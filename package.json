@@ -1,0 +1,18 @@
+{
+  "name": "docker-game-manager",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A lightweight, Docker-native game server control panel",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c cyan,magenta \"pnpm --filter backend dev\" \"pnpm --filter frontend dev\"",
+    "build": "pnpm --filter backend build && pnpm --filter frontend build",
+    "backend:dev": "pnpm --filter backend dev",
+    "frontend:dev": "pnpm --filter frontend dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,16 @@
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Uncomment to enable auth:
+      # - PANEL_SECRET=change-me-to-a-strong-secret
+    restart: unless-stopped
+
