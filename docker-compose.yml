@@ -11,8 +11,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      # Optional safeguard for first-run administrator setup.
-      # - PANEL_SETUP_TOKEN=change-me-to-a-strong-random-value
+      - PANEL_API_TOKEN=${PANEL_API_TOKEN:-}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
+      - FILE_HELPER_IMAGE=${FILE_HELPER_IMAGE:-alpine:3.22}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
       interval: 30s

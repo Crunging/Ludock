@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 
 process.env.PANEL_DB_PATH = ":memory:";
-delete process.env.PANEL_SETUP_TOKEN;
 process.env.PANEL_API_TOKEN = "integration-api-secret";
 
 const [{ createApp }, { getDockerInstance }] = await Promise.all([
@@ -91,12 +90,30 @@ describe("HTTP application", () => {
   it("serves public status and health endpoints", async () => {
     const authStatus = await fetch(`${baseUrl}/api/auth/status`);
     assert.equal(authStatus.status, 200);
-    assert.deepEqual(await authStatus.json(), {
-      setupRequired: true,
-      setupTokenRequired: false,
-      authenticated: false,
-      user: null,
-    });
+    const status = (await authStatus.json()) as {
+      setupRequired: boolean;
+      setupLocked: boolean;
+      setupExpiresAt: number | null;
+      setupRemainingMs: number | null;
+      authenticated: boolean;
+      user: unknown;
+    };
+    assert.deepEqual(
+      {
+        ...status,
+        setupExpiresAt: typeof status.setupExpiresAt,
+        setupRemainingMs: typeof status.setupRemainingMs,
+      },
+      {
+        setupRequired: true,
+        setupLocked: false,
+        setupExpiresAt: "number",
+        setupRemainingMs: "number",
+        authenticated: false,
+        user: null,
+      }
+    );
+    assert.equal(authStatus.headers.get("cache-control"), "no-store");
 
     const health = await fetch(`${baseUrl}/api/health`);
     assert.equal(health.status, 200);
@@ -107,13 +124,32 @@ describe("HTTP application", () => {
     });
     assert.equal(health.headers.get("x-content-type-options"), "nosniff");
     assert.equal(health.headers.get("x-frame-options"), "DENY");
-    assert.match(health.headers.get("content-security-policy") || "", /default-src 'self'/);
+    assert.equal(
+      health.headers.get("cross-origin-opener-policy"),
+      "same-origin"
+    );
+    assert.match(
+      health.headers.get("content-security-policy") || "",
+      /default-src 'self'/
+    );
+
+    const proxiedHealth = await fetch(`${baseUrl}/api/health`, {
+      headers: { "X-Forwarded-Proto": "https" },
+    });
+    assert.equal(
+      proxiedHealth.headers.get("strict-transport-security"),
+      "max-age=31536000; includeSubDomains"
+    );
   });
 
   it("completes initial setup without a token and establishes a session", async () => {
     const response = await fetch(`${baseUrl}/api/auth/setup`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Origin: baseUrl.replace("http://", "https://"),
+        "X-Forwarded-Proto": "https",
+      },
       body: JSON.stringify({
         username: "admin",
         password: "integration-password",
@@ -124,6 +160,7 @@ describe("HTTP application", () => {
     assert.match(setCookie, /dgm_session=/);
     assert.match(setCookie, /HttpOnly/i);
     assert.match(setCookie, /SameSite=Strict/i);
+    assert.match(setCookie, /Secure/i);
     sessionCookie = setCookie.split(";")[0];
 
     const me = await fetch(`${baseUrl}/api/auth/me`, {
@@ -189,6 +226,24 @@ describe("HTTP application", () => {
       }),
     });
     assert.equal(response.status, 403);
+
+    const fetchMetadataResponse = await authorizedFetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Sec-Fetch-Site": "cross-site" },
+    });
+    assert.equal(fetchMetadataResponse.status, 403);
+  });
+
+  it("requires an explicit binary media type for uploads", async () => {
+    const response = await authorizedFetch(
+      `/api/servers/${managedInfo.Id}/files/upload?root=root-0&path=&name=mod.jar`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "not accepted as an upload",
+      }
+    );
+    assert.equal(response.status, 415);
   });
 
   it("manages users without exposing password hashes", async () => {

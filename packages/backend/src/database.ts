@@ -62,13 +62,14 @@ export function getDatabase(): DatabaseSync {
       : path.resolve("data/panel.db"));
 
   if (dbPath !== ":memory:") {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
   }
 
   database = new DatabaseSync(dbPath, {
     enableForeignKeyConstraints: true,
     timeout: 5000,
   });
+  if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -344,6 +345,17 @@ export function updateUserPassword(id: string, passwordHash: string): void {
     )
     .run(passwordHash, Date.now(), id);
   deleteUserSessions(id);
+}
+
+export function upgradeUserPasswordHash(
+  id: string,
+  passwordHash: string
+): void {
+  getDatabase()
+    .prepare(
+      "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?"
+    )
+    .run(passwordHash, Date.now(), id);
 }
 
 export function deleteUser(id: string): void {

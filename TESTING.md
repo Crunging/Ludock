@@ -22,15 +22,19 @@ Run the panel with a persistent `/data` volume and add
 ### Authentication
 
 - A new database displays the initial administrator setup page.
-- Username and a 12+ character password create the first administrator.
-- When `PANEL_SETUP_TOKEN` is configured, the setup page requires it and
-  rejects an incorrect value without creating an account.
+- Username and a 15+ character password create the first administrator.
+- Initial setup locks five minutes after startup. Restarting the panel reopens
+  the setup window when no account exists.
 - Subsequent visits display username/password sign-in, not the setup form.
 - Invalid credentials use a generic error and repeated failures are throttled.
 - Refreshing and restarting the panel preserve an authenticated session.
 - Sign out returns to the sign-in page on desktop and mobile.
 - Changing a password revokes every other session.
 - A revoked or disabled session immediately loses API and WebSocket access.
+- Behind an HTTPS-terminating reverse proxy, setup and login cookies include
+  `Secure` and console WebSockets connect without panel-specific proxy flags.
+- `TRUSTED_PROXIES` changes the recorded client IP only for requests arriving
+  through the configured proxy address or CIDR.
 
 ### Users and permissions
 

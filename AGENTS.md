@@ -23,7 +23,7 @@ game servers.
 - Only manage containers with `game-panel.enable=true`.
 - Keep filesystem access within configured roots and preserve symlink traversal
   protections.
-- Never expose console credentials, setup tokens, passwords, or session tokens.
+- Never expose console credentials, API tokens, passwords, or session tokens.
 - Preserve administrator, operator, and viewer permission boundaries.
 - Add protocol-specific console behavior through an adapter; do not assume one
   command transport works for every game.

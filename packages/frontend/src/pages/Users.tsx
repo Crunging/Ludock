@@ -90,8 +90,8 @@ export default function Users() {
 
   const resetPassword = async (user: UserSummary) => {
     const nextPassword = resetPasswords[user.id] || "";
-    if (nextPassword.length < 12) {
-      setError("Reset passwords must be at least 12 characters.");
+    if (nextPassword.length < 15) {
+      setError("Reset passwords must be at least 15 characters.");
       return;
     }
 
@@ -171,7 +171,7 @@ export default function Users() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              minLength={12}
+              minLength={15}
               maxLength={128}
               required
             />

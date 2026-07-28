@@ -14,44 +14,94 @@ import {
   deleteSessionRecord,
   findSessionUser,
   findUserByUsername,
+  upgradeUserPasswordHash,
   writeAuditLog,
   type SessionUser,
 } from "./database.js";
+import {
+  isExternalHttpsRequest,
+  isSameOriginRequest,
+} from "./request-security.js";
 
 const SESSION_COOKIE = "dgm_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SCRYPT_N = 32768;
+const SCRYPT_R = 8;
+const SCRYPT_P = 3;
+const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
+export const SETUP_WINDOW_MS = 5 * 60 * 1000;
+
+export interface SetupState {
+  required: boolean;
+  locked: boolean;
+  expiresAt: number | null;
+  remainingMs: number | null;
+}
+
+export interface WebSocketAuth {
+  user: SessionUser;
+  sessionTokenHash?: string;
+  validate: () => SessionUser | null;
+}
+
+export class SetupWindow {
+  readonly expiresAt: number;
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    durationMs = SETUP_WINDOW_MS
+  ) {
+    this.expiresAt = now() + durationMs;
+  }
+
+  getState(): SetupState {
+    const required = isSetupRequired();
+    const now = this.now();
+    return {
+      required,
+      locked: required && now >= this.expiresAt,
+      expiresAt: required ? this.expiresAt : null,
+      remainingMs: required ? Math.max(0, this.expiresAt - now) : null,
+    };
+  }
+
+  assertOpen(): void {
+    const state = this.getState();
+    if (!state.required) throw new AuthError("SETUP_COMPLETE", 409);
+    if (state.locked) throw new AuthError("SETUP_LOCKED", 403);
+  }
+}
+
+export const defaultSetupWindow = new SetupWindow();
 
 export function isSetupRequired(): boolean {
   return countUsers() === 0;
 }
 
-export function isSetupTokenRequired(): boolean {
-  return getSetupToken() !== null;
-}
-
-function getSetupToken(): string | null {
-  return process.env.PANEL_SETUP_TOKEN || process.env.PANEL_SECRET || null;
-}
-
-export function logSetupInstructions(): void {
+export function logSetupInstructions(
+  setupWindow: SetupWindow = defaultSetupWindow
+): void {
   if (!isSetupRequired()) return;
 
-  console.log("Initial administrator setup is available in the web interface.");
-  if (isSetupTokenRequired()) {
-    console.log("The configured PANEL_SETUP_TOKEN is required.");
-  }
+  const minutes = Math.round(SETUP_WINDOW_MS / 60_000);
+  console.log(
+    `Initial administrator setup is available for ${minutes} minutes.`
+  );
+  console.log(
+    `Setup closes at ${new Date(setupWindow.expiresAt).toISOString()}; restart the panel to reopen it.`
+  );
 }
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const key = await derivePassword(password, salt, 64, {
-    N: 32768,
-    r: 8,
-    p: 1,
-    maxmem: 64 * 1024 * 1024,
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+    maxmem: SCRYPT_MAX_MEMORY,
   });
 
-  return `scrypt$32768$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`;
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
 }
 
 export async function verifyPassword(
@@ -71,35 +121,49 @@ export async function verifyPassword(
   }
 
   const expected = Buffer.from(keyValue, "base64url");
+  const options = {
+    N: Number(n),
+    r: Number(r),
+    p: Number(p),
+  };
+  if (
+    !Number.isInteger(options.N) ||
+    !Number.isInteger(options.r) ||
+    !Number.isInteger(options.p) ||
+    options.N < 2 ||
+    options.N > 131072 ||
+    options.r < 1 ||
+    options.r > 16 ||
+    options.p < 1 ||
+    options.p > 10
+  ) {
+    return false;
+  }
   const actual = await derivePassword(
     password,
     Buffer.from(saltValue, "base64url"),
     expected.length,
     {
-      N: Number(n),
-      r: Number(r),
-      p: Number(p),
-      maxmem: 64 * 1024 * 1024,
+      ...options,
+      maxmem: Math.max(
+        SCRYPT_MAX_MEMORY,
+        128 * options.N * options.r + 16 * 1024 * 1024
+      ),
     }
   );
 
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export async function createInitialAdmin(input: {
-  setupToken?: string;
-  username: string;
-  password: string;
-  ipAddress?: string;
-}): Promise<SessionUser> {
-  if (!isSetupRequired()) throw new AuthError("SETUP_COMPLETE", 409);
-  const expectedToken = getSetupToken();
-  if (
-    expectedToken !== null &&
-    !tokensMatch(input.setupToken || "", expectedToken)
-  ) {
-    throw new AuthError("INVALID_SETUP_TOKEN", 401);
-  }
+export async function createInitialAdmin(
+  input: {
+    username: string;
+    password: string;
+    ipAddress?: string;
+  },
+  setupWindow: SetupWindow = defaultSetupWindow
+): Promise<SessionUser> {
+  setupWindow.assertOpen();
 
   const now = Date.now();
   const user: SessionUser = {
@@ -108,7 +172,7 @@ export async function createInitialAdmin(input: {
     role: "admin",
   };
   const passwordHash = await hashPassword(input.password);
-  if (!isSetupRequired()) throw new AuthError("SETUP_COMPLETE", 409);
+  setupWindow.assertOpen();
   createUser({
     ...user,
     passwordHash,
@@ -135,6 +199,9 @@ export async function authenticateUser(
     return null;
   }
   if (!(await verifyPassword(password, record.passwordHash))) return null;
+  if (passwordHashNeedsUpgrade(record.passwordHash)) {
+    upgradeUserPasswordHash(record.id, await hashPassword(password));
+  }
 
   return { id: record.id, username: record.username, role: record.role };
 }
@@ -163,11 +230,10 @@ export function setSessionCookie(
   request: Request,
   token: string
 ): void {
-  const secure = request.secure || process.env.COOKIE_SECURE === "true";
   response.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "strict",
-    secure,
+    secure: isExternalHttpsRequest(request),
     path: "/",
     maxAge: SESSION_TTL_MS,
   });
@@ -211,12 +277,8 @@ export function authMiddleware(
 
   const apiToken =
     process.env.PANEL_API_TOKEN || process.env.PANEL_SECRET || "";
-  const authHeader = req.headers.authorization;
-  if (
-    apiToken &&
-    authHeader?.startsWith("Bearer ") &&
-    tokensMatch(authHeader.slice(7), apiToken)
-  ) {
+  const candidate = bearerToken(req.headers.authorization);
+  if (apiToken && candidate && tokensMatch(candidate, apiToken)) {
     res.locals.user = {
       id: "api-token",
       username: "api-token",
@@ -242,23 +304,33 @@ export function requireRole(...roles: SessionUser["role"][]) {
 
 export function authenticateWsRequest(
   request: IncomingMessage
-): SessionUser | null {
+): WebSocketAuth | null {
   const session = getRequestSession(request);
-  if (session) return session.user;
+  if (session) {
+    if (!isSameOriginRequest(request)) return null;
+    return {
+      user: session.user,
+      sessionTokenHash: session.tokenHash,
+      validate: () => findSessionUser(session.tokenHash, Date.now()),
+    };
+  }
 
   const apiToken =
     process.env.PANEL_API_TOKEN || process.env.PANEL_SECRET || "";
   if (!apiToken) return null;
-
-  try {
-    const parsed = new URL(request.url || "", "http://localhost");
-    const candidate = parsed.searchParams.get("token");
-    return candidate !== null && tokensMatch(candidate, apiToken)
-      ? { id: "api-token", username: "api-token", role: "admin" }
-      : null;
-  } catch {
+  if (request.headers.origin && !isSameOriginRequest(request)) {
     return null;
   }
+  const candidate = bearerToken(request.headers.authorization);
+  if (!candidate || !tokensMatch(candidate, apiToken)) return null;
+  return {
+    user: { id: "api-token", username: "api-token", role: "admin" },
+    validate: () => ({
+      id: "api-token",
+      username: "api-token",
+      role: "admin",
+    }),
+  };
 }
 
 export class AuthError extends Error {
@@ -286,6 +358,28 @@ function derivePassword(
       else resolve(derivedKey);
     });
   });
+}
+
+function passwordHashNeedsUpgrade(encoded: string): boolean {
+  const [algorithm, n, r, p] = encoded.split("$");
+  return (
+    algorithm !== "scrypt" ||
+    Number(n) !== SCRYPT_N ||
+    Number(r) !== SCRYPT_R ||
+    Number(p) !== SCRYPT_P
+  );
+}
+
+function bearerToken(authorization: string | undefined): string {
+  if (!authorization) return "";
+  const separator = authorization.indexOf(" ");
+  if (
+    separator < 1 ||
+    authorization.slice(0, separator).toLowerCase() !== "bearer"
+  ) {
+    return "";
+  }
+  return authorization.slice(separator + 1);
 }
 
 function parseCookies(header: string): Record<string, string> {

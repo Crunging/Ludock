@@ -1,45 +1,70 @@
 import { createServer } from "node:http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { handleConsoleConnection } from "./console.js";
 import { addEventClient, stopEventStream } from "./events.js";
-import { authenticateWsRequest, logSetupInstructions } from "./auth.js";
+import {
+  authenticateWsRequest,
+  logSetupInstructions,
+  type WebSocketAuth,
+} from "./auth.js";
 import { createApp } from "./app.js";
 import { closeDatabase } from "./database.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
+const MAX_WEBSOCKET_CONNECTIONS = 100;
+const WEBSOCKET_SESSION_CHECK_MS = 15_000;
 
 const app = createApp();
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 64 * 1024,
+  perMessageDeflate: false,
+});
 
 server.on("upgrade", (req, socket, head) => {
-  const user = authenticateWsRequest(req);
-  if (!user) {
+  const auth = authenticateWsRequest(req);
+  if (!auth) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;
   }
+  if (wss.clients.size >= MAX_WEBSOCKET_CONNECTIONS) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+    socket.destroy();
+    return;
+  }
 
-  const pathname = new URL(req.url || "", `http://${req.headers.host}`).pathname;
+  let pathname: string;
+  try {
+    pathname = new URL(req.url || "", `http://${req.headers.host}`).pathname;
+  } catch {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+    return;
+  }
 
   if (
     pathname.startsWith("/ws/game-console/") ||
     pathname.startsWith("/ws/console/")
   ) {
     wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleConsoleConnection(ws, req, user, "game");
+      monitorWebSocketSession(ws, auth);
+      void handleConsoleConnection(ws, req, auth, "game");
     });
   } else if (pathname.startsWith("/ws/shell/")) {
-    if (user.role !== "admin") {
+    if (auth.user.role !== "admin") {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleConsoleConnection(ws, req, user, "shell");
+      monitorWebSocketSession(ws, auth, true);
+      void handleConsoleConnection(ws, req, auth, "shell");
     });
   } else if (pathname === "/ws/events") {
     wss.handleUpgrade(req, socket, head, (ws) => {
+      monitorWebSocketSession(ws, auth);
       addEventClient(ws);
     });
   } else {
@@ -47,6 +72,25 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
   }
 });
+
+function monitorWebSocketSession(
+  ws: WebSocket,
+  auth: WebSocketAuth,
+  adminRequired = false
+): void {
+  const interval = setInterval(() => {
+    const user = auth.validate();
+    if (!user || (adminRequired && user.role !== "admin")) {
+      ws.close(1008, "Session expired or access revoked");
+      return;
+    }
+    auth.user = user;
+  }, WEBSOCKET_SESSION_CHECK_MS);
+  interval.unref();
+  const stop = () => clearInterval(interval);
+  ws.once("close", stop);
+  ws.once("error", stop);
+}
 
 server.listen(PORT, () => {
   console.log(`Docker Game Manager listening on http://localhost:${PORT}`);

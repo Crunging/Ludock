@@ -11,15 +11,11 @@ export interface AuthUser {
 export interface AuthContextValue {
   loading: boolean;
   setupRequired: boolean;
-  setupTokenRequired: boolean;
+  setupLocked: boolean;
   authenticated: boolean;
   user: AuthUser | null;
   login: (username: string, password: string) => Promise<string | null>;
-  setup: (
-    username: string,
-    password: string,
-    setupToken?: string
-  ) => Promise<string | null>;
+  setup: (username: string, password: string) => Promise<string | null>;
   logout: () => Promise<void>;
 }
 

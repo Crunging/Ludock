@@ -16,16 +16,21 @@ import {
   clearSessionCookie,
   createInitialAdmin,
   createSession,
+  defaultSetupWindow,
   deleteRequestSession,
   getRequestSession,
   hashPassword,
   isSetupRequired,
-  isSetupTokenRequired,
   verifyPassword,
   requireRole,
   setSessionCookie,
+  type SetupWindow,
 } from "./auth.js";
 import { checkDockerConnection } from "./docker.js";
+import {
+  isExternalHttpsRequest,
+  isSameOriginRequest,
+} from "./request-security.js";
 import {
   countEnabledAdmins,
   checkDatabase,
@@ -48,6 +53,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_MIN_LENGTH = 15;
 const credentialsSchema = z.object({
   username: z
     .string()
@@ -55,11 +61,9 @@ const credentialsSchema = z.object({
     .min(3)
     .max(32)
     .regex(/^[a-zA-Z0-9._-]+$/),
-  password: z.string().min(12).max(128),
+  password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
 });
-const setupSchema = credentialsSchema.extend({
-  setupToken: z.string().max(512).optional(),
-});
+const setupSchema = credentialsSchema;
 const newUserSchema = credentialsSchema.extend({
   role: z.enum(["admin", "operator", "viewer"]),
 });
@@ -68,15 +72,16 @@ const accessSchema = z.object({
   disabled: z.boolean(),
 });
 const passwordSchema = z.object({
-  password: z.string().min(12).max(128),
+  password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
 });
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(12).max(128),
+  newPassword: z.string().min(PASSWORD_MIN_LENGTH).max(128),
 });
 
 interface CreateAppOptions {
   frontendDist?: string | false;
+  setupWindow?: SetupWindow;
 }
 
 function publicUser(user: UserRecord | null) {
@@ -90,11 +95,25 @@ function publicUser(user: UserRecord | null) {
   };
 }
 
+function loginThrottleKey(scope: "ip" | "account", value: string): string {
+  return createHash("sha256").update(`${scope}:${value}`).digest("hex");
+}
+
 export function createApp(options: CreateAppOptions = {}): Express {
   const app = express();
+  const setupWindow = options.setupWindow || defaultSetupWindow;
 
   app.disable("x-powered-by");
-  if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
+  const trustedProxies = process.env.TRUSTED_PROXIES?.trim();
+  if (trustedProxies) {
+    app.set(
+      "trust proxy",
+      trustedProxies
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    );
+  }
   app.use((req, res, next) => {
     const requestId = randomUUID();
     res.locals.requestId = requestId;
@@ -102,15 +121,21 @@ export function createApp(options: CreateAppOptions = {}): Express {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    res.setHeader("Origin-Agent-Cluster", "?1");
     res.setHeader(
       "Permissions-Policy",
       "camera=(), microphone=(), geolocation=(), payment=()"
     );
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     );
-    if (req.secure) {
+    if (req.path.startsWith("/api/")) {
+      res.setHeader("Cache-Control", "no-store");
+    }
+    if (isExternalHttpsRequest(req)) {
       res.setHeader(
         "Strict-Transport-Security",
         "max-age=31536000; includeSubDomains"
@@ -121,26 +146,26 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(express.json({ limit: "64kb" }));
   app.use((req, res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      if (req.get("sec-fetch-site") === "cross-site") {
+        res.status(403).json({ error: "Cross-origin request rejected" });
+        return;
+      }
       const origin = req.get("origin");
-      if (origin) {
-        try {
-          if (new URL(origin).host !== req.get("host")) {
-            res.status(403).json({ error: "Cross-origin request rejected" });
-            return;
-          }
-        } catch {
-          res.status(403).json({ error: "Invalid request origin" });
-          return;
-        }
+      if (origin && !isSameOriginRequest(req)) {
+        res.status(403).json({ error: "Cross-origin request rejected" });
+        return;
       }
     }
     next();
   });
   app.get("/api/auth/status", (req, res) => {
     const session = getRequestSession(req);
+    const setup = setupWindow.getState();
     res.json({
-      setupRequired: isSetupRequired(),
-      setupTokenRequired: isSetupRequired() && isSetupTokenRequired(),
+      setupRequired: setup.required,
+      setupLocked: setup.locked,
+      setupExpiresAt: setup.expiresAt,
+      setupRemainingMs: setup.remainingMs,
       authenticated: session !== null,
       user: session?.user || null,
     });
@@ -150,16 +175,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
     if (!parsed.success) {
       res.status(400).json({
         error:
-          "Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least 12 characters.",
+          `Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
       });
       return;
     }
 
     try {
-      const user = await createInitialAdmin({
-        ...parsed.data,
-        ipAddress: req.ip,
-      });
+      const user = await createInitialAdmin(
+        {
+          ...parsed.data,
+          ipAddress: req.ip,
+        },
+        setupWindow
+      );
       const session = createSession(user, req);
       setSessionCookie(res, req, session.token);
       res.status(201).json({ user });
@@ -167,8 +195,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
       if (error instanceof AuthError) {
         res.status(error.statusCode).json({
           error:
-            error.code === "INVALID_SETUP_TOKEN"
-              ? "Invalid setup token"
+            error.code === "SETUP_LOCKED"
+              ? "Initial setup has expired. Restart the panel to reopen setup."
               : "Initial setup has already been completed",
         });
         return;
@@ -177,12 +205,22 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
   });
   app.post("/api/auth/login", async (req, res) => {
-    const key = createHash("sha256")
-      .update(req.ip || "unknown")
-      .digest("hex");
     const now = Date.now();
-    const attempt = getLoginThrottle(key, now, LOGIN_WINDOW_MS);
-    if (attempt.blockedUntil > now) {
+    const ipKey = loginThrottleKey("ip", req.ip || "unknown");
+    const requestedUsername =
+      typeof req.body?.username === "string"
+        ? req.body.username.trim().toLowerCase().slice(0, 32)
+        : "";
+    const accountKey = requestedUsername
+      ? loginThrottleKey("account", requestedUsername)
+      : null;
+    const blocked = [ipKey, accountKey]
+      .filter((key): key is string => key !== null)
+      .some(
+        (key) =>
+          getLoginThrottle(key, now, LOGIN_WINDOW_MS).blockedUntil > now
+      );
+    if (blocked) {
       res.status(429).json({ error: "Too many attempts. Try again later." });
       return;
     }
@@ -198,7 +236,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
       parsed.data.password
     );
     if (!user) {
-      recordLoginFailure(key, now, LOGIN_WINDOW_MS, 5);
+      recordLoginFailure(ipKey, now, LOGIN_WINDOW_MS, 20);
+      if (accountKey) {
+        recordLoginFailure(accountKey, now, LOGIN_WINDOW_MS, 5);
+      }
       writeAuditLog({
         action: "auth.login.failed",
         targetType: "user",
@@ -214,7 +255,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       return;
     }
 
-    clearLoginThrottle(key);
+    if (accountKey) clearLoginThrottle(accountKey);
     const session = createSession(user, req);
     setSessionCookie(res, req, session.token);
     writeAuditLog({
@@ -229,6 +270,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const session = getRequestSession(req);
     deleteRequestSession(req);
     clearSessionCookie(res);
+    res.setHeader("Clear-Site-Data", '"cache", "cookies", "storage"');
     if (session) {
       writeAuditLog({
         userId: session.user.id,
@@ -258,7 +300,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const record = findUserById(actor.id);
     if (!parsed.success) {
       res.status(400).json({
-        error: "New password must be between 12 and 128 characters",
+        error: `New password must be between ${PASSWORD_MIN_LENGTH} and 128 characters`,
       });
       return;
     }
@@ -389,7 +431,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       if (!parsed.success || !target) {
         res.status(target ? 400 : 404).json({
           error: target
-            ? "Password must be at least 12 characters"
+            ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters`
             : "User not found",
         });
         return;

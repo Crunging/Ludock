@@ -9,29 +9,43 @@ import {
 } from "./docker.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
 import { executeGameCommand } from "./game-console-runtime.js";
-import { writeAuditLog, type SessionUser } from "./database.js";
+import type { WebSocketAuth } from "./auth.js";
+import { writeAuditLog } from "./database.js";
 
 export type ConsoleMode = "game" | "shell";
 
 export async function handleConsoleConnection(
   ws: WebSocket,
   req: IncomingMessage,
-  user: SessionUser,
+  auth: WebSocketAuth,
   mode: ConsoleMode
 ): Promise<void> {
+  const user = auth.user;
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const containerId = url.pathname.split("/").filter(Boolean).at(-1);
   const pendingMessages: string[] = [];
   let processMessage: ((raw: string) => Promise<void>) | null = null;
+  let processingMessages = false;
+
+  async function drainMessages() {
+    if (processingMessages || !processMessage) return;
+    processingMessages = true;
+    try {
+      while (pendingMessages.length > 0 && processMessage) {
+        await processMessage(pendingMessages.shift()!);
+      }
+    } finally {
+      processingMessages = false;
+    }
+  }
 
   ws.on("message", (raw) => {
     const message = raw.toString();
-    if (processMessage) {
-      void processMessage(message);
-    } else if (pendingMessages.length < 10) {
+    if (pendingMessages.length < 10) {
       pendingMessages.push(message);
+      void drainMessages();
     } else {
-      sendMessage(ws, "error", "Too many commands queued during connection setup");
+      sendMessage(ws, "error", "Too many commands queued");
     }
   });
 
@@ -99,6 +113,17 @@ export async function handleConsoleConnection(
   }
 
   processMessage = async (raw: string) => {
+    const currentUser = auth.validate();
+    if (!currentUser) {
+      ws.close(1008, "Session expired or access revoked");
+      return;
+    }
+    auth.user = currentUser;
+    if (mode === "shell" && currentUser.role !== "admin") {
+      ws.close(1008, "Administrator access required");
+      return;
+    }
+
     let message: { type?: unknown; data?: unknown };
     try {
       message = JSON.parse(raw) as { type?: unknown; data?: unknown };
@@ -113,7 +138,7 @@ export async function handleConsoleConnection(
 
     const command = message.data.trim();
     if (!command) return;
-    if (mode === "game" && user.role === "viewer") {
+    if (mode === "game" && currentUser.role === "viewer") {
       sendMessage(ws, "error", "Your account has read-only log access");
       return;
     }
@@ -129,7 +154,7 @@ export async function handleConsoleConnection(
 
     try {
       writeAuditLog({
-        userId: user.id === "api-token" ? undefined : user.id,
+        userId: currentUser.id === "api-token" ? undefined : currentUser.id,
         action:
           mode === "game"
             ? "container.game-command.execute"
@@ -157,14 +182,13 @@ export async function handleConsoleConnection(
         );
       }
     } catch (error: unknown) {
-      const prefix = mode === "game" ? "Game command failed" : "Shell command failed";
+      const prefix =
+        mode === "game" ? "Game command failed" : "Shell command failed";
       sendMessage(ws, "error", `${prefix}: ${errorMessage(error)}`);
     }
   };
 
-  for (const pendingMessage of pendingMessages.splice(0)) {
-    void processMessage(pendingMessage);
-  }
+  void drainMessages();
 
   const destroyLogStream = () => {
     if (logStream) {

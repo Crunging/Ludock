@@ -492,7 +492,8 @@ function validateName(name: string): void {
     name === "." ||
     name === ".." ||
     name.includes("/") ||
-    name.includes("\0")
+    name.trim() !== name ||
+    /[\x00-\x1f\x7f]/.test(name)
   ) {
     throw new FileStorageError("INVALID_NAME", 400);
   }

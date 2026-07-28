@@ -114,7 +114,7 @@ export default function Account() {
             <input
               type="password"
               autoComplete="new-password"
-              minLength={12}
+              minLength={15}
               maxLength={128}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
@@ -126,7 +126,7 @@ export default function Account() {
             <input
               type="password"
               autoComplete="new-password"
-              minLength={12}
+              minLength={15}
               maxLength={128}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}

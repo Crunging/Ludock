@@ -4,7 +4,8 @@ import { AuthContext, type AuthUser } from "./auth-context";
 
 interface AuthStatus {
   setupRequired: boolean;
-  setupTokenRequired: boolean;
+  setupLocked: boolean;
+  setupRemainingMs: number | null;
   authenticated: boolean;
   user: AuthUser | null;
 }
@@ -12,7 +13,8 @@ interface AuthStatus {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
-  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+  const [setupLocked, setSetupLocked] = useState(false);
+  const [setupRemainingMs, setSetupRemainingMs] = useState<number | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
@@ -26,7 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((status) => {
         if (!active) return;
         setSetupRequired(status.setupRequired);
-        setSetupTokenRequired(status.setupTokenRequired);
+        setSetupLocked(status.setupLocked);
+        setSetupRemainingMs(status.setupRemainingMs);
         setUser(status.authenticated ? status.user : null);
       })
       .catch(() => {
@@ -41,6 +44,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!setupRequired || setupLocked || setupRemainingMs === null) return;
+    const timer = window.setTimeout(
+      () => setSetupLocked(true),
+      Math.max(0, setupRemainingMs)
+    );
+    return () => window.clearTimeout(timer);
+  }, [setupLocked, setupRemainingMs, setupRequired]);
 
   useEffect(() => {
     const requireAuth = () => setUser(null);
@@ -71,27 +83,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const setup = useCallback(
-    async (
-      username: string,
-      password: string,
-      setupToken?: string
-    ): Promise<string | null> => {
+    async (username: string, password: string): Promise<string | null> => {
       const response = await fetch("/api/auth/setup", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password, setupToken }),
+        body: JSON.stringify({ username, password }),
       });
       const body = (await response.json().catch(() => ({}))) as {
         user?: AuthUser;
         error?: string;
       };
       if (!response.ok || !body.user) {
+        if (response.status === 403) setSetupLocked(true);
         return body.error || `Unable to complete setup (HTTP ${response.status}).`;
       }
 
       setSetupRequired(false);
-      setSetupTokenRequired(false);
+      setSetupLocked(false);
+      setSetupRemainingMs(null);
       setUser(body.user);
       return null;
     },
@@ -114,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         loading,
         setupRequired,
-        setupTokenRequired,
+        setupLocked,
         authenticated: user !== null,
         user,
         login,

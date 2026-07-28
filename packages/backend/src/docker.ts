@@ -87,7 +87,7 @@ export async function getManagedContainer(
 export async function getContainerStats(
   id: string
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
-  const container = docker.getContainer(id);
+  const container = await getManagedDockerContainer(id);
   const stats = (await container.stats({ stream: false })) as Docker.ContainerStats;
 
   const cpuDelta =

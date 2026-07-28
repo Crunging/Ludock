@@ -2,8 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth-context";
 
 export default function Login() {
-  const { login, setup, setupRequired, setupTokenRequired } = useAuth();
-  const [setupToken, setSetupToken] = useState("");
+  const { login, setup, setupRequired, setupLocked } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -29,11 +28,7 @@ export default function Login() {
     setError(null);
     try {
       const result = setupRequired
-        ? await setup(
-            username.trim(),
-            password,
-            setupTokenRequired ? setupToken.trim() : undefined
-          )
+        ? await setup(username.trim(), password)
         : await login(username.trim(), password);
       setError(result);
     } catch {
@@ -42,6 +37,23 @@ export default function Login() {
       setSubmitting(false);
     }
   };
+
+  if (setupRequired && setupLocked) {
+    return (
+      <main className="login-page">
+        <section className="login-card" aria-labelledby="setup-expired-title">
+          <div className="sidebar__logo-icon login-card__logo">GP</div>
+          <h1 className="login-card__title" id="setup-expired-title">
+            Setup window expired
+          </h1>
+          <p className="login-card__description">
+            Restart the Game Panel container, then return here within five
+            minutes to create the administrator account.
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="login-page">
@@ -52,25 +64,9 @@ export default function Login() {
         </h1>
         <p className="login-card__description">
           {setupRequired
-            ? "Create the administrator account you will use to manage this panel."
+            ? "Create the administrator account within five minutes of starting the panel."
             : "Sign in with your Game Panel account."}
         </p>
-        {setupRequired && setupTokenRequired && (
-          <>
-            <label className="login-card__label" htmlFor="setup-token">
-              Setup code
-            </label>
-            <input
-              id="setup-token"
-              className="login-card__input"
-              type="password"
-              value={setupToken}
-              onChange={(event) => setSetupToken(event.target.value)}
-              autoComplete="off"
-              required
-            />
-          </>
-        )}
         <label className="login-card__label" htmlFor="username">
           Username
         </label>
@@ -95,12 +91,12 @@ export default function Login() {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           autoComplete={setupRequired ? "new-password" : "current-password"}
-          minLength={12}
+          minLength={15}
           maxLength={128}
           required
         />
         {setupRequired && (
-          <div className="login-card__hint">Use at least 12 characters.</div>
+          <div className="login-card__hint">Use at least 15 characters.</div>
         )}
         {setupRequired && (
           <>
@@ -114,7 +110,7 @@ export default function Login() {
               value={confirmation}
               onChange={(event) => setConfirmation(event.target.value)}
               autoComplete="new-password"
-              minLength={12}
+              minLength={15}
               maxLength={128}
               required
             />
@@ -132,8 +128,7 @@ export default function Login() {
             submitting ||
             !username.trim() ||
             !password ||
-            (setupRequired && !confirmation) ||
-            (setupTokenRequired && !setupToken.trim())
+            (setupRequired && !confirmation)
           }
         >
           {submitLabel}

@@ -17,8 +17,8 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  if (password.length < 12 || password.length > 128) {
-    console.error("Recovery password must be between 12 and 128 characters.");
+  if (password.length < 15 || password.length > 128) {
+    console.error("Recovery password must be between 15 and 128 characters.");
     process.exitCode = 2;
     return;
   }

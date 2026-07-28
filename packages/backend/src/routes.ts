@@ -251,6 +251,12 @@ router.put(
   "/api/servers/:id/files/upload",
   requireRole("admin", "operator"),
   async (req: Request, res: Response) => {
+    if (!req.is("application/octet-stream")) {
+      res
+        .status(415)
+        .json({ error: "Uploads must use application/octet-stream" });
+      return;
+    }
     const parsed = uploadQuerySchema.safeParse({
       root: queryValue(req.query.root),
       path: queryValue(req.query.path) || "",

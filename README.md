@@ -46,6 +46,9 @@ volumes:
 ### Run the Panel
 
 ```bash
+# Optional: configure deployment overrides
+cp .env.example .env
+
 docker compose up -d
 ```
 
@@ -61,8 +64,8 @@ docker run -d \
 ```
 
 The panel will be available at `http://localhost:3000`. On first launch, create
-the initial administrator account in the browser. Set `PANEL_SETUP_TOKEN`
-before first launch if you want to require an additional setup code.
+the initial administrator account in the browser within five minutes. If the
+setup window expires, restart the panel to reopen it.
 
 ## Labels
 
@@ -95,9 +98,10 @@ with scrypt and browser sessions are stored as opaque, revocable, HttpOnly
 cookies. Administrators can create accounts, assign roles, reset passwords,
 disable access, and inspect the audit log.
 
-With a new database, the first visitor can create the administrator account.
-Configure `PANEL_SETUP_TOKEN` if the panel will be reachable by anyone else
-before setup is complete.
+With a new database, the first visitor can create the administrator account
+during a five-minute window after the panel starts. If setup is not completed
+in time, it locks until the panel is restarted. Do not expose an unconfigured
+panel to an untrusted network.
 
 | Role | Access |
 |---|---|
@@ -107,11 +111,24 @@ before setup is complete.
 
 `PANEL_API_TOKEN` is optional and intended only for API automation or
 emergency administrative access. It is not the normal browser sign-in method.
-Use a long random value and send it as `Authorization: Bearer <token>`.
+Generate a 256-bit value with `openssl rand -hex 32` and send it as
+`Authorization: Bearer <token>`.
 
-For network access, terminate HTTPS at a trusted reverse proxy. Set
-`TRUST_PROXY=true` when exactly one trusted proxy sits in front of the panel,
-and optionally set `COOKIE_SECURE=true` to require secure session cookies.
+Terminate external access at an HTTPS reverse proxy. Secure cookies, origin
+checks, WebSockets, and HSTS work without additional panel configuration.
+
+`TRUSTED_PROXIES` is optional. It lets audit logs and rate limits use the client
+IP supplied by the directly connected proxy. Otherwise, they use the proxy IP.
+
+For Docker, inspect the proxy address on its shared network and add `/32`:
+
+```bash
+docker inspect -f '{{(index .NetworkSettings.Networks "proxy").IPAddress}}' traefik
+```
+
+Replace `traefik` with `nginx`, `nginx-proxy-manager`, or `caddy` as needed.
+Prefer a static proxy IP or dedicated proxy-only network. Multiple entries may
+be comma-separated; do not trust networks containing untrusted systems.
 
 > [!WARNING]
 > Access to the Docker socket is effectively root-level access to the Docker
