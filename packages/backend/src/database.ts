@@ -167,6 +167,9 @@ export function getLoginThrottle(
   return { failures: row.failures, blockedUntil: row.blocked_until };
 }
 
+const LOGIN_PRUNE_INTERVAL = 200;
+let failuresSincePrune = 0;
+
 export function recordLoginFailure(
   attemptKey: string,
   now: number,
@@ -199,6 +202,12 @@ export function recordLoginFailure(
       blockedUntil,
       now
     );
+
+  failuresSincePrune += 1;
+  if (failuresSincePrune >= LOGIN_PRUNE_INTERVAL) {
+    failuresSincePrune = 0;
+    pruneLoginAttempts(now, windowMs);
+  }
   return { failures, blockedUntil };
 }
 
@@ -366,6 +375,20 @@ export function deleteUserSessions(userId: string): void {
   getDatabase().prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
 }
 
+/**
+ * Every distinct source IP creates a throttle row, so a distributed attack would
+ * leave them behind indefinitely. Drop rows that are no longer blocking and
+ * whose window has long since closed.
+ */
+export function pruneLoginAttempts(now: number, windowMs: number): void {
+  getDatabase()
+    .prepare(
+      `DELETE FROM login_attempts
+       WHERE blocked_until <= ? AND updated_at < ?`
+    )
+    .run(now, now - windowMs);
+}
+
 export function createSessionRecord(input: {
   sessionId: string;
   tokenHash: string;
@@ -440,13 +463,16 @@ export function deleteUserSessionById(
   return result.changes > 0;
 }
 
+const LAST_SEEN_WRITE_INTERVAL_MS = 60_000;
+
 export function findSessionUser(
   tokenHash: string,
   now: number
 ): SessionUser | null {
   const row = getDatabase()
     .prepare(
-      `SELECT users.id, users.username, users.role, users.disabled, sessions.expires_at
+      `SELECT users.id, users.username, users.role, users.disabled,
+              sessions.expires_at, sessions.last_seen_at
        FROM sessions
        JOIN users ON users.id = sessions.user_id
        WHERE sessions.token_hash = ?`
@@ -458,6 +484,7 @@ export function findSessionUser(
         role: UserRecord["role"];
         disabled: number;
         expires_at: number;
+        last_seen_at: number;
       }
     | undefined;
 
@@ -466,9 +493,13 @@ export function findSessionUser(
     return null;
   }
 
-  getDatabase()
-    .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
-    .run(now, tokenHash);
+  // Every authenticated request lands here, so avoid a write per request. The
+  // value only drives the session list and coarse activity display.
+  if (now - row.last_seen_at >= LAST_SEEN_WRITE_INTERVAL_MS) {
+    getDatabase()
+      .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
+      .run(now, tokenHash);
+  }
 
   return { id: row.id, username: row.username, role: row.role };
 }
@@ -477,6 +508,26 @@ export function deleteSessionRecord(tokenHash: string): void {
   getDatabase()
     .prepare("DELETE FROM sessions WHERE token_hash = ?")
     .run(tokenHash);
+}
+
+/**
+ * Failed logins are audited for unauthenticated callers, so the audit log would
+ * otherwise grow without bound and fill the volume. Keep a rolling window.
+ */
+const AUDIT_LOG_MAX_ROWS = Math.max(
+  1000,
+  Number(process.env.AUDIT_LOG_MAX_ROWS) || 100_000
+);
+const AUDIT_PRUNE_INTERVAL = 500;
+let auditWritesSincePrune = 0;
+
+export function pruneAuditLog(): void {
+  getDatabase()
+    .prepare(
+      `DELETE FROM audit_log
+       WHERE id <= (SELECT MAX(id) FROM audit_log) - ?`
+    )
+    .run(AUDIT_LOG_MAX_ROWS);
 }
 
 export function writeAuditLog(input: {
@@ -502,6 +553,12 @@ export function writeAuditLog(input: {
       input.ipAddress || null,
       Date.now()
     );
+
+  auditWritesSincePrune += 1;
+  if (auditWritesSincePrune >= AUDIT_PRUNE_INTERVAL) {
+    auditWritesSincePrune = 0;
+    pruneAuditLog();
+  }
 }
 
 export function listAuditLog(limit: number): AuditRecord[] {

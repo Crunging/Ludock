@@ -95,7 +95,10 @@ function publicUser(user: UserRecord | null) {
   };
 }
 
-function loginThrottleKey(scope: "ip" | "account", value: string): string {
+function loginThrottleKey(
+  scope: "ip" | "account" | "password-change",
+  value: string
+): string {
   return createHash("sha256").update(`${scope}:${value}`).digest("hex");
 }
 
@@ -106,13 +109,22 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.disable("x-powered-by");
   const trustedProxies = process.env.TRUSTED_PROXIES?.trim();
   if (trustedProxies) {
-    app.set(
-      "trust proxy",
-      trustedProxies
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean)
-    );
+    const entries = trustedProxies
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    // A typo here used to throw out of createApp and crash the process on
+    // startup. Fail closed instead: trust no proxy, and say why. Crash-looping
+    // would also keep reopening the initial-setup window on a fresh install.
+    try {
+      app.set("trust proxy", entries);
+    } catch (error) {
+      console.error(
+        `TRUSTED_PROXIES is not a valid list of IPs or CIDR ranges and has been ignored (${
+          error instanceof Error ? error.message : String(error)
+        }). Client IPs will be taken from the direct connection.`
+      );
+    }
   }
   app.use((req, res, next) => {
     const requestId = randomUUID();
@@ -143,7 +155,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     next();
   });
-  app.use(express.json({ limit: "64kb" }));
+  // Reject cross-origin writes before the body parser so hostile requests never
+  // get a 64kb buffer allocated for them.
   app.use((req, res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       if (req.get("sec-fetch-site") === "cross-site") {
@@ -158,6 +171,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     next();
   });
+  app.use(express.json({ limit: "64kb" }));
   app.get("/api/auth/status", (req, res) => {
     const session = getRequestSession(req);
     const setup = setupWindow.getState();
@@ -281,14 +295,41 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     res.json({ ok: true });
   });
-  app.get("/api/health", async (_req, res) => {
-    try {
-      checkDatabase();
-      await checkDockerConnection();
-      res.json({ status: "ok", docker: "connected", database: "connected" });
-    } catch {
-      res.status(503).json({ status: "degraded" });
+  // This endpoint is unauthenticated so the container healthcheck can use it.
+  // Cache the result briefly so external traffic cannot amplify into one Docker
+  // daemon ping plus a database query per request.
+  const HEALTH_CACHE_MS = 5_000;
+  let healthCache: { checkedAt: number; healthy: boolean } | null = null;
+  let healthProbe: Promise<boolean> | null = null;
+
+  const probeHealth = async (): Promise<boolean> => {
+    const now = Date.now();
+    if (healthCache && now - healthCache.checkedAt < HEALTH_CACHE_MS) {
+      return healthCache.healthy;
     }
+    // Collapse concurrent requests onto a single in-flight probe.
+    healthProbe ||= (async () => {
+      try {
+        checkDatabase();
+        await checkDockerConnection();
+        return true;
+      } catch {
+        return false;
+      }
+    })().then((healthy) => {
+      healthCache = { checkedAt: Date.now(), healthy };
+      healthProbe = null;
+      return healthy;
+    });
+    return healthProbe;
+  };
+
+  app.get("/api/health", async (_req, res) => {
+    if (await probeHealth()) {
+      res.json({ status: "ok", docker: "connected", database: "connected" });
+      return;
+    }
+    res.status(503).json({ status: "degraded" });
   });
   app.use("/api", authMiddleware);
   app.get("/api/auth/me", (_req, res) => {
@@ -297,20 +338,40 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.post("/api/account/change-password", async (req, res) => {
     const parsed = changePasswordSchema.safeParse(req.body);
     const actor = res.locals.user as SessionUser;
-    const record = findUserById(actor.id);
     if (!parsed.success) {
       res.status(400).json({
         error: `New password must be between ${PASSWORD_MIN_LENGTH} and 128 characters`,
       });
       return;
     }
+
+    // Throttle current-password guesses so a stolen session cannot be brute
+    // forced into a permanent account takeover.
+    const now = Date.now();
+    const throttleKey = loginThrottleKey("password-change", actor.id);
+    if (getLoginThrottle(throttleKey, now, LOGIN_WINDOW_MS).blockedUntil > now) {
+      res.status(429).json({ error: "Too many attempts. Try again later." });
+      return;
+    }
+
+    const record = findUserById(actor.id);
     if (
       !record ||
       !(await verifyPassword(parsed.data.currentPassword, record.passwordHash))
     ) {
+      recordLoginFailure(throttleKey, now, LOGIN_WINDOW_MS, 5);
+      writeAuditLog({
+        userId: actor.id,
+        action: "auth.password.change-failed",
+        targetType: "user",
+        targetId: actor.id,
+        ipAddress: req.ip,
+      });
       res.status(400).json({ error: "Current password is incorrect" });
       return;
     }
+
+    clearLoginThrottle(throttleKey);
 
     await updateUserPassword(
       actor.id,
@@ -491,6 +552,22 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use("/api/{*splat}", (_req, res) => {
     res.status(404).json({ error: "API endpoint not found" });
   });
+
+  const frontendDist =
+    options.frontendDist === undefined
+      ? path.resolve(__dirname, "../../frontend/dist")
+      : options.frontendDist;
+
+  if (frontendDist !== false) {
+    app.use(express.static(frontendDist));
+    app.get("/{*splat}", (_req, res) => {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    });
+  }
+
+  // Registered last so it also catches failures from the static and SPA
+  // handlers, which would otherwise fall through to Express' default handler
+  // and leak a stack trace.
   app.use(
     (
       error: unknown,
@@ -513,21 +590,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
         });
         return;
       }
-      next(error);
+      res.status(500).type("text/plain").send("Internal server error");
     }
   );
-
-  const frontendDist =
-    options.frontendDist === undefined
-      ? path.resolve(__dirname, "../../frontend/dist")
-      : options.frontendDist;
-
-  if (frontendDist !== false) {
-    app.use(express.static(frontendDist));
-    app.get("/{*splat}", (_req, res) => {
-      res.sendFile(path.join(frontendDist, "index.html"));
-    });
-  }
 
   return app;
 }

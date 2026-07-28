@@ -7,6 +7,32 @@ import {
 import { getFileRoots, type FileRoot } from "./file-storage.js";
 
 export const LABEL_PREFIX = "game-panel";
+
+const CONTAINER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+const CONTAINER_ID_MAX_LENGTH = 128;
+
+/**
+ * Container identifiers arrive from URL parameters and WebSocket paths, and
+ * dockerode interpolates them straight into the Docker API path. Express
+ * decodes `%2f`, so an unvalidated identifier can contain `../` and escape
+ * `/containers/<id>/json`. The daemon then answers with a 301 to the cleaned
+ * path, and docker-modem follows that redirect *without* the UNIX socket path,
+ * turning it into an outbound network request whose hostname comes from the
+ * identifier. Reject anything that is not a plain Docker ID or name.
+ */
+export function assertValidContainerId(id: unknown): string {
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    id.length > CONTAINER_ID_MAX_LENGTH ||
+    !CONTAINER_ID_PATTERN.test(id)
+  ) {
+    const error = new Error("Invalid container identifier");
+    Object.assign(error, { statusCode: 400, code: "INVALID_CONTAINER_ID" });
+    throw error;
+  }
+  return id;
+}
 export const LABEL_ENABLE = `${LABEL_PREFIX}.enable`;
 export const LABEL_NAME = `${LABEL_PREFIX}.name`;
 export const LABEL_GAME = `${LABEL_PREFIX}.game`;
@@ -45,12 +71,14 @@ export async function listManagedContainers(): Promise<ManagedContainer[]> {
 export async function getManagedContainer(
   id: string
 ): Promise<ManagedContainer> {
-  const container = docker.getContainer(id);
+  const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
 
   const labels = info.Config.Labels || {};
   if (labels[LABEL_ENABLE] !== "true") {
-    throw new Error(`Container ${id} is not managed by game-panel`);
+    const error = new Error(`Container ${id} is not managed by game-panel`);
+    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
+    throw error;
   }
 
   const managed = {
@@ -133,11 +161,11 @@ export async function checkDockerConnection(): Promise<void> {
 }
 
 export function getContainer(id: string): Docker.Container {
-  return docker.getContainer(id);
+  return docker.getContainer(assertValidContainerId(id));
 }
 
 async function getManagedDockerContainer(id: string): Promise<Docker.Container> {
-  const container = docker.getContainer(id);
+  const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
   const labels = info.Config.Labels || {};
 

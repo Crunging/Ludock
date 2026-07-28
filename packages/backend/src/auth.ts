@@ -25,6 +25,7 @@ import {
 
 const SESSION_COOKIE = "dgm_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const MIN_API_TOKEN_LENGTH = 32;
 const SCRYPT_N = 32768;
 const SCRYPT_R = 8;
 const SCRYPT_P = 3;
@@ -42,6 +43,28 @@ export interface WebSocketAuth {
   user: SessionUser;
   sessionTokenHash?: string;
   validate: () => SessionUser | null;
+}
+
+let warnedAboutWeakApiToken = "";
+
+/**
+ * The API token grants unconditional administrator access and is not subject to
+ * the login throttle, so a short token could be brute forced at request rate.
+ * Reject anything below the strength floor instead of honouring it.
+ */
+export function panelApiToken(): string {
+  const configured = process.env.PANEL_API_TOKEN?.trim() || "";
+  if (!configured) return "";
+  if (configured.length < MIN_API_TOKEN_LENGTH) {
+    if (warnedAboutWeakApiToken !== configured) {
+      warnedAboutWeakApiToken = configured;
+      console.error(
+        `PANEL_API_TOKEN is shorter than ${MIN_API_TOKEN_LENGTH} characters and has been ignored. Generate one with: openssl rand -hex 32`
+      );
+    }
+    return "";
+  }
+  return configured;
 }
 
 export class SetupWindow {
@@ -275,8 +298,7 @@ export function authMiddleware(
     return;
   }
 
-  const apiToken =
-    process.env.PANEL_API_TOKEN || process.env.PANEL_SECRET || "";
+  const apiToken = panelApiToken();
   const candidate = bearerToken(req.headers.authorization);
   if (apiToken && candidate && tokensMatch(candidate, apiToken)) {
     res.locals.user = {
@@ -315,8 +337,7 @@ export function authenticateWsRequest(
     };
   }
 
-  const apiToken =
-    process.env.PANEL_API_TOKEN || process.env.PANEL_SECRET || "";
+  const apiToken = panelApiToken();
   if (!apiToken) return null;
   if (request.headers.origin && !isSameOriginRequest(request)) {
     return null;

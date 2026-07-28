@@ -114,11 +114,17 @@ emergency administrative access. It is not the normal browser sign-in method.
 Generate a 256-bit value with `openssl rand -hex 32` and send it as
 `Authorization: Bearer <token>`.
 
+Because the token grants unconditional administrator access and is exempt from
+the login throttle, tokens shorter than 32 characters are ignored and logged as
+an error at startup rather than accepted.
+
 Terminate external access at an HTTPS reverse proxy. Secure cookies, origin
 checks, WebSockets, and HSTS work without additional panel configuration.
 
 `TRUSTED_PROXIES` is optional. It lets audit logs and rate limits use the client
 IP supplied by the directly connected proxy. Otherwise, they use the proxy IP.
+Setting it also restricts `X-Forwarded-Proto` to that proxy, so a directly
+connected client can no longer claim its own request arrived over HTTPS.
 
 For Docker, inspect the proxy address on its shared network and add `/32`:
 
