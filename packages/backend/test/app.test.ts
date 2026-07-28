@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 
 process.env.PANEL_DB_PATH = ":memory:";
-process.env.PANEL_API_TOKEN = "integration-api-secret";
+process.env.PANEL_API_TOKEN = "integration-api-secret-0123456789abcdef";
 
 const [{ createApp }, { getDockerInstance }] = await Promise.all([
   import("../src/app.js"),
@@ -82,7 +82,7 @@ after(async () => {
 
 function authorizedFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", "Bearer integration-api-secret");
+  headers.set("Authorization", "Bearer integration-api-secret-0123456789abcdef");
   return fetch(`${baseUrl}${path}`, { ...init, headers });
 }
 
@@ -503,5 +503,33 @@ describe("HTTP application", () => {
       }),
     });
     assert.equal(blocked.status, 429);
+  });
+
+  it("throttles current-password guessing on password change", async () => {
+    const guess = () =>
+      fetch(`${baseUrl}/api/account/change-password`, {
+        method: "POST",
+        headers: { Cookie: sessionCookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: "not-the-current-password",
+          newPassword: "another-replacement-password",
+        }),
+      });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      assert.equal((await guess()).status, 400);
+    }
+    assert.equal((await guess()).status, 429);
+
+    // A correct current password is still refused while the block is active.
+    const correct = await fetch(`${baseUrl}/api/account/change-password`, {
+      method: "POST",
+      headers: { Cookie: sessionCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentPassword: "replacement-password",
+        newPassword: "another-replacement-password",
+      }),
+    });
+    assert.equal(correct.status, 429);
   });
 });

@@ -40,6 +40,11 @@ function sendDockerError(
     return;
   }
 
+  if (error.code === "INVALID_CONTAINER_ID") {
+    res.status(400).json({ error: "Invalid container identifier" });
+    return;
+  }
+
   if (error.statusCode === 403 || error.code === "FORBIDDEN") {
     res.status(403).json({ error: "Container is not managed by game-panel" });
     return;
@@ -97,6 +102,8 @@ function queryValue(value: unknown): string | undefined {
 }
 
 function sendFileError(res: Response, error: unknown): void {
+  // Checked before the Docker cases below: FileStorageError carries its own
+  // statusCode and must keep its specific message.
   if (error instanceof FileStorageError) {
     const messages: Record<string, string> = {
       INVALID_PATH: "Invalid file path",
@@ -116,6 +123,21 @@ function sendFileError(res: Response, error: unknown): void {
       .json({ error: messages[error.code] || "File operation failed" });
     return;
   }
+
+  const routeError = error as DockerRouteError;
+  if (routeError.code === "INVALID_CONTAINER_ID") {
+    res.status(400).json({ error: "Invalid container identifier" });
+    return;
+  }
+  if (routeError.code === "FORBIDDEN") {
+    res.status(403).json({ error: "Container is not managed by game-panel" });
+    return;
+  }
+  if (routeError.statusCode === 404) {
+    res.status(404).json({ error: "Container not found" });
+    return;
+  }
+
   console.error("[API] File operation failed:", error);
   res.status(500).json({ error: "File operation failed" });
 }
@@ -165,7 +187,9 @@ router.get("/api/servers/:id", async (req: Request, res: Response) => {
     ]);
 
     if (server.status === "rejected") {
-      res.status(404).json({ error: server.reason?.message || "Not found" });
+      // Never reflect the underlying dockerode message; it can expose socket
+      // paths and daemon internals to any authenticated role.
+      sendDockerError(res, server.reason, "Failed to get server details");
       return;
     }
 

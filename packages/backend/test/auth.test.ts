@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { Request } from "express";
 
 process.env.PANEL_DB_PATH = ":memory:";
-process.env.PANEL_API_TOKEN = "test-api-token";
+process.env.PANEL_API_TOKEN = "test-api-token-0123456789abcdef0123";
 
 const {
   SetupWindow,
@@ -14,6 +14,7 @@ const {
   createSession,
   hashPassword,
   isSetupRequired,
+  panelApiToken,
   verifyPassword,
 } = await import("../src/auth.js");
 
@@ -138,7 +139,7 @@ describe("account authentication", () => {
       authenticateWsRequest(
         websocketRequest(
           { host: "panel.example" },
-          "/ws/console/server?token=test-api-token"
+          "/ws/console/server?token=test-api-token-0123456789abcdef0123"
         )
       ),
       null
@@ -146,10 +147,29 @@ describe("account authentication", () => {
     assert.ok(
       authenticateWsRequest(
         websocketRequest({
-          authorization: "Bearer test-api-token",
+          authorization: "Bearer test-api-token-0123456789abcdef0123",
           host: "panel.example",
         })
       )
     );
+  });
+
+  it("ignores an API token below the strength floor", () => {
+    const previous = process.env.PANEL_API_TOKEN;
+    process.env.PANEL_API_TOKEN = "short";
+    try {
+      assert.equal(panelApiToken(), "");
+      assert.equal(
+        authenticateWsRequest(
+          websocketRequest({
+            authorization: "Bearer short",
+            host: "panel.example",
+          })
+        ),
+        null
+      );
+    } finally {
+      process.env.PANEL_API_TOKEN = previous;
+    }
   });
 });

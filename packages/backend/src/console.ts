@@ -217,6 +217,8 @@ async function executeInContainer(
   execStream.on("error", (error: Error) => {
     sendMessage(ws, "error", `Command stream error: ${error.message}`);
   });
+  // Deliberately not awaited: output streams back as it arrives so that
+  // long-running commands such as `tail -f` do not block further input.
   getDockerInstance().modem.demuxStream(execStream, stdout, stderr);
 }
 

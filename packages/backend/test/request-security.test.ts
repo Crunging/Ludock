@@ -8,11 +8,12 @@ import {
 
 function request(
   headers: IncomingMessage["headers"],
-  encrypted = false
+  encrypted = false,
+  remoteAddress = "10.1.2.3"
 ): Pick<IncomingMessage, "headers" | "socket"> {
   return {
     headers,
-    socket: { encrypted } as IncomingMessage["socket"] & {
+    socket: { encrypted, remoteAddress } as IncomingMessage["socket"] & {
       encrypted?: boolean;
     },
   };
@@ -72,6 +73,36 @@ describe("request security metadata", () => {
       ),
       false
     );
+  });
+
+  it("only believes x-forwarded-proto from a declared proxy", () => {
+    const forwarded = { "x-forwarded-proto": "https", host: "panel.example" };
+    const previous = process.env.TRUSTED_PROXIES;
+    process.env.TRUSTED_PROXIES = "10.1.2.3/32";
+    try {
+      assert.equal(
+        isExternalHttpsRequest(request(forwarded, false, "10.1.2.3")),
+        true
+      );
+      assert.equal(
+        isExternalHttpsRequest(request(forwarded, false, "10.9.9.9")),
+        false,
+        "a direct client must not be able to spoof HTTPS"
+      );
+      assert.equal(
+        isSameOriginRequest(
+          request(
+            { ...forwarded, origin: "https://panel.example" },
+            false,
+            "10.9.9.9"
+          )
+        ),
+        false
+      );
+    } finally {
+      if (previous === undefined) delete process.env.TRUSTED_PROXIES;
+      else process.env.TRUSTED_PROXIES = previous;
+    }
   });
 
   it("rejects cross-host and malformed origins", () => {
