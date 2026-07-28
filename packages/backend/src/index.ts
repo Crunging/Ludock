@@ -1,34 +1,20 @@
 import { createServer } from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import express from "express";
-import cors from "cors";
 import { WebSocketServer } from "ws";
-import { router } from "./routes.js";
 import { handleConsoleConnection } from "./console.js";
-import { addEventClient } from "./events.js";
-import { authMiddleware, validateWsAuth, isAuthEnabled } from "./auth.js";
+import { addEventClient, stopEventStream } from "./events.js";
+import { authenticateWsRequest, logSetupInstructions } from "./auth.js";
+import { createApp } from "./app.js";
+import { closeDatabase } from "./database.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(authMiddleware);
-app.use(router);
-
-const frontendDist = path.resolve(__dirname, "../../frontend/dist");
-app.use(express.static(frontendDist));
-app.get("/{*splat}", (_req, res) => {
-  res.sendFile(path.join(frontendDist, "index.html"));
-});
-
+const app = createApp();
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
 server.on("upgrade", (req, socket, head) => {
-  if (!validateWsAuth(req.url || "")) {
+  const user = authenticateWsRequest(req);
+  if (!user) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;
@@ -36,9 +22,21 @@ server.on("upgrade", (req, socket, head) => {
 
   const pathname = new URL(req.url || "", `http://${req.headers.host}`).pathname;
 
-  if (pathname.startsWith("/ws/console/")) {
+  if (
+    pathname.startsWith("/ws/game-console/") ||
+    pathname.startsWith("/ws/console/")
+  ) {
     wss.handleUpgrade(req, socket, head, (ws) => {
-      handleConsoleConnection(ws, req);
+      void handleConsoleConnection(ws, req, user, "game");
+    });
+  } else if (pathname.startsWith("/ws/shell/")) {
+    if (user.role !== "admin") {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      void handleConsoleConnection(ws, req, user, "shell");
     });
   } else if (pathname === "/ws/events") {
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -52,5 +50,24 @@ server.on("upgrade", (req, socket, head) => {
 
 server.listen(PORT, () => {
   console.log(`Docker Game Manager listening on http://localhost:${PORT}`);
-  if (isAuthEnabled()) console.log("Auth enabled via PANEL_SECRET");
+  logSetupInstructions();
 });
+
+function shutdown(signal: string): void {
+  console.log(`Received ${signal}, shutting down...`);
+  stopEventStream();
+  for (const client of wss.clients) {
+    client.close(1001, "Server shutting down");
+  }
+  wss.close();
+  server.close((error) => {
+    closeDatabase();
+    if (error) {
+      console.error("Failed to shut down cleanly:", error);
+      process.exitCode = 1;
+    }
+  });
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));

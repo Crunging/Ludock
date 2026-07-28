@@ -2,10 +2,15 @@
   "name": "docker-game-manager",
   "private": true,
   "version": "0.1.0",
-  "description": "A lightweight, Docker-native game server control panel",
+  "packageManager": "pnpm@10.28.2",
+  "description": "A Docker-native game server control panel",
   "scripts": {
     "dev": "concurrently -n backend,frontend -c cyan,magenta \"pnpm --filter backend dev\" \"pnpm --filter frontend dev\"",
     "build": "pnpm --filter backend build && pnpm --filter frontend build",
+    "typecheck": "pnpm --filter backend exec tsc --noEmit && pnpm --filter frontend exec tsc -b",
+    "lint": "pnpm --filter frontend lint",
+    "test": "pnpm --filter backend test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "backend:dev": "pnpm --filter backend dev",
     "frontend:dev": "pnpm --filter frontend dev"
   },
@@ -13,6 +18,6 @@
     "concurrently": "^9.1.2"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.15.0"
   }
 }

@@ -7,24 +7,28 @@ export interface ManagedContainer {
   state: string;
   status: string;
   gameType: string;
+  gameConsole: {
+    id:
+      | "minecraft-rcon"
+      | "source-rcon"
+      | "rust-webrcon"
+      | "telnet-console"
+      | "stdin-console";
+    name: string;
+    commandPlaceholder: string;
+  } | null;
+  fileRoots: Array<{
+    id: string;
+    name: string;
+    path: string;
+  }>;
   ports: Array<{ private: number; public: number; type: string }>;
   created: number;
   labels: Record<string, string>;
 }
 
-export interface ContainerStats {
-  cpuPercent: number;
-  memUsageMB: number;
-  memLimitMB: number;
-}
-
-export interface ServerDetail {
-  server: ManagedContainer;
-  stats: ContainerStats | null;
-}
-
 export interface ConsoleMessage {
-  type: "stdout" | "stderr" | "system" | "error" | "input";
+  type: "stdout" | "stderr" | "system" | "error";
   data: string;
 }
 
@@ -36,19 +40,24 @@ export interface ContainerEvent {
   time: number;
 }
 
-const GAME_ICONS: Record<string, string> = {
-  minecraft: "⛏️",
-  valheim: "⚔️",
-  terraria: "🌳",
-  factorio: "⚙️",
-  ark: "🦕",
-  rust: "🔫",
-  csgo: "💣",
-  palworld: "🐾",
-  satisfactory: "🏭",
-  unknown: "🎮",
+const GAME_ABBREVIATIONS: Record<string, string> = {
+  minecraft: "MC",
+  valheim: "VH",
+  terraria: "TR",
+  factorio: "FA",
+  ark: "ARK",
+  rust: "RS",
+  csgo: "CS",
+  cs2: "CS2",
+  palworld: "PW",
+  satisfactory: "SF",
 };
 
-export function getGameIcon(gameType: string): string {
-  return GAME_ICONS[gameType.toLowerCase()] || GAME_ICONS.unknown;
+export function getGameAbbreviation(gameType: string): string {
+  const normalized = gameType.trim().toLowerCase();
+  return (
+    GAME_ABBREVIATIONS[normalized] ||
+    normalized.replace(/[^a-z0-9]/g, "").slice(0, 3).toUpperCase() ||
+    "GAME"
+  );
 }

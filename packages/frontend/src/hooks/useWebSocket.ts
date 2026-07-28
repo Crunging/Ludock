@@ -18,37 +18,12 @@ export function useWebSocket({
   maxRetries = 10,
 }: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
-  const retriesRef = useRef(0);
+  const onMessageRef = useRef(onMessage);
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
 
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    setStatus("connecting");
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setStatus("connected");
-      retriesRef.current = 0;
-    };
-
-    ws.onmessage = (event) => {
-      onMessage?.(event.data);
-    };
-
-    ws.onclose = () => {
-      setStatus("disconnected");
-      wsRef.current = null;
-
-      if (reconnect && retriesRef.current < maxRetries) {
-        retriesRef.current++;
-        setTimeout(connect, reconnectDelay);
-      }
-    };
-
-    ws.onerror = () => {};
-  }, [url, onMessage, reconnect, reconnectDelay, maxRetries]);
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   const send = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -56,17 +31,59 @@ export function useWebSocket({
     }
   }, []);
 
-  const disconnect = useCallback(() => {
-    retriesRef.current = maxRetries;
-    wsRef.current?.close();
-  }, [maxRetries]);
-
   useEffect(() => {
+    if (!url) {
+      return;
+    }
+
+    let cancelled = false;
+    let retries = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    function connect() {
+      if (cancelled) return;
+
+      setStatus("connecting");
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (cancelled) {
+          ws.close();
+          return;
+        }
+        setStatus("connected");
+        retries = 0;
+      };
+
+      ws.onmessage = (event) => {
+        onMessageRef.current?.(event.data);
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
+        if (cancelled) return;
+
+        setStatus("disconnected");
+        if (reconnect && retries < maxRetries) {
+          retries += 1;
+          reconnectTimer = setTimeout(connect, reconnectDelay);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
     connect();
     return () => {
-      disconnect();
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-  }, [connect, disconnect]);
+  }, [url, reconnect, reconnectDelay, maxRetries]);
 
-  return { status, send, disconnect };
+  return { status, send };
 }

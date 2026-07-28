@@ -1,24 +1,30 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
+import { apiFetch } from "../api";
 
 export default function Dashboard() {
   const { servers, loading, error, refresh } = useServers();
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleAction = useCallback(
     async (id: string, action: "start" | "stop" | "restart") => {
       try {
-        const res = await fetch(`/api/servers/${id}/${action}`, {
+        setActionError(null);
+        const response = await apiFetch(`/api/servers/${id}/${action}`, {
           method: "POST",
         });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `Action failed (HTTP ${res.status})`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(
+            body.error || `Action failed (HTTP ${response.status})`
+          );
         }
-        // The Docker events WebSocket will trigger a refresh
-      } catch (err: any) {
-        console.error(`Failed to ${action} container:`, err);
-        // Still refresh to get latest state
+        refresh();
+      } catch (error: unknown) {
+        setActionError(
+          error instanceof Error ? error.message : `Failed to ${action} server`
+        );
         refresh();
       }
     },
@@ -35,6 +41,15 @@ export default function Dashboard() {
             : "Monitoring containers with game-panel.enable=true"}
         </p>
       </div>
+
+      {actionError && (
+        <div className="alert alert--error" role="alert">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
+      )}
 
       {loading && servers.length === 0 && (
         <div className="loading-spinner">
@@ -55,8 +70,9 @@ export default function Dashboard() {
           <div className="empty-state__icon">?</div>
           <div className="empty-state__title">No Servers Found</div>
           <div className="empty-state__description">
-            No Docker containers with the <strong>game-panel.enable=true</strong> label
-            were found. Add this label to your game server containers to manage them here.
+            No Docker containers with the{" "}
+            <strong>game-panel.enable=true</strong> label were found. Add this
+            label to your game server containers to manage them here.
           </div>
           <div className="empty-state__code">
             <span>docker run</span> -l <span>game-panel.enable=true</span> \{"\n"}

@@ -3,16 +3,32 @@ import { getDockerInstance, LABEL_ENABLE } from "./docker.js";
 
 const eventClients = new Set<WebSocket>();
 let eventStreamActive = false;
+let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function addEventClient(ws: WebSocket): void {
   eventClients.add(ws);
 
-  ws.on("close", () => eventClients.delete(ws));
-  ws.on("error", () => eventClients.delete(ws));
+  const removeClient = () => {
+    eventClients.delete(ws);
+    if (eventClients.size === 0) stopEventStream();
+  };
+  ws.on("close", removeClient);
+  ws.on("error", removeClient);
 
   if (!eventStreamActive) {
     startEventStream();
   }
+}
+
+export function stopEventStream(): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  eventStream?.destroy?.();
+  eventStream = null;
+  eventStreamActive = false;
 }
 
 async function startEventStream(): Promise<void> {
@@ -28,6 +44,7 @@ async function startEventStream(): Promise<void> {
         label: [`${LABEL_ENABLE}=true`],
       },
     });
+    eventStream = stream;
 
     stream.on("data", (chunk: Buffer) => {
       try {
@@ -35,7 +52,7 @@ async function startEventStream(): Promise<void> {
         const payload = JSON.stringify({
           type: "container_event",
           action: event.Action,
-          containerId: event.id,
+          containerId: event.Actor?.ID || event.id || "",
           name: event.Actor?.Attributes?.name || "",
           time: event.time,
         });
@@ -46,27 +63,37 @@ async function startEventStream(): Promise<void> {
           }
         }
       } catch {
-        // malformed event
+        return;
       }
     });
 
-    stream.on("error", (err) => {
-      console.error("[Events] Docker event stream error:", err.message);
-      eventStreamActive = false;
-      setTimeout(() => {
-        if (eventClients.size > 0) startEventStream();
-      }, 5000);
+    stream.on("error", (error) => {
+      if (eventStream !== stream) return;
+      console.error("[Events] Docker event stream error:", error.message);
+      scheduleReconnect(5000);
     });
 
     stream.on("end", () => {
+      if (eventStream !== stream) return;
       console.warn("[Events] Docker event stream ended, reconnecting...");
-      eventStreamActive = false;
-      setTimeout(() => {
-        if (eventClients.size > 0) startEventStream();
-      }, 2000);
+      scheduleReconnect(2000);
     });
-  } catch (err: any) {
-    console.error("[Events] Failed to start event stream:", err.message);
-    eventStreamActive = false;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[Events] Failed to start event stream:", message);
+    scheduleReconnect(5000);
   }
+}
+
+function scheduleReconnect(delay: number): void {
+  if (reconnectTimer) return;
+
+  eventStream = null;
+  eventStreamActive = false;
+  if (eventClients.size === 0) return;
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void startEventStream();
+  }, delay);
 }

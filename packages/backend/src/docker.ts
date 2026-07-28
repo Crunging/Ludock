@@ -1,6 +1,10 @@
 import Docker from "dockerode";
-
-const docker = new Docker({ socketPath: "/var/run/docker.sock" });
+import { docker } from "./docker-client.js";
+import {
+  getGameConsoleAdapterSummary,
+  type GameConsoleAdapterId,
+} from "./game-console.js";
+import { getFileRoots, type FileRoot } from "./file-storage.js";
 
 export const LABEL_PREFIX = "game-panel";
 export const LABEL_ENABLE = `${LABEL_PREFIX}.enable`;
@@ -16,6 +20,12 @@ export interface ManagedContainer {
   state: string;
   status: string;
   gameType: string;
+  gameConsole: {
+    id: GameConsoleAdapterId;
+    name: string;
+    commandPlaceholder: string;
+  } | null;
+  fileRoots: FileRoot[];
   ports: Array<{ private: number; public: number; type: string }>;
   created: number;
   labels: Record<string, string>;
@@ -43,7 +53,7 @@ export async function getManagedContainer(
     throw new Error(`Container ${id} is not managed by game-panel`);
   }
 
-  return {
+  const managed = {
     id: info.Id,
     shortId: info.Id.substring(0, 12),
     name: info.Name.replace(/^\//, ""),
@@ -65,7 +75,12 @@ export async function getManagedContainer(
       }
     ),
     created: new Date(info.Created).getTime(),
-    labels,
+    labels: panelLabels(labels),
+  };
+  return {
+    ...managed,
+    gameConsole: getGameConsoleAdapterSummary(managed),
+    fileRoots: getFileRoots(managed),
   };
 }
 
@@ -95,23 +110,44 @@ export async function getContainerStats(
 }
 
 export async function startContainer(id: string): Promise<void> {
-  await docker.getContainer(id).start();
+  const container = await getManagedDockerContainer(id);
+  await container.start();
 }
 
 export async function stopContainer(id: string): Promise<void> {
-  await docker.getContainer(id).stop();
+  const container = await getManagedDockerContainer(id);
+  await container.stop();
 }
 
 export async function restartContainer(id: string): Promise<void> {
-  await docker.getContainer(id).restart();
+  const container = await getManagedDockerContainer(id);
+  await container.restart();
 }
 
 export function getDockerInstance(): Docker {
   return docker;
 }
 
+export async function checkDockerConnection(): Promise<void> {
+  await docker.ping();
+}
+
 export function getContainer(id: string): Docker.Container {
   return docker.getContainer(id);
+}
+
+async function getManagedDockerContainer(id: string): Promise<Docker.Container> {
+  const container = docker.getContainer(id);
+  const info = await container.inspect();
+  const labels = info.Config.Labels || {};
+
+  if (labels[LABEL_ENABLE] !== "true") {
+    const error = new Error(`Container ${id} is not managed by game-panel`);
+    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
+    throw error;
+  }
+
+  return container;
 }
 
 function toManagedContainer(
@@ -120,7 +156,7 @@ function toManagedContainer(
   const labels = container.Labels || {};
   const name = (container.Names[0] || "").replace(/^\//, "");
 
-  return {
+  const managed = {
     id: container.Id,
     shortId: container.Id.substring(0, 12),
     name,
@@ -135,6 +171,19 @@ function toManagedContainer(
       type: p.Type || "tcp",
     })),
     created: container.Created * 1000,
-    labels,
+    labels: panelLabels(labels),
   };
+  return {
+    ...managed,
+    gameConsole: getGameConsoleAdapterSummary(managed),
+    fileRoots: getFileRoots(managed),
+  };
+}
+
+function panelLabels(labels: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(labels).filter(([key]) =>
+      key.startsWith(`${LABEL_PREFIX}.`)
+    )
+  );
 }

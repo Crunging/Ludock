@@ -1,27 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useWebSocket } from "../hooks/useWebSocket";
 import type { ConsoleMessage, ManagedContainer } from "../types";
+import { apiFetch, authenticatedWebSocketUrl } from "../api";
+import { useAuth } from "../auth-context";
+import { useNavigate } from "../navigation-context";
 
-export default function Console() {
-  const { containerId } = useParams<{ containerId: string }>();
+export default function Console({ containerId }: { containerId: string }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const readOnly = user?.role === "viewer";
+  const [mode, setMode] = useState<"game" | "shell">("game");
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [command, setCommand] = useState("");
   const [serverInfo, setServerInfo] = useState<ManagedContainer | null>(null);
+  const gameConsoleAvailable = Boolean(serverInfo?.gameConsole);
+  const canSendGameCommand = !readOnly && gameConsoleAvailable;
+  const canSendShellCommand = user?.role === "admin";
+  const canSendCommand =
+    mode === "game" ? canSendGameCommand : canSendShellCommand;
 
   useEffect(() => {
-    if (!containerId) return;
-    fetch(`/api/servers/${containerId}`)
-      .then((r) => r.json())
-      .then((data) => setServerInfo(data.server))
-      .catch(() => {});
+    apiFetch(`/api/servers/${encodeURIComponent(containerId)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<{ server: ManagedContainer }>;
+      })
+      .then(({ server }) => setServerInfo(server))
+      .catch(() => setServerInfo(null));
   }, [containerId]);
 
   useEffect(() => {
@@ -68,9 +79,7 @@ export default function Console() {
     terminal.loadAddon(webLinksAddon);
     terminal.open(termRef.current);
 
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-    });
+    requestAnimationFrame(() => fitAddon.fit());
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -104,13 +113,18 @@ export default function Console() {
           terminal.write(`\x1b[31;1m[error] ${msg.data}\x1b[0m\r\n`);
           break;
       }
-    } catch {}
+    } catch {
+      terminalRef.current?.write(
+        "\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n"
+      );
+    }
   }, []);
 
-  const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = containerId
-    ? `${wsProtocol}//${window.location.host}/ws/console/${containerId}`
-    : "";
+  const wsUrl = authenticatedWebSocketUrl(
+    mode === "game"
+      ? `/ws/game-console/${containerId}`
+      : `/ws/shell/${containerId}`
+  );
 
   const { status, send } = useWebSocket({
     url: wsUrl,
@@ -125,6 +139,16 @@ export default function Console() {
     send(JSON.stringify({ type: "input", data: cmd }));
     setCommand("");
   }, [command, send]);
+
+  const switchMode = useCallback((nextMode: "game" | "shell") => {
+    setMode(nextMode);
+    setCommand("");
+    terminalRef.current?.write(
+      `\r\n\x1b[36m[system] Switched to ${
+        nextMode === "game" ? "game console" : "container shell"
+      }\x1b[0m\r\n`
+    );
+  }, []);
 
   const statusLabel =
     status === "connected"
@@ -147,13 +171,36 @@ export default function Console() {
           </button>
           <div>
             <div className="console-header__name">
-              {serverInfo?.displayName || containerId?.substring(0, 12) || "Container"}
+              {serverInfo?.displayName || containerId.substring(0, 12)}
             </div>
             <div className="console-header__status">
-              {serverInfo?.image || "Loading..."}
+              {mode === "game"
+                ? serverInfo?.gameConsole?.name || "Container logs"
+                : "Administrator container shell"}{" "}
+              · {serverInfo?.image || "Loading..."}
             </div>
           </div>
         </div>
+        {user?.role === "admin" && (
+          <div className="console-mode-tabs" role="tablist" aria-label="Console mode">
+            <button
+              className={mode === "game" ? "console-mode-tab--active" : ""}
+              onClick={() => switchMode("game")}
+              role="tab"
+              aria-selected={mode === "game"}
+            >
+              Game Console
+            </button>
+            <button
+              className={mode === "shell" ? "console-mode-tab--active" : ""}
+              onClick={() => switchMode("shell")}
+              role="tab"
+              aria-selected={mode === "shell"}
+            >
+              Container Shell
+            </button>
+          </div>
+        )}
         <div className={`connection-status connection-status--${status}`}>
           <span className="status-dot" />
           {statusLabel}
@@ -162,30 +209,55 @@ export default function Console() {
 
       <div className="console-terminal" ref={termRef} />
 
-      <div className="console-input">
-        <span className="console-input__prompt">{">"}</span>
-        <input
-          className="console-input__field"
-          type="text"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") sendCommand();
-          }}
-          placeholder="Type a command and press Enter..."
-          disabled={status !== "connected"}
-          id="console-input"
-          autoFocus
-        />
-        <button
-          className="console-input__send"
-          onClick={sendCommand}
-          disabled={status !== "connected" || !command.trim()}
-          id="btn-console-send"
-        >
-          Send
-        </button>
-      </div>
+      {mode === "game" && readOnly ? (
+        <div className="console-warning">Your account has read-only log access.</div>
+      ) : mode === "game" && !gameConsoleAvailable ? (
+        <div className="console-warning">
+          No game console adapter is configured for this server. Live logs are
+          still available.
+        </div>
+      ) : (
+        <>
+          <div className="console-warning">
+            {mode === "game"
+              ? `Commands are sent directly through ${
+                  serverInfo?.gameConsole?.name || "the game console"
+                }. Enter each command exactly as the game expects it.`
+              : "Advanced access: commands run as a new process inside the container."}
+          </div>
+          <div className="console-input">
+            <span className="console-input__prompt">{">"}</span>
+            <input
+              className="console-input__field"
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") sendCommand();
+              }}
+              placeholder={
+                mode === "game"
+                  ? serverInfo?.gameConsole?.commandPlaceholder ||
+                    "Enter a game command..."
+                  : "Run a container shell command..."
+              }
+              disabled={status !== "connected" || !canSendCommand}
+              id="console-input"
+              autoFocus
+            />
+            <button
+              className="console-input__send"
+              onClick={sendCommand}
+              disabled={
+                status !== "connected" || !canSendCommand || !command.trim()
+              }
+              id="btn-console-send"
+            >
+              Send
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -2,7 +2,11 @@ packages:
   - packages/*
 
 onlyBuiltDependencies:
-  - cpu-features
   - esbuild
   - protobufjs
-  - ssh2
+
+overrides:
+  "@grpc/grpc-js": 1.14.4
+  body-parser: 2.3.0
+  protobufjs: 7.6.5
+  qs: 6.15.2

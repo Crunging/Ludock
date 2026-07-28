@@ -1,26 +1,54 @@
-import type { WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
-import { getContainer, getManagedContainer, getDockerInstance } from "./docker.js";
+import { PassThrough } from "node:stream";
+import type Docker from "dockerode";
+import type { WebSocket } from "ws";
+import {
+  getContainer,
+  getDockerInstance,
+  getManagedContainer,
+} from "./docker.js";
+import { resolveGameConsoleAdapter } from "./game-console.js";
+import { executeGameCommand } from "./game-console-runtime.js";
+import { writeAuditLog, type SessionUser } from "./database.js";
 
-// Uses a dual-stream approach: logs for output, exec for input.
-// Never calls container.attach(), so no risk of killing PID 1.
+export type ConsoleMode = "game" | "shell";
 
 export async function handleConsoleConnection(
   ws: WebSocket,
-  req: IncomingMessage
+  req: IncomingMessage,
+  user: SessionUser,
+  mode: ConsoleMode
 ): Promise<void> {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
-  const segments = url.pathname.split("/").filter(Boolean);
-  const containerId = segments[segments.length - 1];
+  const containerId = url.pathname.split("/").filter(Boolean).at(-1);
+  const pendingMessages: string[] = [];
+  let processMessage: ((raw: string) => Promise<void>) | null = null;
+
+  ws.on("message", (raw) => {
+    const message = raw.toString();
+    if (processMessage) {
+      void processMessage(message);
+    } else if (pendingMessages.length < 10) {
+      pendingMessages.push(message);
+    } else {
+      sendMessage(ws, "error", "Too many commands queued during connection setup");
+    }
+  });
 
   if (!containerId) {
     sendMessage(ws, "error", "Missing container ID");
     ws.close(1008, "Missing container ID");
     return;
   }
+  if (mode === "shell" && user.role !== "admin") {
+    sendMessage(ws, "error", "Container shell access requires an administrator");
+    ws.close(1008, "Administrator access required");
+    return;
+  }
 
+  let server;
   try {
-    await getManagedContainer(containerId);
+    server = await getManagedContainer(containerId);
   } catch {
     sendMessage(ws, "error", `Container ${containerId} is not managed`);
     ws.close(1008, "Container not managed");
@@ -28,10 +56,28 @@ export async function handleConsoleConnection(
   }
 
   const container = getContainer(containerId);
-  sendMessage(ws, "system", `Connected to container ${containerId.substring(0, 12)}`);
+  const adapter = resolveGameConsoleAdapter(server);
+  sendMessage(
+    ws,
+    "system",
+    mode === "game"
+      ? adapter
+        ? `Connected to ${adapter.name}`
+        : "No game console adapter is configured; showing logs only"
+      : `Administrator shell connected to ${containerId.substring(0, 12)}`
+  );
+  writeAuditLog({
+    userId: user.id === "api-token" ? undefined : user.id,
+    action:
+      mode === "game"
+        ? "container.game-console.opened"
+        : "container.shell.opened",
+    targetType: "container",
+    targetId: containerId,
+    ipAddress: req.socket.remoteAddress,
+  });
 
   let logStream: NodeJS.ReadableStream | null = null;
-
   try {
     const stream = await container.logs({
       follow: true,
@@ -40,103 +86,131 @@ export async function handleConsoleConnection(
       tail: 200,
       timestamps: false,
     });
-
     logStream = stream;
-
-    // Docker multiplexes stdout/stderr when tty=false. Each frame has an 8-byte
-    // header: [stream_type(1), 0, 0, 0, size(4)]. When tty=true, it's raw.
-    stream.on("data", (chunk: Buffer) => {
-      if (ws.readyState !== ws.OPEN) return;
-
-      const firstByte = chunk[0];
-      if ((firstByte === 1 || firstByte === 2) && chunk.length >= 8) {
-        let offset = 0;
-        while (offset < chunk.length - 7) {
-          const streamType = chunk[offset];
-          const frameSize = chunk.readUInt32BE(offset + 4);
-          const payload = chunk.subarray(offset + 8, offset + 8 + frameSize);
-          const type = streamType === 2 ? "stderr" : "stdout";
-          sendMessage(ws, type, payload.toString("utf-8"));
-          offset += 8 + frameSize;
-        }
-      } else {
-        sendMessage(ws, "stdout", chunk.toString("utf-8"));
-      }
+    stream.on("data", (chunk: Buffer) => sendLogChunk(ws, chunk));
+    stream.on("error", (error) => {
+      sendMessage(ws, "error", `Log stream error: ${error.message}`);
     });
-
-    stream.on("error", (err) => {
-      sendMessage(ws, "error", `Log stream error: ${err.message}`);
-    });
-
     stream.on("end", () => {
       sendMessage(ws, "system", "Log stream ended (container may have stopped)");
     });
-  } catch (err: any) {
-    sendMessage(ws, "error", `Failed to attach log stream: ${err.message}`);
+  } catch (error: unknown) {
+    sendMessage(ws, "error", `Failed to open logs: ${errorMessage(error)}`);
   }
 
-  ws.on("message", async (raw) => {
-    let msg: { type: string; data: string };
+  processMessage = async (raw: string) => {
+    let message: { type?: unknown; data?: unknown };
     try {
-      msg = JSON.parse(raw.toString());
+      message = JSON.parse(raw) as { type?: unknown; data?: unknown };
     } catch {
       sendMessage(ws, "error", "Invalid message format (expected JSON)");
       return;
     }
-
-    if (msg.type !== "input" || typeof msg.data !== "string") {
+    if (message.type !== "input" || typeof message.data !== "string") {
       sendMessage(ws, "error", 'Expected { type: "input", data: "..." }');
       return;
     }
 
-    const command = msg.data.trim();
+    const command = message.data.trim();
     if (!command) return;
+    if (mode === "game" && user.role === "viewer") {
+      sendMessage(ws, "error", "Your account has read-only log access");
+      return;
+    }
+    if (mode === "game" && !adapter) {
+      sendMessage(ws, "error", "This server has no game console adapter");
+      return;
+    }
+    const limit = mode === "game" ? 1024 : 4096;
+    if (command.length > limit) {
+      sendMessage(ws, "error", `Command exceeds the ${limit} character limit`);
+      return;
+    }
 
     try {
-      const exec = await container.exec({
-        Cmd: ["/bin/sh", "-c", command],
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: false,
+      writeAuditLog({
+        userId: user.id === "api-token" ? undefined : user.id,
+        action:
+          mode === "game"
+            ? "container.game-command.execute"
+            : "container.shell.execute",
+        targetType: "container",
+        targetId: containerId,
+        ipAddress: req.socket.remoteAddress,
       });
-
-      const execStream = await exec.start({ hijack: true, stdin: false });
-
-      const chunks: Buffer[] = [];
-      execStream.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-
-      execStream.on("end", () => {
-        const output = Buffer.concat(chunks).toString("utf-8");
-        const cleaned = stripMultiplexHeaders(output);
-        if (cleaned.trim()) {
-          sendMessage(ws, "stdout", cleaned);
-        }
-      });
-
-      execStream.on("error", (err: Error) => {
-        sendMessage(ws, "error", `Exec error: ${err.message}`);
-      });
-    } catch (err: any) {
-      sendMessage(ws, "error", `Failed to exec command: ${err.message}`);
+      if (mode === "game") {
+        await executeGameCommand(container, server, adapter!, command, {
+          stdout: (data) => sendMessage(ws, "stdout", data),
+          stderr: (data) => sendMessage(ws, "stderr", data),
+          system: (data) => sendMessage(ws, "system", data),
+        });
+      } else {
+        await executeInContainer(
+          container,
+          {
+            Cmd: ["/bin/sh", "-c", command],
+            AttachStdout: true,
+            AttachStderr: true,
+            Tty: false,
+          },
+          ws
+        );
+      }
+    } catch (error: unknown) {
+      const prefix = mode === "game" ? "Game command failed" : "Shell command failed";
+      sendMessage(ws, "error", `${prefix}: ${errorMessage(error)}`);
     }
-  });
+  };
 
-  ws.on("close", () => {
+  for (const pendingMessage of pendingMessages.splice(0)) {
+    void processMessage(pendingMessage);
+  }
+
+  const destroyLogStream = () => {
     if (logStream) {
-      (logStream as any).destroy?.();
+      (logStream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
       logStream = null;
     }
+  };
+  ws.on("close", destroyLogStream);
+  ws.on("error", (error) => {
+    console.error(`[Console] WebSocket error for ${containerId}:`, error.message);
+    destroyLogStream();
   });
+}
 
-  ws.on("error", (err) => {
-    console.error(`[Console] WebSocket error for ${containerId}:`, err.message);
-    if (logStream) {
-      (logStream as any).destroy?.();
-      logStream = null;
-    }
+async function executeInContainer(
+  container: Docker.Container,
+  options: Docker.ExecCreateOptions,
+  ws: WebSocket
+): Promise<void> {
+  const exec = await container.exec(options);
+  const execStream = await exec.start({ hijack: true, stdin: false });
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  stdout.on("data", (chunk: Buffer) => sendMessage(ws, "stdout", chunk.toString()));
+  stderr.on("data", (chunk: Buffer) => sendMessage(ws, "stderr", chunk.toString()));
+  execStream.on("error", (error: Error) => {
+    sendMessage(ws, "error", `Command stream error: ${error.message}`);
   });
+  getDockerInstance().modem.demuxStream(execStream, stdout, stderr);
+}
+
+function sendLogChunk(ws: WebSocket, chunk: Buffer): void {
+  if (ws.readyState !== ws.OPEN) return;
+  const firstByte = chunk[0];
+  if ((firstByte === 1 || firstByte === 2) && chunk.length >= 8) {
+    let offset = 0;
+    while (offset <= chunk.length - 8) {
+      const frameSize = chunk.readUInt32BE(offset + 4);
+      if (offset + 8 + frameSize > chunk.length) break;
+      const payload = chunk.subarray(offset + 8, offset + 8 + frameSize);
+      sendMessage(ws, chunk[offset] === 2 ? "stderr" : "stdout", payload.toString());
+      offset += 8 + frameSize;
+    }
+    return;
+  }
+  sendMessage(ws, "stdout", chunk.toString());
 }
 
 function sendMessage(
@@ -144,26 +218,9 @@ function sendMessage(
   type: "stdout" | "stderr" | "system" | "error",
   data: string
 ): void {
-  if (ws.readyState === ws.OPEN) {
-    ws.send(JSON.stringify({ type, data }));
-  }
+  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data }));
 }
 
-function stripMultiplexHeaders(raw: string): string {
-  const buf = Buffer.from(raw, "utf-8");
-  const firstByte = buf[0];
-
-  if ((firstByte === 1 || firstByte === 2) && buf.length >= 8) {
-    const parts: string[] = [];
-    let offset = 0;
-    while (offset < buf.length - 7) {
-      const frameSize = buf.readUInt32BE(offset + 4);
-      if (offset + 8 + frameSize > buf.length) break;
-      parts.push(buf.subarray(offset + 8, offset + 8 + frameSize).toString("utf-8"));
-      offset += 8 + frameSize;
-    }
-    if (parts.length > 0) return parts.join("");
-  }
-
-  return raw;
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

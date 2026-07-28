@@ -1,7 +1,12 @@
-node_modules
-dist
+**/node_modules
+**/dist
+.pnpm-store
+coverage
+data
 .git
+.github
 *.md
-!README.md
 .env
 .env.*
+**/.DS_Store
+**/package-lock.json
