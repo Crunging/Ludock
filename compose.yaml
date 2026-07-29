@@ -1,20 +1,15 @@
 services:
   panel:
-    image: ${PANEL_IMAGE:-ghcr.io/crunging/docker-game-manager:latest}
+    image: ghcr.io/crunging/docker-game-manager:latest
     pull_policy: always
     ports:
       - "3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - panel-data:/data
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - PANEL_API_TOKEN=${PANEL_API_TOKEN:-}
-      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
-      - AUDIT_LOG_MAX_ROWS=${AUDIT_LOG_MAX_ROWS:-100000}
-      - FILE_HELPER_IMAGE=${FILE_HELPER_IMAGE:-alpine:3.22}
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+    env_file:
+      - path: .env
+        required: false
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
