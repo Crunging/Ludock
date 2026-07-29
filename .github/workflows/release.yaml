@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: stable-release-${{ github.ref }}
+  group: stable-release
   cancel-in-progress: false
 
 env:
@@ -45,10 +45,6 @@ jobs:
           set -euo pipefail
 
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-              echo "::error::Manual stable releases must run from main."
-              exit 1
-            fi
             tag="v${REQUESTED_VERSION#v}"
           else
             tag="$GITHUB_REF_NAME"
@@ -96,7 +92,6 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'refs/heads/main' || github.ref }}
           persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Create release tag
@@ -165,7 +160,7 @@ jobs:
               range="$previous..$RELEASE_TAG"
             fi
 
-            git log --first-parent --format='- %s (`%h`)' "$range"
+            git log --first-parent --format="- %s (\`%h\`)" "$range"
 
             if [[ -n "$previous" ]]; then
               echo
