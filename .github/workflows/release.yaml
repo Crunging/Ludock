@@ -2,14 +2,10 @@ name: Stable release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release (for example, 0.1.1)"
-        required: true
-        type: string
+    branches:
+      - main
+    paths:
+      - package.json
 
 permissions:
   contents: write
@@ -28,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Check out repository
@@ -38,16 +35,24 @@ jobs:
 
       - name: Validate release version
         id: version
-        env:
-          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="v${REQUESTED_VERSION#v}"
-          else
-            tag="$GITHUB_REF_NAME"
+          package_version="$(node -p "require('./package.json').version")"
+          tag="v$package_version"
+          previous_version="$(
+            git show "${GITHUB_SHA}^:package.json" |
+              node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version"
+          )"
+
+          if [[ "$package_version" == "$previous_version" ]]; then
+            echo "::notice::package.json changed without a version change; no release needed."
+            {
+              echo "should_release=false"
+              echo "tag=$tag"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -55,14 +60,12 @@ jobs:
             exit 1
           fi
 
-          package_version="$(node -p "require('./package.json').version")"
           if [[ "$tag" != "v$package_version" ]]; then
             echo "::error::$tag does not match package.json version $package_version."
             exit 1
           fi
 
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&
-             git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
             tagged_commit="$(git rev-list -n 1 "$tag")"
             current_commit="$(git rev-parse HEAD)"
             if [[ "$tagged_commit" != "$current_commit" ]]; then
@@ -71,10 +74,14 @@ jobs:
             fi
           fi
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "should_release=true"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
 
   check:
     needs: validate
+    if: needs.validate.outputs.should_release == 'true'
     uses: ./.github/workflows/checks.yaml
 
   release:
@@ -92,10 +99,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
+          persist-credentials: true
 
       - name: Create release tag
-        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
