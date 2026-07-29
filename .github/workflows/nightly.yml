@@ -23,8 +23,6 @@ env:
 jobs:
   check:
     uses: ./.github/workflows/checks.yml
-    with:
-      build_image: false
 
   release:
     name: Publish nightly image and release
