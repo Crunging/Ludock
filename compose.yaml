@@ -6,7 +6,7 @@ services:
       - "3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - panel-data:/data
+      - ./data:/data
     env_file:
       - path: .env
         required: false
@@ -17,6 +17,3 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-
-volumes:
-  panel-data:

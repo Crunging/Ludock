@@ -224,15 +224,15 @@ Docker volume or bind mount.
 
 ## Operations
 
-Account data is stored at `/data/panel.db` in the persistent `panel-data`
-volume. Do not run the panel without this volume: deleting it removes accounts,
-sessions, and audit history.
+Account data is stored in `./data/panel.db` beside the Compose file and mounted
+at `/data/panel.db` in the container. Deleting it removes accounts, sessions,
+and audit history.
 
 To take a consistent backup with Docker Compose:
 
 ```bash
 docker compose stop panel
-docker compose cp panel:/data/panel.db ./panel.db.backup
+cp ./data/panel.db ./panel.db.backup
 docker compose start panel
 ```
 
