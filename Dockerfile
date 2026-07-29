@@ -34,7 +34,20 @@ RUN pnpm install --prod --frozen-lockfile
 FROM node:24-alpine AS runtime
 WORKDIR /app
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+# The application only needs the Node.js runtime. Removing the package managers
+# bundled in the base image avoids shipping unused tooling and its dependency
+# tree in production.
+RUN rm -rf \
+      /usr/local/lib/node_modules/npm \
+      /usr/local/lib/node_modules/corepack \
+      /opt/yarn-v1.22.22 \
+    && rm -f \
+      /usr/local/bin/npm \
+      /usr/local/bin/npx \
+      /usr/local/bin/corepack \
+      /usr/local/bin/yarn \
+      /usr/local/bin/yarnpkg
+
 COPY packages/backend/package.json packages/backend/
 
 # Copied rather than installed here, which keeps pnpm and corepack out of the
