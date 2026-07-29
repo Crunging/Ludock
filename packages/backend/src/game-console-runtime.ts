@@ -10,6 +10,7 @@ import {
   type GameConsoleAdapter,
 } from "./game-console.js";
 import type { ManagedContainer } from "./docker.js";
+import { rawDataToString } from "./ws-message.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -104,7 +105,8 @@ export async function executeSourceRcon(
       clearTimeout(timeout);
       if (responseTimer) clearTimeout(responseTimer);
       socket.destroy();
-      error ? reject(error) : resolve(response);
+      if (error) reject(error);
+      else resolve(response);
     };
 
     socket.setNoDelay(true);
@@ -168,7 +170,8 @@ export async function executeRustWebRcon(
       settled = true;
       clearTimeout(timeout);
       socket.close();
-      error ? reject(error) : resolve(response);
+      if (error) reject(error);
+      else resolve(response);
     };
 
     socket.once("open", () => {
@@ -182,7 +185,7 @@ export async function executeRustWebRcon(
     });
     socket.on("message", (raw: RawData) => {
       try {
-        const message = JSON.parse(raw.toString()) as {
+        const message = JSON.parse(rawDataToString(raw)) as {
           Identifier?: unknown;
           Message?: unknown;
         };
@@ -226,7 +229,8 @@ export async function executeTelnetCommand(
       clearTimeout(timeout);
       if (quietTimer) clearTimeout(quietTimer);
       socket.destroy();
-      error ? reject(error) : resolve(cleanTelnetOutput(output, command));
+      if (error) reject(error);
+      else resolve(cleanTelnetOutput(output, command));
     };
 
     socket.setTimeout(CONNECT_TIMEOUT_MS, () =>
@@ -435,7 +439,7 @@ function isValidConsoleHost(host: string): boolean {
   return (
     host.length <= 253 &&
     !host.includes("://") &&
-    !/[\/\\\s@?#]/.test(host) &&
+    !/[/\\\s@?#]/.test(host) &&
     /^[A-Za-z0-9_.:[\]-]+$/.test(host)
   );
 }

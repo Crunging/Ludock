@@ -60,8 +60,17 @@ docker run -d \
   -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v game-panel-data:/data \
-  docker-game-manager
+  ghcr.io/crunging/docker-game-manager:latest
 ```
+
+Images are published for `linux/amd64` and `linux/arm64`, so the same tag works
+on x86 servers, Apple Silicon, and 64-bit Raspberry Pi.
+
+Stable releases are published as `latest`, `MAJOR`, `MAJOR.MINOR`, and
+`MAJOR.MINOR.PATCH`. The moving tags only ever advance: a patch released from an
+older branch updates its own series without taking `latest` backwards. Builds
+from every commit to `main` are published as `nightly` and an immutable
+`nightly-RUN-SHA` tag, and the ten most recent nightly releases are retained.
 
 The panel will be available at `http://localhost:3000`. On first launch, create
 the initial administrator account in the browser within five minutes. If the

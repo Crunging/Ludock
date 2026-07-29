@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "lint": "eslint .",
     "test": "tsx --test test/**/*.test.ts",
     "recover": "tsx src/recovery.ts",
     "start": "node dist/index.js"
@@ -19,13 +20,17 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/dockerode": "^4.0.1",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
     "@types/proxy-addr": "^2.0.3",
     "@types/tar-stream": "^3.1.4",
     "@types/ws": "^8.18.1",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0",
     "tsx": "^4.23.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

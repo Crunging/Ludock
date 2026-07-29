@@ -1,0 +1,136 @@
+name: Stable release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: stable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Stable releases require a vMAJOR.MINOR.PATCH tag."
+            exit 1
+          fi
+
+  check:
+    needs: validate
+    uses: ./.github/workflows/checks.yml
+    with:
+      build_image: false
+
+  release:
+    name: Publish stable image and release
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Full history so the tag being released can be compared against
+          # every other release tag.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A hotfix cut from an older branch must not drag the moving tags
+      # backwards, so each one is applied only when this release is the newest
+      # in the series that tag represents.
+      - name: Determine which moving tags this release owns
+        id: rank
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current="$GITHUB_REF_NAME"
+          major="${current%%.*}"
+          minor="${current%.*}"
+
+          releases="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+
+          newest_in() {
+            local prefix="${1//./\\.}"
+            printf '%s\n' "$releases" | grep -E "^${prefix}\." | sort -V | tail -n 1
+          }
+
+          highest="$(printf '%s\n' "$releases" | sort -V | tail -n 1)"
+          highest_major="$(newest_in "$major")"
+          highest_minor="$(newest_in "$minor")"
+
+          {
+            echo "is_latest=$([[ "$highest" == "$current" ]] && echo true || echo false)"
+            echo "is_major_latest=$([[ "$highest_major" == "$current" ]] && echo true || echo false)"
+            echo "is_minor_latest=$([[ "$highest_minor" == "$current" ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.is_minor_latest == 'true' }}
+            type=semver,pattern={{major}},enable=${{ steps.rank.outputs.is_major_latest == 'true' }}
+            type=raw,value=latest,enable=${{ steps.rank.outputs.is_latest == 'true' }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: |
+            type=gha,scope=stable
+            type=gha,scope=ci
+          cache-to: type=gha,mode=min,scope=stable
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_LATEST: ${{ steps.rank.outputs.is_latest }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --latest="$IS_LATEST"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --latest="$IS_LATEST" \
+              --generate-notes
+          fi

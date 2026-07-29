@@ -1,33 +1,21 @@
 name: CI
 
+# Pull requests are the only trigger, so a branch with an open PR is not built
+# twice for the same commit. Pushes to main and to release tags are covered by
+# the release workflows, which run these same checks before publishing.
 on:
-  push:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - LICENSE
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Type-check, lint, test, and build
-        run: pnpm check
-
-      - name: Build production image
-        run: docker build --tag docker-game-manager:ci .
+    uses: ./.github/workflows/checks.yml

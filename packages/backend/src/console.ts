@@ -8,6 +8,7 @@ import {
   getManagedContainer,
 } from "./docker.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
+import { rawDataToString } from "./ws-message.js";
 import { executeGameCommand } from "./game-console-runtime.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
@@ -40,7 +41,7 @@ export async function handleConsoleConnection(
   }
 
   ws.on("message", (raw) => {
-    const message = raw.toString();
+    const message = rawDataToString(raw);
     if (pendingMessages.length < 10) {
       pendingMessages.push(message);
       void drainMessages();

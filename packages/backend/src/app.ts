@@ -373,10 +373,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     clearLoginThrottle(throttleKey);
 
-    await updateUserPassword(
-      actor.id,
-      await hashPassword(parsed.data.newPassword)
-    );
+    updateUserPassword(actor.id, await hashPassword(parsed.data.newPassword));
     const session = createSession(actor, req);
     setSessionCookie(res, req, session.token);
     writeAuditLog({
@@ -397,7 +394,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
   app.delete("/api/account/sessions/:id", (req, res) => {
     const actor = res.locals.user as SessionUser;
-    const sessionId = req.params.id as string;
+    const sessionId = req.params.id;
     const removed = deleteUserSessionById(actor.id, sessionId);
     if (!removed) {
       res.status(404).json({ error: "Session not found" });

@@ -116,13 +116,13 @@ export async function getContainerStats(
   id: string
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
   const container = await getManagedDockerContainer(id);
-  const stats = (await container.stats({ stream: false })) as Docker.ContainerStats;
+  const stats = (await container.stats({ stream: false }));
 
   const cpuDelta =
     stats.cpu_stats.cpu_usage.total_usage -
     stats.precpu_stats.cpu_usage.total_usage;
   const systemDelta =
-    stats.cpu_stats.system_cpu_usage! - stats.precpu_stats.system_cpu_usage!;
+    stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage;
   const numCpus = stats.cpu_stats.online_cpus || 1;
   const cpuPercent =
     systemDelta > 0 ? (cpuDelta / systemDelta) * numCpus * 100 : 0;

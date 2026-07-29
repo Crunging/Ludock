@@ -17,7 +17,7 @@ export function addEventClient(ws: WebSocket): void {
   ws.on("error", removeClient);
 
   if (!eventStreamActive) {
-    startEventStream();
+    void startEventStream();
   }
 }
 
@@ -35,9 +35,12 @@ async function startEventStream(): Promise<void> {
   if (eventStreamActive) return;
   eventStreamActive = true;
 
-  const docker = getDockerInstance();
-
   try {
+    // Resolving the client is part of the attempt: when Docker is unreachable
+    // this throws, and outside the try it would reject the returned promise
+    // with no handler, taking the process down.
+    const docker = getDockerInstance();
+
     const stream = await docker.getEvents({
       filters: {
         type: ["container"],

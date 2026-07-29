@@ -1,0 +1,132 @@
+name: Nightly release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  NIGHTLY_RELEASES_TO_KEEP: "10"
+
+jobs:
+  check:
+    uses: ./.github/workflows/checks.yml
+    with:
+      build_image: false
+
+  release:
+    name: Publish nightly image and release
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Define nightly version
+        id: version
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          version="nightly-${GITHUB_RUN_NUMBER}-${short_sha}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=nightly
+            type=raw,value=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: |
+            type=gha,scope=nightly
+            type=gha,scope=ci
+          cache-to: type=gha,mode=min,scope=nightly
+
+      - name: Create nightly GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --prerelease \
+              --latest=false
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TAG" \
+              --prerelease \
+              --latest=false \
+              --generate-notes
+          fi
+
+      # Every commit on main produces a release and its tag, so old ones are
+      # trimmed to keep the releases page and `git fetch` usable. Only the
+      # nightly- prefix is ever considered, so stable releases are untouched.
+      - name: Prune superseded nightly releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stale=$(
+            gh release list --limit 200 --json tagName,createdAt \
+              --jq '[.[] | select(.tagName | startswith("nightly-"))]
+                    | sort_by(.createdAt) | reverse
+                    | .['"$NIGHTLY_RELEASES_TO_KEEP"':]
+                    | .[].tagName'
+          )
+
+          if [[ -z "$stale" ]]; then
+            echo "No nightly releases to prune."
+            exit 0
+          fi
+
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            echo "Deleting nightly release $tag"
+            gh release delete "$tag" --yes --cleanup-tag
+          done <<< "$stale"
