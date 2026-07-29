@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (for example, 0.1.1)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -18,17 +24,58 @@ env:
 
 jobs:
   validate:
-    name: Validate release tag
+    name: Validate release
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Validate release tag
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "::error::Manual stable releases must run from main."
+              exit 1
+            fi
+            tag="v${REQUESTED_VERSION#v}"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Stable releases require a vMAJOR.MINOR.PATCH tag."
             exit 1
           fi
+
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$tag" != "v$package_version" ]]; then
+            echo "::error::$tag does not match package.json version $package_version."
+            exit 1
+          fi
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&
+             git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            current_commit="$(git rev-parse HEAD)"
+            if [[ "$tagged_commit" != "$current_commit" ]]; then
+              echo "::error::Tag $tag already exists on a different commit."
+              exit 1
+            fi
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   check:
     needs: validate
@@ -36,16 +83,32 @@ jobs:
 
   release:
     name: Publish stable image and release
-    needs: check
+    needs:
+      - validate
+      - check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'refs/heads/main' || github.ref }}
+          persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Create release tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$RELEASE_TAG" --message "Ludock $RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+          fi
 
       # Prevent an older hotfix from moving latest-series tags backward.
       - name: Determine which moving tags this release owns
@@ -54,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          current="$GITHUB_REF_NAME"
+          current="$RELEASE_TAG"
           major="${current%%.*}"
           minor="${current%.*}"
 
@@ -75,6 +138,41 @@ jobs:
             echo "is_minor_latest=$([[ "$highest_minor" == "$current" ]] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          releases="$(git tag --list 'v*' |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+            sort -V)"
+          previous="$(
+            printf '%s\n' "$releases" |
+              awk -v current="$RELEASE_TAG" '
+                $0 == current { print prior; exit }
+                { prior = $0 }
+              '
+          )"
+
+          {
+            if [[ -z "$previous" ]]; then
+              echo "Initial beta release of Ludock."
+              echo
+              range="$RELEASE_TAG"
+            else
+              echo "## What's changed"
+              echo
+              range="$previous..$RELEASE_TAG"
+            fi
+
+            git log --first-parent --format='- %s (`%h`)' "$range"
+
+            if [[ -n "$previous" ]]; then
+              echo
+              echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous...$RELEASE_TAG"
+            fi
+          } > "$RUNNER_TEMP/release-notes.md"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -91,9 +189,9 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.is_minor_latest == 'true' }}
-            type=semver,pattern={{major}},enable=${{ steps.rank.outputs.is_major_latest == 'true' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ steps.rank.outputs.is_minor_latest == 'true' }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ steps.rank.outputs.is_major_latest == 'true' }}
             type=raw,value=latest,enable=${{ steps.rank.outputs.is_latest == 'true' }}
 
       - name: Build and publish image
@@ -117,14 +215,15 @@ jobs:
           IS_LATEST: ${{ steps.rank.outputs.is_latest }}
         shell: bash
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               --latest="$IS_LATEST"
           else
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$RELEASE_TAG" \
               --verify-tag \
-              --title "$GITHUB_REF_NAME" \
-              --latest="$IS_LATEST" \
-              --generate-notes
+              --title "$RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest="$IS_LATEST"
           fi

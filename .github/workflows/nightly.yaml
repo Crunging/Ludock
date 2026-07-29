@@ -1,4 +1,4 @@
-name: Nightly release
+name: Nightly build
 
 on:
   push:
@@ -9,23 +9,22 @@ on:
       - LICENSE
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 concurrency:
-  group: nightly-release
+  group: nightly-build
   cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
-  NIGHTLY_RELEASES_TO_KEEP: "10"
 
 jobs:
   check:
     uses: ./.github/workflows/checks.yaml
 
-  release:
-    name: Publish nightly image and release
+  publish:
+    name: Publish nightly image
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -35,14 +34,6 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
-      - name: Define nightly version
-        id: version
-        shell: bash
-        run: |
-          short_sha="${GITHUB_SHA::7}"
-          version="nightly-${GITHUB_RUN_NUMBER}-${short_sha}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -61,9 +52,8 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=nightly
-            type=raw,value=${{ steps.version.outputs.version }}
           labels: |
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=nightly
 
       - name: Build and publish image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -79,49 +69,3 @@ jobs:
             type=gha,scope=nightly
             type=gha,scope=ci
           cache-to: type=gha,mode=min,scope=nightly
-
-      - name: Create nightly GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.version.outputs.version }}
-        shell: bash
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              --prerelease \
-              --latest=false
-          else
-            gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "$RELEASE_TAG" \
-              --prerelease \
-              --latest=false \
-              --generate-notes
-          fi
-
-      - name: Prune superseded nightly releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          stale=$(
-            gh release list --limit 200 --json tagName,createdAt \
-              --jq '[.[] | select(.tagName | startswith("nightly-"))]
-                    | sort_by(.createdAt) | reverse
-                    | .['"$NIGHTLY_RELEASES_TO_KEEP"':]
-                    | .[].tagName'
-          )
-
-          if [[ -z "$stale" ]]; then
-            echo "No nightly releases to prune."
-            exit 0
-          fi
-
-          while IFS= read -r tag; do
-            [[ -n "$tag" ]] || continue
-            echo "Deleting nightly release $tag"
-            gh release delete "$tag" --yes --cleanup-tag
-          done <<< "$stale"
