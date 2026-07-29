@@ -22,7 +22,7 @@ accounts, sessions, roles, and audit history.
 ### Add Labels to Your Game Servers
 
 ```yaml
-# docker-compose.yml
+# compose.yaml
 services:
   minecraft:
     image: itzg/minecraft-server
@@ -45,11 +45,19 @@ volumes:
 
 ### Run the Panel
 
-```bash
-# Optional: configure deployment overrides
-cp .env.example .env
+Download [`compose.yaml`](./compose.yaml) and, if you want to configure any
+optional settings, [`.env.example`](./.env.example) as `.env`. Then run:
 
+```bash
 docker compose up -d
+```
+
+Compose pulls `ghcr.io/crunging/docker-game-manager:latest`; it does not build
+the application locally. To follow the newest build from `main`, set the
+following in `.env` before starting the panel:
+
+```dotenv
+PANEL_IMAGE=ghcr.io/crunging/docker-game-manager:nightly
 ```
 
 Or with Docker directly:
@@ -168,6 +176,9 @@ pnpm frontend:dev
 
 # Type-check, lint, test, and build
 pnpm check
+
+# Build the production container locally
+docker build -t docker-game-manager:test .
 ```
 
 See [TESTING.md](./TESTING.md) for the release acceptance checklist.

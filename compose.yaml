@@ -1,8 +1,7 @@
 services:
   panel:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${PANEL_IMAGE:-ghcr.io/crunging/docker-game-manager:latest}
+    pull_policy: always
     ports:
       - "3000:3000"
     volumes:
@@ -13,6 +12,7 @@ services:
       - PORT=3000
       - PANEL_API_TOKEN=${PANEL_API_TOKEN:-}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
+      - AUDIT_LOG_MAX_ROWS=${AUDIT_LOG_MAX_ROWS:-100000}
       - FILE_HELPER_IMAGE=${FILE_HELPER_IMAGE:-alpine:3.22}
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
     healthcheck:

@@ -32,7 +32,7 @@ jobs:
 
   check:
     needs: validate
-    uses: ./.github/workflows/checks.yml
+    uses: ./.github/workflows/checks.yaml
 
   release:
     name: Publish stable image and release

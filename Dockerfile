@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
 
-# Every build stage is pinned to the build platform. The compiled output is
-# JavaScript and no runtime dependency ships a native binding, so the artifacts
-# are architecture-independent and cross-building costs nothing.
+ARG ALPINE_VERSION=3.24
 
-FROM --platform=$BUILDPLATFORM node:24-alpine AS deps
+# Application build stages use the build platform. The compiled output is
+# JavaScript and no runtime dependency ships a native binding, so the artifacts
+# are architecture-independent and the expensive build work remains native.
+FROM --platform=$BUILDPLATFORM node:24-alpine${ALPINE_VERSION} AS deps
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
@@ -24,30 +25,24 @@ COPY packages/backend/ packages/backend/
 COPY tsconfig.base.json ./
 RUN pnpm --filter backend build
 
-FROM --platform=$BUILDPLATFORM node:24-alpine AS prod-deps
+FROM --platform=$BUILDPLATFORM node:24-alpine${ALPINE_VERSION} AS prod-deps
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/backend/package.json packages/backend/
 RUN pnpm install --prod --frozen-lockfile
 
-FROM node:24-alpine AS runtime
+# This stage follows the target platform so each final image receives the
+# correct Node executable for its architecture.
+FROM node:24-alpine${ALPINE_VERSION} AS node-runtime
+
+FROM alpine:${ALPINE_VERSION} AS runtime
+RUN apk add --no-cache libstdc++
 WORKDIR /app
 
-# The application only needs the Node.js runtime. Removing the package managers
-# bundled in the base image avoids shipping unused tooling and its dependency
-# tree in production.
-RUN rm -rf \
-      /usr/local/lib/node_modules/npm \
-      /usr/local/lib/node_modules/corepack \
-      /opt/yarn-v1.22.22 \
-    && rm -f \
-      /usr/local/bin/npm \
-      /usr/local/bin/npx \
-      /usr/local/bin/corepack \
-      /usr/local/bin/yarn \
-      /usr/local/bin/yarnpkg
-
+# Copy only the runtime executable and application files. Package managers from
+# the Node image are never included in the final image.
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY packages/backend/package.json packages/backend/
 
 # Copied rather than installed here, which keeps pnpm and corepack out of the
