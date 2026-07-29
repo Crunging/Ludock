@@ -78,7 +78,7 @@ describe("Rust WebRCON transport", () => {
           Name: string;
         };
         assert.equal(message.Message, "server.save");
-        assert.equal(message.Name, "Game Panel");
+        assert.equal(message.Name, "Ludock");
         socket.send(
           JSON.stringify({
             Identifier: message.Identifier,

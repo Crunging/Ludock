@@ -44,14 +44,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # Full history so the tag being released can be compared against
-          # every other release tag.
           fetch-depth: 0
           persist-credentials: false
 
-      # A hotfix cut from an older branch must not drag the moving tags
-      # backwards, so each one is applied only when this release is the newest
-      # in the series that tag represents.
+      # Prevent an older hotfix from moving latest-series tags backward.
       - name: Determine which moving tags this release owns
         id: rank
         shell: bash

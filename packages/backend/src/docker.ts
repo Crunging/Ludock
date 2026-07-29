@@ -6,20 +6,12 @@ import {
 } from "./game-console.js";
 import { getFileRoots, type FileRoot } from "./file-storage.js";
 
-export const LABEL_PREFIX = "game-panel";
+export const LABEL_PREFIX = "ludock";
 
 const CONTAINER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 const CONTAINER_ID_MAX_LENGTH = 128;
 
-/**
- * Container identifiers arrive from URL parameters and WebSocket paths, and
- * dockerode interpolates them straight into the Docker API path. Express
- * decodes `%2f`, so an unvalidated identifier can contain `../` and escape
- * `/containers/<id>/json`. The daemon then answers with a 301 to the cleaned
- * path, and docker-modem follows that redirect *without* the UNIX socket path,
- * turning it into an outbound network request whose hostname comes from the
- * identifier. Reject anything that is not a plain Docker ID or name.
- */
+// Keep untrusted identifiers from altering dockerode's Docker API request path.
 export function assertValidContainerId(id: unknown): string {
   if (
     typeof id !== "string" ||
@@ -76,7 +68,7 @@ export async function getManagedContainer(
 
   const labels = info.Config.Labels || {};
   if (labels[LABEL_ENABLE] !== "true") {
-    const error = new Error(`Container ${id} is not managed by game-panel`);
+    const error = new Error(`Container ${id} is not managed by Ludock`);
     Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
     throw error;
   }
@@ -103,7 +95,7 @@ export async function getManagedContainer(
       }
     ),
     created: new Date(info.Created).getTime(),
-    labels: panelLabels(labels),
+    labels: ludockLabels(labels),
   };
   return {
     ...managed,
@@ -170,7 +162,7 @@ async function getManagedDockerContainer(id: string): Promise<Docker.Container> 
   const labels = info.Config.Labels || {};
 
   if (labels[LABEL_ENABLE] !== "true") {
-    const error = new Error(`Container ${id} is not managed by game-panel`);
+    const error = new Error(`Container ${id} is not managed by Ludock`);
     Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
     throw error;
   }
@@ -199,7 +191,7 @@ function toManagedContainer(
       type: p.Type || "tcp",
     })),
     created: container.Created * 1000,
-    labels: panelLabels(labels),
+    labels: ludockLabels(labels),
   };
   return {
     ...managed,
@@ -208,7 +200,7 @@ function toManagedContainer(
   };
 }
 
-function panelLabels(labels: Record<string, string>): Record<string, string> {
+function ludockLabels(labels: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(labels).filter(([key]) =>
       key.startsWith(`${LABEL_PREFIX}.`)

@@ -5,7 +5,7 @@ import { addEventClient, stopEventStream } from "./events.js";
 import {
   authenticateWsRequest,
   logSetupInstructions,
-  panelApiToken,
+  ludockApiToken,
   type WebSocketAuth,
 } from "./auth.js";
 import { createApp } from "./app.js";
@@ -94,10 +94,10 @@ function monitorWebSocketSession(
 }
 
 server.listen(PORT, () => {
-  console.log(`Docker Game Manager listening on http://localhost:${PORT}`);
+  console.log(`Ludock listening on http://localhost:${PORT}`);
   // Surface a rejected API token now rather than on the first request that
   // happens to present a bearer credential.
-  panelApiToken();
+  ludockApiToken();
   logSetupInstructions();
 });
 

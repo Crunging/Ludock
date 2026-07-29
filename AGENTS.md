@@ -1,6 +1,6 @@
 # Repository Guide
 
-Docker Game Manager is a pnpm monorepo for managing explicitly opted-in Docker
+Ludock is a pnpm monorepo for managing explicitly opted-in Docker
 game servers.
 
 ## Structure
@@ -15,12 +15,12 @@ game servers.
 
 - Requires Node.js 24 and pnpm 10.
 - Run `pnpm check` before committing.
-- Run `docker build -t docker-game-manager:test .` after container or deployment
+- Run `docker build -t ludock:test .` after container or deployment
   changes.
 
 ## Constraints
 
-- Only manage containers with `game-panel.enable=true`.
+- Only manage containers with `ludock.enable=true`.
 - Keep filesystem access within configured roots and preserve symlink traversal
   protections.
 - Never expose console credentials, API tokens, passwords, or session tokens.

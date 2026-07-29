@@ -102,6 +102,12 @@ function loginThrottleKey(
   return createHash("sha256").update(`${scope}:${value}`).digest("hex");
 }
 
+function stringProperty(value: unknown, property: string): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const propertyValue = (value as Record<string, unknown>)[property];
+  return typeof propertyValue === "string" ? propertyValue : undefined;
+}
+
 export function createApp(options: CreateAppOptions = {}): Express {
   const app = express();
   const setupWindow = options.setupWindow || defaultSetupWindow;
@@ -113,9 +119,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    // A typo here used to throw out of createApp and crash the process on
-    // startup. Fail closed instead: trust no proxy, and say why. Crash-looping
-    // would also keep reopening the initial-setup window on a fresh install.
     try {
       app.set("trust proxy", entries);
     } catch (error) {
@@ -155,8 +158,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     next();
   });
-  // Reject cross-origin writes before the body parser so hostile requests never
-  // get a 64kb buffer allocated for them.
+  // Enforce origin checks before parsing request bodies.
   app.use((req, res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       if (req.get("sec-fetch-site") === "cross-site") {
@@ -221,10 +223,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.post("/api/auth/login", async (req, res) => {
     const now = Date.now();
     const ipKey = loginThrottleKey("ip", req.ip || "unknown");
-    const requestedUsername =
-      typeof req.body?.username === "string"
-        ? req.body.username.trim().toLowerCase().slice(0, 32)
-        : "";
+    const requestedUsername = (
+      stringProperty(req.body as unknown, "username") || ""
+    )
+      .trim()
+      .toLowerCase()
+      .slice(0, 32);
     const accountKey = requestedUsername
       ? loginThrottleKey("account", requestedUsername)
       : null;
@@ -295,9 +299,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     res.json({ ok: true });
   });
-  // This endpoint is unauthenticated so the container healthcheck can use it.
-  // Cache the result briefly so external traffic cannot amplify into one Docker
-  // daemon ping plus a database query per request.
+  // Public for container health checks.
   const HEALTH_CACHE_MS = 5_000;
   let healthCache: { checkedAt: number; healthy: boolean } | null = null;
   let healthProbe: Promise<boolean> | null = null;
@@ -307,7 +309,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
     if (healthCache && now - healthCache.checkedAt < HEALTH_CACHE_MS) {
       return healthCache.healthy;
     }
-    // Collapse concurrent requests onto a single in-flight probe.
     healthProbe ||= (async () => {
       try {
         checkDatabase();
@@ -333,7 +334,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
   app.use("/api", authMiddleware);
   app.get("/api/auth/me", (_req, res) => {
-    res.json({ user: res.locals.user });
+    res.json({ user: res.locals.user as SessionUser });
   });
   app.post("/api/account/change-password", async (req, res) => {
     const parsed = changePasswordSchema.safeParse(req.body);
@@ -572,8 +573,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
       res: Response,
       next: NextFunction
     ) => {
+      const requestId =
+        typeof res.locals.requestId === "string"
+          ? res.locals.requestId
+          : "unknown";
       console.error(
-        `[API] Unhandled error ${res.locals.requestId || "unknown"}:`,
+        `[API] Unhandled error ${requestId}:`,
         error
       );
       if (res.headersSent) {
@@ -583,7 +588,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       if (req.path.startsWith("/api/")) {
         res.status(500).json({
           error: "Internal server error",
-          requestId: res.locals.requestId,
+          requestId,
         });
         return;
       }

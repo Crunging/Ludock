@@ -1,8 +1,5 @@
 name: CI
 
-# Pull requests are the only trigger, so a branch with an open PR is not built
-# twice for the same commit. Pushes to main and to release tags are covered by
-# the release workflows, which run these same checks before publishing.
 on:
   pull_request:
     paths-ignore:

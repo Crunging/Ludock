@@ -32,7 +32,7 @@ export default function Login() {
         : await login(username.trim(), password);
       setError(result);
     } catch {
-      setError("Unable to reach the game panel.");
+      setError("Unable to reach Ludock.");
     } finally {
       setSubmitting(false);
     }
@@ -42,12 +42,12 @@ export default function Login() {
     return (
       <main className="login-page">
         <section className="login-card" aria-labelledby="setup-expired-title">
-          <div className="sidebar__logo-icon login-card__logo">GP</div>
+          <div className="sidebar__logo-icon login-card__logo">LU</div>
           <h1 className="login-card__title" id="setup-expired-title">
             Setup window expired
           </h1>
           <p className="login-card__description">
-            Restart the Game Panel container, then return here within five
+            Restart the Ludock container, then return here within five
             minutes to create the administrator account.
           </p>
         </section>
@@ -58,14 +58,14 @@ export default function Login() {
   return (
     <main className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <div className="sidebar__logo-icon login-card__logo">GP</div>
+        <div className="sidebar__logo-icon login-card__logo">LU</div>
         <h1 className="login-card__title">
-          {setupRequired ? "Set up Game Panel" : "Sign in to Game Panel"}
+          {setupRequired ? "Set up Ludock" : "Sign in to Ludock"}
         </h1>
         <p className="login-card__description">
           {setupRequired
             ? "Create the administrator account within five minutes of starting the panel."
-            : "Sign in with your Game Panel account."}
+            : "Sign in with your Ludock account."}
         </p>
         <label className="login-card__label" htmlFor="username">
           Username

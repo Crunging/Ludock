@@ -19,19 +19,30 @@ function PageFallback() {
   );
 }
 
+function routeParameter(match: RegExpMatchArray | null): string | null {
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 function App() {
   const { loading, authenticated, user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const consoleMatch = location.pathname.match(/^\/console\/([^/]+)$/);
   const filesMatch = location.pathname.match(/^\/files\/([^/]+)$/);
-  const isConsolePage = consoleMatch !== null;
+  const consoleId = routeParameter(consoleMatch);
+  const filesId = routeParameter(filesMatch);
+  const isConsolePage = consoleId !== null;
   const knownPath =
     location.pathname === "/" ||
     location.pathname === "/account" ||
     location.pathname === "/users" ||
     location.pathname === "/audit" ||
-    filesMatch !== null ||
+    filesId !== null ||
     isConsolePage;
 
   useEffect(() => {
@@ -65,16 +76,16 @@ function App() {
     page = <Users />;
   } else if (location.pathname === "/audit" && user?.role === "admin") {
     page = <Audit />;
-  } else if (consoleMatch) {
+  } else if (consoleId) {
     page = (
       <Suspense fallback={<PageFallback />}>
-        <Console containerId={decodeURIComponent(consoleMatch[1])} />
+        <Console containerId={consoleId} />
       </Suspense>
     );
-  } else if (filesMatch) {
+  } else if (filesId) {
     page = (
       <Suspense fallback={<PageFallback />}>
-        <Files containerId={decodeURIComponent(filesMatch[1])} />
+        <Files containerId={filesId} />
       </Suspense>
     );
   }
@@ -85,8 +96,8 @@ function App() {
         <aside className="sidebar">
           <div className="sidebar__header">
             <div className="sidebar__logo">
-              <div className="sidebar__logo-icon">GP</div>
-              <div className="sidebar__logo-text">Game Panel</div>
+              <div className="sidebar__logo-icon">LU</div>
+              <div className="sidebar__logo-text">Ludock</div>
             </div>
           </div>
           <nav className="sidebar__nav">
@@ -139,8 +150,8 @@ function App() {
       {!isConsolePage && (
         <header className="mobile-header">
           <div className="sidebar__logo">
-            <div className="sidebar__logo-icon">GP</div>
-            <div className="sidebar__logo-text">Game Panel</div>
+            <div className="sidebar__logo-icon">LU</div>
+            <div className="sidebar__logo-text">Ludock</div>
           </div>
           <span className="mobile-header__user">{user?.username}</span>
           <button className="mobile-header__logout" onClick={logout}>

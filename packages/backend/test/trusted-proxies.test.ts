@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, describe, it } from "node:test";
 
-process.env.PANEL_DB_PATH = ":memory:";
+process.env.LUDOCK_DB_PATH = ":memory:";
 
 const { createApp } = await import("../src/app.js");
 
@@ -45,7 +45,6 @@ async function withTrustedProxies<T>(
 
 describe("TRUSTED_PROXIES configuration", () => {
   it("starts and serves requests when the value is malformed", async () => {
-    // Previously this threw out of createApp and crashed the process.
     await withTrustedProxies("not-an-ip,,,", async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/auth/status`);
       assert.equal(response.status, 200);

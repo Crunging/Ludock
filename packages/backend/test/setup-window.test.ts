@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 
-process.env.PANEL_DB_PATH = ":memory:";
+process.env.LUDOCK_DB_PATH = ":memory:";
 
 const [{ createApp }, { SetupWindow }] = await Promise.all([
   import("../src/app.js"),

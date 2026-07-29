@@ -1,10 +1,10 @@
 import type Docker from "dockerode";
 import type { ManagedContainer } from "./docker.js";
 
-export const LABEL_CONSOLE = "game-panel.console";
-export const LABEL_CONSOLE_PORT = "game-panel.console.port";
-export const LABEL_CONSOLE_HOST = "game-panel.console.host";
-export const LABEL_CONSOLE_PASSWORD_ENV = "game-panel.console.password-env";
+export const LABEL_CONSOLE = "ludock.console";
+export const LABEL_CONSOLE_PORT = "ludock.console.port";
+export const LABEL_CONSOLE_HOST = "ludock.console.host";
+export const LABEL_CONSOLE_PASSWORD_ENV = "ludock.console.password-env";
 
 export type GameConsoleAdapterId =
   | "minecraft-rcon"

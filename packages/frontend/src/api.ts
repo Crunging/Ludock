@@ -1,4 +1,4 @@
-export const AUTH_REQUIRED_EVENT = "game-panel:auth-required";
+export const AUTH_REQUIRED_EVENT = "ludock:auth-required";
 
 export async function apiFetch(
   input: RequestInfo | URL,

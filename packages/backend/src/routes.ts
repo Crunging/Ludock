@@ -46,7 +46,7 @@ function sendDockerError(
   }
 
   if (error.statusCode === 403 || error.code === "FORBIDDEN") {
-    res.status(403).json({ error: "Container is not managed by game-panel" });
+    res.status(403).json({ error: "Container is not managed by Ludock" });
     return;
   }
 
@@ -130,7 +130,7 @@ function sendFileError(res: Response, error: unknown): void {
     return;
   }
   if (routeError.code === "FORBIDDEN") {
-    res.status(403).json({ error: "Container is not managed by game-panel" });
+    res.status(403).json({ error: "Container is not managed by Ludock" });
     return;
   }
   if (routeError.statusCode === 404) {
@@ -256,13 +256,10 @@ router.get(
         res.destroy();
       });
       res.once("close", () => {
-        if (
-          !res.writableEnded &&
-          "destroy" in download.stream &&
-          typeof download.stream.destroy === "function"
-        ) {
-          download.stream.destroy();
-        }
+        const stream = download.stream as NodeJS.ReadableStream & {
+          destroy?: () => void;
+        };
+        if (!res.writableEnded) stream.destroy?.();
       });
       download.stream.pipe(res);
     } catch (error) {

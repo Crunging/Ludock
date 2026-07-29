@@ -35,7 +35,7 @@ describe("container file storage", () => {
         gameType: "custom",
         image: "example/game",
         labels: {
-          "game-panel.files": "/srv/game, /srv/backups/, /srv/game, /data/..",
+          "ludock.files": "/srv/game, /srv/backups/, /srv/game, /data/..",
         },
       }),
       [

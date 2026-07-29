@@ -40,7 +40,7 @@ export function useServers(): UseServersResult {
           fetchServers();
         }
       } catch {
-        // Ignore unrelated or malformed event messages.
+        return;
       }
     },
     [fetchServers]

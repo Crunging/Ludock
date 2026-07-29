@@ -20,14 +20,14 @@ describe("game console adapters", () => {
     assert.equal(
       resolveGameConsoleAdapter({
         gameType: "minecraft",
-        labels: { "game-panel.console": "disabled" },
+        labels: { "ludock.console": "disabled" },
       }),
       null
     );
     assert.equal(
       resolveGameConsoleAdapter({
         gameType: "custom",
-        labels: { "game-panel.console": "minecraft-rcon" },
+        labels: { "ludock.console": "minecraft-rcon" },
       })?.id,
       "minecraft-rcon"
     );
@@ -81,7 +81,7 @@ describe("game console adapters", () => {
       assert.equal(
         resolveGameConsoleAdapter({
           gameType: "custom",
-          labels: { "game-panel.console": adapterId },
+          labels: { "ludock.console": adapterId },
         })?.id,
         adapterId
       );

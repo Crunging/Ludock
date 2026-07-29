@@ -3,8 +3,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 
-process.env.PANEL_DB_PATH = ":memory:";
-process.env.PANEL_API_TOKEN = "integration-api-secret-0123456789abcdef";
+process.env.LUDOCK_DB_PATH = ":memory:";
+process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
 
 const [{ createApp }, { getDockerInstance }] = await Promise.all([
   import("../src/app.js"),
@@ -33,8 +33,8 @@ const managedInfo = {
   Ports: [],
   Created: 1_700_000_000,
   Labels: {
-    "game-panel.enable": "true",
-    "game-panel.name": "Managed Fixture",
+    "ludock.enable": "true",
+    "ludock.name": "Managed Fixture",
     "unrelated.secret": "must-not-leak",
   },
 };
@@ -157,7 +157,7 @@ describe("HTTP application", () => {
     });
     assert.equal(response.status, 201);
     const setCookie = response.headers.get("set-cookie") || "";
-    assert.match(setCookie, /dgm_session=/);
+    assert.match(setCookie, /ludock_session=/);
     assert.match(setCookie, /HttpOnly/i);
     assert.match(setCookie, /SameSite=Strict/i);
     assert.match(setCookie, /Secure/i);
@@ -400,7 +400,7 @@ describe("HTTP application", () => {
     });
     assert.equal(response.status, 200);
     const replacementCookie = (response.headers.get("set-cookie") || "").split(";")[0];
-    assert.match(replacementCookie, /dgm_session=/);
+    assert.match(replacementCookie, /ludock_session=/);
     assert.equal(
       (
         await fetch(`${baseUrl}/api/auth/me`, {
@@ -448,8 +448,8 @@ describe("HTTP application", () => {
     assert.equal(body.servers.length, 1);
     assert.equal(body.servers[0].id, managedInfo.Id);
     assert.deepEqual(body.servers[0].labels, {
-      "game-panel.enable": "true",
-      "game-panel.name": "Managed Fixture",
+      "ludock.enable": "true",
+      "ludock.name": "Managed Fixture",
     });
   });
 
@@ -521,7 +521,6 @@ describe("HTTP application", () => {
     }
     assert.equal((await guess()).status, 429);
 
-    // A correct current password is still refused while the block is active.
     const correct = await fetch(`${baseUrl}/api/account/change-password`, {
       method: "POST",
       headers: { Cookie: sessionCookie, "Content-Type": "application/json" },

@@ -23,7 +23,7 @@ import {
   isSameOriginRequest,
 } from "./request-security.js";
 
-const SESSION_COOKIE = "dgm_session";
+const SESSION_COOKIE = "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MIN_API_TOKEN_LENGTH = 32;
 const SCRYPT_N = 32768;
@@ -52,14 +52,14 @@ let warnedAboutWeakApiToken = "";
  * the login throttle, so a short token could be brute forced at request rate.
  * Reject anything below the strength floor instead of honouring it.
  */
-export function panelApiToken(): string {
-  const configured = process.env.PANEL_API_TOKEN?.trim() || "";
+export function ludockApiToken(): string {
+  const configured = process.env.LUDOCK_API_TOKEN?.trim() || "";
   if (!configured) return "";
   if (configured.length < MIN_API_TOKEN_LENGTH) {
     if (warnedAboutWeakApiToken !== configured) {
       warnedAboutWeakApiToken = configured;
       console.error(
-        `PANEL_API_TOKEN is shorter than ${MIN_API_TOKEN_LENGTH} characters and has been ignored. Generate one with: openssl rand -hex 32`
+        `LUDOCK_API_TOKEN is shorter than ${MIN_API_TOKEN_LENGTH} characters and has been ignored. Generate one with: openssl rand -hex 32`
       );
     }
     return "";
@@ -298,7 +298,7 @@ export function authMiddleware(
     return;
   }
 
-  const apiToken = panelApiToken();
+  const apiToken = ludockApiToken();
   const candidate = bearerToken(req.headers.authorization);
   if (apiToken && candidate && tokensMatch(candidate, apiToken)) {
     res.locals.user = {
@@ -337,7 +337,7 @@ export function authenticateWsRequest(
     };
   }
 
-  const apiToken = panelApiToken();
+  const apiToken = ludockApiToken();
   if (!apiToken) return null;
   if (request.headers.origin && !isSameOriginRequest(request)) {
     return null;

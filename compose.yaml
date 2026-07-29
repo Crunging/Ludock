@@ -1,6 +1,6 @@
 services:
-  panel:
-    image: ghcr.io/crunging/docker-game-manager:latest
+  ludock:
+    image: ghcr.io/crunging/ludock:latest
     pull_policy: always
     ports:
       - "3000:3000"

@@ -103,7 +103,7 @@ export async function handleConsoleConnection(
     });
     logStream = stream;
     stream.on("data", (chunk: Buffer) => sendLogChunk(ws, chunk));
-    stream.on("error", (error) => {
+    stream.on("error", (error: Error) => {
       sendMessage(ws, "error", `Log stream error: ${error.message}`);
     });
     stream.on("end", () => {

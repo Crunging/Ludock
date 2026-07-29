@@ -38,7 +38,7 @@ export default function Dashboard() {
         <p className="page__subtitle">
           {servers.length > 0
             ? `Managing ${servers.length} server${servers.length !== 1 ? "s" : ""} via Docker`
-            : "Monitoring containers with game-panel.enable=true"}
+            : "Monitoring containers with ludock.enable=true"}
         </p>
       </div>
 
@@ -71,13 +71,13 @@ export default function Dashboard() {
           <div className="empty-state__title">No Servers Found</div>
           <div className="empty-state__description">
             No Docker containers with the{" "}
-            <strong>game-panel.enable=true</strong> label were found. Add this
+            <strong>ludock.enable=true</strong> label were found. Add this
             label to your game server containers to manage them here.
           </div>
           <div className="empty-state__code">
-            <span>docker run</span> -l <span>game-panel.enable=true</span> \{"\n"}
-            {"  "}-l <span>game-panel.name=</span>"My Server" \{"\n"}
-            {"  "}-l <span>game-panel.game=</span>"minecraft" \{"\n"}
+            <span>docker run</span> -l <span>ludock.enable=true</span> \{"\n"}
+            {"  "}-l <span>ludock.name=</span>"My Server" \{"\n"}
+            {"  "}-l <span>ludock.game=</span>"minecraft" \{"\n"}
             {"  "}your/game-image
           </div>
         </div>

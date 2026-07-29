@@ -3,8 +3,8 @@ import type { IncomingMessage } from "node:http";
 import { describe, it } from "node:test";
 import type { Request } from "express";
 
-process.env.PANEL_DB_PATH = ":memory:";
-process.env.PANEL_API_TOKEN = "test-api-token-0123456789abcdef0123";
+process.env.LUDOCK_DB_PATH = ":memory:";
+process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
 
 const {
   SetupWindow,
@@ -14,7 +14,7 @@ const {
   createSession,
   hashPassword,
   isSetupRequired,
-  panelApiToken,
+  ludockApiToken,
   verifyPassword,
 } = await import("../src/auth.js");
 
@@ -113,7 +113,7 @@ describe("account authentication", () => {
       ip: "127.0.0.1",
       get: () => "test-agent",
     } as unknown as Request);
-    const cookie = `dgm_session=${session.token}`;
+    const cookie = `ludock_session=${session.token}`;
 
     assert.ok(
       authenticateWsRequest(
@@ -155,10 +155,10 @@ describe("account authentication", () => {
   });
 
   it("ignores an API token below the strength floor", () => {
-    const previous = process.env.PANEL_API_TOKEN;
-    process.env.PANEL_API_TOKEN = "short";
+    const previous = process.env.LUDOCK_API_TOKEN;
+    process.env.LUDOCK_API_TOKEN = "short";
     try {
-      assert.equal(panelApiToken(), "");
+      assert.equal(ludockApiToken(), "");
       assert.equal(
         authenticateWsRequest(
           websocketRequest({
@@ -169,7 +169,7 @@ describe("account authentication", () => {
         null
       );
     } finally {
-      process.env.PANEL_API_TOKEN = previous;
+      process.env.LUDOCK_API_TOKEN = previous;
     }
   });
 });

@@ -1,7 +1,5 @@
 name: Checks
 
-# Shared verification used by CI and by both release workflows, so that nothing
-# is published from a commit that has not passed `pnpm check`.
 on:
   workflow_call:
 
@@ -62,9 +60,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      # Load the runner-native image into Docker so it can be run and scanned.
-      # Release workflows perform the authoritative amd64/arm64 build before
-      # publishing, so CI does not repeat that expensive cross-build.
       - name: Build production image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -72,30 +67,24 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: docker-game-manager:ci
+          tags: ludock:ci
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=min,scope=ci
 
-      # Building the image proves it compiles, not that it runs. The runtime
-      # stage copies pnpm's symlinked dependency tree rather than installing
-      # it, so a broken layout would otherwise only surface on deploy.
       - name: Smoke-test the image
         shell: bash
         run: |
           set -euo pipefail
 
-          docker run -d --name smoke -p 3000:3000 docker-game-manager:ci
+          docker run -d --name smoke -p 3000:3000 ludock:ci
           trap 'docker rm -f smoke >/dev/null 2>&1 || true' EXIT
 
+          # Without a Docker socket, "degraded" confirms the process is serving.
           for _ in $(seq 1 30); do
-            # The endpoint intentionally returns HTTP 503 when Docker is not
-            # mounted, so do not use curl --fail here.
             body="$(curl --silent --show-error --max-time 2 \
               http://localhost:3000/api/health || true)"
             if [[ -n "$body" ]]; then
               echo "Health response: $body"
-              # Docker is deliberately not mounted, so "degraded" is the
-              # expected healthy-process answer here.
               if [[ "$body" == '{"status":"degraded"}' ]]; then
                 exit 0
               fi
@@ -111,10 +100,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: docker-game-manager:ci
+          image-ref: ludock:ci
           scanners: vuln
           severity: HIGH,CRITICAL
-          # An unfixed base-image CVE cannot be resolved by this project and
-          # should not block unrelated work.
+          # Block vulnerabilities only when an upstream fix is available.
           ignore-unfixed: true
           exit-code: "1"

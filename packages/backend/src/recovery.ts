@@ -8,11 +8,11 @@ import { hashPassword } from "./auth.js";
 
 async function main() {
   const username = process.argv[2]?.trim();
-  const password = process.env.PANEL_RECOVERY_PASSWORD;
+  const password = process.env.LUDOCK_RECOVERY_PASSWORD;
 
   if (!username || !password) {
     console.error(
-      "Usage: PANEL_RECOVERY_PASSWORD='<new password>' node dist/recovery.js <username>"
+      "Usage: LUDOCK_RECOVERY_PASSWORD='<new password>' node dist/recovery.js <username>"
     );
     process.exitCode = 2;
     return;

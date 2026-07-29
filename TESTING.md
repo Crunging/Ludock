@@ -1,4 +1,4 @@
-# Testing Docker Game Manager
+# Testing Ludock
 
 ## Automated checks
 
@@ -8,7 +8,7 @@ From a clean checkout with Node.js 24 and Corepack enabled:
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
-docker build -t docker-game-manager:test .
+docker build -t ludock:test .
 ```
 
 `pnpm check` runs TypeScript checking, frontend linting, backend unit and HTTP
@@ -17,7 +17,7 @@ integration tests, and both production builds.
 ## Manual acceptance checklist
 
 Run the panel with a persistent `/data` volume and add
-`game-panel.enable=true` to a disposable container.
+`ludock.enable=true` to a disposable container.
 
 ### Authentication
 
@@ -83,7 +83,7 @@ Run the panel with a persistent `/data` volume and add
 ### File manager
 
 - A Minecraft server exposes `/data`; a supported Valheim image exposes
-  `/config`. An explicit `game-panel.files` label overrides inference.
+  `/config`. An explicit `ludock.files` label overrides inference.
 - Files and folders can be browsed without exposing paths outside a configured
   root.
 - Dragging one or more files into the upload area stores them in the current

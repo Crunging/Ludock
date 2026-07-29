@@ -179,7 +179,7 @@ export async function executeRustWebRcon(
         JSON.stringify({
           Identifier: identifier,
           Message: command,
-          Name: "Game Panel",
+          Name: "Ludock",
         })
       );
     });

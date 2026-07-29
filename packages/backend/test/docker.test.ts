@@ -26,7 +26,7 @@ describe("managed container lifecycle boundary", () => {
       let actionCalled = false;
       const container = {
         inspect: async () => ({
-          Config: { Labels: { "game-panel.enable": "true" } },
+          Config: { Labels: { "ludock.enable": "true" } },
         }),
         [action]: async () => {
           actionCalled = true;

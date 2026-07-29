@@ -6,6 +6,21 @@ let eventStreamActive = false;
 let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+interface DockerEvent {
+  Action?: string;
+  Actor?: {
+    ID?: string;
+    Attributes?: { name?: string };
+  };
+  id?: string;
+  time?: number;
+}
+
+function parseDockerEvent(chunk: Buffer): DockerEvent | null {
+  const value = JSON.parse(chunk.toString()) as unknown;
+  return typeof value === "object" && value !== null ? value : null;
+}
+
 export function addEventClient(ws: WebSocket): void {
   eventClients.add(ws);
 
@@ -36,9 +51,6 @@ async function startEventStream(): Promise<void> {
   eventStreamActive = true;
 
   try {
-    // Resolving the client is part of the attempt: when Docker is unreachable
-    // this throws, and outside the try it would reject the returned promise
-    // with no handler, taking the process down.
     const docker = getDockerInstance();
 
     const stream = await docker.getEvents({
@@ -51,7 +63,8 @@ async function startEventStream(): Promise<void> {
 
     stream.on("data", (chunk: Buffer) => {
       try {
-        const event = JSON.parse(chunk.toString());
+        const event = parseDockerEvent(chunk);
+        if (!event) return;
         const payload = JSON.stringify({
           type: "container_event",
           action: event.Action,
@@ -70,7 +83,7 @@ async function startEventStream(): Promise<void> {
       }
     });
 
-    stream.on("error", (error) => {
+    stream.on("error", (error: Error) => {
       if (eventStream !== stream) return;
       console.error("[Events] Docker event stream error:", error.message);
       scheduleReconnect(5000);

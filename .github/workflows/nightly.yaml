@@ -100,9 +100,6 @@ jobs:
               --generate-notes
           fi
 
-      # Every commit on main produces a release and its tag, so old ones are
-      # trimmed to keep the releases page and `git fetch` usable. Only the
-      # nightly- prefix is ever considered, so stable releases are untouched.
       - name: Prune superseded nightly releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

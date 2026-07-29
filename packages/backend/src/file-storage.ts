@@ -5,7 +5,7 @@ import * as tar from "tar-stream";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 
-export const LABEL_FILES = "game-panel.files";
+export const LABEL_FILES = "ludock.files";
 
 export interface FileRoot {
   id: string;
@@ -309,8 +309,8 @@ export async function openDownload(
       }
     });
     extract.on("finish", () => output.end());
-    extract.on("error", (error) => output.destroy(error));
-    archive.on("error", (error) => output.destroy(error));
+    extract.on("error", (error: Error) => output.destroy(error));
+    archive.on("error", (error: Error) => output.destroy(error));
     archive.pipe(extract);
     cleanupAfterStream(output, access.cleanup);
     return { name, type: "file", size: stat.size, stream: output };
@@ -380,7 +380,7 @@ async function createHelperContainer(
     Entrypoint: ["/bin/sh", "-c"],
     Cmd: ["while :; do sleep 3600; done"],
     User: "0",
-    Labels: { "game-panel.internal": "file-helper" },
+    Labels: { "ludock.internal": "file-helper" },
     HostConfig: {
       VolumesFrom: [`${sourceContainerId}:rw`],
       NetworkMode: "none",

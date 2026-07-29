@@ -54,12 +54,12 @@ let database: DatabaseSync | null = null;
 export function getDatabase(): DatabaseSync {
   if (database) return database;
 
-  const configuredPath = process.env.PANEL_DB_PATH;
+  const configuredPath = process.env.LUDOCK_DB_PATH;
   const dbPath =
     configuredPath ||
     (process.env.NODE_ENV === "production"
-      ? "/data/panel.db"
-      : path.resolve("data/panel.db"));
+      ? "/data/ludock.db"
+      : path.resolve("data/ludock.db"));
 
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
@@ -589,7 +589,9 @@ export function listAuditLog(limit: number): AuditRecord[] {
     action: row.action,
     targetType: row.target_type,
     targetId: row.target_id,
-    details: row.details_json ? JSON.parse(row.details_json) : null,
+    details: row.details_json
+      ? (JSON.parse(row.details_json) as unknown)
+      : null,
     ipAddress: row.ip_address,
     createdAt: row.created_at,
   }));

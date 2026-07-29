@@ -234,6 +234,9 @@ export default function Users() {
                 type="password"
                 placeholder="New password"
                 aria-label={`New password for ${user.username}`}
+                autoComplete="new-password"
+                minLength={15}
+                maxLength={128}
                 value={resetPasswords[user.id] || ""}
                 onChange={(event) =>
                   setResetPasswords((current) => ({
@@ -245,7 +248,7 @@ export default function Users() {
               <button
                 className="secondary-btn"
                 onClick={() => resetPassword(user)}
-                disabled={(resetPasswords[user.id] || "").length < 12}
+                disabled={(resetPasswords[user.id] || "").length < 15}
               >
                 Reset password
               </button>

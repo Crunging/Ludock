@@ -301,7 +301,7 @@ export default function Files({ containerId }: { containerId: string }) {
         <div className="empty-state">
           <div className="empty-state__title">File access is not configured</div>
           <div className="empty-state__description">
-            Add a game-panel.files label with one or more container paths.
+            Add a ludock.files label with one or more container paths.
           </div>
         </div>
       ) : (
