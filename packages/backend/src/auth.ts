@@ -22,6 +22,7 @@ import {
   isExternalHttpsRequest,
   isSameOriginRequest,
 } from "./request-security.js";
+import { createLogger } from "./logger.js";
 
 const SESSION_COOKIE = "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -31,6 +32,7 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 3;
 const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;
+const logger = createLogger("auth");
 
 export interface SetupState {
   required: boolean;
@@ -58,9 +60,9 @@ export function ludockApiToken(): string {
   if (configured.length < MIN_API_TOKEN_LENGTH) {
     if (warnedAboutWeakApiToken !== configured) {
       warnedAboutWeakApiToken = configured;
-      console.error(
-        `LUDOCK_API_TOKEN is shorter than ${MIN_API_TOKEN_LENGTH} characters and has been ignored. Generate one with: openssl rand -hex 32`
-      );
+      logger.error("LUDOCK_API_TOKEN is too short and has been ignored", {
+        minimumLength: MIN_API_TOKEN_LENGTH,
+      });
     }
     return "";
   }
@@ -107,12 +109,10 @@ export function logSetupInstructions(
   if (!isSetupRequired()) return;
 
   const minutes = Math.round(SETUP_WINDOW_MS / 60_000);
-  console.log(
-    `Initial administrator setup is available for ${minutes} minutes.`
-  );
-  console.log(
-    `Setup closes at ${new Date(setupWindow.expiresAt).toISOString()}; restart the panel to reopen it.`
-  );
+  logger.info("Initial administrator setup is available", {
+    durationMinutes: minutes,
+    closesAt: new Date(setupWindow.expiresAt).toISOString(),
+  });
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -329,7 +329,16 @@ export function authenticateWsRequest(
 ): WebSocketAuth | null {
   const session = getRequestSession(request);
   if (session) {
-    if (!isSameOriginRequest(request)) return null;
+    if (!isSameOriginRequest(request)) {
+      logger.debug("WebSocket authentication rejected", {
+        reason: "session-origin-mismatch",
+      });
+      return null;
+    }
+    logger.debug("WebSocket session authenticated", {
+      method: "session",
+      role: session.user.role,
+    });
     return {
       user: session.user,
       sessionTokenHash: session.tokenHash,
@@ -338,12 +347,29 @@ export function authenticateWsRequest(
   }
 
   const apiToken = ludockApiToken();
-  if (!apiToken) return null;
+  if (!apiToken) {
+    logger.debug("WebSocket authentication rejected", {
+      reason: "no-session-or-api-token",
+    });
+    return null;
+  }
   if (request.headers.origin && !isSameOriginRequest(request)) {
+    logger.debug("WebSocket authentication rejected", {
+      reason: "api-token-origin-mismatch",
+    });
     return null;
   }
   const candidate = bearerToken(request.headers.authorization);
-  if (!candidate || !tokensMatch(candidate, apiToken)) return null;
+  if (!candidate || !tokensMatch(candidate, apiToken)) {
+    logger.debug("WebSocket authentication rejected", {
+      reason: candidate ? "invalid-api-token" : "missing-bearer-token",
+    });
+    return null;
+  }
+  logger.debug("WebSocket session authenticated", {
+    method: "api-token",
+    role: "admin",
+  });
   return {
     user: { id: "api-token", username: "api-token", role: "admin" },
     validate: () => ({

@@ -12,8 +12,10 @@ import { rawDataToString } from "./ws-message.js";
 import { executeGameCommand } from "./game-console-runtime.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
+import { createLogger, errorMessage } from "./logger.js";
 
 export type ConsoleMode = "game" | "shell";
+const logger = createLogger("console");
 
 export async function handleConsoleConnection(
   ws: WebSocket,
@@ -46,16 +48,24 @@ export async function handleConsoleConnection(
       pendingMessages.push(message);
       void drainMessages();
     } else {
+      logger.warn("Rejected console input because the queue is full", {
+        container: shortContainerId(containerId),
+        mode,
+      });
       sendMessage(ws, "error", "Too many commands queued");
     }
   });
 
   if (!containerId) {
+    logger.warn("Rejected console connection without a container ID", { mode });
     sendMessage(ws, "error", "Missing container ID");
     ws.close(1008, "Missing container ID");
     return;
   }
   if (mode === "shell" && user.role !== "admin") {
+    logger.warn("Rejected shell connection for non-administrator", {
+      role: user.role,
+    });
     sendMessage(ws, "error", "Container shell access requires an administrator");
     ws.close(1008, "Administrator access required");
     return;
@@ -64,7 +74,12 @@ export async function handleConsoleConnection(
   let server;
   try {
     server = await getManagedContainer(containerId);
-  } catch {
+  } catch (error) {
+    logger.warn("Rejected console connection for unmanaged container", {
+      container: shortContainerId(containerId),
+      mode,
+      error: errorMessage(error),
+    });
     sendMessage(ws, "error", `Container ${containerId} is not managed`);
     ws.close(1008, "Container not managed");
     return;
@@ -72,6 +87,12 @@ export async function handleConsoleConnection(
 
   const container = getContainer(containerId);
   const adapter = resolveGameConsoleAdapter(server);
+  logger.info("Console connection opened", {
+    container: shortContainerId(containerId),
+    mode,
+    role: user.role,
+    adapter: adapter?.id || "logs-only",
+  });
   sendMessage(
     ws,
     "system",
@@ -102,14 +123,29 @@ export async function handleConsoleConnection(
       timestamps: false,
     });
     logStream = stream;
+    logger.debug("Docker log stream attached", {
+      container: shortContainerId(containerId),
+      mode,
+    });
     stream.on("data", (chunk: Buffer) => sendLogChunk(ws, chunk));
     stream.on("error", (error: Error) => {
+      logger.warn("Docker log stream failed", {
+        container: shortContainerId(containerId),
+        error: error.message,
+      });
       sendMessage(ws, "error", `Log stream error: ${error.message}`);
     });
     stream.on("end", () => {
+      logger.info("Docker log stream ended", {
+        container: shortContainerId(containerId),
+      });
       sendMessage(ws, "system", "Log stream ended (container may have stopped)");
     });
   } catch (error: unknown) {
+    logger.warn("Failed to attach Docker log stream", {
+      container: shortContainerId(containerId),
+      error: errorMessage(error),
+    });
     sendMessage(ws, "error", `Failed to open logs: ${errorMessage(error)}`);
   }
 
@@ -154,6 +190,12 @@ export async function handleConsoleConnection(
     }
 
     try {
+      logger.debug("Executing console input", {
+        container: shortContainerId(containerId),
+        mode,
+        commandLength: command.length,
+        adapter: adapter?.id,
+      });
       writeAuditLog({
         userId: currentUser.id === "api-token" ? undefined : currentUser.id,
         action:
@@ -185,6 +227,11 @@ export async function handleConsoleConnection(
     } catch (error: unknown) {
       const prefix =
         mode === "game" ? "Game command failed" : "Shell command failed";
+      logger.warn(prefix, {
+        container: shortContainerId(containerId),
+        adapter: adapter?.id,
+        error: errorMessage(error),
+      });
       sendMessage(ws, "error", `${prefix}: ${errorMessage(error)}`);
     }
   };
@@ -197,9 +244,20 @@ export async function handleConsoleConnection(
       logStream = null;
     }
   };
-  ws.on("close", destroyLogStream);
+  ws.on("close", (code) => {
+    logger.info("Console connection closed", {
+      container: shortContainerId(containerId),
+      mode,
+      code,
+    });
+    destroyLogStream();
+  });
   ws.on("error", (error) => {
-    console.error(`[Console] WebSocket error for ${containerId}:`, error.message);
+    logger.warn("Console WebSocket error", {
+      container: shortContainerId(containerId),
+      mode,
+      error: error.message,
+    });
     destroyLogStream();
   });
 }
@@ -216,6 +274,7 @@ async function executeInContainer(
   stdout.on("data", (chunk: Buffer) => sendMessage(ws, "stdout", chunk.toString()));
   stderr.on("data", (chunk: Buffer) => sendMessage(ws, "stderr", chunk.toString()));
   execStream.on("error", (error: Error) => {
+    logger.warn("Container command stream failed", { error: error.message });
     sendMessage(ws, "error", `Command stream error: ${error.message}`);
   });
   // Deliberately not awaited: output streams back as it arrives so that
@@ -248,6 +307,6 @@ function sendMessage(
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data }));
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function shortContainerId(containerId: string | undefined): string | undefined {
+  return containerId?.slice(0, 12);
 }

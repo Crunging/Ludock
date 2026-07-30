@@ -5,6 +5,7 @@ import {
   type GameConsoleAdapterId,
 } from "./game-console.js";
 import { getFileRoots, type FileRoot } from "./file-storage.js";
+import { inferGameType } from "./server-presets.js";
 
 export const LABEL_PREFIX = "ludock";
 
@@ -82,7 +83,7 @@ export async function getManagedContainer(
     image: info.Config.Image,
     state: info.State.Status,
     status: `${info.State.Status}${info.State.Health ? ` (${info.State.Health.Status})` : ""}`,
-    gameType: labels[LABEL_GAME] || "unknown",
+    gameType: labels[LABEL_GAME]?.trim() || inferGameType(info.Config.Image),
     ports: Object.entries(info.NetworkSettings.Ports || {}).flatMap(
       ([containerPort, bindings]) => {
         if (!bindings) return [];
@@ -100,7 +101,7 @@ export async function getManagedContainer(
   return {
     ...managed,
     gameConsole: getGameConsoleAdapterSummary(managed),
-    fileRoots: getFileRoots(managed),
+    fileRoots: getFileRoots(managed, info.Mounts || []),
   };
 }
 
@@ -184,7 +185,7 @@ function toManagedContainer(
     image: container.Image,
     state: container.State,
     status: container.Status,
-    gameType: labels[LABEL_GAME] || "unknown",
+    gameType: labels[LABEL_GAME]?.trim() || inferGameType(container.Image),
     ports: (container.Ports || []).map((p) => ({
       private: p.PrivatePort,
       public: p.PublicPort || 0,
@@ -196,7 +197,7 @@ function toManagedContainer(
   return {
     ...managed,
     gameConsole: getGameConsoleAdapterSummary(managed),
-    fileRoots: getFileRoots(managed),
+    fileRoots: getFileRoots(managed, container.Mounts || []),
   };
 }
 

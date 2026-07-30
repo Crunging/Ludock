@@ -82,8 +82,10 @@ Run the panel with a persistent `/data` volume and add
 
 ### File manager
 
-- A Minecraft server exposes `/data`; a supported Valheim image exposes
-  `/config`. An explicit `ludock.files` label overrides inference.
+- Known game images with only `ludock.enable=true` infer their game type.
+  Writable bind mounts and named volumes become file roots; read-only, system,
+  Docker socket, host-root, and nested duplicate mounts do not. Explicit
+  `ludock.game` and `ludock.files` labels override inference.
 - Files and folders can be browsed without exposing paths outside a configured
   root.
 - Dragging one or more files into the upload area stores them in the current

@@ -20,8 +20,10 @@ import {
   renameFileEntry,
   uploadFile,
 } from "./file-storage.js";
+import { createLogger, errorMessage } from "./logger.js";
 
 export const router: RouterType = Router();
+const logger = createLogger("api");
 
 interface DockerRouteError extends Error {
   statusCode?: number;
@@ -55,7 +57,7 @@ function sendDockerError(
     return;
   }
 
-  console.error(`[API] ${fallbackMessage}:`, caught);
+  logger.error(fallbackMessage, { error: errorMessage(caught) });
   res.status(500).json({ error: fallbackMessage });
 }
 
@@ -138,7 +140,7 @@ function sendFileError(res: Response, error: unknown): void {
     return;
   }
 
-  console.error("[API] File operation failed:", error);
+  logger.error("File operation failed", { error: errorMessage(error) });
   res.status(500).json({ error: "File operation failed" });
 }
 
@@ -173,7 +175,7 @@ router.get("/api/servers", async (_req: Request, res: Response) => {
     const servers = await listManagedContainers();
     res.json({ servers });
   } catch (error) {
-    console.error("[API] Failed to list servers:", error);
+    logger.error("Failed to list servers", { error: errorMessage(error) });
     res.status(500).json({ error: "Failed to list servers" });
   }
 });
@@ -198,7 +200,7 @@ router.get("/api/servers/:id", async (req: Request, res: Response) => {
       stats: stats.status === "fulfilled" ? stats.value : null,
     });
   } catch (error) {
-    console.error("[API] Failed to get server:", error);
+    logger.error("Failed to get server", { error: errorMessage(error) });
     res.status(500).json({ error: "Failed to get server details" });
   }
 });
@@ -252,7 +254,10 @@ router.get(
       }
       fileAudit(req, res, "downloaded", id, parsed.data);
       download.stream.on("error", (error) => {
-        console.error("[API] Download stream failed:", error);
+        logger.error("Download stream failed", {
+          container: id.slice(0, 12),
+          error: errorMessage(error),
+        });
         res.destroy();
       });
       res.once("close", () => {

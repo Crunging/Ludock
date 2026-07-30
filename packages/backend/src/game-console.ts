@@ -143,6 +143,7 @@ const GAME_PRESETS: Record<string, GamePreset> = {
     name: "Source RCON",
     defaultPort: 27015,
     placeholder: "status, changelevel de_dust2, say Hello",
+    passwordEnvCandidates: ["CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"],
   },
   csgo: {
     adapter: "source-rcon",
@@ -178,7 +179,10 @@ const GAME_PRESETS: Record<string, GamePreset> = {
     name: "V Rising RCON",
     defaultPort: 25575,
   },
-  rust: { adapter: "rust-webrcon" },
+  rust: {
+    adapter: "rust-webrcon",
+    passwordEnvCandidates: ["RUST_RCON_PASSWORD", "RCON_PASSWORD"],
+  },
   terraria: {
     adapter: "stdin-console",
     name: "Terraria console",

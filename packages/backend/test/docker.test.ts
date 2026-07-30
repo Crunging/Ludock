@@ -63,6 +63,46 @@ describe("managed container lifecycle boundary", () => {
   }
 });
 
+describe("managed container image inference", () => {
+  it("needs only the enable label for a recognized image", async () => {
+    const container = {
+      inspect: async () => ({
+        Id: "a".repeat(64),
+        Name: "/terraria",
+        Config: {
+          Image: "hexlo/terraria-server-docker:latest",
+          Labels: { "ludock.enable": "true" },
+        },
+        State: { Status: "running" },
+        Mounts: [
+          {
+            Type: "bind",
+            Source: "/srv/terraria",
+            Destination: "/root/.local/share/Terraria/Worlds",
+            RW: true,
+          },
+        ],
+        NetworkSettings: { Ports: {} },
+        Created: "2026-01-01T00:00:00.000Z",
+      }),
+    };
+    docker.getContainer =
+      (() => container) as unknown as typeof docker.getContainer;
+
+    const managed = await getManagedContainer("terraria");
+
+    assert.equal(managed.gameType, "terraria");
+    assert.equal(managed.gameConsole?.id, "stdin-console");
+    assert.deepEqual(managed.fileRoots, [
+      {
+        id: "root-0",
+        name: "Terraria worlds",
+        path: "/root/.local/share/Terraria/Worlds",
+      },
+    ]);
+  });
+});
+
 describe("container identifier validation", () => {
   // Express decodes %2f, so a raw identifier can carry "../" and escape
   // /containers/<id>/json. The daemon 301s to the cleaned path and docker-modem

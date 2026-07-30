@@ -26,7 +26,7 @@ It does not create game servers or manage containers without the
 Docker Compose is the recommended installation method.
 
 1. Download [`compose.yaml`](./compose.yaml).
-2. Add Ludock labels to each game-server service:
+2. Opt each game-server service into Ludock:
 
    ```yaml
    services:
@@ -34,7 +34,6 @@ Docker Compose is the recommended installation method.
        labels:
          ludock.enable: "true"
          ludock.name: "Survival Server"
-         ludock.game: "minecraft"
    ```
 
 3. Start Ludock:
@@ -50,85 +49,30 @@ The image supports `linux/amd64` and `linux/arm64`. Stable versions are
 published as `latest`, `MAJOR`, `MAJOR.MINOR`, and `MAJOR.MINOR.PATCH`;
 development builds use `nightly`.
 
-## Container labels
+## Add game servers
 
-| Label | Purpose |
-|---|---|
-| `ludock.enable` | Required. Set to `"true"` to manage the container |
-| `ludock.name` | Display name; defaults to the container name |
-| `ludock.game` | Game identifier, such as `minecraft` or `valheim` |
-| `ludock.console` | Console adapter override or `disabled` |
-| `ludock.console.host` | RCON or Telnet host override |
-| `ludock.console.port` | RCON or Telnet port override |
-| `ludock.console.password-env` | Name of the container environment variable containing the console password |
-| `ludock.files` | Comma-separated container paths exposed by the file manager |
+Add `ludock.enable=true` to each game-server container you want Ludock to
+manage. Known images need no other labels: Ludock selects the game integration
+from the image and discovers file roots from its writable mounts.
 
-Minecraft automatically exposes `/data`. Supported Valheim images
-automatically expose `/config`. Other servers can declare roots:
+See [Game servers and overrides](./docs/GAME-SERVERS.md) for:
 
-```yaml
-labels:
-  ludock.files: "/config,/backups"
-```
+- recognized images and platform availability;
+- game, console, port, password-variable, and file-root overrides;
+- console transports and their internal ports;
+- custom-image examples and file-root discovery behavior.
 
-The panel rejects `/`, traversal, and symbolic-link escapes.
+## Documentation
 
-## Game consoles
-
-These are console connections and ports, not the ports players use to join a
-game.
-
-| Game | Console connection | Default console port |
-|---|---|---:|
-| Minecraft (`itzg/minecraft-server`) | Bundled `rcon-cli` inside the container | 25575 (internal) |
-| Factorio | RCON | 27015 |
-| Palworld | RCON | 25575 |
-| ARK and ARK: Survival Ascended | RCON | 27020 |
-| Counter-Strike 2 | RCON | 27015 |
-| Project Zomboid | RCON | 27015 |
-| Conan Exiles | RCON | 25575 |
-| V Rising | RCON | 25575 |
-| Rust | WebRCON | 28016 |
-| 7 Days to Die | Telnet | 8081 |
-| Terraria | Container process input | — |
-
-Minecraft normally uses port `25565` for players and `25575` for RCON.
-Ludock runs the bundled `rcon-cli` command inside `itzg/minecraft-server`, so
-the RCON port should not be published or configured in Ludock.
-
-Ludock selects a console connection from `ludock.game`. Games without a
-supported console still have live logs.
-
-For consoles reached over a Docker network, enable the protocol in the game
-server and store its password in the game container:
-
-```yaml
-labels:
-  ludock.console.password-env: "RCON_PASSWORD"
-environment:
-  RCON_PASSWORD: "${RCON_PASSWORD}"
-```
-
-The password value stays on the backend and is not sent to the browser or audit
-log. Put the panel and game server on a shared Docker network, and never expose
-RCON or Telnet directly to the internet.
-
-## Files and permissions
-
-Administrators and operators can browse, upload, create, rename, download, and
-delete files inside configured roots. Viewers can browse and download only.
-Stop a game server before replacing active worlds or configuration files.
-
-Volume-backed roots remain available while a server is stopped. The panel uses
-a short-lived helper container with no network and dropped Linux capabilities;
-data kept only in a container's writable layer requires that container to be
-running.
-
-| Role | Access |
-|---|---|
-| Administrator | Server control, game console, files, container shell, users, and audit log |
-| Operator | Server control, game console, and files |
-| Viewer | Server status, logs, and file downloads |
+- [Game servers and overrides](./docs/GAME-SERVERS.md): recognized images,
+  labels, console transports, custom images, and file roots.
+- [Operations](./docs/OPERATIONS.md): environment settings, log levels,
+  permissions, backups, and administrator recovery.
+- [Security policy](./SECURITY.md): deployment boundary, supported releases,
+  and vulnerability reporting.
+- [Testing](./TESTING.md): release acceptance criteria and product boundaries.
+- [Contributing](./CONTRIBUTING.md): development setup and contribution
+  workflow.
 
 ## Security
 
@@ -140,40 +84,9 @@ running.
 Browser sessions use revocable HttpOnly cookies, and passwords are hashed with
 scrypt. Only labeled containers can be listed or controlled.
 
-Optional settings are documented in [`.env.example`](./.env.example). In
-particular:
-
-- `LUDOCK_API_TOKEN` enables administrator API access and must contain at least
-  32 characters.
-- `TRUSTED_PROXIES` identifies the directly connected reverse proxy whose
-  forwarded client address and protocol may be trusted.
-- `MAX_UPLOAD_BYTES`, `AUDIT_LOG_MAX_ROWS`, and `FILE_HELPER_IMAGE` adjust
-  operational limits.
-
-See [SECURITY.md](./SECURITY.md) for vulnerability reporting and the supported
-release policy.
-
-## Backup and recovery
-
-Ludock accounts, sessions, and audit history are stored in
-`./data/ludock.db`.
-Back it up with the panel stopped:
-
-```bash
-docker compose stop ludock
-cp ./data/ludock.db ./ludock.db.backup
-docker compose start ludock
-```
-
-To reset an existing administrator password:
-
-```bash
-docker compose stop ludock
-docker compose run --rm \
-  -e LUDOCK_RECOVERY_PASSWORD='choose-a-new-long-password' \
-  ludock node packages/backend/dist/recovery.js admin
-docker compose start ludock
-```
+See the [operations guide](./docs/OPERATIONS.md) for configuration, logging,
+backup, and recovery, and [SECURITY.md](./SECURITY.md) for the supported release
+policy.
 
 ## Development
 

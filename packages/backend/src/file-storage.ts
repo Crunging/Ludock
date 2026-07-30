@@ -4,8 +4,10 @@ import type Docker from "dockerode";
 import * as tar from "tar-stream";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
+import { createLogger, errorMessage } from "./logger.js";
 
 export const LABEL_FILES = "ludock.files";
+const logger = createLogger("files");
 
 export interface FileRoot {
   id: string;
@@ -20,13 +22,21 @@ export interface FileEntry {
   modifiedAt: number;
 }
 
+export interface ContainerFileMount {
+  Type: string;
+  Source: string;
+  Destination: string;
+  RW: boolean;
+}
+
 export function getFileRoots(
-  server: Pick<ManagedContainer, "gameType" | "image" | "labels">
+  server: Pick<ManagedContainer, "gameType" | "image" | "labels">,
+  mounts: readonly ContainerFileMount[] = []
 ): FileRoot[] {
   const configured = server.labels[LABEL_FILES];
-  const paths = configured
+  const paths = configured !== undefined
     ? configured.split(",").map((value) => value.trim())
-    : inferredFilePaths(server);
+    : inferredFilePaths(mounts);
 
   return paths
     .map((value) => {
@@ -357,7 +367,10 @@ async function acquireFileContainer(
     } catch (error) {
       const statusCode = (error as { statusCode?: number }).statusCode;
       if (statusCode !== 404) {
-        console.error("[Files] Failed to remove offline helper:", error);
+        logger.warn("Failed to remove offline helper container", {
+          container: server.id.slice(0, 12),
+          error: errorMessage(error),
+        });
       }
     }
   };
@@ -423,20 +436,60 @@ function cleanupAfterStream(
   stream.once("error", run);
 }
 
-function inferredFilePaths(
-  server: Pick<ManagedContainer, "gameType" | "image">
-): string[] {
-  const game = server.gameType.trim().toLowerCase();
-  const image = server.image.toLowerCase();
-  if (game === "minecraft") return ["/data"];
-  if (
-    game === "valheim" &&
-    (image.includes("community-valheim-tools/valheim-server") ||
-      image.includes("lloesche/valheim-server"))
-  ) {
-    return ["/config"];
+function inferredFilePaths(mounts: readonly ContainerFileMount[]): string[] {
+  const paths = mounts
+    .filter(isSafeWritableDataMount)
+    .map((mount) => path.posix.normalize(mount.Destination))
+    .filter((value, index, values) => values.indexOf(value) === index);
+
+  return paths.filter(
+    (candidate) =>
+      !paths.some(
+        (other) => other !== candidate && candidate.startsWith(`${other}/`)
+      )
+  );
+}
+
+function isSafeWritableDataMount(mount: ContainerFileMount): boolean {
+  if (!mount.RW || (mount.Type !== "bind" && mount.Type !== "volume")) {
+    return false;
   }
-  return [];
+
+  const destination = path.posix.normalize(mount.Destination);
+  if (
+    !destination.startsWith("/") ||
+    destination === "/" ||
+    destination.length > 512 ||
+    isSensitiveSystemPath(destination)
+  ) {
+    return false;
+  }
+
+  if (mount.Type === "bind") {
+    const source = path.posix.normalize(mount.Source);
+    if (
+      !source.startsWith("/") ||
+      source === "/" ||
+      isSensitiveSystemPath(source)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isSensitiveSystemPath(value: string): boolean {
+  return [
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/var/run",
+    "/var/lib/docker",
+    "/etc",
+    "/boot",
+  ].some((root) => value === root || value.startsWith(`${root}/`));
 }
 
 function rootName(gameType: string, rootPath: string): string {
@@ -446,6 +499,12 @@ function rootName(gameType: string, rootPath: string): string {
   if (gameType.toLowerCase() === "valheim" && rootPath === "/config") {
     return "Valheim config";
   }
+  if (
+    gameType.toLowerCase() === "terraria" &&
+    rootPath === "/root/.local/share/Terraria/Worlds"
+  ) {
+    return "Terraria worlds";
+  }
   return path.posix.basename(rootPath) || rootPath;
 }
 
@@ -454,7 +513,7 @@ function resolveTarget(
   rootId: string,
   relativePath: string
 ): { root: FileRoot; relativePath: string; absolutePath: string } {
-  const root = getFileRoots(server).find((candidate) => candidate.id === rootId);
+  const root = server.fileRoots.find((candidate) => candidate.id === rootId);
   if (!root) throw new FileStorageError("ROOT_NOT_FOUND", 404);
   const normalized = normalizeRelativePath(relativePath);
   return {

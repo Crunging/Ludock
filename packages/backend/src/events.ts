@@ -1,10 +1,12 @@
 import type { WebSocket } from "ws";
 import { getDockerInstance, LABEL_ENABLE } from "./docker.js";
+import { createLogger, errorMessage } from "./logger.js";
 
 const eventClients = new Set<WebSocket>();
 let eventStreamActive = false;
 let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const logger = createLogger("events");
 
 interface DockerEvent {
   Action?: string;
@@ -23,9 +25,15 @@ function parseDockerEvent(chunk: Buffer): DockerEvent | null {
 
 export function addEventClient(ws: WebSocket): void {
   eventClients.add(ws);
+  logger.debug("Event WebSocket client connected", {
+    clients: eventClients.size,
+  });
 
   const removeClient = () => {
     eventClients.delete(ws);
+    logger.debug("Event WebSocket client disconnected", {
+      clients: eventClients.size,
+    });
     if (eventClients.size === 0) stopEventStream();
   };
   ws.on("close", removeClient);
@@ -60,6 +68,9 @@ async function startEventStream(): Promise<void> {
       },
     });
     eventStream = stream;
+    logger.debug("Docker event stream attached", {
+      clients: eventClients.size,
+    });
 
     stream.on("data", (chunk: Buffer) => {
       try {
@@ -85,18 +96,19 @@ async function startEventStream(): Promise<void> {
 
     stream.on("error", (error: Error) => {
       if (eventStream !== stream) return;
-      console.error("[Events] Docker event stream error:", error.message);
+      logger.warn("Docker event stream failed", { error: error.message });
       scheduleReconnect(5000);
     });
 
     stream.on("end", () => {
       if (eventStream !== stream) return;
-      console.warn("[Events] Docker event stream ended, reconnecting...");
+      logger.warn("Docker event stream ended; reconnecting");
       scheduleReconnect(2000);
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("[Events] Failed to start event stream:", message);
+    logger.warn("Failed to start Docker event stream", {
+      error: errorMessage(error),
+    });
     scheduleReconnect(5000);
   }
 }
@@ -107,6 +119,7 @@ function scheduleReconnect(delay: number): void {
   eventStream = null;
   eventStreamActive = false;
   if (eventClients.size === 0) return;
+  logger.debug("Scheduled Docker event stream reconnect", { delayMs: delay });
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;

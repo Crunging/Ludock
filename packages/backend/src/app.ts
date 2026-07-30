@@ -50,10 +50,12 @@ import {
   type SessionUser,
   type UserRecord,
 } from "./database.js";
+import { createLogger, errorMessage } from "./logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_MIN_LENGTH = 15;
+const logger = createLogger("api");
 const credentialsSchema = z.object({
   username: z
     .string()
@@ -122,10 +124,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
     try {
       app.set("trust proxy", entries);
     } catch (error) {
-      console.error(
-        `TRUSTED_PROXIES is not a valid list of IPs or CIDR ranges and has been ignored (${
-          error instanceof Error ? error.message : String(error)
-        }). Client IPs will be taken from the direct connection.`
+      logger.error(
+        "TRUSTED_PROXIES is invalid and has been ignored; using the direct client address",
+        { error: errorMessage(error) }
       );
     }
   }
@@ -156,6 +157,17 @@ export function createApp(options: CreateAppOptions = {}): Express {
         "max-age=31536000; includeSubDomains"
       );
     }
+    const startedAt = performance.now();
+    res.once("finish", () => {
+      logger.debug("HTTP request completed", {
+        requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        durationMs: Math.round(performance.now() - startedAt),
+        remoteAddress: req.ip,
+      });
+    });
     next();
   });
   // Enforce origin checks before parsing request bodies.
@@ -577,10 +589,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
         typeof res.locals.requestId === "string"
           ? res.locals.requestId
           : "unknown";
-      console.error(
-        `[API] Unhandled error ${requestId}:`,
-        error
-      );
+      logger.error("Unhandled request error", {
+        requestId,
+        method: req.method,
+        path: req.path,
+        error: errorMessage(error),
+      });
       if (res.headersSent) {
         next(error);
         return;

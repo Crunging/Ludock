@@ -98,4 +98,17 @@ describe("game console adapters", () => {
       null
     );
   });
+
+  it("recognizes credential variables used by popular CS2 and Rust images", () => {
+    assert.deepEqual(
+      resolveGameConsoleAdapter({ gameType: "cs2", labels: {} })
+        ?.passwordEnvCandidates,
+      ["CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"]
+    );
+    assert.deepEqual(
+      resolveGameConsoleAdapter({ gameType: "rust", labels: {} })
+        ?.passwordEnvCandidates,
+      ["RUST_RCON_PASSWORD", "RCON_PASSWORD"]
+    );
+  });
 });
