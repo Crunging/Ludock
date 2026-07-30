@@ -364,18 +364,43 @@ async function writeContainerStdin(
   command: string,
   output: GameCommandOutput
 ): Promise<void> {
-  const exec = await container.exec({
-    Cmd: ["/bin/sh", "-c", "cat > /proc/1/fd/0"],
-    AttachStdin: true,
-    AttachStdout: true,
-    AttachStderr: true,
-    Tty: false,
+  const info = await container.inspect();
+  if (!info.Config.OpenStdin) {
+    throw new Error(
+      "Container standard input is closed; recreate it with stdin_open: true"
+    );
+  }
+  if (info.Config.StdinOnce) {
+    throw new Error(
+      "Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled"
+    );
+  }
+
+  const stream = await container.attach({
+    stream: true,
+    stdin: true,
+    stdout: false,
+    stderr: false,
+    hijack: true,
   });
-  const stream = await exec.start({ hijack: true, stdin: true });
-  const completed = streamExecOutput(stream, output);
-  stream.end(`${command}\n`);
-  await completed;
+  try {
+    await writeAttachedInput(stream, `${command}\n`);
+  } finally {
+    (stream as NodeJS.ReadWriteStream & { destroy(): void }).destroy();
+  }
   output.system("Command sent to the server process");
+}
+
+async function writeAttachedInput(
+  stream: NodeJS.ReadWriteStream,
+  data: string
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    stream.write(data, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 async function streamExecOutput(

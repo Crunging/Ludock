@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import net from "node:net";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, it } from "node:test";
+import type Docker from "dockerode";
 import { WebSocketServer } from "ws";
 import {
+  executeGameCommand,
   executeRustWebRcon,
   executeSourceRcon,
   executeTelnetCommand,
 } from "../src/game-console-runtime.js";
+import type { GameConsoleAdapter } from "../src/game-console.js";
 
 const closers: Array<() => Promise<void>> = [];
 
@@ -132,6 +136,86 @@ describe("Telnet console transport", () => {
     assert.deepEqual(received, ["telnet-secret", "listplayers"]);
     assert.match(response, /PlayerOne, PlayerTwo/);
     assert.doesNotMatch(response, /telnet-secret/);
+  });
+});
+
+describe("Container stdin transport", () => {
+  const adapter: GameConsoleAdapter = {
+    id: "stdin-console",
+    name: "Server console",
+    transport: "container-stdin",
+    commandPlaceholder: "help",
+  };
+
+  it("attaches directly to the container stdin and sends a newline", async () => {
+    const stream = new PassThrough();
+    let received = "";
+    let attachOptions: Docker.ContainerAttachOptions | undefined;
+    stream.on("data", (chunk: Buffer) => {
+      received += chunk.toString();
+    });
+    const container = {
+      inspect: async () => ({
+        Config: { OpenStdin: true, StdinOnce: false },
+      }),
+      attach: async (options: Docker.ContainerAttachOptions) => {
+        attachOptions = options;
+        return stream;
+      },
+    } as unknown as Docker.Container;
+    const systemMessages: string[] = [];
+
+    await executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      "help",
+      {
+        stdout: () => undefined,
+        stderr: () => undefined,
+        system: (message) => systemMessages.push(message),
+      }
+    );
+
+    assert.deepEqual(attachOptions, {
+      stream: true,
+      stdin: true,
+      stdout: false,
+      stderr: false,
+      hijack: true,
+    });
+    assert.equal(received, "help\n");
+    assert.equal(stream.destroyed, true);
+    assert.deepEqual(systemMessages, ["Command sent to the server process"]);
+  });
+
+  it("explains when the container was not created with open stdin", async () => {
+    let attached = false;
+    const container = {
+      inspect: async () => ({
+        Config: { OpenStdin: false, StdinOnce: false },
+      }),
+      attach: async () => {
+        attached = true;
+        return new PassThrough();
+      },
+    } as unknown as Docker.Container;
+
+    await assert.rejects(
+      executeGameCommand(
+        container,
+        { state: "running", labels: {} },
+        adapter,
+        "help",
+        {
+          stdout: () => undefined,
+          stderr: () => undefined,
+          system: () => undefined,
+        }
+      ),
+      /stdin_open: true/
+    );
+    assert.equal(attached, false);
   });
 });
 
