@@ -115,6 +115,18 @@ describe("HTTP application", () => {
     );
     assert.equal(authStatus.headers.get("cache-control"), "no-store");
 
+    const proxiedStatus = await fetch(`${baseUrl}/api/auth/status`, {
+      headers: {
+        Cookie: "authelia_session=opaque%token; unrelated=value",
+      },
+    });
+    assert.equal(proxiedStatus.status, 200);
+    assert.equal(
+      ((await proxiedStatus.json()) as { setupRequired: boolean })
+        .setupRequired,
+      true
+    );
+
     const health = await fetch(`${baseUrl}/api/health`);
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), {

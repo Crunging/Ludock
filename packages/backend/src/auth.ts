@@ -273,7 +273,7 @@ export function clearSessionCookie(response: Response): void {
 export function getRequestSession(
   request: Pick<IncomingMessage, "headers">
 ): { token: string; tokenHash: string; user: SessionUser } | null {
-  const token = parseCookies(request.headers.cookie || "")[SESSION_COOKIE];
+  const token = cookieValue(request.headers.cookie || "", SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = hashToken(token);
   const user = findSessionUser(tokenHash, Date.now());
@@ -403,22 +403,28 @@ function bearerToken(authorization: string | undefined): string {
   return authorization.slice(separator + 1);
 }
 
-function parseCookies(header: string): Record<string, string> {
-  return Object.fromEntries(
-    header
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const separator = part.indexOf("=");
-        return separator === -1
-          ? [part, ""]
-          : [
-              decodeURIComponent(part.slice(0, separator)),
-              decodeURIComponent(part.slice(separator + 1)),
-            ];
-      })
-  );
+function cookieValue(header: string, name: string): string {
+  let value = "";
+  for (const rawPart of header.split(";")) {
+    const part = rawPart.trim();
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+
+    let cookieName: string;
+    try {
+      cookieName = decodeURIComponent(part.slice(0, separator));
+    } catch {
+      continue;
+    }
+    if (cookieName !== name) continue;
+
+    try {
+      value = decodeURIComponent(part.slice(separator + 1));
+    } catch {
+      value = "";
+    }
+  }
+  return value;
 }
 
 function tokensMatch(candidate: string, expected: string): boolean {
