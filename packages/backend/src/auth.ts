@@ -21,6 +21,7 @@ import {
 import {
   isExternalHttpsRequest,
   isSameOriginRequest,
+  requestOriginDiagnostic,
 } from "./request-security.js";
 import { createLogger } from "./logger.js";
 
@@ -332,6 +333,7 @@ export function authenticateWsRequest(
     if (!isSameOriginRequest(request)) {
       logger.debug("WebSocket authentication rejected", {
         reason: "session-origin-mismatch",
+        ...requestOriginDiagnostic(request),
       });
       return null;
     }
@@ -356,6 +358,7 @@ export function authenticateWsRequest(
   if (request.headers.origin && !isSameOriginRequest(request)) {
     logger.debug("WebSocket authentication rejected", {
       reason: "api-token-origin-mismatch",
+      ...requestOriginDiagnostic(request),
     });
     return null;
   }
