@@ -13,7 +13,6 @@
   "dependencies": {
     "dockerode": "^5.0.1",
     "express": "^5.2.1",
-    "proxy-addr": "^2.0.7",
     "tar-stream": "^3.2.0",
     "ws": "^8.21.1",
     "zod": "^3.25.76"
@@ -23,7 +22,6 @@
     "@types/dockerode": "^4.0.1",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
-    "@types/proxy-addr": "^2.0.3",
     "@types/tar-stream": "^3.1.4",
     "@types/ws": "^8.18.1",
     "eslint": "^10.8.0",

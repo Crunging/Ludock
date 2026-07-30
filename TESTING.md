@@ -33,8 +33,6 @@ Run the panel with a persistent `/data` volume and add
 - A revoked or disabled session immediately loses API and WebSocket access.
 - Behind an HTTPS-terminating reverse proxy, setup and login cookies include
   `Secure` and console WebSockets connect without panel-specific proxy flags.
-- `TRUSTED_PROXIES` changes the recorded client IP only for requests arriving
-  through the configured proxy address or CIDR.
 
 ### Users and permissions
 

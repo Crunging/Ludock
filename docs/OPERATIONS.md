@@ -13,7 +13,6 @@ Compose loads this file into the Ludock container.
 |---|---|
 | `LOG_LEVEL` | Log verbosity: `error`, `warn`, `info` (default), or `debug` |
 | `LUDOCK_API_TOKEN` | Optional administrator API token; must be at least 32 characters |
-| `TRUSTED_PROXIES` | Directly connected reverse-proxy IPs or CIDR ranges |
 | `MAX_UPLOAD_BYTES` | Maximum file upload size |
 | `AUDIT_LOG_MAX_ROWS` | Maximum retained audit entries |
 | `FILE_HELPER_IMAGE` | Image used to access volume-backed files while a game is stopped |
@@ -23,6 +22,14 @@ After changing `.env`, recreate the container:
 ```bash
 docker compose up -d --force-recreate ludock
 ```
+
+## Reverse proxies
+
+Traefik works without Ludock-specific middleware. It automatically supplies
+the external host and protocol metadata Ludock uses for HTTPS cookies,
+browser-origin checks, and WebSockets. Other reverse proxies work when they
+preserve the public host, forward the external protocol, and support WebSocket
+upgrades.
 
 ## Logging and diagnostics
 

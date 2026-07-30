@@ -8,19 +8,18 @@ import {
 
 function request(
   headers: IncomingMessage["headers"],
-  encrypted = false,
-  remoteAddress = "10.1.2.3"
+  encrypted = false
 ): Pick<IncomingMessage, "headers" | "socket"> {
   return {
     headers,
-    socket: { encrypted, remoteAddress } as IncomingMessage["socket"] & {
+    socket: { encrypted } as IncomingMessage["socket"] & {
       encrypted?: boolean;
     },
   };
 }
 
 describe("request security metadata", () => {
-  it("detects direct and reverse-proxied HTTPS without trusting client IPs", () => {
+  it("detects HTTPS directly and through a reverse proxy", () => {
     assert.equal(isExternalHttpsRequest(request({}, true)), true);
     assert.equal(
       isExternalHttpsRequest(
@@ -73,36 +72,32 @@ describe("request security metadata", () => {
       ),
       false
     );
+    assert.equal(
+      isSameOriginRequest(
+        request({
+          origin: "https://panel.example",
+          host: "ludock:3000",
+          "x-forwarded-host": "panel.example",
+          "x-forwarded-proto": "https",
+        })
+      ),
+      true,
+      "a proxy may use the internal service name in Host"
+    );
   });
 
-  it("only believes x-forwarded-proto from a declared proxy", () => {
-    const forwarded = { "x-forwarded-proto": "https", host: "panel.example" };
-    const previous = process.env.TRUSTED_PROXIES;
-    process.env.TRUSTED_PROXIES = "10.1.2.3/32";
-    try {
-      assert.equal(
-        isExternalHttpsRequest(request(forwarded, false, "10.1.2.3")),
-        true
-      );
-      assert.equal(
-        isExternalHttpsRequest(request(forwarded, false, "10.9.9.9")),
-        false,
-        "a direct client must not be able to spoof HTTPS"
-      );
-      assert.equal(
-        isSameOriginRequest(
-          request(
-            { ...forwarded, origin: "https://panel.example" },
-            false,
-            "10.9.9.9"
-          )
-        ),
-        false
-      );
-    } finally {
-      if (previous === undefined) delete process.env.TRUSTED_PROXIES;
-      else process.env.TRUSTED_PROXIES = previous;
-    }
+  it("uses forwarded public origin metadata", () => {
+    const proxied = request(
+      {
+        origin: "https://panel.example",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "panel.example",
+        host: "ludock:3000",
+      },
+      false
+    );
+    assert.equal(isExternalHttpsRequest(proxied), true);
+    assert.equal(isSameOriginRequest(proxied), true);
   });
 
   it("rejects cross-host and malformed origins", () => {
@@ -118,5 +113,16 @@ describe("request security metadata", () => {
         false
       );
     }
+    assert.equal(
+      isSameOriginRequest(
+        request({
+          origin: "https://attacker.example",
+          host: "ludock:3000",
+          "x-forwarded-host": "panel.example",
+          "x-forwarded-proto": "https",
+        })
+      ),
+      false
+    );
   });
 });

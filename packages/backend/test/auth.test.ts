@@ -125,6 +125,18 @@ describe("account authentication", () => {
         })
       )
     );
+    assert.ok(
+      authenticateWsRequest(
+        websocketRequest({
+          cookie,
+          host: "ludock:3000",
+          origin: "https://panel.example",
+          "x-forwarded-host": "panel.example",
+          "x-forwarded-proto": "https",
+        })
+      ),
+      "accepts the public origin metadata supplied by Traefik"
+    );
     assert.equal(
       authenticateWsRequest(
         websocketRequest({

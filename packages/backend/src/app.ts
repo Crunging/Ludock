@@ -98,7 +98,7 @@ function publicUser(user: UserRecord | null) {
 }
 
 function loginThrottleKey(
-  scope: "ip" | "account" | "password-change",
+  scope: "account" | "password-change",
   value: string
 ): string {
   return createHash("sha256").update(`${scope}:${value}`).digest("hex");
@@ -115,21 +115,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const setupWindow = options.setupWindow || defaultSetupWindow;
 
   app.disable("x-powered-by");
-  const trustedProxies = process.env.TRUSTED_PROXIES?.trim();
-  if (trustedProxies) {
-    const entries = trustedProxies
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    try {
-      app.set("trust proxy", entries);
-    } catch (error) {
-      logger.error(
-        "TRUSTED_PROXIES is invalid and has been ignored; using the direct client address",
-        { error: errorMessage(error) }
-      );
-    }
-  }
   app.use((req, res, next) => {
     const requestId = randomUUID();
     res.locals.requestId = requestId;
@@ -234,7 +219,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
   app.post("/api/auth/login", async (req, res) => {
     const now = Date.now();
-    const ipKey = loginThrottleKey("ip", req.ip || "unknown");
     const requestedUsername = (
       stringProperty(req.body as unknown, "username") || ""
     )
@@ -244,12 +228,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const accountKey = requestedUsername
       ? loginThrottleKey("account", requestedUsername)
       : null;
-    const blocked = [ipKey, accountKey]
-      .filter((key): key is string => key !== null)
-      .some(
-        (key) =>
-          getLoginThrottle(key, now, LOGIN_WINDOW_MS).blockedUntil > now
-      );
+    const blocked =
+      accountKey !== null &&
+      getLoginThrottle(accountKey, now, LOGIN_WINDOW_MS).blockedUntil > now;
     if (blocked) {
       res.status(429).json({ error: "Too many attempts. Try again later." });
       return;
@@ -266,7 +247,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
       parsed.data.password
     );
     if (!user) {
-      recordLoginFailure(ipKey, now, LOGIN_WINDOW_MS, 20);
       if (accountKey) {
         recordLoginFailure(accountKey, now, LOGIN_WINDOW_MS, 5);
       }
