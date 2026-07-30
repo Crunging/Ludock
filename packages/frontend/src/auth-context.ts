@@ -10,10 +10,12 @@ export interface AuthUser {
 
 export interface AuthContextValue {
   loading: boolean;
+  statusError: boolean;
   setupRequired: boolean;
   setupLocked: boolean;
   authenticated: boolean;
   user: AuthUser | null;
+  refreshStatus: () => Promise<void>;
   login: (username: string, password: string) => Promise<string | null>;
   setup: (username: string, password: string) => Promise<string | null>;
   logout: () => Promise<void>;

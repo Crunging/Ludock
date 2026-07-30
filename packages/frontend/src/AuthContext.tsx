@@ -10,40 +10,52 @@ interface AuthStatus {
   user: AuthUser | null;
 }
 
+const STATUS_RETRY_DELAYS_MS = [250, 500, 1_000];
+
+function retryDelay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
+  const [statusError, setStatusError] = useState(false);
   const [setupRequired, setSetupRequired] = useState(false);
   const [setupLocked, setSetupLocked] = useState(false);
   const [setupRemainingMs, setSetupRemainingMs] = useState<number | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
 
-  useEffect(() => {
-    let active = true;
+  const refreshStatus = useCallback(async () => {
+    setLoading(true);
+    setStatusError(false);
 
-    fetch("/api/auth/status", { credentials: "same-origin" })
-      .then(async (response) => {
+    for (let attempt = 0; attempt <= STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const response = await fetch("/api/auth/status", {
+          credentials: "same-origin",
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as AuthStatus;
-      })
-      .then((status) => {
-        if (!active) return;
+        const status = (await response.json()) as AuthStatus;
         setSetupRequired(status.setupRequired);
         setSetupLocked(status.setupLocked);
         setSetupRemainingMs(status.setupRemainingMs);
         setUser(status.authenticated ? status.user : null);
-      })
-      .catch(() => {
-        if (!active) return;
-        setUser(null);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
+        setLoading(false);
+        return;
+      } catch {
+        const delay = STATUS_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) {
+          setStatusError(true);
+          setLoading(false);
+          return;
+        }
+        await retryDelay(delay);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
 
   useEffect(() => {
     if (!setupRequired || setupLocked || setupRemainingMs === null) return;
@@ -123,10 +135,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         loading,
+        statusError,
         setupRequired,
         setupLocked,
         authenticated: user !== null,
         user,
+        refreshStatus,
         login,
         setup,
         logout,

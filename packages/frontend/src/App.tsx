@@ -29,7 +29,14 @@ function routeParameter(match: RegExpMatchArray | null): string | null {
 }
 
 function App() {
-  const { loading, authenticated, user, logout } = useAuth();
+  const {
+    loading,
+    statusError,
+    authenticated,
+    user,
+    refreshStatus,
+    logout,
+  } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const consoleMatch = location.pathname.match(/^\/console\/([^/]+)$/);
@@ -62,6 +69,30 @@ function App() {
       <div className="loading-spinner loading-spinner--page">
         <div className="loading-spinner__ring" />
       </div>
+    );
+  }
+
+  if (statusError) {
+    return (
+      <main className="login-page">
+        <section className="login-card" aria-labelledby="connection-error-title">
+          <div className="sidebar__logo-icon login-card__logo">LU</div>
+          <h1 className="login-card__title" id="connection-error-title">
+            Unable to reach Ludock
+          </h1>
+          <p className="login-card__description">
+            The panel could not determine whether initial setup is required.
+            Check that the backend is running, then try again.
+          </p>
+          <button
+            className="login-card__submit"
+            type="button"
+            onClick={() => void refreshStatus()}
+          >
+            Try again
+          </button>
+        </section>
+      </main>
     );
   }
 
