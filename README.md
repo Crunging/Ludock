@@ -26,27 +26,15 @@ It does not create game servers or manage containers without the
 Docker Compose is the recommended installation method.
 
 1. Download [`compose.yaml`](./compose.yaml).
-2. Add the management label to each game-server container:
+2. Add Ludock labels to each game-server service:
 
    ```yaml
    services:
      minecraft:
-       image: itzg/minecraft-server
        labels:
          ludock.enable: "true"
          ludock.name: "Survival Server"
          ludock.game: "minecraft"
-       environment:
-         EULA: "TRUE"
-       volumes:
-         - minecraft-data:/data
-       ports:
-         - "25565:25565"
-       tty: true
-       stdin_open: true
-
-   volumes:
-     minecraft-data:
    ```
 
 3. Start Ludock:
@@ -85,22 +73,34 @@ labels:
 
 The panel rejects `/`, traversal, and symbolic-link escapes.
 
-## Console support
+## Game consoles
 
-| Game | Transport | Default port |
+These are console connections and ports, not the ports players use to join a
+game.
+
+| Game | Console connection | Default console port |
 |---|---|---:|
-| Minecraft | Bundled `rcon-cli` | Image-managed |
-| Factorio, Palworld, ARK, CS2, Project Zomboid, Conan Exiles, V Rising | Source RCON | Game-specific |
+| Minecraft (`itzg/minecraft-server`) | Bundled `rcon-cli` inside the container | 25575 (internal) |
+| Factorio | RCON | 27015 |
+| Palworld | RCON | 25575 |
+| ARK and ARK: Survival Ascended | RCON | 27020 |
+| Counter-Strike 2 | RCON | 27015 |
+| Project Zomboid | RCON | 27015 |
+| Conan Exiles | RCON | 25575 |
+| V Rising | RCON | 25575 |
 | Rust | WebRCON | 28016 |
 | 7 Days to Die | Telnet | 8081 |
-| Terraria | Container process stdin | — |
+| Terraria | Container process input | — |
 
-Supported overrides are `minecraft-rcon`, `source-rcon`, `rust-webrcon`,
-`telnet-console`, and `stdin-console`. Games without an adapter still have live
-logs.
+Minecraft normally uses port `25565` for players and `25575` for RCON.
+Ludock runs the bundled `rcon-cli` command inside `itzg/minecraft-server`, so
+the RCON port should not be published or configured in Ludock.
 
-For network consoles, enable the protocol in the game server and store its
-password in the game container:
+Ludock selects a console connection from `ludock.game`. Games without a
+supported console still have live logs.
+
+For consoles reached over a Docker network, enable the protocol in the game
+server and store its password in the game container:
 
 ```yaml
 labels:
@@ -177,22 +177,8 @@ docker compose start ludock
 
 ## Development
 
-Development requires Node.js 24 and pnpm 10.
-
-```bash
-corepack enable
-pnpm install
-pnpm dev
-```
-
-Run `pnpm check` before submitting a change. Container or deployment changes
-also require:
-
-```bash
-docker build -t ludock:test .
-```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contribution workflow and
-[TESTING.md](./TESTING.md) for the release acceptance checklist.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and the
+contribution workflow, and [TESTING.md](./TESTING.md) for the release acceptance
+checklist.
 
 Licensed under the [MIT License](./LICENSE).

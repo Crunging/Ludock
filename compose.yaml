@@ -1,7 +1,6 @@
 services:
   ludock:
     image: ghcr.io/crunging/ludock:latest
-    pull_policy: always
     ports:
       - "3000:3000"
     volumes:
@@ -10,10 +9,4 @@ services:
     env_file:
       - path: .env
         required: false
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     restart: unless-stopped
