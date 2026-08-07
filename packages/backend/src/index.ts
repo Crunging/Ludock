@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { handleConsoleConnection } from "./console.js";
+import { handleContainerLogsConnection } from "./container-logs.js";
 import { addEventClient, stopEventStream } from "./events.js";
 import {
   authenticateWsRequest,
@@ -68,7 +69,18 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  if (
+  if (pathname.startsWith("/ws/logs/")) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      monitorWebSocketSession(ws, auth);
+      void handleContainerLogsConnection(ws, req, auth).catch((error) => {
+        logger.error("Unexpected Docker log connection failure", {
+          path: pathname,
+          error: errorMessage(error),
+        });
+        ws.close(1011, "Log connection failed");
+      });
+    });
+  } else if (
     pathname.startsWith("/ws/game-console/") ||
     pathname.startsWith("/ws/console/")
   ) {

@@ -57,7 +57,13 @@ Run the panel with a persistent `/data` volume and add
 
 ### Game console, logs, and shell
 
-- Opening **Game Console** displays recent and live container output.
+- Opening **Docker Logs** displays the latest 500 timestamped stdout/stderr
+  lines and follows new output. Pause holds a bounded amount of output and
+  Resume catches up, reporting if older paused output was discarded.
+- Viewers can open **Docker Logs** but cannot see command input or switch to a
+  game console or container shell.
+- Opening **Game Console** displays recent and live container output alongside
+  protocol-specific command responses.
 - On an `itzg/minecraft-server` fixture, `say acceptance-test` is sent through
   RCON and appears in the server log.
 - `difficulty hard`, `whitelist on`, and `whitelist add PlayerName` are accepted
@@ -77,6 +83,16 @@ Run the panel with a persistent `/data` volume and add
   `test-ok` in the terminal.
 - Unsupported games explain that no adapter is configured and retain live logs.
 - Leaving the page closes the WebSocket without affecting the container.
+
+### Ludock logs
+
+- Administrators can open **Ludock logs** and see structured component, level,
+  message, and context fields without duplicated timestamps.
+- Passwords, tokens, cookies, authorization values, and sensitive URL query
+  parameters are redacted before entries reach the browser.
+- The log viewer does not generate request-log entries for its own polling.
+- Keeping the page open across a Ludock restart resets its process cursor and
+  begins displaying entries from the new process.
 
 ### File manager
 

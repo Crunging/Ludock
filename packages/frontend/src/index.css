@@ -218,6 +218,104 @@ button {
   line-height: 1;
 }
 
+/* Ludock application logs */
+.application-logs-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.application-logs-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 18px;
+}
+
+.application-logs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.application-logs-count {
+  margin-right: 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.application-logs-output {
+  flex: 1;
+  min-height: 240px;
+  overflow: auto;
+  padding: 8px 0;
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.application-log {
+  display: grid;
+  grid-template-columns: 180px 52px 110px minmax(0, 1fr);
+  gap: 10px;
+  padding: 4px 12px;
+  border-left: 2px solid transparent;
+}
+
+.application-log:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.application-log time {
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.application-log__level {
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.application-log__component {
+  color: var(--blue);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-log pre {
+  color: var(--text);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.application-log--warn {
+  border-left-color: var(--yellow);
+}
+
+.application-log--warn .application-log__level {
+  color: var(--yellow);
+}
+
+.application-log--error {
+  border-left-color: var(--red);
+}
+
+.application-log--error .application-log__level {
+  color: var(--red);
+}
+
+.application-logs-empty {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  color: var(--text-faint);
+}
+
 /* Server Grid */
 .server-grid {
   display: grid;
@@ -476,6 +574,22 @@ button {
 .console-mode-tabs .console-mode-tab--active {
   color: var(--text);
   background: var(--bg-card);
+}
+
+.console-pause {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.console-pause:hover,
+.console-pause--active {
+  color: var(--text);
+  border-color: var(--border-light);
 }
 
 .console-terminal {
@@ -1263,6 +1377,28 @@ button {
     padding: 16px;
   }
 
+  .application-logs-page {
+    height: calc(100vh - 101px);
+  }
+
+  .application-logs-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .application-logs-actions {
+    flex-wrap: wrap;
+  }
+
+  .application-log {
+    grid-template-columns: minmax(130px, 1fr) auto auto;
+  }
+
+  .application-log pre {
+    grid-column: 1 / -1;
+  }
+
   .files-header,
   .file-toolbar {
     align-items: stretch;
@@ -1330,6 +1466,7 @@ button {
     order: 3;
     width: 100%;
     margin-left: 38px;
+    overflow-x: auto;
   }
 
   .console-header {

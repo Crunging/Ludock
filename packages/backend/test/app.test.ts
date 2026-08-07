@@ -6,12 +6,14 @@ import { after, before, describe, it } from "node:test";
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }] = await Promise.all([
+const [{ createApp }, { getDockerInstance }, { createLogger }] = await Promise.all([
   import("../src/app.js"),
   import("../src/docker.js"),
+  import("../src/logger.js"),
 ]);
 
 const docker = getDockerInstance();
+const testLogger = createLogger("http-test");
 const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const originalGetContainer = docker.getContainer.bind(docker);
@@ -317,6 +319,11 @@ describe("HTTP application", () => {
     });
     assert.equal(viewerList.status, 403);
 
+    const viewerLogs = await fetch(`${baseUrl}/api/application-logs`, {
+      headers: { Cookie: viewerCookie },
+    });
+    assert.equal(viewerLogs.status, 403);
+
     const viewerStop = await fetch(
       `${baseUrl}/api/servers/${managedInfo.Id}/stop`,
       { method: "POST", headers: { Cookie: viewerCookie } }
@@ -350,6 +357,70 @@ describe("HTTP application", () => {
       body: JSON.stringify({ role: "viewer", disabled: false }),
     });
     assert.equal(demote.status, 409);
+  });
+
+  it("serves structured redacted Ludock logs to administrators", async () => {
+    testLogger.warn("diagnostic marker", {
+      requestId: "log-test-request",
+      apiToken: "must-not-reach-browser",
+    });
+    const response = await fetch(`${baseUrl}/api/application-logs?limit=20`, {
+      headers: { Cookie: sessionCookie },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      generation: string;
+      entries: Array<{
+        level: string;
+        component: string;
+        message: string;
+        context?: Record<string, unknown>;
+      }>;
+    };
+    assert.ok(body.generation);
+    const marker = body.entries.find(
+      (entry) =>
+        entry.component === "http-test" &&
+        entry.message.includes("diagnostic")
+    );
+    assert.ok(marker);
+    assert.equal(marker.level, "warn");
+    assert.equal(marker.context?.apiToken, "[REDACTED]");
+    assert.doesNotMatch(JSON.stringify(marker), /must-not-reach-browser/);
+    assert.equal(marker.context?.requestId, "log-test-request");
+  });
+
+  it("does not create debug log entries for log-viewer polling", async () => {
+    const previousLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = "debug";
+    try {
+      await fetch(`${baseUrl}/api/application-logs`, {
+        headers: { Cookie: sessionCookie },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const response = await fetch(`${baseUrl}/api/application-logs`, {
+        headers: { Cookie: sessionCookie },
+      });
+      const body = (await response.json()) as {
+        entries: Array<{
+          component: string;
+          message: string;
+          context?: Record<string, unknown>;
+        }>;
+      };
+      assert.equal(
+        body.entries.some(
+          (entry) =>
+            entry.component === "api" &&
+            entry.message === "HTTP request completed" &&
+            entry.context?.path === "/api/application-logs"
+        ),
+        false
+      );
+    } finally {
+      if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+      else process.env.LOG_LEVEL = previousLevel;
+    }
   });
 
   it("lists and revokes account sessions", async () => {

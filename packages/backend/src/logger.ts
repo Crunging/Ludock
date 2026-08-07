@@ -1,3 +1,8 @@
+import {
+  recordApplicationLog,
+  type ApplicationLogContext,
+} from "./application-logs.js";
+
 export const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -56,22 +61,31 @@ function writeLog(
   const configuredLevel = getLogLevelConfiguration().level;
   if (LOG_LEVEL_PRIORITY[level] > LOG_LEVEL_PRIORITY[configuredLevel]) return;
 
-  const fields = context
-    ? Object.fromEntries(
-        Object.entries(context)
-          .filter(([, value]) => value !== undefined)
-          .map(([key, value]) => [
-            key,
-            SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : value,
-          ])
-      )
-    : undefined;
+  const fields = context ? redactContext(context) : undefined;
   const suffix =
     fields && Object.keys(fields).length > 0 ? ` ${JSON.stringify(fields)}` : "";
-  const line = `${new Date().toISOString()} ${level.toUpperCase()} [${component}] ${message}${suffix}`;
+  const timestamp = Date.now();
+  const line = `${new Date(timestamp).toISOString()} ${level.toUpperCase()} [${component}] ${message}${suffix}`;
+
+  recordApplicationLog({
+    timestamp,
+    level,
+    component,
+    message,
+    context: fields,
+  });
 
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else if (level === "debug") console.debug(line);
   else console.info(line);
+}
+
+function redactContext(context: LogContext): ApplicationLogContext {
+  const fields: ApplicationLogContext = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (value === undefined) continue;
+    fields[key] = SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : value;
+  }
+  return fields;
 }

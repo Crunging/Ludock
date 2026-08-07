@@ -10,6 +10,7 @@ import { useLocation, useNavigate } from "./navigation-context";
 
 const Console = lazy(() => import("./pages/Console"));
 const Files = lazy(() => import("./pages/Files"));
+const ApplicationLogs = lazy(() => import("./pages/ApplicationLogs"));
 
 function PageFallback() {
   return (
@@ -49,6 +50,7 @@ function App() {
     location.pathname === "/account" ||
     location.pathname === "/users" ||
     location.pathname === "/audit" ||
+    location.pathname === "/logs" ||
     filesId !== null ||
     isConsolePage;
 
@@ -57,7 +59,8 @@ function App() {
       authenticated &&
       (!knownPath ||
         ((location.pathname === "/users" ||
-          location.pathname === "/audit") &&
+          location.pathname === "/audit" ||
+          location.pathname === "/logs") &&
           user?.role !== "admin"))
     ) {
       navigate("/", { replace: true });
@@ -107,6 +110,12 @@ function App() {
     page = <Users />;
   } else if (location.pathname === "/audit" && user?.role === "admin") {
     page = <Audit />;
+  } else if (location.pathname === "/logs" && user?.role === "admin") {
+    page = (
+      <Suspense fallback={<PageFallback />}>
+        <ApplicationLogs />
+      </Suspense>
+    );
   } else if (consoleId) {
     page = (
       <Suspense fallback={<PageFallback />}>
@@ -167,6 +176,14 @@ function App() {
                 >
                   Audit log
                 </NavLink>
+                <NavLink
+                  to="/logs"
+                  className={({ isActive }) =>
+                    `nav-link ${isActive ? "nav-link--active" : ""}`
+                  }
+                >
+                  Ludock logs
+                </NavLink>
               </>
             )}
           </nav>
@@ -198,6 +215,7 @@ function App() {
           <NavLink to="/account">Account</NavLink>
           {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
           {user?.role === "admin" && <NavLink to="/audit">Audit</NavLink>}
+          {user?.role === "admin" && <NavLink to="/logs">Logs</NavLink>}
         </nav>
       )}
       <main

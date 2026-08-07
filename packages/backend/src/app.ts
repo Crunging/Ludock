@@ -51,6 +51,7 @@ import {
   type UserRecord,
 } from "./database.js";
 import { createLogger, errorMessage } from "./logger.js";
+import { listApplicationLogs } from "./application-logs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -144,6 +145,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     const startedAt = performance.now();
     res.once("finish", () => {
+      if (req.path === "/api/application-logs") return;
       logger.debug("HTTP request completed", {
         requestId,
         method: req.method,
@@ -537,6 +539,21 @@ export function createApp(options: CreateAppOptions = {}): Express {
       ? Math.max(1, Math.min(250, Math.trunc(requested)))
       : 100;
     res.json({ entries: listAuditLog(limit) });
+  });
+  app.get("/api/application-logs", requireRole("admin"), (req, res) => {
+    const requestedLimit = Number(req.query.limit || 250);
+    const requestedAfter = Number(req.query.after || 0);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(1_000, Math.trunc(requestedLimit)))
+      : 250;
+    const after = Number.isSafeInteger(requestedAfter) && requestedAfter >= 0
+      ? requestedAfter
+      : 0;
+    const generation =
+      typeof req.query.generation === "string"
+        ? req.query.generation.slice(0, 64)
+        : undefined;
+    res.json(listApplicationLogs({ after, limit, generation }));
   });
   app.use(router);
   app.use("/api/{*splat}", (_req, res) => {

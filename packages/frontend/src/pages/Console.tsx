@@ -9,31 +9,59 @@ import { apiFetch, authenticatedWebSocketUrl } from "../api";
 import { useAuth } from "../auth-context";
 import { useNavigate } from "../navigation-context";
 
+type ConsoleMode = "logs" | "game" | "shell";
+type ServerLoadState = "loading" | "loaded" | "error";
+
 export default function Console({ containerId }: { containerId: string }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const readOnly = user?.role === "viewer";
-  const [mode, setMode] = useState<"game" | "shell">("game");
+  const [mode, setMode] = useState<ConsoleMode>("logs");
+  const [paused, setPaused] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const pausedMessagesRef = useRef<string[]>([]);
+  const pausedMessageCharsRef = useRef(0);
+  const pausedOutputDroppedRef = useRef(false);
   const [command, setCommand] = useState("");
   const [serverInfo, setServerInfo] = useState<ManagedContainer | null>(null);
+  const [serverState, setServerState] = useState<ServerLoadState>("loading");
   const gameConsoleAvailable = Boolean(serverInfo?.gameConsole);
   const canSendGameCommand = !readOnly && gameConsoleAvailable;
   const canSendShellCommand = user?.role === "admin";
   const canSendCommand =
-    mode === "game" ? canSendGameCommand : canSendShellCommand;
+    mode === "game"
+      ? canSendGameCommand
+      : mode === "shell"
+        ? canSendShellCommand
+        : false;
 
   useEffect(() => {
+    let cancelled = false;
+    setServerState("loading");
+    setServerInfo(null);
+    setMode("logs");
     apiFetch(`/api/servers/${encodeURIComponent(containerId)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json() as Promise<{ server: ManagedContainer }>;
       })
-      .then(({ server }) => setServerInfo(server))
-      .catch(() => setServerInfo(null));
-  }, [containerId]);
+      .then(({ server }) => {
+        if (cancelled) return;
+        setServerInfo(server);
+        setServerState("loaded");
+        setMode(!readOnly && server.gameConsole ? "game" : "logs");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerInfo(null);
+        setServerState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [containerId, readOnly]);
 
   useEffect(() => {
     if (!termRef.current) return;
@@ -93,7 +121,7 @@ export default function Console({ containerId }: { containerId: string }) {
     };
   }, []);
 
-  const handleMessage = useCallback((raw: string) => {
+  const writeMessage = useCallback((raw: string) => {
     try {
       const msg: ConsoleMessage = JSON.parse(raw);
       const terminal = terminalRef.current;
@@ -120,11 +148,52 @@ export default function Console({ containerId }: { containerId: string }) {
     }
   }, []);
 
-  const wsUrl = authenticatedWebSocketUrl(
-    mode === "game"
-      ? `/ws/game-console/${containerId}`
-      : `/ws/shell/${containerId}`
+  const handleMessage = useCallback(
+    (raw: string) => {
+      if (mode === "logs" && paused) {
+        pausedMessagesRef.current.push(raw);
+        pausedMessageCharsRef.current += raw.length;
+        while (
+          pausedMessagesRef.current.length > 500 ||
+          pausedMessageCharsRef.current > 1_000_000
+        ) {
+          pausedMessageCharsRef.current -=
+            pausedMessagesRef.current.shift()?.length || 0;
+          pausedOutputDroppedRef.current = true;
+        }
+        return;
+      }
+      writeMessage(raw);
+    },
+    [mode, paused, writeMessage]
   );
+
+  const togglePaused = useCallback(() => {
+    if (paused) {
+      if (pausedOutputDroppedRef.current) {
+        terminalRef.current?.write(
+          "\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n"
+        );
+      }
+      for (const raw of pausedMessagesRef.current.splice(0)) {
+        writeMessage(raw);
+      }
+      pausedMessageCharsRef.current = 0;
+      pausedOutputDroppedRef.current = false;
+    }
+    setPaused(!paused);
+  }, [paused, writeMessage]);
+
+  const wsUrl =
+    serverState !== "loaded" || (mode === "game" && !gameConsoleAvailable)
+      ? ""
+      : authenticatedWebSocketUrl(
+          mode === "logs"
+            ? `/ws/logs/${encodeURIComponent(containerId)}`
+            : mode === "game"
+              ? `/ws/game-console/${encodeURIComponent(containerId)}`
+              : `/ws/shell/${encodeURIComponent(containerId)}`
+        );
 
   const { status, send } = useWebSocket({
     url: wsUrl,
@@ -140,22 +209,35 @@ export default function Console({ containerId }: { containerId: string }) {
     setCommand("");
   }, [command, send]);
 
-  const switchMode = useCallback((nextMode: "game" | "shell") => {
+  const switchMode = useCallback((nextMode: ConsoleMode) => {
     setMode(nextMode);
+    setPaused(false);
+    pausedMessagesRef.current = [];
+    pausedMessageCharsRef.current = 0;
+    pausedOutputDroppedRef.current = false;
     setCommand("");
+    terminalRef.current?.clear();
     terminalRef.current?.write(
-      `\r\n\x1b[36m[system] Switched to ${
-        nextMode === "game" ? "game console" : "container shell"
+      `\x1b[36m[system] Switched to ${
+        nextMode === "logs"
+          ? "Docker logs"
+          : nextMode === "game"
+            ? "game console"
+            : "container shell"
       }\x1b[0m\r\n`
     );
   }, []);
 
   const statusLabel =
-    status === "connected"
-      ? "Connected"
-      : status === "connecting"
-        ? "Connecting..."
-        : "Disconnected";
+    serverState === "loading"
+      ? "Loading..."
+      : serverState === "error"
+        ? "Unavailable"
+        : status === "connected"
+          ? "Connected"
+          : status === "connecting"
+            ? "Connecting..."
+            : "Disconnected";
 
   return (
     <div className="console-wrapper">
@@ -174,32 +256,59 @@ export default function Console({ containerId }: { containerId: string }) {
               {serverInfo?.displayName || containerId.substring(0, 12)}
             </div>
             <div className="console-header__status">
-              {mode === "game"
-                ? serverInfo?.gameConsole?.name || "Container logs"
-                : "Administrator container shell"}{" "}
+              {mode === "logs"
+                ? "Docker stdout and stderr"
+                : mode === "game"
+                  ? serverInfo?.gameConsole?.name || "Game console"
+                  : "Administrator container shell"}{" "}
               · {serverInfo?.image || "Loading..."}
             </div>
           </div>
         </div>
-        {user?.role === "admin" && (
-          <div className="console-mode-tabs" role="tablist" aria-label="Console mode">
+        {serverState === "loaded" && (
+          <div
+            className="console-mode-tabs"
+            role="tablist"
+            aria-label="Console mode"
+          >
             <button
-              className={mode === "game" ? "console-mode-tab--active" : ""}
-              onClick={() => switchMode("game")}
+              className={mode === "logs" ? "console-mode-tab--active" : ""}
+              onClick={() => switchMode("logs")}
               role="tab"
-              aria-selected={mode === "game"}
+              aria-selected={mode === "logs"}
             >
-              Game Console
+              Docker Logs
             </button>
-            <button
-              className={mode === "shell" ? "console-mode-tab--active" : ""}
-              onClick={() => switchMode("shell")}
-              role="tab"
-              aria-selected={mode === "shell"}
-            >
-              Container Shell
-            </button>
+            {!readOnly && gameConsoleAvailable && (
+              <button
+                className={mode === "game" ? "console-mode-tab--active" : ""}
+                onClick={() => switchMode("game")}
+                role="tab"
+                aria-selected={mode === "game"}
+              >
+                Game Console
+              </button>
+            )}
+            {user?.role === "admin" && (
+              <button
+                className={mode === "shell" ? "console-mode-tab--active" : ""}
+                onClick={() => switchMode("shell")}
+                role="tab"
+                aria-selected={mode === "shell"}
+              >
+                Container Shell
+              </button>
+            )}
           </div>
+        )}
+        {mode === "logs" && serverState === "loaded" && (
+          <button
+            className={`console-pause ${paused ? "console-pause--active" : ""}`}
+            onClick={togglePaused}
+            type="button"
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
         )}
         <div className={`connection-status connection-status--${status}`}>
           <span className="status-dot" />
@@ -209,12 +318,17 @@ export default function Console({ containerId }: { containerId: string }) {
 
       <div className="console-terminal" ref={termRef} />
 
-      {mode === "game" && readOnly ? (
-        <div className="console-warning">Your account has read-only log access.</div>
-      ) : mode === "game" && !gameConsoleAvailable ? (
+      {serverState === "loading" ? (
+        <div className="console-warning">Loading server details…</div>
+      ) : serverState === "error" ? (
         <div className="console-warning">
-          No game console adapter is configured for this server. Live logs are
-          still available.
+          Server details could not be loaded. Return to the dashboard and try
+          again.
+        </div>
+      ) : mode === "logs" ? (
+        <div className="console-warning">
+          Read-only Docker output · latest 500 lines · timestamps enabled
+          {paused ? " · live display paused" : ""}
         </div>
       ) : (
         <>
