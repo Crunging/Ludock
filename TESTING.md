@@ -1,8 +1,8 @@
-# Testing Ludock v2
+# Testing Ludock
 
-Tests describe expected behavior. Their presence is not evidence that a release,
-Docker architecture, or live-game integration has passed them. Record the image
-version, platform, fixture, and result during release validation.
+Tests describe expected behavior. Their presence is not evidence that a
+particular image, Docker architecture, or live-game integration has passed them.
+Record the image digest, platform, fixture, and result during validation.
 
 ## Automated checks
 
@@ -26,9 +26,10 @@ pnpm --filter @ludock/frontend test
 pnpm --filter @ludock/backend test
 ```
 
-Backend suites include discovery, identity, grants, migrations, protocol
-adapters, filesystem boundaries, archive/restore validation, operation locks and
-recovery, schedule authority/DST handling, monitoring, and notification retries.
+Backend suites include discovery, identity, grants, database schema handling,
+protocol adapters, filesystem boundaries, archive/restore validation, operation
+locks and recovery, schedule authority/DST handling, monitoring, and notification
+retries.
 Frontend tests cover independent action grants, role ceilings, runtime response
 validation, confirmation/draft state, polling, and extracted server panels.
 Deferred-request regressions cover password reset and session revocation during
@@ -81,9 +82,8 @@ for seven days.
 
 Validate both `linux/amd64` and `linux/arm64` on their corresponding CI runners
 or a suitable Buildx/emulation setup. A successful build on one architecture is
-insufficient. Release/nightly images must contain both runtime platforms; check
-the actual published tag with `docker buildx imagetools inspect` before release
-sign-off.
+insufficient. Published images must contain both runtime platforms; check the
+actual tag with `docker buildx imagetools inspect` before distribution.
 
 For each platform:
 
@@ -144,10 +144,10 @@ and fresh `/data`. Never exercise restore or forced recreation on the only copy
 of a real world. Keep the owning Compose files mounted read-only at identical
 absolute paths on the Docker host and inside Ludock.
 
-### Fresh setup and authentication
+### Initial setup and authentication
 
-- Fresh v2 storage opens first-administrator setup; v1 or unrelated databases are
-  rejected without changing those files or any game data.
+- Empty application storage opens first-administrator setup. Unrelated databases
+  and unsupported schemas are rejected without changing those files or game data.
 - Setup expires after five minutes and reopens on restart while no account exists.
 - Sign-in requires a valid username and 15–128 character password; repeated
   failures are throttled and do not disclose whether a user exists.
@@ -159,8 +159,8 @@ absolute paths on the Docker host and inside Ludock.
   password hashing prevents its pending account mutation.
 - The last enabled administrator cannot be disabled, deleted, or demoted.
 - Configure uploads with `MAX_UPLOAD_SIZE=500 MB` or `1.5 GiB`; verify the
-  configured limit and a readable oversized-upload error. Existing
-  `MAX_UPLOAD_BYTES` values still work; malformed sizes fail startup clearly.
+  configured limit and a readable oversized-upload error. The byte-only
+  `MAX_UPLOAD_BYTES` setting is also accepted; malformed sizes fail startup clearly.
   The example Compose file uses `LUDOCK_PORT` for the published browser port.
 
 ### Discovery, identity, and server grants

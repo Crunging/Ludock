@@ -10,16 +10,11 @@ Unrecognized images require `ludock.enable: "true"`. Docker Compose, Portainer,
 Dockge, or the Docker CLI remains the configuration owner: Ludock does not
 provision servers or edit their definitions.
 
-> [!IMPORTANT]
-> v2 requires fresh Ludock application storage. It does not import v1 users,
-> settings, or sessions. An incompatible database is rejected without resetting
-> it. Keep existing game containers and game-data volumes intact.
-
 ## Run with Docker
 
 Docker and the `docker compose` command are required. Save
 [`compose.yaml`](./compose.yaml) in a folder on your Docker host and run the
-commands below from that folder, using a published v2 image. To customize it,
+commands below from that folder. To customize it,
 copy [`.env.example`](./.env.example) to `.env` beside the Compose file and
 uncomment the settings you want to change. For example, `LUDOCK_PORT=8080`
 changes the browser port, and `MAX_UPLOAD_SIZE=500 MB` limits each file upload.
@@ -36,8 +31,8 @@ Open `http://localhost:3000` (or your chosen port). From another device, replace
 within five minutes. If setup expires, run `docker compose restart ludock`,
 then choose **Check again** in the panel.
 
-The example creates separate volumes for fresh v2 application data and backups.
-Do not reuse a v1 database.
+The example creates separate volumes for Ludock application data and backups.
+Existing game containers and game-data volumes stay in place.
 
 After signing in:
 
@@ -48,19 +43,19 @@ After signing in:
 3. To share a server, open **Users**, create an account, then choose its servers
    and permitted actions in the access editor.
 
-To test this checkout before its image is published:
+To test a local build:
 
 ```bash
 docker build -t ludock:test .
 docker run --rm -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -v ludock-data-v2:/data \
-  -v ludock-backups-v2:/backups \
+  -v ludock-data:/data \
+  -v ludock-backups:/backups \
   -e LUDOCK_BACKUP_ROOTS=/backups \
   ludock:test
 ```
 
-Release images target **Linux AMD64 and ARM64**. Each platform requires its own
+Container images target **Linux AMD64 and ARM64**. Each platform requires its own
 runtime smoke checks; see [Testing](./TESTING.md). This does not imply that all
 recognized game images support both architectures.
 

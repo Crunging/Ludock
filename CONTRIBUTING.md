@@ -32,13 +32,14 @@ Optional overrides:
 | `LUDOCK_DEV_HOME` | Parent directory for checkout-specific development state |
 | `LUDOCK_DEV_PORT` | Frontend port; a conflict fails rather than changing it |
 | `LUDOCK_DEV_API_PORT` | Backend port (`PORT` is also accepted) |
-| `LUDOCK_DB_PATH` | Explicit fresh development database, or `:memory:` |
+| `LUDOCK_DB_PATH` | Development database path, or `:memory:` |
 | `DOCKER_SOCKET` | Socket for a dedicated development Docker daemon |
 
 Use `pnpm dev --print-config` to inspect the selected configuration without
 starting services or creating state. Existing database overrides must be regular
 files without hard links; existing symlink targets and directory aliases resolve
-to one database lock. Do not point development at a production or v1 database.
+to one database lock. Do not point development at a production database or
+unrelated application storage.
 
 Stop with Ctrl+C. The runner shuts down its children and releases checkout and
 database locks after they exit. Backend reloads wait for active work to drain, so
@@ -75,7 +76,8 @@ Add or update tests for behavior changes. Keep these product boundaries intact:
   WebSocket, transfer, operation, and schedule.
 - Implement new console protocols as adapters.
 - Preserve logical identity checks, stop-only backups, and safe recovery.
-- Keep v2 application storage separate from incompatible older databases.
+- Reject unrelated databases and unsupported schemas without changing their
+  contents.
 - Validate runtime/helper dependencies on both Linux AMD64 and ARM64 for
   deployment changes.
 

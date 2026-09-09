@@ -1,18 +1,18 @@
 # Operations
 
-Ludock v2 manages one Docker host from one backend instance. Use the Linux
+Ludock manages one Docker host from one backend instance. Use the Linux
 container distribution for Compose project access. Docker is the source of
 live container state; owning managers retain their configuration.
 
-## Deployment and fresh storage
+## Deployment and application storage
 
 The [example Compose file](../compose.yaml) publishes port 3000 by default, mounts
-the Docker socket, and stores Ludock's database in a new `ludock-data-v2` named
-volume mounted at `/data`. A separate `ludock-backups-v2` volume is mounted at
-`/backups`, ready to configure in Settings. Back up and retain any v1 application
-directory separately. v2 rejects incompatible
-application databases; it does not migrate or delete them. Do not remove game
-containers or game-data volumes when setting up fresh Ludock storage.
+the Docker socket, and stores Ludock's database in a `ludock-data` named volume
+mounted at `/data`. A separate `ludock-backups` volume is mounted at `/backups`,
+ready to configure in Settings. Keep Ludock's database separate from unrelated
+application storage. Unrelated databases and unsupported schemas are rejected
+without changing their contents. Do not remove game containers or game-data
+volumes when setting up Ludock.
 
 Create the first administrator within five minutes of starting an empty
 installation. Restart Ludock to reopen an expired setup window. Passwords must
@@ -45,17 +45,17 @@ docker compose up -d --force-recreate ludock
 | `LUDOCK_BACKUP_ROOTS` | Approved mounted backup directories; `/backups` in the example Compose file. An explicitly empty value disables backup destination configuration |
 | `LUDOCK_DOCKER_CONFIG` | Optional read-only Docker client configuration directory for private-registry credentials; otherwise `/nonexistent` |
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
-| `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an older alias |
+| `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an alias |
 | `FILE_HELPER_IMAGE` | File and backup helper image; `node:24-alpine` |
 | `MAX_UPLOAD_SIZE` | Maximum size of each uploaded file; `2 GiB` by default. Examples: `500 MB`, `1.5 GiB` |
-| `MAX_UPLOAD_BYTES` | Older byte-only upload setting; still supported when `MAX_UPLOAD_SIZE` is unset or blank |
+| `MAX_UPLOAD_BYTES` | Byte-only upload setting, used when `MAX_UPLOAD_SIZE` is unset or blank |
 | `AUDIT_LOG_MAX_ROWS` | Retained audit entries; 100,000 by default |
 | `PORT` | Internal backend listener; 3000 in the image, 3001 during development. Use `LUDOCK_PORT` to change the example Compose file's browser port |
 
 Upload sizes accept spaces and decimal amounts. `KB`, `MB`, `GB`, and `TB` use
 powers of 1,000; `KiB`, `MiB`, `GiB`, and `TiB` use powers of 1,024. Units are
 case-insensitive, and a positive whole number without a unit is treated as bytes.
-`MAX_UPLOAD_SIZE` takes precedence over the older `MAX_UPLOAD_BYTES` setting.
+`MAX_UPLOAD_SIZE` takes precedence over the byte-only `MAX_UPLOAD_BYTES` setting.
 Invalid limits stop startup with a configuration error, so a typo cannot silently
 use a different limit.
 
@@ -295,7 +295,7 @@ rediscovered under the same Ludock UUID.
 
 Schedules support start, stop, restart, and backup at a selected local time on
 selected weekdays. Time zones are explicit. Missed times and spring-forward
-gaps are skipped; a repeated fall-back time runs once. v2 does not schedule
+gaps are skipped; a repeated fall-back time runs once. Ludock does not schedule
 updates or arbitrary shell commands. Review a failed/suspended schedule's
 reported result and recreate it after fixing its permissions or data binding.
 
@@ -323,7 +323,7 @@ With the example deployment:
 
 ```bash
 docker compose stop ludock
-docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data-v2.backup
+docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data.backup
 docker compose start ludock
 ```
 
@@ -349,10 +349,9 @@ sessions. It does not create an account or reset game data.
 
 ## API
 
-HTTP routes use `/api/v1`; WebSockets use `/ws/v1`. Legacy unversioned endpoints
-are not a compatibility interface. Server paths contain logical UUIDs. The
-optional administrator API token uses `Authorization: Bearer …`; do not place
-credentials in URLs. Browser clients use their session cookie.
+HTTP routes use `/api/v1`; WebSockets use `/ws/v1`. Server paths contain logical
+UUIDs. The optional administrator API token uses `Authorization: Bearer …`; do
+not place credentials in URLs. Browser clients use their session cookie.
 
 Core resources include servers, per-server files/backups/restores/schedules/
 availability/operations/updates, Compose projects, notifications, diagnostics,

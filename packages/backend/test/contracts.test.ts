@@ -181,7 +181,7 @@ test("identifier boundary parsers preserve supported Docker references and rejec
   }
 });
 
-test("shared account requests retain normalization, legacy current-password support, and field stripping", () => {
+test("shared account requests normalize input, validate password changes, and strip unknown fields", () => {
   const password = "long-enough-password";
   assert.deepEqual(
     credentialsRequestSchema.parse({

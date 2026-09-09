@@ -1,14 +1,14 @@
 services:
   ludock:
-    image: ghcr.io/crunging/ludock:2
+    image: ghcr.io/crunging/ludock:latest
     ports:
       - "${LUDOCK_PORT:-3000}:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # v2 requires fresh application storage. Keep any old data volume intact.
-      - ludock-data-v2:/data
+      # Persistent application data.
+      - ludock-data:/data
       # Separate backup storage, ready to select in Settings after first sign-in.
-      - ludock-backups-v2:/backups
+      - ludock-backups:/backups
       # To keep backups on another disk, replace the backup volume above with
       # a host-directory mount (create the directory first), for example:
       # - /srv/ludock-backups:/backups
@@ -23,5 +23,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  ludock-data-v2:
-  ludock-backups-v2:
+  ludock-data:
+  ludock-backups:

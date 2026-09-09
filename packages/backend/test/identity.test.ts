@@ -168,7 +168,7 @@ describe("logical server identities", () => {
     assert.ok(reviewed.bindingRevision > pending.bindingRevision);
     for (const candidate of [
       { ...changed, gameType: "factorio" },
-      { ...changed, projectRegistrationId: "registration-v2" },
+      { ...changed, projectRegistrationId: "replacement-registration" },
       { ...changed, gameConfiguration: { "ludock.console": "different" } },
     ]) {
       assert.notEqual(

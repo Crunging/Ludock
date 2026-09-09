@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
-// An application marker distinguishes future v2 migrations from v1 or unrelated
-// SQLite files. Never infer ownership merely because a table name looks familiar.
-export const DATABASE_APPLICATION_ID = 0x4c554432;
+// The "LUDK" marker identifies Ludock-owned SQLite files independently of the
+// schema version. Never infer ownership merely from a familiar table name.
+export const DATABASE_APPLICATION_ID = 0x4c55444b;
 
 export interface DatabaseMigration {
   version: number;
@@ -52,11 +52,6 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         blocked_until INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT;
-    `,
-  },
-  {
-    version: 2,
-    sql: `
       CREATE TABLE docker_hosts (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
@@ -97,11 +92,6 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_id, server_id)
       ) STRICT;
-    `,
-  },
-  {
-    version: 3,
-    sql: `
       CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL) STRICT;
       CREATE TABLE operations (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
@@ -169,7 +159,7 @@ export function assertCompatibleDatabase(
     version > latestVersion
   ) {
     const error = new Error(
-      "This database is incompatible with Ludock v2. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.",
+      "This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.",
     );
     Object.assign(error, { code: "INCOMPATIBLE_DATABASE" });
     throw error;

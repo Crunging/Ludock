@@ -88,8 +88,8 @@ describe("account changes during password work", () => {
     });
   }
 
-  it("does not overwrite a password reset with a delayed legacy hash upgrade", async () => {
-    const salt = Buffer.from("legacy-salt-1234");
+  it("does not overwrite a password reset during a delayed hash-cost upgrade", async () => {
+    const salt = Buffer.alloc(16, 1);
     const key = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
     database.updateUserPassword("admin", `scrypt$16384$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`);
     const hold = pausePasswordWork(2);

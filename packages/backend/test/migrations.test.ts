@@ -22,7 +22,7 @@ after(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-describe("v2 application database ownership and migrations", () => {
+describe("application database ownership and schema migrations", () => {
   it("initializes fresh storage and safely opens the same schema again", () => {
     const dbPath = path.join(directory, "fresh.db");
     process.env.LUDOCK_DB_PATH = dbPath;
@@ -47,13 +47,13 @@ describe("v2 application database ownership and migrations", () => {
     assert.equal(fs.statSync(dbPath).mode & 0o777, 0o600);
   });
 
-  it("rejects a v1 database without changing its bytes, schema, or permissions", () => {
-    const dbPath = path.join(directory, "legacy.db");
-    const legacy = new DatabaseSync(dbPath);
-    legacy.exec(
-      "CREATE TABLE users (id TEXT, password_hash TEXT); INSERT INTO users VALUES ('old-user', 'preserve-this');",
+  it("rejects an unrelated database without changing its bytes, schema, or permissions", () => {
+    const dbPath = path.join(directory, "unrelated.db");
+    const unrelated = new DatabaseSync(dbPath);
+    unrelated.exec(
+      "CREATE TABLE inventory_items (id TEXT, description TEXT); INSERT INTO inventory_items VALUES ('asset-1', 'preserve-this');",
     );
-    legacy.close();
+    unrelated.close();
     fs.chmodSync(dbPath, 0o640);
     const original = fs.readFileSync(dbPath);
     process.env.LUDOCK_DB_PATH = dbPath;
@@ -66,11 +66,11 @@ describe("v2 application database ownership and migrations", () => {
     assert.doesNotThrow(() => getDatabase());
   });
 
-  it("rejects unversioned tables even if they contain no old users", () => {
+  it("does not infer database ownership from familiar table names", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec("CREATE TABLE users (id TEXT)");
-      assert.throws(() => applyMigrations(db), /incompatible with Ludock v2/);
+      assert.throws(() => applyMigrations(db), /incompatible with Ludock/);
       assert.equal(
         db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
           .length,
@@ -81,21 +81,32 @@ describe("v2 application database ownership and migrations", () => {
     }
   });
 
-  it("upgrades an older v2 schema in order without replacing its users", () => {
+  it("applies a future schema addition without replacing existing records", () => {
     const db = new DatabaseSync(":memory:");
     try {
-      applyMigrations(db, DATABASE_MIGRATIONS.slice(0, 1));
-      db.exec("INSERT INTO users VALUES ('u','player','hash','viewer',0,1,1)");
       applyMigrations(db);
+      db.exec("INSERT INTO users VALUES ('u','player','hash','viewer',0,1,1)");
+      const nextVersion = DATABASE_MIGRATIONS.at(-1)!.version + 1;
+      const migrations = [
+        ...DATABASE_MIGRATIONS,
+        {
+          version: nextVersion,
+          sql: "CREATE TABLE test_preferences (user_id TEXT PRIMARY KEY REFERENCES users(id), note TEXT NOT NULL) STRICT;",
+        },
+      ];
+      applyMigrations(db, migrations);
       assert.equal(
         db.prepare("SELECT username FROM users WHERE id = 'u'").get()?.username,
         "player",
       );
       assert.equal(
         db.prepare("PRAGMA user_version").get()?.user_version,
-        DATABASE_MIGRATIONS.at(-1)?.version,
+        nextVersion,
       );
-      assert.doesNotThrow(() => applyMigrations(db));
+      db.exec("INSERT INTO test_preferences VALUES ('u', 'preserved account')");
+      assert.equal(db.prepare("SELECT note FROM test_preferences WHERE user_id = 'u'").get()?.note,
+        "preserved account");
+      assert.doesNotThrow(() => applyMigrations(db, migrations));
     } finally {
       db.close();
     }
@@ -104,17 +115,18 @@ describe("v2 application database ownership and migrations", () => {
   it("rolls back an interrupted migration and leaves the prior version usable", () => {
     const db = new DatabaseSync(":memory:");
     try {
-      applyMigrations(db, DATABASE_MIGRATIONS.slice(0, 1));
+      applyMigrations(db);
+      const currentVersion = DATABASE_MIGRATIONS.at(-1)!.version;
       assert.throws(() =>
         applyMigrations(db, [
-          DATABASE_MIGRATIONS[0],
+          ...DATABASE_MIGRATIONS,
           {
-            version: 2,
+            version: currentVersion + 1,
             sql: "CREATE TABLE should_rollback (id TEXT); INSERT INTO nonexistent VALUES (1);",
           },
         ]),
       );
-      assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
+      assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, currentVersion);
       assert.equal(
         db
           .prepare(

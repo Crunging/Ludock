@@ -1,4 +1,4 @@
-# Ludock v2 Repository Guide
+# Ludock Repository Guide
 
 Ludock manages existing Docker game servers. Recognized images are discovered
 automatically unless opted out; unknown images require `ludock.enable=true`.
@@ -22,7 +22,7 @@ It does not provision servers or edit their owning manager's configuration.
 - Run focused checks during development and `pnpm check` before committing.
 - Run `docker build -t ludock:test .` after container or deployment
   changes.
-- Release images target `linux/amd64` and `linux/arm64`; validate runtime
+- Container images target `linux/amd64` and `linux/arm64`; validate runtime
   dependencies and helper images on both architectures.
 - Work continuously through coherent features; no per-commit approval stops.
   Commits are authorized when useful and validated. Keep private implementation
@@ -57,14 +57,14 @@ It does not provision servers or edit their owning manager's configuration.
   command transport works for every game.
 - Backups require the server stopped throughout copying. Persist initial running
   state and restore it safely afterward. Parent update/restore operations own
-  state restoration for their nested backups. Live backups are outside v2.
+  state restoration for their nested backups. Live backups are not supported.
 - Persist operation progress and recover safely after interruption. Coordinate
   conflicting server/project/shared-root operations and recheck authorization.
 - Updates and forced recreation are administrator-only and use explicitly
   registered Compose projects. Validate transitive reads within approved roots,
   invoke argument arrays without a shell, and preserve initially stopped state.
-- v2 uses fresh application storage; reject incompatible old databases without
-  destroying them. Never reset existing game containers or persistent game data.
+- Reject unrelated databases and unsupported schemas without changing their
+  contents. Never reset existing game containers or persistent game data.
 
 ## Frontend
 

@@ -4,7 +4,7 @@ Creates and removes only unique Ludock fixture containers and their volumes.
 Override LUDOCK_TEST_IMAGE to test another locally built runtime image.
 """
 import hashlib, json, os, pathlib, subprocess, tempfile, time, urllib.request, uuid
-project='ludock-v2-smoke-'+uuid.uuid4().hex[:8]
+project='ludock-compose-smoke-'+uuid.uuid4().hex[:8]
 root=pathlib.Path(tempfile.mkdtemp(prefix=project+'-',dir=os.environ.get('LUDOCK_TEST_DIRECTORY'))).resolve()
 app=project+'-app'
 token='test-only-'+uuid.uuid4().hex
@@ -18,7 +18,7 @@ compose.write_text('''services:
       BRACED: "$${literal}"
     labels:
       ludock.enable: "true"
-      ludock.name: "V2 Compose Smoke"
+      ludock.name: "Compose Smoke"
     depends_on: [dependency]
   dependency:
     image: alpine:3.23
@@ -37,7 +37,7 @@ def request(path,body=None,method=None):
         with urllib.request.urlopen(req,timeout=30) as r: return json.load(r)
     except urllib.error.HTTPError as e: raise RuntimeError(str(e.code)+' '+e.read().decode())
 def update(force):
-    op=request('/servers/'+sid+'/updates',{'createBackup':False,'skipBackupConfirmation':'V2 Compose Smoke','forceRecreate':force})['operation']
+    op=request('/servers/'+sid+'/updates',{'createBackup':False,'skipBackupConfirmation':'Compose Smoke','forceRecreate':force})['operation']
     end=time.time()+300
     while time.time()<end:
         op=request('/operations/'+op['id'])['operation']
@@ -52,7 +52,7 @@ try:
     for _ in range(100):
         try: request('/health');break
         except Exception: time.sleep(.2)
-    sid=next(s['id'] for s in request('/servers')['servers'] if s['displayName']=='V2 Compose Smoke')
+    sid=next(s['id'] for s in request('/servers')['servers'] if s['displayName']=='Compose Smoke')
     request('/compose-projects',{'projectName':project,'projectDirectory':str(root),'composeFiles':['compose.yaml'],'envFiles':[]})
     cap=request('/servers/'+sid+'/update-capability')['capability'];assert cap['available'],cap
     unchanged=update(False);assert unchanged['status']=='already_current',unchanged
