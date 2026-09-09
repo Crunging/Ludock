@@ -159,6 +159,33 @@ describe("server list actions", () => {
     update({ ...server, permissions: ["server.view"] });
     await userEvent.click(screen.getByRole("button", { name: "Stop server" }));
     expect(action).not.toHaveBeenCalled();
+
+    update(server);
+    await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+    update({ ...server, state: "paused" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop server" }));
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("offers Start only for stopped containers and explains states managed through Docker", async () => {
+    const permitted = { ...server, permissions: [...server.permissions, "server.start"] as ManagedContainer["permissions"] };
+    const { action, update } = card(permitted);
+    for (const [state, guidance] of [
+      ["paused", "Paused in Docker. Resume it through Docker or its owning manager."],
+      ["restarting", "Restart in progress. Controls will be available when it finishes."],
+      ["removing", "Removal in progress."],
+      ["dead", "Container state: dead. Check it in Docker or its owning manager before using server controls."],
+    ]) {
+      update({ ...permitted, state });
+      expect(screen.queryByRole("button", { name: "Start", exact: true })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Stop", exact: true })).toBeNull();
+      expect(screen.getByText(guidance)).toBeTruthy();
+    }
+    for (const state of ["created", "exited"]) {
+      update({ ...permitted, state });
+      await userEvent.click(screen.getByRole("button", { name: "Start", exact: true }));
+    }
+    expect(action.mock.calls).toEqual([[server.id, "start"], [server.id, "start"]]);
   });
 
   it("prevents a confirmed lifecycle action if its server snapshot becomes stale", async () => {
@@ -197,9 +224,9 @@ describe("server list actions", () => {
 });
 
 describe("server filters", () => {
-  function dashboard() {
+  function dashboard(role: AuthUser["role"] = "operator") {
     const content = () => (
-      <AuthContext.Provider value={{ user } as AuthContextValue}>
+      <AuthContext.Provider value={{ user: { ...user, role } } as AuthContextValue}>
         <NavigationContext.Provider value={{ pathname: "/", navigate: vi.fn() }}>
           <ViewPreferencesProvider><Dashboard /></ViewPreferencesProvider>
         </NavigationContext.Provider>
@@ -208,6 +235,44 @@ describe("server filters", () => {
     const result = render(content());
     return { update: () => result.rerender(content()) };
   }
+
+  it("gives a new administrator a discovery check before image-label instructions", async () => {
+    vi.mocked(useServers).mockReturnValue({
+      ...vi.mocked(useServers)(), servers: [],
+    });
+    dashboard("admin");
+    expect(screen.getByRole("link", { name: "Check Docker and image support" }).getAttribute("href")).toBe("/diagnostics");
+    expect(screen.queryByText(/labels:/)).toBeNull();
+    const help = screen.getByRole("button", { name: "Game not shown?" });
+    await userEvent.click(help);
+    expect(help.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("link", { name: "check Docker connectivity and supported images" }).getAttribute("href")).toBe("/diagnostics");
+    expect(screen.getByRole("link", { name: "share servers on the Users page" }).getAttribute("href")).toBe("/users");
+    expect(screen.getByText(/labels:/).textContent).toContain('ludock.enable: "true"');
+    await userEvent.click(help);
+    expect(screen.queryByRole("heading", { name: "Find your game servers" })).toBeNull();
+  });
+
+  it("identifies an unassigned account without showing administrator discovery controls", () => {
+    vi.mocked(useServers).mockReturnValue({
+      ...vi.mocked(useServers)(), servers: [],
+    });
+    dashboard("viewer");
+    expect(screen.getByRole("heading", { name: "No servers assigned" })).toBeTruthy();
+    expect(screen.getByText(/signed in as friend/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Game not shown?" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Docker|diagnostics|Users/ })).toBeNull();
+  });
+
+  it("routes administrators with a discovery failure to diagnostics instead of an empty result", () => {
+    vi.mocked(useServers).mockReturnValue({
+      ...vi.mocked(useServers)(), servers: [], error: "Docker unavailable", stale: true,
+    });
+    dashboard("admin");
+    expect(screen.getByRole("alert").textContent).toContain("Docker unavailable");
+    expect(screen.getByRole("link", { name: "Open diagnostics" }).getAttribute("href")).toBe("/diagnostics");
+    expect(screen.queryByRole("heading", { name: "No game servers found" })).toBeNull();
+  });
 
   it("filters exact states independently from search and clears empty results", async () => {
     dashboard();

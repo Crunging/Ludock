@@ -3,12 +3,15 @@ import {
   notificationSettingsRequestSchema,
   diagnosticsResponseSchema,
   integrationsResponseSchema,
+  deploymentSettingsResponseSchema,
   type DiscoveryDiagnostic,
   type GameCapability,
   type GameIntegration,
 } from "@ludock/shared";
 import { Router, type Router as RouterType } from "express";
-import { requireRole } from "../auth.js";
+import path from "node:path";
+import { assertRequestUser, requireRole } from "../auth.js";
+import { assertAdministrator } from "../authorization.js";
 import { getDiscoveryDiagnostics } from "../docker.js";
 import {
   getGameCapabilityMatrix,
@@ -22,6 +25,25 @@ import { isComposeAvailable } from "../compose.js";
 import { respond, actor, audit } from "./request.js";
 
 export const settingsRouter: RouterType = Router();
+
+settingsRouter.get(
+  "/api/v1/settings/deployment",
+  requireRole("admin"),
+  async (req, res) => {
+    const composeAvailable = await isComposeAvailable();
+    assertAdministrator(assertRequestUser(req, actor(res)));
+    respond(res, deploymentSettingsResponseSchema, {
+      backupRoots: [...new Set(
+        (process.env.LUDOCK_BACKUP_ROOTS || "").split(path.delimiter).filter(Boolean),
+      )],
+      composeRoots: [...new Set(
+        (process.env.LUDOCK_COMPOSE_ROOTS || "")
+          .split(path.delimiter).map((root) => root.trim()).filter(Boolean),
+      )],
+      composeAvailable,
+    });
+  },
+);
 
 function publicCapability(capability: RegistryCapability): GameCapability {
   return { ...capability, evidence: [...capability.evidence] };

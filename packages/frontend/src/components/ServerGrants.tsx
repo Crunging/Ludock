@@ -8,6 +8,8 @@ import {
 } from "../permissions";
 import type { ManagedContainer, ServerCapability } from "../types";
 import type { UserRole } from "../auth-context";
+import { NavLink } from "../navigation";
+import "../styles/admin-setup.css";
 
 import {
   type ServerGrantInput,
@@ -37,11 +39,16 @@ function ServerGrantsEditor({
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [hasChanges, setHasChanges] = useState(false);
   const saving = useRef(false);
   const active = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     active.current = true;
@@ -89,6 +96,7 @@ function ServerGrantsEditor({
   }, [userId, role, loadAttempt]);
   function setServerGrant(serverId: string, capabilities: ServerCapability[]) {
     setNotice(null);
+    setHasChanges(true);
     setGrants((current) => [
       ...current.filter((grant) => grant.serverId !== serverId),
       ...(capabilities.length ? [{ serverId, capabilities }] : []),
@@ -107,8 +115,9 @@ function ServerGrantsEditor({
         jsonBody("PUT", { grants }),
       );
       if (!active.current) return;
+      setHasChanges(false);
       setNotice(
-        "Server access saved. Revoked permissions apply to open connections and queued work.",
+        `Server access saved for ${username}. Access changes take effect immediately.`,
       );
     } catch (reason) {
       if (!active.current) return;
@@ -128,12 +137,15 @@ function ServerGrantsEditor({
     (capability) =>
       role !== "viewer" || VIEWER_CAPABILITIES.includes(capability),
   );
+  const selectedServers = grants.filter((grant) =>
+    grant.capabilities.includes("server.view"),
+  ).length;
   return (
-    <div className="grants-editor">
-      <h3>Server access for {username}</h3>
+    <div className="grants-editor" id={`server-grants-${userId}`}>
+      <h3 ref={heading} tabIndex={-1}>Server access for {username}</h3>
       <p className="muted">
-        Choose servers and actions separately. New servers are not shared
-        automatically.
+        Choose a preset for each server, then adjust its permissions. New servers
+        are not shared automatically.
       </p>
       {error && (
         <div className="alert alert--error" role="alert">
@@ -162,9 +174,10 @@ function ServerGrantsEditor({
       ) : (
         <>
           {servers.length === 0 && (
-            <p className="table-empty">
-              No eligible servers are available to assign.
-            </p>
+            <div className="admin-setup-help">
+              <p>No eligible servers are available to assign.</p>
+              <p><NavLink to="/diagnostics">Check server discovery</NavLink> to connect Docker or find out why a container is missing. Then return here to share it.</p>
+            </div>
           )}
           {servers.map((server) => {
             const selected =
@@ -240,6 +253,12 @@ function ServerGrantsEditor({
             );
           })}
           <div className="inline-actions">
+            <p className="grants-selection-summary" aria-live="polite">
+              {selectedServers === 0
+                ? "No servers selected. This user will not see any servers."
+                : `${selectedServers} ${selectedServers === 1 ? "server" : "servers"} selected.`}
+              {hasChanges && " Unsaved changes."}
+            </p>
             <button
               type="button"
               className="primary-btn"
@@ -254,7 +273,7 @@ function ServerGrantsEditor({
               onClick={onClose}
               disabled={busy}
             >
-              Close
+              {hasChanges ? "Cancel changes" : "Done"}
             </button>
           </div>
         </>

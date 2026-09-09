@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { apiJson, jsonBody } from "../api";
 import ServerGrants from "../components/ServerGrants";
 import { useAuth } from "../auth-context";
+import "../styles/admin-setup.css";
 
 import {
   type UserSummary,
@@ -14,6 +15,12 @@ import {
   okResponseSchema,
 } from "@ludock/shared";
 
+const roleHelp: Record<UserSummary["role"], string> = {
+  admin: "Administrators can manage all servers, users, and settings.",
+  operator: "Operators can use only the servers and actions you share with them.",
+  viewer: "Viewers can check status and read the logs or files you share with them.",
+};
+
 export default function Users() {
   const { user: currentUser } = useAuth();
   const [editingGrants, setEditingGrants] = useState<string | null>(null);
@@ -25,6 +32,7 @@ export default function Users() {
     {},
   );
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
@@ -61,6 +69,7 @@ export default function Users() {
     mutationPending.current = true;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const result = await action();
       if (active.current) apply(result);
@@ -87,6 +96,10 @@ export default function Users() {
         setUsers((current) => [...current, user]);
         setUsername((current) => current === username ? "" : current);
         setPassword((current) => current === password ? "" : current);
+        setEditingGrants((current) => current ?? (user.role === "admin" ? null : user.id));
+        setNotice(user.role === "admin"
+          ? `Created ${user.username}. Administrators can manage all servers and settings.`
+          : `Created ${user.username}. Share servers using their Server access controls below.`);
       },
     );
   };
@@ -108,6 +121,7 @@ export default function Users() {
         setUsers((current) => current.map((item) =>
           item.id === response.user.id ? response.user : item,
         ));
+        setNotice(`Updated access for ${response.user.username}.`);
       },
     );
   };
@@ -130,6 +144,7 @@ export default function Users() {
         setResetPasswords((current) =>
           current[user.id] === nextPassword ? { ...current, [user.id]: "" } : current,
         );
+        setNotice(`Password reset for ${user.username}. Share the new password securely.`);
       },
     );
   };
@@ -148,6 +163,7 @@ export default function Users() {
       }),
       () => {
         setUsers((current) => current.filter((item) => item.id !== user.id));
+        setNotice(`Deleted ${user.username}.`);
         setResetPasswords((current) => {
           const next = { ...current };
           delete next[user.id];
@@ -158,7 +174,7 @@ export default function Users() {
   };
 
   return (
-    <div className="page">
+    <div className="page users-page">
       <div className="page__header">
         <h1 className="page__title">Users</h1>
         <p className="page__subtitle">
@@ -175,6 +191,9 @@ export default function Users() {
           </button>
         </div>
       )}
+      {notice && (
+        <div className="alert alert--success" role="status">{notice}</div>
+      )}
 
       <form className="settings-card" onSubmit={createNewUser}>
         <h2>Create user</h2>
@@ -186,17 +205,24 @@ export default function Users() {
               onChange={(event) => setUsername(event.target.value)}
               minLength={3}
               maxLength={32}
+              pattern={"[a-zA-Z0-9._\\-]+"}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              aria-describedby="create-user-username-help"
               required
             />
           </label>
           <label>
-            <span>Temporary password</span>
+            <span>Initial password</span>
             <input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
+              autoComplete="new-password"
+              aria-describedby="create-user-password-help"
               required
             />
           </label>
@@ -204,6 +230,7 @@ export default function Users() {
             <span>Role</span>
             <select
               value={role}
+              aria-describedby="create-user-role-help"
               onChange={(event) =>
                 setRole(event.target.value as UserSummary["role"])
               }
@@ -219,6 +246,11 @@ export default function Users() {
           >
             Create user
           </button>
+        </div>
+        <div className="admin-form-help">
+          <p id="create-user-username-help">Usernames use 3–32 letters, numbers, periods, hyphens, or underscores.</p>
+          <p id="create-user-role-help">{roleHelp[role]}{role !== "admin" && " Choose their server access after creating the account."}</p>
+          <p id="create-user-password-help">Use at least {PASSWORD_MIN_LENGTH} characters. Share the password securely; the user can change it in Account after signing in.</p>
         </div>
       </form>
 
@@ -245,6 +277,7 @@ export default function Users() {
               <span>Role</span>
               <select
                 value={user.role}
+                aria-label={`Role for ${user.username}`}
                 disabled={busy || user.disabled}
                 onChange={(event) =>
                   updateAccess(user, {
@@ -266,12 +299,14 @@ export default function Users() {
             </button>
             {user.role !== "admin" && (
               <button
+                id={`server-access-${user.id}`}
                 className="secondary-btn"
                 onClick={() =>
                   setEditingGrants(editingGrants === user.id ? null : user.id)
                 }
                 disabled={busy}
                 aria-expanded={editingGrants === user.id}
+                aria-controls={editingGrants === user.id ? `server-grants-${user.id}` : undefined}
               >
                 Server access
               </button>
@@ -323,7 +358,10 @@ export default function Users() {
                 userId={user.id}
                 username={user.username}
                 role={user.role}
-                onClose={() => setEditingGrants(null)}
+                onClose={() => {
+                  setEditingGrants(null);
+                  document.getElementById(`server-access-${user.id}`)?.focus();
+                }}
               />
             )}
           </section>

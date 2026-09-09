@@ -226,6 +226,72 @@ describe("server detail navigation", () => {
     ).toBe(true);
   });
 
+  it("explains paused controls in other tabs and opens operation progress with keyboard focus", async () => {
+    detail({
+      onRequest: (path) => {
+        if (path.endsWith("/operations")) return {
+          operations: [{
+            id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0",
+            serverId: server.id,
+            kind: "backup",
+            status: "running",
+            phase: "copying_data",
+            createdAt: 0,
+            updatedAt: 0,
+            error: null,
+            result: null,
+          }],
+        };
+      },
+    });
+    await userEvent.click(await screen.findByRole("tab", { name: "Backups" }));
+    expect(screen.getByRole("status").textContent).toContain("backup in progress");
+    expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((screen.getByRole("button", { name: "Create backup", exact: true }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    const progress = screen.getByRole("button", { name: "View progress" });
+    progress.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(document.activeElement).toBe(screen.getByRole("tabpanel", { name: "Activity" }));
+    expect(screen.getByRole("status").textContent).toBe("copying data");
+    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+      .toBe(false);
+  });
+
+  it("rechecks unavailable updates without resetting monitoring drafts or bypassing confirmation", async () => {
+    let available = false;
+    detail({
+      onRequest: (path) => {
+        if (path.endsWith("/update-capability") && !available) return {
+          capability: { available: false, actionLabel: "Update server", unavailableReason: "Wait for the active operation to finish before updating" },
+        };
+      },
+    });
+    await userEvent.click(await screen.findByRole("tab", { name: "Availability" }));
+    const grace = screen.getByRole("spinbutton", { name: "Failure grace period (seconds)" });
+    await userEvent.clear(grace);
+    await userEvent.type(grace, "240");
+    await userEvent.click(screen.getByRole("tab", { name: "Update", exact: true }));
+    expect(screen.getByText("Wait for the active operation to finish before updating")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open update settings" }).getAttribute("href"))
+      .toBe("/settings");
+    available = true;
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    const update = await screen.findByRole("button", { name: "Update server", exact: true });
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("tabpanel", { name: "Update" }));
+    expect(vi.mocked(apiJson).mock.calls.filter(([path]) => path.endsWith("/update-capability")))
+      .toHaveLength(2);
+    expect(vi.mocked(apiJson).mock.calls.filter(([path]) => path.endsWith("/availability")))
+      .toHaveLength(1);
+    await userEvent.click(screen.getByRole("tab", { name: "Availability" }));
+    expect((screen.getByRole("spinbutton", { name: "Failure grace period (seconds)" }) as HTMLInputElement).value)
+      .toBe("240");
+    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+      .toBe(false);
+  });
+
   it("reports a failed start and restores the control without granting other actions", async () => {
     detail({
       role: "operator",
@@ -256,6 +322,21 @@ describe("server detail navigation", () => {
       "Activity",
     ]);
   });
+
+  it.each(["paused", "restarting", "removing", "dead"])(
+    "explains the %s state without offering unsupported lifecycle actions",
+    async (state) => {
+      detail({ current: { ...server, state } });
+      await screen.findByRole("heading", { name: server.displayName });
+      for (const action of ["Start", "Stop", "Restart"])
+        expect(screen.queryByRole("button", { name: action, exact: true })).toBeNull();
+      expect(screen.getByRole("status").textContent).toMatch(
+        /Paused in Docker|Restart in progress|Removal in progress|Container state: dead/,
+      );
+      expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+        .toBe(false);
+    },
+  );
 
   it("requires confirmation for stop, restores focus on cancel, and refreshes state after success", async () => {
     let stopped = false;

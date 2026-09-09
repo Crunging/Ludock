@@ -8,8 +8,9 @@ live container state; owning managers retain their configuration.
 
 The [example Compose file](../compose.yaml) publishes port 3000 by default, mounts
 the Docker socket, and stores Ludock's database in a new `ludock-data-v2` named
-volume mounted at `/data`. Back up and retain any v1 application directory
-separately. v2 rejects incompatible
+volume mounted at `/data`. A separate `ludock-backups-v2` volume is mounted at
+`/backups`, ready to configure in Settings. Back up and retain any v1 application
+directory separately. v2 rejects incompatible
 application databases; it does not migrate or delete them. Do not remove game
 containers or game-data volumes when setting up fresh Ludock storage.
 
@@ -41,7 +42,7 @@ docker compose up -d --force-recreate ludock
 | `DOCKER_SOCKET` | Socket path inside Ludock; `/var/run/docker.sock` |
 | `LUDOCK_API_TOKEN` | Optional full-administrator API token, at least 32 characters; shorter values are ignored |
 | `LUDOCK_COMPOSE_ROOTS` | Approved directories containing Compose inputs; empty disables project access |
-| `LUDOCK_BACKUP_ROOTS` | Approved mounted backup directories; empty disables backup destination configuration |
+| `LUDOCK_BACKUP_ROOTS` | Approved mounted backup directories; `/backups` in the example Compose file. An explicitly empty value disables backup destination configuration |
 | `LUDOCK_DOCKER_CONFIG` | Optional read-only Docker client configuration directory for private-registry credentials; otherwise `/nonexistent` |
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
 | `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an older alias |
@@ -142,8 +143,15 @@ Validate overrides on both architectures before distributing them.
 
 ## Configure backups
 
-Mount a dedicated destination into Ludock, separate from every selected game
-root:
+The example Compose deployment already mounts a separate named volume at
+`/backups` and configures that allowed path. Open **Settings → Backup storage**,
+choose **Use /backups**, review the limits, and save. Settings lists the paths
+configured for this deployment; saving still verifies that the selected path is
+mounted and writable.
+
+The named volume stores archives on the Docker host. To use a directory on
+another disk, replace the example backup volume mount with a bind mount, keeping
+the destination separate from every selected game root:
 
 ```yaml
 services:
@@ -155,7 +163,8 @@ services:
 ```
 
 This is a fragment to merge into the deployment, retaining the socket and
-application-data mounts. Create the destination directory before starting.
+application-data mounts. Replace the existing `/backups` mount instead of adding
+a second one at the same path. Create the destination directory before starting.
 Under **Settings → Backup storage**, choose `/backups`, retention per server,
 the total backup storage limit, and a free-space reserve. Both storage values
 are entered in GiB and accept decimals. Ludock verifies that the destination

@@ -10,6 +10,7 @@ import { apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth, type AuthUser } from "../auth-context";
 import { can } from "../permissions";
 import { NavLink } from "../navigation";
+import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
 import "./console-recovery.css";
 
 type ConsoleMode = "logs" | "game" | "shell";
@@ -76,7 +77,11 @@ function ConsoleSession({ containerId, user }: {
     : mode === "shell" ? canSendShellCommand : false;
   const command = mode === "logs" ? "" : drafts[mode];
   const isRunning = serverInfo?.state === "running";
+  const canStart = can(user, serverInfo, "server.start") &&
+    Boolean(serverInfo && lifecycleActionForState(serverInfo.state) === "start");
+  const stateGuidance = serverInfo && lifecycleStateGuidance(serverInfo.state);
   const bindingActive = serverInfo?.bindingStatus === "active";
+  const detailsPath = `/servers/${encodeURIComponent(containerId)}`;
 
   const loadDetails = useCallback(async (preserveMode: boolean) => {
     if (!preserveMode) hasLoadedRef.current = false;
@@ -311,7 +316,7 @@ function ConsoleSession({ containerId, user }: {
         <div className="console-header__title">
           <NavLink
             className="console-header__back"
-            to={`/servers/${containerId}`}
+            to={detailsPath}
             title="Back to server details"
             aria-label="Back to server details"
             id="btn-console-back"
@@ -423,7 +428,10 @@ function ConsoleSession({ containerId, user }: {
         </div>
       ) : !bindingActive ? (
         <div className="console-warning" role="alert">
-          Server identity requires administrator review. Open server details to review its binding.
+          Server identity requires administrator review.{" "}
+          <NavLink className="text-link" to={detailsPath}>
+            Open server details
+          </NavLink>
         </div>
       ) : mode === "logs" ? (
         <div className="console-warning">
@@ -439,6 +447,31 @@ function ConsoleSession({ containerId, user }: {
                 ? `Enter commands exactly as ${serverInfo?.gameConsole?.name || "the game console"} expects them.`
                 : "Advanced access: commands run as a new process inside the container."}
             {" "}Commands are never resent automatically.
+            {!isRunning && (
+              <>
+                {stateGuidance && (
+                  <p className="console-warning__guidance">
+                    {stateGuidance} Reload details after the state changes.
+                  </p>
+                )}
+                <div className="console-warning__actions">
+                  {canReadLogs && (
+                    <button
+                      className="console-retry"
+                      onClick={() => {
+                        switchMode("logs");
+                        tabButtonsRef.current.get("logs")?.focus();
+                      }}
+                    >
+                      View logs
+                    </button>
+                  )}
+                  <NavLink className="text-link" to={detailsPath}>
+                    {canStart ? "Open server controls" : "Open server details"}
+                  </NavLink>
+                </div>
+              </>
+            )}
           </div>
           {commandFeedback && (
             <div

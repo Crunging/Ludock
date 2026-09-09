@@ -1,4 +1,5 @@
 import { type Backup, formatByteSize } from "@ludock/shared";
+import { NavLink } from "../../navigation";
 
 export interface RestoreSelection {
   backup: Backup | null;
@@ -47,7 +48,7 @@ export default function BackupsPanel(props: Props) {
   return (
     <>
       <div className="section-heading">
-        <h2>Stopped-server backups</h2>
+        <h2>Backups</h2>
         {canCreate && (
           <button
             className="primary-btn"
@@ -61,6 +62,12 @@ export default function BackupsPanel(props: Props) {
       <p className="section-note">
         Backups stop the server throughout copying, then restore its previous
         running state. Initially stopped servers stay stopped.
+        {admin && (
+          <>
+            {" "}Manage the destination and storage limits in{" "}
+            <NavLink className="text-link" to="/settings">backup settings</NavLink>.
+          </>
+        )}
       </p>
       {admin && canRead ? (
         <div className="table-scroll">
@@ -77,8 +84,8 @@ export default function BackupsPanel(props: Props) {
               {backups.length === 0 && (
                 <tr>
                   <td colSpan={4} className="muted">
-                    No backups yet. Configure the destination and limits in
-                    Settings before the first backup.
+                    No backups yet. Configure backup settings if needed, then
+                    create a backup to save this server’s game data.
                   </td>
                 </tr>
               )}

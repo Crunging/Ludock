@@ -2,16 +2,22 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   type BackupSettings,
   type ComposeProject,
+  type DeploymentSettings,
   backupSettingsSchema,
   backupSettingsResponseSchema,
   composeProjectsResponseSchema,
   composeProjectResponseSchema,
   notificationSettingsResponseSchema,
   okResponseSchema,
+  deploymentSettingsResponseSchema,
 } from "@ludock/shared";
 import { apiJson, jsonBody } from "../api";
+import { NavLink } from "../navigation";
+import DeploymentGuidance from "../components/DeploymentGuidance";
+import "../styles/admin-setup.css";
 
 const gib = 1024 ** 3;
+type SettingsSection = "backups" | "projects" | "registration" | "notifications";
 
 interface BackupDraft {
   destination: string;
@@ -51,17 +57,43 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [deployment, setDeployment] = useState<DeploymentSettings | null>(null);
+  const [deploymentLoading, setDeploymentLoading] = useState(true);
+  const [deploymentError, setDeploymentError] = useState<string | null>(null);
+  const [deploymentAttempt, setDeploymentAttempt] = useState(0);
+  const backupDestination = useRef<HTMLInputElement>(null);
   const saving = useRef(false);
   const active = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [feedbackSection, setFeedbackSection] = useState<SettingsSection | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    setDeploymentLoading(true);
+    setDeploymentError(null);
+    apiJson("/settings/deployment", deploymentSettingsResponseSchema, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!controller.signal.aborted) setDeployment(response);
+      })
+      .catch((reason) => {
+        if (!controller.signal.aborted)
+          setDeploymentError(reason instanceof Error ? reason.message : "Unable to load deployment guidance.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDeploymentLoading(false);
+      });
+    return () => controller.abort();
+  }, [deploymentAttempt]);
   useEffect(() => {
     const controller = new AbortController();
     active.current = true;
     setLoading(true);
     setLoaded(false);
     setError(null);
+    setFeedbackSection(null);
     Promise.all([
       apiJson("/settings/backups", backupSettingsResponseSchema, {
         signal: controller.signal,
@@ -99,6 +131,7 @@ export default function Settings() {
     };
   }, [loadAttempt]);
   async function save<T,>(
+    section: SettingsSection,
     action: () => Promise<T>,
     message: string,
     apply: (result: T) => void,
@@ -108,6 +141,7 @@ export default function Settings() {
     setBusy(true);
     setError(null);
     setNotice(null);
+    setFeedbackSection(section);
     try {
       const result = await action();
       if (!active.current) return;
@@ -126,6 +160,7 @@ export default function Settings() {
   async function saveBackup(event: FormEvent) {
     event.preventDefault();
     if (!loaded || saving.current) return;
+    setFeedbackSection("backups");
     if (
       [backup.retentionCount, backup.maxGiB, backup.reserveGiB].some(
         (value) => !value.trim(),
@@ -150,6 +185,7 @@ export default function Settings() {
     }
     const submittedDraft = backup;
     await save(
+      "backups",
       () => apiJson(
         "/settings/backups",
         backupSettingsResponseSchema,
@@ -175,6 +211,7 @@ export default function Settings() {
     const lines = (value: string) =>
       value.split("\n").map((line) => line.trim()).filter(Boolean);
     await save(
+      "registration",
       () => apiJson(
         "/compose-projects",
         composeProjectResponseSchema,
@@ -201,6 +238,7 @@ export default function Settings() {
   async function saveNotifications(event: FormEvent) {
     event.preventDefault();
     await save(
+      "notifications",
       () => apiJson(
         "/notifications",
         notificationSettingsResponseSchema,
@@ -219,6 +257,21 @@ export default function Settings() {
       },
     );
   }
+  function feedbackFor(section: SettingsSection | null) {
+    if (feedbackSection !== section) return null;
+    return (
+      <>
+        {error && <div className="alert alert--error" role="alert">{error}</div>}
+        {notice && (
+          <div className="alert alert--success admin-settings-feedback" role="status">
+            <p>{notice}</p>
+            {section === "backups" && <NavLink to="/">Choose a server and open Backups to create a backup.</NavLink>}
+            {section === "registration" && <NavLink to="/">Choose a server and open Update to use this registration.</NavLink>}
+          </div>
+        )}
+      </>
+    );
+  }
   return (
     <div className="page settings-page">
       <div className="page__header">
@@ -227,16 +280,7 @@ export default function Settings() {
           Storage, trusted Compose projects, and notification delivery.
         </p>
       </div>
-      {error && (
-        <div className="alert alert--error" role="alert">
-          {error}
-        </div>
-      )}
-      {notice && (
-        <div className="alert alert--success" role="status">
-          {notice}
-        </div>
-      )}
+      {feedbackFor(null)}
       {loading ? (
         <p className="muted" role="status">
           Loading settings…
@@ -250,6 +294,13 @@ export default function Settings() {
         </button>
       ) : (
         <>
+          {deploymentLoading && <p className="muted" role="status">Loading setup guidance…</p>}
+          {deploymentError && (
+            <div className="admin-setup-help">
+              <p>Setup guidance is unavailable: {deploymentError} Your settings can still be edited below.</p>
+              <button className="secondary-btn" onClick={() => setDeploymentAttempt((value) => value + 1)}>Reload setup guidance</button>
+            </div>
+          )}
           <section
             className="settings-section settings-section--divided"
             aria-labelledby="backup-settings-title"
@@ -262,9 +313,20 @@ export default function Settings() {
                   : "Backups are disabled until an approved mounted destination and limits are saved."}{" "}
                 Every backup stops its server for the entire copy.
               </p>
+              {deployment && !deploymentLoading && !deploymentError && (
+                <DeploymentGuidance
+                  section="backups"
+                  deployment={deployment}
+                  onUseBackupRoot={(destination) => {
+                    setBackup((current) => ({ ...current, destination }));
+                    backupDestination.current?.focus();
+                  }}
+                />
+              )}
               <label>
                 Mounted destination path
                 <input
+                  ref={backupDestination}
                   value={backup.destination}
                   onChange={(event) =>
                     setBackup({ ...backup, destination: event.target.value })
@@ -351,6 +413,7 @@ export default function Settings() {
                 separate from game data. Space is also required for temporary
                 archives and restore staging.
               </p>
+              {feedbackFor("backups")}
               <button className="primary-btn" disabled={busy}>
                 Save backup settings
               </button>
@@ -367,6 +430,10 @@ export default function Settings() {
               inaccessible here remain managed through Portainer, Dockge, or
               their owning manager.
             </p>
+            {deployment && !deploymentLoading && !deploymentError && (
+              <DeploymentGuidance section="compose" deployment={deployment} />
+            )}
+            {feedbackFor("projects")}
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -412,7 +479,7 @@ export default function Settings() {
                                 `Unregister ${project.projectName}? This disables Ludock updates for its services; it does not stop or delete containers.`,
                               )
                             )
-                              void save(() => apiJson(
+                              void save("projects", () => apiJson(
                                 `/compose-projects/${encodeURIComponent(project.id)}`,
                                 okResponseSchema,
                                 { method: "DELETE" },
@@ -434,13 +501,18 @@ export default function Settings() {
               onSubmit={registerProject}
             >
               <h3>Register project</h3>
+              <p className="muted">Use the project that already runs your servers. Find its exact project name with <code>docker compose ls</code> on the Docker host or in its owning manager.</p>
               <div className="form-columns">
                 <label>
                   Compose project name
                   <input
                     value={projectName}
                     onChange={(event) => setProjectName(event.target.value)}
-                    pattern="[a-z0-9][a-z0-9_-]*"
+                    pattern={"[a-z0-9][a-z0-9_\\-]*"}
+                    maxLength={128}
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    title="Use lowercase letters, numbers, hyphens, or underscores, starting with a letter or number."
                     required
                   />
                 </label>
@@ -452,10 +524,12 @@ export default function Settings() {
                       setProjectDirectory(event.target.value)
                     }
                     placeholder="/compose/my-project"
+                    aria-describedby="compose-directory-help"
                     required
                   />
                 </label>
               </div>
+              <p className="muted" id="compose-directory-help">The project directory is its existing folder on the Docker host. Mount that folder into Ludock read-only at the same absolute path.</p>
               <label>
                 Compose files — one path per line, in merge order
                 <textarea
@@ -465,23 +539,28 @@ export default function Settings() {
                     "/compose/my-project/compose.yaml\n/compose/my-project/compose.override.yaml"
                   }
                   rows={3}
+                  aria-describedby="compose-files-help"
                   required
                 />
               </label>
+              <p className="muted" id="compose-files-help">Usually this is one <code>compose.yaml</code> file. Add any override files after the base file, in the same order used to start the project.</p>
               <label>
-                CLI environment files — one path per line, in order
+                CLI environment files (optional) — one path per line, in order
                 <textarea
                   value={envFiles}
                   onChange={(event) => setEnvFiles(event.target.value)}
                   rows={2}
+                  aria-describedby="compose-env-help"
                 />
               </label>
+              <p className="muted" id="compose-env-help">List any <code>.env</code> or <code>--env-file</code> files this project needs. Ludock does not load <code>.env</code> automatically.</p>
               <p className="muted">
                 All files and transitive reads must be within the deployment’s
                 approved Compose roots. Source validation can reject unsupported
                 Compose features. Enter file paths only; file contents and
                 credentials are never shown here.
               </p>
+              {feedbackFor("registration")}
               <button className="primary-btn" disabled={busy}>
                 Validate and register
               </button>
@@ -526,6 +605,7 @@ export default function Settings() {
                 The saved webhook is write-only. It is never returned to the
                 browser.
               </p>
+              {feedbackFor("notifications")}
               <button
                 className="primary-btn"
                 disabled={

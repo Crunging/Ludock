@@ -33,6 +33,25 @@
   color: var(--red);
 }
 
+.console-warning__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+
+.console-warning__guidance {
+  margin: 4px 0 0;
+}
+
+.console-warning__actions .text-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+}
+
 .console-terminal--blocked > * { visibility: hidden; }
 
 .console-header .console-mode-tabs { flex-shrink: 0; }
@@ -57,5 +76,6 @@
   .console-retry,
   .console-mode-tabs button,
   .console-pause,
+  .console-warning__actions .text-link,
   .console-input__send { min-height: 44px; }
 }

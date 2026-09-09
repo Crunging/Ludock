@@ -23,6 +23,7 @@ import { NavLink } from "../navigation";
 import { can } from "../permissions";
 import type { ManagedContainer } from "../types";
 import { operationActive } from "../operations";
+import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
 import SectionTabs from "../components/SectionTabs";
 import LifecycleConfirmation from "../components/LifecycleConfirmation";
 import ActivityPanel from "../components/server-detail/ActivityPanel";
@@ -76,6 +77,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     "loading",
   );
   const [settingsAttempt, setSettingsAttempt] = useState(0);
+  const [capabilityState, setCapabilityState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [capabilityAttempt, setCapabilityAttempt] = useState(0);
+  const capabilityFocusPending = useRef(false);
+  const detailRoot = useRef<HTMLDivElement>(null);
   const refreshRequest = useRef<AbortController | null>(null);
   const mutationPending = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +123,15 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [bindingConfirmation, setBindingConfirmation] = useState("");
   const path = `/servers/${encodeURIComponent(serverId)}`;
   const blocked = server?.bindingStatus !== "active";
+  const startable = Boolean(server && lifecycleActionForState(server.state) === "start");
   const activeOperation = operations.find(operationActive);
+
+  useEffect(() => {
+    if (capabilityState === "loading" || !capabilityFocusPending.current) return;
+    capabilityFocusPending.current = false;
+    if (tab === "update" && document.activeElement === document.body)
+      detailRoot.current?.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')?.focus();
+  }, [capabilityState, tab]);
 
   const refresh = useCallback(async (replacePending = true, afterMutation = false) => {
     if (
@@ -180,18 +195,29 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   useEffect(() => {
     if (!admin) return;
     const controller = new AbortController();
-    setSettingsState("loading");
-    Promise.all([
-      apiJson(`${path}/update-capability`, updateCapabilityResponseSchema, {
-        signal: controller.signal,
-      }),
-      apiJson(`${path}/availability`, availabilityResponseSchema, {
-        signal: controller.signal,
-      }),
-    ])
-      .then(([nextCapability, monitor]) => {
+    setCapabilityState("loading");
+    apiJson(`${path}/update-capability`, updateCapabilityResponseSchema, {
+      signal: controller.signal,
+    })
+      .then(({ capability: next }) => {
         if (controller.signal.aborted) return;
-        setCapability(nextCapability.capability);
+        setCapability(next);
+        setCapabilityState("ready");
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setCapabilityState("error");
+      });
+    return () => controller.abort();
+  }, [admin, path, capabilityAttempt]);
+  useEffect(() => {
+    if (!admin) return;
+    const controller = new AbortController();
+    setSettingsState("loading");
+    apiJson(`${path}/availability`, availabilityResponseSchema, {
+      signal: controller.signal,
+    })
+      .then((monitor) => {
+        if (controller.signal.aborted) return;
         setAvailability(monitor.policy);
         setSettingsState("ready");
       })
@@ -272,7 +298,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       busy ||
       activeOperation ||
       (action === "start"
-        ? server?.state === "running"
+        ? !startable
         : server?.state !== "running")
     )
       return;
@@ -288,7 +314,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       !admin ||
       !can(user, server, update.forceRecreate ? "server.recreate" : "server.update") ||
       !capability?.available ||
-      settingsState !== "ready" ||
+      capabilityState !== "ready" ||
       blocked ||
       activeOperation ||
       !update.confirmed ||
@@ -385,6 +411,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       : []),
   ];
   const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
+  const activeSettingsState = activeTab === "update" ? capabilityState : settingsState;
+  const stateGuidance = lifecycleStateGuidance(server.state);
   const consoleAvailable =
     (can(user, server, "console.execute") && Boolean(server.gameConsole)) ||
     can(user, server, "console.shell");
@@ -395,7 +423,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     (action) =>
       can(user, server, `server.${action}`) &&
       (action === "start"
-        ? server.state !== "running"
+        ? startable
         : server.state === "running"),
   );
   const publishedPorts = server.ports
@@ -413,7 +441,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   );
 
   return (
-    <div className="page server-detail">
+    <div className="page server-detail" ref={detailRoot}>
       <NavLink className="text-link back-link" to="/" end>
         <span aria-hidden="true">←</span> All servers
       </NavLink>
@@ -493,6 +521,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
           </div>
         )}
       </header>
+      {!blocked && stateGuidance && (
+        <p className="section-note" role="status">
+          {stateGuidance}
+        </p>
+      )}
       {confirmLifecycle && (
         <LifecycleConfirmation
           action={confirmLifecycle}
@@ -542,6 +575,18 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       {notice && (
         <div className="alert alert--success" role="status">
           {notice}
+        </div>
+      )}
+      {activeOperation && activeTab !== "activity" && (
+        <div className="detail-operation-notice">
+          <p role="status">
+            <strong className="capitalize">{activeOperation.kind.replaceAll("_", " ")}</strong>
+            {activeOperation.status === "queued" ? " queued. " : " in progress. "}
+            Server controls, backups, and updates are paused until it finishes.
+          </p>
+          <button className="text-link" onClick={() => setTab("activity")}>
+            View progress
+          </button>
         </div>
       )}
       <SectionTabs
@@ -644,8 +689,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         )}
         {admin &&
           (activeTab === "update" || activeTab === "availability") &&
-          settingsState !== "ready" && (
-            settingsState === "loading" ? (
+          activeSettingsState !== "ready" && (
+            activeSettingsState === "loading" ? (
               <p role="status">Loading server settings…</p>
             ) : (
               <div>
@@ -654,14 +699,17 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                 </p>
                 <button
                   className="secondary-btn"
-                  onClick={() => setSettingsAttempt((value) => value + 1)}
+                  onClick={() => {
+                    if (activeTab === "update") setCapabilityAttempt((value) => value + 1);
+                    else setSettingsAttempt((value) => value + 1);
+                  }}
                 >
                   Reload server settings
                 </button>
               </div>
             )
           )}
-        {activeTab === "update" && admin && settingsState === "ready" && (
+        {activeTab === "update" && admin && capabilityState === "ready" && (
           <UpdatePanel
             serverName={server.displayName}
             capability={capability}
@@ -674,6 +722,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             )}
             blocked={blocked}
             hasActiveOperation={Boolean(activeOperation)}
+            onRecheck={() => {
+              capabilityFocusPending.current = true;
+              setCapabilityAttempt((value) => value + 1);
+            }}
             onSubmit={() => void requestUpdate()}
           />
         )}

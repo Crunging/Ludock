@@ -7,8 +7,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # v2 requires fresh application storage. Keep any old data volume intact.
       - ludock-data-v2:/data
-      # Optional backup destination: create the host directory, uncomment this
-      # mount, and set LUDOCK_BACKUP_ROOTS=/backups in .env before configuring it.
+      # Separate backup storage, ready to select in Settings after first sign-in.
+      - ludock-backups-v2:/backups
+      # To keep backups on another disk, replace the backup volume above with
+      # a host-directory mount (create the directory first), for example:
       # - /srv/ludock-backups:/backups
       # Optional Compose sources: preserve identical absolute host/container
       # paths and set LUDOCK_COMPOSE_ROOTS=/srv/game-stacks in .env.
@@ -16,7 +18,10 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      LUDOCK_BACKUP_ROOTS: "${LUDOCK_BACKUP_ROOTS-/backups}"
     restart: unless-stopped
 
 volumes:
   ludock-data-v2:
+  ludock-backups-v2:

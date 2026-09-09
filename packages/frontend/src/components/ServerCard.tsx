@@ -6,6 +6,7 @@ import { NavLink } from "../navigation";
 import { can } from "../permissions";
 import LifecycleConfirmation from "./LifecycleConfirmation";
 import ServerMoreActions from "./ServerMoreActions";
+import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
 import "./server-list.css";
 
 interface ServerCardProps {
@@ -22,6 +23,8 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
     null,
   );
   const isRunning = server.state === "running";
+  const lifecycleAction = lifecycleActionForState(server.state);
+  const stateGuidance = lifecycleStateGuidance(server.state);
   const bindingBlocked = Boolean(
     server.bindingStatus && server.bindingStatus !== "active",
   );
@@ -31,7 +34,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
       bindingBlocked ||
       actionLoading ||
       actionsDisabled ||
-      (action === "start" ? isRunning : !isRunning)
+      (action === "start" ? lifecycleAction !== "start" : !isRunning)
     )
       return;
     setActionLoading(action);
@@ -60,7 +63,6 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
         ]
       : []),
   ];
-  const lifecycleAction = isRunning ? "stop" : "start";
 
   return (
     <article className="server-row" aria-labelledby={`server-${server.id}`}>
@@ -76,6 +78,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
           <span className="server-row__game">{server.gameType}</span>
           <span className="server-row__image">{server.image}</span>
         </span>
+        {stateGuidance && <p className="muted">{stateGuidance}</p>}
         {bindingBlocked && (
           <span className="server-row__warning">
             {`Binding ${server.bindingStatus.replaceAll("_", " ")}. Administrator review required.`}
@@ -104,7 +107,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
             {consoleAvailable ? "Console" : "Logs"}
           </NavLink>
         )}
-        {can(user, server, `server.${lifecycleAction}`) && (
+        {lifecycleAction && can(user, server, `server.${lifecycleAction}`) && (
           <button
             className={`secondary-btn ${isRunning ? "secondary-btn--danger" : ""}`}
             disabled={actionLoading !== null || bindingBlocked || actionsDisabled}

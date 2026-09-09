@@ -116,9 +116,32 @@
   min-width: 0;
 }
 
+.detail-operation-notice {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.detail-operation-notice p {
+  margin: 0;
+  flex: 1 1 280px;
+}
+
+.detail-operation-notice button {
+  flex-shrink: 0;
+  min-height: 34px;
+}
+
 @media (pointer: coarse) {
   .detail-actions .primary-btn,
   .detail-actions .secondary-btn,
+  .detail-operation-notice button,
   .server-detail .section-tabs button {
     min-height: 44px;
   }

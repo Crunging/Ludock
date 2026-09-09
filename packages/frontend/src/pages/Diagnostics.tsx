@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiJson } from "../api";
+import { NavLink } from "../navigation";
+import "./diagnostics.css";
 
 import {
   diagnosticsResponseSchema,
@@ -92,9 +94,37 @@ export default function Diagnostics() {
           <dl className="metadata-list">
             <dt>Docker Engine</dt>
             <dd>{dockerConnected ? "Connected" : "Unavailable"}</dd>
-            <dt>Docker Compose</dt>
-            <dd>{composeAvailable ? "Available" : "Unavailable"}</dd>
+            <dt>Compose updates</dt>
+            <dd>{composeAvailable ? "Available" : "Not enabled"}</dd>
           </dl>
+          {!dockerConnected && (
+            <section className="help-panel diagnostics-help" aria-labelledby="docker-help-title">
+              <h2 id="docker-help-title">Connect Ludock to Docker</h2>
+              <p>
+                Check that Docker is running on the host where Ludock is installed.
+                The Ludock container needs its Docker socket mounted:
+              </p>
+              <pre><code>/var/run/docker.sock:/var/run/docker.sock:ro</code></pre>
+              <p>
+                If you use a different socket, its mount must match the
+                <code> DOCKER_SOCKET</code> setting inside Ludock. Recreate Ludock
+                after changing the mount, then refresh this page.
+              </p>
+              <NavLink className="text-link" to="/logs">View Ludock logs</NavLink>
+            </section>
+          )}
+          {!composeAvailable && (
+            <section className="help-panel diagnostics-help" aria-labelledby="compose-help-title">
+              <h2 id="compose-help-title">Enable Compose updates when you need them</h2>
+              <p>
+                Server discovery and ordinary controls work without Compose update
+                access. To update through Ludock, use its Linux container image,
+                mount the existing Compose sources read-only, and set
+                <code> LUDOCK_COMPOSE_ROOTS</code> to those directories.
+              </p>
+              <NavLink className="text-link" to="/settings">Open update settings</NavLink>
+            </section>
+          )}
           <section className="settings-section">
             <h2>Discovery issues</h2>
             <div className="table-scroll">
@@ -110,7 +140,9 @@ export default function Diagnostics() {
                   {diagnostics.length === 0 && (
                     <tr>
                       <td colSpan={3} className="muted">
-                        No discovery issues reported.
+                        {dockerConnected
+                          ? "No discovery issues reported."
+                          : "Discovery cannot be checked until Docker is connected."}
                       </td>
                     </tr>
                   )}

@@ -214,6 +214,10 @@ absolute paths on the Docker host and inside Ludock.
 
 - Backups are unavailable without administrator configuration and a verified,
   separate mounted destination inside `LUDOCK_BACKUP_ROOTS`.
+- A fresh example Compose deployment creates separate application and backup
+  volumes. Settings offers `/backups`; selecting it does not save automatically.
+  Saving the limits validates the mount. An explicitly empty backup-root setting
+  still disables destination configuration.
 - A running server stops before copying and restarts after success/recoverable
   failure. A stopped server remains stopped. Failed/forced stops prevent a
   completed backup; known running shared writers prevent copying.

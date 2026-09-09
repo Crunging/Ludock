@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
+import path from "node:path";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
@@ -531,6 +532,7 @@ describe("HTTP application", () => {
     for (const feature of [
       "compose-projects",
       "settings/backups",
+      "settings/deployment",
       "notifications",
       "diagnostics",
       "integrations",
@@ -608,6 +610,43 @@ describe("HTTP application", () => {
     );
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { ok: true });
+  });
+
+  it("shows deployment root choices only to administrators without exposing other environment settings", async () => {
+    const originalBackupRoots = process.env.LUDOCK_BACKUP_ROOTS;
+    const originalComposeRoots = process.env.LUDOCK_COMPOSE_ROOTS;
+    try {
+      delete process.env.LUDOCK_BACKUP_ROOTS;
+      delete process.env.LUDOCK_COMPOSE_ROOTS;
+      const defaults = await authorizedFetch("/api/v1/settings/deployment");
+      assert.equal(defaults.status, 200);
+      assert.deepEqual(await defaults.json(), {
+        backupRoots: [], composeRoots: [], composeAvailable: false,
+      });
+
+      process.env.LUDOCK_BACKUP_ROOTS = ["/backups", "/archive", "/backups"].join(path.delimiter);
+      process.env.LUDOCK_COMPOSE_ROOTS = ["/srv/games", "/srv/games"].join(path.delimiter);
+      const response = await authorizedFetch("/api/v1/settings/deployment");
+      assert.equal(response.status, 200);
+      const body = await response.json() as Record<string, unknown>;
+      assert.deepEqual(body.backupRoots, ["/backups", "/archive"]);
+      assert.deepEqual(body.composeRoots, ["/srv/games"]);
+      assert.equal(typeof body.composeAvailable, "boolean");
+      assert.deepEqual(Object.keys(body).sort(), ["backupRoots", "composeAvailable", "composeRoots"]);
+
+      for (const [headers, expected] of [
+        [{}, 401], [{ Cookie: viewerCookie }, 403],
+      ] as const) {
+        const denied = await fetch(`${baseUrl}/api/v1/settings/deployment`, { headers });
+        assert.equal(denied.status, expected);
+        assert.doesNotMatch(JSON.stringify(await denied.json()), /\/backups|\/archive|\/srv\/games/);
+      }
+    } finally {
+      if (originalBackupRoots === undefined) delete process.env.LUDOCK_BACKUP_ROOTS;
+      else process.env.LUDOCK_BACKUP_ROOTS = originalBackupRoots;
+      if (originalComposeRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
+      else process.env.LUDOCK_COMPOSE_ROOTS = originalComposeRoots;
+    }
   });
 
   it("keeps a lifecycle lock until Docker settles after the browser disconnects", async () => {

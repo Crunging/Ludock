@@ -5,6 +5,7 @@ import Account from "../src/pages/Account";
 import Audit from "../src/pages/Audit";
 import ApplicationLogs from "../src/pages/ApplicationLogs";
 import Diagnostics from "../src/pages/Diagnostics";
+import { NavigationProvider } from "../src/navigation";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -81,7 +82,7 @@ describe("account and history recovery", () => {
         ? Response.json({ error: "Diagnostics unavailable" }, { status: 503 })
         : Response.json({ diagnostics: [], dockerConnected: true, composeAvailable: true });
     });
-    render(<Diagnostics />);
+    render(<NavigationProvider><Diagnostics /></NavigationProvider>);
     await screen.findByText("No discovery issues reported.");
     expect(screen.getByText("Connected")).toBeTruthy();
     unavailable = true;
@@ -90,6 +91,27 @@ describe("account and history recovery", () => {
     expect(screen.queryByText("No discovery issues reported.")).toBeNull();
     expect(screen.queryByText("Connected")).toBeNull();
     expect(screen.queryByText("Unavailable")).toBeNull();
+  });
+
+  it("offers connection recovery without claiming discovery succeeded while Docker is unavailable", async () => {
+    let connected = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      String(url).endsWith("/integrations")
+        ? Response.json({ integrations: [] })
+        : Response.json({ diagnostics: [], dockerConnected: connected, composeAvailable: false }),
+    );
+    render(<NavigationProvider><Diagnostics /></NavigationProvider>);
+    await screen.findByRole("heading", { name: "Connect Ludock to Docker" });
+    expect(screen.getByText("Discovery cannot be checked until Docker is connected.")).toBeTruthy();
+    expect(screen.queryByText("No discovery issues reported.")).toBeNull();
+    expect(screen.getByRole("link", { name: "View Ludock logs" }).getAttribute("href")).toBe("/logs");
+    expect(screen.getByRole("link", { name: "Open update settings" }).getAttribute("href")).toBe("/settings");
+
+    connected = true;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("No discovery issues reported.");
+    expect(screen.queryByRole("heading", { name: "Connect Ludock to Docker" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Enable Compose updates when you need them" })).toBeTruthy();
   });
 
   it("aborts a paused log read and ignores its late response after resuming", async () => {

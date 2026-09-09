@@ -5,6 +5,8 @@ import ServerCard from "../components/ServerCard";
 import { apiJson } from "../api";
 import { useAuth } from "../auth-context";
 import { useViewPreferences } from "../view-preferences-context";
+import { NavLink } from "../navigation";
+import "./dashboard.css";
 
 export default function Dashboard() {
   const {
@@ -62,6 +64,7 @@ export default function Dashboard() {
             {user?.role === "admin"
               ? "Recognized game servers are discovered automatically."
               : "Servers shared with your account."}
+            {servers.length > 0 && " Select a server name to open its details."}
           </p>
         </div>
         <div className="inline-actions">
@@ -70,22 +73,28 @@ export default function Dashboard() {
             onClick={() => refresh()}
             disabled={loading}
           >
-            Refresh
+            {loading ? "Refreshing…" : "Refresh"}
           </button>
           {user?.role === "admin" && (
             <button
               className="secondary-btn"
               onClick={() => setShowHelp(!showHelp)}
               aria-expanded={showHelp}
+              aria-controls="server-discovery-help"
             >
               Game not shown?
             </button>
           )}
         </div>
       </div>
-      {showHelp && (
-        <section className="help-panel">
-          <h2>Include an unrecognized image</h2>
+      {showHelp && user?.role === "admin" && (
+        <section className="help-panel" id="server-discovery-help" aria-labelledby="server-discovery-title">
+          <h2 id="server-discovery-title">Find your game servers</h2>
+          <p>
+            Ludock discovers existing game containers on its connected Docker host.
+            First, <NavLink to="/diagnostics" className="text-link">check Docker connectivity and supported images</NavLink>.
+          </p>
+          <h3>Using an unrecognized image?</h3>
           <p>
             Add this label through the manager that owns the container, then
             recreate it:
@@ -96,7 +105,7 @@ export default function Dashboard() {
             <code>ludock.enable: "false"</code> label excludes a container.
             Invalid values exclude a container. Compose one-off containers need
             an explicit true label. Newly discovered servers are visible to
-            administrators; assign other users access on the Users page.
+            administrators; <NavLink to="/users" className="text-link">share servers on the Users page</NavLink>.
           </p>
         </section>
       )}
@@ -113,7 +122,12 @@ export default function Dashboard() {
       )}
       {error && (
         <div className="alert alert--error" role="alert">
-          Unable to load servers: {error}
+          <div>
+            <p>Unable to load servers: {error}</p>
+            {user?.role === "admin" && (
+              <NavLink to="/diagnostics" className="text-link">Open diagnostics</NavLink>
+            )}
+          </div>
         </div>
       )}
       {stale && (lastUpdated !== null || !loading) && (
@@ -184,9 +198,14 @@ export default function Dashboard() {
           </h2>
           <p className="empty-state__description">
             {user?.role === "admin"
-              ? "Run a recognized game image, or use “Game not shown?” to include another image."
-              : "Ask an administrator to share the servers and actions you need."}
+              ? "Ludock looks for existing game containers on the connected Docker host. Check the connection and supported images to find out why a server is missing."
+              : `You’re signed in as ${user?.username || "a limited user"}. Ask an administrator to share the servers and actions you need.`}
           </p>
+          {user?.role === "admin" && (
+            <NavLink to="/diagnostics" className="secondary-btn dashboard-empty-action">
+              Check Docker and image support
+            </NavLink>
+          )}
         </div>
       )}
       {servers.length > 0 && (

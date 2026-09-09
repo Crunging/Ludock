@@ -1,0 +1,42 @@
+.login-card__visibility {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-card__visibility input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--blue);
+}
+
+.login-card__account-help {
+  margin-top: 18px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.login-card__submit {
+  min-height: 44px;
+}
+
+@media (max-width: 600px) {
+  .login-page {
+    padding: 20px 16px;
+  }
+
+  .login-card {
+    padding: 24px;
+  }
+
+  .login-card__input {
+    font-size: 16px;
+    min-height: 44px;
+  }
+}

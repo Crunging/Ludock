@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderComponent, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { apiJson } from "../src/api";
@@ -6,6 +7,7 @@ import ServerGrants from "../src/components/ServerGrants";
 import Settings from "../src/pages/Settings";
 import Users from "../src/pages/Users";
 import { AuthContext, type AuthContextValue } from "../src/auth-context";
+import { NavigationProvider } from "../src/navigation";
 
 vi.mock("../src/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/api")>()),
@@ -19,6 +21,11 @@ function deferred<T>() {
 }
 
 const member = { id: "member", username: "friend", role: "operator", disabled: false, createdAt: 0 };
+const deployment = { backupRoots: ["/backups"], composeRoots: ["/compose"], composeAvailable: true };
+
+function render(ui: ReactNode) {
+  return renderComponent(<NavigationProvider>{ui}</NavigationProvider>);
+}
 
 function renderUsers() {
   return render(<AuthContext.Provider value={{ user: { id: "admin", role: "admin", username: "admin" } } as AuthContextValue}><Users /></AuthContext.Provider>);
@@ -56,6 +63,7 @@ describe("administration recovery", () => {
   it("does not expose settings defaults when one of the initial reads fails", async () => {
     let unavailable = true;
     vi.mocked(apiJson).mockImplementation(async (path) => {
+      if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: { destination: "/saved", retentionCount: 4, maxBytes: 1024 ** 3, reserveBytes: 0 } };
       if (path === "/compose-projects") return { projects: [] };
       if (unavailable) throw new Error("Notifications unavailable");
@@ -75,6 +83,7 @@ describe("administration recovery", () => {
     const pending = deferred<unknown>();
     vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return pending.promise;
+      if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
       if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
@@ -100,6 +109,7 @@ describe("administration recovery", () => {
         if (++saveCount > 1) return { settings: submitted };
         return pending.promise;
       }
+      if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: {
         destination: "/backups", retentionCount: 10,
         maxBytes: 100 * 1024 ** 3, reserveBytes: 5 * 1024 ** 3,
@@ -153,6 +163,7 @@ describe("administration recovery", () => {
     };
     vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return { settings: JSON.parse(String(init.body)) };
+      if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings };
       if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
@@ -168,10 +179,69 @@ describe("administration recovery", () => {
     }));
   });
 
+  it("reloads deployment guidance without replacing drafts and validates a chosen root only on Save", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<unknown>();
+    let unavailable = true;
+    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+      if (path === "/settings/deployment") {
+        if (unavailable) throw new Error("Deployment unavailable");
+        return pending.promise;
+      }
+      if (init?.method === "PUT") throw new Error("Destination is not mounted");
+      if (path === "/settings/backups") return { settings: null };
+      if (path === "/compose-projects") return { projects: [] };
+      return { configured: false, enabled: false };
+    });
+    render(<Settings />);
+    const destination = await screen.findByLabelText("Mounted destination path") as HTMLInputElement;
+    await user.type(destination, "/my-draft");
+    unavailable = false;
+    await user.click(await screen.findByRole("button", { name: "Reload setup guidance" }));
+    await act(async () => pending.resolve({ ...deployment, backupRoots: ["/approved/backups"] }));
+    expect(destination.value).toBe("/my-draft");
+    await user.click(screen.getByRole("button", { name: "Use /approved/backups" }));
+    expect(destination.value).toBe("/approved/backups");
+    expect(document.activeElement).toBe(destination);
+    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Save backup settings" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Destination is not mounted");
+    expect(alert.closest("form")).toBe(destination.closest("form"));
+    expect(destination.value).toBe("/approved/backups");
+  });
+
+  it("opens server sharing after creating an operator and returns focus when sharing is done", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+      if (path === "/users") return init?.method === "POST" ? { user: member } : { users: [] };
+      if (path === "/servers") return { servers: [{ id: "world", displayName: "World" }] };
+      return init?.method === "PUT" ? JSON.parse(String(init.body)) : { grants: [] };
+    });
+    renderUsers();
+    await user.type(screen.getByLabelText("Username"), "friend");
+    await user.type(screen.getByLabelText("Initial password"), "initial-password-123");
+    await user.click(screen.getByRole("button", { name: "Create user", exact: true }));
+    const heading = await screen.findByRole("heading", { name: "Server access for friend" });
+    expect(document.activeElement).toBe(heading);
+    expect((screen.getByLabelText("Initial password") as HTMLInputElement).value).toBe("");
+    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    await user.click(await screen.findByRole("button", { name: "Start and stop" }));
+    await user.click(screen.getByRole("button", { name: "Save server access" }));
+    await screen.findByText("Server access saved for friend. Access changes take effect immediately.");
+    expect(apiJson).toHaveBeenLastCalledWith("/users/member/server-grants", expect.anything(), expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ grants: [{ serverId: "world", capabilities: ["server.view", "server.start", "server.stop"] }] }),
+    }));
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("heading", { name: "Server access for friend" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Server access", exact: true }));
+  });
+
   it("uses the registered project response without wiping a newer project draft", async () => {
     const pending = deferred<unknown>();
     vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
       if (init?.method === "POST") return pending.promise;
+      if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
       if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };

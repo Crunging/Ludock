@@ -219,9 +219,28 @@ describe("console recovery", () => {
     expect(screen.getByText(/Server state: paused/)).toBeTruthy();
     await userEvent.type(screen.getByRole("textbox", { name: "Game command" }), "list");
     expect((screen.getByRole("button", { name: "Send", exact: true }) as HTMLButtonElement).disabled).toBe(true);
-    await userEvent.click(screen.getByRole("tab", { name: "Docker Logs" }));
+    expect(screen.getByText(/Paused in Docker. Resume it through Docker/)).toBeTruthy();
+    const controls = screen.getByRole("link", { name: "Open server details", exact: true });
+    expect(controls.getAttribute("href")).toBe(`/servers/${server.id}`);
+    await userEvent.click(screen.getByRole("button", { name: "View logs" }));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Docker Logs" }));
     await openConnection();
     expect(socketOptions.url).toContain(`/ws/v1/logs/${server.id}`);
+    expect(transport.send).not.toHaveBeenCalled();
+  });
+
+  it("does not offer logs or imply start access when neither permission is granted", async () => {
+    vi.mocked(apiJson).mockResolvedValue({
+      server: { ...server, state: "exited", permissions: ["server.view", "console.execute"] },
+      stats: null,
+    });
+    const { navigate } = consolePage("operator");
+    await screen.findByRole("tab", { name: "Game Console" });
+    expect(socketOptions.url).toBe("");
+    expect(screen.queryByRole("button", { name: "View logs" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open server controls" })).toBeNull();
+    await userEvent.click(screen.getByRole("link", { name: "Open server details", exact: true }));
+    expect(navigate).toHaveBeenCalledWith(`/servers/${server.id}`);
     expect(transport.send).not.toHaveBeenCalled();
   });
 });

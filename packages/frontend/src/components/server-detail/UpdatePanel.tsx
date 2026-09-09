@@ -1,4 +1,5 @@
 import type { UpdateCapability } from "@ludock/shared";
+import { NavLink } from "../../navigation";
 export interface UpdateOptions {
   createBackup: boolean;
   forceRecreate: boolean;
@@ -14,6 +15,7 @@ interface Props {
   busy: boolean;
   blocked: boolean;
   hasActiveOperation: boolean;
+  onRecheck: () => void;
   onSubmit: () => void;
 }
 
@@ -26,6 +28,7 @@ export default function UpdatePanel(props: Props) {
     busy,
     blocked,
     hasActiveOperation,
+    onRecheck,
     onSubmit,
   } = props;
   const {
@@ -38,10 +41,20 @@ export default function UpdatePanel(props: Props) {
     <>
       <h2>{capability?.actionLabel || "Update server"}</h2>
       {!capability?.available ? (
-        <p className="section-note">
-          {capability?.unavailableReason ||
-            "This server’s Compose project is not registered. Update it through its owning manager, or register the trusted project in Settings."}
-        </p>
+        <>
+          <p className="section-note">
+            {capability?.unavailableReason ||
+              "Updates require a registered Compose project. You can also update this server through its owning manager."}
+          </p>
+          <div className="inline-actions">
+            <button className="secondary-btn" onClick={onRecheck} disabled={busy}>
+              Check again
+            </button>
+            <NavLink className="text-link" to="/settings">
+              Open update settings
+            </NavLink>
+          </div>
+        </>
       ) : (
         <form
           className="stack-form"

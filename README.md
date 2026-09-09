@@ -17,7 +17,9 @@ provision servers or edit their definitions.
 
 ## Run with Docker
 
-Use [`compose.yaml`](./compose.yaml) with a published v2 image. To customize it,
+Docker and the `docker compose` command are required. Save
+[`compose.yaml`](./compose.yaml) in a folder on your Docker host and run the
+commands below from that folder, using a published v2 image. To customize it,
 copy [`.env.example`](./.env.example) to `.env` beside the Compose file and
 uncomment the settings you want to change. For example, `LUDOCK_PORT=8080`
 changes the browser port, and `MAX_UPLOAD_SIZE=500 MB` limits each file upload.
@@ -29,10 +31,22 @@ Start the panel:
 docker compose up -d
 ```
 
-Open `http://localhost:3000` (or your chosen port) and create the first
-administrator within five minutes. Restart Ludock if the setup window expires
-before an account exists.
-The example uses a new `ludock-data-v2` named volume; do not reuse a v1 database.
+Open `http://localhost:3000` (or your chosen port). From another device, replace
+`localhost` with your Docker host's address. Create the first administrator
+within five minutes. If setup expires, run `docker compose restart ludock`,
+then choose **Check again** in the panel.
+
+The example creates separate volumes for fresh v2 application data and backups.
+Do not reuse a v1 database.
+
+After signing in:
+
+1. Open **Servers**. Recognized game containers appear automatically; use
+   **Game not shown?** if one is missing.
+2. To enable backups, open **Settings → Backup storage**, choose **Use /backups**,
+   review the limits, and save. No extra mount setup is needed with this example.
+3. To share a server, open **Users**, create an account, then choose its servers
+   and permitted actions in the access editor.
 
 To test this checkout before its image is published:
 
@@ -41,6 +55,8 @@ docker build -t ludock:test .
 docker run --rm -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v ludock-data-v2:/data \
+  -v ludock-backups-v2:/backups \
+  -e LUDOCK_BACKUP_ROOTS=/backups \
   ludock:test
 ```
 
@@ -70,8 +86,11 @@ it does not grant logs, commands, files, backups, or schedules.
 
 ## Backups and updates
 
-Backups are disabled until an administrator mounts a separate destination,
-sets `LUDOCK_BACKUP_ROOTS`, and saves its capacity and retention settings.
+The example Compose deployment provides backup storage at `/backups`. Backups
+are enabled when an administrator saves its capacity and retention settings.
+This volume stores archives on the Docker host; to use another disk, replace
+the backup volume mount with a host-directory mount as shown in
+[`compose.yaml`](./compose.yaml).
 Backups stop the server throughout copying and restore its previous running
 state afterward. Live backups are not included.
 
