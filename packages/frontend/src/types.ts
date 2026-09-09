@@ -1,20 +1,9 @@
-import type { Server } from "@ludock/shared";
-export type { ServerCapability } from "@ludock/shared";
-
-export type ManagedContainer = Server & { bindingDiagnostic?: string };
-
-export interface ConsoleMessage {
-  type: "stdout" | "stderr" | "system" | "error";
-  data: string;
-}
-
-export interface ContainerEvent {
-  type: "container_event";
-  action: string;
-  containerId: string;
-  name: string;
-  time: number;
-}
+export type {
+  Server as ManagedContainer,
+  ServerCapability,
+  ConsoleMessage,
+  ServerEvent as ContainerEvent,
+} from "@ludock/shared";
 
 const GAME_ABBREVIATIONS: Record<string, string> = {
   minecraft: "MC",

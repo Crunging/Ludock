@@ -15,8 +15,10 @@ pnpm check
 docker build -t ludock:test .
 ```
 
-`pnpm check` builds shared runtime contracts, checks types and lint, runs backend
-unit/HTTP tests and frontend component tests, then builds production artifacts.
+`pnpm check` builds shared runtime contracts, checks types and lint, runs
+development-runner, backend unit/HTTP, and frontend component tests, then builds
+production artifacts. Compile-only checks cover logical versus Docker identity
+boundaries and required route capabilities/response contracts.
 For focused work:
 
 ```bash
@@ -27,8 +29,10 @@ pnpm --filter @ludock/backend test
 Backend suites include discovery, identity, grants, migrations, protocol
 adapters, filesystem boundaries, archive/restore validation, operation locks and
 recovery, schedule authority/DST handling, monitoring, and notification retries.
-Frontend tests cover independent action grants, role ceilings, and explicit
-update confirmation controls. Fixture tests do not replace real
+Frontend tests cover independent action grants, role ceilings, runtime response
+validation, confirmation/draft state, polling, and extracted server panels.
+Development tests cover isolated state/cookies, shared database locks, port
+collisions, and backend instance checks. Fixture tests do not replace real
 Docker, Compose, or game-world validation.
 
 ## Docker and architecture validation
@@ -220,6 +224,9 @@ absolute paths on the Docker host and inside Ludock.
 
 - Server lists use readable rows, compact controls, useful empty/error states,
   and keyboard-accessible actions; no permission is inferred from role alone.
+- State and port columns align with their headings across running and stopped
+  rows. Check widths around 1200px and 900px, including wrapped actions and names;
+  narrow layouts switch to stacked rows without horizontal page overflow.
 - At 390px width, navigation can scroll, server actions wrap, forms fit, and data
   tables remain usable. Console input and file controls do not overflow.
 - Grant presets show the actual selected capabilities. Backup downtime, restore

@@ -1,31 +1,15 @@
 import { useEffect, useState } from "react";
-import { apiFetch } from "../api";
+import { apiJson } from "../api";
 
-interface AuditEntry {
-  id: number;
-  username: string | null;
-  action: string;
-  targetType: string | null;
-  targetId: string | null;
-  createdAt: number;
-}
+import { type AuditEntry, auditResponseSchema } from "@ludock/shared";
 
 export default function Audit() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch("/api/v1/audit")
-      .then(async (response) => {
-        const body = (await response.json().catch(() => ({}))) as {
-          entries?: AuditEntry[];
-          error?: string;
-        };
-        if (!response.ok || !body.entries) {
-          throw new Error(body.error || "Failed to load audit log");
-        }
-        setEntries(body.entries);
-      })
+    apiJson("/audit", auditResponseSchema)
+      .then(({ entries }) => setEntries(entries))
       .catch((reason: unknown) => {
         setError(
           reason instanceof Error ? reason.message : "Failed to load audit log",

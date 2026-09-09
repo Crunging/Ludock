@@ -16,17 +16,9 @@ const normalizedMountPath = (value: string) =>
 const within = (value: string, root: string) =>
   value === root || value.startsWith(`${root}/`);
 
-export interface FileRoot {
-  id: string;
-  name: string;
-  path: string;
-}
-export interface FileEntry {
-  name: string;
-  type: "file" | "directory" | "symlink";
-  size: number;
-  modifiedAt: number;
-}
+import type { FileRoot, FileEntry } from "@ludock/shared";
+export type { FileRoot, FileEntry } from "@ludock/shared";
+
 export interface ContainerFileMount {
   Type: string;
   Source: string;
@@ -659,7 +651,10 @@ export async function runExec(
   input?: Readable,
 ): Promise<{ stdout: string; stderr: string }> {
   const execution = await container.exec(options);
-  const stream = await execution.start({ hijack: true, stdin: Boolean(input) });
+  const stream = await execution.start({
+    hijack: true,
+    stdin: Boolean(input),
+  });
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const chunks: Buffer[] = [];

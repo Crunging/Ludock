@@ -87,6 +87,8 @@ flows, limitations, and recovery behavior.
   schedules, Compose updates, monitoring, notifications, and recovery.
 - [Testing](./TESTING.md): automated checks and disposable-server acceptance.
 - [Contributing](./CONTRIBUTING.md): Node.js 24 / pnpm 10 development workflow.
+- [Architecture](./docs/ARCHITECTURE.md): shared contracts, feature modules, and
+  development instance boundaries.
 - [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
 
 ## Security

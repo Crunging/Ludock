@@ -1,19 +1,15 @@
 import { randomUUID } from "node:crypto";
 
-export type ApplicationLogLevel = "debug" | "info" | "warn" | "error";
-export type ApplicationLogContext = Record<
-  string,
-  string | number | boolean | null
->;
-
-export interface ApplicationLogEntry {
-  id: number;
-  timestamp: number;
-  level: ApplicationLogLevel;
-  component: string;
-  message: string;
-  context?: ApplicationLogContext;
-}
+import type {
+  ApplicationLogLevel,
+  ApplicationLogEntry,
+  ApplicationLogContext,
+} from "@ludock/shared";
+export type {
+  ApplicationLogLevel,
+  ApplicationLogEntry,
+  ApplicationLogContext,
+} from "@ludock/shared";
 
 const MAX_LOG_ENTRIES = 1_000;
 const MAX_MESSAGE_LENGTH = 16_384;
@@ -25,7 +21,7 @@ let nextId = 1;
 const SECRET_KEY_PATTERN =
   /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(\s*[=:]\s*)(["']?)([^\s,"';&}]+)\3/gi;
 const BEARER_PATTERN = /\bBearer\s+[^\s,;]+/gi;
-const COOKIE_PATTERN = /\b(ludock_session)=([^;\s]+)/gi;
+const COOKIE_PATTERN = /\b(ludock_session(?:_[a-z0-9_-]+)?)=([^;\s]+)/gi;
 const SENSITIVE_QUERY_PATTERN =
   /([?&](?:token|api[-_]?key|password|secret|session)=)[^&#\s]+/gi;
 const JSON_SECRET_PATTERN =
@@ -55,7 +51,7 @@ export function recordApplicationLog(input: {
           typeof value === "string"
             ? redactApplicationLog(value).slice(0, MAX_CONTEXT_VALUE_LENGTH)
             : value,
-        ])
+        ]),
       )
     : undefined;
   entries.push({
@@ -85,8 +81,6 @@ export function listApplicationLogs(options: {
       : options.after || 0;
   return {
     generation,
-    entries: entries
-      .filter((entry) => entry.id > after)
-      .slice(-options.limit),
+    entries: entries.filter((entry) => entry.id > after).slice(-options.limit),
   };
 }

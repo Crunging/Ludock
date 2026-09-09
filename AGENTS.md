@@ -12,6 +12,8 @@ It does not provision servers or edit their owning manager's configuration.
 - `packages/shared`: authoritative API schemas and cross-package types.
 - `packages/backend/test`: backend unit and HTTP integration tests.
 - `packages/frontend/test`: frontend component and permission tests.
+- `docs/ARCHITECTURE.md`: current feature ownership and transport boundaries.
+- `scripts/dev.mjs`: isolated checkout development state, ports, and processes.
 - `TESTING.md`: automated and manual acceptance criteria.
 
 ## Development
@@ -29,6 +31,12 @@ It does not provision servers or edit their owning manager's configuration.
   repository frameworks, dependency-injection containers, and workflow engines.
 - Treat shared contracts as authoritative; update their producers and consumers
   together instead of duplicating request or response types.
+- Keep feature HTTP handlers in `packages/backend/src/routes` and server-detail
+  UI in its feature panels. Direct server actions declare their capability with
+  `serverAction`; preserve its authorization, lock, and cleanup lifetime.
+- Use `pnpm dev` for separate checkout state and session cookies. Docker is
+  disconnected by default; connect only a dedicated development daemon and keep
+  one backend per Docker host. Development state does not isolate Docker data.
 
 ## Constraints
 

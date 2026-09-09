@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { apiFetch } from "../api";
+import { apiJson, jsonBody } from "../api";
 import ServerGrants from "../components/ServerGrants";
-import { useAuth, type UserRole } from "../auth-context";
+import { useAuth } from "../auth-context";
 
-interface UserSummary {
-  id: string;
-  username: string;
-  role: UserRole;
-  disabled: boolean;
-  createdAt: number;
-}
+import {
+  type UserSummary,
+  type CreateUserRequest,
+  type UserAccessRequest,
+  type ResetPasswordRequest,
+  PASSWORD_MIN_LENGTH,
+  usersResponseSchema,
+  userResponseSchema,
+  okResponseSchema,
+} from "@ludock/shared";
 
 export default function Users() {
   const { user: currentUser } = useAuth();
@@ -25,14 +28,7 @@ export default function Users() {
   const [busy, setBusy] = useState(false);
 
   const loadUsers = useCallback(async () => {
-    const response = await apiFetch("/api/v1/users");
-    const body = (await response.json().catch(() => ({}))) as {
-      users?: UserSummary[];
-      error?: string;
-    };
-    if (!response.ok || !body.users) {
-      throw new Error(body.error || "Failed to load users");
-    }
+    const body = await apiJson("/users", usersResponseSchema);
     setUsers(body.users);
   }, []);
 
@@ -49,15 +45,15 @@ export default function Users() {
     setBusy(true);
     setError(null);
     try {
-      const response = await apiFetch("/api/v1/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password, role }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      if (!response.ok) throw new Error(body.error || "Failed to create user");
+      await apiJson(
+        "/users",
+        userResponseSchema,
+        jsonBody("POST", {
+          username,
+          password,
+          role,
+        } satisfies CreateUserRequest),
+      );
       setUsername("");
       setPassword("");
       await loadUsers();
@@ -72,22 +68,18 @@ export default function Users() {
 
   const updateAccess = async (
     user: UserSummary,
-    changes: Partial<Pick<UserSummary, "role" | "disabled">>,
+    changes: Partial<UserAccessRequest>,
   ) => {
     setError(null);
     try {
-      const response = await apiFetch(`/api/v1/users/${user.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await apiJson(
+        `/users/${user.id}`,
+        userResponseSchema,
+        jsonBody("PATCH", {
           role: changes.role ?? user.role,
           disabled: changes.disabled ?? user.disabled,
-        }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      if (!response.ok) throw new Error(body.error || "Failed to update user");
+        } satisfies UserAccessRequest),
+      );
       await loadUsers();
     } catch (reason) {
       setError(
@@ -98,26 +90,22 @@ export default function Users() {
 
   const resetPassword = async (user: UserSummary) => {
     const nextPassword = resetPasswords[user.id] || "";
-    if (nextPassword.length < 15) {
-      setError("Reset passwords must be at least 15 characters.");
+    if (nextPassword.length < PASSWORD_MIN_LENGTH) {
+      setError(
+        `Reset passwords must be at least ${PASSWORD_MIN_LENGTH} characters.`,
+      );
       return;
     }
 
     setError(null);
     try {
-      const response = await apiFetch(
-        `/api/v1/users/${user.id}/reset-password`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: nextPassword }),
-        },
+      await apiJson(
+        `/users/${user.id}/reset-password`,
+        okResponseSchema,
+        jsonBody("POST", {
+          password: nextPassword,
+        } satisfies ResetPasswordRequest),
       );
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      if (!response.ok)
-        throw new Error(body.error || "Failed to reset password");
       setResetPasswords((current) => ({ ...current, [user.id]: "" }));
     } catch (reason) {
       setError(
@@ -135,17 +123,16 @@ export default function Users() {
       return;
     }
     setError(null);
-    const response = await apiFetch(`/api/v1/users/${user.id}`, {
-      method: "DELETE",
-    });
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    if (!response.ok) {
-      setError(body.error || "Failed to delete user");
-      return;
+    try {
+      await apiJson(`/users/${user.id}`, okResponseSchema, {
+        method: "DELETE",
+      });
+      await loadUsers();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Failed to delete user",
+      );
     }
-    await loadUsers();
   };
 
   return (
@@ -186,7 +173,7 @@ export default function Users() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              minLength={15}
+              minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
               required
             />
@@ -262,7 +249,7 @@ export default function Users() {
                 placeholder="New password"
                 aria-label={`New password for ${user.username}`}
                 autoComplete="new-password"
-                minLength={15}
+                minLength={PASSWORD_MIN_LENGTH}
                 maxLength={128}
                 value={resetPasswords[user.id] || ""}
                 onChange={(event) =>
@@ -275,7 +262,9 @@ export default function Users() {
               <button
                 className="secondary-btn"
                 onClick={() => resetPassword(user)}
-                disabled={(resetPasswords[user.id] || "").length < 15}
+                disabled={
+                  (resetPasswords[user.id] || "").length < PASSWORD_MIN_LENGTH
+                }
               >
                 Reset password
               </button>

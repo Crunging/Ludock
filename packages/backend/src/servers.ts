@@ -3,6 +3,7 @@ import {
   serverSchema,
   type Server,
   type ServerCapability,
+  type DockerContainerId,
 } from "@ludock/shared";
 import type { SessionUser } from "./database.js";
 import {
@@ -87,7 +88,7 @@ export async function getServer(
   return toPublicServer(actor, server, current.get(server.containerId ?? ""));
 }
 export interface ServerContext {
-  logical: LogicalServer & { containerId: string };
+  logical: LogicalServer & { containerId: DockerContainerId };
   container: ManagedContainer;
   observation: ServerObservation;
   lockKeys: string[];

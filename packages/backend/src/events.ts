@@ -1,3 +1,4 @@
+import { SERVER_STATE_ACTIONS, serverEventSchema } from "@ludock/shared";
 import { StringDecoder } from "node:string_decoder";
 import type { WebSocket } from "ws";
 import type { WebSocketAuth } from "./auth.js";
@@ -22,23 +23,7 @@ export interface DockerEvent {
   time?: number;
 }
 
-const STATE_ACTIONS = new Set([
-  "create",
-  "start",
-  "stop",
-  "die",
-  "kill",
-  "restart",
-  "destroy",
-  "rename",
-  "pause",
-  "unpause",
-  "update",
-  "oom",
-  "health_status: healthy",
-  "health_status: unhealthy",
-  "health_status: starting",
-]);
+const STATE_ACTIONS = new Set<string>(SERVER_STATE_ACTIONS);
 
 /** Docker JSON events can span chunks or share a chunk. Bound incomplete input. */
 export function dockerEventDecoder(
@@ -124,15 +109,17 @@ export async function dispatchDockerEvent(event: DockerEvent): Promise<void> {
     // or suspended server. It reveals nothing about any other server.
     if (!visible && !previouslyVisible.has(client)) continue;
     client.send(
-      JSON.stringify({
-        type: "container_event",
-        action: visible ? event.Action : "refresh",
-        ...(visible ? { serverId: current.id } : {}),
-        time:
-          typeof event.time === "number" && Number.isFinite(event.time)
-            ? event.time
-            : Math.floor(Date.now() / 1000),
-      }),
+      JSON.stringify(
+        serverEventSchema.parse({
+          type: "container_event",
+          action: visible ? event.Action : "refresh",
+          ...(visible ? { serverId: current.id } : {}),
+          time:
+            typeof event.time === "number" && Number.isFinite(event.time)
+              ? event.time
+              : Math.floor(Date.now() / 1000),
+        }),
+      ),
     );
   }
 }

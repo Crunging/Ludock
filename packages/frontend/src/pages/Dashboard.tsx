@@ -1,7 +1,8 @@
+import { okResponseSchema } from "@ludock/shared";
 import { useCallback, useState } from "react";
 import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
-import { apiFetch } from "../api";
+import { apiJson } from "../api";
 import { useAuth } from "../auth-context";
 
 export default function Dashboard() {
@@ -14,16 +15,11 @@ export default function Dashboard() {
     async (id: string, action: "start" | "stop" | "restart") => {
       try {
         setActionError(null);
-        const response = await apiFetch(
-          `/api/v1/servers/${encodeURIComponent(id)}/${action}`,
+        await apiJson(
+          `/servers/${encodeURIComponent(id)}/${action}`,
+          okResponseSchema,
           { method: "POST" },
         );
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(
-            body.error || `Action failed (HTTP ${response.status})`,
-          );
-        }
         refresh();
       } catch (reason) {
         setActionError(

@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AUTH_REQUIRED_EVENT } from "./api";
+import { AUTH_REQUIRED_EVENT, ApiRequestError, apiJson, jsonBody } from "./api";
+import {
+  type CredentialsRequest,
+  type SetupRequest,
+  authStatusSchema,
+  authUserResponseSchema,
+  okResponseSchema,
+} from "@ludock/shared";
 import { AuthContext, type AuthUser } from "./auth-context";
-
-interface AuthStatus {
-  setupRequired: boolean;
-  setupLocked: boolean;
-  setupRemainingMs: number | null;
-  authenticated: boolean;
-  user: AuthUser | null;
-}
 
 const STATUS_RETRY_DELAYS_MS = [250, 500, 1_000];
 
@@ -34,11 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attempt += 1
     ) {
       try {
-        const response = await fetch("/api/v1/auth/status", {
-          credentials: "same-origin",
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const status = (await response.json()) as AuthStatus;
+        const status = await apiJson("/auth/status", authStatusSchema);
         setSetupRequired(status.setupRequired);
         setSetupLocked(status.setupLocked);
         setSetupRemainingMs(status.setupRemainingMs);
@@ -78,60 +73,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string): Promise<string | null> => {
-      const response = await fetch("/api/v1/auth/login", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        user?: AuthUser;
-        error?: string;
-      };
-      if (!response.ok || !body.user) {
-        return body.error || `Unable to sign in (HTTP ${response.status}).`;
+      try {
+        const { user } = await apiJson(
+          "/auth/login",
+          authUserResponseSchema,
+          jsonBody("POST", {
+            username,
+            password,
+          } satisfies CredentialsRequest),
+        );
+        setUser(user);
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : "Unable to sign in.";
       }
-
-      setUser(body.user);
-      return null;
     },
     [],
   );
 
   const setup = useCallback(
     async (username: string, password: string): Promise<string | null> => {
-      const response = await fetch("/api/v1/auth/setup", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        user?: AuthUser;
-        error?: string;
-      };
-      if (!response.ok || !body.user) {
-        if (response.status === 403) setSetupLocked(true);
-        return (
-          body.error || `Unable to complete setup (HTTP ${response.status}).`
+      try {
+        const { user } = await apiJson(
+          "/auth/setup",
+          authUserResponseSchema,
+          jsonBody("POST", { username, password } satisfies SetupRequest),
         );
+        setSetupRequired(false);
+        setSetupLocked(false);
+        setSetupRemainingMs(null);
+        setUser(user);
+        return null;
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 403)
+          setSetupLocked(true);
+        return error instanceof Error
+          ? error.message
+          : "Unable to complete setup.";
       }
-
-      setSetupRequired(false);
-      setSetupLocked(false);
-      setSetupRemainingMs(null);
-      setUser(body.user);
-      return null;
     },
     [],
   );
 
   const logout = useCallback(async () => {
     try {
-      await fetch("/api/v1/auth/logout", {
-        method: "POST",
-        credentials: "same-origin",
-      });
+      await apiJson("/auth/logout", okResponseSchema, { method: "POST" });
     } finally {
       setUser(null);
     }

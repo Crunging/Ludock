@@ -3,45 +3,18 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyMigrations, assertCompatibleDatabase } from "./migrations.js";
 
-export interface UserRecord {
-  id: string;
-  username: string;
+import type {
+  AuthUser,
+  UserSummary,
+  SessionSummary,
+  AuditEntry,
+} from "@ludock/shared";
+export type { UserSummary, SessionSummary } from "@ludock/shared";
+export type SessionUser = AuthUser;
+export type AuditRecord = AuditEntry;
+
+export interface UserRecord extends UserSummary {
   passwordHash: string;
-  role: "admin" | "operator" | "viewer";
-  disabled: boolean;
-  createdAt: number;
-}
-
-export interface SessionUser {
-  id: string;
-  username: string;
-  role: UserRecord["role"];
-}
-
-export interface UserSummary extends SessionUser {
-  disabled: boolean;
-  createdAt: number;
-}
-
-export interface AuditRecord {
-  id: number;
-  username: string | null;
-  action: string;
-  targetType: string | null;
-  targetId: string | null;
-  details: unknown;
-  ipAddress: string | null;
-  createdAt: number;
-}
-
-export interface SessionSummary {
-  id: string;
-  createdAt: number;
-  expiresAt: number;
-  lastSeenAt: number;
-  ipAddress: string | null;
-  userAgent: string | null;
-  current: boolean;
 }
 
 export interface LoginThrottle {

@@ -8,6 +8,24 @@ import express, {
   type Response,
 } from "express";
 import { z } from "zod";
+import {
+  PASSWORD_MIN_LENGTH,
+  credentialsRequestSchema,
+  setupRequestSchema,
+  createUserRequestSchema,
+  userAccessRequestSchema,
+  resetPasswordRequestSchema,
+  changePasswordRequestSchema,
+  authStatusSchema,
+  authUserResponseSchema,
+  usersResponseSchema,
+  userResponseSchema,
+  sessionsResponseSchema,
+  auditResponseSchema,
+  applicationLogsResponseSchema,
+  okResponseSchema,
+} from "@ludock/shared";
+import { respond } from "./routes/request.js";
 import { router } from "./routes.js";
 import { advancedRouter } from "./advanced-routes.js";
 import { AppError } from "./errors.js";
@@ -56,35 +74,14 @@ import {
 } from "./database.js";
 import { createLogger, errorMessage } from "./logger.js";
 import { listApplicationLogs } from "./application-logs.js";
+import {
+  developmentInstance,
+  matchesDevelopmentInstance,
+} from "./development-instance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const PASSWORD_MIN_LENGTH = 15;
 const logger = createLogger("api");
-const credentialsSchema = z.object({
-  username: z
-    .string()
-    .trim()
-    .min(3)
-    .max(32)
-    .regex(/^[a-zA-Z0-9._-]+$/),
-  password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
-});
-const setupSchema = credentialsSchema;
-const newUserSchema = credentialsSchema.extend({
-  role: z.enum(["admin", "operator", "viewer"]),
-});
-const accessSchema = z.object({
-  role: z.enum(["admin", "operator", "viewer"]),
-  disabled: z.boolean(),
-});
-const passwordSchema = z.object({
-  password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
-});
-const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(PASSWORD_MIN_LENGTH).max(128),
-});
 
 interface CreateAppOptions {
   frontendDist?: string | false;
@@ -92,7 +89,12 @@ interface CreateAppOptions {
 }
 
 function publicUser(user: UserRecord | null) {
-  if (!user) return null;
+  if (!user)
+    throw new AppError(
+      "INVALID_RESPONSE",
+      500,
+      "The server could not produce a valid response",
+    );
   return {
     id: user.id,
     username: user.username,
@@ -120,6 +122,17 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const setupWindow = options.setupWindow || defaultSetupWindow;
 
   app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    if (developmentInstance)
+      res.setHeader("X-Ludock-Dev-Instance", developmentInstance);
+    if (!matchesDevelopmentInstance(req.headers["x-ludock-dev-instance"])) {
+      res.status(409).json({
+        error: "This request belongs to a different development checkout.",
+      });
+      return;
+    }
+    next();
+  });
   app.use((req, res, next) => {
     const requestId = randomUUID();
     res.locals.requestId = requestId;
@@ -180,17 +193,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.get("/api/v1/auth/status", (req, res) => {
     const session = getRequestSession(req);
     const setup = setupWindow.getState();
-    res.json({
+    const authentication = session
+      ? { authenticated: true as const, user: session.user }
+      : { authenticated: false as const, user: null };
+    respond(res, authStatusSchema, {
       setupRequired: setup.required,
       setupLocked: setup.locked,
       setupExpiresAt: setup.expiresAt,
       setupRemainingMs: setup.remainingMs,
-      authenticated: session !== null,
-      user: session?.user || null,
+      ...authentication,
     });
   });
   app.post("/api/v1/auth/setup", async (req, res) => {
-    const parsed = setupSchema.safeParse(req.body);
+    const parsed = setupRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
         error: `Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
@@ -208,7 +223,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       );
       const session = createSession(user, req);
       setSessionCookie(res, req, session.token);
-      res.status(201).json({ user });
+      respond(res.status(201), authUserResponseSchema, { user });
     } catch (error) {
       if (error instanceof AuthError) {
         res.status(error.statusCode).json({
@@ -241,7 +256,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       return;
     }
 
-    const parsed = credentialsSchema.safeParse(req.body);
+    const parsed = credentialsRequestSchema.safeParse(req.body);
     if (!parsed.success || isSetupRequired()) {
       res.status(401).json({ error: "Invalid username or password" });
       return;
@@ -279,13 +294,20 @@ export function createApp(options: CreateAppOptions = {}): Express {
       targetType: "session",
       ipAddress: req.ip,
     });
-    res.json({ user });
+    respond(res, authUserResponseSchema, { user });
   });
   app.post("/api/v1/auth/logout", (req, res) => {
     const session = getRequestSession(req);
     deleteRequestSession(req);
     clearSessionCookie(res);
-    res.setHeader("Clear-Site-Data", '"cache", "cookies", "storage"');
+    // Cookie clearing is host-wide, so development checkouts on other ports
+    // must retain their sessions. clearSessionCookie removes this one's cookie.
+    res.setHeader(
+      "Clear-Site-Data",
+      developmentInstance
+        ? '"cache", "storage"'
+        : '"cache", "cookies", "storage"',
+    );
     if (session) {
       writeAuditLog({
         userId: session.user.id,
@@ -294,7 +316,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
         ipAddress: req.ip,
       });
     }
-    res.json({ ok: true });
+    respond(res, okResponseSchema, { ok: true });
   });
   // Public for container health checks.
   const HEALTH_CACHE_MS = 5_000;
@@ -331,10 +353,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
   app.use("/api/v1", authMiddleware);
   app.get("/api/v1/auth/me", (_req, res) => {
-    res.json({ user: res.locals.user as SessionUser });
+    respond(res, authUserResponseSchema, {
+      user: res.locals.user as SessionUser,
+    });
   });
   app.post("/api/v1/account/change-password", async (req, res) => {
-    const parsed = changePasswordSchema.safeParse(req.body);
+    const parsed = changePasswordRequestSchema.safeParse(req.body);
     const actor = res.locals.user as SessionUser;
     if (!parsed.success) {
       res.status(400).json({
@@ -383,12 +407,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
       targetId: actor.id,
       ipAddress: req.ip,
     });
-    res.json({ ok: true });
+    respond(res, okResponseSchema, { ok: true });
   });
   app.get("/api/v1/account/sessions", (_req, res) => {
     const actor = res.locals.user as SessionUser;
     const tokenHash = res.locals.sessionTokenHash as string | undefined;
-    res.json({
+    respond(res, sessionsResponseSchema, {
       sessions: tokenHash ? listUserSessions(actor.id, tokenHash) : [],
     });
   });
@@ -407,13 +431,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
       targetId: sessionId,
       ipAddress: req.ip,
     });
-    res.json({ ok: true });
+    respond(res, okResponseSchema, { ok: true });
   });
   app.get("/api/v1/users", requireRole("admin"), (_req, res) => {
-    res.json({ users: listUsers() });
+    respond(res, usersResponseSchema, { users: listUsers() });
   });
   app.post("/api/v1/users", requireRole("admin"), async (req, res) => {
-    const parsed = newUserSchema.safeParse(req.body);
+    const parsed = createUserRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid user details" });
       return;
@@ -447,10 +471,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
       details: { username: parsed.data.username, role: parsed.data.role },
       ipAddress: req.ip,
     });
-    res.status(201).json({ user: publicUser(findUserById(id)) });
+    respond(res.status(201), userResponseSchema, {
+      user: publicUser(findUserById(id)),
+    });
   });
   app.patch("/api/v1/users/:id", requireRole("admin"), (req, res) => {
-    const parsed = accessSchema.safeParse(req.body);
+    const parsed = userAccessRequestSchema.safeParse(req.body);
     const target = findUserById(req.params.id as string);
     if (!parsed.success || !target) {
       res.status(target ? 400 : 404).json({
@@ -478,13 +504,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
       details: parsed.data,
       ipAddress: req.ip,
     });
-    res.json({ user: publicUser(findUserById(target.id)) });
+    respond(res, userResponseSchema, {
+      user: publicUser(findUserById(target.id)),
+    });
   });
   app.post(
     "/api/v1/users/:id/reset-password",
     requireRole("admin"),
     async (req, res) => {
-      const parsed = passwordSchema.safeParse(req.body);
+      const parsed = resetPasswordRequestSchema.safeParse(req.body);
       const target = findUserById(req.params.id as string);
       if (!parsed.success || !target) {
         res.status(target ? 400 : 404).json({
@@ -504,7 +532,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
         targetId: target.id,
         ipAddress: req.ip,
       });
-      res.json({ ok: true });
+      respond(res, okResponseSchema, { ok: true });
     },
   );
   app.delete("/api/v1/users/:id", requireRole("admin"), (req, res) => {
@@ -536,14 +564,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
       details: { username: target.username, role: target.role },
       ipAddress: req.ip,
     });
-    res.json({ ok: true });
+    respond(res, okResponseSchema, { ok: true });
   });
   app.get("/api/v1/audit", requireRole("admin"), (req, res) => {
     const requested = Number(req.query.limit || 100);
     const limit = Number.isFinite(requested)
       ? Math.max(1, Math.min(250, Math.trunc(requested)))
       : 100;
-    res.json({ entries: listAuditLog(limit) });
+    respond(res, auditResponseSchema, { entries: listAuditLog(limit) });
   });
   app.get("/api/v1/application-logs", requireRole("admin"), (req, res) => {
     const requestedLimit = Number(req.query.limit || 250);
@@ -559,7 +587,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
       typeof req.query.generation === "string"
         ? req.query.generation.slice(0, 64)
         : undefined;
-    res.json(listApplicationLogs({ after, limit, generation }));
+    respond(
+      res,
+      applicationLogsResponseSchema,
+      listApplicationLogs({ after, limit, generation }),
+    );
   });
   app.use(router);
   app.use(advancedRouter);

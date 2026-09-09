@@ -21,31 +21,28 @@ import {
   LABEL_GAME,
 } from "./discovery.js";
 import type { ServerObservation } from "./identity.js";
+import {
+  dockerContainerIdSchema,
+  type DockerContainerId,
+} from "@ludock/shared";
 
 export { LABEL_ENABLE, LABEL_NAME, LABEL_GAME } from "./discovery.js";
 
 export const LABEL_PREFIX = "ludock";
 
-const CONTAINER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
-const CONTAINER_ID_MAX_LENGTH = 128;
-
 // Keep untrusted identifiers from altering dockerode's Docker API request path.
-export function assertValidContainerId(id: unknown): string {
-  if (
-    typeof id !== "string" ||
-    id.length === 0 ||
-    id.length > CONTAINER_ID_MAX_LENGTH ||
-    !CONTAINER_ID_PATTERN.test(id)
-  ) {
+export function assertValidContainerId(id: unknown): DockerContainerId {
+  const parsed = dockerContainerIdSchema.safeParse(id);
+  if (!parsed.success) {
     const error = new Error("Invalid container identifier");
     Object.assign(error, { statusCode: 400, code: "INVALID_CONTAINER_ID" });
     throw error;
   }
-  return id;
+  return parsed.data;
 }
 
 export interface ManagedContainer {
-  id: string;
+  id: DockerContainerId;
   shortId: string;
   name: string;
   displayName: string;
@@ -113,7 +110,7 @@ export async function getDiscoveryDiagnostics(): Promise<
 }
 
 export async function getManagedContainer(
-  id: string,
+  id: DockerContainerId,
 ): Promise<ManagedContainer> {
   return (await getManagedContainerObservation(id)).container;
 }
@@ -137,7 +134,11 @@ export async function listManagedContainerObservations(): Promise<
     )
       continue;
     try {
-      observations.push(await getManagedContainerObservation(container.Id));
+      observations.push(
+        await getManagedContainerObservation(
+          assertValidContainerId(container.Id),
+        ),
+      );
     } catch (error) {
       const code = (error as { statusCode?: number }).statusCode;
       if (
@@ -153,7 +154,7 @@ export async function listManagedContainerObservations(): Promise<
 }
 
 export async function getManagedContainerObservation(
-  id: string,
+  id: DockerContainerId,
 ): Promise<ManagedContainerObservation> {
   const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
@@ -170,7 +171,7 @@ function toInspectedManagedContainer(
 ): ManagedContainer {
   const labels = info.Config.Labels || {};
   const managed = {
-    id: info.Id,
+    id: assertValidContainerId(info.Id),
     shortId: info.Id.substring(0, 12),
     name: info.Name.replace(/^\//, ""),
     displayName: labels[LABEL_NAME] || info.Name.replace(/^\//, ""),
@@ -233,7 +234,7 @@ export function toServerObservation(
     gameConfiguration["stdin:once"] = String(info.Config.StdinOnce);
   }
   return {
-    containerId: info.Id,
+    containerId: assertValidContainerId(info.Id),
     name: server.name,
     displayName: server.displayName,
     gameType: server.gameType,
@@ -250,7 +251,7 @@ export function toServerObservation(
 }
 
 export async function getContainerStats(
-  id: string,
+  id: DockerContainerId,
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
   const container = await getManagedDockerContainer(id);
   const stats = await container.stats({ stream: false });
@@ -274,17 +275,17 @@ export async function getContainerStats(
   };
 }
 
-export async function startContainer(id: string): Promise<void> {
+export async function startContainer(id: DockerContainerId): Promise<void> {
   const container = await getManagedDockerContainer(id);
   await container.start();
 }
 
-export async function stopContainer(id: string): Promise<void> {
+export async function stopContainer(id: DockerContainerId): Promise<void> {
   const container = await getManagedDockerContainer(id);
   await container.stop();
 }
 
-export async function restartContainer(id: string): Promise<void> {
+export async function restartContainer(id: DockerContainerId): Promise<void> {
   const container = await getManagedDockerContainer(id);
   await container.restart();
 }
@@ -297,12 +298,12 @@ export async function checkDockerConnection(): Promise<void> {
   await docker.ping();
 }
 
-export function getContainer(id: string): Docker.Container {
+export function getContainer(id: DockerContainerId): Docker.Container {
   return docker.getContainer(assertValidContainerId(id));
 }
 
 async function getManagedDockerContainer(
-  id: string,
+  id: DockerContainerId,
 ): Promise<Docker.Container> {
   const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
@@ -316,7 +317,7 @@ function toManagedContainer(container: Docker.ContainerInfo): ManagedContainer {
   const name = (container.Names[0] || "").replace(/^\//, "");
 
   const managed = {
-    id: container.Id,
+    id: assertValidContainerId(container.Id),
     shortId: container.Id.substring(0, 12),
     name,
     displayName: labels[LABEL_NAME] || name,

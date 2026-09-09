@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { apiFetch } from "../api";
+import { apiJson, jsonBody } from "../api";
 
-interface SessionSummary {
-  id: string;
-  lastSeenAt: number;
-  ipAddress: string | null;
-  userAgent: string | null;
-  current: boolean;
-}
+import {
+  type SessionSummary,
+  type ChangePasswordRequest,
+  PASSWORD_MIN_LENGTH,
+  sessionsResponseSchema,
+  okResponseSchema,
+} from "@ludock/shared";
 
 export default function Account() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -19,14 +19,7 @@ export default function Account() {
   const [busy, setBusy] = useState(false);
 
   const loadSessions = useCallback(async () => {
-    const response = await apiFetch("/api/v1/account/sessions");
-    const body = (await response.json().catch(() => ({}))) as {
-      sessions?: SessionSummary[];
-      error?: string;
-    };
-    if (!response.ok || !body.sessions) {
-      throw new Error(body.error || "Failed to load sessions");
-    }
+    const body = await apiJson("/account/sessions", sessionsResponseSchema);
     setSessions(body.sessions);
   }, []);
 
@@ -48,16 +41,14 @@ export default function Account() {
     }
     setBusy(true);
     try {
-      const response = await apiFetch("/api/v1/account/change-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      if (!response.ok)
-        throw new Error(body.error || "Failed to change password");
+      await apiJson(
+        "/account/change-password",
+        okResponseSchema,
+        jsonBody("POST", {
+          currentPassword,
+          newPassword,
+        } satisfies ChangePasswordRequest),
+      );
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -74,21 +65,20 @@ export default function Account() {
 
   const revokeSession = async (session: SessionSummary) => {
     setError(null);
-    const response = await apiFetch(`/api/v1/account/sessions/${session.id}`, {
-      method: "DELETE",
-    });
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    if (!response.ok) {
-      setError(body.error || "Failed to revoke session");
-      return;
+    try {
+      await apiJson(`/account/sessions/${session.id}`, okResponseSchema, {
+        method: "DELETE",
+      });
+      if (session.current) {
+        window.location.reload();
+        return;
+      }
+      await loadSessions();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Failed to revoke session",
+      );
     }
-    if (session.current) {
-      window.location.reload();
-      return;
-    }
-    await loadSessions();
   };
 
   return (
@@ -121,7 +111,7 @@ export default function Account() {
             <input
               type="password"
               autoComplete="new-password"
-              minLength={15}
+              minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
@@ -133,7 +123,7 @@ export default function Account() {
             <input
               type="password"
               autoComplete="new-password"
-              minLength={15}
+              minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}

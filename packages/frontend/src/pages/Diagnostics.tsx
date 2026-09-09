@@ -1,22 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiJson } from "../api";
 
-interface Diagnostic {
-  containerId?: string;
-  name?: string;
-  code: string;
-  message: string;
-}
-interface Capability {
-  status: string;
-  description: string;
-  evidence: string[];
-}
-interface Integration {
-  gameType: string;
-  repositories: string[];
-  capabilities: Record<string, Capability>;
-}
+import {
+  diagnosticsResponseSchema,
+  integrationsResponseSchema,
+  type DiscoveryDiagnostic,
+  type GameIntegration,
+} from "@ludock/shared";
+
 const columns = [
   { id: "recognition", title: "Recognition" },
   { id: "console", title: "Console" },
@@ -24,11 +15,11 @@ const columns = [
   { id: "readiness", title: "Readiness" },
   { id: "update", title: "Updates" },
   { id: "platforms", title: "Image platforms" },
-];
+] as const;
 
 export default function Diagnostics() {
-  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [diagnostics, setDiagnostics] = useState<DiscoveryDiagnostic[]>([]);
+  const [integrations, setIntegrations] = useState<GameIntegration[]>([]);
   const [dockerConnected, setDockerConnected] = useState(false);
   const [composeAvailable, setComposeAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -39,12 +30,8 @@ export default function Diagnostics() {
     setError(null);
     try {
       const [system, games] = await Promise.all([
-        apiJson<{
-          diagnostics: Diagnostic[];
-          dockerConnected: boolean;
-          composeAvailable: boolean;
-        }>("/diagnostics"),
-        apiJson<{ integrations: Integration[] }>("/integrations"),
+        apiJson("/diagnostics", diagnosticsResponseSchema),
+        apiJson("/integrations", integrationsResponseSchema),
       ]);
       setDiagnostics(system.diagnostics);
       setDockerConnected(system.dockerConnected);

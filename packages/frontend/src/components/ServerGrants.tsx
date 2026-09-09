@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiFetch } from "../api";
+import { apiJson, jsonBody } from "../api";
 import {
   CAPABILITY_LABELS,
   VIEWER_CAPABILITIES,
@@ -9,10 +9,12 @@ import {
 import type { ManagedContainer, ServerCapability } from "../types";
 import type { UserRole } from "../auth-context";
 
-interface Grant {
-  serverId: string;
-  capabilities: ServerCapability[];
-}
+import {
+  type ServerGrantInput,
+  serverGrantsResponseSchema,
+  serversResponseSchema,
+} from "@ludock/shared";
+
 interface Props {
   userId: string;
   username: string;
@@ -27,7 +29,7 @@ export default function ServerGrants({
   onClose,
 }: Props) {
   const [servers, setServers] = useState<ManagedContainer[]>([]);
-  const [grants, setGrants] = useState<Grant[]>([]);
+  const [grants, setGrants] = useState<ServerGrantInput[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,19 +37,21 @@ export default function ServerGrants({
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      apiFetch("/api/v1/servers"),
-      apiFetch(`/api/v1/users/${encodeURIComponent(userId)}/server-grants`),
+      apiJson("/servers", serversResponseSchema),
+      apiJson(
+        `/users/${encodeURIComponent(userId)}/server-grants`,
+        serverGrantsResponseSchema,
+      ),
     ])
-      .then(async ([serverResponse, grantsResponse]) => {
-        if (!serverResponse.ok || !grantsResponse.ok)
-          throw new Error("Unable to load server access.");
-        const [serverBody, grantsBody] = await Promise.all([
-          serverResponse.json(),
-          grantsResponse.json(),
-        ]);
+      .then(([serverBody, grantsBody]) => {
         if (!cancelled) {
           setServers(serverBody.servers);
-          setGrants(grantsBody.grants);
+          setGrants(
+            grantsBody.grants.map(({ serverId, capabilities }) => ({
+              serverId,
+              capabilities,
+            })),
+          );
         }
       })
       .catch((reason) => {
@@ -77,17 +81,11 @@ export default function ServerGrants({
     setError(null);
     setNotice(null);
     try {
-      const response = await apiFetch(
-        `/api/v1/users/${encodeURIComponent(userId)}/server-grants`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ grants }),
-        },
+      await apiJson(
+        `/users/${encodeURIComponent(userId)}/server-grants`,
+        serverGrantsResponseSchema,
+        jsonBody("PUT", { grants }),
       );
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok)
-        throw new Error(body.error || "Unable to save server access.");
       setNotice(
         "Server access saved. Revoked permissions apply to open connections and queued work.",
       );

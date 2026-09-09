@@ -1,8 +1,8 @@
-import { serverSchema } from "@ludock/shared";
+import { serversResponseSchema, serverEventSchema } from "@ludock/shared";
 import { useCallback, useEffect, useState } from "react";
-import type { ManagedContainer, ContainerEvent } from "../types";
+import type { ManagedContainer } from "../types";
 import { useWebSocket } from "./useWebSocket";
-import { apiFetch, authenticatedWebSocketUrl } from "../api";
+import { apiJson, authenticatedWebSocketUrl } from "../api";
 
 interface UseServersResult {
   servers: ManagedContainer[];
@@ -20,10 +20,8 @@ export function useServers(): UseServersResult {
     try {
       setLoading(true);
       setError(null);
-      const response = await apiFetch("/api/v1/servers");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      setServers(serverSchema.array().parse(body.servers));
+      const body = await apiJson("/servers", serversResponseSchema);
+      setServers(body.servers);
     } catch (error: unknown) {
       setServers([]);
       setError(
@@ -37,7 +35,7 @@ export function useServers(): UseServersResult {
   const handleEvent = useCallback(
     (raw: string) => {
       try {
-        const event: ContainerEvent = JSON.parse(raw);
+        const event = serverEventSchema.parse(JSON.parse(raw));
         if (event.type === "container_event") {
           fetchServers();
         }

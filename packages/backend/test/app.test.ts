@@ -489,6 +489,34 @@ describe("HTTP application", () => {
       (await friendFetch(`/servers/${managedServerId}/updates`, "POST")).status,
       403,
     );
+    for (const feature of ["backups", "schedules", "update-capability"]) {
+      assert.equal(
+        (await friendFetch(`/servers/${managedServerId}/${feature}`)).status,
+        403,
+        feature,
+      );
+    }
+    for (const feature of ["operations", "availability"]) {
+      assert.equal(
+        (await friendFetch(`/servers/${managedServerId}/${feature}`)).status,
+        200,
+        feature,
+      );
+    }
+    for (const feature of [
+      "compose-projects",
+      "settings/backups",
+      "notifications",
+      "diagnostics",
+      "integrations",
+    ]) {
+      assert.equal((await friendFetch(`/${feature}`)).status, 403, feature);
+    }
+    const scheduleDenied = await friendFetch(
+      `/servers/${managedServerId}/schedules/00000000-0000-4000-8000-000000000001`,
+      "DELETE",
+    );
+    assert.equal(scheduleDenied.status, 403);
     const revoked = await authorizedFetch(
       `/api/v1/users/${viewerId}/server-grants`,
       {
@@ -503,6 +531,58 @@ describe("HTTP application", () => {
       404,
     );
     assert.equal((await setRole("viewer")).status, 200);
+  });
+
+  it("mounts feature routes with their response contracts and scoped schedules", async () => {
+    const expected = [
+      ["/settings/backups", "settings"],
+      ["/compose-projects", "projects"],
+      ["/notifications", "configured"],
+      ["/integrations", "integrations"],
+      [`/servers/${managedServerId}/operations`, "operations"],
+      [`/servers/${managedServerId}/backups`, "backups"],
+      [`/servers/${managedServerId}/schedules`, "schedules"],
+      [`/servers/${managedServerId}/availability`, "policy"],
+      [`/servers/${managedServerId}/update-capability`, "capability"],
+    ];
+    for (const [path, key] of expected) {
+      const response = await authorizedFetch(`/api/v1${path}`);
+      assert.equal(response.status, 200, path);
+      const body = (await response.json()) as Record<string, unknown>;
+      assert.ok(key in body, path);
+    }
+    const invalidProject = await authorizedFetch("/api/v1/compose-projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(invalidProject.status, 400);
+    const created = await fetch(
+      `${baseUrl}/api/v1/servers/${managedServerId}/schedules`,
+      {
+        method: "POST",
+        headers: { Cookie: sessionCookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "stop",
+          enabled: true,
+          time: "12:00",
+          days: [1],
+          timezone: "UTC",
+        }),
+      },
+    );
+    assert.equal(created.status, 201);
+    const { schedule } = (await created.json()) as {
+      schedule: { id: string; serverId: string; ownerId: string };
+    };
+    assert.equal(schedule.serverId, managedServerId);
+    assert.match(schedule.ownerId, /^[a-f0-9-]{36}$/);
+    const deleted = await authorizedFetch(
+      `/api/v1/servers/${managedServerId}/schedules/${schedule.id}`,
+      { method: "DELETE" },
+    );
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), { ok: true });
   });
 
   it("keeps a lifecycle lock until Docker settles after the browser disconnects", async () => {

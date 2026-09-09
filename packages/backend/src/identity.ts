@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { getDatabase } from "./database.js";
+import {
+  dockerContainerIdSchema,
+  logicalServerIdSchema,
+  type DockerContainerId,
+  type LogicalServerId,
+} from "@ludock/shared";
 
 export interface ServerObservation {
-  containerId: string;
+  containerId: DockerContainerId;
   name: string;
   displayName: string;
   gameType: string;
@@ -27,10 +33,10 @@ export type ServerBindingStatus =
   | "review_required";
 
 export interface LogicalServer {
-  id: string;
+  id: LogicalServerId;
   hostId: string;
   externalIdentity: string;
-  containerId: string | null;
+  containerId: DockerContainerId | null;
   displayName: string;
   gameType: string;
   status: ServerBindingStatus;
@@ -152,11 +158,22 @@ export function bindingFingerprint(observation: ServerObservation): string {
 }
 
 function toLogicalServer(row: ServerRow): LogicalServer {
+  const id = logicalServerIdSchema.safeParse(row.id);
+  const containerId = dockerContainerIdSchema
+    .nullable()
+    .safeParse(row.container_id);
+  if (!id.success || !containerId.success) {
+    throw new ServerBindingError(
+      "INVALID_STORED_IDENTITY",
+      "Stored server identity is invalid; review application data.",
+      500,
+    );
+  }
   return {
-    id: row.id,
+    id: id.data,
     hostId: row.host_id,
     externalIdentity: row.external_identity,
-    containerId: row.container_id,
+    containerId: containerId.data,
     displayName: row.display_name,
     gameType: row.game_type,
     status: row.status,
@@ -196,7 +213,7 @@ export function getLogicalServer(serverId: string): LogicalServer | null {
 export function resolveServerBinding(
   serverId: string,
   expectedRevision?: number,
-): LogicalServer & { containerId: string } {
+): LogicalServer & { containerId: DockerContainerId } {
   const server = getLogicalServer(serverId);
   if (!server)
     throw new ServerBindingError("SERVER_NOT_FOUND", "Server not found", 404);
@@ -219,7 +236,7 @@ export function resolveServerBinding(
       "The server binding changed; reload before trying again",
     );
   }
-  return server as LogicalServer & { containerId: string };
+  return { ...server, containerId: server.containerId };
 }
 
 /** Validate a fresh inspect immediately before a mutation. Does not reconcile a
@@ -228,7 +245,7 @@ export function assertObservedServerBinding(
   serverId: string,
   observation: ServerObservation,
   expectedRevision?: number,
-): LogicalServer & { containerId: string } {
+): LogicalServer & { containerId: DockerContainerId } {
   const server = resolveServerBinding(serverId, expectedRevision);
   if (
     server.containerId !== observation.containerId ||

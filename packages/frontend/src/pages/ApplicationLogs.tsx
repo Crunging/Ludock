@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "../api";
+import { apiJson } from "../api";
 
-type LogLevel = "debug" | "info" | "warn" | "error";
-
-interface LogEntry {
-  id: number;
-  timestamp: number;
-  level: LogLevel;
-  component: string;
-  message: string;
-  context?: Record<string, string | number | boolean | null>;
-}
+import {
+  type ApplicationLogEntry,
+  applicationLogsResponseSchema,
+} from "@ludock/shared";
 
 const MAX_VISIBLE_ENTRIES = 1_000;
 
 export default function ApplicationLogs() {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [entries, setEntries] = useState<ApplicationLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -32,17 +26,10 @@ export default function ApplicationLogs() {
       const processGeneration = generation.current
         ? `&generation=${encodeURIComponent(generation.current)}`
         : "";
-      const response = await apiFetch(
-        `/api/v1/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`,
+      const body = await apiJson(
+        `/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`,
+        applicationLogsResponseSchema,
       );
-      const body = (await response.json().catch(() => ({}))) as {
-        generation?: string;
-        entries?: LogEntry[];
-        error?: string;
-      };
-      if (!response.ok || !body.generation || !body.entries) {
-        throw new Error(body.error || "Failed to load application logs");
-      }
 
       const processRestarted =
         generation.current !== null && generation.current !== body.generation;
@@ -55,8 +42,8 @@ export default function ApplicationLogs() {
         lastId.current = body.entries[body.entries.length - 1].id;
         setEntries((current) =>
           (initial || processRestarted
-            ? body.entries!
-            : [...current, ...body.entries!]
+            ? body.entries
+            : [...current, ...body.entries]
           ).slice(-MAX_VISIBLE_ENTRIES),
         );
       }

@@ -1,3 +1,5 @@
+import { apiErrorSchema, type ResponseSchema } from "@ludock/shared";
+
 export const AUTH_REQUIRED_EVENT = "ludock:auth-required";
 
 export async function apiFetch(
@@ -24,15 +26,49 @@ export function authenticatedWebSocketUrl(path: string): string {
   return new URL(`${protocol}//${window.location.host}${path}`).toString();
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+/** Validate success and error bodies before any caller consumes them. */
+export async function apiResponse<T>(
+  response: Response,
+  schema: ResponseSchema<T>,
+): Promise<T> {
+  const body: unknown = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    const error = apiErrorSchema.safeParse(body);
+    throw new ApiRequestError(
+      error.success
+        ? error.data.error
+        : `Request failed (HTTP ${response.status})`,
+      response.status,
+    );
+  }
+  try {
+    return schema.parse(body);
+  } catch {
+    // Schema errors can include response values. Keep unexpected data out of UI
+    // errors and logs, especially on authentication and settings endpoints.
+    throw new ApiRequestError(
+      "The server returned an invalid response. Refresh and try again.",
+      response.status,
+    );
+  }
+}
+
 export async function apiJson<T>(
   path: string,
+  schema: ResponseSchema<T>,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await apiFetch(`/api/v1${path}`, init);
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok)
-    throw new Error(body.error || `Request failed (HTTP ${response.status})`);
-  return body as T;
+  return apiResponse(await apiFetch(`/api/v1${path}`, init), schema);
 }
 
 export function jsonBody(method: string, value: unknown): RequestInit {

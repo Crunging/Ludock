@@ -18,6 +18,7 @@ import { runSchedules } from "./schedules.js";
 import { deliverNotifications } from "./notifications.js";
 import { refreshServers } from "./servers.js";
 import { waitForLocksReleased } from "./operation-locks.js";
+import { matchesDevelopmentInstance } from "./development-instance.js";
 import {
   createLogger,
   errorMessage,
@@ -25,6 +26,7 @@ import {
 } from "./logger.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
+const HOST = process.env.HOST;
 const MAX_WEBSOCKET_CONNECTIONS = 100;
 const WEBSOCKET_SESSION_CHECK_MS = 15_000;
 const logger = createLogger("server");
@@ -67,6 +69,11 @@ const wss = new WebSocketServer({
 });
 
 server.on("upgrade", (req, socket, head) => {
+  if (!matchesDevelopmentInstance(req.headers["x-ludock-dev-instance"])) {
+    socket.write("HTTP/1.1 409 Conflict\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   if (shuttingDown) {
     socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
     socket.destroy();
@@ -176,6 +183,7 @@ server.on("clientError", (error, socket) => {
 
 server.on("error", (error) => {
   logger.error("HTTP server error", { error: error.message });
+  process.exitCode = 1;
 });
 
 wss.on("error", (error) => {
@@ -204,7 +212,7 @@ function monitorWebSocketSession(
   ws.once("error", stop);
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   const logConfiguration = getLogLevelConfiguration();
   logger.info("Ludock listening", {
     address: `http://localhost:${PORT}`,
@@ -265,5 +273,5 @@ async function shutdown(signal: string): Promise<void> {
   } else logger.info("Shutdown complete");
 }
 
-process.once("SIGINT", () => void shutdown("SIGINT"));
-process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

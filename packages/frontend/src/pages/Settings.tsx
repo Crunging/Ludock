@@ -1,14 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type {
-  BackupSettings,
-  ComposeProjectRegistration,
+import {
+  type BackupSettings,
+  type ComposeProject,
+  backupSettingsResponseSchema,
+  composeProjectsResponseSchema,
+  composeProjectResponseSchema,
+  notificationSettingsResponseSchema,
+  okResponseSchema,
 } from "@ludock/shared";
 import { apiJson, jsonBody } from "../api";
 
-interface Project extends ComposeProjectRegistration {
-  id: string;
-  disabled: boolean;
-}
 const gib = 1024 ** 3;
 export default function Settings() {
   const [backup, setBackup] = useState<BackupSettings>({
@@ -18,7 +19,7 @@ export default function Settings() {
     reserveBytes: 5 * gib,
   });
   const [backupConfigured, setBackupConfigured] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ComposeProject[]>([]);
   const [projectName, setProjectName] = useState("");
   const [projectDirectory, setProjectDirectory] = useState("");
   const [composeFiles, setComposeFiles] = useState("");
@@ -32,9 +33,9 @@ export default function Settings() {
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     Promise.all([
-      apiJson<{ settings: BackupSettings | null }>("/settings/backups"),
-      apiJson<{ projects: Project[] }>("/compose-projects"),
-      apiJson<{ configured: boolean; enabled: boolean }>("/notifications"),
+      apiJson("/settings/backups", backupSettingsResponseSchema),
+      apiJson("/compose-projects", composeProjectsResponseSchema),
+      apiJson("/notifications", notificationSettingsResponseSchema),
     ])
       .then(([backupResponse, projectResponse, notificationResponse]) => {
         if (backupResponse.settings) {
@@ -70,7 +71,11 @@ export default function Settings() {
   async function saveBackup(event: FormEvent) {
     event.preventDefault();
     await save(async () => {
-      await apiJson("/settings/backups", jsonBody("PUT", backup));
+      await apiJson(
+        "/settings/backups",
+        backupSettingsResponseSchema,
+        jsonBody("PUT", backup),
+      );
       setBackupConfigured(true);
     }, "Backup settings saved.");
   }
@@ -84,6 +89,7 @@ export default function Settings() {
           .filter(Boolean);
       await apiJson(
         "/compose-projects",
+        composeProjectResponseSchema,
         jsonBody("POST", {
           projectName,
           projectDirectory,
@@ -92,7 +98,8 @@ export default function Settings() {
         }),
       );
       setProjects(
-        (await apiJson<{ projects: Project[] }>("/compose-projects")).projects,
+        (await apiJson("/compose-projects", composeProjectsResponseSchema))
+          .projects,
       );
       setProjectName("");
       setProjectDirectory("");
@@ -105,6 +112,7 @@ export default function Settings() {
     await save(async () => {
       await apiJson(
         "/notifications",
+        notificationSettingsResponseSchema,
         jsonBody("PUT", {
           enabled: notificationEnabled,
           ...(webhookUrl.trim() ? { webhookUrl: webhookUrl.trim() } : {}),
@@ -282,6 +290,7 @@ export default function Settings() {
                               void save(async () => {
                                 await apiJson(
                                   `/compose-projects/${encodeURIComponent(project.id)}`,
+                                  okResponseSchema,
                                   { method: "DELETE" },
                                 );
                                 setProjects((current) =>

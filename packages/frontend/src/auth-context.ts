@@ -1,12 +1,7 @@
 import { createContext, useContext } from "react";
 
-export type UserRole = "admin" | "operator" | "viewer";
-
-export interface AuthUser {
-  id: string;
-  username: string;
-  role: UserRole;
-}
+import type { AuthUser } from "@ludock/shared";
+export type { AuthUser, UserRole } from "@ludock/shared";
 
 export interface AuthContextValue {
   loading: boolean;

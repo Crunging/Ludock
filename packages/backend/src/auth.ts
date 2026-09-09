@@ -25,7 +25,10 @@ import {
 } from "./request-security.js";
 import { createLogger } from "./logger.js";
 
-const SESSION_COOKIE = "ludock_session";
+import { developmentInstance } from "./development-instance.js";
+const SESSION_COOKIE = developmentInstance
+  ? `ludock_session_${developmentInstance}`
+  : "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MIN_API_TOKEN_LENGTH = 32;
 const SCRYPT_N = 32768;
@@ -75,7 +78,7 @@ export class SetupWindow {
 
   constructor(
     private readonly now: () => number = Date.now,
-    durationMs = SETUP_WINDOW_MS
+    durationMs = SETUP_WINDOW_MS,
   ) {
     this.expiresAt = now() + durationMs;
   }
@@ -105,7 +108,7 @@ export function isSetupRequired(): boolean {
 }
 
 export function logSetupInstructions(
-  setupWindow: SetupWindow = defaultSetupWindow
+  setupWindow: SetupWindow = defaultSetupWindow,
 ): void {
   if (!isSetupRequired()) return;
 
@@ -130,17 +133,10 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(
   password: string,
-  encoded: string
+  encoded: string,
 ): Promise<boolean> {
   const [algorithm, n, r, p, saltValue, keyValue] = encoded.split("$");
-  if (
-    algorithm !== "scrypt" ||
-    !n ||
-    !r ||
-    !p ||
-    !saltValue ||
-    !keyValue
-  ) {
+  if (algorithm !== "scrypt" || !n || !r || !p || !saltValue || !keyValue) {
     return false;
   }
 
@@ -171,9 +167,9 @@ export async function verifyPassword(
       ...options,
       maxmem: Math.max(
         SCRYPT_MAX_MEMORY,
-        128 * options.N * options.r + 16 * 1024 * 1024
+        128 * options.N * options.r + 16 * 1024 * 1024,
       ),
-    }
+    },
   );
 
   return actual.length === expected.length && timingSafeEqual(actual, expected);
@@ -185,7 +181,7 @@ export async function createInitialAdmin(
     password: string;
     ipAddress?: string;
   },
-  setupWindow: SetupWindow = defaultSetupWindow
+  setupWindow: SetupWindow = defaultSetupWindow,
 ): Promise<SessionUser> {
   setupWindow.assertOpen();
 
@@ -215,7 +211,7 @@ export async function createInitialAdmin(
 
 export async function authenticateUser(
   username: string,
-  password: string
+  password: string,
 ): Promise<SessionUser | null> {
   const record = findUserByUsername(username);
   if (!record || record.disabled) {
@@ -232,7 +228,7 @@ export async function authenticateUser(
 
 export function createSession(
   user: SessionUser,
-  request: Request
+  request: Request,
 ): { token: string; expiresAt: number } {
   const token = randomBytes(32).toString("base64url");
   const now = Date.now();
@@ -252,7 +248,7 @@ export function createSession(
 export function setSessionCookie(
   response: Response,
   request: Request,
-  token: string
+  token: string,
 ): void {
   response.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -272,7 +268,7 @@ export function clearSessionCookie(response: Response): void {
 }
 
 export function getRequestSession(
-  request: Pick<IncomingMessage, "headers">
+  request: Pick<IncomingMessage, "headers">,
 ): { token: string; tokenHash: string; user: SessionUser } | null {
   const token = cookieValue(request.headers.cookie || "", SESSION_COOKIE);
   if (!token) return null;
@@ -289,7 +285,7 @@ export function deleteRequestSession(request: Request): void {
 export function authMiddleware(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void {
   const session = getRequestSession(req);
   if (session) {
@@ -326,7 +322,7 @@ export function requireRole(...roles: SessionUser["role"][]) {
 }
 
 export function authenticateWsRequest(
-  request: IncomingMessage
+  request: IncomingMessage,
 ): WebSocketAuth | null {
   const session = getRequestSession(request);
   if (session) {
@@ -386,7 +382,7 @@ export function authenticateWsRequest(
 export class AuthError extends Error {
   constructor(
     public readonly code: string,
-    public readonly statusCode: number
+    public readonly statusCode: number,
   ) {
     super(code);
   }
@@ -400,7 +396,7 @@ function derivePassword(
   password: string,
   salt: Buffer,
   keyLength: number,
-  options: { N: number; r: number; p: number; maxmem: number }
+  options: { N: number; r: number; p: number; maxmem: number },
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     scrypt(password, salt, keyLength, options, (error, derivedKey) => {

@@ -1,11 +1,12 @@
+import { serverResponseSchema, consoleMessageSchema } from "@ludock/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useWebSocket } from "../hooks/useWebSocket";
-import type { ConsoleMessage, ManagedContainer } from "../types";
-import { apiFetch, authenticatedWebSocketUrl } from "../api";
+import type { ManagedContainer } from "../types";
+import { apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth } from "../auth-context";
 import { can } from "../permissions";
 import { useNavigate } from "../navigation-context";
@@ -44,11 +45,7 @@ export default function Console({ containerId }: { containerId: string }) {
     setServerState("loading");
     setServerInfo(null);
     setMode("logs");
-    apiFetch(`/api/v1/servers/${encodeURIComponent(containerId)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<{ server: ManagedContainer }>;
-      })
+    apiJson(`/servers/${encodeURIComponent(containerId)}`, serverResponseSchema)
       .then(({ server }) => {
         if (cancelled) return;
         setServerInfo(server);
@@ -131,7 +128,7 @@ export default function Console({ containerId }: { containerId: string }) {
 
   const writeMessage = useCallback((raw: string) => {
     try {
-      const msg: ConsoleMessage = JSON.parse(raw);
+      const msg = consoleMessageSchema.parse(JSON.parse(raw));
       const terminal = terminalRef.current;
       if (!terminal) return;
 

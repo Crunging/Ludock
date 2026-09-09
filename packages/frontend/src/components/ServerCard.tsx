@@ -55,8 +55,7 @@ export default function ServerCard({ server, onAction }: ServerCardProps) {
         </span>
         {bindingBlocked && (
           <span className="server-row__warning">
-            {server.bindingDiagnostic ||
-              `Binding ${server.bindingStatus?.replaceAll("_", " ")}. Administrator review required.`}
+            {`Binding ${server.bindingStatus.replaceAll("_", " ")}. Administrator review required.`}
           </span>
         )}
       </div>

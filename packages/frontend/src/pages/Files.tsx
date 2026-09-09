@@ -6,23 +6,22 @@ import {
   useRef,
   useState,
 } from "react";
-import { apiFetch } from "../api";
+import { apiFetch, apiJson, apiResponse } from "../api";
 import { useAuth } from "../auth-context";
 import { can } from "../permissions";
 import { useNavigate } from "../navigation-context";
 import type { ManagedContainer } from "../types";
 
-interface FileEntry {
-  name: string;
-  type: "file" | "directory" | "symlink";
-  size: number;
-  modifiedAt: number;
-}
-
-interface FileListing {
-  path: string;
-  entries: FileEntry[];
-}
+import {
+  type FileEntry,
+  type FileLocationRequest,
+  type CreateDirectoryRequest,
+  type RenameFileRequest,
+  type UploadFileQuery,
+  fileListingSchema,
+  serverResponseSchema,
+  okResponseSchema,
+} from "@ludock/shared";
 
 function joinPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
@@ -38,11 +37,6 @@ function formatSize(bytes: number): string {
     index += 1;
   }
   return `${value < 10 ? value.toFixed(1) : value.toFixed(0)} ${units[index]}`;
-}
-
-async function responseError(response: Response): Promise<string> {
-  const body = await response.json().catch(() => ({}));
-  return body.error || `Request failed (HTTP ${response.status})`;
 }
 
 export default function Files({ containerId }: { containerId: string }) {
@@ -61,12 +55,8 @@ export default function Files({ containerId }: { containerId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch(`/api/v1/servers/${encodeURIComponent(containerId)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(await responseError(response));
-        return response.json();
-      })
-      .then(({ server: nextServer }: { server: ManagedContainer }) => {
+    apiJson(`/servers/${encodeURIComponent(containerId)}`, serverResponseSchema)
+      .then(({ server: nextServer }) => {
         setServer(nextServer);
         if (!can(user, nextServer, "files.read"))
           throw new Error("You do not have file access to this server.");
@@ -86,13 +76,15 @@ export default function Files({ containerId }: { containerId: string }) {
     }
     setLoading(true);
     setError(null);
-    const query = new URLSearchParams({ root: rootId, path: currentPath });
+    const query = new URLSearchParams({
+      root: rootId,
+      path: currentPath,
+    } satisfies FileLocationRequest);
     try {
-      const response = await apiFetch(
-        `/api/v1/servers/${encodeURIComponent(containerId)}/files?${query}`,
+      const listing = await apiJson(
+        `/servers/${encodeURIComponent(containerId)}/files?${query}`,
+        fileListingSchema,
       );
-      if (!response.ok) throw new Error(await responseError(response));
-      const listing = (await response.json()) as FileListing;
       setEntries(listing.entries);
     } catch (reason) {
       setError(
@@ -117,7 +109,7 @@ export default function Files({ containerId }: { containerId: string }) {
       setNotice(null);
       try {
         const response = await request();
-        if (!response.ok) throw new Error(await responseError(response));
+        await apiResponse(response, okResponseSchema);
         setNotice(successMessage);
         await refresh();
         return true;
@@ -146,7 +138,7 @@ export default function Files({ containerId }: { containerId: string }) {
             root: rootId,
             path: currentPath,
             name: file.name,
-          });
+          } satisfies UploadFileQuery);
           const response = await apiFetch(
             `/api/v1/servers/${encodeURIComponent(containerId)}/files/upload?${query}`,
             {
@@ -155,9 +147,7 @@ export default function Files({ containerId }: { containerId: string }) {
               body: file,
             },
           );
-          if (!response.ok) {
-            throw new Error(`${file.name}: ${await responseError(response)}`);
-          }
+          await apiResponse(response, okResponseSchema);
           completed += 1;
         }
         setNotice(
@@ -185,7 +175,11 @@ export default function Files({ containerId }: { containerId: string }) {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ root: rootId, path: currentPath, name }),
+            body: JSON.stringify({
+              root: rootId,
+              path: currentPath,
+              name,
+            } satisfies CreateDirectoryRequest),
           },
         ),
       `Created ${name}`,
@@ -206,7 +200,7 @@ export default function Files({ containerId }: { containerId: string }) {
               root: rootId,
               path: joinPath(currentPath, entry.name),
               newName,
-            }),
+            } satisfies RenameFileRequest),
           },
         ),
       `Renamed ${entry.name}`,
@@ -222,7 +216,7 @@ export default function Files({ containerId }: { containerId: string }) {
     const query = new URLSearchParams({
       root: rootId,
       path: joinPath(currentPath, entry.name),
-    });
+    } satisfies FileLocationRequest);
     await runMutation(
       () =>
         apiFetch(
@@ -237,7 +231,7 @@ export default function Files({ containerId }: { containerId: string }) {
     const query = new URLSearchParams({
       root: rootId,
       path: joinPath(currentPath, entry.name),
-    });
+    } satisfies FileLocationRequest);
     return `/api/v1/servers/${encodeURIComponent(containerId)}/files/download?${query}`;
   };
 
