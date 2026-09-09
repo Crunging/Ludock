@@ -1,12 +1,22 @@
 services:
   ludock:
-    image: ghcr.io/crunging/ludock:latest
+    image: ghcr.io/crunging/ludock:2
     ports:
       - "3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./data:/data
+      # v2 requires fresh application storage. Keep any old data volume intact.
+      - ludock-data-v2:/data
+      # Optional backup destination: create the host directory, uncomment this
+      # mount, and set LUDOCK_BACKUP_ROOTS=/backups in .env before configuring it.
+      # - /srv/ludock-backups:/backups
+      # Optional Compose sources: preserve identical absolute host/container
+      # paths and set LUDOCK_COMPOSE_ROOTS=/srv/game-stacks in .env.
+      # - /srv/game-stacks:/srv/game-stacks:ro
     env_file:
       - path: .env
         required: false
     restart: unless-stopped
+
+volumes:
+  ludock-data-v2:

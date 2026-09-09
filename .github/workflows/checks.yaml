@@ -47,8 +47,16 @@ jobs:
         uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
   container:
-    name: Container
-    runs-on: ubuntu-latest
+    name: Container (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
 
     steps:
@@ -64,25 +72,27 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: false
           load: true
           tags: ludock:ci
-          cache-from: type=gha,scope=ci
-          cache-to: type=gha,mode=min,scope=ci
+          cache-from: type=gha,scope=ci-${{ runner.arch }}
+          cache-to: type=gha,mode=min,scope=ci-${{ runner.arch }}
 
       - name: Smoke-test the image
         shell: bash
         run: |
           set -euo pipefail
 
+          docker run --rm ludock:ci docker --version
+          docker run --rm ludock:ci docker compose version
           docker run -d --name smoke -p 3000:3000 ludock:ci
           trap 'docker rm -f smoke >/dev/null 2>&1 || true' EXIT
 
           # Without a Docker socket, "degraded" confirms the process is serving.
           for _ in $(seq 1 30); do
             body="$(curl --silent --show-error --max-time 2 \
-              http://localhost:3000/api/health || true)"
+              http://localhost:3000/api/v1/health || true)"
             if [[ -n "$body" ]]; then
               echo "Health response: $body"
               if [[ "$body" == '{"status":"degraded"}' ]]; then
@@ -92,9 +102,41 @@ jobs:
             sleep 2
           done
 
-          echo "::error::The image did not serve /api/health within 60s."
+          echo "::error::The image did not serve /api/v1/health within 60s."
           docker logs smoke
           exit 1
+
+      - name: Check Compose updates with disposable services
+        run: python3 scripts/test-compose.py
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Set up Node.js for storage integration
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install test harness dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Check backend suites in the Linux production runtime
+        run: node scripts/test-linux.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Check scoped file helpers with disposable data
+        run: |
+          docker pull node:24-alpine
+          node scripts/test-files.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Check backup and restore recovery with disposable data
+        run: node scripts/test-backups.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
 
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0

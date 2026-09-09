@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { applyMigrations, assertCompatibleDatabase } from "./migrations.js";
 
 export interface UserRecord {
   id: string;
@@ -61,83 +61,36 @@ export function getDatabase(): DatabaseSync {
       ? "/data/ludock.db"
       : path.resolve("data/ludock.db"));
 
+  // Validate existing data before WAL, chmod, migrations, or any other writes.
+  if (
+    dbPath !== ":memory:" &&
+    fs.existsSync(dbPath) &&
+    fs.statSync(dbPath).size > 0
+  ) {
+    const existing = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      assertCompatibleDatabase(existing);
+    } finally {
+      existing.close();
+    }
+  }
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
   }
-
-  database = new DatabaseSync(dbPath, {
+  const opened = new DatabaseSync(dbPath, {
     enableForeignKeyConstraints: true,
     timeout: 5000,
   });
-  if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
-  database.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'viewer')),
-      disabled INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT PRIMARY KEY,
-      session_id TEXT UNIQUE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      ip_address TEXT,
-      user_agent TEXT
-    ) STRICT;
-
-    CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
-    CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
-
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-      action TEXT NOT NULL,
-      target_type TEXT,
-      target_id TEXT,
-      details_json TEXT,
-      ip_address TEXT,
-      created_at INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE INDEX IF NOT EXISTS audit_log_created_at_idx
-      ON audit_log(created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS login_attempts (
-      attempt_key TEXT PRIMARY KEY,
-      failures INTEGER NOT NULL,
-      window_started_at INTEGER NOT NULL,
-      blocked_until INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-  `);
-
-  const sessionColumns = database
-    .prepare("PRAGMA table_info(sessions)")
-    .all() as Array<{ name: string }>;
-  if (!sessionColumns.some((column) => column.name === "session_id")) {
-    database.exec("ALTER TABLE sessions ADD COLUMN session_id TEXT");
-    database.exec(
-      "CREATE UNIQUE INDEX IF NOT EXISTS sessions_session_id_idx ON sessions(session_id)"
-    );
-  }
-  const legacySessions = database
-    .prepare("SELECT token_hash FROM sessions WHERE session_id IS NULL")
-    .all() as Array<{ token_hash: string }>;
-  const assignSessionId = database.prepare(
-    "UPDATE sessions SET session_id = ? WHERE token_hash = ?"
-  );
-  for (const session of legacySessions) {
-    assignSessionId.run(randomUUID(), session.token_hash);
+  try {
+    assertCompatibleDatabase(opened);
+    opened.exec("PRAGMA foreign_keys = ON");
+    applyMigrations(opened);
+    opened.exec("PRAGMA journal_mode = WAL");
+    if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
+    database = opened;
+  } catch (error) {
+    opened.close();
+    throw error;
   }
 
   return database;
@@ -146,12 +99,12 @@ export function getDatabase(): DatabaseSync {
 export function getLoginThrottle(
   attemptKey: string,
   now: number,
-  windowMs: number
+  windowMs: number,
 ): LoginThrottle {
   const row = getDatabase()
     .prepare(
       `SELECT failures, window_started_at, blocked_until
-       FROM login_attempts WHERE attempt_key = ?`
+       FROM login_attempts WHERE attempt_key = ?`,
     )
     .get(attemptKey) as
     | { failures: number; window_started_at: number; blocked_until: number }
@@ -174,7 +127,7 @@ export function recordLoginFailure(
   attemptKey: string,
   now: number,
   windowMs: number,
-  maxFailures: number
+  maxFailures: number,
 ): LoginThrottle {
   const current = getLoginThrottle(attemptKey, now, windowMs);
   const failures = current.failures + 1;
@@ -182,7 +135,7 @@ export function recordLoginFailure(
     failures >= maxFailures ? now + windowMs : current.blockedUntil;
   const existing = getDatabase()
     .prepare(
-      "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?"
+      "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?",
     )
     .get(attemptKey) as { window_started_at: number } | undefined;
   getDatabase()
@@ -193,14 +146,14 @@ export function recordLoginFailure(
        ON CONFLICT(attempt_key) DO UPDATE SET
          failures = excluded.failures,
          blocked_until = excluded.blocked_until,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at`,
     )
     .run(
       attemptKey,
       failures,
       existing?.window_started_at || now,
       blockedUntil,
-      now
+      now,
     );
 
   failuresSincePrune += 1;
@@ -218,7 +171,9 @@ export function clearLoginThrottle(attemptKey: string): void {
 }
 
 export function countUsers(): number {
-  const row = getDatabase().prepare("SELECT COUNT(*) AS count FROM users").get() as {
+  const row = getDatabase()
+    .prepare("SELECT COUNT(*) AS count FROM users")
+    .get() as {
     count: number;
   };
   return row.count;
@@ -233,7 +188,7 @@ export function createUser(user: UserRecord): void {
     .prepare(
       `INSERT INTO users
         (id, username, password_hash, role, disabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       user.id,
@@ -242,7 +197,7 @@ export function createUser(user: UserRecord): void {
       user.role,
       user.disabled ? 1 : 0,
       user.createdAt,
-      user.createdAt
+      user.createdAt,
     );
 }
 
@@ -250,7 +205,7 @@ export function findUserByUsername(username: string): UserRecord | null {
   const row = getDatabase()
     .prepare(
       `SELECT id, username, password_hash, role, disabled, created_at
-       FROM users WHERE username = ?`
+       FROM users WHERE username = ?`,
     )
     .get(username) as
     | {
@@ -279,7 +234,7 @@ export function findUserById(id: string): UserRecord | null {
   const row = getDatabase()
     .prepare(
       `SELECT id, username, password_hash, role, disabled, created_at
-       FROM users WHERE id = ?`
+       FROM users WHERE id = ?`,
     )
     .get(id) as
     | {
@@ -307,7 +262,7 @@ export function listUsers(): UserSummary[] {
   const rows = getDatabase()
     .prepare(
       `SELECT id, username, role, disabled, created_at
-       FROM users ORDER BY username COLLATE NOCASE`
+       FROM users ORDER BY username COLLATE NOCASE`,
     )
     .all() as Array<{
     id: string;
@@ -328,7 +283,7 @@ export function listUsers(): UserSummary[] {
 export function countEnabledAdmins(): number {
   const row = getDatabase()
     .prepare(
-      "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled = 0"
+      "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled = 0",
     )
     .get() as { count: number };
   return row.count;
@@ -337,11 +292,11 @@ export function countEnabledAdmins(): number {
 export function updateUserAccess(
   id: string,
   role: UserRecord["role"],
-  disabled: boolean
+  disabled: boolean,
 ): void {
   getDatabase()
     .prepare(
-      "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?"
+      "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?",
     )
     .run(role, disabled ? 1 : 0, Date.now(), id);
   if (disabled) deleteUserSessions(id);
@@ -349,21 +304,17 @@ export function updateUserAccess(
 
 export function updateUserPassword(id: string, passwordHash: string): void {
   getDatabase()
-    .prepare(
-      "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?"
-    )
+    .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
     .run(passwordHash, Date.now(), id);
   deleteUserSessions(id);
 }
 
 export function upgradeUserPasswordHash(
   id: string,
-  passwordHash: string
+  passwordHash: string,
 ): void {
   getDatabase()
-    .prepare(
-      "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?"
-    )
+    .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
     .run(passwordHash, Date.now(), id);
 }
 
@@ -384,7 +335,7 @@ export function pruneLoginAttempts(now: number, windowMs: number): void {
   getDatabase()
     .prepare(
       `DELETE FROM login_attempts
-       WHERE blocked_until <= ? AND updated_at < ?`
+       WHERE blocked_until <= ? AND updated_at < ?`,
     )
     .run(now, now - windowMs);
 }
@@ -403,7 +354,7 @@ export function createSessionRecord(input: {
   db.prepare(
     `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.tokenHash,
     input.sessionId,
@@ -412,13 +363,13 @@ export function createSessionRecord(input: {
     input.expiresAt,
     input.createdAt,
     input.ipAddress || null,
-    input.userAgent || null
+    input.userAgent || null,
   );
 }
 
 export function listUserSessions(
   userId: string,
-  currentTokenHash: string
+  currentTokenHash: string,
 ): SessionSummary[] {
   const rows = getDatabase()
     .prepare(
@@ -426,7 +377,7 @@ export function listUserSessions(
               ip_address, user_agent
        FROM sessions
        WHERE user_id = ? AND expires_at > ?
-       ORDER BY last_seen_at DESC`
+       ORDER BY last_seen_at DESC`,
     )
     .all(userId, Date.now()) as Array<{
     session_id: string | null;
@@ -440,7 +391,7 @@ export function listUserSessions(
 
   return rows
     .filter((row): row is typeof row & { session_id: string } =>
-      Boolean(row.session_id)
+      Boolean(row.session_id),
     )
     .map((row) => ({
       id: row.session_id,
@@ -455,7 +406,7 @@ export function listUserSessions(
 
 export function deleteUserSessionById(
   userId: string,
-  sessionId: string
+  sessionId: string,
 ): boolean {
   const result = getDatabase()
     .prepare("DELETE FROM sessions WHERE user_id = ? AND session_id = ?")
@@ -467,7 +418,7 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 60_000;
 
 export function findSessionUser(
   tokenHash: string,
-  now: number
+  now: number,
 ): SessionUser | null {
   const row = getDatabase()
     .prepare(
@@ -475,7 +426,7 @@ export function findSessionUser(
               sessions.expires_at, sessions.last_seen_at
        FROM sessions
        JOIN users ON users.id = sessions.user_id
-       WHERE sessions.token_hash = ?`
+       WHERE sessions.token_hash = ?`,
     )
     .get(tokenHash) as
     | {
@@ -516,7 +467,7 @@ export function deleteSessionRecord(tokenHash: string): void {
  */
 const AUDIT_LOG_MAX_ROWS = Math.max(
   1000,
-  Number(process.env.AUDIT_LOG_MAX_ROWS) || 100_000
+  Number(process.env.AUDIT_LOG_MAX_ROWS) || 100_000,
 );
 const AUDIT_PRUNE_INTERVAL = 500;
 let auditWritesSincePrune = 0;
@@ -525,7 +476,7 @@ export function pruneAuditLog(): void {
   getDatabase()
     .prepare(
       `DELETE FROM audit_log
-       WHERE id <= (SELECT MAX(id) FROM audit_log) - ?`
+       WHERE id <= (SELECT MAX(id) FROM audit_log) - ?`,
     )
     .run(AUDIT_LOG_MAX_ROWS);
 }
@@ -542,7 +493,7 @@ export function writeAuditLog(input: {
     .prepare(
       `INSERT INTO audit_log
         (user_id, action, target_type, target_id, details_json, ip_address, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.userId || null,
@@ -551,7 +502,7 @@ export function writeAuditLog(input: {
       input.targetId || null,
       input.details === undefined ? null : JSON.stringify(input.details),
       input.ipAddress || null,
-      Date.now()
+      Date.now(),
     );
 
   auditWritesSincePrune += 1;
@@ -571,7 +522,7 @@ export function listAuditLog(limit: number): AuditRecord[] {
        FROM audit_log
        LEFT JOIN users ON users.id = audit_log.user_id
        ORDER BY audit_log.id DESC
-       LIMIT ?`
+       LIMIT ?`,
     )
     .all(limit) as Array<{
     id: number;

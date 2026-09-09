@@ -20,14 +20,14 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve()))
+    server.close((error) => (error ? reject(error) : resolve())),
   );
 });
 
 describe("concurrent initial setup", () => {
   it("creates at most one administrator when setup requests race", async () => {
     const attempt = (username: string) =>
-      fetch(`${baseUrl}/api/auth/setup`, {
+      fetch(`${baseUrl}/api/v1/auth/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password: "race-test-password-1" }),

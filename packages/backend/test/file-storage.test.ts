@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import {
   FileStorageError,
   getFileRoots,
   normalizeRelativePath,
+  isSafeWritableDataMount,
+  acquireFileContainer,
+  openDownload,
+  pumpDockerDownload,
 } from "../src/file-storage.js";
+import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
+import { PassThrough, Readable } from "node:stream";
+import type Docker from "dockerode";
+import { createMountProof } from "../src/mount-proof.js";
+
+function frame(channel: number, payload: string | Buffer): Buffer {
+  const content = Buffer.from(payload);
+  const header = Buffer.alloc(8);
+  header[0] = channel;
+  header.writeUInt32BE(content.length, 4);
+  return Buffer.concat([header, content]);
+}
 
 describe("container file storage", () => {
   it("selects writable bind and volume mount destinations", () => {
@@ -28,12 +44,12 @@ describe("container file storage", () => {
             Destination: "/backups/",
             RW: true,
           },
-        ]
+        ],
       ),
       [
         { id: "root-0", name: "Minecraft data", path: "/data" },
         { id: "root-1", name: "backups", path: "/backups" },
-      ]
+      ],
     );
   });
 
@@ -52,7 +68,7 @@ describe("container file storage", () => {
             Destination: "/root/.local/share/Terraria/Worlds",
             RW: true,
           },
-        ]
+        ],
       ),
       [
         {
@@ -60,7 +76,7 @@ describe("container file storage", () => {
           name: "Terraria worlds",
           path: "/root/.local/share/Terraria/Worlds",
         },
-      ]
+      ],
     );
   });
 
@@ -109,26 +125,140 @@ describe("container file storage", () => {
             Destination: "/cache",
             RW: true,
           },
-        ]
+        ],
       ),
-      [{ id: "root-0", name: "data", path: "/data" }]
+      [{ id: "root-0", name: "data", path: "/data" }],
     );
   });
 
-  it("supports explicit roots and discards paths that normalize to root", () => {
+  it("lets explicit roots restrict actual writable mounts without granting arbitrary paths", () => {
     assert.deepEqual(
-      getFileRoots({
-        gameType: "custom",
-        image: "example/game",
-        labels: {
-          "ludock.files": "/srv/game, /srv/backups/, /srv/game, /data/..",
+      getFileRoots(
+        {
+          gameType: "custom",
+          image: "example/game",
+          labels: {
+            "ludock.files": "/srv/game, /srv/backups/, /srv/game, /data/..",
+          },
         },
-      }),
+        [
+          {
+            Type: "bind",
+            Source: "/srv/instance/game",
+            Destination: "/srv/game",
+            RW: true,
+          },
+          {
+            Type: "bind",
+            Source: "/srv/instance/backups",
+            Destination: "/srv/backups",
+            RW: true,
+          },
+        ],
+      ),
       [
         { id: "root-0", name: "game", path: "/srv/game" },
         { id: "root-1", name: "backups", path: "/srv/backups" },
-      ]
+      ],
     );
+  });
+
+  it("does not let labels open missing, read-only, socket, or sensitive roots", () => {
+    const server = {
+      gameType: "custom",
+      image: "example/game",
+      labels: {
+        "ludock.files": "/data,/etc,/secret,/socket,/arbitrary,/data/private",
+      },
+    };
+    assert.deepEqual(
+      getFileRoots(server, [
+        { Type: "bind", Source: "/srv/game", Destination: "/data", RW: true },
+        { Type: "bind", Source: "/etc", Destination: "/etc", RW: true },
+        {
+          Type: "bind",
+          Source: "/srv/read-only",
+          Destination: "/secret",
+          RW: false,
+        },
+        {
+          Type: "bind",
+          Source: "/srv/docker.sock",
+          Destination: "/socket",
+          RW: true,
+        },
+        {
+          Type: "bind",
+          Source: "/srv/private",
+          Destination: "/data/private",
+          RW: false,
+        },
+      ]),
+      [{ id: "root-0", name: "data", path: "/data" }],
+    );
+    assert.deepEqual(
+      getFileRoots({ ...server, labels: { "ludock.files": "/data/world" } }, [
+        { Type: "bind", Source: "/srv/game", Destination: "/data", RW: true },
+      ]),
+      [{ id: "root-0", name: "world", path: "/data/world" }],
+    );
+    assert.deepEqual(getFileRoots(server), []);
+  });
+
+  it("rejects ancestors of protected host directories and deployment-sensitive paths", () => {
+    for (const source of [
+      "/",
+      "/var",
+      "/var/lib",
+      "/usr",
+      "/root",
+      "/home",
+      "/var/lib/docker",
+      "/srv/docker.sock",
+    ]) {
+      assert.equal(
+        isSafeWritableDataMount({
+          Type: "bind",
+          Source: source,
+          Destination: "/data",
+          RW: true,
+        }),
+        false,
+        source,
+      );
+    }
+    const previous = process.env.LUDOCK_SENSITIVE_PATHS;
+    process.env.LUDOCK_SENSITIVE_PATHS = "/srv/private/secrets";
+    try {
+      for (const source of [
+        "/srv/private",
+        "/srv/private/secrets",
+        "/srv/private/secrets/passwords",
+      ]) {
+        assert.equal(
+          isSafeWritableDataMount({
+            Type: "bind",
+            Source: source,
+            Destination: "/data",
+            RW: true,
+          }),
+          false,
+          source,
+        );
+      }
+      assert.equal(
+        isSafeWritableDataMount({
+          Type: "bind",
+          Source: "/srv/game",
+          Destination: "/data",
+          RW: true,
+        }),
+        true,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.LUDOCK_SENSITIVE_PATHS;
+      else process.env.LUDOCK_SENSITIVE_PATHS = previous;
+    }
   });
 
   it("allows mount inference to be disabled with an empty files label", () => {
@@ -146,21 +276,398 @@ describe("container file storage", () => {
             Destination: "/data",
             RW: true,
           },
-        ]
+        ],
       ),
-      []
+      [],
     );
   });
 
   it("rejects absolute paths, traversal, and null bytes", () => {
     assert.equal(normalizeRelativePath("worlds/main"), "worlds/main");
     assert.equal(normalizeRelativePath("worlds/./main"), "worlds/main");
-    for (const invalid of ["/etc/passwd", "../etc", "worlds/../../etc", "a\0b"]) {
+    for (const invalid of [
+      "/etc/passwd",
+      "../etc",
+      "worlds/../../etc",
+      "a\0b",
+    ]) {
       assert.throws(
         () => normalizeRelativePath(invalid),
         (error) =>
-          error instanceof FileStorageError && error.code === "INVALID_PATH"
+          error instanceof FileStorageError && error.code === "INVALID_PATH",
       );
     }
+  });
+});
+
+describe("scoped file helper projections", () => {
+  const docker = getDockerInstance();
+  const originals = {
+    getContainer: docker.getContainer,
+    getVolume: docker.getVolume,
+    createContainer: docker.createContainer,
+    demux: docker.modem.demuxStream,
+  };
+  afterEach(() => {
+    docker.getContainer = originals.getContainer;
+    docker.getVolume = originals.getVolume;
+    docker.createContainer = originals.createContainer;
+    docker.modem.demuxStream = originals.demux;
+  });
+  for (const state of ["running", "exited"]) {
+    it(`projects approved mounts for a ${state} server and never inherits its sockets`, async () => {
+      let created: Docker.ContainerCreateOptions | undefined;
+      let removed = false;
+      const mounts = [
+        { Type: "bind", Source: "/srv/game", Destination: "/data", RW: true },
+        {
+          Type: "volume",
+          Name: "config-data",
+          Source: "/var/lib/docker/volumes/config-data/_data",
+          Destination: "/data/config",
+          RW: true,
+        },
+        {
+          Type: "bind",
+          Source: "/var/run/docker.sock",
+          Destination: "/data/docker.sock",
+          RW: true,
+        },
+        {
+          Type: "bind",
+          Source: "/srv/other-server",
+          Destination: "/other",
+          RW: true,
+        },
+      ];
+      docker.getContainer = (() => ({
+        inspect: async () => ({
+          Id: "physical",
+          Config: {
+            Image: "example/game",
+            Labels: { "ludock.enable": "true" },
+          },
+          Mounts: mounts,
+        }),
+      })) as unknown as typeof docker.getContainer;
+      docker.getVolume = (() => ({
+        inspect: async () => ({ Driver: "local", Options: {} }),
+      })) as unknown as typeof docker.getVolume;
+      docker.modem.demuxStream = ((_input, stdout) => {
+        _input.on("data", (chunk: Buffer) =>
+          (stdout as PassThrough).write(chunk),
+        );
+      }) as typeof docker.modem.demuxStream;
+      docker.createContainer = (async (
+        options: Docker.ContainerCreateOptions,
+      ) => {
+        if (options.Labels?.["ludock.internal"] === "mount-validator") {
+          return {
+            start: async () => {},
+            remove: async () => {},
+            logs: async () => {
+              const stream = new PassThrough();
+              setImmediate(() =>
+                stream.write(
+                  JSON.stringify({
+                    identities: { "/data": { dev: "1", ino: "2" } },
+                  }) + "\n",
+                ),
+              );
+              return stream;
+            },
+          };
+        }
+        created = options;
+        return {
+          start: async () => {},
+          remove: async () => {
+            removed = true;
+          },
+          exec: async () => ({
+            start: async () => {
+              const stream = new PassThrough();
+              setImmediate(() => stream.end('{"safe":true}'));
+              return stream;
+            },
+            inspect: async () => ({ ExitCode: 0, Running: false }),
+          }),
+        };
+      }) as unknown as typeof docker.createContainer;
+      const access = await acquireFileContainer(
+        {
+          id: "physical",
+          state,
+          image: "example/game",
+          gameType: "unknown",
+          labels: { "ludock.enable": "true" },
+        } as ManagedContainer,
+        { id: "root-0", name: "data", path: "/data" },
+        { readOnly: true },
+      );
+      assert.equal(created?.Image, "node:24-alpine");
+      assert.equal(created?.HostConfig?.VolumesFrom, undefined);
+      assert.deepEqual(
+        created?.HostConfig?.Mounts?.map((mount) => [
+          mount.Source,
+          mount.Target,
+          mount.ReadOnly,
+        ]),
+        [
+          ["/srv/game", "/data", true],
+          ["config-data", "/data/config", true],
+        ],
+      );
+      assert.deepEqual(access.blockedPaths, ["/data/docker.sock"]);
+      assert.equal(created?.HostConfig?.ReadonlyRootfs, true);
+      assert.equal(created?.HostConfig?.NetworkMode, "none");
+      assert.deepEqual(created?.HostConfig?.CapDrop, ["ALL"]);
+      assert.equal(created?.Labels?.["ludock.enable"], "false");
+      await access.cleanup();
+      assert.equal(removed, true);
+    });
+  }
+
+  it("rejects named volumes using driver plugins or host remapping options before exposing them", async () => {
+    for (const info of [
+      { Driver: "remote-plugin", Options: {} },
+      { Driver: "local", Options: { type: "none", device: "/etc", o: "bind" } },
+    ]) {
+      docker.getVolume = (() => ({
+        inspect: async () => info,
+      })) as unknown as typeof docker.getVolume;
+      await assert.rejects(
+        createMountProof([
+          {
+            Type: "volume",
+            Source: "game-volume",
+            Name: "game-volume",
+            Destination: "/data",
+            RW: true,
+          },
+        ]),
+        /could not be verified/,
+      );
+    }
+    docker.getVolume = (() => ({
+      inspect: async () => {
+        throw new Error("private-host-path");
+      },
+    })) as unknown as typeof docker.getVolume;
+    await assert.rejects(
+      createMountProof([
+        {
+          Type: "volume",
+          Source: "game-volume",
+          Destination: "/data",
+          RW: true,
+        },
+      ]),
+      (error) =>
+        error instanceof Error && !error.message.includes("private-host-path"),
+    );
+  });
+
+  it("cleans up without exposing data when the original game is replaced during helper startup", async () => {
+    let started = false;
+    let removed = false;
+    docker.getContainer = (() => ({
+      inspect: async () => {
+        if (started)
+          throw Object.assign(new Error("original removed"), {
+            statusCode: 404,
+          });
+        return {
+          Id: "physical",
+          Name: "/game",
+          Config: {
+            Image: "example/game",
+            Labels: { "ludock.enable": "true" },
+          },
+          Mounts: [
+            {
+              Type: "volume",
+              Name: "game-data",
+              Source: "game-data",
+              Destination: "/data",
+              RW: true,
+            },
+          ],
+        };
+      },
+    })) as unknown as typeof docker.getContainer;
+    docker.getVolume = (() => ({
+      inspect: async () => ({ Driver: "local", Options: {} }),
+    })) as unknown as typeof docker.getVolume;
+    docker.modem.demuxStream = ((input, stdout) =>
+      input.on("data", (chunk: Buffer) =>
+        (stdout as PassThrough).write(chunk),
+      )) as typeof docker.modem.demuxStream;
+    docker.createContainer = (async () => ({
+      start: async () => {
+        started = true;
+      },
+      remove: async () => {
+        removed = true;
+      },
+      exec: async () => ({
+        start: async () => {
+          const stream = new PassThrough();
+          setImmediate(() => stream.end('{"safe":true}'));
+          return stream;
+        },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    })) as unknown as typeof docker.createContainer;
+    await assert.rejects(
+      acquireFileContainer(
+        {
+          id: "physical",
+          image: "example/game",
+          gameType: "unknown",
+          labels: { "ludock.enable": "true" },
+        } as ManagedContainer,
+        { id: "root-0", name: "data", path: "/data" },
+      ),
+      (error) =>
+        error instanceof FileStorageError &&
+        error.code === "FILE_TARGET_CHANGED",
+    );
+    assert.equal(removed, true);
+  });
+
+  it("keeps download completion pending until the helper has been removed", async () => {
+    let finishRemoval!: () => void;
+    let removalStarted!: () => void;
+    const removal = new Promise<void>((resolve) => {
+      finishRemoval = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      removalStarted = resolve;
+    });
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: "physical",
+        Config: { Image: "example/game", Labels: { "ludock.enable": "true" } },
+        Mounts: [
+          {
+            Type: "volume",
+            Name: "game-data",
+            Source: "game-data",
+            Destination: "/data",
+            RW: true,
+          },
+        ],
+      }),
+    })) as unknown as typeof docker.getContainer;
+    docker.getVolume = (() => ({
+      inspect: async () => ({ Driver: "local", Options: {} }),
+    })) as unknown as typeof docker.getVolume;
+    docker.modem.demuxStream = ((input, stdout) =>
+      input.on("data", (chunk: Buffer) =>
+        (stdout as PassThrough).write(chunk),
+      )) as typeof docker.modem.demuxStream;
+    docker.createContainer = (async () => ({
+      start: async () => {},
+      remove: async () => {
+        removalStarted();
+        await removal;
+      },
+      exec: async (options: Docker.ExecCreateOptions) => ({
+        start: async () => {
+          const request = JSON.parse(options.Cmd?.at(-1) || "{}") as {
+            operation: string;
+          };
+          const stream = new PassThrough();
+          setImmediate(() =>
+            stream.end(
+              request.operation === "download"
+                ? frame(1, "contents")
+                : request.operation === "stat"
+                  ? '{"type":"file","size":8}'
+                  : '{"safe":true}',
+            ),
+          );
+          return stream;
+        },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    })) as unknown as typeof docker.createContainer;
+    const download = await openDownload(
+      {
+        id: "physical",
+        image: "example/game",
+        gameType: "unknown",
+        labels: { "ludock.enable": "true" },
+        fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+      } as ManagedContainer,
+      "root-0",
+      "file",
+    );
+    let completed = false;
+    void download.completed.then(() => {
+      completed = true;
+    });
+    let contents = "";
+    for await (const chunk of download.stream as Readable)
+      contents += (chunk as Buffer).toString();
+    await started;
+    assert.equal(contents, "contents");
+    assert.equal(completed, false);
+    finishRemoval();
+    await download.completed;
+    assert.equal(completed, true);
+  });
+});
+
+describe("bounded Docker download transport", () => {
+  it("decodes split frame headers and bodies while dropping stderr", async () => {
+    const data = Buffer.concat([
+      frame(1, "hello"),
+      frame(2, "private stderr"),
+      frame(1, " world"),
+    ]);
+    const output = new PassThrough();
+    let contents = "";
+    const collected = (async () => {
+      for await (const value of output)
+        contents += (value as Buffer).toString();
+    })();
+    await pumpDockerDownload(
+      Readable.from([...data].map((value) => Buffer.from([value]))),
+      output,
+    );
+    output.end();
+    await collected;
+    assert.equal(contents, "hello world");
+    await assert.rejects(
+      pumpDockerDownload(
+        Readable.from([data.subarray(0, data.length - 1)]),
+        new PassThrough(),
+      ),
+      /INCOMPLETE_DOWNLOAD_STREAM/,
+    );
+  });
+
+  it("waits for a slow consumer instead of draining the entire Docker source into memory", async () => {
+    let emitted = 0;
+    const source = Readable.from(
+      (async function* () {
+        for (let index = 0; index < 1000; index++) {
+          emitted++;
+          yield frame(1, Buffer.alloc(1024));
+        }
+      })(),
+    );
+    const output = new PassThrough({ highWaterMark: 16 });
+    output.on("error", () => {});
+    const pumping = pumpDockerDownload(source, output);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(
+      emitted < 10,
+      `Only a bounded number of frames may be prefetched; received ${emitted}`,
+    );
+    output.destroy(new Error("Client closed"));
+    await assert.rejects(pumping, /Client closed/);
   });
 });

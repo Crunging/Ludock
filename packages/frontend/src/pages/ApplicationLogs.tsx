@@ -33,7 +33,7 @@ export default function ApplicationLogs() {
         ? `&generation=${encodeURIComponent(generation.current)}`
         : "";
       const response = await apiFetch(
-        `/api/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`
+        `/api/v1/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`,
       );
       const body = (await response.json().catch(() => ({}))) as {
         generation?: string;
@@ -57,7 +57,7 @@ export default function ApplicationLogs() {
           (initial || processRestarted
             ? body.entries!
             : [...current, ...body.entries!]
-          ).slice(-MAX_VISIBLE_ENTRIES)
+          ).slice(-MAX_VISIBLE_ENTRIES),
         );
       }
       setError(null);
@@ -65,7 +65,7 @@ export default function ApplicationLogs() {
       setError(
         reason instanceof Error
           ? reason.message
-          : "Failed to load application logs"
+          : "Failed to load application logs",
       );
     } finally {
       requestInFlight.current = false;
@@ -136,7 +136,9 @@ export default function ApplicationLogs() {
               {new Date(entry.timestamp).toLocaleString()}
             </time>
             <span className="application-log__level">{entry.level}</span>
-            <span className="application-log__component">{entry.component}</span>
+            <span className="application-log__component">
+              {entry.component}
+            </span>
             <pre>
               {entry.message}
               {entry.context ? ` ${JSON.stringify(entry.context)}` : ""}

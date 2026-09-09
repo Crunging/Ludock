@@ -19,7 +19,7 @@ export default function Account() {
   const [busy, setBusy] = useState(false);
 
   const loadSessions = useCallback(async () => {
-    const response = await apiFetch("/api/account/sessions");
+    const response = await apiFetch("/api/v1/account/sessions");
     const body = (await response.json().catch(() => ({}))) as {
       sessions?: SessionSummary[];
       error?: string;
@@ -32,7 +32,9 @@ export default function Account() {
 
   useEffect(() => {
     loadSessions().catch((reason: unknown) =>
-      setError(reason instanceof Error ? reason.message : "Failed to load sessions")
+      setError(
+        reason instanceof Error ? reason.message : "Failed to load sessions",
+      ),
     );
   }, [loadSessions]);
 
@@ -46,7 +48,7 @@ export default function Account() {
     }
     setBusy(true);
     try {
-      const response = await apiFetch("/api/account/change-password", {
+      const response = await apiFetch("/api/v1/account/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ currentPassword, newPassword }),
@@ -54,14 +56,17 @@ export default function Account() {
       const body = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
-      if (!response.ok) throw new Error(body.error || "Failed to change password");
+      if (!response.ok)
+        throw new Error(body.error || "Failed to change password");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
       setMessage("Password changed. Other sessions have been signed out.");
       await loadSessions();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Failed to change password");
+      setError(
+        reason instanceof Error ? reason.message : "Failed to change password",
+      );
     } finally {
       setBusy(false);
     }
@@ -69,10 +74,12 @@ export default function Account() {
 
   const revokeSession = async (session: SessionSummary) => {
     setError(null);
-    const response = await apiFetch(`/api/account/sessions/${session.id}`, {
+    const response = await apiFetch(`/api/v1/account/sessions/${session.id}`, {
       method: "DELETE",
     });
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
     if (!response.ok) {
       setError(body.error || "Failed to revoke session");
       return;
@@ -146,7 +153,9 @@ export default function Account() {
             <article className="settings-card session-row" key={session.id}>
               <div>
                 <strong>
-                  {session.current ? "This device" : session.ipAddress || "Unknown address"}
+                  {session.current
+                    ? "This device"
+                    : session.ipAddress || "Unknown address"}
                 </strong>
                 <span>{session.userAgent || "Unknown browser"}</span>
                 <span>

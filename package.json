@@ -1,15 +1,15 @@
 {
   "name": "ludock",
   "private": true,
-  "version": "0.1.2",
+  "version": "2.0.0",
   "packageManager": "pnpm@10.28.2",
   "description": "A self-hosted control panel for existing Docker game servers",
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c cyan,magenta \"pnpm --filter @ludock/backend dev\" \"pnpm --filter @ludock/frontend dev\"",
-    "build": "pnpm --filter @ludock/backend build && pnpm --filter @ludock/frontend build",
-    "typecheck": "pnpm --filter @ludock/backend exec tsc --noEmit && pnpm --filter @ludock/frontend exec tsc -b",
+    "dev": "pnpm --filter @ludock/shared build && concurrently -n backend,frontend -c cyan,magenta \"pnpm --filter @ludock/backend dev\" \"pnpm --filter @ludock/frontend dev\"",
+    "build": "pnpm --filter @ludock/shared build && pnpm --filter @ludock/backend build && pnpm --filter @ludock/frontend build",
+    "typecheck": "pnpm --filter @ludock/shared build && pnpm --filter @ludock/backend exec tsc --noEmit && pnpm --filter @ludock/frontend exec tsc -b",
     "lint": "pnpm --filter @ludock/backend lint && pnpm --filter @ludock/frontend lint",
-    "test": "pnpm --filter @ludock/backend test",
+    "test": "pnpm --filter @ludock/shared build && pnpm --filter @ludock/backend test && pnpm --filter @ludock/frontend test",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "backend:dev": "pnpm --filter @ludock/backend dev",
     "frontend:dev": "pnpm --filter @ludock/frontend dev"

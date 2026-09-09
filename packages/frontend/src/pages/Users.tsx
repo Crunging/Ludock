@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { apiFetch } from "../api";
+import ServerGrants from "../components/ServerGrants";
 import { useAuth, type UserRole } from "../auth-context";
 
 interface UserSummary {
@@ -12,18 +13,19 @@ interface UserSummary {
 
 export default function Users() {
   const { user: currentUser } = useAuth();
+  const [editingGrants, setEditingGrants] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<UserSummary["role"]>("operator");
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>(
-    {}
+    {},
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadUsers = useCallback(async () => {
-    const response = await apiFetch("/api/users");
+    const response = await apiFetch("/api/v1/users");
     const body = (await response.json().catch(() => ({}))) as {
       users?: UserSummary[];
       error?: string;
@@ -36,7 +38,9 @@ export default function Users() {
 
   useEffect(() => {
     loadUsers().catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : "Failed to load users");
+      setError(
+        reason instanceof Error ? reason.message : "Failed to load users",
+      );
     });
   }, [loadUsers]);
 
@@ -45,7 +49,7 @@ export default function Users() {
     setBusy(true);
     setError(null);
     try {
-      const response = await apiFetch("/api/users", {
+      const response = await apiFetch("/api/v1/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password, role }),
@@ -58,7 +62,9 @@ export default function Users() {
       setPassword("");
       await loadUsers();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Failed to create user");
+      setError(
+        reason instanceof Error ? reason.message : "Failed to create user",
+      );
     } finally {
       setBusy(false);
     }
@@ -66,11 +72,11 @@ export default function Users() {
 
   const updateAccess = async (
     user: UserSummary,
-    changes: Partial<Pick<UserSummary, "role" | "disabled">>
+    changes: Partial<Pick<UserSummary, "role" | "disabled">>,
   ) => {
     setError(null);
     try {
-      const response = await apiFetch(`/api/users/${user.id}`, {
+      const response = await apiFetch(`/api/v1/users/${user.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -84,7 +90,9 @@ export default function Users() {
       if (!response.ok) throw new Error(body.error || "Failed to update user");
       await loadUsers();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Failed to update user");
+      setError(
+        reason instanceof Error ? reason.message : "Failed to update user",
+      );
     }
   };
 
@@ -97,19 +105,23 @@ export default function Users() {
 
     setError(null);
     try {
-      const response = await apiFetch(`/api/users/${user.id}/reset-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: nextPassword }),
-      });
+      const response = await apiFetch(
+        `/api/v1/users/${user.id}/reset-password`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: nextPassword }),
+        },
+      );
       const body = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
-      if (!response.ok) throw new Error(body.error || "Failed to reset password");
+      if (!response.ok)
+        throw new Error(body.error || "Failed to reset password");
       setResetPasswords((current) => ({ ...current, [user.id]: "" }));
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : "Failed to reset password"
+        reason instanceof Error ? reason.message : "Failed to reset password",
       );
     }
   };
@@ -117,16 +129,18 @@ export default function Users() {
   const removeUser = async (user: UserSummary) => {
     if (
       !window.confirm(
-        `Delete ${user.username}? This revokes their sessions and cannot be undone.`
+        `Delete ${user.username}? This revokes their sessions and cannot be undone.`,
       )
     ) {
       return;
     }
     setError(null);
-    const response = await apiFetch(`/api/users/${user.id}`, {
+    const response = await apiFetch(`/api/v1/users/${user.id}`, {
       method: "DELETE",
     });
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
     if (!response.ok) {
       setError(body.error || "Failed to delete user");
       return;
@@ -139,7 +153,8 @@ export default function Users() {
       <div className="page__header">
         <h1 className="page__title">Users</h1>
         <p className="page__subtitle">
-          Manage accounts and permissions for this panel.
+          Create accounts, then share specific servers and actions. New
+          operators and viewers have no server access.
         </p>
       </div>
 
@@ -223,12 +238,24 @@ export default function Users() {
             </label>
             <button
               className="secondary-btn"
-              onClick={() =>
-                updateAccess(user, { disabled: !user.disabled })
-              }
+              onClick={() => updateAccess(user, { disabled: !user.disabled })}
             >
               {user.disabled ? "Enable" : "Disable"}
             </button>
+            {user.role !== "admin" && (
+              <button
+                className="secondary-btn"
+                onClick={() =>
+                  setEditingGrants(editingGrants === user.id ? null : user.id)
+                }
+                aria-expanded={editingGrants === user.id}
+              >
+                Server access
+              </button>
+            )}
+            {user.role === "admin" && (
+              <span className="muted user-access-summary">All servers</span>
+            )}
             <div className="password-reset">
               <input
                 type="password"
@@ -265,6 +292,15 @@ export default function Users() {
             >
               Delete
             </button>
+            {editingGrants === user.id && user.role !== "admin" && (
+              <ServerGrants
+                key={`${user.id}-${user.role}`}
+                userId={user.id}
+                username={user.username}
+                role={user.role}
+                onClose={() => setEditingGrants(null)}
+              />
+            )}
           </section>
         ))}
       </div>

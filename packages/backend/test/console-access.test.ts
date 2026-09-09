@@ -1,0 +1,325 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
+import { PassThrough } from "node:stream";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
+import type { WebSocket } from "ws";
+import { getDockerInstance } from "../src/docker.js";
+import { handleConsoleConnection } from "../src/console.js";
+import { handleContainerLogsConnection } from "../src/container-logs.js";
+import {
+  closeDatabase,
+  createUser,
+  updateUserAccess,
+  type SessionUser,
+} from "../src/database.js";
+import { listLogicalServers } from "../src/identity.js";
+import { setServerGrant, setUserServerGrants } from "../src/authorization.js";
+import { refreshServers } from "../src/servers.js";
+import { acquireLocks } from "../src/operation-locks.js";
+import {
+  ConsoleOutputRedactor,
+  observationSecrets,
+} from "../src/console-redaction.js";
+
+process.env.LUDOCK_DB_PATH = ":memory:";
+const docker = getDockerInstance();
+const originalGetContainer = docker.getContainer.bind(docker);
+const originalListContainers = docker.listContainers.bind(docker);
+const administrator: SessionUser = {
+  id: "api-token",
+  username: "api-token",
+  role: "admin",
+};
+const operator: SessionUser = {
+  id: "operator",
+  username: "friend",
+  role: "operator",
+};
+let logStream: PassThrough;
+let logCalls = 0;
+let attachCalls = 0;
+let containerId = "physical-server";
+let serverId: string;
+const sockets: FakeWebSocket[] = [];
+
+class FakeWebSocket extends EventEmitter {
+  readonly OPEN = 1;
+  readyState = this.OPEN;
+  sent: Array<{ type: string; data: string }> = [];
+  closeCode: number | null = null;
+  constructor() {
+    super();
+    sockets.push(this);
+  }
+  send(raw: string): void {
+    this.sent.push(JSON.parse(raw) as { type: string; data: string });
+  }
+  close(code: number): void {
+    this.closeCode = code;
+    this.readyState = 3;
+    this.emit("close", code);
+  }
+}
+
+beforeEach(async () => {
+  closeDatabase();
+  createUser({
+    ...operator,
+    passwordHash: "fixture",
+    disabled: false,
+    createdAt: 1,
+  });
+  logStream = new PassThrough();
+  logCalls = 0;
+  attachCalls = 0;
+  containerId = "physical-server";
+  docker.listContainers = (async () => [
+    {
+      Id: containerId,
+      Image: "fixture:latest",
+      Labels: { "ludock.enable": "true" },
+    },
+  ]) as unknown as typeof docker.listContainers;
+  docker.getContainer = (() => ({
+    inspect: async () => ({
+      Id: containerId,
+      Name: "/game",
+      Config: {
+        Image: "fixture:latest",
+        Labels: { "ludock.enable": "true", "ludock.console": "stdin-console" },
+        OpenStdin: true,
+        StdinOnce: false,
+        Env: [],
+      },
+      State: { Status: "running" },
+      NetworkSettings: { Ports: {} },
+      Created: "2026-09-01T00:00:00Z",
+      Mounts: [],
+    }),
+    logs: async () => {
+      logCalls += 1;
+      return logStream;
+    },
+    attach: async () => {
+      attachCalls += 1;
+      const stream = new PassThrough();
+      stream.resume();
+      return stream;
+    },
+  })) as unknown as typeof docker.getContainer;
+  await refreshServers();
+  serverId = listLogicalServers()[0].id;
+});
+afterEach(() => {
+  sockets.splice(0).forEach((socket) => socket.close(1000));
+  docker.getContainer = originalGetContainer;
+  docker.listContainers = originalListContainers;
+});
+after(() => closeDatabase());
+
+describe("WebSocket server capability boundaries", () => {
+  it("rejects console and log endpoints for a lifecycle-only friend before Docker attachment", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "server.start", "server.stop"],
+      administrator,
+    );
+    const console = new FakeWebSocket();
+    await handleConsoleConnection(
+      console as unknown as WebSocket,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    const logs = new FakeWebSocket();
+    await handleContainerLogsConnection(
+      logs as unknown as WebSocket,
+      request("logs"),
+      auth(),
+    );
+    assert.equal(console.closeCode, 1008);
+    assert.equal(logs.closeCode, 1008);
+    assert.equal(logCalls, 0);
+    assert.equal(attachCalls, 0);
+  });
+
+  it("lets a command-only grant execute without attaching historical or live logs", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws as unknown as WebSocket,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    assert.equal(ws.closeCode, null);
+    assert.equal(logCalls, 0);
+    ws.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    await settle();
+    assert.equal(attachCalls, 1);
+    assert.ok(ws.sent.some((message) => message.data.includes("Command sent")));
+  });
+
+  it("closes and destroys the log stream before sending any frame after grants are revoked", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "logs.read"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleContainerLogsConnection(
+      ws as unknown as WebSocket,
+      request("logs"),
+      auth(),
+    );
+    setUserServerGrants(operator.id, [], administrator);
+    logStream.write("must not reach revoked user");
+    assert.equal(ws.closeCode, 1008);
+    assert.equal(logStream.destroyed, true);
+    assert.equal(
+      ws.sent.some((message) => message.data.includes("must not reach")),
+      false,
+    );
+  });
+
+  it("blocks the next console command immediately after account disablement", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws as unknown as WebSocket,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    updateUserAccess(operator.id, "operator", true);
+    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    await settle();
+    assert.equal(ws.closeCode, 1008);
+    assert.equal(attachCalls, 0);
+  });
+
+  it("rejects commands while a conflicting operation owns the server lock", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws as unknown as WebSocket,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    const release = acquireLocks([`server:${serverId}`]);
+    try {
+      ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+      await settle();
+      assert.equal(attachCalls, 0);
+      assert.ok(
+        ws.sent.some((message) =>
+          message.data.includes("conflicting operation"),
+        ),
+      );
+    } finally {
+      release();
+    }
+  });
+
+  it("closes a stream when Docker recreation replaces its original binding", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws as unknown as WebSocket,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    containerId = "new-container";
+    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    await settle();
+    assert.equal(ws.closeCode, 1008);
+    assert.equal(attachCalls, 0);
+  });
+
+  it("does not grant administrator shell access through an operator's console grant", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws as unknown as WebSocket,
+      request("shell"),
+      auth(),
+      "shell",
+    );
+    assert.equal(ws.closeCode, 1008);
+  });
+});
+
+describe("console credential redaction", () => {
+  it("redacts known secrets split across frame boundaries and custom password variables", () => {
+    const values: string[] = [];
+    const redactor = new ConsoleOutputRedactor(["secret-value"], (value) =>
+      values.push(value),
+    );
+    redactor.push("prefix sec");
+    redactor.push("ret-va");
+    redactor.push("lue suffix");
+    redactor.end();
+    assert.equal(values.join(""), "prefix [redacted] suffix");
+    const secrets = observationSecrets({
+      containerId: "id",
+      name: "game",
+      displayName: "game",
+      gameType: "unknown",
+      mounts: [],
+      gameConfiguration: {
+        "ludock.console.password-env": "CUSTOM_KEY",
+        "env:CUSTOM_KEY": "do-not-leak",
+        "env:API_TOKEN": "another-secret",
+        "env:RCON_PORT": "25575",
+      },
+    });
+    assert.deepEqual(
+      new Set(secrets),
+      new Set(["do-not-leak", "another-secret"]),
+    );
+  });
+});
+
+function auth() {
+  return { user: operator, validate: () => operator };
+}
+function request(endpoint: string): IncomingMessage {
+  return {
+    url: `/ws/v1/${endpoint}/${serverId}`,
+    headers: { host: "localhost" },
+    socket: { remoteAddress: "127.0.0.1" },
+  } as unknown as IncomingMessage;
+}
+async function settle(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}

@@ -9,6 +9,10 @@ import express, {
 } from "express";
 import { z } from "zod";
 import { router } from "./routes.js";
+import { advancedRouter } from "./advanced-routes.js";
+import { AppError } from "./errors.js";
+import { AuthorizationError } from "./authorization.js";
+import { ServerBindingError } from "./identity.js";
 import {
   AuthError,
   authMiddleware,
@@ -100,7 +104,7 @@ function publicUser(user: UserRecord | null) {
 
 function loginThrottleKey(
   scope: "account" | "password-change",
-  value: string
+  value: string,
 ): string {
   return createHash("sha256").update(`${scope}:${value}`).digest("hex");
 }
@@ -128,24 +132,24 @@ export function createApp(options: CreateAppOptions = {}): Express {
     res.setHeader("Origin-Agent-Cluster", "?1");
     res.setHeader(
       "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=(), payment=()"
+      "camera=(), microphone=(), geolocation=(), payment=()",
     );
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
-    if (req.path.startsWith("/api/")) {
+    if (req.path.startsWith("/api/v1/")) {
       res.setHeader("Cache-Control", "no-store");
     }
     if (isExternalHttpsRequest(req)) {
       res.setHeader(
         "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains"
+        "max-age=31536000; includeSubDomains",
       );
     }
     const startedAt = performance.now();
     res.once("finish", () => {
-      if (req.path === "/api/application-logs") return;
+      if (req.path === "/api/v1/application-logs") return;
       logger.debug("HTTP request completed", {
         requestId,
         method: req.method,
@@ -173,7 +177,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     next();
   });
   app.use(express.json({ limit: "64kb" }));
-  app.get("/api/auth/status", (req, res) => {
+  app.get("/api/v1/auth/status", (req, res) => {
     const session = getRequestSession(req);
     const setup = setupWindow.getState();
     res.json({
@@ -185,12 +189,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
       user: session?.user || null,
     });
   });
-  app.post("/api/auth/setup", async (req, res) => {
+  app.post("/api/v1/auth/setup", async (req, res) => {
     const parsed = setupSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
-        error:
-          `Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
+        error: `Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
       });
       return;
     }
@@ -201,7 +204,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
           ...parsed.data,
           ipAddress: req.ip,
         },
-        setupWindow
+        setupWindow,
       );
       const session = createSession(user, req);
       setSessionCookie(res, req, session.token);
@@ -219,7 +222,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       throw error;
     }
   });
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/v1/auth/login", async (req, res) => {
     const now = Date.now();
     const requestedUsername = (
       stringProperty(req.body as unknown, "username") || ""
@@ -246,7 +249,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     const user = await authenticateUser(
       parsed.data.username,
-      parsed.data.password
+      parsed.data.password,
     );
     if (!user) {
       if (accountKey) {
@@ -278,7 +281,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
     res.json({ user });
   });
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/v1/auth/logout", (req, res) => {
     const session = getRequestSession(req);
     deleteRequestSession(req);
     clearSessionCookie(res);
@@ -319,18 +322,18 @@ export function createApp(options: CreateAppOptions = {}): Express {
     return healthProbe;
   };
 
-  app.get("/api/health", async (_req, res) => {
+  app.get("/api/v1/health", async (_req, res) => {
     if (await probeHealth()) {
       res.json({ status: "ok", docker: "connected", database: "connected" });
       return;
     }
     res.status(503).json({ status: "degraded" });
   });
-  app.use("/api", authMiddleware);
-  app.get("/api/auth/me", (_req, res) => {
+  app.use("/api/v1", authMiddleware);
+  app.get("/api/v1/auth/me", (_req, res) => {
     res.json({ user: res.locals.user as SessionUser });
   });
-  app.post("/api/account/change-password", async (req, res) => {
+  app.post("/api/v1/account/change-password", async (req, res) => {
     const parsed = changePasswordSchema.safeParse(req.body);
     const actor = res.locals.user as SessionUser;
     if (!parsed.success) {
@@ -344,7 +347,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
     // forced into a permanent account takeover.
     const now = Date.now();
     const throttleKey = loginThrottleKey("password-change", actor.id);
-    if (getLoginThrottle(throttleKey, now, LOGIN_WINDOW_MS).blockedUntil > now) {
+    if (
+      getLoginThrottle(throttleKey, now, LOGIN_WINDOW_MS).blockedUntil > now
+    ) {
       res.status(429).json({ error: "Too many attempts. Try again later." });
       return;
     }
@@ -356,7 +361,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     ) {
       recordLoginFailure(throttleKey, now, LOGIN_WINDOW_MS, 5);
       writeAuditLog({
-        userId: actor.id,
+        userId: actor.id === "api-token" ? undefined : actor.id,
         action: "auth.password.change-failed",
         targetType: "user",
         targetId: actor.id,
@@ -372,7 +377,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const session = createSession(actor, req);
     setSessionCookie(res, req, session.token);
     writeAuditLog({
-      userId: actor.id,
+      userId: actor.id === "api-token" ? undefined : actor.id,
       action: "auth.password.changed",
       targetType: "user",
       targetId: actor.id,
@@ -380,14 +385,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
     res.json({ ok: true });
   });
-  app.get("/api/account/sessions", (_req, res) => {
+  app.get("/api/v1/account/sessions", (_req, res) => {
     const actor = res.locals.user as SessionUser;
     const tokenHash = res.locals.sessionTokenHash as string | undefined;
     res.json({
       sessions: tokenHash ? listUserSessions(actor.id, tokenHash) : [],
     });
   });
-  app.delete("/api/account/sessions/:id", (req, res) => {
+  app.delete("/api/v1/account/sessions/:id", (req, res) => {
     const actor = res.locals.user as SessionUser;
     const sessionId = req.params.id;
     const removed = deleteUserSessionById(actor.id, sessionId);
@@ -396,7 +401,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       return;
     }
     writeAuditLog({
-      userId: actor.id,
+      userId: actor.id === "api-token" ? undefined : actor.id,
       action: "auth.session.revoked",
       targetType: "session",
       targetId: sessionId,
@@ -404,10 +409,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
     res.json({ ok: true });
   });
-  app.get("/api/users", requireRole("admin"), (_req, res) => {
+  app.get("/api/v1/users", requireRole("admin"), (_req, res) => {
     res.json({ users: listUsers() });
   });
-  app.post("/api/users", requireRole("admin"), async (req, res) => {
+  app.post("/api/v1/users", requireRole("admin"), async (req, res) => {
     const parsed = newUserSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid user details" });
@@ -435,7 +440,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     const actor = res.locals.user as SessionUser;
     writeAuditLog({
-      userId: actor.id,
+      userId: actor.id === "api-token" ? undefined : actor.id,
       action: "user.created",
       targetType: "user",
       targetId: id,
@@ -444,7 +449,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
     res.status(201).json({ user: publicUser(findUserById(id)) });
   });
-  app.patch("/api/users/:id", requireRole("admin"), (req, res) => {
+  app.patch("/api/v1/users/:id", requireRole("admin"), (req, res) => {
     const parsed = accessSchema.safeParse(req.body);
     const target = findUserById(req.params.id as string);
     if (!parsed.success || !target) {
@@ -466,7 +471,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     updateUserAccess(target.id, parsed.data.role, parsed.data.disabled);
     const actor = res.locals.user as SessionUser;
     writeAuditLog({
-      userId: actor.id,
+      userId: actor.id === "api-token" ? undefined : actor.id,
       action: "user.access.updated",
       targetType: "user",
       targetId: target.id,
@@ -476,7 +481,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     res.json({ user: publicUser(findUserById(target.id)) });
   });
   app.post(
-    "/api/users/:id/reset-password",
+    "/api/v1/users/:id/reset-password",
     requireRole("admin"),
     async (req, res) => {
       const parsed = passwordSchema.safeParse(req.body);
@@ -493,16 +498,16 @@ export function createApp(options: CreateAppOptions = {}): Express {
       updateUserPassword(target.id, await hashPassword(parsed.data.password));
       const actor = res.locals.user as SessionUser;
       writeAuditLog({
-        userId: actor.id,
+        userId: actor.id === "api-token" ? undefined : actor.id,
         action: "user.password.reset",
         targetType: "user",
         targetId: target.id,
         ipAddress: req.ip,
       });
       res.json({ ok: true });
-    }
+    },
   );
-  app.delete("/api/users/:id", requireRole("admin"), (req, res) => {
+  app.delete("/api/v1/users/:id", requireRole("admin"), (req, res) => {
     const target = findUserById(req.params.id as string);
     const actor = res.locals.user as SessionUser;
     if (!target) {
@@ -524,7 +529,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     deleteUser(target.id);
     writeAuditLog({
-      userId: actor.id,
+      userId: actor.id === "api-token" ? undefined : actor.id,
       action: "user.deleted",
       targetType: "user",
       targetId: target.id,
@@ -533,22 +538,23 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
     res.json({ ok: true });
   });
-  app.get("/api/audit", requireRole("admin"), (req, res) => {
+  app.get("/api/v1/audit", requireRole("admin"), (req, res) => {
     const requested = Number(req.query.limit || 100);
     const limit = Number.isFinite(requested)
       ? Math.max(1, Math.min(250, Math.trunc(requested)))
       : 100;
     res.json({ entries: listAuditLog(limit) });
   });
-  app.get("/api/application-logs", requireRole("admin"), (req, res) => {
+  app.get("/api/v1/application-logs", requireRole("admin"), (req, res) => {
     const requestedLimit = Number(req.query.limit || 250);
     const requestedAfter = Number(req.query.after || 0);
     const limit = Number.isFinite(requestedLimit)
       ? Math.max(1, Math.min(1_000, Math.trunc(requestedLimit)))
       : 250;
-    const after = Number.isSafeInteger(requestedAfter) && requestedAfter >= 0
-      ? requestedAfter
-      : 0;
+    const after =
+      Number.isSafeInteger(requestedAfter) && requestedAfter >= 0
+        ? requestedAfter
+        : 0;
     const generation =
       typeof req.query.generation === "string"
         ? req.query.generation.slice(0, 64)
@@ -556,6 +562,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     res.json(listApplicationLogs({ after, limit, generation }));
   });
   app.use(router);
+  app.use(advancedRouter);
   app.use("/api/{*splat}", (_req, res) => {
     res.status(404).json({ error: "API endpoint not found" });
   });
@@ -575,37 +582,46 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // Registered last so it also catches failures from the static and SPA
   // handlers, which would otherwise fall through to Express' default handler
   // and leak a stack trace.
-  app.use(
-    (
-      error: unknown,
-      req: Request,
-      res: Response,
-      next: NextFunction
-    ) => {
-      const requestId =
-        typeof res.locals.requestId === "string"
-          ? res.locals.requestId
-          : "unknown";
-      logger.error("Unhandled request error", {
-        requestId,
-        method: req.method,
-        path: req.path,
-        error: errorMessage(error),
-      });
-      if (res.headersSent) {
-        next(error);
-        return;
-      }
-      if (req.path.startsWith("/api/")) {
-        res.status(500).json({
-          error: "Internal server error",
-          requestId,
-        });
-        return;
-      }
-      res.status(500).type("text/plain").send("Internal server error");
+  app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (error instanceof z.ZodError) {
+      res
+        .status(400)
+        .json({ error: "Invalid request", code: "INVALID_REQUEST" });
+      return;
     }
-  );
+    if (
+      error instanceof AppError ||
+      error instanceof AuthorizationError ||
+      error instanceof ServerBindingError
+    ) {
+      res
+        .status(error.statusCode)
+        .json({ error: error.message, code: error.code });
+      return;
+    }
+    const requestId =
+      typeof res.locals.requestId === "string"
+        ? res.locals.requestId
+        : "unknown";
+    logger.error("Unhandled request error", {
+      requestId,
+      method: req.method,
+      path: req.path,
+      error: errorMessage(error),
+    });
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    if (req.path.startsWith("/api/v1/")) {
+      res.status(500).json({
+        error: "Internal server error",
+        requestId,
+      });
+      return;
+    }
+    res.status(500).type("text/plain").send("Internal server error");
+  });
 
   return app;
 }

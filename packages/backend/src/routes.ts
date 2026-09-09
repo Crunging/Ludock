@@ -1,12 +1,15 @@
 import { Router } from "express";
-import type { Request, Response, Router as RouterType } from "express";
+import type {
+  Request,
+  Response,
+  RequestHandler,
+  Router as RouterType,
+} from "express";
 import { z } from "zod";
-import { requireRole } from "./auth.js";
+import { getRequestSession } from "./auth.js";
 import { writeAuditLog, type SessionUser } from "./database.js";
 import {
-  getManagedContainer,
   getContainerStats,
-  listManagedContainers,
   restartContainer,
   startContainer,
   stopContainer,
@@ -21,9 +24,34 @@ import {
   uploadFile,
 } from "./file-storage.js";
 import { createLogger, errorMessage } from "./logger.js";
+import {
+  listServers,
+  getServer,
+  resolveAuthorizedServer,
+  type ServerContext,
+} from "./servers.js";
+import { acquireLocks } from "./operation-locks.js";
+import { assertServerCapability } from "./authorization.js";
+import { AppError } from "./errors.js";
+import type { ServerCapability } from "@ludock/shared";
+import { setIntentionalStop, suppressMonitoring } from "./monitoring.js";
 
 export const router: RouterType = Router();
 const logger = createLogger("api");
+function serverHandler(
+  action: (req: Request, res: Response) => Promise<void>,
+): RequestHandler {
+  return async (req, res) => {
+    try {
+      await action(req, res);
+    } finally {
+      (res.locals.finishServerOperation as (() => void) | undefined)?.();
+    }
+  };
+}
+function routeContext(res: Response): ServerContext {
+  return res.locals.serverContext as ServerContext;
+}
 
 interface DockerRouteError extends Error {
   statusCode?: number;
@@ -33,9 +61,15 @@ interface DockerRouteError extends Error {
 function sendDockerError(
   res: Response,
   caught: unknown,
-  fallbackMessage: string
+  fallbackMessage: string,
 ): void {
   const error = caught as DockerRouteError;
+  if (error instanceof AppError) {
+    res
+      .status(error.statusCode)
+      .json({ error: error.message, code: error.code });
+    return;
+  }
 
   if (error.statusCode === 304) {
     res.json({ ok: true });
@@ -65,13 +99,13 @@ function auditContainerAction(
   req: Request,
   res: Response,
   action: string,
-  containerId: string
+  containerId: string,
 ): void {
   const user = res.locals.user as SessionUser;
   writeAuditLog({
     userId: user.id === "api-token" ? undefined : user.id,
-    action: `container.${action}`,
-    targetType: "container",
+    action: `server.${action}`,
+    targetType: "server",
     targetId: containerId,
     ipAddress: req.ip,
   });
@@ -96,7 +130,7 @@ const uploadQuerySchema = fileLocationSchema.extend({
 
 const maxUploadBytes = Math.max(
   1,
-  Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024
+  Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
 );
 
 function queryValue(value: unknown): string | undefined {
@@ -118,7 +152,8 @@ function sendFileError(res: Response, error: unknown): void {
       CONTAINER_FILE_OPERATION_42: "File or folder not found",
       CONTAINER_FILE_OPERATION_44: "Symbolic links cannot be accessed",
       CONTAINER_FILE_OPERATION_45: "Folder not found",
-      CONTAINER_FILE_OPERATION_46: "A file or folder with that name already exists",
+      CONTAINER_FILE_OPERATION_46:
+        "A file or folder with that name already exists",
     };
     res
       .status(error.statusCode)
@@ -149,13 +184,13 @@ function fileAudit(
   res: Response,
   action: string,
   containerId: string,
-  details: Record<string, unknown>
+  details: Record<string, unknown>,
 ): void {
   const user = res.locals.user as SessionUser;
   writeAuditLog({
     userId: user.id === "api-token" ? undefined : user.id,
-    action: `container.file.${action}`,
-    targetType: "container",
+    action: `server.file.${action}`,
+    targetType: "server",
     targetId: containerId,
     details,
     ipAddress: req.ip,
@@ -170,62 +205,117 @@ function contentDisposition(name: string): string {
   return `attachment; filename="${fallback || "download"}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-router.get("/api/servers", async (_req: Request, res: Response) => {
-  try {
-    const servers = await listManagedContainers();
-    res.json({ servers });
-  } catch (error) {
-    logger.error("Failed to list servers", { error: errorMessage(error) });
-    res.status(500).json({ error: "Failed to list servers" });
-  }
-});
+router.get(
+  "/api/v1/servers",
+  serverHandler(async (_req: Request, res: Response) => {
+    res.json({ servers: await listServers(res.locals.user as SessionUser) });
+  }),
+);
 
-router.get("/api/servers/:id", async (req: Request, res: Response) => {
-  try {
+router.get(
+  "/api/v1/servers/:id",
+  serverHandler(async (req: Request, res: Response) => {
+    const actor = res.locals.user as SessionUser;
     const id = req.params.id as string;
-    const [server, stats] = await Promise.allSettled([
-      getManagedContainer(id),
-      getContainerStats(id),
-    ]);
-
-    if (server.status === "rejected") {
-      // Never reflect the underlying dockerode message; it can expose socket
-      // paths and daemon internals to any authenticated role.
-      sendDockerError(res, server.reason, "Failed to get server details");
-      return;
+    const server = await getServer(actor, id);
+    let stats = null;
+    if (server.bindingStatus === "active") {
+      try {
+        const context = await resolveAuthorizedServer(actor, id, "server.view");
+        stats = await getContainerStats(context.container.id);
+      } catch {
+        /* Status remains useful without stats. */
+      }
     }
+    res.json({ server, stats });
+  }),
+);
 
-    res.json({
-      server: server.value,
-      stats: stats.status === "fulfilled" ? stats.value : null,
-    });
-  } catch (error) {
-    logger.error("Failed to get server", { error: errorMessage(error) });
-    res.status(500).json({ error: "Failed to get server details" });
-  }
-});
-
-router.get("/api/servers/:id/files", async (req: Request, res: Response) => {
-  const parsed = fileLocationSchema.safeParse({
-    root: queryValue(req.query.root),
-    path: queryValue(req.query.path) || "",
-  });
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid file location" });
+// A per-server capability check precedes body handling and Docker calls. Hold
+// shared-root locks through the response lifetime, including streamed uploads.
+router.use("/api/v1/servers/:id", async (req, res, next) => {
+  // Match Express's default case-insensitive, optional-trailing-slash routes,
+  // including HEAD requests that Express dispatches to GET handlers.
+  const relative = req.path.replace(/\/$/, "").toLowerCase();
+  const method = req.method === "HEAD" ? "GET" : req.method;
+  let capability: ServerCapability | undefined;
+  const fileRoutes: Record<string, string[]> = {
+    GET: ["/files", "/files/download"],
+    PUT: ["/files/upload"],
+    POST: ["/files/directory"],
+    PATCH: ["/files/rename"],
+    DELETE: ["/files"],
+  };
+  if (fileRoutes[method]?.includes(relative))
+    capability = method === "GET" ? "files.read" : "files.write";
+  else if (
+    method === "POST" &&
+    ["/start", "/stop", "/restart"].includes(relative)
+  )
+    capability = `server.${relative.slice(1)}` as ServerCapability;
+  if (!capability) {
+    next();
     return;
   }
-  try {
-    const id = req.params.id as string;
-    const server = await getManagedContainer(id);
-    res.json(await listFiles(server, parsed.data.root, parsed.data.path));
-  } catch (error) {
-    sendFileError(res, error);
-  }
+  const actor = res.locals.user as SessionUser;
+  const logicalId = req.params.id;
+  const context = await resolveAuthorizedServer(actor, logicalId, capability);
+  res.locals.serverContext = context;
+  res.locals.logicalServerId = logicalId;
+  const release = acquireLocks(context.lockKeys);
+  let handlerSettled = false;
+  let responseClosed = false;
+  const releaseWhenSettled = () => {
+    if (handlerSettled && responseClosed) release();
+  };
+  res.locals.finishServerOperation = () => {
+    handlerSettled = true;
+    releaseWhenSettled();
+  };
+  const responseDone = () => {
+    responseClosed = true;
+    releaseWhenSettled();
+  };
+  res.once("finish", responseDone);
+  res.once("close", responseDone);
+  const revalidate = setInterval(() => {
+    try {
+      if (actor.id !== "api-token" && !getRequestSession(req))
+        throw new AppError("ACCESS_REVOKED", 401, "Session expired");
+      assertServerCapability(actor, logicalId, capability);
+    } catch {
+      res.destroy();
+    }
+  }, 1000);
+  revalidate.unref();
+  res.once("close", () => clearInterval(revalidate));
+  res.once("finish", () => clearInterval(revalidate));
+  next();
 });
 
 router.get(
-  "/api/servers/:id/files/download",
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/files",
+  serverHandler(async (req: Request, res: Response) => {
+    const parsed = fileLocationSchema.safeParse({
+      root: queryValue(req.query.root),
+      path: queryValue(req.query.path) || "",
+    });
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid file location" });
+      return;
+    }
+    try {
+      const server = routeContext(res).container;
+      res.json(await listFiles(server, parsed.data.root, parsed.data.path));
+    } catch (error) {
+      sendFileError(res, error);
+    }
+  }),
+);
+
+router.get(
+  "/api/v1/servers/:id/files/download",
+  serverHandler(async (req: Request, res: Response) => {
     const parsed = fileLocationSchema.safeParse({
       root: queryValue(req.query.root),
       path: queryValue(req.query.path) || "",
@@ -236,22 +326,19 @@ router.get(
     }
     try {
       const id = req.params.id as string;
-      const server = await getManagedContainer(id);
+      const server = routeContext(res).container;
       const download = await openDownload(
         server,
         parsed.data.root,
-        parsed.data.path
+        parsed.data.path,
       );
       res.setHeader("Content-Disposition", contentDisposition(download.name));
       res.setHeader(
         "Content-Type",
         download.type === "directory"
           ? "application/x-tar"
-          : "application/octet-stream"
+          : "application/octet-stream",
       );
-      if (download.type === "file") {
-        res.setHeader("Content-Length", String(download.size));
-      }
       fileAudit(req, res, "downloaded", id, parsed.data);
       download.stream.on("error", (error) => {
         logger.error("Download stream failed", {
@@ -267,16 +354,17 @@ router.get(
         if (!res.writableEnded) stream.destroy?.();
       });
       download.stream.pipe(res);
+      await download.completed;
     } catch (error) {
-      sendFileError(res, error);
+      if (res.headersSent || res.destroyed) res.destroy();
+      else sendFileError(res, error);
     }
-  }
+  }),
 );
 
 router.put(
-  "/api/servers/:id/files/upload",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/files/upload",
+  serverHandler(async (req: Request, res: Response) => {
     if (!req.is("application/octet-stream")) {
       res
         .status(415)
@@ -299,14 +387,14 @@ router.put(
     }
     try {
       const id = req.params.id as string;
-      const server = await getManagedContainer(id);
+      const server = routeContext(res).container;
       await uploadFile(
         server,
         parsed.data.root,
         parsed.data.path,
         parsed.data.name,
         size,
-        req
+        req,
       );
       fileAudit(req, res, "uploaded", id, {
         root: parsed.data.root,
@@ -318,13 +406,12 @@ router.put(
     } catch (error) {
       sendFileError(res, error);
     }
-  }
+  }),
 );
 
 router.post(
-  "/api/servers/:id/files/directory",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/files/directory",
+  serverHandler(async (req: Request, res: Response) => {
     const parsed = directorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid folder request" });
@@ -332,25 +419,24 @@ router.post(
     }
     try {
       const id = req.params.id as string;
-      const server = await getManagedContainer(id);
+      const server = routeContext(res).container;
       await createDirectory(
         server,
         parsed.data.root,
         parsed.data.path,
-        parsed.data.name
+        parsed.data.name,
       );
       fileAudit(req, res, "directory.created", id, parsed.data);
       res.status(201).json({ ok: true });
     } catch (error) {
       sendFileError(res, error);
     }
-  }
+  }),
 );
 
 router.patch(
-  "/api/servers/:id/files/rename",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/files/rename",
+  serverHandler(async (req: Request, res: Response) => {
     const parsed = renameSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid rename request" });
@@ -358,25 +444,24 @@ router.patch(
     }
     try {
       const id = req.params.id as string;
-      const server = await getManagedContainer(id);
+      const server = routeContext(res).container;
       await renameFileEntry(
         server,
         parsed.data.root,
         parsed.data.path,
-        parsed.data.newName
+        parsed.data.newName,
       );
       fileAudit(req, res, "renamed", id, parsed.data);
       res.json({ ok: true });
     } catch (error) {
       sendFileError(res, error);
     }
-  }
+  }),
 );
 
 router.delete(
-  "/api/servers/:id/files",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/files",
+  serverHandler(async (req: Request, res: Response) => {
     const parsed = fileLocationSchema.safeParse({
       root: queryValue(req.query.root),
       path: queryValue(req.query.path) || "",
@@ -387,61 +472,60 @@ router.delete(
     }
     try {
       const id = req.params.id as string;
-      const server = await getManagedContainer(id);
-      await deleteFileEntry(
-        server,
-        parsed.data.root,
-        parsed.data.path
-      );
+      const server = routeContext(res).container;
+      await deleteFileEntry(server, parsed.data.root, parsed.data.path);
       fileAudit(req, res, "deleted", id, parsed.data);
       res.json({ ok: true });
     } catch (error) {
       sendFileError(res, error);
     }
-  }
+  }),
 );
 
 router.post(
-  "/api/servers/:id/start",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/start",
+  serverHandler(async (req: Request, res: Response) => {
     try {
       const id = req.params.id as string;
-      await startContainer(id);
+      suppressMonitoring(id);
+      await startContainer(routeContext(res).container.id);
+      setIntentionalStop(id, false);
       auditContainerAction(req, res, "start", id);
       res.json({ ok: true });
     } catch (error: unknown) {
       sendDockerError(res, error, "Failed to start container");
     }
-  }
+  }),
 );
 
 router.post(
-  "/api/servers/:id/stop",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/stop",
+  serverHandler(async (req: Request, res: Response) => {
     try {
       const id = req.params.id as string;
-      await stopContainer(id);
+      suppressMonitoring(id);
+      await stopContainer(routeContext(res).container.id);
+      setIntentionalStop(id, true);
       auditContainerAction(req, res, "stop", id);
       res.json({ ok: true });
     } catch (error: unknown) {
       sendDockerError(res, error, "Failed to stop container");
     }
-  }
+  }),
 );
 
 router.post(
-  "/api/servers/:id/restart",
-  requireRole("admin", "operator"),
-  async (req: Request, res: Response) => {
+  "/api/v1/servers/:id/restart",
+  serverHandler(async (req: Request, res: Response) => {
     try {
       const id = req.params.id as string;
-      await restartContainer(id);
+      suppressMonitoring(id);
+      await restartContainer(routeContext(res).container.id);
+      setIntentionalStop(id, false);
       auditContainerAction(req, res, "restart", id);
       res.json({ ok: true });
     } catch (error: unknown) {
       sendDockerError(res, error, "Failed to restart container");
     }
-  }
+  }),
 );

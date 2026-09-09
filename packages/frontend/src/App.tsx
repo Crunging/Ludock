@@ -9,6 +9,9 @@ import { NavLink } from "./navigation";
 import { useLocation, useNavigate } from "./navigation-context";
 
 const Console = lazy(() => import("./pages/Console"));
+const Diagnostics = lazy(() => import("./pages/Diagnostics"));
+const ServerDetail = lazy(() => import("./pages/ServerDetail"));
+const Settings = lazy(() => import("./pages/Settings"));
 const Files = lazy(() => import("./pages/Files"));
 const ApplicationLogs = lazy(() => import("./pages/ApplicationLogs"));
 
@@ -30,16 +33,12 @@ function routeParameter(match: RegExpMatchArray | null): string | null {
 }
 
 function App() {
-  const {
-    loading,
-    statusError,
-    authenticated,
-    user,
-    refreshStatus,
-    logout,
-  } = useAuth();
+  const { loading, statusError, authenticated, user, refreshStatus, logout } =
+    useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const serverMatch = location.pathname.match(/^\/servers\/([^/]+)$/);
+  const serverId = routeParameter(serverMatch);
   const consoleMatch = location.pathname.match(/^\/console\/([^/]+)$/);
   const filesMatch = location.pathname.match(/^\/files\/([^/]+)$/);
   const consoleId = routeParameter(consoleMatch);
@@ -51,6 +50,9 @@ function App() {
     location.pathname === "/users" ||
     location.pathname === "/audit" ||
     location.pathname === "/logs" ||
+    location.pathname === "/settings" ||
+    location.pathname === "/diagnostics" ||
+    serverId !== null ||
     filesId !== null ||
     isConsolePage;
 
@@ -60,7 +62,9 @@ function App() {
       (!knownPath ||
         ((location.pathname === "/users" ||
           location.pathname === "/audit" ||
-          location.pathname === "/logs") &&
+          location.pathname === "/logs" ||
+          location.pathname === "/settings" ||
+          location.pathname === "/diagnostics") &&
           user?.role !== "admin"))
     ) {
       navigate("/", { replace: true });
@@ -78,7 +82,10 @@ function App() {
   if (statusError) {
     return (
       <main className="login-page">
-        <section className="login-card" aria-labelledby="connection-error-title">
+        <section
+          className="login-card"
+          aria-labelledby="connection-error-title"
+        >
           <div className="sidebar__logo-icon login-card__logo">LU</div>
           <h1 className="login-card__title" id="connection-error-title">
             Unable to reach Ludock
@@ -114,6 +121,24 @@ function App() {
     page = (
       <Suspense fallback={<PageFallback />}>
         <ApplicationLogs />
+      </Suspense>
+    );
+  } else if (location.pathname === "/diagnostics" && user?.role === "admin") {
+    page = (
+      <Suspense fallback={<PageFallback />}>
+        <Diagnostics />
+      </Suspense>
+    );
+  } else if (location.pathname === "/settings" && user?.role === "admin") {
+    page = (
+      <Suspense fallback={<PageFallback />}>
+        <Settings />
+      </Suspense>
+    );
+  } else if (serverId) {
+    page = (
+      <Suspense fallback={<PageFallback />}>
+        <ServerDetail key={serverId} serverId={serverId} />
       </Suspense>
     );
   } else if (consoleId) {
@@ -160,6 +185,22 @@ function App() {
             </NavLink>
             {user?.role === "admin" && (
               <>
+                <NavLink
+                  to="/diagnostics"
+                  className={({ isActive }) =>
+                    `nav-link ${isActive ? "nav-link--active" : ""}`
+                  }
+                >
+                  Diagnostics
+                </NavLink>
+                <NavLink
+                  to="/settings"
+                  className={({ isActive }) =>
+                    `nav-link ${isActive ? "nav-link--active" : ""}`
+                  }
+                >
+                  Settings
+                </NavLink>
                 <NavLink
                   to="/users"
                   className={({ isActive }) =>
@@ -213,6 +254,10 @@ function App() {
             Servers
           </NavLink>
           <NavLink to="/account">Account</NavLink>
+          {user?.role === "admin" && <NavLink to="/settings">Settings</NavLink>}
+          {user?.role === "admin" && (
+            <NavLink to="/diagnostics">Diagnostics</NavLink>
+          )}
           {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
           {user?.role === "admin" && <NavLink to="/audit">Audit</NavLink>}
           {user?.role === "admin" && <NavLink to="/logs">Logs</NavLink>}

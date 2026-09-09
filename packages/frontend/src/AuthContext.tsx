@@ -28,9 +28,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setStatusError(false);
 
-    for (let attempt = 0; attempt <= STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt <= STATUS_RETRY_DELAYS_MS.length;
+      attempt += 1
+    ) {
       try {
-        const response = await fetch("/api/auth/status", {
+        const response = await fetch("/api/v1/auth/status", {
           credentials: "same-origin",
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -61,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!setupRequired || setupLocked || setupRemainingMs === null) return;
     const timer = window.setTimeout(
       () => setSetupLocked(true),
-      Math.max(0, setupRemainingMs)
+      Math.max(0, setupRemainingMs),
     );
     return () => window.clearTimeout(timer);
   }, [setupLocked, setupRemainingMs, setupRequired]);
@@ -74,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string): Promise<string | null> => {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch("/api/v1/auth/login", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -91,12 +95,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(body.user);
       return null;
     },
-    []
+    [],
   );
 
   const setup = useCallback(
     async (username: string, password: string): Promise<string | null> => {
-      const response = await fetch("/api/auth/setup", {
+      const response = await fetch("/api/v1/auth/setup", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -108,7 +112,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
       if (!response.ok || !body.user) {
         if (response.status === 403) setSetupLocked(true);
-        return body.error || `Unable to complete setup (HTTP ${response.status}).`;
+        return (
+          body.error || `Unable to complete setup (HTTP ${response.status}).`
+        );
       }
 
       setSetupRequired(false);
@@ -117,12 +123,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(body.user);
       return null;
     },
-    []
+    [],
   );
 
   const logout = useCallback(async () => {
     try {
-      await fetch("/api/auth/logout", {
+      await fetch("/api/v1/auth/logout", {
         method: "POST",
         credentials: "same-origin",
       });

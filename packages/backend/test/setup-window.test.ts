@@ -23,13 +23,13 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve()))
+    server.close((error) => (error ? reject(error) : resolve())),
   );
 });
 
 describe("initial setup window", () => {
   it("reports a locked setup after the startup deadline", async () => {
-    const response = await fetch(`${baseUrl}/api/auth/status`);
+    const response = await fetch(`${baseUrl}/api/v1/auth/status`);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       setupRequired: true,
@@ -42,7 +42,7 @@ describe("initial setup window", () => {
   });
 
   it("does not create an administrator after the deadline", async () => {
-    const response = await fetch(`${baseUrl}/api/auth/setup`, {
+    const response = await fetch(`${baseUrl}/api/v1/auth/setup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

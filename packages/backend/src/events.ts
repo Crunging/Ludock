@@ -1,128 +1,208 @@
+import { StringDecoder } from "node:string_decoder";
 import type { WebSocket } from "ws";
-import { getDockerInstance, LABEL_ENABLE } from "./docker.js";
-import { createLogger, errorMessage } from "./logger.js";
+import type { WebSocketAuth } from "./auth.js";
+import { currentActor, hasServerCapability } from "./authorization.js";
+import { getDockerInstance } from "./docker.js";
+import { listLogicalServers } from "./identity.js";
+import { refreshServers } from "./servers.js";
+import { createLogger } from "./logger.js";
 
-const eventClients = new Set<WebSocket>();
+const eventClients = new Map<WebSocket, WebSocketAuth>();
 let eventStreamActive = false;
-let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null = null;
+let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
+  null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let streamGeneration = 0;
 const logger = createLogger("events");
 
-interface DockerEvent {
+export interface DockerEvent {
   Action?: string;
-  Actor?: {
-    ID?: string;
-    Attributes?: { name?: string };
-  };
+  Actor?: { ID?: string };
   id?: string;
   time?: number;
 }
 
-function parseDockerEvent(chunk: Buffer): DockerEvent | null {
-  const value = JSON.parse(chunk.toString()) as unknown;
-  return typeof value === "object" && value !== null ? value : null;
+const STATE_ACTIONS = new Set([
+  "create",
+  "start",
+  "stop",
+  "die",
+  "kill",
+  "restart",
+  "destroy",
+  "rename",
+  "pause",
+  "unpause",
+  "update",
+  "oom",
+  "health_status: healthy",
+  "health_status: unhealthy",
+  "health_status: starting",
+]);
+
+/** Docker JSON events can span chunks or share a chunk. Bound incomplete input. */
+export function dockerEventDecoder(
+  deliver: (event: DockerEvent) => void,
+): (chunk: Buffer) => void {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  return (chunk) => {
+    pending += decoder.write(chunk);
+    if (Buffer.byteLength(pending) > 1_048_576)
+      throw new Error("Docker event buffer exceeded its limit");
+    let newline: number;
+    while ((newline = pending.indexOf("\n")) !== -1) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      if (!line.trim()) continue;
+      try {
+        const value: unknown = JSON.parse(line);
+        if (value && typeof value === "object" && !Array.isArray(value))
+          deliver(value);
+      } catch {
+        /* Ignore malformed lines without recording their contents. */
+      }
+    }
+  };
 }
 
-export function addEventClient(ws: WebSocket): void {
-  eventClients.add(ws);
-  logger.debug("Event WebSocket client connected", {
-    clients: eventClients.size,
-  });
-
+export function addEventClient(ws: WebSocket, auth: WebSocketAuth): void {
+  eventClients.set(ws, auth);
   const removeClient = () => {
     eventClients.delete(ws);
-    logger.debug("Event WebSocket client disconnected", {
-      clients: eventClients.size,
-    });
     if (eventClients.size === 0) stopEventStream();
   };
   ws.on("close", removeClient);
   ws.on("error", removeClient);
-
-  if (!eventStreamActive) {
-    void startEventStream();
-  }
+  if (!eventStreamActive) void startEventStream();
 }
 
 export function stopEventStream(): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  eventStream?.destroy?.();
+  streamGeneration++;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  const stream = eventStream;
   eventStream = null;
   eventStreamActive = false;
+  stream?.destroy?.();
+}
+
+/** Send only logical identifiers after a fresh eligible snapshot and grant check. */
+export async function dispatchDockerEvent(event: DockerEvent): Promise<void> {
+  if (typeof event.Action !== "string" || !STATE_ACTIONS.has(event.Action))
+    return;
+  const containerId = event.Actor?.ID || event.id;
+  if (
+    typeof containerId !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(containerId)
+  )
+    return;
+  const previous = listLogicalServers().find(
+    (server) => server.containerId === containerId,
+  );
+  const previouslyVisible = new Set<WebSocket>();
+  if (previous) {
+    for (const [client, auth] of eventClients) {
+      if (hasServerCapability(auth.validate(), previous.id, "server.view"))
+        previouslyVisible.add(client);
+    }
+  }
+  await refreshServers();
+  const current = listLogicalServers().find(
+    (server) => server.containerId === containerId,
+  );
+  for (const [client, auth] of eventClients) {
+    if (client.readyState !== client.OPEN) continue;
+    const user = currentActor(auth.validate());
+    if (!user) {
+      client.close(1008, "Authentication expired");
+      continue;
+    }
+    const visible =
+      current && hasServerCapability(user, current.id, "server.view");
+    // A former viewer needs a content-free invalidation to remove a disappeared
+    // or suspended server. It reveals nothing about any other server.
+    if (!visible && !previouslyVisible.has(client)) continue;
+    client.send(
+      JSON.stringify({
+        type: "container_event",
+        action: visible ? event.Action : "refresh",
+        ...(visible ? { serverId: current.id } : {}),
+        time:
+          typeof event.time === "number" && Number.isFinite(event.time)
+            ? event.time
+            : Math.floor(Date.now() / 1000),
+      }),
+    );
+  }
 }
 
 async function startEventStream(): Promise<void> {
   if (eventStreamActive) return;
   eventStreamActive = true;
-
+  const generation = streamGeneration;
   try {
-    const docker = getDockerInstance();
-
-    const stream = await docker.getEvents({
-      filters: {
-        type: ["container"],
-        label: [`${LABEL_ENABLE}=true`],
-      },
+    const stream = await getDockerInstance().getEvents({
+      filters: { type: ["container"] },
     });
+    if (generation !== streamGeneration || eventClients.size === 0) {
+      (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+      return;
+    }
     eventStream = stream;
-    logger.debug("Docker event stream attached", {
-      clients: eventClients.size,
-    });
-
-    stream.on("data", (chunk: Buffer) => {
+    // Coalesce Docker bursts; dashboard updates need the latest state, not an
+    // unbounded queue of health/exec events. Only state actions enter the queue.
+    const pending = new Map<string, DockerEvent>();
+    let draining = false;
+    const drain = async () => {
+      if (draining) return;
+      draining = true;
       try {
-        const event = parseDockerEvent(chunk);
-        if (!event) return;
-        const payload = JSON.stringify({
-          type: "container_event",
-          action: event.Action,
-          containerId: event.Actor?.ID || event.id || "",
-          name: event.Actor?.Attributes?.name || "",
-          time: event.time,
-        });
-
-        for (const client of eventClients) {
-          if (client.readyState === client.OPEN) {
-            client.send(payload);
+        while (pending.size && eventStream === stream) {
+          const [id, event] = pending.entries().next().value!;
+          pending.delete(id);
+          try {
+            await dispatchDockerEvent(event);
+          } catch {
+            logger.warn("Unable to refresh Docker event state");
           }
         }
+      } finally {
+        draining = false;
+      }
+    };
+    const decode = dockerEventDecoder((event) => {
+      if (!event.Action || !STATE_ACTIONS.has(event.Action)) return;
+      const id = event.Actor?.ID || event.id;
+      if (typeof id !== "string" || pending.size >= 1024) return;
+      pending.set(id, event);
+      void drain();
+    });
+    stream.on("data", (chunk: Buffer) => {
+      try {
+        decode(chunk);
       } catch {
-        return;
+        scheduleReconnect(5000);
       }
     });
-
-    stream.on("error", (error: Error) => {
-      if (eventStream !== stream) return;
-      logger.warn("Docker event stream failed", { error: error.message });
-      scheduleReconnect(5000);
+    stream.on("error", () => {
+      if (eventStream === stream) scheduleReconnect(5000);
     });
-
     stream.on("end", () => {
-      if (eventStream !== stream) return;
-      logger.warn("Docker event stream ended; reconnecting");
-      scheduleReconnect(2000);
+      if (eventStream === stream) scheduleReconnect(2000);
     });
-  } catch (error: unknown) {
-    logger.warn("Failed to start Docker event stream", {
-      error: errorMessage(error),
-    });
-    scheduleReconnect(5000);
+  } catch {
+    if (generation === streamGeneration) scheduleReconnect(5000);
   }
 }
 
 function scheduleReconnect(delay: number): void {
   if (reconnectTimer) return;
-
-  eventStream = null;
-  eventStreamActive = false;
+  stopEventStream();
   if (eventClients.size === 0) return;
-  logger.debug("Scheduled Docker event stream reconnect", { delayMs: delay });
-
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     void startEventStream();
   }, delay);
+  reconnectTimer.unref();
 }

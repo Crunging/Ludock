@@ -8,6 +8,7 @@ import {
 } from "react";
 import { apiFetch } from "../api";
 import { useAuth } from "../auth-context";
+import { can } from "../permissions";
 import { useNavigate } from "../navigation-context";
 import type { ManagedContainer } from "../types";
 
@@ -47,9 +48,9 @@ async function responseError(response: Response): Promise<string> {
 export default function Files({ containerId }: { containerId: string }) {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const canManage = user?.role === "admin" || user?.role === "operator";
   const fileInput = useRef<HTMLInputElement>(null);
   const [server, setServer] = useState<ManagedContainer | null>(null);
+  const canManage = can(user, server, "files.write");
   const [rootId, setRootId] = useState("");
   const [currentPath, setCurrentPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -60,19 +61,23 @@ export default function Files({ containerId }: { containerId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch(`/api/servers/${encodeURIComponent(containerId)}`)
+    apiFetch(`/api/v1/servers/${encodeURIComponent(containerId)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(await responseError(response));
         return response.json();
       })
       .then(({ server: nextServer }: { server: ManagedContainer }) => {
         setServer(nextServer);
+        if (!can(user, nextServer, "files.read"))
+          throw new Error("You do not have file access to this server.");
         setRootId(nextServer.fileRoots[0]?.id || "");
       })
       .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : "Unable to load server")
+        setError(
+          reason instanceof Error ? reason.message : "Unable to load server",
+        ),
       );
-  }, [containerId]);
+  }, [containerId, user]);
 
   const refresh = useCallback(async () => {
     if (!rootId) {
@@ -84,13 +89,15 @@ export default function Files({ containerId }: { containerId: string }) {
     const query = new URLSearchParams({ root: rootId, path: currentPath });
     try {
       const response = await apiFetch(
-        `/api/servers/${encodeURIComponent(containerId)}/files?${query}`
+        `/api/v1/servers/${encodeURIComponent(containerId)}/files?${query}`,
       );
       if (!response.ok) throw new Error(await responseError(response));
       const listing = (await response.json()) as FileListing;
       setEntries(listing.entries);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to list files");
+      setError(
+        reason instanceof Error ? reason.message : "Unable to list files",
+      );
     } finally {
       setLoading(false);
     }
@@ -103,7 +110,7 @@ export default function Files({ containerId }: { containerId: string }) {
   const runMutation = useCallback(
     async (
       request: () => Promise<Response>,
-      successMessage: string
+      successMessage: string,
     ): Promise<boolean> => {
       setBusy(true);
       setError(null);
@@ -115,13 +122,15 @@ export default function Files({ containerId }: { containerId: string }) {
         await refresh();
         return true;
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "File operation failed");
+        setError(
+          reason instanceof Error ? reason.message : "File operation failed",
+        );
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [refresh]
+    [refresh],
   );
 
   const uploadFiles = useCallback(
@@ -139,12 +148,12 @@ export default function Files({ containerId }: { containerId: string }) {
             name: file.name,
           });
           const response = await apiFetch(
-            `/api/servers/${encodeURIComponent(containerId)}/files/upload?${query}`,
+            `/api/v1/servers/${encodeURIComponent(containerId)}/files/upload?${query}`,
             {
               method: "PUT",
               headers: { "Content-Type": "application/octet-stream" },
               body: file,
-            }
+            },
           );
           if (!response.ok) {
             throw new Error(`${file.name}: ${await responseError(response)}`);
@@ -152,7 +161,7 @@ export default function Files({ containerId }: { containerId: string }) {
           completed += 1;
         }
         setNotice(
-          `${completed} file${completed === 1 ? "" : "s"} uploaded successfully`
+          `${completed} file${completed === 1 ? "" : "s"} uploaded successfully`,
         );
         await refresh();
       } catch (reason) {
@@ -163,7 +172,7 @@ export default function Files({ containerId }: { containerId: string }) {
         if (fileInput.current) fileInput.current.value = "";
       }
     },
-    [canManage, containerId, currentPath, refresh, rootId]
+    [canManage, containerId, currentPath, refresh, rootId],
   );
 
   const createFolder = async () => {
@@ -172,14 +181,14 @@ export default function Files({ containerId }: { containerId: string }) {
     await runMutation(
       () =>
         apiFetch(
-          `/api/servers/${encodeURIComponent(containerId)}/files/directory`,
+          `/api/v1/servers/${encodeURIComponent(containerId)}/files/directory`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ root: rootId, path: currentPath, name }),
-          }
+          },
         ),
-      `Created ${name}`
+      `Created ${name}`,
     );
   };
 
@@ -189,7 +198,7 @@ export default function Files({ containerId }: { containerId: string }) {
     await runMutation(
       () =>
         apiFetch(
-          `/api/servers/${encodeURIComponent(containerId)}/files/rename`,
+          `/api/v1/servers/${encodeURIComponent(containerId)}/files/rename`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -198,9 +207,9 @@ export default function Files({ containerId }: { containerId: string }) {
               path: joinPath(currentPath, entry.name),
               newName,
             }),
-          }
+          },
         ),
-      `Renamed ${entry.name}`
+      `Renamed ${entry.name}`,
     );
   };
 
@@ -217,10 +226,10 @@ export default function Files({ containerId }: { containerId: string }) {
     await runMutation(
       () =>
         apiFetch(
-          `/api/servers/${encodeURIComponent(containerId)}/files?${query}`,
-          { method: "DELETE" }
+          `/api/v1/servers/${encodeURIComponent(containerId)}/files?${query}`,
+          { method: "DELETE" },
         ),
-      `Deleted ${entry.name}`
+      `Deleted ${entry.name}`,
     );
   };
 
@@ -229,7 +238,7 @@ export default function Files({ containerId }: { containerId: string }) {
       root: rootId,
       path: joinPath(currentPath, entry.name),
     });
-    return `/api/servers/${encodeURIComponent(containerId)}/files/download?${query}`;
+    return `/api/v1/servers/${encodeURIComponent(containerId)}/files/download?${query}`;
   };
 
   const pathParts = currentPath ? currentPath.split("/") : [];
@@ -287,21 +296,28 @@ export default function Files({ containerId }: { containerId: string }) {
       {error && (
         <div className="alert alert--error" role="alert">
           <span>{error}</span>
-          <button onClick={() => setError(null)} aria-label="Dismiss error">×</button>
+          <button onClick={() => setError(null)} aria-label="Dismiss error">
+            ×
+          </button>
         </div>
       )}
       {notice && (
         <div className="alert alert--success" role="status">
           <span>{notice}</span>
-          <button onClick={() => setNotice(null)} aria-label="Dismiss notice">×</button>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss notice">
+            ×
+          </button>
         </div>
       )}
 
       {!rootId && !loading ? (
         <div className="empty-state">
-          <div className="empty-state__title">File access is not configured</div>
+          <div className="empty-state__title">
+            File access is not configured
+          </div>
           <div className="empty-state__description">
-            Add a ludock.files label with one or more container paths.
+            No approved writable mounts are available. An administrator can
+            check the mount restrictions or ludock.files label.
           </div>
         </div>
       ) : (
@@ -422,7 +438,9 @@ export default function Files({ containerId }: { containerId: string }) {
                       </small>
                     )}
                   </div>
-                  <span>{entry.type === "file" ? formatSize(entry.size) : "—"}</span>
+                  <span>
+                    {entry.type === "file" ? formatSize(entry.size) : "—"}
+                  </span>
                   <span>
                     {entry.modifiedAt
                       ? new Date(entry.modifiedAt).toLocaleString()

@@ -7,6 +7,7 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import type { ConsoleMessage, ManagedContainer } from "../types";
 import { apiFetch, authenticatedWebSocketUrl } from "../api";
 import { useAuth } from "../auth-context";
+import { can } from "../permissions";
 import { useNavigate } from "../navigation-context";
 
 type ConsoleMode = "logs" | "game" | "shell";
@@ -15,7 +16,6 @@ type ServerLoadState = "loading" | "loaded" | "error";
 export default function Console({ containerId }: { containerId: string }) {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const readOnly = user?.role === "viewer";
   const [mode, setMode] = useState<ConsoleMode>("logs");
   const [paused, setPaused] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
@@ -28,8 +28,10 @@ export default function Console({ containerId }: { containerId: string }) {
   const [serverInfo, setServerInfo] = useState<ManagedContainer | null>(null);
   const [serverState, setServerState] = useState<ServerLoadState>("loading");
   const gameConsoleAvailable = Boolean(serverInfo?.gameConsole);
-  const canSendGameCommand = !readOnly && gameConsoleAvailable;
-  const canSendShellCommand = user?.role === "admin";
+  const canReadLogs = can(user, serverInfo, "logs.read");
+  const canSendGameCommand =
+    can(user, serverInfo, "console.execute") && gameConsoleAvailable;
+  const canSendShellCommand = can(user, serverInfo, "console.shell");
   const canSendCommand =
     mode === "game"
       ? canSendGameCommand
@@ -42,7 +44,7 @@ export default function Console({ containerId }: { containerId: string }) {
     setServerState("loading");
     setServerInfo(null);
     setMode("logs");
-    apiFetch(`/api/servers/${encodeURIComponent(containerId)}`)
+    apiFetch(`/api/v1/servers/${encodeURIComponent(containerId)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json() as Promise<{ server: ManagedContainer }>;
@@ -51,7 +53,13 @@ export default function Console({ containerId }: { containerId: string }) {
         if (cancelled) return;
         setServerInfo(server);
         setServerState("loaded");
-        setMode(!readOnly && server.gameConsole ? "game" : "logs");
+        setMode(
+          can(user, server, "console.execute") && server.gameConsole
+            ? "game"
+            : can(user, server, "logs.read")
+              ? "logs"
+              : "shell",
+        );
       })
       .catch(() => {
         if (cancelled) return;
@@ -61,7 +69,7 @@ export default function Console({ containerId }: { containerId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [containerId, readOnly]);
+  }, [containerId, user]);
 
   useEffect(() => {
     if (!termRef.current) return;
@@ -143,7 +151,7 @@ export default function Console({ containerId }: { containerId: string }) {
       }
     } catch {
       terminalRef.current?.write(
-        "\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n"
+        "\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n",
       );
     }
   }, []);
@@ -165,14 +173,14 @@ export default function Console({ containerId }: { containerId: string }) {
       }
       writeMessage(raw);
     },
-    [mode, paused, writeMessage]
+    [mode, paused, writeMessage],
   );
 
   const togglePaused = useCallback(() => {
     if (paused) {
       if (pausedOutputDroppedRef.current) {
         terminalRef.current?.write(
-          "\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n"
+          "\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n",
         );
       }
       for (const raw of pausedMessagesRef.current.splice(0)) {
@@ -185,14 +193,17 @@ export default function Console({ containerId }: { containerId: string }) {
   }, [paused, writeMessage]);
 
   const wsUrl =
-    serverState !== "loaded" || (mode === "game" && !gameConsoleAvailable)
+    serverState !== "loaded" ||
+    (mode === "game" && !canSendGameCommand) ||
+    (mode === "logs" && !canReadLogs) ||
+    (mode === "shell" && !canSendShellCommand)
       ? ""
       : authenticatedWebSocketUrl(
           mode === "logs"
-            ? `/ws/logs/${encodeURIComponent(containerId)}`
+            ? `/ws/v1/logs/${encodeURIComponent(containerId)}`
             : mode === "game"
-              ? `/ws/game-console/${encodeURIComponent(containerId)}`
-              : `/ws/shell/${encodeURIComponent(containerId)}`
+              ? `/ws/v1/game-console/${encodeURIComponent(containerId)}`
+              : `/ws/v1/shell/${encodeURIComponent(containerId)}`,
         );
 
   const { status, send } = useWebSocket({
@@ -202,12 +213,12 @@ export default function Console({ containerId }: { containerId: string }) {
 
   const sendCommand = useCallback(() => {
     const cmd = command.trim();
-    if (!cmd) return;
+    if (!cmd || !canSendCommand || status !== "connected") return;
 
     terminalRef.current?.write(`\x1b[33m> ${cmd}\x1b[0m\r\n`);
     send(JSON.stringify({ type: "input", data: cmd }));
     setCommand("");
-  }, [command, send]);
+  }, [canSendCommand, command, send, status]);
 
   const switchMode = useCallback((nextMode: ConsoleMode) => {
     setMode(nextMode);
@@ -224,7 +235,7 @@ export default function Console({ containerId }: { containerId: string }) {
           : nextMode === "game"
             ? "game console"
             : "container shell"
-      }\x1b[0m\r\n`
+      }\x1b[0m\r\n`,
     );
   }, []);
 
@@ -271,15 +282,17 @@ export default function Console({ containerId }: { containerId: string }) {
             role="tablist"
             aria-label="Console mode"
           >
-            <button
-              className={mode === "logs" ? "console-mode-tab--active" : ""}
-              onClick={() => switchMode("logs")}
-              role="tab"
-              aria-selected={mode === "logs"}
-            >
-              Docker Logs
-            </button>
-            {!readOnly && gameConsoleAvailable && (
+            {canReadLogs && (
+              <button
+                className={mode === "logs" ? "console-mode-tab--active" : ""}
+                onClick={() => switchMode("logs")}
+                role="tab"
+                aria-selected={mode === "logs"}
+              >
+                Docker Logs
+              </button>
+            )}
+            {canSendGameCommand && (
               <button
                 className={mode === "game" ? "console-mode-tab--active" : ""}
                 onClick={() => switchMode("game")}
@@ -289,7 +302,7 @@ export default function Console({ containerId }: { containerId: string }) {
                 Game Console
               </button>
             )}
-            {user?.role === "admin" && (
+            {canSendShellCommand && (
               <button
                 className={mode === "shell" ? "console-mode-tab--active" : ""}
                 onClick={() => switchMode("shell")}
@@ -324,6 +337,10 @@ export default function Console({ containerId }: { containerId: string }) {
         <div className="console-warning">
           Server details could not be loaded. Return to the dashboard and try
           again.
+        </div>
+      ) : !canReadLogs && !canSendGameCommand && !canSendShellCommand ? (
+        <div className="console-warning" role="alert">
+          You do not have console or log access to this server.
         </div>
       ) : mode === "logs" ? (
         <div className="console-warning">

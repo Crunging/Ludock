@@ -1,97 +1,105 @@
 # Ludock
 
-Ludock combines the Latin *ludus* (“game” or “play”) with “dock”: it is a
-self-hosted web panel for existing Docker game servers.
+Ludock is a self-hosted control panel for existing Docker game servers. It
+starts and stops servers, provides game consoles and file access, and handles
+backups, schedules, availability alerts, and updates through registered Compose
+projects.
 
-It discovers only containers you explicitly opt in, while Docker remains the
-source of truth.
+Recognized game images appear automatically unless explicitly opted out.
+Unrecognized images require `ludock.enable: "true"`. Docker Compose, Portainer,
+Dockge, or the Docker CLI remains the configuration owner: Ludock does not
+provision servers or edit their definitions.
 
 > [!IMPORTANT]
-> This project is in beta. Back up game data and the panel database before
-> upgrading.
+> v2 requires fresh Ludock application storage. It does not import v1 users,
+> settings, or sessions. An incompatible database is rejected without resetting
+> it. Keep existing game containers and game-data volumes intact.
 
-## What it does
+## Run with Docker
 
-- Starts, stops, restarts, and monitors opted-in containers
-- Streams logs and supports several game-console protocols
-- Manages files inside configured container paths
-- Provides administrator, operator, and read-only viewer roles
-- Records account and server actions in an audit log
+Use [`compose.yaml`](./compose.yaml) with a published v2 image, then start the
+panel:
 
-It does not create game servers or manage containers without the
-`ludock.enable=true` label.
+```bash
+docker compose up -d
+```
 
-## Quick start
+Open `http://localhost:3000` and create the first administrator within five
+minutes. Restart Ludock if the setup window expires before an account exists.
+The example uses a new `ludock-data-v2` named volume; do not reuse a v1 database.
 
-Docker Compose is the recommended installation method.
+To test this checkout before its image is published:
 
-1. Download [`compose.yaml`](./compose.yaml).
-2. Opt each game-server service into Ludock:
+```bash
+docker build -t ludock:test .
+docker run --rm -p 3000:3000 \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v ludock-data-v2:/data \
+  ludock:test
+```
 
-   ```yaml
-   services:
-     minecraft:
-       labels:
-         ludock.enable: "true"
-         ludock.name: "Survival Server"
-   ```
+Release images target **Linux AMD64 and ARM64**. Each platform requires its own
+runtime smoke checks; see [Testing](./TESTING.md). This does not imply that all
+recognized game images support both architectures.
 
-3. Start Ludock:
+## Discover and share servers
 
-   ```bash
-   docker compose up -d
-   ```
+A recognized image such as `itzg/minecraft-server` needs no Ludock label.
+Private mirrors with a recognized repository suffix also work.
 
-4. Open `http://localhost:3000` and create the first administrator within five
-   minutes. Restart the panel if the setup window expires.
+```yaml
+labels:
+  ludock.name: "Friends' survival world"  # Optional display name
+```
 
-The image supports `linux/amd64` and `linux/arm64`. Stable versions are
-published as `latest`, `MAJOR`, `MAJOR.MINOR`, and `MAJOR.MINOR.PATCH`;
-development builds use `nightly`.
+For another image, add `ludock.enable: "true"`. To exclude any image, add
+`ludock.enable: "false"`. Invalid values exclude the container and appear in
+administrator diagnostics. Compose one-off containers are excluded unless
+explicitly enabled.
 
-## Add game servers
+Administrators see all eligible servers. New operators and viewers see none
+until an administrator opens **Users → Server access** and assigns specific
+servers and actions. **Start and stop** shares only status, start, and stop;
+it does not grant logs, commands, files, backups, or schedules.
 
-Add `ludock.enable=true` to each game-server container you want Ludock to
-manage. Known images need no other labels: Ludock selects the game integration
-from the image and discovers file roots from its writable mounts.
+## Backups and updates
 
-See [Game servers and overrides](./docs/GAME-SERVERS.md) for:
+Backups are disabled until an administrator mounts a separate destination,
+sets `LUDOCK_BACKUP_ROOTS`, and saves its capacity and retention settings.
+Backups stop the server throughout copying and restore its previous running
+state afterward. Live backups are not included.
 
-- recognized images and platform availability;
-- game, console, port, password-variable, and file-root overrides;
-- console transports and their internal ports;
-- custom-image examples and file-root discovery behavior.
+Updates require a registered, accessible Compose project inside
+`LUDOCK_COMPOSE_ROOTS`. Ludock pulls the selected service's configured image and
+recreates that service without rebuilding it or recreating dependencies.
+**Recreate anyway** also replaces a service whose image is unchanged. A stopped
+server stays stopped. Inaccessible projects and standalone containers must be
+updated through their original manager.
+
+See [Operations](./docs/OPERATIONS.md) for the required mounts, confirmation
+flows, limitations, and recovery behavior.
 
 ## Documentation
 
-- [Game servers and overrides](./docs/GAME-SERVERS.md): recognized images,
-  labels, console transports, custom images, and file roots.
-- [Operations](./docs/OPERATIONS.md): environment settings, log levels,
-  permissions, backups, and administrator recovery.
-- [Security policy](./SECURITY.md): deployment boundary, supported releases,
-  and vulnerability reporting.
-- [Testing](./TESTING.md): release acceptance criteria and product boundaries.
-- [Contributing](./CONTRIBUTING.md): development setup and contribution
-  workflow.
+- [Game servers](./docs/GAME-SERVERS.md): recognized repositories, capability
+  matrix, console prerequisites, labels, and safe file roots.
+- [Operations](./docs/OPERATIONS.md): deployment settings, permissions, backups,
+  schedules, Compose updates, monitoring, notifications, and recovery.
+- [Testing](./TESTING.md): automated checks and disposable-server acceptance.
+- [Contributing](./CONTRIBUTING.md): Node.js 24 / pnpm 10 development workflow.
+- [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
 
 ## Security
 
-> [!WARNING]
-> Docker socket access is effectively root access to the Docker host. A
-> read-only socket mount does not make Docker API operations read-only. Run the
-> panel only on a trusted host and place it behind an HTTPS reverse proxy.
+Docker socket access grants host-level power. Mounting the socket read-only
+does not make Docker API requests read-only. Deploy one Ludock instance per
+managed Docker host, keep it on a trusted network, and use an HTTPS reverse
+proxy for remote access.
 
-Browser sessions use revocable HttpOnly cookies, and passwords are hashed with
-scrypt. Only labeled containers can be listed or controlled.
-
-See the [operations guide](./docs/OPERATIONS.md) for configuration, logging,
-backup, and recovery, and [SECURITY.md](./SECURITY.md) for the supported release
-policy.
-
-## Development
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and the
-contribution workflow, and [TESTING.md](./TESTING.md) for the release acceptance
-checklist.
+Browser sessions use revocable HttpOnly cookies, passwords are hashed with
+scrypt, and authorization is enforced in the API, WebSockets, and background
+jobs. Discovery eligibility is separate from a user's permission to access a
+server. Console credentials and notification webhooks are never returned to
+the browser.
 
 Licensed under the [MIT License](./LICENSE).

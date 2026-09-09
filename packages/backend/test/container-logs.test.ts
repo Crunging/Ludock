@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { after, afterEach, describe, it } from "node:test";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
 import type { WebSocket } from "ws";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -10,15 +10,27 @@ process.env.LUDOCK_DB_PATH = ":memory:";
 const [
   { DockerLogDecoder, handleContainerLogsConnection },
   { getDockerInstance },
-  { closeDatabase },
+  { closeDatabase, createUser },
+  { listLogicalServers },
+  { refreshServers },
+  { setServerGrant },
 ] = await Promise.all([
   import("../src/container-logs.js"),
   import("../src/docker.js"),
   import("../src/database.js"),
+  import("../src/identity.js"),
+  import("../src/servers.js"),
+  import("../src/authorization.js"),
 ]);
 
 const docker = getDockerInstance();
 const originalGetContainer = docker.getContainer.bind(docker);
+const originalListContainers = docker.listContainers.bind(docker);
+const administrator = {
+  id: "api-token",
+  username: "api-token",
+  role: "admin" as const,
+};
 
 class FakeWebSocket extends EventEmitter {
   readonly OPEN = 1;
@@ -37,8 +49,20 @@ class FakeWebSocket extends EventEmitter {
   }
 }
 
+beforeEach(() => {
+  closeDatabase();
+  createUser({
+    id: "viewer",
+    username: "viewer",
+    role: "viewer",
+    passwordHash: "fixture",
+    disabled: false,
+    createdAt: 1,
+  });
+});
 afterEach(() => {
   docker.getContainer = originalGetContainer;
+  docker.listContainers = originalListContainers;
 });
 
 after(() => closeDatabase());
@@ -47,7 +71,7 @@ describe("Docker log decoder", () => {
   it("reassembles multiplexed headers and payloads split across chunks", () => {
     const output: Array<{ type: string; data: string }> = [];
     const decoder = new DockerLogDecoder((type, data) =>
-      output.push({ type, data })
+      output.push({ type, data }),
     );
     const stdout = frame(1, "hello ");
     const stderr = frame(2, "world");
@@ -76,7 +100,7 @@ describe("Docker log decoder", () => {
 });
 
 describe("Docker log WebSocket", () => {
-  it("follows opted-in logs for viewers and rejects input", async () => {
+  it("follows assigned logs for viewers and rejects input", async () => {
     const logStream = new PassThrough();
     let logOptions: Record<string, unknown> | null = null;
     docker.getContainer = (() => ({
@@ -87,11 +111,26 @@ describe("Docker log WebSocket", () => {
       },
     })) as unknown as typeof docker.getContainer;
 
+    docker.listContainers = (async () => [
+      {
+        Id: "managed-id",
+        Image: "fixture:latest",
+        Labels: { "ludock.enable": "true" },
+      },
+    ]) as unknown as typeof docker.listContainers;
+    await refreshServers();
+    const logicalId = listLogicalServers()[0].id;
+    setServerGrant(
+      "viewer",
+      logicalId,
+      ["server.view", "logs.read"],
+      administrator,
+    );
     const ws = new FakeWebSocket();
     await handleContainerLogsConnection(
       ws as unknown as WebSocket,
-      request("/ws/logs/managed-id"),
-      viewerAuth()
+      request(`/ws/v1/logs/${logicalId}`),
+      viewerAuth(),
     );
 
     assert.deepEqual(logOptions, {
@@ -105,16 +144,17 @@ describe("Docker log WebSocket", () => {
     assert.ok(
       ws.sent.some(
         (message) =>
-          message.type === "stdout" && message.data.includes("game started")
-      )
+          message.type === "stdout" && message.data.includes("game started"),
+      ),
     );
 
     ws.emit("message", Buffer.from('{"type":"input","data":"stop"}'));
     assert.ok(
       ws.sent.some(
         (message) =>
-          message.type === "error" && message.data === "Docker logs are read-only"
-      )
+          message.type === "error" &&
+          message.data === "Docker logs are read-only",
+      ),
     );
     ws.close(1000);
     assert.equal(logStream.destroyed, true);
@@ -130,11 +170,13 @@ describe("Docker log WebSocket", () => {
       },
     })) as unknown as typeof docker.getContainer;
 
+    docker.listContainers =
+      (async () => []) as unknown as typeof docker.listContainers;
     const ws = new FakeWebSocket();
     await handleContainerLogsConnection(
       ws as unknown as WebSocket,
-      request("/ws/logs/unmanaged-id"),
-      viewerAuth()
+      request("/ws/v1/logs/unmanaged-id"),
+      viewerAuth(),
     );
 
     assert.equal(ws.closeCode, 1008);
@@ -152,7 +194,7 @@ function frame(type: 1 | 2, value: string): Buffer {
 }
 
 function viewerAuth() {
-  const user = { id: "api-token", username: "viewer", role: "viewer" as const };
+  const user = { id: "viewer", username: "viewer", role: "viewer" as const };
   return { user, validate: () => user };
 }
 

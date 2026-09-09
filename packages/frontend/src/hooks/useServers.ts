@@ -1,3 +1,4 @@
+import { serverSchema } from "@ludock/shared";
 import { useCallback, useEffect, useState } from "react";
 import type { ManagedContainer, ContainerEvent } from "../types";
 import { useWebSocket } from "./useWebSocket";
@@ -19,13 +20,14 @@ export function useServers(): UseServersResult {
     try {
       setLoading(true);
       setError(null);
-      const response = await apiFetch("/api/servers");
+      const response = await apiFetch("/api/v1/servers");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.json();
-      setServers(body.servers);
+      setServers(serverSchema.array().parse(body.servers));
     } catch (error: unknown) {
+      setServers([]);
       setError(
-        error instanceof Error ? error.message : "Failed to fetch servers"
+        error instanceof Error ? error.message : "Failed to fetch servers",
       );
     } finally {
       setLoading(false);
@@ -43,10 +45,10 @@ export function useServers(): UseServersResult {
         return;
       }
     },
-    [fetchServers]
+    [fetchServers],
   );
 
-  const wsUrl = authenticatedWebSocketUrl("/ws/events");
+  const wsUrl = authenticatedWebSocketUrl("/ws/v1/events");
 
   useWebSocket({
     url: wsUrl,

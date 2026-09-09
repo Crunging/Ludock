@@ -60,11 +60,12 @@ export function useWebSocket({
         onMessageRef.current?.(event.data);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (wsRef.current === ws) wsRef.current = null;
         if (cancelled) return;
 
         setStatus("disconnected");
+        if ([1008, 4001, 4003, 4401, 4403].includes(event.code)) return;
         if (reconnect && retries < maxRetries) {
           retries += 1;
           reconnectTimer = setTimeout(connect, reconnectDelay);

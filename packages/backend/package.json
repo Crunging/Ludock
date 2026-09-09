@@ -6,15 +6,17 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "lint": "eslint .",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "recover": "tsx src/recovery.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@ludock/shared": "workspace:*",
     "dockerode": "^5.0.1",
     "express": "^5.2.1",
     "tar-stream": "^3.2.0",
     "ws": "^8.21.1",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

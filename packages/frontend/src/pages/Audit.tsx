@@ -15,7 +15,7 @@ export default function Audit() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch("/api/audit")
+    apiFetch("/api/v1/audit")
       .then(async (response) => {
         const body = (await response.json().catch(() => ({}))) as {
           entries?: AuditEntry[];
@@ -28,7 +28,7 @@ export default function Audit() {
       })
       .catch((reason: unknown) => {
         setError(
-          reason instanceof Error ? reason.message : "Failed to load audit log"
+          reason instanceof Error ? reason.message : "Failed to load audit log",
         );
       });
   }, []);
