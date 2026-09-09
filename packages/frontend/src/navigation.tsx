@@ -77,6 +77,7 @@ export function NavLink({
     <a
       {...props}
       href={to}
+      aria-current={pathname === to ? "page" : props["aria-current"]}
       className={`${resolvedClassName || ""}${isActive ? " active" : ""}`.trim()}
       onClick={handleClick}
     />

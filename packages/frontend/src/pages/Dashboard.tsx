@@ -10,6 +10,7 @@ export default function Dashboard() {
   const { user } = useAuth();
   const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [stateFilter, setStateFilter] = useState("all");
   const [showHelp, setShowHelp] = useState(false);
   const handleAction = useCallback(
     async (id: string, action: "start" | "stop" | "restart") => {
@@ -33,13 +34,20 @@ export default function Dashboard() {
     [refresh],
   );
   const filtered = servers.filter((server) =>
+    (stateFilter === "all" || server.state === stateFilter) &&
     `${server.displayName} ${server.gameType} ${server.image}`
       .toLowerCase()
-      .includes(search.toLowerCase()),
+      .includes(search.trim().toLowerCase()),
   );
+  // Keep a selected state available when a refresh changes the last matching
+  // server, so the empty result remains understandable and easy to clear.
+  const states = [...new Set([
+    ...servers.map((server) => server.state),
+    ...(stateFilter === "all" ? [] : [stateFilter]),
+  ])].sort();
 
   return (
-    <div className="page">
+    <div className="page dashboard-page">
       <div className="page__header page__header--actions">
         <div>
           <h1 className="page__title">Servers</h1>
@@ -112,8 +120,22 @@ export default function Dashboard() {
               type="search"
             />
           </label>
-          <span className="muted">
-            {filtered.length} of {servers.length}
+          <label className="state-filter">
+            <span>State</span>
+            <select
+              value={stateFilter}
+              onChange={(event) => setStateFilter(event.target.value)}
+            >
+              <option value="all">All states</option>
+              {states.map((state) => (
+                <option key={state} value={state}>
+                  {state.charAt(0).toUpperCase() + state.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="list-toolbar__count muted" role="status">
+            {filtered.length} of {servers.length} servers
           </span>
         </div>
       )}
@@ -139,7 +161,7 @@ export default function Dashboard() {
       {servers.length > 0 && (
         <section className="server-list" aria-label="Game servers">
           <div className="server-list__header">
-            <span>Server / image</span>
+            <span>Server</span>
             <span>State</span>
             <span>Ports</span>
             <span>Actions</span>
@@ -152,7 +174,15 @@ export default function Dashboard() {
             />
           ))}
           {filtered.length === 0 && (
-            <p className="table-empty">No servers match “{search}”.</p>
+            <div className="server-list__empty">
+              <p>No servers match your filters.</p>
+              <button
+                className="text-link"
+                onClick={() => { setSearch(""); setStateFilter("all"); }}
+              >
+                Clear filters
+              </button>
+            </div>
           )}
         </section>
       )}

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth-context";
+import LudockMark from "../components/LudockMark";
 
 export default function Login() {
   const { login, setup, setupRequired, setupLocked } = useAuth();
@@ -42,7 +43,7 @@ export default function Login() {
     return (
       <main className="login-page">
         <section className="login-card" aria-labelledby="setup-expired-title">
-          <div className="sidebar__logo-icon login-card__logo">LU</div>
+          <LudockMark className="sidebar__logo-icon login-card__logo" />
           <h1 className="login-card__title" id="setup-expired-title">
             Setup window expired
           </h1>
@@ -58,7 +59,7 @@ export default function Login() {
   return (
     <main className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <div className="sidebar__logo-icon login-card__logo">LU</div>
+        <LudockMark className="sidebar__logo-icon login-card__logo" />
         <h1 className="login-card__title">
           {setupRequired ? "Set up Ludock" : "Sign in to Ludock"}
         </h1>

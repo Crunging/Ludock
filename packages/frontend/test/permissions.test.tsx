@@ -49,8 +49,8 @@ function renderServer(value: ManagedContainer, user = friend) {
 describe("server controls", () => {
   it("start/stop sharing never shows commands, logs, files, or restart", async () => {
     const { action } = renderServer(server);
-    expect(screen.queryByRole("button", { name: "Console" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Logs" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Console" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Logs" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Files" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restart" })).toBeNull();
     await userEvent.click(
@@ -68,7 +68,7 @@ describe("server controls", () => {
     };
     renderServer(scoped);
     expect(
-      screen.getByRole("button", { name: "Console", exact: true }),
+      screen.getByRole("link", { name: "Console", exact: true }),
     ).toBeTruthy();
     expect(can(friend, server, "console.execute")).toBe(false);
     expect(can(friend, scoped, "logs.read")).toBe(false);
@@ -90,7 +90,7 @@ describe("server controls", () => {
       screen.queryByRole("button", { name: "Start", exact: true }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Console", exact: true }),
+      screen.queryByRole("link", { name: "Console", exact: true }),
     ).toBeNull();
   });
   it("blocks lifecycle actions while identity needs review", async () => {

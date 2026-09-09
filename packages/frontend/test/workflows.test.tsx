@@ -242,7 +242,12 @@ describe("server management panels", () => {
       ).disabled,
     ).toBe(true);
     const panel = screen.getByRole("tabpanel");
-    expect(panel.getAttribute("aria-labelledby")).toBe("tab-update");
+    expect(panel.getAttribute("aria-labelledby")).toBe(
+      screen.getByRole("tab", { name: "Update", exact: true }).id,
+    );
+    expect(panel.id).toBe(
+      screen.getByRole("tab", { name: "Update", exact: true }).getAttribute("aria-controls"),
+    );
     expect(
       screen
         .getByRole("tab", { name: "Update", exact: true })
@@ -288,7 +293,9 @@ describe("server management panels", () => {
       completeUpdate({ operation: { ...completedUpdate, status: "queued" } });
     });
     await waitFor(() =>
-      expect(screen.getByRole("tabpanel").id).toBe("panel-activity"),
+      expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+        screen.getByRole("tab", { name: "Activity", selected: true }).id,
+      ),
     );
     await userEvent.click(
       screen.getByRole("tab", { name: "Update", exact: true }),
@@ -343,7 +350,9 @@ describe("server management panels", () => {
     );
     await screen.findByText("Backup queued. Follow its progress in Activity.");
     await waitFor(() =>
-      expect(screen.getByRole("tabpanel").id).toBe("panel-activity"),
+      expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+        screen.getByRole("tab", { name: "Activity", selected: true }).id,
+      ),
     );
     expect(apiJson).toHaveBeenCalledWith(
       `/servers/${server.id}/backups`,
@@ -407,7 +416,9 @@ describe("server management panels", () => {
       screen.getByRole("button", { name: "Restore game data" }),
     );
     await waitFor(() =>
-      expect(screen.getByRole("tabpanel").id).toBe("panel-activity"),
+      expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+        screen.getByRole("tab", { name: "Activity", selected: true }).id,
+      ),
     );
     expect(apiJson).toHaveBeenCalledWith(
       `/servers/${server.id}/restores`,

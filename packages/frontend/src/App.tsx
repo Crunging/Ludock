@@ -7,6 +7,7 @@ import Account from "./pages/Account";
 import { useAuth } from "./auth-context";
 import { NavLink } from "./navigation";
 import { useLocation, useNavigate } from "./navigation-context";
+import LudockMark from "./components/LudockMark";
 
 const Console = lazy(() => import("./pages/Console"));
 const Diagnostics = lazy(() => import("./pages/Diagnostics"));
@@ -86,7 +87,7 @@ function App() {
           className="login-card"
           aria-labelledby="connection-error-title"
         >
-          <div className="sidebar__logo-icon login-card__logo">LU</div>
+          <LudockMark className="sidebar__logo-icon login-card__logo" />
           <h1 className="login-card__title" id="connection-error-title">
             Unable to reach Ludock
           </h1>
@@ -157,91 +158,58 @@ function App() {
 
   return (
     <div className="app-layout">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       {!isConsolePage && (
         <aside className="sidebar">
           <div className="sidebar__header">
-            <div className="sidebar__logo">
-              <div className="sidebar__logo-icon">LU</div>
+            <NavLink className="sidebar__logo" to="/" end aria-label="Ludock servers">
+              <LudockMark className="sidebar__logo-icon" />
               <div className="sidebar__logo-text">Ludock</div>
-            </div>
+            </NavLink>
           </div>
-          <nav className="sidebar__nav">
+          <nav className="sidebar__nav" aria-label="Primary navigation">
             <NavLink
               to="/"
               end
-              className={({ isActive }) =>
-                `nav-link ${isActive ? "nav-link--active" : ""}`
-              }
+              className={`nav-link ${serverId || filesId ? "nav-link--active" : ""}`}
+              aria-current={serverId || filesId ? "location" : undefined}
             >
               Servers
             </NavLink>
-            <NavLink
-              to="/account"
-              className={({ isActive }) =>
-                `nav-link ${isActive ? "nav-link--active" : ""}`
-              }
-            >
-              Account
-            </NavLink>
             {user?.role === "admin" && (
               <>
-                <NavLink
-                  to="/diagnostics"
-                  className={({ isActive }) =>
-                    `nav-link ${isActive ? "nav-link--active" : ""}`
-                  }
-                >
-                  Diagnostics
-                </NavLink>
-                <NavLink
-                  to="/settings"
-                  className={({ isActive }) =>
-                    `nav-link ${isActive ? "nav-link--active" : ""}`
-                  }
-                >
-                  Settings
-                </NavLink>
-                <NavLink
-                  to="/users"
-                  className={({ isActive }) =>
-                    `nav-link ${isActive ? "nav-link--active" : ""}`
-                  }
-                >
-                  Users
-                </NavLink>
-                <NavLink
-                  to="/audit"
-                  className={({ isActive }) =>
-                    `nav-link ${isActive ? "nav-link--active" : ""}`
-                  }
-                >
-                  Audit log
-                </NavLink>
-                <NavLink
-                  to="/logs"
-                  className={({ isActive }) =>
-                    `nav-link ${isActive ? "nav-link--active" : ""}`
-                  }
-                >
-                  Ludock logs
-                </NavLink>
+                <div className="sidebar__group" role="group" aria-labelledby="administration-label">
+                  <p className="sidebar__group-label" id="administration-label">Administration</p>
+                  <NavLink to="/users" className="nav-link">Users</NavLink>
+                  <NavLink to="/settings" className="nav-link">Settings</NavLink>
+                  <NavLink to="/diagnostics" className="nav-link">Diagnostics</NavLink>
+                </div>
+                <div className="sidebar__group" role="group" aria-labelledby="history-label">
+                  <p className="sidebar__group-label" id="history-label">History</p>
+                  <NavLink to="/audit" className="nav-link">Audit log</NavLink>
+                  <NavLink to="/logs" className="nav-link">Ludock logs</NavLink>
+                </div>
               </>
             )}
           </nav>
           <div className="sidebar__footer">
-            <span title={user?.role}>{user?.username}</span>
-            <button className="sidebar__logout" onClick={logout}>
-              Sign out
-            </button>
+            <NavLink to="/account" className="nav-link sidebar__account">Account</NavLink>
+            <div className="sidebar__session">
+              <div className="sidebar__identity">
+                <span className="sidebar__username" title={user?.username}>{user?.username}</span>
+                <span className="sidebar__role">{user?.role === "admin" ? "Administrator" : user?.role}</span>
+              </div>
+              <button className="sidebar__logout" onClick={logout}>Sign out</button>
+            </div>
           </div>
         </aside>
       )}
       {!isConsolePage && (
         <header className="mobile-header">
-          <div className="sidebar__logo">
-            <div className="sidebar__logo-icon">LU</div>
+          <NavLink className="sidebar__logo" to="/" end aria-label="Ludock servers">
+            <LudockMark className="sidebar__logo-icon" />
             <div className="sidebar__logo-text">Ludock</div>
-          </div>
+          </NavLink>
           <span className="mobile-header__user">{user?.username}</span>
           <button className="mobile-header__logout" onClick={logout}>
             Sign out
@@ -250,7 +218,7 @@ function App() {
       )}
       {!isConsolePage && (
         <nav className="mobile-nav" aria-label="Primary navigation">
-          <NavLink to="/" end>
+          <NavLink to="/" end className={serverId || filesId ? "nav-link--active" : undefined} aria-current={serverId || filesId ? "location" : undefined}>
             Servers
           </NavLink>
           <NavLink to="/account">Account</NavLink>
@@ -264,6 +232,8 @@ function App() {
         </nav>
       )}
       <main
+        id="main-content"
+        tabIndex={-1}
         className={`main-content ${isConsolePage ? "main-content--console" : ""}`}
       >
         {page}

@@ -225,10 +225,23 @@ absolute paths on the Docker host and inside Ludock.
 - Server lists use readable rows, compact controls, useful empty/error states,
   and keyboard-accessible actions; no permission is inferred from role alone.
 - State and port columns align with their headings across running and stopped
-  rows. Check widths around 1200px and 900px, including wrapped actions and names;
-  narrow layouts switch to stacked rows without horizontal page overflow.
-- At 390px width, navigation can scroll, server actions wrap, forms fit, and data
-  tables remain usable. Console input and file controls do not overflow.
+  rows. Check widths around the content-width breakpoint, including wrapped
+  actions and names; narrow layouts retain labeled ports without page overflow.
+- Search and exact-state filters combine, report the visible count, and provide
+  a clear-filters action when no servers match. A refresh does not reset filters.
+- More actions support Tab, Escape, and outside dismissal. Stop and Restart name
+  the server in a modal confirmation; Cancel has initial focus, Tab cannot enter
+  the page behind the dialog, and dismissal restores focus. No request occurs before confirmation.
+  A restart-only grant remains usable without a stop grant.
+- Detail tabs have one tab stop, support Arrow keys/Home/End, and reference their
+  panels. Switching tabs preserves drafts; action-driven changes move focus into
+  the new panel when the triggering control disappears.
+- At 320px and 390px widths, navigation can scroll, server actions wrap, forms
+  fit, and data tables remain usable. Console input and file controls do not
+  overflow. Touch actions remain at least 44px tall and text inputs avoid zoom.
+- The four-tile Ludock mark appears in navigation and authentication screens.
+  Check the solid favicon at 16px on light and dark browser chrome. Primary
+  controls, placeholder text, focus rings, and permission-limited views stay clear.
 - Grant presets show the actual selected capabilities. Backup downtime, restore
   data replacement, force recreation, and the meaning of image-current results
   are explicit in the relevant flow.

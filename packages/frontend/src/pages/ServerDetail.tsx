@@ -19,10 +19,12 @@ import {
 } from "@ludock/shared";
 import { apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
-import { useNavigate } from "../navigation-context";
+import { NavLink } from "../navigation";
 import { can } from "../permissions";
 import type { ManagedContainer } from "../types";
 import { operationActive } from "../operations";
+import SectionTabs from "../components/SectionTabs";
+import LifecycleConfirmation from "../components/LifecycleConfirmation";
 import ActivityPanel from "../components/server-detail/ActivityPanel";
 import BackupsPanel, {
   type RestoreSelection,
@@ -33,6 +35,7 @@ import UpdatePanel, {
 } from "../components/server-detail/UpdatePanel";
 import AvailabilityPanel from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
+import "./server-detail.css";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
@@ -44,7 +47,6 @@ const defaultSchedule: ScheduleInput = {
 
 export default function ServerDetail({ serverId }: { serverId: string }) {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const admin = user?.role === "admin";
   const [server, setServer] = useState<ManagedContainer | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -61,6 +63,12 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTab] = useState("activity");
+  const [lifecycleAction, setLifecycleAction] = useState<
+    "start" | "stop" | "restart" | null
+  >(null);
+  const [confirmLifecycle, setConfirmLifecycle] = useState<
+    "stop" | "restart" | null
+  >(null);
   // Keep drafts above the panels so changing tabs never discards a selection.
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
   const [update, setUpdate] = useState<UpdateOptions>({
@@ -175,6 +183,26 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
     )
       setTab("activity");
   }
+  async function requestLifecycle(action: "start" | "stop" | "restart") {
+    setConfirmLifecycle(null);
+    if (
+      !can(user, server, `server.${action}`) ||
+      blocked ||
+      loading ||
+      busy ||
+      activeOperation ||
+      (action === "start"
+        ? server?.state === "running"
+        : server?.state !== "running")
+    )
+      return;
+    setLifecycleAction(action);
+    await perform(
+      () => apiJson(`${path}/${action}`, okResponseSchema, { method: "POST" }),
+      `Server ${action === "start" ? "started" : action === "stop" ? "stopped" : "restarted"}.`,
+    );
+    setLifecycleAction(null);
+  }
   async function requestUpdate() {
     if (!admin || !update.confirmed) return;
     if (
@@ -237,9 +265,9 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   if (!server)
     return (
       <div className="page">
-        <button className="text-link" onClick={() => navigate("/")}>
+        <NavLink className="text-link" to="/" end>
           ← Servers
-        </button>
+        </NavLink>
         <div className="alert alert--error" role="alert">
           {error || "Server unavailable."}
         </div>
@@ -258,6 +286,24 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
         ]
       : []),
   ];
+  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
+  const consoleAvailable =
+    (can(user, server, "console.execute") && Boolean(server.gameConsole)) ||
+    can(user, server, "console.shell");
+  const canOpenConsole = consoleAvailable || can(user, server, "logs.read");
+  const canOpenFiles =
+    can(user, server, "files.read") && server.fileRoots.length > 0;
+  const lifecycleActions = (["start", "stop", "restart"] as const).filter(
+    (action) =>
+      can(user, server, `server.${action}`) &&
+      (action === "start"
+        ? server.state !== "running"
+        : server.state === "running"),
+  );
+  const publishedPorts = server.ports
+    .filter((port) => port.public > 0)
+    .map((port) => `${port.public}/${port.type}`)
+    .join(", ");
   const scheduleActions = (
     ["start", "stop", "restart", "backup"] as const
   ).filter((action) =>
@@ -270,39 +316,94 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
 
   return (
     <div className="page server-detail">
-      <button className="text-link back-link" onClick={() => navigate("/")}>
-        ← Servers
-      </button>
-      <div className="page__header page__header--actions">
-        <div>
-          <h1 className="page__title">{server.displayName}</h1>
-          <p className="page__subtitle">{server.image}</p>
+      <NavLink className="text-link back-link" to="/" end>
+        <span aria-hidden="true">←</span> All servers
+      </NavLink>
+      <header className="detail-header">
+        <div className="detail-header__title">
+          <h1 className="page__title" id="server-detail-title" tabIndex={-1}>
+            {server.displayName}
+          </h1>
+          <div className={`server-state server-state--${server.state}`}>
+            <span className="status-dot" aria-hidden="true" />
+            {server.state}
+          </div>
         </div>
-        <div className={`server-state server-state--${server.state}`}>
-          <span className="status-dot" />
-          {server.state}
-        </div>
-      </div>
-      <div className="inline-actions detail-actions">
-        {(can(user, server, "logs.read") ||
-          (can(user, server, "console.execute") && server.gameConsole) ||
-          can(user, server, "console.shell")) && (
-          <button
-            className="secondary-btn"
-            onClick={() => navigate(`/console/${server.id}`)}
-          >
-            Open console / logs
-          </button>
+        <p className="detail-header__identity">
+          <span className="detail-header__game">{server.gameType}</span>
+          {server.name !== server.displayName && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{server.name}</span>
+            </>
+          )}
+        </p>
+        <dl className="detail-metadata">
+          <div>
+            <dt>Image</dt>
+            <dd>
+              <code>{server.image}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>Published ports</dt>
+            <dd>{publishedPorts ? <code>{publishedPorts}</code> : "None"}</dd>
+          </div>
+        </dl>
+        {(canOpenConsole || canOpenFiles || lifecycleActions.length > 0) && (
+          <div className="inline-actions detail-actions">
+            {(canOpenConsole || canOpenFiles) && (
+              <div className="detail-actions__group">
+                {canOpenConsole && (
+                  <NavLink
+                    className="primary-btn"
+                    to={`/console/${encodeURIComponent(server.id)}`}
+                  >
+                    {consoleAvailable ? "Console" : "Logs"}
+                  </NavLink>
+                )}
+                {canOpenFiles && (
+                  <NavLink
+                    className="secondary-btn"
+                    to={`/files/${encodeURIComponent(server.id)}`}
+                  >
+                    Files
+                  </NavLink>
+                )}
+              </div>
+            )}
+            {lifecycleActions.length > 0 && (
+              <div className="detail-actions__group">
+                {lifecycleActions.map((action) => (
+                  <button
+                    type="button"
+                    className={`secondary-btn${action === "stop" ? " secondary-btn--danger" : ""}`}
+                    key={action}
+                    disabled={loading || busy || blocked || Boolean(activeOperation)}
+                    onClick={() => {
+                      if (action === "start") void requestLifecycle(action);
+                      else setConfirmLifecycle(action);
+                    }}
+                  >
+                    {lifecycleAction === action
+                      ? "Working…"
+                      : action.charAt(0).toUpperCase() + action.slice(1)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
-        {can(user, server, "files.read") && server.fileRoots.length > 0 && (
-          <button
-            className="secondary-btn"
-            onClick={() => navigate(`/files/${server.id}`)}
-          >
-            Browse files
-          </button>
-        )}
-      </div>
+      </header>
+      {confirmLifecycle && (
+        <LifecycleConfirmation
+          action={confirmLifecycle}
+          serverName={server.displayName}
+          fallbackFocusId="server-detail-title"
+          onCancel={() => setConfirmLifecycle(null)}
+          onConfirm={() => void requestLifecycle(confirmLifecycle)}
+        />
+      )}
       {blocked && (
         <div className="alert alert--error" role="alert">
           This server’s binding is {server.bindingStatus.replaceAll("_", " ")}.
@@ -341,30 +442,13 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
           {notice}
         </div>
       )}
-      <div
-        className="section-tabs"
-        role="tablist"
-        aria-label="Server management"
+      <SectionTabs
+        label="Server management"
+        tabs={tabs}
+        activeId={activeTab}
+        onChange={setTab}
       >
-        {tabs.map((item) => (
-          <button
-            role="tab"
-            id={`tab-${item.id}`}
-            aria-controls={`panel-${item.id}`}
-            aria-selected={tab === item.id}
-            key={item.id}
-            onClick={() => setTab(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      <section
-        role="tabpanel"
-        id={`panel-${tab}`}
-        aria-labelledby={`tab-${tab}`}
-      >
-        {tab === "activity" && (
+        {activeTab === "activity" && (
           <ActivityPanel
             operations={operations}
             admin={admin}
@@ -381,7 +465,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             }}
           />
         )}
-        {tab === "backups" && (admin || canCreateBackup) && (
+        {activeTab === "backups" && (admin || canCreateBackup) && (
           <BackupsPanel
             serverName={server.displayName}
             path={path}
@@ -408,7 +492,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             }
           />
         )}
-        {tab === "schedules" && canManageSchedules && (
+        {activeTab === "schedules" && canManageSchedules && (
           <SchedulesPanel
             schedules={schedules}
             draft={schedule}
@@ -440,7 +524,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             }
           />
         )}
-        {tab === "update" && admin && (
+        {activeTab === "update" && admin && (
           <UpdatePanel
             serverName={server.displayName}
             capability={capability}
@@ -452,7 +536,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             onSubmit={() => void requestUpdate()}
           />
         )}
-        {tab === "availability" && admin && (
+        {activeTab === "availability" && admin && (
           <AvailabilityPanel
             value={availability}
             onChange={setAvailability}
@@ -474,7 +558,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             }
           />
         )}
-      </section>
+      </SectionTabs>
     </div>
   );
 }
