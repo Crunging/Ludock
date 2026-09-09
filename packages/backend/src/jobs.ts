@@ -33,6 +33,7 @@ import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { suppressMonitoring, setIntentionalStop } from "./monitoring.js";
 import { ludockApiToken } from "./auth.js";
+import { assertObservedServerBinding } from "./identity.js";
 
 export function jobActor(context: JobContext): SessionUser {
   const id = context.job.actorId;
@@ -90,7 +91,6 @@ async function lifecycle(
       `server.${action}`,
       context.job.bindingRevision,
     );
-    jobActor(context);
     context.progress(action);
     suppressMonitoring(server.logical.id);
     try {
@@ -98,7 +98,18 @@ async function lifecycle(
         start: startContainer,
         stop: stopContainer,
         restart: restartContainer,
-      }[action](server.container.id);
+      }[action](server.container.id, (observation) => {
+        assertServerCapability(
+          jobActor(context),
+          server.logical.id,
+          `server.${action}`,
+        );
+        assertObservedServerBinding(
+          server.logical.id,
+          observation,
+          context.job.bindingRevision,
+        );
+      });
       setIntentionalStop(server.logical.id, action === "stop");
       return { action };
     } finally {
@@ -145,6 +156,9 @@ export async function runUpdate(
         const current = await docker
           .getContainer(server.container.id)
           .inspect();
+        assertServerCapability(
+          jobActor(context), server.logical.id, capability,
+        );
         context.progress("pulling", {
           containerId: server.container.id,
           initiallyRunning: current.State.Running,
@@ -225,6 +239,9 @@ export async function runUpdate(
             409,
             "Another manager changed the selected image during the update",
           );
+        assertServerCapability(
+          jobActor(context), server.logical.id, capability,
+        );
         context.progress("recreating", { mutationStarted: true });
         const flags = current.State.Running
           ? ["up", "-d", "--wait", "--wait-timeout", "180"]

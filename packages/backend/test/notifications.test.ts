@@ -103,4 +103,38 @@ describe("Discord notification delivery", () => {
     await deliverNotifications(fetcher);
     assert.equal(calls, 1);
   });
+  it("stops the current batch when notifications are disabled during delivery", async () => {
+    configureNotifications(true, webhook);
+    notifyEvent("first", "First event.");
+    notifyEvent("second", "Second event.");
+    let calls = 0;
+    await deliverNotifications((async () => {
+      calls++;
+      configureNotifications(false);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    assert.equal(calls, 1);
+    assert.deepEqual(
+      deliveries().map((row) => [row.state, row.attempts]),
+      [
+        ["delivered", 1],
+        ["queued", 0],
+      ],
+    );
+  });
+  it("uses a replaced webhook for the remaining queued deliveries", async () => {
+    const replacement =
+      "https://discord.com/api/webhooks/789012/replaced-test-secret";
+    configureNotifications(true, webhook);
+    notifyEvent("first", "First event.");
+    notifyEvent("second", "Second event.");
+    const destinations: unknown[] = [];
+    await deliverNotifications((async (url) => {
+      destinations.push(url);
+      configureNotifications(true, replacement);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    assert.deepEqual(destinations, [webhook, replacement]);
+    assert.equal(deliveries().every((row) => row.state === "delivered"), true);
+  });
 });

@@ -242,26 +242,28 @@ export async function createComposeSnapshot(
           const files = Array.isArray(service.env_file)
             ? service.env_file
             : [service.env_file];
-          service.env_file = await Promise.all(
-            files.map(async (entry) => {
-              const record =
-                typeof entry === "string" ? { path: entry } : object(entry);
-              if (
-                Object.keys(record).some(
-                  (key) => !["path", "required", "format"].includes(key),
-                )
+          const snapshots = [];
+          // Fingerprints follow the declared source order, regardless of how
+          // quickly the filesystem can read each environment file.
+          for (const entry of files) {
+            const record =
+              typeof entry === "string" ? { path: entry } : object(entry);
+            if (
+              Object.keys(record).some(
+                (key) => !["path", "required", "format"].includes(key),
               )
-                throw new AppError(
-                  "UNSUPPORTED_COMPOSE",
-                  400,
-                  "Unsupported environment-file option",
-                );
-              return {
-                ...record,
-                path: await snapshotFile(inputPath(record.path, base)),
-              };
-            }),
-          );
+            )
+              throw new AppError(
+                "UNSUPPORTED_COMPOSE",
+                400,
+                "Unsupported environment-file option",
+              );
+            snapshots.push({
+              ...record,
+              path: await snapshotFile(inputPath(record.path, base)),
+            });
+          }
+          service.env_file = snapshots;
         }
       }
       const copy = path.join(directory, `compose-${inputCount++}.json`);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiJson } from "../api";
+import { ApiRequestError, apiJson } from "../api";
 
 import {
   type ApplicationLogEntry,
@@ -15,12 +15,20 @@ export default function ApplicationLogs() {
   const [loading, setLoading] = useState(true);
   const generation = useRef<string | null>(null);
   const lastId = useRef(0);
-  const requestInFlight = useRef(false);
+  const request = useRef<AbortController | null>(null);
   const logOutput = useRef<HTMLDivElement>(null);
 
-  const loadLogs = useCallback(async (initial = false) => {
-    if (requestInFlight.current) return;
-    requestInFlight.current = true;
+  useEffect(() => () => {
+    request.current?.abort();
+    request.current = null;
+  }, []);
+
+  const loadLogs = useCallback(async () => {
+    if (request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setLoading(true);
+    const initial = generation.current === null;
     try {
       const after = initial ? 0 : lastId.current;
       const processGeneration = generation.current
@@ -29,7 +37,9 @@ export default function ApplicationLogs() {
       const body = await apiJson(
         `/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`,
         applicationLogsResponseSchema,
+        { signal: controller.signal },
       );
+      if (controller.signal.aborted || request.current !== controller) return;
 
       const processRestarted =
         generation.current !== null && generation.current !== body.generation;
@@ -49,25 +59,37 @@ export default function ApplicationLogs() {
       }
       setError(null);
     } catch (reason: unknown) {
+      if (controller.signal.aborted || request.current !== controller) return;
+      if (reason instanceof ApiRequestError && reason.status < 500) {
+        generation.current = null;
+        lastId.current = 0;
+        setEntries([]);
+      }
       setError(
         reason instanceof Error
           ? reason.message
           : "Failed to load application logs",
       );
     } finally {
-      requestInFlight.current = false;
-      setLoading(false);
+      if (request.current === controller && !controller.signal.aborted) {
+        request.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    void loadLogs(true);
-  }, [loadLogs]);
-
-  useEffect(() => {
-    if (paused) return;
+    if (paused) {
+      setLoading(false);
+      return;
+    }
+    void loadLogs();
     const interval = window.setInterval(() => void loadLogs(), 2_000);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      request.current?.abort();
+      request.current = null;
+    };
   }, [loadLogs, paused]);
 
   useEffect(() => {
@@ -92,6 +114,7 @@ export default function ApplicationLogs() {
           <button
             className="secondary-btn"
             type="button"
+            aria-pressed={paused}
             onClick={() => setPaused((value) => !value)}
           >
             {paused ? "Resume" : "Pause"}
@@ -99,6 +122,7 @@ export default function ApplicationLogs() {
           <button
             className="secondary-btn"
             type="button"
+            disabled={loading}
             onClick={() => void loadLogs()}
           >
             Refresh
@@ -106,11 +130,12 @@ export default function ApplicationLogs() {
         </div>
       </div>
 
-      {error && <div className="alert alert--error">{error}</div>}
+      {error && <div className="alert alert--error" role="alert">{error}</div>}
       <div
         className="application-logs-output"
         ref={logOutput}
         role="log"
+        aria-busy={loading}
         aria-live={paused ? "off" : "polite"}
         aria-label="Ludock application logs"
       >

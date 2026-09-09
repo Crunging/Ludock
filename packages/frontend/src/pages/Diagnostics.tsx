@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiJson } from "../api";
 
 import {
@@ -25,30 +25,40 @@ export default function Diagnostics() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState("");
+  const request = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setLoading(true);
     setError(null);
     try {
       const [system, games] = await Promise.all([
-        apiJson("/diagnostics", diagnosticsResponseSchema),
-        apiJson("/integrations", integrationsResponseSchema),
+        apiJson("/diagnostics", diagnosticsResponseSchema, { signal: controller.signal }),
+        apiJson("/integrations", integrationsResponseSchema, { signal: controller.signal }),
       ]);
+      if (controller.signal.aborted || request.current !== controller) return;
       setDiagnostics(system.diagnostics);
       setDockerConnected(system.dockerConnected);
       setComposeAvailable(system.composeAvailable);
       setIntegrations(games.integrations);
     } catch (reason) {
+      if (controller.signal.aborted || request.current !== controller) return;
       setError(
         reason instanceof Error
           ? reason.message
           : "Unable to load diagnostics.",
       );
     } finally {
-      setLoading(false);
+      if (request.current === controller && !controller.signal.aborted) {
+        request.current = null;
+        setLoading(false);
+      }
     }
   }, []);
   useEffect(() => {
     void refresh();
+    return () => request.current?.abort();
   }, [refresh]);
   const integration = integrations.find((item) => item.gameType === selected);
   return (
@@ -77,7 +87,7 @@ export default function Diagnostics() {
         <p className="muted" role="status">
           Loading diagnostics…
         </p>
-      ) : (
+      ) : !error && (
         <>
           <dl className="metadata-list">
             <dt>Docker Engine</dt>
@@ -147,7 +157,7 @@ export default function Diagnostics() {
                       </td>
                       {columns.map((column) => (
                         <td key={column.id}>
-                          {game.capabilities[column.id]?.status || "unverified"}
+                          {game.capabilities[column.id].status}
                         </td>
                       ))}
                     </tr>
@@ -165,8 +175,7 @@ export default function Diagnostics() {
                   <div key={column.id}>
                     <h4>{column.title}</h4>
                     <p>
-                      {integration.capabilities[column.id]?.description ||
-                        "No verified capability information."}
+                      {integration.capabilities[column.id].description}
                     </p>
                   </div>
                 ))}

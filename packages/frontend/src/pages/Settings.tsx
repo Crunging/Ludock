@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   type BackupSettings,
   type ComposeProject,
@@ -28,16 +28,32 @@ export default function Settings() {
   const [notificationConfigured, setNotificationConfigured] = useState(false);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const saving = useRef(false);
+  const active = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
+    const controller = new AbortController();
+    active.current = true;
+    setLoading(true);
+    setLoaded(false);
+    setError(null);
     Promise.all([
-      apiJson("/settings/backups", backupSettingsResponseSchema),
-      apiJson("/compose-projects", composeProjectsResponseSchema),
-      apiJson("/notifications", notificationSettingsResponseSchema),
+      apiJson("/settings/backups", backupSettingsResponseSchema, {
+        signal: controller.signal,
+      }),
+      apiJson("/compose-projects", composeProjectsResponseSchema, {
+        signal: controller.signal,
+      }),
+      apiJson("/notifications", notificationSettingsResponseSchema, {
+        signal: controller.signal,
+      }),
     ])
       .then(([backupResponse, projectResponse, notificationResponse]) => {
+        if (controller.signal.aborted) return;
         if (backupResponse.settings) {
           setBackup(backupResponse.settings);
           setBackupConfigured(true);
@@ -45,49 +61,70 @@ export default function Settings() {
         setProjects(projectResponse.projects);
         setNotificationConfigured(notificationResponse.configured);
         setNotificationEnabled(notificationResponse.enabled);
+        setLoaded(true);
       })
-      .catch((reason) =>
-        setError(
-          reason instanceof Error ? reason.message : "Unable to load settings.",
-        ),
-      )
-      .finally(() => setLoading(false));
-  }, []);
-  async function save(action: () => Promise<void>, message: string) {
+      .catch((reason) => {
+        if (!controller.signal.aborted)
+          setError(
+            reason instanceof Error ? reason.message : "Unable to load settings.",
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => {
+      active.current = false;
+      controller.abort();
+    };
+  }, [loadAttempt]);
+  async function save<T,>(
+    action: () => Promise<T>,
+    message: string,
+    apply: (result: T) => void,
+  ) {
+    if (!loaded || saving.current) return;
+    saving.current = true;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await action();
+      const result = await action();
+      if (!active.current) return;
+      apply(result);
       setNotice(message);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to save settings.",
-      );
+      if (active.current)
+        setError(
+          reason instanceof Error ? reason.message : "Unable to save settings.",
+        );
     } finally {
-      setBusy(false);
+      saving.current = false;
+      if (active.current) setBusy(false);
     }
   }
   async function saveBackup(event: FormEvent) {
     event.preventDefault();
-    await save(async () => {
-      await apiJson(
+    const submitted = backup;
+    await save(
+      () => apiJson(
         "/settings/backups",
         backupSettingsResponseSchema,
-        jsonBody("PUT", backup),
-      );
-      setBackupConfigured(true);
-    }, "Backup settings saved.");
+        jsonBody("PUT", submitted),
+      ),
+      "Backup settings saved.",
+      ({ settings }) => {
+        setBackupConfigured(Boolean(settings));
+        if (settings)
+          setBackup((current) => current === submitted ? settings : current);
+      },
+    );
   }
   async function registerProject(event: FormEvent) {
     event.preventDefault();
-    await save(async () => {
-      const lines = (value: string) =>
-        value
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-      await apiJson(
+    const lines = (value: string) =>
+      value.split("\n").map((line) => line.trim()).filter(Boolean);
+    await save(
+      () => apiJson(
         "/compose-projects",
         composeProjectResponseSchema,
         jsonBody("POST", {
@@ -96,31 +133,40 @@ export default function Settings() {
           composeFiles: lines(composeFiles),
           envFiles: lines(envFiles),
         }),
-      );
-      setProjects(
-        (await apiJson("/compose-projects", composeProjectsResponseSchema))
-          .projects,
-      );
-      setProjectName("");
-      setProjectDirectory("");
-      setComposeFiles("");
-      setEnvFiles("");
-    }, "Compose project registered.");
+      ),
+      "Compose project registered.",
+      ({ project }) => {
+        setProjects((current) => [
+          ...current.filter((item) => item.id !== project.id),
+          project,
+        ]);
+        setProjectName((current) => current === projectName ? "" : current);
+        setProjectDirectory((current) => current === projectDirectory ? "" : current);
+        setComposeFiles((current) => current === composeFiles ? "" : current);
+        setEnvFiles((current) => current === envFiles ? "" : current);
+      },
+    );
   }
   async function saveNotifications(event: FormEvent) {
     event.preventDefault();
-    await save(async () => {
-      await apiJson(
+    await save(
+      () => apiJson(
         "/notifications",
         notificationSettingsResponseSchema,
         jsonBody("PUT", {
           enabled: notificationEnabled,
           ...(webhookUrl.trim() ? { webhookUrl: webhookUrl.trim() } : {}),
         }),
-      );
-      if (webhookUrl.trim()) setNotificationConfigured(true);
-      setWebhookUrl("");
-    }, "Notification settings saved.");
+      ),
+      "Notification settings saved.",
+      (response) => {
+        setNotificationConfigured(response.configured);
+        setNotificationEnabled((current) =>
+          current === notificationEnabled ? response.enabled : current,
+        );
+        setWebhookUrl((current) => current === webhookUrl ? "" : current);
+      },
+    );
   }
   return (
     <div className="page settings-page">
@@ -144,6 +190,13 @@ export default function Settings() {
         <p className="muted" role="status">
           Loading settings…
         </p>
+      ) : !loaded ? (
+        <button
+          className="secondary-btn"
+          onClick={() => setLoadAttempt((value) => value + 1)}
+        >
+          Try again
+        </button>
       ) : (
         <>
           <section
@@ -287,18 +340,13 @@ export default function Settings() {
                                 `Unregister ${project.projectName}? This disables Ludock updates for its services; it does not stop or delete containers.`,
                               )
                             )
-                              void save(async () => {
-                                await apiJson(
-                                  `/compose-projects/${encodeURIComponent(project.id)}`,
-                                  okResponseSchema,
-                                  { method: "DELETE" },
-                                );
-                                setProjects((current) =>
-                                  current.filter(
-                                    (value) => value.id !== project.id,
-                                  ),
-                                );
-                              }, "Project unregistered.");
+                              void save(() => apiJson(
+                                `/compose-projects/${encodeURIComponent(project.id)}`,
+                                okResponseSchema,
+                                { method: "DELETE" },
+                              ), "Project unregistered.", () => {
+                                setProjects((current) => current.filter((value) => value.id !== project.id));
+                              });
                           }}
                         >
                           Unregister

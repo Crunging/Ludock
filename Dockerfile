@@ -36,7 +36,8 @@ RUN pnpm install --prod --frozen-lockfile
 FROM node:24-alpine${ALPINE_VERSION} AS node-runtime
 
 FROM alpine:${ALPINE_VERSION} AS runtime
-RUN apk add --no-cache libstdc++ docker-cli docker-cli-compose
+RUN apk upgrade --no-cache \
+    && apk add --no-cache libstdc++ docker-cli docker-cli-compose
 WORKDIR /app
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node

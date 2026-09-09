@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { apiJson, jsonBody } from "../api";
 
 import {
@@ -17,67 +17,109 @@ export default function Account() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const request = useRef<AbortController | null>(null);
+  const mutation = useRef<AbortController | null>(null);
 
   const loadSessions = useCallback(async () => {
-    const body = await apiJson("/account/sessions", sessionsResponseSchema);
-    setSessions(body.sessions);
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    setSessions([]);
+    try {
+      const body = await apiJson("/account/sessions", sessionsResponseSchema, { signal: controller.signal });
+      if (!controller.signal.aborted && request.current === controller) setSessions(body.sessions);
+    } catch (reason) {
+      if (!controller.signal.aborted && request.current === controller)
+        setSessionsError(reason instanceof Error ? reason.message : "Failed to load sessions");
+    } finally {
+      if (!controller.signal.aborted && request.current === controller) {
+        request.current = null;
+        setSessionsLoading(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
-    loadSessions().catch((reason: unknown) =>
-      setError(
-        reason instanceof Error ? reason.message : "Failed to load sessions",
-      ),
-    );
+    void loadSessions();
+    return () => {
+      request.current?.abort();
+      mutation.current?.abort();
+    };
   }, [loadSessions]);
 
   const changePassword = async (event: FormEvent) => {
     event.preventDefault();
+    if (mutation.current) return;
     setError(null);
     setMessage(null);
     if (newPassword !== confirmPassword) {
       setError("New passwords do not match.");
       return;
     }
+    const controller = new AbortController();
+    mutation.current = controller;
     setBusy(true);
     try {
       await apiJson(
         "/account/change-password",
         okResponseSchema,
-        jsonBody("POST", {
-          currentPassword,
-          newPassword,
-        } satisfies ChangePasswordRequest),
+        {
+          ...jsonBody("POST", { currentPassword, newPassword } satisfies ChangePasswordRequest),
+          signal: controller.signal,
+        },
       );
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
+      if (controller.signal.aborted) return;
+      setCurrentPassword((value) => value === currentPassword ? "" : value);
+      setNewPassword((value) => value === newPassword ? "" : value);
+      setConfirmPassword((value) => value === confirmPassword ? "" : value);
       setMessage("Password changed. Other sessions have been signed out.");
       await loadSessions();
     } catch (reason) {
+      if (controller.signal.aborted) return;
       setError(
         reason instanceof Error ? reason.message : "Failed to change password",
       );
     } finally {
-      setBusy(false);
+      if (mutation.current === controller) {
+        mutation.current = null;
+        if (!controller.signal.aborted) setBusy(false);
+      }
     }
   };
 
   const revokeSession = async (session: SessionSummary) => {
+    if (mutation.current || sessionsLoading || sessionsError) return;
+    const controller = new AbortController();
+    mutation.current = controller;
+    setBusy(true);
     setError(null);
+    setMessage(null);
     try {
       await apiJson(`/account/sessions/${session.id}`, okResponseSchema, {
         method: "DELETE",
+        signal: controller.signal,
       });
+      if (controller.signal.aborted) return;
       if (session.current) {
         window.location.reload();
         return;
       }
+      setMessage("Session revoked.");
       await loadSessions();
     } catch (reason) {
+      if (controller.signal.aborted) return;
       setError(
         reason instanceof Error ? reason.message : "Failed to revoke session",
       );
+    } finally {
+      if (mutation.current === controller) {
+        mutation.current = null;
+        if (!controller.signal.aborted) setBusy(false);
+      }
     }
   };
 
@@ -90,8 +132,8 @@ export default function Account() {
         </p>
       </div>
 
-      {error && <div className="alert alert--error">{error}</div>}
-      {message && <div className="alert alert--success">{message}</div>}
+      {error && <div className="alert alert--error" role="alert">{error}</div>}
+      {message && <div className="alert alert--success" role="status">{message}</div>}
 
       <form className="settings-card" onSubmit={changePassword}>
         <h2>Change password</h2>
@@ -101,6 +143,7 @@ export default function Account() {
             <input
               type="password"
               autoComplete="current-password"
+              maxLength={128}
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
               required
@@ -131,13 +174,21 @@ export default function Account() {
             />
           </label>
           <button className="primary-btn" disabled={busy}>
-            {busy ? "Updating..." : "Change password"}
+            {busy ? "Working…" : "Change password"}
           </button>
         </div>
       </form>
 
       <section className="settings-section">
-        <h2>Active sessions</h2>
+        <div className="section-heading">
+          <h2>Active sessions</h2>
+          <button className="secondary-btn" disabled={sessionsLoading || busy} onClick={() => void loadSessions()}>
+            Refresh sessions
+          </button>
+        </div>
+        {sessionsLoading && <p className="muted" role="status">Loading sessions…</p>}
+        {sessionsError && <div className="alert alert--error" role="alert">Unable to load sessions: {sessionsError}</div>}
+        {!sessionsLoading && !sessionsError && sessions.length === 0 && <p className="muted">No active sessions.</p>}
         <div className="settings-list">
           {sessions.map((session) => (
             <article className="settings-card session-row" key={session.id}>
@@ -154,6 +205,7 @@ export default function Account() {
               </div>
               <button
                 className="secondary-btn secondary-btn--danger"
+                disabled={busy || sessionsLoading}
                 onClick={() => revokeSession(session)}
               >
                 {session.current ? "Sign out" : "Revoke"}

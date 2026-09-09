@@ -8,7 +8,6 @@ import {
 import { getLogicalServer, type LogicalServer } from "./identity.js";
 import { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
 export { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
-export const CAPABILITIES = SERVER_CAPABILITIES;
 
 const READ_CAPABILITIES = new Set<ServerCapability>([
   "server.view",
@@ -71,7 +70,7 @@ export function assertAdministrator(actor: SessionUser): SessionUser {
   return current;
 }
 
-export function roleCapabilities(role: UserRecord["role"]): ServerCapability[] {
+function roleCapabilities(role: UserRecord["role"]): ServerCapability[] {
   if (role === "admin") return [...SERVER_CAPABILITIES];
   return SERVER_CAPABILITIES.filter((capability) =>
     (role === "operator" ? OPERATOR_CAPABILITIES : READ_CAPABILITIES).has(

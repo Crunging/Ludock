@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 import type { WebSocket } from "ws";
+import { ConsoleOutputRedactor } from "../src/console-redaction.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -97,6 +98,22 @@ describe("Docker log decoder", () => {
     assert.equal(decoder.end(), true);
     assert.deepEqual(output, ["plain ", "output"]);
   });
+
+  for (const framed of [false, true]) {
+    it(`preserves and redacts Unicode credentials split across ${framed ? "Docker frames" : "TTY chunks"}`, () => {
+      const output: string[] = [];
+      const secret = "päss🔑word";
+      const redactor = new ConsoleOutputRedactor([secret], (value) => output.push(value));
+      const decoder = new DockerLogDecoder((_type, value) => redactor.push(value));
+      for (const byte of Buffer.from(`before ${secret} after`)) {
+        const payload = Buffer.from([byte]);
+        decoder.push(framed ? frame(1, payload) : payload);
+      }
+      assert.equal(decoder.end(), true);
+      redactor.end();
+      assert.equal(output.join(""), "before [redacted] after");
+    });
+  }
 });
 
 describe("Docker log WebSocket", () => {
@@ -184,7 +201,7 @@ describe("Docker log WebSocket", () => {
   });
 });
 
-function frame(type: 1 | 2, value: string): Buffer {
+function frame(type: 1 | 2, value: string | Buffer): Buffer {
   const payload = Buffer.from(value);
   const result = Buffer.alloc(8 + payload.length);
   result[0] = type;

@@ -14,7 +14,7 @@ export async function apiFetch(
     credentials: "same-origin",
   });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !init.signal?.aborted) {
     window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
   }
 

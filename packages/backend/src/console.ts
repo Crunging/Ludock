@@ -128,6 +128,9 @@ export async function handleConsoleConnection(
     try {
       await withLocks(access.context.lockKeys, async () => {
         const current = await access.refresh();
+        const assertAccess = () => {
+          if (!access.allowed()) throw new Error("Console access changed");
+        };
         const currentAdapter = resolveGameConsoleAdapter(current.container);
         if (mode === "game" && !currentAdapter)
           throw new Error("Console unavailable");
@@ -171,8 +174,9 @@ export async function handleConsoleConnection(
               currentAdapter!,
               command,
               output,
+              assertAccess,
             );
-          else await executeShell(getContainer(containerId), command, output);
+          else await executeShell(getContainer(containerId), command, output, assertAccess);
           writeAuditLog({
             userId: actorId,
             action:
@@ -273,6 +277,7 @@ async function executeShell(
   container: Docker.Container,
   command: string,
   output: GameCommandOutput,
+  assertAccess: () => void,
 ): Promise<void> {
   // Run the timeout inside the managed container. Closing a Docker exec stream
   // alone does not terminate its process and must never be used as a substitute.
@@ -282,17 +287,25 @@ async function executeShell(
     AttachStderr: true,
     Tty: false,
   });
+  assertAccess();
   const stream = await exec.start({ hijack: true, stdin: false });
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  stdout.on("data", (chunk: Buffer) => output.stdout(chunk.toString()));
-  stderr.on("data", (chunk: Buffer) => output.stderr(chunk.toString()));
-  await new Promise<void>((resolve, reject) => {
-    stream.once("end", resolve);
-    stream.once("close", resolve);
-    stream.once("error", () => reject(new Error("Shell stream failed")));
-    getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-  });
+  stdout.setEncoding("utf8");
+  stderr.setEncoding("utf8");
+  stdout.on("data", (chunk: string) => output.stdout(chunk));
+  stderr.on("data", (chunk: string) => output.stderr(chunk));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      stream.once("end", resolve);
+      stream.once("close", resolve);
+      stream.once("error", () => reject(new Error("Shell stream failed")));
+      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
+    });
+  } finally {
+    stdout.end();
+    stderr.end();
+  }
   const result = await exec.inspect();
   if (result.Running || result.ExitCode !== 0)
     throw new Error("Shell command failed or timed out");

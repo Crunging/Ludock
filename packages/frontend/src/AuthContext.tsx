@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AUTH_REQUIRED_EVENT, ApiRequestError, apiJson, jsonBody } from "./api";
 import {
   type CredentialsRequest,
-  type SetupRequest,
   authStatusSchema,
   authUserResponseSchema,
   okResponseSchema,
@@ -11,8 +10,17 @@ import { AuthContext, type AuthUser } from "./auth-context";
 
 const STATUS_RETRY_DELAYS_MS = [250, 500, 1_000];
 
-function retryDelay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+function retryDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+    if (signal.aborted) finish();
+  });
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -22,39 +30,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [setupLocked, setSetupLocked] = useState(false);
   const [setupRemainingMs, setSetupRemainingMs] = useState<number | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const revision = useRef(0);
+  const statusRequest = useRef<AbortController | null>(null);
+  const authRequest = useRef<AbortController | null>(null);
+
+  const invalidateStatus = useCallback(() => {
+    revision.current += 1;
+    statusRequest.current?.abort();
+    statusRequest.current = null;
+    return revision.current;
+  }, []);
 
   const refreshStatus = useCallback(async () => {
+    if (authRequest.current) return;
+    const owner = invalidateStatus();
+    const controller = new AbortController();
+    statusRequest.current = controller;
     setLoading(true);
     setStatusError(false);
 
-    for (
-      let attempt = 0;
-      attempt <= STATUS_RETRY_DELAYS_MS.length;
-      attempt += 1
-    ) {
+    for (let attempt = 0; attempt <= STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (controller.signal.aborted || revision.current !== owner) return;
       try {
-        const status = await apiJson("/auth/status", authStatusSchema);
+        const status = await apiJson("/auth/status", authStatusSchema, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || revision.current !== owner) return;
         setSetupRequired(status.setupRequired);
         setSetupLocked(status.setupLocked);
         setSetupRemainingMs(status.setupRemainingMs);
         setUser(status.authenticated ? status.user : null);
+        statusRequest.current = null;
         setLoading(false);
         return;
       } catch {
+        if (controller.signal.aborted || revision.current !== owner) return;
         const delay = STATUS_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) {
+          statusRequest.current = null;
+          setUser(null);
           setStatusError(true);
           setLoading(false);
           return;
         }
-        await retryDelay(delay);
+        await retryDelay(delay, controller.signal);
       }
     }
-  }, []);
+  }, [invalidateStatus]);
 
   useEffect(() => {
+    const requireAuth = () => {
+      invalidateStatus();
+      setUser(null);
+      setStatusError(false);
+      setLoading(false);
+    };
+    window.addEventListener(AUTH_REQUIRED_EVENT, requireAuth);
     void refreshStatus();
-  }, [refreshStatus]);
+    return () => {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, requireAuth);
+      invalidateStatus();
+      authRequest.current?.abort();
+      authRequest.current = null;
+    };
+  }, [invalidateStatus, refreshStatus]);
 
   useEffect(() => {
     if (!setupRequired || setupLocked || setupRemainingMs === null) return;
@@ -65,63 +104,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [setupLocked, setupRemainingMs, setupRequired]);
 
-  useEffect(() => {
-    const requireAuth = () => setUser(null);
-    window.addEventListener(AUTH_REQUIRED_EVENT, requireAuth);
-    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, requireAuth);
-  }, []);
-
-  const login = useCallback(
-    async (username: string, password: string): Promise<string | null> => {
+  const authenticate = useCallback(
+    async (
+      path: "/auth/login" | "/auth/setup",
+      username: string,
+      password: string,
+    ): Promise<string | null> => {
+      // Serialize cookie-changing requests; aborting a request cannot undo a Set-Cookie response.
+      if (authRequest.current)
+        return "Another sign-in request is still in progress.";
+      const owner = invalidateStatus();
+      const controller = new AbortController();
+      authRequest.current = controller;
       try {
-        const { user } = await apiJson(
-          "/auth/login",
-          authUserResponseSchema,
-          jsonBody("POST", {
-            username,
-            password,
-          } satisfies CredentialsRequest),
-        );
-        setUser(user);
-        return null;
-      } catch (error) {
-        return error instanceof Error ? error.message : "Unable to sign in.";
-      }
-    },
-    [],
-  );
-
-  const setup = useCallback(
-    async (username: string, password: string): Promise<string | null> => {
-      try {
-        const { user } = await apiJson(
-          "/auth/setup",
-          authUserResponseSchema,
-          jsonBody("POST", { username, password } satisfies SetupRequest),
-        );
+        const { user } = await apiJson(path, authUserResponseSchema, {
+          ...jsonBody("POST", { username, password } satisfies CredentialsRequest),
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || revision.current !== owner)
+          return "Your session changed. Please sign in again.";
         setSetupRequired(false);
         setSetupLocked(false);
         setSetupRemainingMs(null);
+        setStatusError(false);
+        setLoading(false);
         setUser(user);
         return null;
       } catch (error) {
-        if (error instanceof ApiRequestError && error.status === 403)
+        if (
+          !controller.signal.aborted && revision.current === owner &&
+          path === "/auth/setup" && error instanceof ApiRequestError &&
+          error.status === 403
+        )
           setSetupLocked(true);
-        return error instanceof Error
-          ? error.message
-          : "Unable to complete setup.";
+        return error instanceof Error ? error.message : "Unable to sign in.";
+      } finally {
+        if (authRequest.current === controller) authRequest.current = null;
       }
     },
-    [],
+    [invalidateStatus],
+  );
+
+  const login = useCallback(
+    (username: string, password: string) => authenticate("/auth/login", username, password),
+    [authenticate],
+  );
+  const setup = useCallback(
+    (username: string, password: string) => authenticate("/auth/setup", username, password),
+    [authenticate],
   );
 
   const logout = useCallback(async () => {
+    if (authRequest.current) return;
+    const owner = invalidateStatus();
+    const controller = new AbortController();
+    authRequest.current = controller;
+    setUser(null);
+    setLoading(true);
+    setStatusError(false);
     try {
-      await apiJson("/auth/logout", okResponseSchema, { method: "POST" });
+      await apiJson("/auth/logout", okResponseSchema, {
+        method: "POST",
+        signal: controller.signal,
+      });
+    } catch {
+      if (!controller.signal.aborted && revision.current === owner) setStatusError(true);
     } finally {
-      setUser(null);
+      if (authRequest.current === controller) authRequest.current = null;
+      if (!controller.signal.aborted && revision.current === owner) setLoading(false);
     }
-  }, []);
+  }, [invalidateStatus]);
 
   return (
     <AuthContext.Provider

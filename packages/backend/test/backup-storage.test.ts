@@ -9,17 +9,20 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { Readable } from "node:stream";
+import { Duplex, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import * as tar from "tar-stream";
 import { createHash, randomUUID } from "node:crypto";
+import type Docker from "dockerode";
 import {
   archiveEntryMetadata,
   mappedArchiveHeader,
   approvedBackupDirectory,
   archiveValidator,
   backupFilePath,
+  extractRootToStage,
+  helperExec,
   validateArchive,
   validateArchiveEntry,
 } from "../src/backup-storage.js";
@@ -60,6 +63,81 @@ async function archive(
 }
 
 describe("backup storage boundaries", () => {
+  it("rechecks access after helper exec preparation before starting a restore", async () => {
+    let allowed = true;
+    let starts = 0;
+    const helper = {
+      exec: async () => {
+        allowed = false;
+        return { start: async () => { starts++; } };
+      },
+    } as unknown as Docker.Container;
+    const assertAccess = () => {
+      if (!allowed) throw new Error("Access revoked during preparation");
+    };
+    await assert.rejects(
+      helperExec(helper, ["node", "restore-helper"], {}, assertAccess),
+      /Access revoked/,
+    );
+    allowed = true;
+    await assert.rejects(
+      extractRootToStage(
+        directory, randomUUID(), helper, roots[0], "/data",
+        `.ludock-restore-${randomUUID()}`, roots, 10000, "checksum",
+        assertAccess,
+      ),
+      /Access revoked/,
+    );
+    assert.equal(starts, 0);
+  });
+  it(
+    "stops streaming restore data when access changes after extraction starts",
+    { skip: process.platform !== "linux" },
+    async () => {
+      const bytes = await archive([
+        {
+          header: { name: "snapshot/root-0/world.txt", type: "file", size: 5 },
+          body: "hello",
+        },
+      ]);
+      const id = randomUUID();
+      await writeFile(await backupFilePath(directory, id), bytes);
+      let allowed = true;
+      const writes: Buffer[] = [];
+      const socket = new Duplex({
+        read() {},
+        write(chunk: Buffer, _encoding, callback) {
+          writes.push(Buffer.from(chunk));
+          allowed = false;
+          callback();
+        },
+        final(callback) {
+          this.push(null);
+          callback();
+        },
+      });
+      const helper = {
+        exec: async () => ({
+          start: async () => socket,
+          inspect: async () => ({ ExitCode: 0 }),
+        }),
+      } as unknown as Docker.Container;
+      await assert.rejects(
+        extractRootToStage(
+          directory, id, helper, roots[0], "/data",
+          `.ludock-restore-${randomUUID()}`, roots, 10000,
+          createHash("sha256").update(bytes).digest("hex"),
+          () => {
+            if (!allowed) throw new Error("Access revoked during streaming");
+          },
+        ),
+        /Access revoked/,
+      );
+      assert.equal(writes.length, 1);
+      assert.match(writes[0].toString(), /world\.txt/);
+      assert.equal(socket.destroyed, true);
+    },
+  );
   it("preserves large Linux IDs and future timestamps through tar repacking without source path overrides", async () => {
     const source = {
       name: "source/world",

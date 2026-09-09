@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import type { WebSocket } from "ws";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
@@ -140,6 +141,10 @@ export async function handleContainerLogsConnection(
 export class DockerLogDecoder {
   private mode: "unknown" | "raw" | "multiplexed" = "unknown";
   private buffer = Buffer.alloc(0);
+  private readonly text = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
 
   constructor(
     private readonly output: (type: "stdout" | "stderr", data: string) => void,
@@ -148,7 +153,7 @@ export class DockerLogDecoder {
   push(chunk: Buffer): void {
     if (chunk.length === 0) return;
     if (this.mode === "raw") {
-      this.output("stdout", chunk.toString());
+      this.write("stdout", chunk);
       return;
     }
 
@@ -186,7 +191,7 @@ export class DockerLogDecoder {
       }
       if (this.buffer.length < 8 + frameSize) return;
       const payload = this.buffer.subarray(8, 8 + frameSize);
-      this.output(streamType === 2 ? "stderr" : "stdout", payload.toString());
+      this.write(streamType === 2 ? "stderr" : "stdout", payload);
       this.buffer = this.buffer.subarray(8 + frameSize);
     }
   }
@@ -195,13 +200,22 @@ export class DockerLogDecoder {
     if (this.mode === "unknown" && this.buffer.length > 0) {
       this.useRawMode();
     }
+    for (const type of ["stdout", "stderr"] as const) {
+      const final = this.text[type].end();
+      if (final) this.output(type, final);
+    }
     return this.buffer.length === 0;
+  }
+
+  private write(type: "stdout" | "stderr", chunk: Buffer): void {
+    const value = this.text[type].write(chunk);
+    if (value) this.output(type, value);
   }
 
   private useRawMode(): void {
     this.mode = "raw";
     if (this.buffer.length > 0) {
-      this.output("stdout", this.buffer.toString());
+      this.write("stdout", this.buffer);
       this.buffer = Buffer.alloc(0);
     }
   }

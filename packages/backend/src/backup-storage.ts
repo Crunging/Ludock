@@ -622,6 +622,7 @@ export async function helperExec(
   container: Docker.Container,
   command: string[],
   environment: Record<string, string> = {},
+  assertAccess?: () => void,
 ): Promise<string> {
   const execution = await container.exec({
     Cmd: command,
@@ -629,6 +630,7 @@ export async function helperExec(
     AttachStdout: true,
     AttachStderr: true,
   });
+  assertAccess?.();
   const stream = await execution.start({ hijack: true, stdin: false });
   const output = new PassThrough(),
     errors = new PassThrough();
@@ -677,6 +679,7 @@ export async function helperExec(
 async function helperArchive(
   container: Docker.Container,
   root: string,
+  assertAccess?: () => void,
 ): Promise<Readable> {
   const execution = await container.exec({
     Cmd: [
@@ -688,6 +691,7 @@ async function helperArchive(
     AttachStdout: true,
     AttachStderr: true,
   });
+  assertAccess?.();
   const stream = await execution.start({ hijack: true, stdin: false });
   const output = new PassThrough(),
     errors = new PassThrough();
@@ -741,6 +745,7 @@ export async function writeSnapshot(
   id: string,
   availableBytes: number,
   assertStopped: () => Promise<void>,
+  assertAccess?: () => void,
 ): Promise<{ size: number; checksum: string }> {
   if (!uuidPattern.test(id))
     throw failBackup("BACKUP_ID", "Invalid backup identifier.");
@@ -809,6 +814,7 @@ export async function writeSnapshot(
       const input = await helperArchive(
         helper.container,
         helperRoot(context, root),
+        assertAccess,
       );
       const extract = tar.extract();
       let prefix: string | undefined;
@@ -909,6 +915,7 @@ export async function extractRootToStage(
   roots: readonly BackupRoot[],
   maxBytes: number,
   checksum: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   const execution = await helper.exec({
     Cmd: [
@@ -921,6 +928,7 @@ export async function extractRootToStage(
     AttachStdout: true,
     AttachStderr: true,
   });
+  assertAccess?.();
   const socket = await execution.start({ hijack: true, stdin: true });
   const ignored = new PassThrough();
   ignored.resume();
@@ -957,6 +965,7 @@ export async function extractRootToStage(
   void completed.catch(() => {});
   const write = (value: Buffer) =>
     new Promise<void>((resolve, reject) => {
+      assertAccess?.();
       socket.write(value, (error?: Error | null) =>
         error ? reject(error) : resolve(),
       );

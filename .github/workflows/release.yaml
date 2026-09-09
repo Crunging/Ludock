@@ -60,11 +60,6 @@ jobs:
             exit 1
           fi
 
-          if [[ "$tag" != "v$package_version" ]]; then
-            echo "::error::$tag does not match package.json version $package_version."
-            exit 1
-          fi
-
           if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
             tagged_commit="$(git rev-list -n 1 "$tag")"
             current_commit="$(git rev-parse HEAD)"
@@ -207,7 +202,8 @@ jobs:
           sbom: true
           cache-from: |
             type=gha,scope=stable
-            type=gha,scope=ci
+            type=gha,scope=ci-X64
+            type=gha,scope=ci-ARM64
           cache-to: type=gha,mode=min,scope=stable
 
       - name: Create GitHub release

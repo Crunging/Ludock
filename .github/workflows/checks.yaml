@@ -129,7 +129,7 @@ jobs:
           docker run --rm ludock:ci docker --version
           docker run --rm ludock:ci docker compose version
           docker run -d --name smoke -p 3000:3000 ludock:ci
-          trap 'docker rm -f smoke >/dev/null 2>&1 || true' EXIT
+          trap 'docker rm -fv smoke >/dev/null 2>&1 || true' EXIT
 
           # Without a Docker socket, "degraded" confirms the process is serving.
           for _ in $(seq 1 30); do

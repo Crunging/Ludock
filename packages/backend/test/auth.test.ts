@@ -38,6 +38,18 @@ describe("account authentication", () => {
     assert.equal(await verifyPassword("wrong-password", encoded), false);
   });
 
+  it("fails closed for malformed stored hashes, including an empty decoded key", async () => {
+    const salt = Buffer.alloc(16, 1).toString("base64url");
+    const key = Buffer.alloc(64, 2).toString("base64url");
+    for (const encoded of [
+      `scrypt$32768$8$3$${salt}$!`,
+      `scrypt$32768$8$3$!$${key}`,
+      `scrypt$32769$8$3$${salt}$${key}`,
+      `scrypt$32768$8$3$${salt}$${key}$extra`,
+      `scrypt$32768$8$3$${salt}$${key.slice(1)}`,
+    ]) assert.equal(await verifyPassword("any-password", encoded), false);
+  });
+
   it("locks initial setup when the startup window expires", async () => {
     let now = 1_000;
     const setupWindow = new SetupWindow(() => now, 100);

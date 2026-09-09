@@ -6,6 +6,7 @@ import {
   normalizeRelativePath,
   isSafeWritableDataMount,
   acquireFileContainer,
+  createDirectory,
   openDownload,
   pumpDockerDownload,
 } from "../src/file-storage.js";
@@ -314,6 +315,98 @@ describe("scoped file helper projections", () => {
     docker.createContainer = originals.createContainer;
     docker.modem.demuxStream = originals.demux;
   });
+  it("rejects a rename after authorization before proving or exposing mounts", async () => {
+    let inspectedVolumes = 0;
+    let createdHelpers = 0;
+    const server = {
+      id: "physical",
+      name: "before-rename",
+      image: "example/game",
+      gameType: "unknown",
+      labels: { "ludock.enable": "true" },
+      fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+    } as ManagedContainer;
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: server.id,
+        Name: "/after-rename",
+        Config: { Image: server.image, Labels: server.labels },
+        Mounts: [
+          {
+            Type: "volume",
+            Name: "game-data",
+            Source: "game-data",
+            Destination: "/data",
+            RW: true,
+          },
+        ],
+      }),
+    })) as unknown as typeof docker.getContainer;
+    docker.getVolume = (() => {
+      inspectedVolumes++;
+      return { inspect: async () => ({ Driver: "local", Options: {} }) };
+    }) as unknown as typeof docker.getVolume;
+    docker.createContainer = (async () => {
+      createdHelpers++;
+      throw new Error("Unexpected helper creation");
+    }) as unknown as typeof docker.createContainer;
+    await assert.rejects(
+      createDirectory(server, "root-0", "", "new-folder", () => {}),
+      (error) =>
+        error instanceof FileStorageError &&
+        error.code === "FILE_TARGET_CHANGED",
+    );
+    assert.equal(inspectedVolumes, 0);
+    assert.equal(createdHelpers, 0);
+  });
+  for (const revokedAt of ["startup", "mkdir", "download"] as const) {
+    it(`does not dispatch a file request after access is revoked during ${revokedAt}`, async () => {
+      let allowed = true;
+      let removed = false;
+      const dispatched: string[] = [];
+      const server = {
+        id: "physical", name: "game", image: "example/game", gameType: "unknown",
+        labels: { "ludock.enable": "true" },
+        fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+      } as ManagedContainer;
+      docker.getContainer = (() => ({
+        inspect: async () => ({
+          Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
+          Mounts: [{ Type: "volume", Name: "game-data", Source: "game-data", Destination: "/data", RW: true }],
+        }),
+      })) as unknown as typeof docker.getContainer;
+      docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
+      docker.modem.demuxStream = ((input, stdout) =>
+        input.on("data", (chunk: Buffer) => (stdout as PassThrough).write(chunk))) as typeof docker.modem.demuxStream;
+      docker.createContainer = (async () => ({
+        start: async () => { if (revokedAt === "startup") allowed = false; },
+        remove: async () => { removed = true; },
+        exec: async (options: Docker.ExecCreateOptions) => {
+          const { operation } = JSON.parse(options.Cmd?.at(-1) || "{}") as { operation: string };
+          if (operation === revokedAt) allowed = false;
+          return {
+            start: async () => {
+              dispatched.push(operation);
+              const stream = new PassThrough();
+              setImmediate(() => stream.end(operation === "stat" ? '{"type":"file","size":8}' : '{"safe":true}'));
+              return stream;
+            },
+            inspect: async () => ({ ExitCode: 0, Running: false }),
+          };
+        },
+      })) as unknown as typeof docker.createContainer;
+      const assertAccess = () => { if (!allowed) throw new Error("Access revoked"); };
+      await assert.rejects(
+        revokedAt === "download"
+          ? openDownload(server, "root-0", "file", assertAccess)
+          : createDirectory(server, "root-0", "", "new-folder", assertAccess),
+        /Access revoked/,
+      );
+      assert.equal(removed, true);
+      assert.equal(dispatched.includes("mkdir"), false);
+      assert.equal(dispatched.includes("download"), false);
+    });
+  }
   for (const state of ["running", "exited"]) {
     it(`projects approved mounts for a ${state} server and never inherits its sockets`, async () => {
       let created: Docker.ContainerCreateOptions | undefined;
@@ -343,6 +436,7 @@ describe("scoped file helper projections", () => {
       docker.getContainer = (() => ({
         inspect: async () => ({
           Id: "physical",
+          Name: "/game",
           Config: {
             Image: "example/game",
             Labels: { "ludock.enable": "true" },
@@ -397,6 +491,7 @@ describe("scoped file helper projections", () => {
       const access = await acquireFileContainer(
         {
           id: "physical",
+          name: "game",
           state,
           image: "example/game",
           gameType: "unknown",
@@ -523,6 +618,7 @@ describe("scoped file helper projections", () => {
       acquireFileContainer(
         {
           id: "physical",
+          name: "game",
           image: "example/game",
           gameType: "unknown",
           labels: { "ludock.enable": "true" },
@@ -548,6 +644,7 @@ describe("scoped file helper projections", () => {
     docker.getContainer = (() => ({
       inspect: async () => ({
         Id: "physical",
+        Name: "/game",
         Config: { Image: "example/game", Labels: { "ludock.enable": "true" } },
         Mounts: [
           {
@@ -596,6 +693,7 @@ describe("scoped file helper projections", () => {
     const download = await openDownload(
       {
         id: "physical",
+        name: "game",
         image: "example/game",
         gameType: "unknown",
         labels: { "ludock.enable": "true" },

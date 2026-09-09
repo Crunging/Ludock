@@ -153,4 +153,36 @@ describe("queued operation authority", () => {
     assert.equal(getOperation(context.job.id)?.status, "failed");
     assert.equal(mutations, 0);
   });
+  for (const change of ["grant revocation", "container rename"] as const)
+  it(`rechecks a scheduled action after ${change} during the final lifecycle inspection`, async () => {
+    const { context } = scheduled();
+    const getContainer = docker.getContainer;
+    let dispatchInspected = false;
+    docker.getContainer = ((id: string) => {
+      const container = getContainer(id);
+      const inspect = container.inspect;
+      container.inspect = (async () => {
+        const info = await inspect.call(container);
+        if (getOperation(context.job.id)?.phase === "start") {
+          dispatchInspected = true;
+          if (change === "grant revocation")
+            setServerGrant(
+              friend.id, serverId, ["server.view", "schedules.manage"], admin,
+            );
+          else info.Name = "/different-server";
+        }
+        return info;
+      }) as typeof container.inspect;
+      return container;
+    }) as typeof docker.getContainer;
+    registerBackgroundJobs();
+    await startOperationRunner();
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (getOperation(context.job.id)?.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(dispatchInspected, true);
+    assert.equal(getOperation(context.job.id)?.status, "failed");
+    assert.equal(mutations, 0);
+  });
 });

@@ -13,6 +13,7 @@ import {
   createUser,
   deleteSessionRecord,
   findSessionUser,
+  findUserById,
   findUserByUsername,
   upgradeUserPasswordHash,
   writeAuditLog,
@@ -135,12 +136,25 @@ export async function verifyPassword(
   password: string,
   encoded: string,
 ): Promise<boolean> {
-  const [algorithm, n, r, p, saltValue, keyValue] = encoded.split("$");
-  if (algorithm !== "scrypt" || !n || !r || !p || !saltValue || !keyValue) {
+  const [algorithm, n, r, p, saltValue, keyValue, extra] = encoded.split("$");
+  if (
+    algorithm !== "scrypt" || !n || !r || !p || !saltValue || !keyValue ||
+    extra !== undefined
+  ) {
     return false;
   }
 
   const expected = Buffer.from(keyValue, "base64url");
+  const salt = Buffer.from(saltValue, "base64url");
+  // Buffer's base64 decoder silently accepts malformed input, including values
+  // that decode to an empty key. A zero-length derived key would match every
+  // password, so validate the stored encoding before performing verification.
+  if (
+    expected.length !== 64 || salt.length !== 16 ||
+    expected.toString("base64url") !== keyValue ||
+    salt.toString("base64url") !== saltValue
+  )
+    return false;
   const options = {
     N: Number(n),
     r: Number(r),
@@ -152,6 +166,7 @@ export async function verifyPassword(
     !Number.isInteger(options.p) ||
     options.N < 2 ||
     options.N > 131072 ||
+    (options.N & (options.N - 1)) !== 0 ||
     options.r < 1 ||
     options.r > 16 ||
     options.p < 1 ||
@@ -161,7 +176,7 @@ export async function verifyPassword(
   }
   const actual = await derivePassword(
     password,
-    Buffer.from(saltValue, "base64url"),
+    salt,
     expected.length,
     {
       ...options,
@@ -219,11 +234,19 @@ export async function authenticateUser(
     return null;
   }
   if (!(await verifyPassword(password, record.passwordHash))) return null;
-  if (passwordHashNeedsUpgrade(record.passwordHash)) {
-    upgradeUserPasswordHash(record.id, await hashPassword(password));
-  }
+  const upgradedHash = passwordHashNeedsUpgrade(record.passwordHash)
+    ? await hashPassword(password)
+    : undefined;
+  // Password verification and upgrades yield to other requests. A reset or
+  // disabled account must invalidate the credentials that were just checked.
+  const current = findUserById(record.id);
+  if (
+    !current || current.disabled || current.passwordHash !== record.passwordHash
+  )
+    return null;
+  if (upgradedHash) upgradeUserPasswordHash(current.id, upgradedHash);
 
-  return { id: record.id, username: record.username, role: record.role };
+  return { id: current.id, username: current.username, role: current.role };
 }
 
 export function createSession(
@@ -280,6 +303,24 @@ export function getRequestSession(
 export function deleteRequestSession(request: Request): void {
   const session = getRequestSession(request);
   if (session) deleteSessionRecord(session.tokenHash);
+}
+
+/** Recheck the exact request principal after asynchronous preparation and
+ * immediately before dispatching an action. Account state alone cannot detect
+ * an explicitly revoked session or a password reset. */
+export function assertRequestUser(
+  request: Request,
+  expected: SessionUser,
+): SessionUser {
+  if (expected.id === "api-token") {
+    const token = ludockApiToken();
+    const candidate = bearerToken(request.headers.authorization);
+    if (token && candidate && tokensMatch(candidate, token)) return expected;
+  } else {
+    const session = getRequestSession(request);
+    if (session?.user.id === expected.id) return session.user;
+  }
+  throw new AuthError("AUTHENTICATION_REQUIRED", 401, "Authentication required");
 }
 
 export function authMiddleware(
@@ -383,8 +424,9 @@ export class AuthError extends Error {
   constructor(
     public readonly code: string,
     public readonly statusCode: number,
+    message = code,
   ) {
-    super(code);
+    super(message);
   }
 }
 

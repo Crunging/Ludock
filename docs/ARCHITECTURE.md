@@ -53,12 +53,20 @@ authorized binding and passes a typed context to the handler. It holds resource
 locks until both the response and handler cleanup have finished, and checks
 session/grant revocation during long transfers. Authorization does not depend on
 a separate table that guesses a capability from the request's URL.
+Handlers pass the context's synchronous `assertAccess` callback into Docker and
+file helpers so they recheck the request session, grants, and binding after
+asynchronous preparation, immediately before dispatch. Lifecycle dispatch also
+checks the final inspected observation. Console transports apply the same rule
+before sending credentials or commands.
 
 Durable actions enqueue operations with their actor and binding revision.
 `operations.ts` and `jobs.ts` own execution and recovery; their handlers recheck
 authorization and acquire the server/project/shared-root locks. A queued request
 does not acquire lifetime ownership of the eventual job. Backups, restore,
 schedules, monitoring, and Compose validation remain in their domain modules.
+Job dispatch rechecks the owner's current authority after preparation. Recovery
+cleanup and restoration of initial running state remain possible after authority
+is revoked; denying new work must not strand partially restored data.
 
 `identity.ts` and `servers.ts` separate logical history from live Docker
 observations. `authorization.ts` owns capability and role ceilings. File helpers
@@ -72,6 +80,12 @@ and form drafts. Panels in `components/server-detail` render activity, backups,
 schedules, updates, availability, and binding review through explicit props and
 callbacks. Drafts remain above the panels so switching tabs does not discard
 confirmation text or selections.
+
+Asynchronous page reads own an abort controller and discard obsolete responses.
+Account changes and session expiry invalidate pending authentication reads.
+Cookie-changing authentication requests and form mutations are serialized;
+successful mutations clear only the draft values they submitted. Settings and
+grant editors require a successful initial read before they can save.
 
 The dashboard's header and server rows share one CSS grid through subgrid.
 Different action counts do not change a row's state or port column. Responsive

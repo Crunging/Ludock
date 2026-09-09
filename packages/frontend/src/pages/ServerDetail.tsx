@@ -17,7 +17,7 @@ import {
   type ScheduleInput,
   type UpdateCapability,
 } from "@ludock/shared";
-import { apiJson, jsonBody } from "../api";
+import { ApiRequestError, apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
 import { NavLink } from "../navigation";
 import { can } from "../permissions";
@@ -48,6 +48,16 @@ const defaultSchedule: ScheduleInput = {
 
 export default function ServerDetail({ serverId }: { serverId: string }) {
   const { user } = useAuth();
+  return (
+    <ServerDetailSession
+      key={`${serverId}-${user?.id}-${user?.role}`}
+      serverId={serverId}
+    />
+  );
+}
+
+function ServerDetailSession({ serverId }: { serverId: string }) {
+  const { user } = useAuth();
   const admin = user?.role === "admin";
   const [server, setServer] = useState<ManagedContainer | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -61,13 +71,23 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [snapshotReady, setSnapshotReady] = useState(false);
+  const [settingsState, setSettingsState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [settingsAttempt, setSettingsAttempt] = useState(0);
+  const refreshRequest = useRef<AbortController | null>(null);
+  const mutationPending = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { serverTabs, rememberServerTab } = useViewPreferences();
   const pageActive = useRef(false);
   useEffect(() => {
     pageActive.current = true;
-    return () => { pageActive.current = false; };
+    return () => {
+      pageActive.current = false;
+      refreshRequest.current?.abort();
+    };
   }, []);
   const tab = serverTabs[serverId] || "activity";
   const setTab = (next: string) => {
@@ -98,70 +118,105 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   const blocked = server?.bindingStatus !== "active";
   const activeOperation = operations.find(operationActive);
 
-  const refresh = useCallback(async () => {
-    if (!pageActive.current) return;
-    const { server: next } = await apiJson(path, serverResponseSchema);
-    if (!pageActive.current) return;
-    setServer(next);
-    const [activity, backupResponse, scheduleResponse] = await Promise.all([
-      apiJson(`${path}/operations`, operationsResponseSchema),
-      admin
-        ? apiJson(`${path}/backups`, backupsResponseSchema)
-        : Promise.resolve({ backups: [] }),
-      can(user, next, "schedules.manage")
-        ? apiJson(`${path}/schedules`, schedulesResponseSchema)
-        : Promise.resolve({ schedules: [] }),
-    ]);
-    if (!pageActive.current) return;
-    setOperations(activity.operations);
-    setBackups(backupResponse.backups);
-    setSchedules(scheduleResponse.schedules);
+  const refresh = useCallback(async (replacePending = true, afterMutation = false) => {
+    if (
+      !pageActive.current ||
+      (mutationPending.current && !afterMutation) ||
+      (!replacePending && refreshRequest.current)
+    ) return;
+    refreshRequest.current?.abort();
+    const controller = new AbortController();
+    refreshRequest.current = controller;
+    setSnapshotReady(false);
+    const ownsRequest = () =>
+      pageActive.current &&
+      refreshRequest.current === controller &&
+      !controller.signal.aborted;
+    const init = { signal: controller.signal };
+    try {
+      const { server: next } = await apiJson(path, serverResponseSchema, init);
+      if (!ownsRequest()) return;
+      setServer(next);
+      const [activity, backupResponse, scheduleResponse] = await Promise.all([
+        apiJson(`${path}/operations`, operationsResponseSchema, init),
+        admin && can(user, next, "backups.read")
+          ? apiJson(`${path}/backups`, backupsResponseSchema, init)
+          : Promise.resolve({ backups: [] }),
+        can(user, next, "schedules.manage")
+          ? apiJson(`${path}/schedules`, schedulesResponseSchema, init)
+          : Promise.resolve({ schedules: [] }),
+      ]);
+      if (!ownsRequest()) return;
+      setOperations(activity.operations);
+      setBackups(backupResponse.backups);
+      setSchedules(scheduleResponse.schedules);
+      setSnapshotReady(true);
+      setError(null);
+    } catch (reason) {
+      if (!ownsRequest()) return;
+      setSnapshotReady(false);
+      if (
+        reason instanceof ApiRequestError &&
+        (reason.status < 400 || [401, 403, 404].includes(reason.status))
+      ) {
+        setServer(null);
+        setOperations([]);
+        setBackups([]);
+        setSchedules([]);
+      }
+      setError(
+        reason instanceof Error ? reason.message : "Unable to refresh server.",
+      );
+    } finally {
+      if (ownsRequest()) {
+        refreshRequest.current = null;
+        setLoading(false);
+      }
+    }
   }, [admin, path, user]);
   useEffect(() => {
-    setLoading(true);
-    refresh()
-      .catch((reason) =>
-        setError(
-          reason instanceof Error ? reason.message : "Unable to load server.",
-        ),
-      )
-      .finally(() => setLoading(false));
+    void refresh();
   }, [refresh]);
   useEffect(() => {
     if (!admin) return;
+    const controller = new AbortController();
+    setSettingsState("loading");
     Promise.all([
-      apiJson(`${path}/update-capability`, updateCapabilityResponseSchema),
-      apiJson(`${path}/availability`, availabilityResponseSchema),
+      apiJson(`${path}/update-capability`, updateCapabilityResponseSchema, {
+        signal: controller.signal,
+      }),
+      apiJson(`${path}/availability`, availabilityResponseSchema, {
+        signal: controller.signal,
+      }),
     ])
       .then(([nextCapability, monitor]) => {
+        if (controller.signal.aborted) return;
         setCapability(nextCapability.capability);
         setAvailability(monitor.policy);
+        setSettingsState("ready");
       })
-      .catch((reason) =>
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "Unable to load server settings.",
-        ),
-      );
-  }, [admin, path]);
+      .catch(() => {
+        if (!controller.signal.aborted) setSettingsState("error");
+      });
+    return () => controller.abort();
+  }, [admin, path, settingsAttempt]);
+  const hasActiveOperation = Boolean(activeOperation);
   useEffect(() => {
     const interval = window.setInterval(
-      () => {
-        void refresh().catch((reason) =>
-          setError(
-            reason instanceof Error
-              ? reason.message
-              : "Unable to refresh server.",
-          ),
-        );
-      },
-      activeOperation ? 2000 : 10000,
+      () => { void refresh(false); },
+      hasActiveOperation ? 2000 : 10000,
     );
     return () => window.clearInterval(interval);
-  }, [activeOperation, refresh]);
+  }, [hasActiveOperation, refresh]);
 
   async function perform(action: () => Promise<unknown>, success: string) {
+    if (
+      mutationPending.current ||
+      refreshRequest.current ||
+      !snapshotReady ||
+      !pageActive.current
+    ) return false;
+    mutationPending.current = true;
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -169,17 +224,26 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
       await action();
       if (!pageActive.current) return false;
       setNotice(success);
-      await refresh();
+      await refresh(true, true);
+      // The action succeeded even if reading its updated state failed.
       return pageActive.current;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Request failed.");
+      if (pageActive.current)
+        setError(reason instanceof Error ? reason.message : "Request failed.");
       return false;
     } finally {
-      setBusy(false);
+      mutationPending.current = false;
+      if (pageActive.current) setBusy(false);
     }
   }
   async function requestBackup() {
-    if (!can(user, server, "backups.create")) return;
+    if (
+      !can(user, server, "backups.create") ||
+      blocked ||
+      activeOperation ||
+      mutationPending.current ||
+      !snapshotReady
+    ) return;
     if (
       !window.confirm(
         `Create a backup of ${server?.displayName}? The server stops for the entire copy and returns to its previous running state afterward.`,
@@ -220,7 +284,16 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
     setLifecycleAction(null);
   }
   async function requestUpdate() {
-    if (!admin || !update.confirmed) return;
+    if (
+      !admin ||
+      !can(user, server, update.forceRecreate ? "server.recreate" : "server.update") ||
+      !capability?.available ||
+      settingsState !== "ready" ||
+      blocked ||
+      activeOperation ||
+      !update.confirmed ||
+      (!update.createBackup && update.skipConfirmation !== server?.displayName)
+    ) return;
     if (
       await perform(
         () =>
@@ -249,7 +322,13 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   async function requestRestore() {
     if (
       !admin ||
+      !can(user, server, "backups.restore") ||
+      blocked ||
+      activeOperation ||
       !restore.backup ||
+      !backups.some((item) =>
+        item.id === restore.backup?.id && item.state === "complete",
+      ) ||
       restore.confirmation !== server?.displayName
     )
       return;
@@ -287,6 +366,9 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
         <div className="alert alert--error" role="alert">
           {error || "Server unavailable."}
         </div>
+        <button className="secondary-btn" onClick={() => void refresh()}>
+          Try again
+        </button>
       </div>
     );
   const canCreateBackup = can(user, server, "backups.create");
@@ -395,7 +477,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
                     type="button"
                     className={`secondary-btn${action === "stop" ? " secondary-btn--danger" : ""}`}
                     key={action}
-                    disabled={loading || busy || blocked || Boolean(activeOperation)}
+                    disabled={loading || busy || !snapshotReady || blocked || Boolean(activeOperation)}
                     onClick={() => {
                       if (action === "start") void requestLifecycle(action);
                       else setConfirmLifecycle(action);
@@ -429,10 +511,14 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
       {admin && server.bindingStatus === "review_required" && (
         <BindingReviewPanel
           serverName={server.displayName}
-          busy={busy}
+          busy={busy || !snapshotReady}
           confirmation={bindingConfirmation}
           onConfirmationChange={setBindingConfirmation}
-          onAccept={() =>
+          onAccept={() => {
+            if (
+              bindingConfirmation !== server.displayName ||
+              server.bindingStatus !== "review_required"
+            ) return;
             void perform(
               () =>
                 apiJson(
@@ -441,8 +527,8 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
                   jsonBody("POST", { confirmation: bindingConfirmation }),
                 ),
               "Server binding reviewed.",
-            )
-          }
+            );
+          }}
         />
       )}
       {error && (
@@ -468,9 +554,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
           <ActivityPanel
             operations={operations}
             admin={admin}
-            onRefresh={() =>
-              void refresh().catch((reason) => setError(String(reason)))
-            }
+            onRefresh={() => void refresh()}
             onRecreate={() => {
               setUpdate((current) => ({
                 ...current,
@@ -489,13 +573,21 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             restore={restore}
             onRestoreChange={setRestore}
             admin={admin}
+            canRead={can(user, server, "backups.read")}
+            canRestore={can(user, server, "backups.restore")}
+            canDelete={can(user, server, "backups.delete")}
             canCreate={canCreateBackup}
-            busy={busy}
+            busy={busy || !snapshotReady}
             blocked={blocked}
             hasActiveOperation={Boolean(activeOperation)}
             onCreate={() => void requestBackup()}
             onRestore={() => void requestRestore()}
-            onDelete={(backup) =>
+            onDelete={(backup) => {
+              if (
+                !can(user, server, "backups.delete") ||
+                activeOperation ||
+                !backups.some((item) => item.id === backup.id)
+              ) return;
               void perform(
                 () =>
                   apiJson(
@@ -504,8 +596,8 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
                     { method: "DELETE" },
                   ),
                 "Backup deleted.",
-              )
-            }
+              );
+            }}
           />
         )}
         {activeTab === "schedules" && canManageSchedules && (
@@ -514,9 +606,15 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
             draft={schedule}
             onDraftChange={setSchedule}
             scheduleActions={scheduleActions}
-            busy={busy}
+            busy={busy || !snapshotReady}
             blocked={blocked}
-            onCreate={() =>
+            onCreate={() => {
+              if (
+                blocked ||
+                !canManageSchedules ||
+                !schedule.days.length ||
+                !scheduleActions.includes(schedule.action)
+              ) return;
               void perform(
                 () =>
                   apiJson(
@@ -525,9 +623,13 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
                     jsonBody("POST", schedule),
                   ),
                 "Schedule created.",
-              )
-            }
-            onDelete={(item) =>
+              );
+            }}
+            onDelete={(item) => {
+              if (
+                !canManageSchedules ||
+                !schedules.some((current) => current.id === item.id)
+              ) return;
               void perform(
                 () =>
                   apiJson(
@@ -536,27 +638,50 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
                     { method: "DELETE" },
                   ),
                 "Schedule deleted.",
-              )
-            }
+              );
+            }}
           />
         )}
-        {activeTab === "update" && admin && (
+        {admin &&
+          (activeTab === "update" || activeTab === "availability") &&
+          settingsState !== "ready" && (
+            settingsState === "loading" ? (
+              <p role="status">Loading server settings…</p>
+            ) : (
+              <div>
+                <p role="alert">
+                  Unable to load server settings. Reload them before making changes.
+                </p>
+                <button
+                  className="secondary-btn"
+                  onClick={() => setSettingsAttempt((value) => value + 1)}
+                >
+                  Reload server settings
+                </button>
+              </div>
+            )
+          )}
+        {activeTab === "update" && admin && settingsState === "ready" && (
           <UpdatePanel
             serverName={server.displayName}
             capability={capability}
             value={update}
             onChange={setUpdate}
-            busy={busy}
+            busy={busy || !snapshotReady || !can(
+              user,
+              server,
+              update.forceRecreate ? "server.recreate" : "server.update",
+            )}
             blocked={blocked}
             hasActiveOperation={Boolean(activeOperation)}
             onSubmit={() => void requestUpdate()}
           />
         )}
-        {activeTab === "availability" && admin && (
+        {activeTab === "availability" && admin && settingsState === "ready" && (
           <AvailabilityPanel
             value={availability}
             onChange={setAvailability}
-            busy={busy}
+            busy={busy || !snapshotReady}
             onSave={() =>
               void perform(
                 () =>

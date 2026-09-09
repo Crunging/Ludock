@@ -120,6 +120,8 @@ async function settingsForBackup(): Promise<BackupSettings> {
   return validateBackupSettings(settings);
 }
 const overlaps = (left: string, right: string) =>
+  left === "/" ||
+  right === "/" ||
   left === right ||
   left.startsWith(`${right}/`) ||
   right.startsWith(`${left}/`);
@@ -137,8 +139,8 @@ export function mountsOverlap(
   return (
     Boolean(left.source && right.source) &&
     overlaps(
-      path.posix.normalize(left.source),
-      path.posix.normalize(right.source),
+      path.posix.resolve(left.source),
+      path.posix.resolve(right.source),
     )
   );
 }
@@ -238,6 +240,7 @@ export async function stopForDataOperation(
       "SERVER_STATE",
       "Unpause or repair this server before a data operation.",
     );
+  assertDataOperationAuthority(context, job);
   if (job.job.recovery.initialRunning === undefined)
     job.progress("stopping", {
       initialRunning: info.State.Running || info.State.Status === "running",
@@ -261,6 +264,26 @@ export async function stopForDataOperation(
       "UNCLEAN_SHUTDOWN",
       "The server needed forced termination. The backup was not created; review its graceful shutdown configuration before retrying.",
     );
+}
+
+function assertDataOperationAuthority(
+  context: ServerContext,
+  job: JobContext,
+): void {
+  assertServerCapability(
+    jobActor(job),
+    context.logical.id,
+    job.job.kind === "backup"
+      ? "backups.create"
+      : job.job.kind === "restore"
+        ? "backups.restore"
+        : "server.update",
+  );
+  assertObservedServerBinding(
+    context.logical.id,
+    context.observation,
+    context.logical.bindingRevision,
+  );
 }
 
 export async function assertDataOperationStopped(
@@ -349,22 +372,15 @@ export async function createStoppedBackup(
   });
   let helper: DataHelper | undefined;
   try {
+    assertDataOperationAuthority(context, job);
     helper = await createDataHelper(context, true, job.job.id);
     job.progress("backing_up", { dataHelperId: helper.container.id });
     let stoppedFailure: Error | undefined;
     let checking: Promise<void> | undefined;
     const assertCopyAllowed = async () => {
-      assertServerCapability(
-        jobActor(job),
-        context.logical.id,
-        job.job.kind === "backup"
-          ? "backups.create"
-          : job.job.kind === "restore"
-            ? "backups.restore"
-            : "server.update",
-      );
       if (stoppedFailure) throw stoppedFailure;
       await assertDataOperationStopped(context, job);
+      assertDataOperationAuthority(context, job);
     };
     const timer = setInterval(() => {
       if (checking) return;
@@ -393,6 +409,7 @@ export async function createStoppedBackup(
         id,
         available,
         assertCopyAllowed,
+        () => assertDataOperationAuthority(context, job),
       );
     } finally {
       clearInterval(timer);
@@ -557,13 +574,15 @@ async function restoreStep(
   root: string,
   job: JobContext,
   operation: string,
+  assertAccess?: () => void,
 ): Promise<Record<string, unknown>> {
-  const result = await helperExec(helper.container, [
+  const command = [
     "node",
     "-e",
     RESTORE_HELPER_SCRIPT,
     JSON.stringify({ operation, root, stage: stageName(job) }),
-  ]);
+  ];
+  const result = await helperExec(helper.container, command, {}, assertAccess);
   return JSON.parse(result) as Record<string, unknown>;
 }
 async function rollbackRestore(
@@ -666,6 +685,7 @@ export async function runRestore(
   );
   return withLocks([...context.lockKeys, "backups:storage"], async () => {
     let helper: DataHelper | undefined;
+    const assertAccess = () => assertDataOperationAuthority(context, job);
     try {
       assertServerCapability(actor, context.logical.id, "backups.restore");
       await validateArchive(
@@ -681,19 +701,10 @@ export async function runRestore(
         safetyBackupId: safety.id,
         restoreRoots: roots.map((root) => ({ root, phase: "staging" })),
       });
-      assertServerCapability(
-        jobActor(job),
-        context.logical.id,
-        "backups.restore",
-      );
+      assertDataOperationAuthority(context, job);
       helper = await createDataHelper(context, false, job.job.id);
       job.progress("restore_staging", { dataHelperId: helper.container.id });
       for (const root of roots) {
-        assertServerCapability(
-          jobActor(job),
-          context.logical.id,
-          "backups.restore",
-        );
         await assertDataOperationStopped(context, job);
         const destination = helperRoot(context, root);
         const { availableBytes } = await restoreStep(
@@ -701,6 +712,7 @@ export async function runRestore(
           destination,
           job,
           "space",
+          assertAccess,
         );
         if (
           typeof availableBytes !== "number" ||
@@ -711,7 +723,9 @@ export async function runRestore(
             "RESTORE_CAPACITY",
             "A data root lacks space for restore staging and the configured reserve.",
           );
-        await restoreStep(helper, destination, job, "stage");
+        assertDataOperationAuthority(context, job);
+        await restoreStep(helper, destination, job, "stage", assertAccess);
+        assertDataOperationAuthority(context, job);
         await extractRootToStage(
           row.destination,
           row.id,
@@ -722,29 +736,24 @@ export async function runRestore(
           roots,
           settings.maxBytes,
           row.checksum,
+          assertAccess,
         );
       }
-      assertServerCapability(
-        jobActor(job),
-        context.logical.id,
-        "backups.restore",
-      );
+      assertDataOperationAuthority(context, job);
       job.progress("restore_replacing", { dataSafe: false });
       for (let index = 0; index < roots.length; index++) {
-        assertServerCapability(
-          jobActor(job),
-          context.logical.id,
-          "backups.restore",
-        );
         await assertDataOperationStopped(context, job);
+        assertDataOperationAuthority(context, job);
         const destination = helperRoot(context, roots[index]);
         persistJournal(job, index, "moving_old");
-        await restoreStep(helper, destination, job, "moveOld");
+        await restoreStep(helper, destination, job, "moveOld", assertAccess);
         persistJournal(job, index, "old_moved");
-        await restoreStep(helper, destination, job, "moveNew");
+        assertDataOperationAuthority(context, job);
+        await restoreStep(helper, destination, job, "moveNew", assertAccess);
         persistJournal(job, index, "replaced");
       }
       await assertDataOperationStopped(context, job);
+      assertDataOperationAuthority(context, job);
       job.progress("restore_committed", {
         restoreCommitted: true,
         dataSafe: true,

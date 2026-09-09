@@ -16,7 +16,10 @@ interface Props {
   restore: RestoreSelection;
   onRestoreChange: (value: RestoreSelection) => void;
   admin: boolean;
+  canRead: boolean;
   canCreate: boolean;
+  canRestore: boolean;
+  canDelete: boolean;
   busy: boolean;
   blocked: boolean;
   hasActiveOperation: boolean;
@@ -33,7 +36,10 @@ export default function BackupsPanel(props: Props) {
     restore,
     onRestoreChange,
     admin,
+    canRead,
     canCreate,
+    canRestore,
+    canDelete,
     busy,
     blocked,
     hasActiveOperation,
@@ -60,7 +66,7 @@ export default function BackupsPanel(props: Props) {
         Backups stop the server throughout copying, then restore its previous
         running state. Initially stopped servers stay stopped.
       </p>
-      {admin ? (
+      {admin && canRead ? (
         <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -99,6 +105,7 @@ export default function BackupsPanel(props: Props) {
                       <button
                         className="secondary-btn secondary-btn--danger"
                         disabled={
+                          !canRestore ||
                           busy ||
                           blocked ||
                           hasActiveOperation ||
@@ -112,7 +119,7 @@ export default function BackupsPanel(props: Props) {
                       </button>
                       <button
                         className="secondary-btn secondary-btn--danger"
-                        disabled={busy || hasActiveOperation}
+                        disabled={!canDelete || busy || hasActiveOperation}
                         onClick={() => {
                           if (
                             window.confirm(
@@ -133,11 +140,12 @@ export default function BackupsPanel(props: Props) {
         </div>
       ) : (
         <p className="section-note">
-          You can create backups using the administrator’s policy. Archive
-          access and restoration require an administrator.
+          {admin
+            ? "Archive access is unavailable for this server."
+            : "You can create backups using the administrator’s policy. Archive access and restoration require an administrator."}
         </p>
       )}
-      {restoreBackup && (
+      {admin && canRead && canRestore && restoreBackup && (
         <form
           className="danger-panel stack-form"
           onSubmit={(event) => {
@@ -175,7 +183,13 @@ export default function BackupsPanel(props: Props) {
           <div className="inline-actions">
             <button
               className="secondary-btn secondary-btn--danger"
-              disabled={busy || restoreConfirmation !== serverName}
+              disabled={
+                busy || blocked || hasActiveOperation ||
+                restoreConfirmation !== serverName ||
+                !backups.some((item) =>
+                  item.id === restoreBackup.id && item.state === "complete",
+                )
+              }
             >
               Restore game data
             </button>

@@ -30,6 +30,7 @@ export interface FileContainerAccess {
   container: Docker.Container;
   blockedPaths: string[];
   cleanup: () => Promise<void>;
+  assertAccess?: () => void;
 }
 interface FileRequest {
   operation:
@@ -171,10 +172,12 @@ export async function listFiles(
   server: ManagedContainer,
   rootId: string,
   relativePath: string,
+  assertAccess?: () => void,
 ): Promise<{ root: FileRoot; path: string; entries: FileEntry[] }> {
   const target = resolveTarget(server, rootId, relativePath);
   const access = await acquireFileContainer(server, target.root, {
     readOnly: true,
+    assertAccess,
   });
   try {
     const result = await helperRequest(access, {
@@ -182,6 +185,7 @@ export async function listFiles(
       root: target.root.path,
       path: target.relativePath,
     });
+    access.assertAccess?.();
     const entries = JSON.parse(result.stdout) as FileEntry[];
     entries.sort((a, b) =>
       a.type === "directory" && b.type !== "directory"
@@ -201,6 +205,7 @@ export async function createDirectory(
   rootId: string,
   relativeParent: string,
   name: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(name);
   const target = resolveTarget(
@@ -208,7 +213,7 @@ export async function createDirectory(
     rootId,
     joinRelative(relativeParent, name),
   );
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
     await helperRequest(access, {
       operation: "mkdir",
@@ -224,10 +229,11 @@ export async function deleteFileEntry(
   server: ManagedContainer,
   rootId: string,
   relativePath: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   const target = resolveTarget(server, rootId, relativePath);
   if (!target.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
     await helperRequest(access, {
       operation: "delete",
@@ -244,11 +250,12 @@ export async function renameFileEntry(
   rootId: string,
   relativePath: string,
   newName: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(newName);
   const target = resolveTarget(server, rootId, relativePath);
   if (!target.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
     await helperRequest(access, {
       operation: "rename",
@@ -271,6 +278,7 @@ export async function uploadFile(
   name: string,
   size: number,
   source: Readable,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(name);
   if (!Number.isSafeInteger(size) || size < 0)
@@ -280,7 +288,7 @@ export async function uploadFile(
     rootId,
     joinRelative(relativeParent, name),
   );
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
     await helperRequest(
       access,
@@ -301,6 +309,7 @@ export async function openDownload(
   server: ManagedContainer,
   rootId: string,
   relativePath: string,
+  assertAccess?: () => void,
 ): Promise<{
   name: string;
   type: "file" | "directory";
@@ -312,6 +321,7 @@ export async function openDownload(
   if (!target.relativePath) throw new FileStorageError("ROOT_DOWNLOAD", 400);
   const access = await acquireFileContainer(server, target.root, {
     readOnly: true,
+    assertAccess,
   });
   try {
     const result = await helperRequest(access, {
@@ -331,6 +341,7 @@ export async function openDownload(
         blocked: access.blockedPaths,
       }),
     );
+    access.assertAccess?.();
     const stream = await execution.start({ hijack: true, stdin: false });
     const output = new PassThrough();
     output.once("error", () => {});
@@ -479,22 +490,24 @@ async function helperRequest(
   access: FileContainerAccess,
   request: Omit<FileRequest, "blocked">,
   input?: Readable,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string }> {
   return runExec(
     access.container,
     helperOptions({ ...request, blocked: access.blockedPaths }),
     input,
+    access.assertAccess,
   );
 }
 
 export async function acquireFileContainer(
   server: ManagedContainer,
   root: FileRoot,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; assertAccess?: () => void } = {},
 ): Promise<FileContainerAccess> {
   const inspection = await docker.getContainer(server.id).inspect();
   if (
     inspection.Id !== server.id ||
+    inspection.Name.replace(/^\//, "") !== server.name ||
     !evaluateContainerEligibility(
       inspection.Config.Image,
       inspection.Config.Labels || {},
@@ -621,7 +634,7 @@ export async function acquireFileContainer(
   try {
     await helper.start();
     await assertMountIdentities(helper, proof.identities);
-    const access = { container: helper, blockedPaths, cleanup };
+    const access = { container: helper, blockedPaths, cleanup, assertAccess: options.assertAccess };
     await helperRequest(access, {
       operation: "check",
       root: root.path,
@@ -645,12 +658,15 @@ export async function acquireFileContainer(
   }
 }
 
-export async function runExec(
+async function runExec(
   container: Docker.Container,
   options: Docker.ExecCreateOptions,
   input?: Readable,
-): Promise<{ stdout: string; stderr: string }> {
+  assertAccess?: () => void,
+): Promise<{ stdout: string }> {
+  assertAccess?.();
   const execution = await container.exec(options);
+  assertAccess?.();
   const stream = await execution.start({
     hijack: true,
     stdin: Boolean(input),
@@ -694,7 +710,7 @@ export async function runExec(
   const status = await execution.inspect();
   if (status.ExitCode !== 0 || status.Running)
     throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
-  return { stdout: Buffer.concat(chunks).toString("utf8"), stderr: "" };
+  return { stdout: Buffer.concat(chunks).toString("utf8") };
 }
 
 function rootName(gameType: string, rootPath: string): string {
@@ -717,16 +733,13 @@ function resolveTarget(
   server: ManagedContainer,
   rootId: string,
   relativePath: string,
-): { root: FileRoot; relativePath: string; absolutePath: string } {
+): { root: FileRoot; relativePath: string } {
   const root = server.fileRoots.find((candidate) => candidate.id === rootId);
   if (!root) throw new FileStorageError("ROOT_NOT_FOUND", 404);
   const normalized = normalizeRelativePath(relativePath);
   return {
     root,
     relativePath: normalized,
-    absolutePath: normalized
-      ? path.posix.join(root.path, normalized)
-      : root.path,
   };
 }
 

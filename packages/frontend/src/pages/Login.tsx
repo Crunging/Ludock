@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { PASSWORD_MIN_LENGTH } from "@ludock/shared";
 import { useAuth } from "../auth-context";
 import LudockMark from "../components/LudockMark";
 
@@ -92,12 +93,12 @@ export default function Login() {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           autoComplete={setupRequired ? "new-password" : "current-password"}
-          minLength={15}
+          minLength={PASSWORD_MIN_LENGTH}
           maxLength={128}
           required
         />
         {setupRequired && (
-          <div className="login-card__hint">Use at least 15 characters.</div>
+          <div className="login-card__hint">Use at least {PASSWORD_MIN_LENGTH} characters.</div>
         )}
         {setupRequired && (
           <>
@@ -111,7 +112,7 @@ export default function Login() {
               value={confirmation}
               onChange={(event) => setConfirmation(event.target.value)}
               autoComplete="new-password"
-              minLength={15}
+              minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
               required
             />

@@ -93,7 +93,7 @@ function App() {
             Unable to reach Ludock
           </h1>
           <p className="login-card__description">
-            The panel could not determine whether initial setup is required.
+            The panel could not confirm your session or setup state.
             Check that the backend is running, then try again.
           </p>
           <button

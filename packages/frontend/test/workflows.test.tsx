@@ -1,6 +1,6 @@
 import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   SERVER_CAPABILITIES,
@@ -693,5 +693,79 @@ describe("server sharing", () => {
     await screen.findByRole("checkbox", { name: "View server" });
     expect(screen.getAllByRole("checkbox")).toHaveLength(3);
     expect(screen.queryByRole("button", { name: "Start and stop" })).toBeNull();
+  });
+});
+
+
+describe("server detail request ownership", () => {
+  it("ignores an older refresh after a newer binding snapshot arrives", async () => {
+    let completeOlder!: (value: unknown) => void;
+    const older = new Promise((resolve) => { completeOlder = resolve; });
+    let reads = 0;
+    detail("admin", { onRequest: (path) => {
+      if (path !== `/servers/${server.id}`) return;
+      reads += 1;
+      if (reads === 2) return older;
+      if (reads >= 3) return { server: { ...server, bindingStatus: "review_required", permissions: ["server.view"] } };
+    } });
+    await screen.findByRole("button", { name: "Refresh" });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText(/This server’s binding is review required/);
+    await act(async () => completeOlder({ server: { ...server, state: "exited", permissions: [...SERVER_CAPABILITIES] } }));
+    expect(screen.getByText(/This server’s binding is review required/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start", exact: true })).toBeNull();
+  });
+
+  it("keeps monitoring defaults unavailable until server settings can be loaded", async () => {
+    let failed = true;
+    detail("admin", { onRequest: (path) => {
+      if (path.endsWith("/availability") && failed) throw new Error("Monitoring unavailable");
+    } });
+    await userEvent.click(await screen.findByRole("tab", { name: "Availability" }));
+    await screen.findByText(/Reload them before making changes/);
+    expect(screen.queryByRole("button", { name: "Save monitoring" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Monitor this server" })).toBeNull();
+    failed = false;
+    await userEvent.click(screen.getByRole("button", { name: "Reload server settings" }));
+    await screen.findByRole("button", { name: "Save monitoring" });
+  });
+
+  it("blocks an already-open restore when an operation starts", async () => {
+    let active = false;
+    detail("admin", { backups: [backup], onRequest: (path) => {
+      if (path.endsWith("/operations") && active) return { operations: [{ ...completedUpdate, status: "running" }] };
+    } });
+    await userEvent.click(await screen.findByRole("tab", { name: "Backups" }));
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /to confirm/ }), { target: { value: server.displayName } });
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    active = true;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Backups" }));
+    const submit = screen.getByRole("button", { name: "Restore game data" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(submit.closest("form")!);
+    expect(vi.mocked(apiJson).mock.calls.some(([path, , init]) => path.endsWith("/restores") && init?.method === "POST")).toBe(false);
+  });
+
+  it("consumes update confirmation when the action succeeds but its refresh fails", async () => {
+    let queued = false;
+    detail("admin", { onRequest: (path, init) => {
+      if (path.endsWith("/updates") && init?.method === "POST") {
+        queued = true;
+        return { operation: { ...completedUpdate, status: "queued" } };
+      }
+      if (path === `/servers/${server.id}` && queued) throw new Error("Unable to read updated server");
+    } });
+    await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Update server", exact: true }));
+    await screen.findByText("Update queued.");
+    await screen.findByText("Unable to read updated server");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Activity", selected: true })).toBeTruthy());
+    await userEvent.click(screen.getByRole("tab", { name: "Update", exact: true }));
+    expect((screen.getByRole("checkbox", { name: /I understand/ }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("button", { name: "Update server", exact: true }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

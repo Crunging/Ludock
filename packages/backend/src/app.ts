@@ -29,10 +29,11 @@ import { respond } from "./routes/request.js";
 import { router } from "./routes.js";
 import { advancedRouter } from "./advanced-routes.js";
 import { AppError } from "./errors.js";
-import { AuthorizationError } from "./authorization.js";
+import { AuthorizationError, assertAdministrator } from "./authorization.js";
 import { ServerBindingError } from "./identity.js";
 import {
   AuthError,
+  assertRequestUser,
   authMiddleware,
   authenticateUser,
   clearSessionCookie,
@@ -379,10 +380,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
 
     const record = findUserById(actor.id);
-    if (
-      !record ||
-      !(await verifyPassword(parsed.data.currentPassword, record.passwordHash))
-    ) {
+    const verified = record !== null &&
+      await verifyPassword(parsed.data.currentPassword, record.passwordHash);
+    assertRequestUser(req, actor);
+    if (!record || !verified) {
       recordLoginFailure(throttleKey, now, LOGIN_WINDOW_MS, 5);
       writeAuditLog({
         userId: actor.id === "api-token" ? undefined : actor.id,
@@ -395,10 +396,16 @@ export function createApp(options: CreateAppOptions = {}): Express {
       return;
     }
 
+    const passwordHash = await hashPassword(parsed.data.newPassword);
+    const current = assertRequestUser(req, actor);
+    if (findUserById(actor.id)?.passwordHash !== record.passwordHash) {
+      throw new AppError(
+        "PASSWORD_CHANGED", 409, "Password changed; sign in again",
+      );
+    }
     clearLoginThrottle(throttleKey);
-
-    updateUserPassword(actor.id, await hashPassword(parsed.data.newPassword));
-    const session = createSession(actor, req);
+    updateUserPassword(actor.id, passwordHash);
+    const session = createSession(current, req);
     setSessionCookie(res, req, session.token);
     writeAuditLog({
       userId: actor.id === "api-token" ? undefined : actor.id,
@@ -445,11 +452,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     const now = Date.now();
     const id = randomUUID();
+    const actor = res.locals.user as SessionUser;
     try {
+      const passwordHash = await hashPassword(parsed.data.password);
+      assertAdministrator(assertRequestUser(req, actor));
       createUser({
         id,
         username: parsed.data.username,
-        passwordHash: await hashPassword(parsed.data.password),
+        passwordHash,
         role: parsed.data.role,
         disabled: false,
         createdAt: now,
@@ -462,7 +472,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
       throw error;
     }
 
-    const actor = res.locals.user as SessionUser;
     writeAuditLog({
       userId: actor.id === "api-token" ? undefined : actor.id,
       action: "user.created",
@@ -523,8 +532,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
         return;
       }
 
-      updateUserPassword(target.id, await hashPassword(parsed.data.password));
       const actor = res.locals.user as SessionUser;
+      const passwordHash = await hashPassword(parsed.data.password);
+      assertAdministrator(assertRequestUser(req, actor));
+      if (!findUserById(target.id)) {
+        throw new AppError("USER_NOT_FOUND", 404, "User not found");
+      }
+      updateUserPassword(target.id, passwordHash);
       writeAuditLog({
         userId: actor.id === "api-token" ? undefined : actor.id,
         action: "user.password.reset",
@@ -623,6 +637,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }
     if (
       error instanceof AppError ||
+      error instanceof AuthError ||
       error instanceof AuthorizationError ||
       error instanceof ServerBindingError
     ) {

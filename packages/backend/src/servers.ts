@@ -103,6 +103,7 @@ export async function resolveAuthorizedServer(
   assertServerCapability(actor, id, capability);
   const logical = resolveServerBinding(id, expectedRevision);
   const observed = await getManagedContainerObservation(logical.containerId);
+  assertServerCapability(actor, id, capability);
   assertObservedServerBinding(
     id,
     observed.observation,

@@ -7,7 +7,7 @@ import express, {
   type Request,
   type Response,
 } from "express";
-import { authMiddleware, createSession } from "../src/auth.js";
+import { AuthError, authMiddleware, createSession } from "../src/auth.js";
 import {
   closeDatabase,
   createUser,
@@ -15,9 +15,9 @@ import {
   type SessionUser,
 } from "../src/database.js";
 import { setServerGrant, AuthorizationError } from "../src/authorization.js";
-import { getDockerInstance } from "../src/docker.js";
+import { getDockerInstance, startContainer } from "../src/docker.js";
 import { AppError } from "../src/errors.js";
-import { listLogicalServers } from "../src/identity.js";
+import { listLogicalServers, ServerBindingError } from "../src/identity.js";
 import {
   acquireLocks,
   isServerBusy,
@@ -52,6 +52,9 @@ let calls: string[];
 let beforeResponse: Promise<void> | undefined;
 let afterResponse: Promise<void> | undefined;
 let beforeInspect: Promise<void> | undefined;
+let inspectCount: number;
+let pauseInspectAt: number | undefined;
+let containerName: string;
 let output: unknown;
 let inspectStarted: () => void;
 let bindingStarted: Promise<void>;
@@ -82,6 +85,9 @@ beforeEach(async () => {
   beforeResponse = undefined;
   afterResponse = undefined;
   beforeInspect = undefined;
+  inspectCount = 0;
+  pauseInspectAt = undefined;
+  containerName = "/fixture";
   output = { ok: true };
   bindingStarted = new Promise((resolve) => {
     inspectStarted = resolve;
@@ -95,13 +101,14 @@ beforeEach(async () => {
   ]) as unknown as typeof docker.listContainers;
   docker.getContainer = (() => ({
     inspect: async () => {
-      if (beforeInspect) {
+      inspectCount += 1;
+      if (beforeInspect && (pauseInspectAt === undefined || pauseInspectAt === inspectCount)) {
         inspectStarted();
         await beforeInspect;
       }
       return {
         Id: "physical-fixture",
-        Name: "/fixture",
+        Name: containerName,
         Config: { Image: "alpine:latest", Labels: { "ludock.enable": "true" } },
         State: { Status: "running" },
         Mounts: [],
@@ -109,9 +116,11 @@ beforeEach(async () => {
         Created: "2026-01-01T00:00:00Z",
       };
     },
+    start: async () => { calls.push("start"); },
   })) as unknown as typeof docker.getContainer;
   await refreshServers();
   serverId = listLogicalServers()[0].id;
+  inspectCount = 0;
   const app = express();
   app.use(authMiddleware);
   let disconnected!: () => void;
@@ -126,6 +135,13 @@ beforeEach(async () => {
   });
   // An unfamiliar route demonstrates that policy travels with registration;
   // it cannot silently miss a separately maintained path/method allowlist.
+  app.post(
+    "/servers/:id/start",
+    serverAction("server.start", async (_req, res, context) => {
+      await startContainer(context.container.id, context.assertAccess);
+      res.json({ ok: true });
+    }),
+  );
   app.post(
     "/servers/:id/new-console-action",
     serverAction("console.execute", async (_req, res, context) => {
@@ -160,7 +176,7 @@ beforeEach(async () => {
         return;
       }
       const status =
-        error instanceof AppError || error instanceof AuthorizationError
+        error instanceof AppError || error instanceof AuthorizationError || error instanceof AuthError || error instanceof ServerBindingError
           ? error.statusCode
           : 500;
       res
@@ -184,6 +200,38 @@ afterEach(async () => {
 });
 
 describe("explicit server action policies", () => {
+  it("rejects an external rename seen only by the final lifecycle inspect", async () => {
+    setServerGrant(friend.id, serverId, ["server.view", "server.start"], admin);
+    pauseInspectAt = 3;
+    beforeInspect = gate();
+    const result = friendFetch("/start", { method: "POST" });
+    await bindingStarted;
+    containerName = "/different-server";
+    releases.splice(0).forEach((release) => release());
+    assert.equal((await result).status, 409);
+    assert.deepEqual(calls, []);
+    await waitForLocksReleased();
+    assert.equal(isServerBusy(serverId), false);
+  });
+  for (const pauseAt of [2, 3]) {
+    for (const revoke of ["grant", "session"] as const) {
+      it(`does not start the container after ${revoke} revocation during Docker inspection ${pauseAt}`, async () => {
+        setServerGrant(friend.id, serverId, ["server.view", "server.start"], admin);
+        pauseInspectAt = pauseAt;
+        beforeInspect = gate();
+        const result = friendFetch("/start", { method: "POST" });
+        await bindingStarted;
+        if (revoke === "grant") setServerGrant(friend.id, serverId, ["server.view"], admin);
+        else deleteUserSessions(friend.id);
+        releases.splice(0).forEach((release) => release());
+        const response = await result;
+        assert.equal(response.status, revoke === "grant" ? 403 : 401);
+        assert.deepEqual(calls, []);
+        await waitForLocksReleased();
+        assert.equal(isServerBusy(serverId), false);
+      });
+    }
+  }
   it("enforces the declared capability on new paths and passes only a resolved binding to the action", async () => {
     setServerGrant(
       friend.id,

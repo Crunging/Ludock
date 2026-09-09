@@ -20,6 +20,9 @@ import {
 import { createLogger, errorMessage } from "../logger.js";
 import { listServers, getServer, resolveAuthorizedServer } from "../servers.js";
 import { AppError } from "../errors.js";
+import { AuthError } from "../auth.js";
+import { AuthorizationError } from "../authorization.js";
+import { ServerBindingError } from "../identity.js";
 import { setIntentionalStop, suppressMonitoring } from "../monitoring.js";
 import { respond } from "./request.js";
 import { serverAction } from "./server-action.js";
@@ -37,7 +40,7 @@ function sendDockerError(
   fallbackMessage: string,
 ): void {
   const error = caught as DockerRouteError;
-  if (error instanceof AppError) {
+  if (error instanceof AppError || error instanceof AuthError || error instanceof AuthorizationError || error instanceof ServerBindingError) {
     res
       .status(error.statusCode)
       .json({ error: error.message, code: error.code });
@@ -117,7 +120,7 @@ serversRouter.post(
     try {
       const id = context.logical.id;
       suppressMonitoring(id);
-      await startContainer(context.container.id);
+      await startContainer(context.container.id, context.assertAccess);
       setIntentionalStop(id, false);
       auditContainerAction(req, res, "start", id);
       respond(res, okResponseSchema, { ok: true });
@@ -133,7 +136,7 @@ serversRouter.post(
     try {
       const id = context.logical.id;
       suppressMonitoring(id);
-      await stopContainer(context.container.id);
+      await stopContainer(context.container.id, context.assertAccess);
       setIntentionalStop(id, true);
       auditContainerAction(req, res, "stop", id);
       respond(res, okResponseSchema, { ok: true });
@@ -149,7 +152,7 @@ serversRouter.post(
     try {
       const id = context.logical.id;
       suppressMonitoring(id);
-      await restartContainer(context.container.id);
+      await restartContainer(context.container.id, context.assertAccess);
       setIntentionalStop(id, false);
       auditContainerAction(req, res, "restart", id);
       respond(res, okResponseSchema, { ok: true });

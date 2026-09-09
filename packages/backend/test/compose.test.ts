@@ -3,10 +3,12 @@ import { after, before, describe, it } from "node:test";
 import {
   mkdtemp,
   mkdir,
+  open,
   readFile,
   rm,
   symlink,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -207,6 +209,70 @@ describe("Compose execution boundary", () => {
         }
       } finally {
         await snapshot.cleanup();
+      }
+    },
+  );
+  it(
+    "keeps environment-file fingerprints stable when read timings change",
+    { skip: process.platform !== "linux" },
+    async (context) => {
+      const filename = path.join(directory, "env-order.yaml");
+      const firstEnv = path.join(directory, "first.env");
+      const secondEnv = path.join(directory, "second.env");
+      await writeFile(firstEnv, "WORLD=first\n");
+      await writeFile(secondEnv, "WORLD=second\n");
+      await writeFile(
+        filename,
+        "services:\n  game:\n    image: alpine:latest\n    env_file:\n      - first.env\n      - second.env\n",
+      );
+      const firstHandle = await open(firstEnv, "r");
+      const secondHandle = await open(secondEnv, "r");
+      const firstInode = (await firstHandle.stat()).ino;
+      const secondInode = (await secondHandle.stat()).ino;
+      const prototype = Object.getPrototypeOf(firstHandle) as FileHandle;
+      const originalRead = prototype.read;
+      await firstHandle.close();
+      await secondHandle.close();
+      let delayedInode = firstInode;
+      context.mock.method(prototype, "read", async function (
+        this: FileHandle,
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number | null,
+      ) {
+        if ((await this.stat()).ino === delayedInode)
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        return originalRead.call(this, buffer, offset, length, position);
+      });
+      const input = {
+        projectName: "fixture",
+        projectDirectory: directory,
+        composeFiles: [filename],
+        envFiles: [],
+      };
+      const first = await createComposeSnapshot(input);
+      try {
+        delayedInode = secondInode;
+        const second = await createComposeSnapshot(input);
+        try {
+          assert.equal(second.fingerprint, first.fingerprint);
+          for (const snapshot of [first, second]) {
+            const services = snapshot.model.services as Record<
+              string, { env_file: { path: string }[] }
+            >;
+            assert.deepEqual(
+              await Promise.all(
+                services.game.env_file.map((entry) => readFile(entry.path, "utf8")),
+              ),
+              ["WORLD=first\n", "WORLD=second\n"],
+            );
+          }
+        } finally {
+          await second.cleanup();
+        }
+      } finally {
+        await first.cleanup();
       }
     },
   );

@@ -31,6 +31,11 @@ adapters, filesystem boundaries, archive/restore validation, operation locks and
 recovery, schedule authority/DST handling, monitoring, and notification retries.
 Frontend tests cover independent action grants, role ceilings, runtime response
 validation, confirmation/draft state, polling, and extracted server panels.
+Deferred-request regressions cover password reset and session revocation during
+hashing, authority changes during Docker/helper preparation, Unicode redaction
+across stream chunks, deterministic Compose environment snapshots, and shared
+bind-root overlap. Frontend cases cover stale session reads, failed editor loads,
+overlapping mutations, preserved new drafts, and honest history/error states.
 Development tests cover isolated state/cookies, shared database locks, port
 collisions, and backend instance checks. Fixture tests do not replace real
 Docker, Compose, or game-world validation.
@@ -149,6 +154,9 @@ absolute paths on the Docker host and inside Ludock.
 - Cookies survive normal restart, are HttpOnly, and are Secure behind HTTPS.
 - Sign-out and password changes revoke the correct sessions. Disabling an
   account or revoking access closes its streams and blocks further commands.
+- A password reset or account change during password verification cannot revive
+  old credentials or a stale role. Revoking an administrator's session during
+  password hashing prevents its pending account mutation.
 - The last enabled administrator cannot be disabled, deleted, or demoted.
 
 ### Discovery, identity, and server grants
@@ -192,6 +200,9 @@ absolute paths on the Docker host and inside Ludock.
 - Replacing the original game during helper startup rejects the request and
   removes the helper. Downloads keep conflicting-operation locks until helper
   cleanup completes, including when the client disconnects.
+- Revoke access during helper/console preparation and verify no subsequent
+  command or file operation is dispatched. Split multibyte text and credentials
+  across stream chunks and verify complete redaction and readable output.
 - Large downloads respect consumer backpressure. Verify long Unicode archive
   paths and files larger than 8 GiB without truncated names or size metadata.
 
@@ -203,6 +214,9 @@ absolute paths on the Docker host and inside Ludock.
   failure. A stopped server remains stopped. Failed/forced stops prevent a
   completed backup; known running shared writers prevent copying.
 - External restart/replacement during copying invalidates the operation.
+- Shared-writer checks include root bind mounts and trailing-slash paths.
+  Revoking authority during preparation blocks new backup/restore/update steps
+  while still allowing rollback, helper cleanup, and safe state restoration.
 - Exercise capacity/reserve failure, temporary output cleanup, checksum failure,
   retention, and protected restore-target retention using disposable data.
 - A restore requires administrator authority and exact typed confirmation. It
@@ -297,6 +311,13 @@ absolute paths on the Docker host and inside Ludock.
 - Grant presets show the actual selected capabilities. Backup downtime, restore
   data replacement, force recreation, and the meaning of image-current results
   are explicit in the relevant flow.
+- Failed settings or grant reads disable saving until a successful retry. A
+  pending save cannot erase a newer draft. Changed roles, bindings, and operations
+  invalidate obsolete action confirmations.
+- Late session reads cannot restore a signed-out account. Failed sign-out shows
+  an unconfirmed session state. Password-change success remains visible if the
+  subsequent session refresh fails; failed history/diagnostic reads never claim
+  an empty or healthy result.
 - Activity reports actual persisted phases/outcomes. Audit and structured logs
   are administrator-only, redacted, and preserve actor/server attribution.
 

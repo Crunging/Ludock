@@ -10,7 +10,6 @@ const opened = new Set();
 const request = JSON.parse(process.argv[1]);
 const fail = () => { throw new Error("Unsafe restore path or changed data"); };
 const directoryFlags = C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW;
-const fileFlags = C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK;
 const link = (directory, name = "") => "/proc/self/fd/" + directory.fd + (name ? "/" + name : "");
 const pin = async (filename, flags = directoryFlags) => {
   const handle = await fsp.open(filename, flags); opened.add(handle); return handle;

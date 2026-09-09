@@ -1,5 +1,6 @@
 import net from "node:net";
 import { PassThrough } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type Docker from "dockerode";
 import WebSocket, { type RawData } from "ws";
 import { getDockerInstance } from "./docker.js";
@@ -27,8 +28,10 @@ export async function executeGameCommand(
   server: Pick<ManagedContainer, "labels" | "state">,
   adapter: GameConsoleAdapter,
   command: string,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
+  assertAccess?.();
   if (server.state !== "running") {
     throw new Error("The game server must be running to accept console commands");
   }
@@ -38,11 +41,13 @@ export async function executeGameCommand(
       if (!adapter.createExecOptions) {
         throw new Error("The console adapter is missing its command configuration");
       }
-      await executeInContainer(container, adapter.createExecOptions(command), output);
+      await executeInContainer(
+        container, adapter.createExecOptions(command), output, assertAccess,
+      );
       return;
     }
     case "container-stdin":
-      await writeContainerStdin(container, command, output);
+      await writeContainerStdin(container, command, output, assertAccess);
       return;
     case "source-rcon": {
       const target = await resolveNetworkTarget(container, server, adapter);
@@ -50,7 +55,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
       return;
@@ -61,7 +67,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
       return;
@@ -72,7 +79,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
     }
@@ -83,14 +91,17 @@ export async function executeSourceRcon(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
+  assertAccess?.();
   return new Promise<string>((resolve, reject) => {
     const socket = net.createConnection({ host, port });
     const authId = randomRequestId();
     const commandId = randomRequestId();
     let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let authenticated = false;
+    const decoder = new StringDecoder("utf8");
     let response = "";
     let settled = false;
     let responseTimer: NodeJS.Timeout | undefined;
@@ -106,7 +117,7 @@ export async function executeSourceRcon(
       if (responseTimer) clearTimeout(responseTimer);
       socket.destroy();
       if (error) reject(error);
-      else resolve(response);
+      else resolve(response + decoder.end());
     };
 
     socket.setNoDelay(true);
@@ -118,7 +129,12 @@ export async function executeSourceRcon(
     });
     socket.once("connect", () => {
       socket.setTimeout(0);
-      socket.write(encodeRconPacket(authId, 3, password));
+      try {
+        assertAccess?.();
+        socket.write(encodeRconPacket(authId, 3, password));
+      } catch {
+        finish(new Error("Console access changed"));
+      }
     });
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -132,13 +148,14 @@ export async function executeSourceRcon(
               return;
             }
             if (packet.id === authId && packet.type === 2) {
+              assertAccess?.();
               authenticated = true;
               socket.write(encodeRconPacket(commandId, 2, command));
             }
             continue;
           }
           if (packet.id !== commandId) continue;
-          response += packet.body;
+          response += decoder.write(packet.body);
           if (responseTimer) clearTimeout(responseTimer);
           responseTimer = setTimeout(() => finish(), 150);
         }
@@ -146,7 +163,9 @@ export async function executeSourceRcon(
         finish(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    socket.once("end", () => finish());
+    socket.once("end", () => finish(
+      authenticated ? undefined : new Error("RCON authentication did not complete"),
+    ));
   });
 }
 
@@ -154,8 +173,10 @@ export async function executeRustWebRcon(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
+  assertAccess?.();
   return new Promise<string>((resolve, reject) => {
     const identifier = randomRequestId();
     const url = `ws://${formatHost(host)}:${port}/${encodeURIComponent(password)}`;
@@ -175,13 +196,18 @@ export async function executeRustWebRcon(
     };
 
     socket.once("open", () => {
-      socket.send(
-        JSON.stringify({
-          Identifier: identifier,
-          Message: command,
-          Name: "Ludock",
-        })
-      );
+      try {
+        assertAccess?.();
+        socket.send(
+          JSON.stringify({
+            Identifier: identifier,
+            Message: command,
+            Name: "Ludock",
+          }),
+        );
+      } catch {
+        finish(new Error("Console access changed"));
+      }
     });
     socket.on("message", (raw: RawData) => {
       try {
@@ -203,6 +229,9 @@ export async function executeRustWebRcon(
     socket.once("error", () => {
       finish(new Error("Could not connect or authenticate with Rust WebRCON"));
     });
+    socket.once("close", () => finish(
+      new Error("WebRCON connection closed before the command response"),
+    ));
   });
 }
 
@@ -210,11 +239,15 @@ export async function executeTelnetCommand(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
+  assertAccess?.();
   return new Promise<string>((resolve, reject) => {
     const socket = net.createConnection({ host, port });
     let output = "";
+    const decoder = new StringDecoder("utf8");
+    let passwordSent = false;
     let commandSent = false;
     let settled = false;
     let quietTimer: NodeJS.Timeout | undefined;
@@ -230,7 +263,7 @@ export async function executeTelnetCommand(
       if (quietTimer) clearTimeout(quietTimer);
       socket.destroy();
       if (error) reject(error);
-      else resolve(cleanTelnetOutput(output, command));
+      else resolve(cleanTelnetOutput(output + decoder.end(), command));
     };
 
     socket.setTimeout(CONNECT_TIMEOUT_MS, () =>
@@ -242,26 +275,43 @@ export async function executeTelnetCommand(
     socket.once("connect", () => socket.setTimeout(0));
     socket.on("data", (chunk) => {
       respondToTelnetNegotiation(socket, chunk);
-      const text = stripTelnetNegotiation(chunk).toString("utf8");
+      const text = decoder.write(stripTelnetNegotiation(chunk));
       output += text;
-      if (!commandSent && /password\s*[:>]?/i.test(output)) {
-        socket.write(`${password}\n`);
-        commandSent = true;
-        setTimeout(() => {
-          if (!settled) socket.write(`${command}\n`);
-        }, 50);
+      if (!passwordSent && /password\s*[:>]?/i.test(output)) {
+        try {
+          assertAccess?.();
+          socket.write(`${password}\n`);
+          passwordSent = true;
+          setTimeout(() => {
+            if (settled) return;
+            try {
+              assertAccess?.();
+              socket.write(`${command}\n`);
+              commandSent = true;
+              quietTimer = setTimeout(() => finish(), 250);
+            } catch {
+              finish(new Error("Console access changed"));
+            }
+          }, 50);
+        } catch {
+          finish(new Error("Console access changed"));
+        }
         return;
       }
-      if (commandSent) {
+      if (passwordSent) {
         if (/incorrect|invalid password|authentication failed/i.test(output)) {
           finish(new Error("Telnet console authentication failed"));
           return;
         }
-        if (quietTimer) clearTimeout(quietTimer);
-        quietTimer = setTimeout(() => finish(), 250);
+        if (commandSent) {
+          if (quietTimer) clearTimeout(quietTimer);
+          quietTimer = setTimeout(() => finish(), 250);
+        }
       }
     });
-    socket.once("end", () => finish());
+    socket.once("end", () => finish(
+      commandSent ? undefined : new Error("Telnet console closed before the command was sent"),
+    ));
   });
 }
 
@@ -352,17 +402,23 @@ function parseEnvironment(values: string[]): Record<string, string> {
 async function executeInContainer(
   container: Docker.Container,
   options: Docker.ExecCreateOptions,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
   const exec = await container.exec(options);
+  assertAccess?.();
   const stream = await exec.start({ hijack: true, stdin: false });
   await streamExecOutput(stream, output);
+  const result = await exec.inspect();
+  if (result.Running || result.ExitCode !== 0)
+    throw new Error("Game console command failed");
 }
 
 async function writeContainerStdin(
   container: Docker.Container,
   command: string,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
   const info = await container.inspect();
   if (!info.Config.OpenStdin) {
@@ -384,6 +440,7 @@ async function writeContainerStdin(
     hijack: true,
   });
   try {
+    assertAccess?.();
     await writeAttachedInput(stream, `${command}\n`);
   } finally {
     (stream as NodeJS.ReadWriteStream & { destroy(): void }).destroy();
@@ -409,14 +466,21 @@ async function streamExecOutput(
 ): Promise<void> {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  stdout.on("data", (chunk: Buffer) => output.stdout(chunk.toString()));
-  stderr.on("data", (chunk: Buffer) => output.stderr(chunk.toString()));
-  getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-  await new Promise<void>((resolve, reject) => {
-    stream.once("end", resolve);
-    stream.once("close", resolve);
-    stream.once("error", reject);
-  });
+  stdout.setEncoding("utf8");
+  stderr.setEncoding("utf8");
+  stdout.on("data", (chunk: string) => output.stdout(chunk));
+  stderr.on("data", (chunk: string) => output.stderr(chunk));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      stream.once("end", resolve);
+      stream.once("close", resolve);
+      stream.once("error", reject);
+      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
+    });
+  } finally {
+    stdout.end();
+    stderr.end();
+  }
 }
 
 function encodeRconPacket(id: number, type: number, body: string): Buffer {
@@ -430,10 +494,10 @@ function encodeRconPacket(id: number, type: number, body: string): Buffer {
 }
 
 function decodeRconPackets(buffer: Buffer): {
-  packets: Array<{ id: number; type: number; body: string }>;
+  packets: Array<{ id: number; type: number; body: Buffer }>;
   remaining: Buffer;
 } {
-  const packets: Array<{ id: number; type: number; body: string }> = [];
+  const packets: Array<{ id: number; type: number; body: Buffer }> = [];
   let offset = 0;
   while (buffer.length - offset >= 4) {
     const size = buffer.readInt32LE(offset);
@@ -445,7 +509,7 @@ function decodeRconPackets(buffer: Buffer): {
     packets.push({
       id: buffer.readInt32LE(offset + 4),
       type: buffer.readInt32LE(offset + 8),
-      body: buffer.subarray(offset + 12, end - 2).toString("utf8"),
+      body: buffer.subarray(offset + 12, end - 2),
     });
     offset = end;
   }

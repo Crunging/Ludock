@@ -28,10 +28,8 @@ import {
 
 export { LABEL_ENABLE, LABEL_NAME, LABEL_GAME } from "./discovery.js";
 
-export const LABEL_PREFIX = "ludock";
-
 // Keep untrusted identifiers from altering dockerode's Docker API request path.
-export function assertValidContainerId(id: unknown): DockerContainerId {
+function assertValidContainerId(id: unknown): DockerContainerId {
   const parsed = dockerContainerIdSchema.safeParse(id);
   if (!parsed.success) {
     const error = new Error("Invalid container identifier");
@@ -202,7 +200,7 @@ function toInspectedManagedContainer(
 }
 
 /** Internal only: raw mounts/configuration are hashed by identity.ts, never serialized as server DTOs. */
-export function toServerObservation(
+function toServerObservation(
   info: Docker.ContainerInspectInfo,
   server: ManagedContainer,
 ): ServerObservation {
@@ -253,7 +251,7 @@ export function toServerObservation(
 export async function getContainerStats(
   id: DockerContainerId,
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
-  const container = await getManagedDockerContainer(id);
+  const { container } = await getManagedDockerContainer(id);
   const stats = await container.stats({ stream: false });
 
   const cpuDelta =
@@ -275,18 +273,30 @@ export async function getContainerStats(
   };
 }
 
-export async function startContainer(id: DockerContainerId): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function startContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.start();
 }
 
-export async function stopContainer(id: DockerContainerId): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function stopContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.stop();
 }
 
-export async function restartContainer(id: DockerContainerId): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function restartContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.restart();
 }
 
@@ -304,12 +314,12 @@ export function getContainer(id: DockerContainerId): Docker.Container {
 
 async function getManagedDockerContainer(
   id: DockerContainerId,
-): Promise<Docker.Container> {
+): Promise<{ container: Docker.Container; info: Docker.ContainerInspectInfo }> {
   const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
   assertEligible(info);
 
-  return container;
+  return { container, info };
 }
 
 function toManagedContainer(container: Docker.ContainerInfo): ManagedContainer {

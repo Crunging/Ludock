@@ -19,6 +19,28 @@ afterEach(async () => {
 });
 
 describe("Source RCON transport", () => {
+  it("does not send a command after access is revoked during authentication", async () => {
+    let allowed = true;
+    const received: string[] = [];
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk) => {
+        received.push(chunk.subarray(12, chunk.length - 2).toString());
+        allowed = false;
+        socket.write(encodePacket(chunk.readInt32LE(4), 2, ""));
+      });
+    });
+    const port = await listen(server);
+    await assert.rejects(executeSourceRcon("127.0.0.1", port, "credential", "stop", () => {
+      if (!allowed) throw new Error("Access revoked");
+    }), /Access revoked/);
+    assert.deepEqual(received, ["credential"]);
+  });
+
+  it("does not report success when the connection closes before authentication", async () => {
+    const server = net.createServer((socket) => { socket.resume(); socket.end(); });
+    const port = await listen(server);
+    await assert.rejects(executeSourceRcon("127.0.0.1", port, "credential", "stop"), /authentication did not complete/);
+  });
   it("authenticates and returns a native command response", async () => {
     const received: string[] = [];
     const server = net.createServer((socket) => {
@@ -70,6 +92,20 @@ describe("Source RCON transport", () => {
 });
 
 describe("Rust WebRCON transport", () => {
+  it("does not send a command after access changes during the WebSocket handshake", async () => {
+    let allowed = true;
+    let sent = false;
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    server.on("connection", (socket) => {
+      allowed = false;
+      socket.on("message", () => { sent = true; });
+    });
+    const port = await websocketPort(server);
+    await assert.rejects(executeRustWebRcon("127.0.0.1", port, "credential", "stop", () => {
+      if (!allowed) throw new Error("Access revoked");
+    }), /Console access changed/);
+    assert.equal(sent, false);
+  });
   it("uses the WebRCON request envelope and matches its response", async () => {
     let requestPath = "";
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -107,6 +143,23 @@ describe("Rust WebRCON transport", () => {
 });
 
 describe("Telnet console transport", () => {
+  it("does not send a command after access changes during password authentication", async () => {
+    let allowed = true;
+    const received: string[] = [];
+    const server = net.createServer((socket) => {
+      socket.write("Password: ");
+      socket.on("data", (chunk) => {
+        received.push(chunk.toString().trim());
+        allowed = false;
+        socket.write("Logged in\n");
+      });
+    });
+    const port = await listen(server);
+    await assert.rejects(executeTelnetCommand("127.0.0.1", port, "credential", "stop", () => {
+      if (!allowed) throw new Error("Access revoked");
+    }), /Console access changed/);
+    assert.deepEqual(received, ["credential"]);
+  });
   it("authenticates and sends a command after the password prompt", async () => {
     const received: string[] = [];
     const server = net.createServer((socket) => {
@@ -146,6 +199,22 @@ describe("Container stdin transport", () => {
     transport: "container-stdin",
     commandPlaceholder: "help",
   };
+
+  it("destroys an attachment without writing if access changes while it opens", async () => {
+    let allowed = true;
+    let received = "";
+    const stream = new PassThrough();
+    stream.on("data", (chunk: Buffer) => { received += chunk.toString(); });
+    const container = {
+      inspect: async () => ({ Config: { OpenStdin: true, StdinOnce: false } }),
+      attach: async () => { allowed = false; return stream; },
+    } as unknown as Docker.Container;
+    await assert.rejects(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", {
+      stdout: () => {}, stderr: () => {}, system: () => {},
+    }, () => { if (!allowed) throw new Error("Access revoked"); }), /Access revoked/);
+    assert.equal(received, "");
+    assert.equal(stream.destroyed, true);
+  });
 
   it("attaches directly to the container stdin and sends a newline", async () => {
     const stream = new PassThrough();
@@ -216,6 +285,40 @@ describe("Container stdin transport", () => {
       /stdin_open: true/
     );
     assert.equal(attached, false);
+  });
+});
+
+describe("Docker exec console transport", () => {
+  const adapter: GameConsoleAdapter = {
+    id: "minecraft-rcon", name: "Fixture", transport: "docker-exec",
+    commandPlaceholder: "help", createExecOptions: (command) => ({ Cmd: ["fixture", command] }),
+  };
+  const output = { stdout: () => {}, stderr: () => {}, system: () => {} };
+  it("does not start a prepared exec after access is revoked", async () => {
+    let allowed = true;
+    let started = false;
+    const container = {
+      exec: async () => {
+        allowed = false;
+        return { start: async () => { started = true; } };
+      },
+    } as unknown as Docker.Container;
+    await assert.rejects(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", output,
+      () => { if (!allowed) throw new Error("Access revoked"); }), /Access revoked/);
+    assert.equal(started, false);
+  });
+  it("reports a nonzero process exit instead of auditing a successful command", async () => {
+    const container = {
+      exec: async () => ({
+        start: async () => {
+          const stream = new PassThrough();
+          setImmediate(() => stream.end());
+          return stream;
+        },
+        inspect: async () => ({ Running: false, ExitCode: 1 }),
+      }),
+    } as unknown as Docker.Container;
+    await assert.rejects(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", output), /Game console command failed/);
   });
 });
 

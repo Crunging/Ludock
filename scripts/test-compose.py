@@ -3,7 +3,7 @@
 Creates and removes only unique Ludock fixture containers and their volumes.
 Override LUDOCK_TEST_IMAGE to test another locally built runtime image.
 """
-import json, os, pathlib, subprocess, tempfile, time, urllib.request, uuid
+import hashlib, json, os, pathlib, subprocess, tempfile, time, urllib.request, uuid
 project='ludock-v2-smoke-'+uuid.uuid4().hex[:8]
 root=pathlib.Path(tempfile.mkdtemp(prefix=project+'-',dir=os.environ.get('LUDOCK_TEST_DIRECTORY'))).resolve()
 app=project+'-app'
@@ -70,6 +70,14 @@ try:
     assert cli('ps','-q','dependency')==dep
     # Every source change must invalidate registration before any update.
     compose.write_text(compose.read_text()+'\n# changed owner source\n')
+    # Docker Desktop may propagate a host bind write after the host write returns.
+    # Confirm the fixture sees the edit before testing application validation.
+    changed_source=hashlib.sha256(compose.read_bytes()).hexdigest()
+    deadline=time.monotonic()+5
+    while time.monotonic()<deadline:
+        if docker('exec',app,'sha256sum',str(compose)).split()[0]==changed_source: break
+        time.sleep(.1)
+    else: raise RuntimeError('Changed Compose source did not reach the fixture mount')
     cap=request('/servers/'+sid+'/update-capability')['capability'];assert not cap['available'],cap
     print(json.dumps({'result':'pass','logicalIdentitySurvived':True,'alreadyCurrent':unchanged['status'],'forcedRunning':forced['status'],'forcedStopped':stopped['status'],'dependencyUntouched':True,'literalDollarPreserved':True,'sourceChangeRejected':True}))
 finally:

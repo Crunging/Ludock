@@ -25,6 +25,10 @@ import {
 import { createLogger, errorMessage } from "../logger.js";
 import { respond } from "./request.js";
 import { serverAction } from "./server-action.js";
+import { AuthError } from "../auth.js";
+import { AuthorizationError } from "../authorization.js";
+import { AppError } from "../errors.js";
+import { ServerBindingError } from "../identity.js";
 
 export const filesRouter: RouterType = Router();
 const logger = createLogger("api");
@@ -43,6 +47,10 @@ function queryValue(value: unknown): string | undefined {
 }
 
 function sendFileError(res: Response, error: unknown): void {
+  if (error instanceof AuthError || error instanceof AuthorizationError || error instanceof AppError || error instanceof ServerBindingError) {
+    res.status(error.statusCode).json({ error: error.message, code: error.code });
+    return;
+  }
   // Checked before the Docker cases below: FileStorageError carries its own
   // statusCode and must keep its specific message.
   if (error instanceof FileStorageError) {
@@ -52,13 +60,6 @@ function sendFileError(res: Response, error: unknown): void {
       ROOT_NOT_FOUND: "File root not found",
       ROOT_MUTATION: "The configured root cannot be changed",
       ROOT_DOWNLOAD: "Choose a file or folder to download",
-      OFFLINE_ROOT_NOT_VOLUME:
-        "This server must be running because the file root is not backed by a Docker volume",
-      CONTAINER_FILE_OPERATION_42: "File or folder not found",
-      CONTAINER_FILE_OPERATION_44: "Symbolic links cannot be accessed",
-      CONTAINER_FILE_OPERATION_45: "Folder not found",
-      CONTAINER_FILE_OPERATION_46:
-        "A file or folder with that name already exists",
     };
     res
       .status(error.statusCode)
@@ -126,7 +127,7 @@ filesRouter.get(
       respond(
         res,
         fileListingSchema,
-        await listFiles(server, parsed.data.root, parsed.data.path),
+        await listFiles(server, parsed.data.root, parsed.data.path, context.assertAccess),
       );
     } catch (error) {
       sendFileError(res, error);
@@ -152,6 +153,7 @@ filesRouter.get(
         server,
         parsed.data.root,
         parsed.data.path,
+        context.assertAccess,
       );
       res.setHeader("Content-Disposition", contentDisposition(download.name));
       res.setHeader(
@@ -216,6 +218,7 @@ filesRouter.put(
         parsed.data.name,
         size,
         req,
+        context.assertAccess,
       );
       fileAudit(req, res, "uploaded", id, {
         root: parsed.data.root,
@@ -246,6 +249,7 @@ filesRouter.post(
         parsed.data.root,
         parsed.data.path,
         parsed.data.name,
+        context.assertAccess,
       );
       fileAudit(req, res, "directory.created", id, parsed.data);
       respond(res.status(201), okResponseSchema, { ok: true });
@@ -271,6 +275,7 @@ filesRouter.patch(
         parsed.data.root,
         parsed.data.path,
         parsed.data.newName,
+        context.assertAccess,
       );
       fileAudit(req, res, "renamed", id, parsed.data);
       respond(res, okResponseSchema, { ok: true });
@@ -294,7 +299,7 @@ filesRouter.delete(
     try {
       const id = context.logical.id;
       const server = context.container;
-      await deleteFileEntry(server, parsed.data.root, parsed.data.path);
+      await deleteFileEntry(server, parsed.data.root, parsed.data.path, context.assertAccess);
       fileAudit(req, res, "deleted", id, parsed.data);
       respond(res, okResponseSchema, { ok: true });
     } catch (error) {

@@ -67,5 +67,6 @@ jobs:
           sbom: true
           cache-from: |
             type=gha,scope=nightly
-            type=gha,scope=ci
+            type=gha,scope=ci-X64
+            type=gha,scope=ci-ARM64
           cache-to: type=gha,mode=min,scope=nightly

@@ -83,8 +83,7 @@ export async function deliverNotifications(
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
   if (delivering) return;
-  const config = getSetting<NotificationSettings>("notifications");
-  if (!config?.enabled) return;
+  if (!notificationConfiguration().enabled) return;
   delivering = true;
   try {
     const rows = getDatabase()
@@ -97,6 +96,8 @@ export async function deliverNotifications(
       attempts: number;
     }>;
     for (const row of rows) {
+      const config = getSetting<NotificationSettings>("notifications");
+      if (!config?.enabled) break;
       let succeeded = false;
       try {
         const response = await fetcher(config.webhookUrl, {

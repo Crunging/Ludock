@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { apiJson, jsonBody } from "../api";
 import ServerGrants from "../components/ServerGrants";
 import { useAuth } from "../auth-context";
@@ -27,65 +27,89 @@ export default function Users() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const loadUsers = useCallback(async () => {
-    const body = await apiJson("/users", usersResponseSchema);
-    setUsers(body.users);
-  }, []);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const active = useRef(false);
+  const mutationPending = useRef(false);
 
   useEffect(() => {
-    loadUsers().catch((reason: unknown) => {
-      setError(
-        reason instanceof Error ? reason.message : "Failed to load users",
-      );
-    });
-  }, [loadUsers]);
+    const controller = new AbortController();
+    active.current = true;
+    setLoadState("loading");
+    setError(null);
+    apiJson("/users", usersResponseSchema, { signal: controller.signal })
+      .then((body) => {
+        if (controller.signal.aborted) return;
+        setUsers(body.users);
+        setLoadState("ready");
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(reason instanceof Error ? reason.message : "Failed to load users");
+        setLoadState("error");
+      });
+    return () => {
+      active.current = false;
+      controller.abort();
+    };
+  }, [loadAttempt]);
 
-  const createNewUser = async (event: FormEvent) => {
-    event.preventDefault();
+  async function mutate<T,>(action: () => Promise<T>, apply: (result: T) => void) {
+    if (mutationPending.current || loadState !== "ready") return;
+    mutationPending.current = true;
     setBusy(true);
     setError(null);
     try {
-      await apiJson(
-        "/users",
-        userResponseSchema,
-        jsonBody("POST", {
-          username,
-          password,
-          role,
-        } satisfies CreateUserRequest),
-      );
-      setUsername("");
-      setPassword("");
-      await loadUsers();
+      const result = await action();
+      if (active.current) apply(result);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Failed to create user",
-      );
+      if (active.current)
+        setError(
+          reason instanceof Error ? reason.message : "Unable to save user changes.",
+        );
     } finally {
-      setBusy(false);
+      mutationPending.current = false;
+      if (active.current) setBusy(false);
     }
+  }
+
+  const createNewUser = async (event: FormEvent) => {
+    event.preventDefault();
+    await mutate(
+      () => apiJson("/users", userResponseSchema, jsonBody("POST", {
+        username,
+        password,
+        role,
+      } satisfies CreateUserRequest)),
+      ({ user }) => {
+        setUsers((current) => [...current, user]);
+        setUsername((current) => current === username ? "" : current);
+        setPassword((current) => current === password ? "" : current);
+      },
+    );
   };
 
   const updateAccess = async (
     user: UserSummary,
     changes: Partial<UserAccessRequest>,
   ) => {
-    setError(null);
-    try {
-      await apiJson(
-        `/users/${user.id}`,
+    await mutate(
+      () => apiJson(
+        `/users/${encodeURIComponent(user.id)}`,
         userResponseSchema,
         jsonBody("PATCH", {
           role: changes.role ?? user.role,
           disabled: changes.disabled ?? user.disabled,
         } satisfies UserAccessRequest),
-      );
-      await loadUsers();
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Failed to update user",
-      );
-    }
+      ),
+      (response) => {
+        setUsers((current) => current.map((item) =>
+          item.id === response.user.id ? response.user : item,
+        ));
+      },
+    );
   };
 
   const resetPassword = async (user: UserSummary) => {
@@ -96,43 +120,41 @@ export default function Users() {
       );
       return;
     }
-
-    setError(null);
-    try {
-      await apiJson(
-        `/users/${user.id}/reset-password`,
+    await mutate(
+      () => apiJson(
+        `/users/${encodeURIComponent(user.id)}/reset-password`,
         okResponseSchema,
-        jsonBody("POST", {
-          password: nextPassword,
-        } satisfies ResetPasswordRequest),
-      );
-      setResetPasswords((current) => ({ ...current, [user.id]: "" }));
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Failed to reset password",
-      );
-    }
+        jsonBody("POST", { password: nextPassword } satisfies ResetPasswordRequest),
+      ),
+      () => {
+        setResetPasswords((current) =>
+          current[user.id] === nextPassword ? { ...current, [user.id]: "" } : current,
+        );
+      },
+    );
   };
 
   const removeUser = async (user: UserSummary) => {
     if (
+      mutationPending.current ||
+      user.id === currentUser?.id ||
       !window.confirm(
         `Delete ${user.username}? This revokes their sessions and cannot be undone.`,
       )
-    ) {
-      return;
-    }
-    setError(null);
-    try {
-      await apiJson(`/users/${user.id}`, okResponseSchema, {
+    ) return;
+    await mutate(
+      () => apiJson(`/users/${encodeURIComponent(user.id)}`, okResponseSchema, {
         method: "DELETE",
-      });
-      await loadUsers();
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Failed to delete user",
-      );
-    }
+      }),
+      () => {
+        setUsers((current) => current.filter((item) => item.id !== user.id));
+        setResetPasswords((current) => {
+          const next = { ...current };
+          delete next[user.id];
+          return next;
+        });
+      },
+    );
   };
 
   return (
@@ -191,12 +213,24 @@ export default function Users() {
               <option value="viewer">Viewer</option>
             </select>
           </label>
-          <button className="primary-btn" disabled={busy}>
-            {busy ? "Creating..." : "Create user"}
+          <button
+            className="primary-btn"
+            disabled={busy || loadState !== "ready"}
+          >
+            Create user
           </button>
         </div>
       </form>
 
+      {loadState === "loading" && <p role="status">Loading users…</p>}
+      {loadState === "error" && (
+        <button
+          className="secondary-btn"
+          onClick={() => setLoadAttempt((value) => value + 1)}
+        >
+          Try again
+        </button>
+      )}
       <div className="settings-list">
         {users.map((user) => (
           <section className="settings-card user-row" key={user.id}>
@@ -211,7 +245,7 @@ export default function Users() {
               <span>Role</span>
               <select
                 value={user.role}
-                disabled={user.disabled}
+                disabled={busy || user.disabled}
                 onChange={(event) =>
                   updateAccess(user, {
                     role: event.target.value as UserSummary["role"],
@@ -225,6 +259,7 @@ export default function Users() {
             </label>
             <button
               className="secondary-btn"
+              disabled={busy}
               onClick={() => updateAccess(user, { disabled: !user.disabled })}
             >
               {user.disabled ? "Enable" : "Disable"}
@@ -235,6 +270,7 @@ export default function Users() {
                 onClick={() =>
                   setEditingGrants(editingGrants === user.id ? null : user.id)
                 }
+                disabled={busy}
                 aria-expanded={editingGrants === user.id}
               >
                 Server access
@@ -263,7 +299,7 @@ export default function Users() {
                 className="secondary-btn"
                 onClick={() => resetPassword(user)}
                 disabled={
-                  (resetPasswords[user.id] || "").length < PASSWORD_MIN_LENGTH
+                  busy || (resetPasswords[user.id] || "").length < PASSWORD_MIN_LENGTH
                 }
               >
                 Reset password
@@ -272,7 +308,7 @@ export default function Users() {
             <button
               className="secondary-btn secondary-btn--danger"
               onClick={() => removeUser(user)}
-              disabled={user.id === currentUser?.id}
+              disabled={busy || user.id === currentUser?.id}
               title={
                 user.id === currentUser?.id
                   ? "You cannot delete your own account"

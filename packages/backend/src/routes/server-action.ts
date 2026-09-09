@@ -1,11 +1,20 @@
 import type { Request, RequestHandler, Response } from "express";
 import type { ServerCapability } from "@ludock/shared";
-import { getRequestSession } from "../auth.js";
+import { assertRequestUser } from "../auth.js";
 import { assertServerCapability } from "../authorization.js";
 import { type SessionUser } from "../database.js";
 import { AppError } from "../errors.js";
+import {
+  assertObservedServerBinding,
+  resolveServerBinding,
+  type ServerObservation,
+} from "../identity.js";
 import { acquireLocks } from "../operation-locks.js";
 import { resolveAuthorizedServer, type ServerContext } from "../servers.js";
+
+interface ServerActionContext extends ServerContext {
+  assertAccess: (observation?: ServerObservation) => void;
+}
 
 /** Every direct server action declares its capability alongside its handler.
  * The resolved context supplies the Docker binding; URL IDs never reach Docker.
@@ -15,7 +24,7 @@ export function serverAction(
   action: (
     req: Request,
     res: Response,
-    context: ServerContext,
+    context: ServerActionContext,
   ) => Promise<void>,
 ): RequestHandler {
   return async (req, res) => {
@@ -26,6 +35,19 @@ export function serverAction(
       capability,
     );
     if (res.destroyed || req.aborted) return;
+    const assertAccess = (observation?: ServerObservation) => {
+      if (res.destroyed || req.aborted)
+        throw new AppError("REQUEST_CLOSED", 409, "Request closed");
+      const current = assertRequestUser(req, actor);
+      assertServerCapability(current, context.logical.id, capability);
+      if (observation)
+        assertObservedServerBinding(
+          context.logical.id, observation, context.logical.bindingRevision,
+        );
+      else
+        resolveServerBinding(context.logical.id, context.logical.bindingRevision);
+    };
+    assertAccess();
     const release = acquireLocks(context.lockKeys);
     let handlerSettled = false;
     let responseClosed = false;
@@ -39,9 +61,7 @@ export function serverAction(
     };
     const revalidate = setInterval(() => {
       try {
-        if (actor.id !== "api-token" && !getRequestSession(req))
-          throw new AppError("ACCESS_REVOKED", 401, "Session expired");
-        assertServerCapability(actor, context.logical.id, capability);
+        assertAccess();
       } catch {
         res.destroy();
       }
@@ -50,7 +70,7 @@ export function serverAction(
     res.once("finish", responseDone);
     res.once("close", responseDone);
     try {
-      await action(req, res, context);
+      await action(req, res, { ...context, assertAccess });
     } finally {
       handlerSettled = true;
       releaseWhenSettled();
