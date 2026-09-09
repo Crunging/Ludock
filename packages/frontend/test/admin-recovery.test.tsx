@@ -89,6 +89,85 @@ describe("administration recovery", () => {
     expect((screen.getByLabelText("Replace webhook URL") as HTMLInputElement).value).toBe("https://discord.com/api/webhooks/next");
   });
 
+  it("allows clearing and typing decimal backup limits and keeps edits made during a save", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<unknown>();
+    let submitted: unknown;
+    let saveCount = 0;
+    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+      if (init?.method === "PUT") {
+        submitted = JSON.parse(String(init.body));
+        if (++saveCount > 1) return { settings: submitted };
+        return pending.promise;
+      }
+      if (path === "/settings/backups") return { settings: {
+        destination: "/backups", retentionCount: 10,
+        maxBytes: 100 * 1024 ** 3, reserveBytes: 5 * 1024 ** 3,
+      } };
+      if (path === "/compose-projects") return { projects: [] };
+      return { configured: false, enabled: false };
+    });
+    render(<Settings />);
+    const retention = await screen.findByLabelText("Backups per server") as HTMLInputElement;
+    const limit = screen.getByLabelText("Total backup limit (GiB)") as HTMLInputElement;
+    const reserve = screen.getByLabelText("Minimum free space (GiB)") as HTMLInputElement;
+    const save = screen.getByRole("button", { name: "Save backup settings" });
+
+    await user.clear(retention);
+    expect(retention.value).toBe("");
+    await user.type(retention, "4");
+    await user.clear(limit);
+    expect(limit.value).toBe("");
+    await user.click(save);
+    expect(submitted).toBeUndefined();
+    await user.type(limit, "1.25");
+    expect(limit.value).toBe("1.25");
+    await user.clear(reserve);
+    expect(reserve.value).toBe("");
+    await user.type(reserve, "0.1");
+    expect(reserve.value).toBe("0.1");
+    await user.click(save);
+    expect(submitted).toEqual({
+      destination: "/backups", retentionCount: 4,
+      maxBytes: 1.25 * 1024 ** 3, reserveBytes: Math.round(0.1 * 1024 ** 3),
+    });
+
+    await user.clear(limit);
+    await user.type(limit, "2.5");
+    await act(async () => pending.resolve({ settings: submitted }));
+    await screen.findByText("Backup settings saved.");
+    expect(limit.value).toBe("2.5");
+    expect(reserve.value).toBe("0.1");
+    expect(retention.value).toBe("4");
+    await user.click(save);
+    expect(saveCount).toBe(2);
+    expect(limit.value).toBe("2.5");
+    expect(reserve.value).toBe("0.1");
+  });
+
+  it("preserves exact saved byte limits when only the backup destination changes", async () => {
+    const user = userEvent.setup();
+    const settings = {
+      destination: "/backups", retentionCount: 4,
+      maxBytes: 10_000_017, reserveBytes: 1,
+    };
+    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+      if (init?.method === "PUT") return { settings: JSON.parse(String(init.body)) };
+      if (path === "/settings/backups") return { settings };
+      if (path === "/compose-projects") return { projects: [] };
+      return { configured: false, enabled: false };
+    });
+    render(<Settings />);
+    const destination = await screen.findByLabelText("Mounted destination path");
+    await user.clear(destination);
+    await user.type(destination, "/new-backups");
+    await user.click(screen.getByRole("button", { name: "Save backup settings" }));
+    await screen.findByText("Backup settings saved.");
+    expect(apiJson).toHaveBeenLastCalledWith("/settings/backups", expect.anything(), expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ ...settings, destination: "/new-backups" }),
+    }));
+  });
+
   it("uses the registered project response without wiping a newer project draft", async () => {
     const pending = deferred<unknown>();
     vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {

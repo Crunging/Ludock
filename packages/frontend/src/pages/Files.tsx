@@ -29,6 +29,7 @@ import {
   fileListingSchema,
   serverResponseSchema,
   okResponseSchema,
+  formatByteSize,
 } from "@ludock/shared";
 
 interface FileLocation {
@@ -75,18 +76,6 @@ function joinPath(parent: string, name: string): string {
 
 function sameLocation(left: FileLocation, right: FileLocation): boolean {
   return left.root === right.root && left.path === right.path;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let index = 0;
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024;
-    index += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : value.toFixed(0)} ${units[index]}`;
 }
 
 export default function Files({ containerId }: { containerId: string }) {
@@ -764,7 +753,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
                     )}
                   </div>
                   <span>
-                    {entry.type === "file" ? formatSize(entry.size) : "—"}
+                    {entry.type === "file" ? formatByteSize(entry.size) : "—"}
                   </span>
                   <span>
                     {entry.modifiedAt

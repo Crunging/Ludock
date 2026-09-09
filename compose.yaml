@@ -2,7 +2,7 @@ services:
   ludock:
     image: ghcr.io/crunging/ludock:2
     ports:
-      - "3000:3000"
+      - "${LUDOCK_PORT:-3000}:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # v2 requires fresh application storage. Keep any old data volume intact.

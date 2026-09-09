@@ -5,6 +5,8 @@ import { after, before, describe, it } from "node:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
+process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
+process.env.MAX_UPLOAD_BYTES = "1";
 
 const [{ createApp }, { getDockerInstance }, { createLogger }] =
   await Promise.all([
@@ -275,6 +277,29 @@ describe("HTTP application", () => {
       },
     );
     assert.equal(response.status, 415);
+  });
+
+  it("enforces the readable upload limit and reports it before accessing file storage", async () => {
+    const upload = (size: number) =>
+      authorizedFetch(
+        `/api/v1/servers/${managedServerId}/files/upload?root=root-0&path=&name=mod.jar`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: new Uint8Array(size),
+        },
+      );
+    const oversized = await upload(1537);
+    assert.equal(oversized.status, 413);
+    assert.deepEqual(await oversized.json(), {
+      error: "File exceeds the upload size limit of 1.5 KiB",
+    });
+
+    // The exact limit passes the size gate and reaches this fixture's missing
+    // file root, despite MAX_UPLOAD_BYTES being configured as only one byte.
+    const boundary = await upload(1536);
+    assert.equal(boundary.status, 404);
+    assert.deepEqual(await boundary.json(), { error: "File root not found" });
   });
 
   it("manages users without exposing password hashes", async () => {

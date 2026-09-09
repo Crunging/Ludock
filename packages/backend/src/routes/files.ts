@@ -11,6 +11,7 @@ import {
   createDirectoryRequestSchema,
   renameFileRequestSchema,
   uploadFileQuerySchema,
+  formatByteSize,
 } from "@ludock/shared";
 import { writeAuditLog, type SessionUser } from "../database.js";
 import {
@@ -29,6 +30,7 @@ import { AuthError } from "../auth.js";
 import { AuthorizationError } from "../authorization.js";
 import { AppError } from "../errors.js";
 import { ServerBindingError } from "../identity.js";
+import { getMaxUploadBytes } from "../upload-limit.js";
 
 export const filesRouter: RouterType = Router();
 const logger = createLogger("api");
@@ -37,10 +39,7 @@ interface FileRouteError extends Error {
   code?: string;
 }
 
-const maxUploadBytes = Math.max(
-  1,
-  Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
-);
+const maxUploadBytes = getMaxUploadBytes();
 
 function queryValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -205,7 +204,9 @@ filesRouter.put(
       return;
     }
     if (size > maxUploadBytes) {
-      res.status(413).json({ error: "File exceeds the upload size limit" });
+      res.status(413).json({
+        error: `File exceeds the upload size limit of ${formatByteSize(maxUploadBytes)}`,
+      });
       return;
     }
     try {

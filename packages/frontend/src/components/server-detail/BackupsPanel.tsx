@@ -1,13 +1,9 @@
-import type { Backup } from "@ludock/shared";
+import { type Backup, formatByteSize } from "@ludock/shared";
 
 export interface RestoreSelection {
   backup: Backup | null;
   confirmation: string;
 }
-const formatSize = (size: number) =>
-  size >= 1024 ** 3
-    ? `${(size / 1024 ** 3).toFixed(2)} GiB`
-    : `${(size / 1024 ** 2).toFixed(1)} MiB`;
 
 interface Props {
   serverName: string;
@@ -89,7 +85,7 @@ export default function BackupsPanel(props: Props) {
               {backups.map((backup) => (
                 <tr key={backup.id}>
                   <td>{new Date(backup.createdAt).toLocaleString()}</td>
-                  <td>{formatSize(backup.size)}</td>
+                  <td>{formatByteSize(backup.size)}</td>
                   <td>{backup.state}</td>
                   <td>
                     <div className="inline-actions">

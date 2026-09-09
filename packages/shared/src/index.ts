@@ -1,5 +1,6 @@
 // Public request and response contracts, organized by feature.
 export * from "./common.js";
+export * from "./data-size.js";
 export * from "./access.js";
 export * from "./auth.js";
 export * from "./files.js";

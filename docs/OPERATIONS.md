@@ -6,10 +6,10 @@ live container state; owning managers retain their configuration.
 
 ## Deployment and fresh storage
 
-The [example Compose file](../compose.yaml) publishes port 3000, mounts the
-Docker socket, and stores Ludock's database in a new `ludock-data-v2` named volume
-mounted at `/data`. Back up and
-retain any v1 application directory separately. v2 rejects incompatible
+The [example Compose file](../compose.yaml) publishes port 3000 by default, mounts
+the Docker socket, and stores Ludock's database in a new `ludock-data-v2` named
+volume mounted at `/data`. Back up and retain any v1 application directory
+separately. v2 rejects incompatible
 application databases; it does not migrate or delete them. Do not remove game
 containers or game-data volumes when setting up fresh Ludock storage.
 
@@ -24,9 +24,10 @@ remains a host-level administrative interface even when mounted `:ro`.
 
 ## Environment settings
 
-Copy [`.env.example`](../.env.example) to `.env` beside the Compose file. Its
-optional `env_file` entry passes these settings into Ludock. Recreate the
-service after changing deployment environment or mounts:
+Copy [`.env.example`](../.env.example) to `.env` beside the Compose file and
+uncomment the settings you want to change. Compose reads `LUDOCK_PORT` to set
+the browser port; its optional `env_file` entry passes application settings into
+Ludock. Recreate the service after changing deployment environment or mounts:
 
 ```bash
 docker compose up -d --force-recreate ludock
@@ -34,6 +35,7 @@ docker compose up -d --force-recreate ludock
 
 | Variable | Purpose / default |
 | --- | --- |
+| `LUDOCK_PORT` | Browser port on the Docker host in the example Compose file; `3000` |
 | `LOG_LEVEL` | `error`, `warn`, `info` (default), or `debug` |
 | `LUDOCK_DB_PATH` | Application database; `/data/ludock.db` in the image |
 | `DOCKER_SOCKET` | Socket path inside Ludock; `/var/run/docker.sock` |
@@ -44,9 +46,17 @@ docker compose up -d --force-recreate ludock
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
 | `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an older alias |
 | `FILE_HELPER_IMAGE` | File and backup helper image; `node:24-alpine` |
-| `MAX_UPLOAD_BYTES` | Maximum file upload; 2 GiB by default |
+| `MAX_UPLOAD_SIZE` | Maximum size of each uploaded file; `2 GiB` by default. Examples: `500 MB`, `1.5 GiB` |
+| `MAX_UPLOAD_BYTES` | Older byte-only upload setting; still supported when `MAX_UPLOAD_SIZE` is unset or blank |
 | `AUDIT_LOG_MAX_ROWS` | Retained audit entries; 100,000 by default |
-| `PORT` | Backend listener; 3000 in the image, 3001 during development |
+| `PORT` | Internal backend listener; 3000 in the image, 3001 during development. Use `LUDOCK_PORT` to change the example Compose file's browser port |
+
+Upload sizes accept spaces and decimal amounts. `KB`, `MB`, `GB`, and `TB` use
+powers of 1,000; `KiB`, `MiB`, `GiB`, and `TiB` use powers of 1,024. Units are
+case-insensitive, and a positive whole number without a unit is treated as bytes.
+`MAX_UPLOAD_SIZE` takes precedence over the older `MAX_UPLOAD_BYTES` setting.
+Invalid limits stop startup with a configuration error, so a typo cannot silently
+use a different limit.
 
 Root lists use the platform path separator: `:` in the Linux container. Use
 dedicated absolute directories, not `/` or system directories. Environment
@@ -147,7 +157,8 @@ services:
 This is a fragment to merge into the deployment, retaining the socket and
 application-data mounts. Create the destination directory before starting.
 Under **Settings → Backup storage**, choose `/backups`, retention per server,
-global byte limit, and free-space reserve. Ludock verifies that the destination
+the total backup storage limit, and a free-space reserve. Both storage values
+are entered in GiB and accept decimals. Ludock verifies that the destination
 is actually mounted into its container and does not overlap game data. Set
 `LUDOCK_SELF_CONTAINER` if a custom hostname prevents self-inspection.
 

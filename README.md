@@ -17,15 +17,21 @@ provision servers or edit their definitions.
 
 ## Run with Docker
 
-Use [`compose.yaml`](./compose.yaml) with a published v2 image, then start the
-panel:
+Use [`compose.yaml`](./compose.yaml) with a published v2 image. To customize it,
+copy [`.env.example`](./.env.example) to `.env` beside the Compose file and
+uncomment the settings you want to change. For example, `LUDOCK_PORT=8080`
+changes the browser port, and `MAX_UPLOAD_SIZE=500 MB` limits each file upload.
+The defaults work without an `.env` file.
+
+Start the panel:
 
 ```bash
 docker compose up -d
 ```
 
-Open `http://localhost:3000` and create the first administrator within five
-minutes. Restart Ludock if the setup window expires before an account exists.
+Open `http://localhost:3000` (or your chosen port) and create the first
+administrator within five minutes. Restart Ludock if the setup window expires
+before an account exists.
 The example uses a new `ludock-data-v2` named volume; do not reuse a v1 database.
 
 To test this checkout before its image is published:

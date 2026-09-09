@@ -158,6 +158,10 @@ absolute paths on the Docker host and inside Ludock.
   old credentials or a stale role. Revoking an administrator's session during
   password hashing prevents its pending account mutation.
 - The last enabled administrator cannot be disabled, deleted, or demoted.
+- Configure uploads with `MAX_UPLOAD_SIZE=500 MB` or `1.5 GiB`; verify the
+  configured limit and a readable oversized-upload error. Existing
+  `MAX_UPLOAD_BYTES` values still work; malformed sizes fail startup clearly.
+  The example Compose file uses `LUDOCK_PORT` for the published browser port.
 
 ### Discovery, identity, and server grants
 
@@ -314,6 +318,10 @@ absolute paths on the Docker host and inside Ludock.
 - Failed settings or grant reads disable saving until a successful retry. A
   pending save cannot erase a newer draft. Changed roles, bindings, and operations
   invalidate obsolete action confirmations.
+- Backup storage fields allow clearing and typing decimal GiB values without
+  changing them mid-edit. Saving untouched settings preserves exact stored sizes;
+  a zero free-space reserve remains valid. File and backup sizes use consistent
+  units.
 - Late session reads cannot restore a signed-out account. Failed sign-out shows
   an unconfirmed session state. Password-change success remains visible if the
   subsequent session refresh fails; failed history/diagnostic reads never claim

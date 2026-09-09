@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   type BackupSettings,
   type ComposeProject,
+  backupSettingsSchema,
   backupSettingsResponseSchema,
   composeProjectsResponseSchema,
   composeProjectResponseSchema,
@@ -11,13 +12,33 @@ import {
 import { apiJson, jsonBody } from "../api";
 
 const gib = 1024 ** 3;
+
+interface BackupDraft {
+  destination: string;
+  retentionCount: string;
+  maxGiB: string;
+  reserveGiB: string;
+}
+
+function backupDraft(settings: BackupSettings): BackupDraft {
+  return {
+    destination: settings.destination,
+    retentionCount: String(settings.retentionCount),
+    // Keep the full value so saving another field preserves the exact byte limit.
+    maxGiB: String(settings.maxBytes / gib),
+    reserveGiB: String(settings.reserveBytes / gib),
+  };
+}
+
 export default function Settings() {
-  const [backup, setBackup] = useState<BackupSettings>({
-    destination: "",
-    retentionCount: 10,
-    maxBytes: 100 * gib,
-    reserveBytes: 5 * gib,
-  });
+  const [backup, setBackup] = useState(() =>
+    backupDraft({
+      destination: "",
+      retentionCount: 10,
+      maxBytes: 100 * gib,
+      reserveBytes: 5 * gib,
+    }),
+  );
   const [backupConfigured, setBackupConfigured] = useState(false);
   const [projects, setProjects] = useState<ComposeProject[]>([]);
   const [projectName, setProjectName] = useState("");
@@ -55,7 +76,7 @@ export default function Settings() {
       .then(([backupResponse, projectResponse, notificationResponse]) => {
         if (controller.signal.aborted) return;
         if (backupResponse.settings) {
-          setBackup(backupResponse.settings);
+          setBackup(backupDraft(backupResponse.settings));
           setBackupConfigured(true);
         }
         setProjects(projectResponse.projects);
@@ -104,18 +125,48 @@ export default function Settings() {
   }
   async function saveBackup(event: FormEvent) {
     event.preventDefault();
-    const submitted = backup;
+    if (!loaded || saving.current) return;
+    if (
+      [backup.retentionCount, backup.maxGiB, backup.reserveGiB].some(
+        (value) => !value.trim(),
+      )
+    ) {
+      setError("Complete all backup limits before saving.");
+      setNotice(null);
+      return;
+    }
+    const parsed = backupSettingsSchema.safeParse({
+      destination: backup.destination,
+      retentionCount: Number(backup.retentionCount),
+      maxBytes: Math.round(Number(backup.maxGiB) * gib),
+      reserveBytes: Math.round(Number(backup.reserveGiB) * gib),
+    });
+    if (!parsed.success) {
+      setError(
+        "Check the backup settings: enter a destination, 1–1,000 backups per server, a positive total limit, and a free-space reserve of zero or more.",
+      );
+      setNotice(null);
+      return;
+    }
+    const submittedDraft = backup;
     await save(
       () => apiJson(
         "/settings/backups",
         backupSettingsResponseSchema,
-        jsonBody("PUT", submitted),
+        jsonBody("PUT", parsed.data),
       ),
       "Backup settings saved.",
       ({ settings }) => {
         setBackupConfigured(Boolean(settings));
-        if (settings)
-          setBackup((current) => current === submitted ? settings : current);
+        if (!settings) return;
+        const savedDraft = backupDraft(settings);
+        if (settings.maxBytes === parsed.data.maxBytes)
+          savedDraft.maxGiB = submittedDraft.maxGiB;
+        if (settings.reserveBytes === parsed.data.reserveBytes)
+          savedDraft.reserveGiB = submittedDraft.reserveGiB;
+        setBackup((current) =>
+          current === submittedDraft ? savedDraft : current,
+        );
       },
     );
   }
@@ -223,56 +274,77 @@ export default function Settings() {
                 />
               </label>
               <div className="form-columns">
-                <label>
-                  Retain per server
-                  <input
-                    type="number"
-                    min={1}
-                    max={1000}
-                    value={backup.retentionCount}
-                    onChange={(event) =>
-                      setBackup({
-                        ...backup,
-                        retentionCount: Number(event.target.value),
-                      })
-                    }
-                    required
-                  />
-                </label>
-                <label>
-                  Global limit (GiB)
-                  <input
-                    type="number"
-                    min={0.01}
-                    step="0.01"
-                    value={backup.maxBytes / gib}
-                    onChange={(event) =>
-                      setBackup({
-                        ...backup,
-                        maxBytes: Math.round(Number(event.target.value) * gib),
-                      })
-                    }
-                    required
-                  />
-                </label>
-                <label>
-                  Keep free (GiB)
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={backup.reserveBytes / gib}
-                    onChange={(event) =>
-                      setBackup({
-                        ...backup,
-                        reserveBytes: Math.round(
-                          Number(event.target.value) * gib,
-                        ),
-                      })
-                    }
-                    required
-                  />
-                </label>
+                <div>
+                  <label>
+                    Backups per server
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      inputMode="numeric"
+                      value={backup.retentionCount}
+                      aria-describedby="backup-retention-help"
+                      onChange={(event) =>
+                        setBackup({
+                          ...backup,
+                          retentionCount: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </label>
+                  <p className="muted" id="backup-retention-help">
+                    Older backups are removed after a new backup succeeds.
+                  </p>
+                </div>
+                <div>
+                  <label>
+                    Total backup limit (GiB)
+                    <input
+                      type="number"
+                      min={1 / gib}
+                      step="any"
+                      inputMode="decimal"
+                      value={backup.maxGiB}
+                      aria-describedby="backup-limit-help"
+                      onChange={(event) =>
+                        setBackup({
+                          ...backup,
+                          maxGiB: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </label>
+                  <p className="muted" id="backup-limit-help">
+                    Combined size of backups across all servers. Leave room for
+                    the next backup before older backups are removed.
+                  </p>
+                </div>
+                <div>
+                  <label>
+                    Minimum free space (GiB)
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      inputMode="decimal"
+                      value={backup.reserveGiB}
+                      aria-describedby="backup-reserve-help"
+                      onChange={(event) =>
+                        setBackup({
+                          ...backup,
+                          reserveGiB: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </label>
+                  <p className="muted" id="backup-reserve-help">
+                    Space to leave free on the backup disk and on game-data disks
+                    during restores. Use 0 for no reserve.
+                  </p>
+                </div>
               </div>
               <p className="muted">
                 The destination must be inside an approved backup root and
