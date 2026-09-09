@@ -1,3 +1,4 @@
+import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -115,7 +116,7 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
       <NavigationContext.Provider
         value={{ pathname: `/servers/${server.id}`, navigate: vi.fn() }}
       >
-        <ServerDetail serverId={server.id} />
+        <ViewPreferencesProvider><ServerDetail serverId={server.id} /></ViewPreferencesProvider>
       </NavigationContext.Provider>
     </AuthContext.Provider>,
   );

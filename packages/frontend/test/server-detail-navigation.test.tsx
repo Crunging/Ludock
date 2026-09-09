@@ -1,5 +1,6 @@
+import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
 import { apiJson } from "../src/api";
@@ -71,23 +72,58 @@ function detail({
       };
     return { server: current, stats: null };
   });
-  render(
+  const user = { id: "user1", role, username: "friend" };
+  const content = (visible: boolean) => (
     <AuthContext.Provider
-      value={
-        { user: { id: "user1", role, username: "friend" } } as AuthContextValue
-      }
+      value={{ user } as AuthContextValue}
     >
       <NavigationContext.Provider
         value={{ pathname: `/servers/${current.id}`, navigate }}
       >
-        <ServerDetail serverId={current.id} />
+        <ViewPreferencesProvider>
+          {visible ? <ServerDetail serverId={current.id} /> : <p>Server tools</p>}
+        </ViewPreferencesProvider>
       </NavigationContext.Provider>
-    </AuthContext.Provider>,
+    </AuthContext.Provider>
   );
-  return { navigate };
+  const view = render(content(true));
+  return {
+    navigate,
+    leaveDetail: () => view.rerender(content(false)),
+    returnToDetail: () => view.rerender(content(true)),
+  };
 }
 
 describe("server detail navigation", () => {
+  it("keeps the new visit's selected tab when an old update request completes", async () => {
+    let finishUpdate!: () => void;
+    const pending = new Promise<void>((resolve) => { finishUpdate = resolve; });
+    const view = detail({
+      onRequest: (path, init) => {
+        if (path.endsWith("/updates") && init?.method === "POST") return pending;
+      },
+    });
+    await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Update server", exact: true }));
+    await waitFor(() => expect(vi.mocked(apiJson).mock.calls.some(
+      ([path, , init]) => path.endsWith("/updates") && init?.method === "POST",
+    )).toBe(true));
+
+    view.leaveDetail();
+    view.returnToDetail();
+    await userEvent.click(await screen.findByRole("tab", { name: "Schedules" }));
+    const timezone = screen.getByRole("textbox", { name: "Time zone" });
+    await userEvent.clear(timezone);
+    await userEvent.type(timezone, "Europe/London");
+    const requestsBeforeCompletion = vi.mocked(apiJson).mock.calls.length;
+    await act(async () => { finishUpdate(); });
+
+    expect(screen.getByRole("tabpanel", { name: "Schedules" })).toBeTruthy();
+    expect((timezone as HTMLInputElement).value).toBe("Europe/London");
+    expect(vi.mocked(apiJson).mock.calls.length).toBe(requestsBeforeCompletion);
+  });
+
   it("uses one tab stop with arrow, Home, End and linked panels without discarding drafts", async () => {
     detail();
     const user = userEvent.setup();

@@ -4,16 +4,23 @@ import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
 import { apiJson } from "../api";
 import { useAuth } from "../auth-context";
+import { useViewPreferences } from "../view-preferences-context";
 
 export default function Dashboard() {
-  const { servers, loading, error, refresh } = useServers();
+  const {
+    servers, loading, error, refresh, stale, lastUpdated,
+    connectionStatus, connectionError, canRetry, retry, accessDenied,
+  } = useServers();
   const { user } = useAuth();
   const [actionError, setActionError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [stateFilter, setStateFilter] = useState("all");
+  const { dashboardFilters, setDashboardFilters } = useViewPreferences();
+  const { search, stateFilter } = dashboardFilters;
+  const setSearch = (search: string) => setDashboardFilters((current) => ({ ...current, search }));
+  const setStateFilter = (stateFilter: string) => setDashboardFilters((current) => ({ ...current, stateFilter }));
   const [showHelp, setShowHelp] = useState(false);
   const handleAction = useCallback(
     async (id: string, action: "start" | "stop" | "restart") => {
+      if (stale || loading) return;
       try {
         setActionError(null);
         await apiJson(
@@ -31,7 +38,7 @@ export default function Dashboard() {
         refresh();
       }
     },
-    [refresh],
+    [refresh, stale, loading],
   );
   const filtered = servers.filter((server) =>
     (stateFilter === "all" || server.state === stateFilter) &&
@@ -109,6 +116,30 @@ export default function Dashboard() {
           Unable to load servers: {error}
         </div>
       )}
+      {stale && (lastUpdated !== null || !loading) && (
+        <div className="server-connection" role="status">
+          <div>
+            <p>
+              {connectionStatus === "connected"
+                ? "Server state needs to be refreshed."
+                : connectionError || (connectionStatus === "connecting"
+                  ? "Connecting to live updates…"
+                  : "Live updates are disconnected.")}
+            </p>
+            {lastUpdated !== null && (
+              <p className="muted">
+                Showing the last known state. Server controls resume after a fresh connection and refresh.
+              </p>
+            )}
+          </div>
+          {canRetry && connectionStatus !== "connected" && (
+            <button className="secondary-btn" onClick={retry}>Retry connection</button>
+          )}
+          {accessDenied && (
+            <button className="secondary-btn" onClick={() => window.location.reload()}>Reload page</button>
+          )}
+        </div>
+      )}
       {servers.length > 0 && (
         <div className="list-toolbar">
           <label className="search-field">
@@ -144,7 +175,7 @@ export default function Dashboard() {
           Loading servers…
         </p>
       )}
-      {!loading && !error && servers.length === 0 && (
+      {!loading && !error && !accessDenied && servers.length === 0 && (
         <div className="empty-state">
           <h2 className="empty-state__title">
             {user?.role === "admin"
@@ -170,6 +201,7 @@ export default function Dashboard() {
             <ServerCard
               key={server.id}
               server={server}
+              actionsDisabled={stale || loading}
               onAction={handleAction}
             />
           ))}

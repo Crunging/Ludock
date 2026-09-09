@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   availabilityResponseSchema,
   backupsResponseSchema,
@@ -36,6 +36,7 @@ import UpdatePanel, {
 import AvailabilityPanel from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
+import { useViewPreferences } from "../view-preferences-context";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
@@ -62,7 +63,18 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [tab, setTab] = useState("activity");
+  const { serverTabs, rememberServerTab } = useViewPreferences();
+  const pageActive = useRef(false);
+  useEffect(() => {
+    pageActive.current = true;
+    return () => { pageActive.current = false; };
+  }, []);
+  const tab = serverTabs[serverId] || "activity";
+  const setTab = (next: string) => {
+    // Remembered tabs outlive this page. A completed request from a previous
+    // visit must not change the tab chosen during a later visit.
+    if (pageActive.current) rememberServerTab(serverId, next);
+  };
   const [lifecycleAction, setLifecycleAction] = useState<
     "start" | "stop" | "restart" | null
   >(null);
@@ -87,7 +99,9 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
   const activeOperation = operations.find(operationActive);
 
   const refresh = useCallback(async () => {
+    if (!pageActive.current) return;
     const { server: next } = await apiJson(path, serverResponseSchema);
+    if (!pageActive.current) return;
     setServer(next);
     const [activity, backupResponse, scheduleResponse] = await Promise.all([
       apiJson(`${path}/operations`, operationsResponseSchema),
@@ -98,6 +112,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
         ? apiJson(`${path}/schedules`, schedulesResponseSchema)
         : Promise.resolve({ schedules: [] }),
     ]);
+    if (!pageActive.current) return;
     setOperations(activity.operations);
     setBackups(backupResponse.backups);
     setSchedules(scheduleResponse.schedules);
@@ -152,9 +167,10 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
     setNotice(null);
     try {
       await action();
+      if (!pageActive.current) return false;
       setNotice(success);
       await refresh();
-      return true;
+      return pageActive.current;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Request failed.");
       return false;

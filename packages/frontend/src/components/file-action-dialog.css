@@ -1,0 +1,129 @@
+.file-action-dialog {
+  width: min(460px, calc(100% - 32px));
+  margin: auto;
+  padding: 24px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.file-action-dialog::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+.file-action-dialog h2 {
+  font-size: 18px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.file-action-dialog__description {
+  margin: 10px 0 20px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.file-action-dialog__description p + p {
+  margin-top: 10px;
+}
+
+.file-action-dialog__field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.file-action-dialog__field input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+
+.file-action-dialog .alert {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-action-dialog__status {
+  margin-top: 16px;
+  color: var(--text-dim);
+}
+
+.file-action-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.file-action-dialog .secondary-btn--danger {
+  color: #2b1216;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.file-action-dialog .secondary-btn--danger:hover:not(:disabled) {
+  background: #ffb1b6;
+  border-color: #ffb1b6;
+}
+
+.files-page .alert .text-link {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.files-back[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.file-dropzone[aria-disabled="true"] {
+  opacity: 0.7;
+}
+
+.file-upload-progress {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.file-upload-progress span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-list__error {
+  padding: 24px 12px;
+  color: var(--text-dim);
+}
+
+.file-list__error p {
+  margin-bottom: 12px;
+}
+
+@media (pointer: coarse) {
+  .files-back { min-width: 44px; }
+  .files-root select,
+  .file-breadcrumbs button,
+  .file-row__name button,
+  .file-row__actions .secondary-btn,
+  .file-action-dialog__field input {
+    min-height: 44px;
+  }
+  .file-breadcrumbs button,
+  .file-row__name button { min-width: 44px; }
+  .file-row__actions .secondary-btn { font-size: 12px; }
+}

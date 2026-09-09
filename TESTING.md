@@ -35,6 +35,43 @@ Development tests cover isolated state/cookies, shared database locks, port
 collisions, and backend instance checks. Fixture tests do not replace real
 Docker, Compose, or game-world validation.
 
+## Browser regression checks
+
+The browser suite serves a production frontend build and intercepts API and
+WebSocket requests with per-test fixtures validated by the shared contracts. It
+does not start a backend, connect to Docker, or read application storage. The
+dedicated preview configuration has no backend proxy, and unexpected API or
+external requests fail the test.
+
+```bash
+pnpm --filter @ludock/shared build
+pnpm --filter @ludock/frontend build
+pnpm --filter @ludock/frontend exec playwright install chromium
+pnpm --filter @ludock/frontend test:e2e
+```
+
+The separate **Browser** CI job installs Chromium with its Linux dependencies
+and runs both desktop and touch-mobile projects. Checks cover 320px/390px
+layouts, state/port column alignment, touch targets, filters, independent grants,
+native dialog focus and confirmation, More actions, detail-tab keyboard use,
+and navigation continuity. File cases cover contextual create/delete dialogs,
+rename failure recovery, cancellation of obsolete listings, and upload
+cancellation. Live-state and console cases cover stale controls, denied access,
+fresh snapshots on reconnect, manual retry after repeated disconnects, separate
+command drafts, and commands never being resent automatically.
+These browser fixtures verify frontend behavior;
+backend authorization and actual Docker mutations remain covered separately.
+
+For focused work, append a spec name or `--project=desktop` to `test:e2e`.
+`LUDOCK_E2E_PORT` changes the isolated preview port (default `4179`). An occupied
+port fails instead of reusing another process. Set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an installed Chrome/Chromium executable
+when the Playwright browser download is unavailable; CI uses Playwright's bundled
+Chromium. Failed checks save screenshots and traces in
+`packages/frontend/test-results/`, with an HTML report in
+`packages/frontend/playwright-report/`. CI retains these fixture-only artifacts
+for seven days.
+
 ## Docker and architecture validation
 
 Validate both `linux/amd64` and `linux/arm64` on their corresponding CI runners
@@ -229,6 +266,13 @@ absolute paths on the Docker host and inside Ludock.
   actions and names; narrow layouts retain labeled ports without page overflow.
 - Search and exact-state filters combine, report the visible count, and provide
   a clear-filters action when no servers match. A refresh does not reset filters.
+- Returning from Files or Console restores the selected detail tab; returning to
+  Servers restores the list filters. Sign-out clears these in-memory choices.
+  A late operation response from a page that was left cannot change the new
+  page's tab.
+- Disconnected lists label retained data as stale and disable lifecycle actions.
+  Every live connection refreshes the authorized snapshot before controls resume;
+  denied access hides cached rows and requires revalidation.
 - More actions support Tab, Escape, and outside dismissal. Stop and Restart name
   the server in a modal confirmation; Cancel has initial focus, Tab cannot enter
   the page behind the dialog, and dismissal restores focus. No request occurs before confirmation.
@@ -236,6 +280,14 @@ absolute paths on the Docker host and inside Ludock.
 - Detail tabs have one tab stop, support Arrow keys/Home/End, and reference their
   panels. Switching tabs preserves drafts; action-driven changes move focus into
   the new panel when the triggering control disappears.
+- Console modes support keyboard navigation and preserve separate command drafts
+  through connection interruptions. Sending requires fresh access; failed sends
+  keep their draft, and reconnecting never resends a command automatically.
+- Changing a file root or folder hides old entries and ignores obsolete reads.
+  File dialogs name the server and folder, retain drafts after ordinary errors,
+  and require a new confirmation after reconciling an uncertain write result.
+  Partial upload failures remain visible after refresh; canceling stops the
+  remaining batch and explains that data already written is not rolled back.
 - At 320px and 390px widths, navigation can scroll, server actions wrap, forms
   fit, and data tables remain usable. Console input and file controls do not
   overflow. Touch actions remain at least 44px tall and text inputs avoid zoom.

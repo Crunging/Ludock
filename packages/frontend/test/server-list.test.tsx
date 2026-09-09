@@ -1,3 +1,4 @@
+import ViewPreferencesProvider from "../src/ViewPreferences";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -37,16 +38,16 @@ function card(value = server, role: AuthUser["role"] = "operator") {
   const action = vi.fn<(id: string, action: "start" | "stop" | "restart") => Promise<void>>()
     .mockResolvedValue(undefined);
   const navigate = vi.fn();
-  const content = (current: ManagedContainer) => (
+  const content = (current: ManagedContainer, actionsDisabled = false) => (
     <AuthContext.Provider value={{ user: { ...user, role } } as AuthContextValue}>
       <NavigationContext.Provider value={{ pathname: "/", navigate }}>
-        <ServerCard server={current} onAction={action} />
+        <ServerCard server={current} onAction={action} actionsDisabled={actionsDisabled} />
         <button>Outside action</button>
       </NavigationContext.Provider>
     </AuthContext.Provider>
   );
   const result = render(content(value));
-  return { ...result, action, navigate, update: (current: ManagedContainer) => result.rerender(content(current)) };
+  return { ...result, action, navigate, update: (current: ManagedContainer, actionsDisabled = false) => result.rerender(content(current, actionsDisabled)) };
 }
 
 const fixtures = [
@@ -61,7 +62,14 @@ beforeEach(() => {
     servers: fixtures,
     loading: false,
     error: null,
-    refresh: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(undefined),
+    stale: false,
+    lastUpdated: 1,
+    connectionStatus: "connected",
+    connectionError: null,
+    accessDenied: false,
+    canRetry: false,
+    retry: vi.fn(),
   });
 });
 
@@ -153,6 +161,18 @@ describe("server list actions", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
+  it("prevents a confirmed lifecycle action if its server snapshot becomes stale", async () => {
+    const { action, update } = card();
+    await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+    update(server, true);
+    await userEvent.click(screen.getByRole("button", { name: "Stop server" }));
+    expect(action).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: /More actions/ }));
+    expect((screen.getByRole("button", { name: "Restart…", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Files", exact: true })).toBeTruthy();
+  });
+
   it("disables further lifecycle controls while a request is pending", async () => {
     const { action } = card();
     let complete: () => void = () => {};
@@ -181,7 +201,7 @@ describe("server filters", () => {
     const content = () => (
       <AuthContext.Provider value={{ user } as AuthContextValue}>
         <NavigationContext.Provider value={{ pathname: "/", navigate: vi.fn() }}>
-          <Dashboard />
+          <ViewPreferencesProvider><Dashboard /></ViewPreferencesProvider>
         </NavigationContext.Provider>
       </AuthContext.Provider>
     );
@@ -216,7 +236,14 @@ describe("server filters", () => {
       servers: fixtures.filter((fixture) => fixture.state !== "paused"),
       loading: false,
       error: null,
-      refresh: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    stale: false,
+    lastUpdated: 1,
+    connectionStatus: "connected",
+    connectionError: null,
+    accessDenied: false,
+    canRetry: false,
+    retry: vi.fn(),
     });
     update();
     expect((state as HTMLSelectElement).value).toBe("paused");

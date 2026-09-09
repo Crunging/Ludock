@@ -10,10 +10,11 @@ import "./server-list.css";
 
 interface ServerCardProps {
   server: ManagedContainer;
+  actionsDisabled?: boolean;
   onAction: (id: string, action: "start" | "stop" | "restart") => Promise<void>;
 }
 
-export default function ServerCard({ server, onAction }: ServerCardProps) {
+export default function ServerCard({ server, onAction, actionsDisabled = false }: ServerCardProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -29,6 +30,7 @@ export default function ServerCard({ server, onAction }: ServerCardProps) {
       !can(user, server, `server.${action}`) ||
       bindingBlocked ||
       actionLoading ||
+      actionsDisabled ||
       (action === "start" ? isRunning : !isRunning)
     )
       return;
@@ -52,7 +54,7 @@ export default function ServerCard({ server, onAction }: ServerCardProps) {
       ? [
           {
             label: actionLoading === "restart" ? "Restarting…" : "Restart…",
-            disabled: actionLoading !== null || bindingBlocked,
+            disabled: actionLoading !== null || bindingBlocked || actionsDisabled,
             onSelect: () => setConfirmation("restart"),
           },
         ]
@@ -105,7 +107,7 @@ export default function ServerCard({ server, onAction }: ServerCardProps) {
         {can(user, server, `server.${lifecycleAction}`) && (
           <button
             className={`secondary-btn ${isRunning ? "secondary-btn--danger" : ""}`}
-            disabled={actionLoading !== null || bindingBlocked}
+            disabled={actionLoading !== null || bindingBlocked || actionsDisabled}
             onClick={() =>
               isRunning
                 ? setConfirmation("stop")

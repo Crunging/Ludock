@@ -8,6 +8,7 @@ import { useAuth } from "./auth-context";
 import { NavLink } from "./navigation";
 import { useLocation, useNavigate } from "./navigation-context";
 import LudockMark from "./components/LudockMark";
+import ViewPreferencesProvider from "./ViewPreferences";
 
 const Console = lazy(() => import("./pages/Console"));
 const Diagnostics = lazy(() => import("./pages/Diagnostics"));
@@ -157,6 +158,7 @@ function App() {
   }
 
   return (
+    <ViewPreferencesProvider key={user?.id}>
     <div className="app-layout">
       <a className="skip-link" href="#main-content">Skip to content</a>
       {!isConsolePage && (
@@ -239,6 +241,7 @@ function App() {
         {page}
       </main>
     </div>
+    </ViewPreferencesProvider>
   );
 }
 

@@ -2,6 +2,22 @@
   container-type: inline-size;
 }
 
+.server-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.server-connection > div { flex: 1 1 240px; }
+.server-connection p + p { margin-top: 3px; }
+
 .list-toolbar {
   display: flex;
   align-items: center;

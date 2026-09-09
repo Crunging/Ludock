@@ -7,7 +7,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "tsc --project e2e/tsconfig.json && playwright test"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -18,6 +19,7 @@
     "@ludock/shared": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
