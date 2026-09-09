@@ -6,7 +6,12 @@ Record the image digest, platform, fixture, and result during validation.
 
 ## Automated checks
 
-Use Node.js 24 and pnpm 10:
+Choose local checks for the behavior and risks affected by the change.
+Documentation-only edits need content, link, and diff checks. CI runs the full
+source, browser, and container suites for code changes; the commands below are
+available for broader local validation, not required before every commit.
+
+Use Node.js 24 and pnpm 10. For a full source check and local image build:
 
 ```bash
 corepack enable

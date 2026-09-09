@@ -94,7 +94,9 @@ rules switch to compact rows at narrow widths.
 For parallel work, assign a feature's contract, router/domain changes, panel,
 and focused tests together when practical. Coordinate edits to shared transport,
 authorization, operation lifetime, and page orchestration explicitly. A feature
-split does not weaken the need for one integrated `pnpm check`.
+split still needs verification of the integrated behavior. Choose checks for the
+affected boundaries; use `pnpm check` for broad integration concerns. CI runs the
+full source suite for code changes.
 
 ## Development instances
 

@@ -54,18 +54,25 @@ manual setups; they do not provide the managed runner's isolation or locks.
 
 ## Before opening a pull request
 
-Run the full source check:
+Run checks appropriate to the change. Focused tests, lint, and type checks are
+usually enough during development; documentation-only changes need content,
+link, and diff checks. CI runs the full source, browser, and container suites for
+code changes. For broad changes or integration concerns, run the full source
+check locally:
 
 ```bash
 pnpm check
 ```
 
-If the change affects the image, Compose configuration, or deployment, also
-run:
+For image or runtime changes that need local validation, build:
 
 ```bash
 docker build -t ludock:test .
 ```
+
+Use `docker compose config` to validate Compose configuration changes. Validate
+affected runtime and helper behavior on both Linux AMD64 and ARM64 when it
+depends on architecture; CI and release validation cover the full platform matrix.
 
 Add or update tests for behavior changes. Keep these product boundaries intact:
 
@@ -78,7 +85,5 @@ Add or update tests for behavior changes. Keep these product boundaries intact:
 - Preserve logical identity checks, stop-only backups, and safe recovery.
 - Reject unrelated databases and unsupported schemas without changing their
   contents.
-- Validate runtime/helper dependencies on both Linux AMD64 and ARM64 for
-  deployment changes.
 
 Use [TESTING.md](./TESTING.md) for manual acceptance checks.
