@@ -12,7 +12,7 @@ async function main() {
 
   if (!username || !password) {
     console.error(
-      "Usage: LUDOCK_RECOVERY_PASSWORD='<new password>' node dist/recovery.js <username>"
+      "Usage: LUDOCK_RECOVERY_PASSWORD='<new password>' bun dist/recovery.js <username>"
     );
     process.exitCode = 2;
     return;
