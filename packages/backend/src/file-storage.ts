@@ -1,54 +1,98 @@
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import type Docker from "dockerode";
-import * as tar from "tar-stream";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
-import { createLogger, errorMessage } from "./logger.js";
+import { createLogger } from "./logger.js";
+import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
+import { evaluateContainerEligibility } from "./discovery.js";
+import { createMountProof, assertMountIdentities } from "./mount-proof.js";
+import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
 
 export const LABEL_FILES = "ludock.files";
 const logger = createLogger("files");
+const MAX_HELPER_OUTPUT = 4 * 1024 * 1024;
+const normalizedMountPath = (value: string) =>
+  path.posix.normalize(value).replace(/\/$/, "") || "/";
+const within = (value: string, root: string) =>
+  value === root || value.startsWith(`${root}/`);
 
-export interface FileRoot {
-  id: string;
-  name: string;
-  path: string;
-}
-
-export interface FileEntry {
-  name: string;
-  type: "file" | "directory" | "symlink";
-  size: number;
-  modifiedAt: number;
-}
+import type { FileRoot, FileEntry } from "@ludock/shared";
+export type { FileRoot, FileEntry } from "@ludock/shared";
 
 export interface ContainerFileMount {
   Type: string;
   Source: string;
   Destination: string;
   RW: boolean;
+  Name?: string;
+}
+export interface FileContainerAccess {
+  container: Docker.Container;
+  blockedPaths: string[];
+  cleanup: () => Promise<void>;
+  assertAccess?: () => void;
+}
+interface FileRequest {
+  operation:
+    | "check"
+    | "list"
+    | "stat"
+    | "mkdir"
+    | "delete"
+    | "rename"
+    | "upload"
+    | "upload-cleanup"
+    | "download";
+  root: string;
+  path: string;
+  blocked: string[];
+  destination?: string;
+  size?: number;
+  uploadId?: string;
 }
 
 export function getFileRoots(
   server: Pick<ManagedContainer, "gameType" | "image" | "labels">,
-  mounts: readonly ContainerFileMount[] = []
+  mounts: readonly ContainerFileMount[] = [],
 ): FileRoot[] {
+  const safe = mounts.filter(isSafeWritableDataMount);
   const configured = server.labels[LABEL_FILES];
-  const paths = configured !== undefined
-    ? configured.split(",").map((value) => value.trim())
-    : inferredFilePaths(mounts);
-
-  return paths
-    .map((value) => {
-      const normalized = path.posix.normalize(value);
-      return normalized === "/" ? normalized : normalized.replace(/\/+$/, "");
-    })
+  const candidates =
+    configured !== undefined
+      ? configured.split(",").map((value) => value.trim())
+      : safe.map((mount) => mount.Destination);
+  const paths = candidates
+    .filter(
+      (value) =>
+        value.startsWith("/") &&
+        !value.includes("\0") &&
+        !value.split("/").includes(".."),
+    )
+    .map((value) => path.posix.normalize(value).replace(/\/$/, ""))
     .filter(
       (value, index, values) =>
-        value.startsWith("/") &&
-        value !== "/" &&
+        value &&
         value.length <= 512 &&
-        values.indexOf(value) === index
+        values.indexOf(value) === index &&
+        !isSensitiveSystemPath(value),
+    )
+    .filter((value) => {
+      // The deepest actual mount owns this path. A label cannot bypass a
+      // read-only or sensitive nested mount merely by naming its parent.
+      const owner = mounts
+        .filter((mount) =>
+          within(value, normalizedMountPath(mount.Destination)),
+        )
+        .sort(
+          (left, right) => right.Destination.length - left.Destination.length,
+        )[0];
+      return owner && isSafeWritableDataMount(owner);
+    });
+  return paths
+    .filter(
+      (candidate) =>
+        !paths.some((other) => other !== candidate && within(candidate, other)),
     )
     .slice(0, 8)
     .map((rootPath, index) => ({
@@ -58,67 +102,101 @@ export function getFileRoots(
     }));
 }
 
+export function isSafeWritableDataMount(mount: ContainerFileMount): boolean {
+  if (!mount.RW || (mount.Type !== "bind" && mount.Type !== "volume"))
+    return false;
+  const destination = normalizedMountPath(mount.Destination);
+  if (
+    !destination.startsWith("/") ||
+    destination.length > 512 ||
+    mount.Destination.includes("\0") ||
+    isSensitiveSystemPath(destination) ||
+    /\.sock$/i.test(destination)
+  )
+    return false;
+  if (mount.Type === "bind") {
+    const source = path.posix.normalize(mount.Source);
+    if (
+      !source.startsWith("/") ||
+      mount.Source.includes("\0") ||
+      isSensitiveSystemPath(source) ||
+      /\.sock$/i.test(source)
+    )
+      return false;
+  }
+  return true;
+}
+
+function isSensitiveSystemPath(value: string): boolean {
+  const configured = (
+    process.env.LUDOCK_SENSITIVE_PATHS ||
+    process.env.FILE_SENSITIVE_PATHS ||
+    ""
+  )
+    .split(path.delimiter)
+    .filter((part) => part.startsWith("/"))
+    .map((part) => path.posix.normalize(part));
+  const protectedPaths = [
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/var/run",
+    "/var/lib/docker",
+    "/var/lib/containerd",
+    "/etc",
+    "/boot",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/usr",
+    "/root/.ssh",
+    "/root/.aws",
+    "/root/.docker",
+    ...configured,
+  ];
+  return (
+    [
+      "/",
+      "/home",
+      "/root",
+      "/srv",
+      "/opt",
+      "/mnt",
+      "/media",
+      "/Users",
+    ].includes(value) ||
+    protectedPaths.some((root) => within(value, root) || within(root, value))
+  );
+}
+
 export async function listFiles(
   server: ManagedContainer,
   rootId: string,
-  relativePath: string
+  relativePath: string,
+  assertAccess?: () => void,
 ): Promise<{ root: FileRoot; path: string; entries: FileEntry[] }> {
   const target = resolveTarget(server, rootId, relativePath);
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, {
+    readOnly: true,
+    assertAccess,
+  });
   try {
-    await assertSafeTarget(
-      access.container,
-      target.root.path,
-      target.absolutePath,
-      false
-    );
-    const result = await runExec(access.container, {
-      Cmd: [
-        "/bin/sh",
-        "-c",
-        `test -d "$TARGET" || exit 45
-for entry in "$TARGET"/* "$TARGET"/.[!.]* "$TARGET"/..?*; do
-  if ! test -e "$entry" && ! test -L "$entry"; then continue; fi
-  name=\${entry##*/}
-  encoded=$(printf "%s" "$name" | base64 | tr -d '\\n')
-  if test -L "$entry"; then
-    kind=symlink
-    size=0
-  elif test -d "$entry"; then
-    kind=directory
-    size=0
-  else
-    kind=file
-    size=$(stat -c %s "$entry" 2>/dev/null || printf 0)
-  fi
-  modified=$(stat -c %Y "$entry" 2>/dev/null || printf 0)
-  printf "%s\\t%s\\t%s\\t%s\\n" "$encoded" "$kind" "$size" "$modified"
-done`,
-      ],
-      Env: [`TARGET=${target.absolutePath}`],
-      AttachStdout: true,
-      AttachStderr: true,
+    const result = await helperRequest(access, {
+      operation: "list",
+      root: target.root.path,
+      path: target.relativePath,
     });
-
-    const entries = result.stdout
-      .split("\n")
-      .filter(Boolean)
-      .map((line): FileEntry => {
-        const [encoded = "", type = "file", size = "0", modified = "0"] =
-          line.split("\t");
-        return {
-          name: Buffer.from(encoded, "base64").toString("utf8"),
-          type: type as FileEntry["type"],
-          size: Number(size) || 0,
-          modifiedAt: (Number(modified) || 0) * 1000,
-        };
-      })
-      .sort((a, b) => {
-        if (a.type === "directory" && b.type !== "directory") return -1;
-        if (a.type !== "directory" && b.type === "directory") return 1;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-      });
-
+    access.assertAccess?.();
+    const entries = JSON.parse(result.stdout) as FileEntry[];
+    entries.sort((a, b) =>
+      a.type === "directory" && b.type !== "directory"
+        ? -1
+        : a.type !== "directory" && b.type === "directory"
+          ? 1
+          : a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
     return { root: target.root, path: target.relativePath, entries };
   } finally {
     await access.cleanup();
@@ -129,27 +207,21 @@ export async function createDirectory(
   server: ManagedContainer,
   rootId: string,
   relativeParent: string,
-  name: string
+  name: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(name);
   const target = resolveTarget(
     server,
     rootId,
-    joinRelative(relativeParent, name)
+    joinRelative(relativeParent, name),
   );
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
-    await assertSafeTarget(
-      access.container,
-      target.root.path,
-      target.absolutePath,
-      true
-    );
-    await runExec(access.container, {
-      Cmd: ["/bin/sh", "-c", 'mkdir "$TARGET"'],
-      Env: [`TARGET=${target.absolutePath}`],
-      AttachStdout: true,
-      AttachStderr: true,
+    await helperRequest(access, {
+      operation: "mkdir",
+      root: target.root.path,
+      path: target.relativePath,
     });
   } finally {
     await access.cleanup();
@@ -159,24 +231,17 @@ export async function createDirectory(
 export async function deleteFileEntry(
   server: ManagedContainer,
   rootId: string,
-  relativePath: string
+  relativePath: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   const target = resolveTarget(server, rootId, relativePath);
   if (!target.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
-    await assertSafeTarget(
-      access.container,
-      target.root.path,
-      target.absolutePath,
-      false,
-      true
-    );
-    await runExec(access.container, {
-      Cmd: ["/bin/sh", "-c", 'rm -rf -- "$TARGET"'],
-      Env: [`TARGET=${target.absolutePath}`],
-      AttachStdout: true,
-      AttachStderr: true,
+    await helperRequest(access, {
+      operation: "delete",
+      root: target.root.path,
+      path: target.relativePath,
     });
   } finally {
     await access.cleanup();
@@ -187,42 +252,22 @@ export async function renameFileEntry(
   server: ManagedContainer,
   rootId: string,
   relativePath: string,
-  newName: string
+  newName: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(newName);
-  const source = resolveTarget(server, rootId, relativePath);
-  if (!source.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
-  const destination = resolveTarget(
-    server,
-    rootId,
-    joinRelative(path.posix.dirname(source.relativePath), newName)
-  );
-  const access = await acquireFileContainer(server, source.root);
+  const target = resolveTarget(server, rootId, relativePath);
+  if (!target.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
+  const access = await acquireFileContainer(server, target.root, { assertAccess });
   try {
-    await assertSafeTarget(
-      access.container,
-      source.root.path,
-      source.absolutePath,
-      false
-    );
-    await assertSafeTarget(
-      access.container,
-      destination.root.path,
-      destination.absolutePath,
-      true
-    );
-    await runExec(access.container, {
-      Cmd: [
-        "/bin/sh",
-        "-c",
-        'test ! -e "$DESTINATION" && test ! -L "$DESTINATION" || exit 46\nmv -- "$SOURCE" "$DESTINATION"',
-      ],
-      Env: [
-        `SOURCE=${source.absolutePath}`,
-        `DESTINATION=${destination.absolutePath}`,
-      ],
-      AttachStdout: true,
-      AttachStderr: true,
+    await helperRequest(access, {
+      operation: "rename",
+      root: target.root.path,
+      path: target.relativePath,
+      destination: joinRelative(
+        path.posix.dirname(target.relativePath),
+        newName,
+      ),
     });
   } finally {
     await access.cleanup();
@@ -235,261 +280,506 @@ export async function uploadFile(
   relativeParent: string,
   name: string,
   size: number,
-  source: Readable
+  source: Readable,
+  assertAccess?: () => void,
 ): Promise<void> {
   validateName(name);
-  const parent = resolveTarget(server, rootId, relativeParent);
-  const destination = resolveTarget(
+  if (!Number.isSafeInteger(size) || size < 0)
+    throw new FileStorageError("INVALID_UPLOAD_SIZE", 400);
+  const target = resolveTarget(
     server,
     rootId,
-    joinRelative(relativeParent, name)
+    joinRelative(relativeParent, name),
   );
-  const access = await acquireFileContainer(server, parent.root);
+  // The HTTP body may be aborted while Docker is still preparing its helper.
+  const ignoreInputError = () => {};
+  source.on("error", ignoreInputError);
   try {
-    await assertSafeTarget(
-      access.container,
-      parent.root.path,
-      parent.absolutePath,
-      false
-    );
-    await assertSafeTarget(
-      access.container,
-      destination.root.path,
-      destination.absolutePath,
-      true
-    );
-
-    const archive = tar.pack();
-    const entry = archive.entry({ name, size, mode: 0o644 });
-    source.pipe(entry);
-    source.once("error", (error) => archive.destroy(error));
-    entry.once("finish", () => archive.finalize());
-    await access.container.putArchive(archive, { path: parent.absolutePath });
+    const access = await acquireFileContainer(server, target.root, { assertAccess });
+    const uploadId = crypto.randomUUID();
+    try {
+      await helperRequest(
+        access,
+        {
+          operation: "upload",
+          root: target.root.path,
+          path: target.relativePath,
+          size,
+          uploadId,
+        },
+        source,
+        Buffer.from(uploadId),
+      );
+    } finally {
+      try {
+        // Cleanup has no user-controlled operation or filename. It must remain
+        // available after cancellation/revocation so staging files are removed.
+        await helperRequest({ ...access, assertAccess: undefined }, {
+          operation: "upload-cleanup",
+          root: target.root.path,
+          path: target.relativePath,
+          uploadId,
+        });
+      } catch {
+        logger.warn("Failed to clean up an upload temporary file", {
+          container: server.id.slice(0, 12),
+        });
+      } finally {
+        await access.cleanup();
+      }
+    }
   } finally {
-    await access.cleanup();
+    source.off("error", ignoreInputError);
   }
 }
 
 export async function openDownload(
   server: ManagedContainer,
   rootId: string,
-  relativePath: string
+  relativePath: string,
+  assertAccess?: () => void,
 ): Promise<{
   name: string;
   type: "file" | "directory";
   size: number;
   stream: NodeJS.ReadableStream;
+  completed: Promise<void>;
 }> {
   const target = resolveTarget(server, rootId, relativePath);
   if (!target.relativePath) throw new FileStorageError("ROOT_DOWNLOAD", 400);
-  const access = await acquireFileContainer(server, target.root);
+  const access = await acquireFileContainer(server, target.root, {
+    readOnly: true,
+    assertAccess,
+  });
   try {
-    await assertSafeTarget(
-      access.container,
-      target.root.path,
-      target.absolutePath,
-      false
+    const result = await helperRequest(access, {
+      operation: "stat",
+      root: target.root.path,
+      path: target.relativePath,
+    });
+    const info = JSON.parse(result.stdout) as {
+      type: "file" | "directory";
+      size: number;
+    };
+    const execution = await access.container.exec(
+      helperOptions({
+        operation: "download",
+        root: target.root.path,
+        path: target.relativePath,
+        blocked: access.blockedPaths,
+      }),
     );
-    const stat = await statTarget(access.container, target.absolutePath);
-    const archive = await access.container.getArchive({
-      path: target.absolutePath,
-    });
-    const name = path.posix.basename(target.relativePath);
-    if (stat.type === "directory") {
-      cleanupAfterStream(archive, access.cleanup);
-      return {
-        name: `${name}.tar`,
-        type: "directory",
-        size: 0,
-        stream: archive,
-      };
-    }
-
-    const extract = tar.extract();
+    access.assertAccess?.();
+    const stream = await execution.start({ hijack: true, stdin: false });
     const output = new PassThrough();
-    let found = false;
-    extract.on("entry", (_header, entryStream, next) => {
-      if (!found) {
-        found = true;
-        entryStream.pipe(output, { end: false });
-        entryStream.on("end", next);
-      } else {
-        entryStream.resume();
-        entryStream.on("end", next);
-      }
+    output.once("error", () => {});
+    let finishCleanup!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
     });
-    extract.on("finish", () => output.end());
-    extract.on("error", (error: Error) => output.destroy(error));
-    archive.on("error", (error: Error) => output.destroy(error));
-    archive.pipe(extract);
-    cleanupAfterStream(output, access.cleanup);
-    return { name, type: "file", size: stat.size, stream: output };
+    let cleaning = false;
+    const timeout = setTimeout(() => {
+      output.destroy(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
+    }, 30 * 60_000);
+    const cleanup = () => {
+      if (cleaning) return;
+      cleaning = true;
+      clearTimeout(timeout);
+      stream.destroy();
+      void access
+        .cleanup()
+        .catch(() =>
+          logger.warn("Failed to remove download helper", {
+            container: server.id.slice(0, 12),
+          }),
+        )
+        .finally(finishCleanup);
+    };
+    output.once("close", cleanup);
+    output.once("error", cleanup);
+    output.once("end", cleanup);
+    void pumpDockerDownload(stream, output)
+      .then(async () => {
+        const status = await execution.inspect();
+        if (status.ExitCode !== 0 || status.Running)
+          output.destroy(
+            new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409),
+          );
+        else output.end();
+      })
+      .catch(() =>
+        output.destroy(new FileStorageError("FILE_DOWNLOAD_FAILED", 409)),
+      );
+    const name = path.posix.basename(target.relativePath);
+    return {
+      name: info.type === "directory" ? `${name}.tar` : name,
+      type: info.type,
+      size: info.size,
+      stream: output,
+      completed,
+    };
   } catch (error) {
     await access.cleanup();
     throw error;
   }
 }
 
-interface FileContainerAccess {
-  container: Docker.Container;
-  cleanup: () => Promise<void>;
+/** Honor the HTTP consumer's backpressure while decoding Docker's non-TTY
+ * frames. docker-modem's event-based demux ignores writable backpressure. */
+export async function pumpDockerDownload(
+  source: Readable,
+  output: PassThrough,
+): Promise<void> {
+  let header = Buffer.alloc(0);
+  let remaining = 0;
+  let channel = 0;
+  for await (const value of source) {
+    const chunk = value as Buffer;
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (!remaining) {
+        const count = Math.min(8 - header.length, chunk.length - offset);
+        header = Buffer.concat([
+          header,
+          chunk.subarray(offset, offset + count),
+        ]);
+        offset += count;
+        if (header.length !== 8) continue;
+        channel = header[0];
+        remaining = header.readUInt32BE(4);
+        if (
+          ![0, 1, 2].includes(channel) ||
+          header[1] ||
+          header[2] ||
+          header[3] ||
+          remaining > 64 * 1024 * 1024
+        )
+          throw new FileStorageError("INVALID_DOWNLOAD_STREAM", 409);
+        header = Buffer.alloc(0);
+        if (!remaining) continue;
+      }
+      const count = Math.min(remaining, chunk.length - offset);
+      if (channel === 1 && count)
+        await new Promise<void>((resolve, reject) => {
+          const closed = () =>
+            finish(new FileStorageError("FILE_DOWNLOAD_CLOSED", 409));
+          const finish = (error?: Error | null) => {
+            output.off("error", finish);
+            output.off("close", closed);
+            if (error) reject(error);
+            else resolve();
+          };
+          if (output.destroyed) {
+            closed();
+            return;
+          }
+          output.once("error", finish);
+          output.once("close", closed);
+          output.write(chunk.subarray(offset, offset + count), finish);
+        });
+      offset += count;
+      remaining -= count;
+    }
+  }
+  if (header.length || remaining)
+    throw new FileStorageError("INCOMPLETE_DOWNLOAD_STREAM", 409);
 }
 
-async function acquireFileContainer(
-  server: ManagedContainer,
-  root: FileRoot
-): Promise<FileContainerAccess> {
-  const target = docker.getContainer(server.id);
-  if (server.state === "running") {
-    return { container: target, cleanup: async () => {} };
-  }
-
-  const inspection = await target.inspect();
-  const rootPath = path.posix.normalize(root.path);
-  const volumeBacked = (inspection.Mounts || []).some((mount) => {
-    const destination = path.posix.normalize(mount.Destination);
-    return (
-      rootPath === destination || rootPath.startsWith(`${destination}/`)
-    );
-  });
-  if (!volumeBacked) {
-    throw new FileStorageError("OFFLINE_ROOT_NOT_VOLUME", 409);
-  }
-
-  const helperImage = process.env.FILE_HELPER_IMAGE || "alpine:3.22";
-  const helper = await createHelperContainer(helperImage, server.id);
-  let removed = false;
-  const cleanup = async () => {
-    if (removed) return;
-    removed = true;
-    try {
-      await helper.remove({ force: true });
-    } catch (error) {
-      const statusCode = (error as { statusCode?: number }).statusCode;
-      if (statusCode !== 404) {
-        logger.warn("Failed to remove offline helper container", {
-          container: server.id.slice(0, 12),
-          error: errorMessage(error),
-        });
-      }
-    }
+function helperOptions(request: FileRequest): Docker.ExecCreateOptions {
+  return {
+    Cmd: ["bun", "-e", FILE_HELPER_SCRIPT, JSON.stringify(request)],
+    AttachStdout: true,
+    AttachStderr: true,
+    AttachStdin: request.operation === "upload",
+    Tty: false,
   };
+}
 
+function fileTargetSignature(inspection: Docker.ContainerInspectInfo): string {
+  return JSON.stringify({
+    id: inspection.Id,
+    name: inspection.Name,
+    image: inspection.Config.Image,
+    labels: Object.entries(inspection.Config.Labels || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    ),
+    mounts: (inspection.Mounts || [])
+      .map((mount) => [
+        mount.Type,
+        mount.Source,
+        mount.Name,
+        mount.Destination,
+        mount.RW,
+      ])
+      .sort((left, right) => String(left[3]).localeCompare(String(right[3]))),
+  });
+}
+async function helperRequest(
+  access: FileContainerAccess,
+  request: Omit<FileRequest, "blocked">,
+  input?: Readable,
+  inputTrailer?: Buffer,
+): Promise<{ stdout: string }> {
+  return runExec(
+    access.container,
+    helperOptions({ ...request, blocked: access.blockedPaths }),
+    input,
+    access.assertAccess,
+    inputTrailer,
+  );
+}
+
+export async function acquireFileContainer(
+  server: ManagedContainer,
+  root: FileRoot,
+  options: { readOnly?: boolean; assertAccess?: () => void } = {},
+): Promise<FileContainerAccess> {
+  const inspection = await docker.getContainer(server.id).inspect();
+  if (
+    inspection.Id !== server.id ||
+    inspection.Name.replace(/^\//, "") !== server.name ||
+    !evaluateContainerEligibility(
+      inspection.Config.Image,
+      inspection.Config.Labels || {},
+    ).eligible
+  )
+    throw new FileStorageError("FILE_TARGET_CHANGED", 409);
+  const mounts = (inspection.Mounts || []) as ContainerFileMount[];
+  const freshRoots = getFileRoots(
+    { ...server, labels: inspection.Config.Labels || {} },
+    mounts,
+  );
+  if (!freshRoots.some((candidate) => candidate.path === root.path))
+    throw new FileStorageError("FILE_ROOT_CHANGED", 409);
+  const owner = mounts
+    .filter((mount) =>
+      within(root.path, normalizedMountPath(mount.Destination)),
+    )
+    .sort(
+      (left, right) => right.Destination.length - left.Destination.length,
+    )[0];
+  if (!owner || !isSafeWritableDataMount(owner))
+    throw new FileStorageError("FILE_ROOT_CHANGED", 409);
+  const children = mounts.filter(
+    (mount) =>
+      mount !== owner &&
+      within(normalizedMountPath(mount.Destination), root.path),
+  );
+  const blockedPaths = children
+    .filter((mount) => !isSafeWritableDataMount(mount))
+    .map((mount) => normalizedMountPath(mount.Destination));
+  const selected = [
+    owner,
+    ...children.filter(
+      (mount) =>
+        isSafeWritableDataMount(mount) &&
+        !blockedPaths.some((blocked) =>
+          within(normalizedMountPath(mount.Destination), blocked),
+        ),
+    ),
+  ];
+  const projections = selected.map((mount) => {
+    const source =
+      mount.Type === "volume" ? mount.Name || mount.Source : mount.Source;
+    if (mount.Type === "volume" && source.includes("/"))
+      throw new FileStorageError("UNIDENTIFIED_VOLUME", 409);
+    return {
+      Type: mount.Type as "bind" | "volume",
+      Source: source,
+      Target: normalizedMountPath(mount.Destination),
+      ReadOnly: Boolean(options.readOnly),
+      ...(mount.Type === "bind"
+        ? {
+            BindOptions: {
+              Propagation: "rprivate" as const,
+              NonRecursive: true,
+            },
+          }
+        : {}),
+    };
+  });
+  const proof = await createMountProof(selected);
+  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
+  const containerOptions: Docker.ContainerCreateOptions = {
+    Image: image,
+    Entrypoint: ["bun", "-e"],
+    Cmd: [
+      "setInterval(() => {}, 3600000); setTimeout(() => process.exit(0), 2100000)",
+    ],
+    User: "0",
+    Labels: { "ludock.enable": "false", "ludock.internal": "file-helper" },
+    HostConfig: {
+      Mounts: projections,
+      NetworkMode: "none",
+      ReadonlyRootfs: true,
+      AutoRemove: true,
+      CapDrop: ["ALL"],
+      CapAdd: options.readOnly ? ["DAC_OVERRIDE"] : ["DAC_OVERRIDE", "CHOWN"],
+      SecurityOpt: ["no-new-privileges"],
+      PidsLimit: 32,
+      Memory: 256 * 1024 * 1024,
+      NanoCpus: 1_000_000_000,
+    },
+  };
+  let helper: Docker.Container;
+  try {
+    helper = await docker.createContainer(containerOptions);
+  } catch (error) {
+    try {
+      if ((error as { statusCode?: number }).statusCode !== 404) throw error;
+      const stream = await docker.pull(image);
+      await new Promise<void>((resolve, reject) =>
+        docker.modem.followProgress(stream, (error) =>
+          error ? reject(error) : resolve(),
+        ),
+      );
+      helper = await docker.createContainer(containerOptions);
+    } catch (failure) {
+      await proof.cleanup();
+      throw failure;
+    }
+  }
+  let removal: Promise<void> | undefined;
+  const cleanup = () => {
+    removal ??= (async () => {
+      try {
+        await helper.remove({ force: true });
+      } catch (error) {
+        if ((error as { statusCode?: number }).statusCode !== 404) {
+          try {
+            await helper.stop({ t: 0 });
+            await helper.remove({ force: true });
+          } catch {
+            logger.warn("Failed to remove file helper", {
+              container: server.id.slice(0, 12),
+            });
+          }
+        }
+      } finally {
+        await proof.cleanup();
+      }
+    })();
+    return removal;
+  };
   try {
     await helper.start();
-    return { container: helper, cleanup };
+    await assertMountIdentities(helper, proof.identities);
+    const access = { container: helper, blockedPaths, cleanup, assertAccess: options.assertAccess };
+    await helperRequest(access, {
+      operation: "check",
+      root: root.path,
+      path: "",
+    });
+    // Pulling or starting a helper can take long enough for an external manager
+    // to replace the game and reuse its volume names. Once helper mounts are
+    // pinned, prove the original game still owns the exact captured binding.
+    let fresh: Docker.ContainerInspectInfo;
+    try {
+      fresh = await docker.getContainer(server.id).inspect();
+    } catch {
+      throw new FileStorageError("FILE_TARGET_CHANGED", 409);
+    }
+    if (fileTargetSignature(fresh) !== fileTargetSignature(inspection))
+      throw new FileStorageError("FILE_TARGET_CHANGED", 409);
+    return access;
   } catch (error) {
     await cleanup();
     throw error;
   }
 }
 
-async function createHelperContainer(
-  image: string,
-  sourceContainerId: string
-): Promise<Docker.Container> {
-  const options: Docker.ContainerCreateOptions = {
-    Image: image,
-    Entrypoint: ["/bin/sh", "-c"],
-    Cmd: ["while :; do sleep 3600; done"],
-    User: "0",
-    Labels: { "ludock.internal": "file-helper" },
-    HostConfig: {
-      VolumesFrom: [`${sourceContainerId}:rw`],
-      NetworkMode: "none",
-      ReadonlyRootfs: true,
-      CapDrop: ["ALL"],
-      SecurityOpt: ["no-new-privileges"],
-    },
-  };
-
-  try {
-    return await docker.createContainer(options);
-  } catch (error) {
-    if ((error as { statusCode?: number }).statusCode !== 404) throw error;
-    await pullImage(image);
-    return docker.createContainer(options);
-  }
-}
-
-async function pullImage(image: string): Promise<void> {
-  const stream = await docker.pull(image);
-  await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(stream, (error) =>
-      error ? reject(error) : resolve()
-    );
+async function runExec(
+  container: Docker.Container,
+  options: Docker.ExecCreateOptions,
+  input?: Readable,
+  assertAccess?: () => void,
+  inputTrailer?: Buffer,
+): Promise<{ stdout: string }> {
+  assertAccess?.();
+  if (input?.destroyed && !input.readableEnded)
+    throw new FileStorageError("FILE_UPLOAD_FAILED", 400);
+  const execution = await container.exec(options);
+  assertAccess?.();
+  const stream = await execution.start({
+    hijack: true,
+    stdin: Boolean(input),
   });
-}
-
-function cleanupAfterStream(
-  stream: NodeJS.ReadableStream,
-  cleanup: () => Promise<void>
-): void {
-  let cleaned = false;
-  const run = () => {
-    if (cleaned) return;
-    cleaned = true;
-    void cleanup();
-  };
-  stream.once("end", run);
-  stream.once("close", run);
-  stream.once("error", run);
-}
-
-function inferredFilePaths(mounts: readonly ContainerFileMount[]): string[] {
-  const paths = mounts
-    .filter(isSafeWritableDataMount)
-    .map((mount) => path.posix.normalize(mount.Destination))
-    .filter((value, index, values) => values.indexOf(value) === index);
-
-  return paths.filter(
-    (candidate) =>
-      !paths.some(
-        (other) => other !== candidate && candidate.startsWith(`${other}/`)
-      )
-  );
-}
-
-function isSafeWritableDataMount(mount: ContainerFileMount): boolean {
-  if (!mount.RW || (mount.Type !== "bind" && mount.Type !== "volume")) {
-    return false;
-  }
-
-  const destination = path.posix.normalize(mount.Destination);
-  if (
-    !destination.startsWith("/") ||
-    destination === "/" ||
-    destination.length > 512 ||
-    isSensitiveSystemPath(destination)
-  ) {
-    return false;
-  }
-
-  if (mount.Type === "bind") {
-    const source = path.posix.normalize(mount.Source);
-    if (
-      !source.startsWith("/") ||
-      source === "/" ||
-      isSensitiveSystemPath(source)
-    ) {
-      return false;
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  stdout.on("data", (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > MAX_HELPER_OUTPUT)
+      stream.destroy(new FileStorageError("FILE_OUTPUT_LIMIT", 409));
+    else chunks.push(chunk);
+  });
+  stderr.resume();
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let inputEnded = false;
+    let inputFailure: Error | undefined;
+    let cancellationTimeout: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(
+      () => {
+        stream.destroy();
+        finish(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
+      },
+      input ? 30 * 60_000 : 60_000,
+    );
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(cancellationTimeout);
+      input?.unpipe(stream);
+      input?.off("end", endInput);
+      input?.off("error", errorInput);
+      input?.off("close", closeInput);
+      const failure = inputFailure || error;
+      if (failure) reject(failure);
+      else resolve();
+    };
+    const failInput = (error?: Error) => {
+      if (settled || inputFailure) return;
+      inputFailure = error || new FileStorageError("FILE_UPLOAD_FAILED", 400);
+      input?.unpipe(stream);
+      // Missing commit trailer makes even a full-length cancelled body fail.
+      // Keep the read side alive until the helper finishes its own cleanup.
+      stream.end();
+      cancellationTimeout = setTimeout(() => {
+        stream.destroy();
+        finish(inputFailure);
+      }, 5_000);
+    };
+    const endInput = () => {
+      inputEnded = true;
+      if (settled || inputFailure) return;
+      try { assertAccess?.(); }
+      catch (error) { failInput(error as Error); return; }
+      stream.end(inputTrailer);
+    };
+    const closeInput = () => { if (!inputEnded) failInput(); };
+    const errorInput = () => failInput();
+    stream.once("end", () => finish());
+    stream.once("close", () => finish(new FileStorageError("FILE_OPERATION_FAILED", 409)));
+    stream.once("error", () =>
+      finish(new FileStorageError("FILE_OPERATION_FAILED", 409)),
+    );
+    docker.modem.demuxStream(stream, stdout, stderr);
+    if (input) {
+      input.once("error", errorInput);
+      input.once("end", endInput);
+      input.once("close", closeInput);
+      if (input.destroyed && !input.readableEnded) failInput();
+      else if (input.readableEnded) endInput();
+      else input.pipe(stream, { end: false });
     }
-  }
-
-  return true;
-}
-
-function isSensitiveSystemPath(value: string): boolean {
-  return [
-    "/proc",
-    "/sys",
-    "/dev",
-    "/run",
-    "/var/run",
-    "/var/lib/docker",
-    "/etc",
-    "/boot",
-  ].some((root) => value === root || value.startsWith(`${root}/`));
+  });
+  const status = await execution.inspect();
+  if (status.ExitCode !== 0 || status.Running)
+    throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
+  return { stdout: Buffer.concat(chunks).toString("utf8") };
 }
 
 function rootName(gameType: string, rootPath: string): string {
@@ -511,17 +801,14 @@ function rootName(gameType: string, rootPath: string): string {
 function resolveTarget(
   server: ManagedContainer,
   rootId: string,
-  relativePath: string
-): { root: FileRoot; relativePath: string; absolutePath: string } {
+  relativePath: string,
+): { root: FileRoot; relativePath: string } {
   const root = server.fileRoots.find((candidate) => candidate.id === rootId);
   if (!root) throw new FileStorageError("ROOT_NOT_FOUND", 404);
   const normalized = normalizeRelativePath(relativePath);
   return {
     root,
     relativePath: normalized,
-    absolutePath: normalized
-      ? path.posix.join(root.path, normalized)
-      : root.path,
   };
 }
 
@@ -561,104 +848,15 @@ function validateName(name: string): void {
   }
 }
 
-async function assertSafeTarget(
-  container: Docker.Container,
-  root: string,
-  target: string,
-  allowMissing: boolean,
-  allowFinalSymlink = false
-): Promise<void> {
-  await runExec(container, {
-    Cmd: [
-      "/bin/sh",
-      "-c",
-      `root_resolved=$(readlink -f "$ROOT") || exit 40
-if test -L "$TARGET"; then
-  test "$ALLOW_SYMLINK" = 1 || exit 44
-  parent_resolved=$(readlink -f "$(dirname "$TARGET")") || exit 41
-  target_resolved="$parent_resolved/$(basename "$TARGET")"
-elif test -e "$TARGET"; then
-  target_resolved=$(readlink -f "$TARGET") || exit 41
-else
-  test "$ALLOW_MISSING" = 1 || exit 42
-  parent_resolved=$(readlink -f "$(dirname "$TARGET")") || exit 42
-  target_resolved="$parent_resolved/$(basename "$TARGET")"
-fi
-case "$target_resolved" in
-  "$root_resolved"|"$root_resolved"/*) exit 0 ;;
-  *) exit 43 ;;
-esac`,
-    ],
-    Env: [
-      `ROOT=${root}`,
-      `TARGET=${target}`,
-      `ALLOW_MISSING=${allowMissing ? "1" : "0"}`,
-      `ALLOW_SYMLINK=${allowFinalSymlink ? "1" : "0"}`,
-    ],
-    AttachStdout: true,
-    AttachStderr: true,
-  });
-}
-
-async function statTarget(
-  container: Docker.Container,
-  target: string
-): Promise<{ type: "file" | "directory"; size: number }> {
-  const result = await runExec(container, {
-    Cmd: [
-      "/bin/sh",
-      "-c",
-      'if test -d "$TARGET"; then printf "directory\\t0"; else printf "file\\t%s" "$(stat -c %s "$TARGET")"; fi',
-    ],
-    Env: [`TARGET=${target}`],
-    AttachStdout: true,
-    AttachStderr: true,
-  });
-  const [type, size] = result.stdout.split("\t");
-  return {
-    type: type === "directory" ? "directory" : "file",
-    size: Number(size) || 0,
-  };
-}
-
-async function runExec(
-  container: Docker.Container,
-  options: Docker.ExecCreateOptions
-): Promise<{ stdout: string; stderr: string }> {
-  const exec = await container.exec(options);
-  const stream = await exec.start({ hijack: true, stdin: false });
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-  stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-  docker.modem.demuxStream(stream, stdout, stderr);
-  await new Promise<void>((resolve, reject) => {
-    stream.once("end", resolve);
-    stream.once("error", reject);
-  });
-  const inspection = await exec.inspect();
-  const result = {
-    stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-    stderr: Buffer.concat(stderrChunks).toString("utf8"),
-  };
-  if (inspection.ExitCode !== 0) {
-    throw new FileStorageError(
-      `CONTAINER_FILE_OPERATION_${inspection.ExitCode}`,
-      inspection.ExitCode === 42 || inspection.ExitCode === 45 ? 404 : 400,
-      result.stderr
-    );
-  }
-  return result;
-}
-
 export class FileStorageError extends Error {
   constructor(
     public readonly code: string,
     public readonly statusCode: number,
-    details?: string
   ) {
-    super(details || code);
+    super(
+      code === "UNSAFE_OR_CHANGED_FILE_PATH"
+        ? "The path changed, is unsafe, or cannot be accessed"
+        : code,
+    );
   }
 }

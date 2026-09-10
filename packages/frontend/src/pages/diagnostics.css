@@ -1,0 +1,13 @@
+.diagnostics-help {
+  margin-top: 20px;
+}
+
+.diagnostics-help > .text-link {
+  display: inline-block;
+  margin-top: 12px;
+}
+
+.diagnostics-help pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

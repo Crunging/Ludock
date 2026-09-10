@@ -2,11 +2,26 @@ services:
   ludock:
     image: ghcr.io/crunging/ludock:latest
     ports:
-      - "3000:3000"
+      - "${LUDOCK_PORT:-3000}:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./data:/data
+      # Persistent application data.
+      - ludock-data:/data
+      # Separate backup storage, ready to select in Settings after first sign-in.
+      - ludock-backups:/backups
+      # To keep backups on another disk, replace the backup volume above with
+      # a host-directory mount (create the directory first), for example:
+      # - /srv/ludock-backups:/backups
+      # Optional Compose sources: preserve identical absolute host/container
+      # paths and set LUDOCK_COMPOSE_ROOTS=/srv/game-stacks in .env.
+      # - /srv/game-stacks:/srv/game-stacks:ro
     env_file:
       - path: .env
         required: false
+    environment:
+      LUDOCK_BACKUP_ROOTS: "${LUDOCK_BACKUP_ROOTS-/backups}"
     restart: unless-stopped
+
+volumes:
+  ludock-data:
+  ludock-backups:

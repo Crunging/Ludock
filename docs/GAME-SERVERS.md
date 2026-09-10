@@ -1,156 +1,156 @@
-# Game servers and overrides
+# Game servers
 
-Ludock discovers existing Docker containers. It does not create or configure
-game servers, and it manages only containers with:
+Ludock discovers existing Docker containers. It does not install game servers,
+edit Compose definitions, or interpret game-specific mod formats.
 
-```yaml
-labels:
-  ludock.enable: "true"
-```
+## Discovery
 
-For a recognized image, that is the only label required. Ludock infers the
-game integration from the image repository and discovers file roots from the
-container's writable mounts.
+Eligibility is evaluated in this order:
 
-## Supported images
+1. An invalid `ludock.enable` value excludes the container and creates an
+   administrator diagnostic.
+2. `ludock.enable: "false"` excludes it.
+3. `ludock.enable: "true"` includes it, including an unknown image or Compose
+   one-off.
+4. An otherwise-unlabeled Compose one-off is excluded.
+5. A recognized image is included automatically.
+6. Other containers are excluded.
 
-Tags, registry prefixes, and image digests do not affect recognition. An exact
-known repository is required; similarly named repositories are not guessed.
+Boolean labels are trimmed and case-insensitive; only `true` and `false` are
+valid. Unknown containers do not appear as discovery candidates. Use **Game
+not shown?** for explicit inclusion instructions.
 
-| Game | Recognized images | Published platforms |
-|---|---|---|
-| Minecraft | `itzg/minecraft-server` | amd64, arm64, riscv64 |
-| Factorio | `factoriotools/factorio` | amd64, arm64 |
-| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | amd64; Thijs also publishes arm64 |
-| ARK: Survival Evolved | `hermsi/ark-server`, `indifferentbroccoli/ark-server-docker` | amd64 |
-| ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | amd64 |
-| Counter-Strike 2 | `joedwards32/cs2` | amd64 |
-| Project Zomboid | `renegademaster/zomboid-dedicated-server` and its GHCR/Quay variants | amd64 |
-| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | amd64 |
-| V Rising | `trueosiris/vrising` | amd64 |
-| Rust | `didstopia/rust-server` | amd64 |
-| 7 Days to Die | `vinanrra/7dtd-server` | amd64 |
-| Valheim | `ghcr.io/community-valheim-tools/valheim-server`, `lloesche/valheim-server` | amd64 |
-| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | image-dependent; Hexlo and Ryshe publish arm64 |
+Recognition removes tags, digests, and registry hostnames/ports, then matches a
+known repository suffix. Both `itzg/minecraft-server:java21` and
+`registry.example.com/mirrors/itzg/minecraft-server:java21` select Minecraft.
+Similarly named repositories are not guessed. Recognition selects integration
+capabilities; it does not verify image provenance.
 
-Games without a supported command transport still have live container logs.
+Administrators see eligible servers immediately. Other users require explicit
+server/action grants. A game label alone does not make an unknown image eligible.
 
-## Labels and overrides
+## Recognized repositories and console capabilities
 
-Explicit labels take precedence over image inference.
+The integration registry is
+[`server-presets.ts`](../packages/backend/src/server-presets.ts). It supplies the
+**Diagnostics → Game capabilities** table and `/api/v1/integrations`.
+
+| Game | Recognized repository suffixes | Console adapter | Default port |
+| --- | --- | --- | --- |
+| Minecraft | `itzg/minecraft-server` | Minecraft `rcon-cli` | Internal configuration |
+| Factorio | `factoriotools/factorio` | Source RCON | 27015 |
+| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Source RCON | 25575 |
+| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | Source RCON | 27020 |
+| ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | Source RCON | 27020 |
+| Counter-Strike 2 | `joedwards32/cs2` | Source RCON | 27015 |
+| Project Zomboid | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Source RCON | 27015 |
+| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Source RCON | 25575 |
+| V Rising | `trueosiris/vrising` | Source RCON | 25575 |
+| Rust | `didstopia/rust-server` | Rust WebRCON | 28016 |
+| 7 Days to Die | `vinanrra/7dtd-server` | Telnet | 8081 |
+| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | None registered | — |
+| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Process stdin | — |
+
+These ports are console ports, not player connection ports. Minecraft's
+`rcon-cli` runs inside the game container; its RCON port does not need to be
+published for Ludock. Other network adapters require a reachable address,
+enabled protocol, and configured credentials. Put Ludock and those servers on
+a suitable Docker network. Do not expose RCON or Telnet directly to the public
+internet.
+
+## Capability matrix and evidence
+
+Recognition does not establish that a particular game release is ready for
+all operations. Status values are `supported`, `conditional`, `unsupported`, and
+`unverified`. The current matrix applies as follows to every repository listed
+above:
+
+| Capability | Status | Requirement / evidence |
+| --- | --- | --- |
+| Recognition | Supported | Exact suffix normalization and eligibility fixtures in `test/server-presets.test.ts` and `test/discovery.test.ts` |
+| Console | Conditional, except Valheim: unsupported | Adapter configuration and transport fixtures in `test/game-console.test.ts` and `test/game-console-runtime.test.ts`; a protocol fixture is not a live-game compatibility test |
+| Game-image platforms | Unverified | Check the chosen upstream image's manifest; Ludock's AMD64/ARM64 targets do not establish game-image architecture support |
+| Backup consistency | Unverified per game | The generic backup requires stopped containers and rejects known shared writers; validate graceful shutdown and world integrity against each actual image |
+| Readiness | Conditional | Docker health or running state; no game-specific player-connectivity probes are registered |
+| Update / same-image recreation | Conditional | Requires a supported, registered Compose project; the image's startup game-update behavior is not verified by image recognition |
+
+The generic backup/restore mechanisms have separate tests. They do not prove
+that every game flushed its world cleanly before stopping. Live backups are
+unsupported. Select an integration in Diagnostics for its current prerequisites
+and source test references.
+
+## Labels and custom images
 
 | Label | Purpose |
-|---|---|
-| `ludock.enable` | Required. Set to `"true"` to manage the container |
+| --- | --- |
+| `ludock.enable` | Optional for recognized images; explicitly include or exclude a container |
 | `ludock.name` | Display name; defaults to the container name |
-| `ludock.game` | Game override, such as `minecraft` or `terraria` |
-| `ludock.console` | Console adapter override or `disabled` |
-| `ludock.console.host` | RCON or Telnet host override |
-| `ludock.console.port` | RCON or Telnet port override |
-| `ludock.console.password-env` | Name of the game container environment variable containing its console password |
-| `ludock.files` | Comma-separated file-root override; set to an empty string to disable files |
+| `ludock.game` | Integration override, such as `minecraft` or `terraria` |
+| `ludock.console` | Adapter override; `disabled` or `none` disables commands |
+| `ludock.console.host` | Console network host override |
+| `ludock.console.port` | Console network port override |
+| `ludock.console.password-env` | Name of the game-container environment variable holding the console password |
+| `ludock.files` | Comma-separated approved container data paths; empty disables file access |
 
-An unknown or custom image needs `ludock.game` to select a game integration:
+Supported console adapter values are `minecraft-rcon`, `source-rcon`,
+`rust-webrcon`, `telnet-console`, and `stdin-console`. Credentials stay in the
+backend. The password-env label contains a **variable name**, never its value.
+
+For an unrecognized custom image:
 
 ```yaml
 services:
   terraria:
     image: example/custom-terraria:latest
+    stdin_open: true
     labels:
       ludock.enable: "true"
       ludock.game: "terraria"
+      ludock.name: "Terraria with friends"
 ```
 
-Use `ludock.console` only when the game preset selects the wrong transport or
-when a custom image needs an explicit adapter. Supported values are
-`minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, and
-`stdin-console`. Set it to `disabled` or `none` for logs without command input.
+`stdin-console` requires an interactive server process with stdin kept open and
+`StdinOnce` disabled. Verify that the selected image actually forwards its
+process input. Unsupported or unconfigured consoles do not prevent separately
+granted log access. Game-console access and log access are independent grants;
+console-only users do not receive the general container log stream.
 
-## Game consoles
-
-These are console connections and ports, not the ports players use to join a
-game.
-
-| Game | Console connection | Default console port |
-|---|---|---:|
-| Minecraft (`itzg/minecraft-server`) | Bundled `rcon-cli` inside the container | 25575 (internal) |
-| Factorio | RCON | 27015 |
-| Palworld | RCON | 25575 |
-| ARK and ARK: Survival Ascended | RCON | 27020 |
-| Counter-Strike 2 | RCON | 27015 |
-| Project Zomboid | RCON | 27015 |
-| Conan Exiles | RCON | 25575 |
-| V Rising | RCON | 25575 |
-| Rust | WebRCON | 28016 |
-| 7 Days to Die | Telnet | 8081 |
-| Terraria | Container process input | — |
-
-Minecraft normally uses port `25565` for players and `25575` for RCON. Ludock
-runs the bundled `rcon-cli` command inside `itzg/minecraft-server`, so the RCON
-port should not be published or configured in Ludock.
-
-For consoles reached over a Docker network, enable the protocol in the game
-server and store its password in the game container:
-
-```yaml
-services:
-  game:
-    labels:
-      ludock.enable: "true"
-      ludock.console.password-env: "RCON_PASSWORD"
-    environment:
-      RCON_PASSWORD: "${RCON_PASSWORD}"
-```
-
-The label contains the environment variable's name, not its secret value. The
-password remains on the backend and is not sent to the browser or audit log.
-Put Ludock and the game server on a shared Docker network, and never expose
-RCON or Telnet directly to the internet.
+An administrator can use the separate interactive container shell. There are
+no saved shell-command hooks in backup, update, or schedule configuration.
 
 ## File roots
 
-The file manager uses the container's actual writable bind mounts and named
-volumes. It does not rely on an image-specific default path and never exposes
-host source paths to the browser.
+Writable bind mounts and named volumes become file roots automatically, even
+while a server is stopped. Ludock exposes container paths rather than host
+source paths. Read-only mounts, broad/system directories, Docker sockets,
+configured sensitive paths, and nested duplicate roots are excluded. It does
+not expose the container's writable layer.
 
-Read-only, system, Docker socket, host-root, and nested duplicate mounts are
-excluded. This allows custom host paths and named volumes to work without
-additional labels:
-
-```yaml
-services:
-  terraria:
-    image: ryshe/terraria:latest
-    stdin_open: true
-    tty: true
-    volumes:
-      - ./terraria-data:/root/.local/share/Terraria/Worlds
-    labels:
-      ludock.enable: "true"
-```
-
-Terraria uses container process input for console commands, so its standard
-input must remain open. The
-[`ryshe/terraria` image instructions](https://hub.docker.com/r/ryshe/terraria)
-also use this world path and an interactive TTY.
-
-Use `ludock.files` to select a subset of mounts or expose custom container
-paths:
+Use the actual data locations provided by your image. For example, restrict a
+container's writable `/data` mount to two known subdirectories:
 
 ```yaml
 labels:
-  ludock.files: "/config,/backups"
+  ludock.files: "/data/worlds,/data/config"
 ```
 
-An empty value disables the file manager:
+The directories must belong to approved writable mounts. A label cannot grant
+access outside that boundary. Disable all file and derived backup roots with:
 
 ```yaml
 labels:
   ludock.files: ""
 ```
 
-Volume-backed roots remain available while a server is stopped. Data stored
-only in the container's writable layer requires the container to be running.
-Ludock rejects `/`, traversal, and symbolic-link escapes.
+File reads/downloads require `files.read`; mutation additionally requires
+`files.write`. Paths and symlink chains are revalidated inside isolated helpers.
+Symbolic-link traversal, root deletion, `../`, and unsafe nested mount paths are
+rejected. Approved nested mounts remain accessible, but downloading, deleting,
+or renaming a parent containing an excluded mount is blocked. File downloads and
+overwrites reject hard links; directory downloads also reject symlinks and
+special files. Backups require physically distinct directory roots without
+nested mounts and reject links and special files; choose suitable subdirectories
+if the image's layout includes them.
 
-Return to the [project overview](../README.md).
+See [Operations](./OPERATIONS.md) for helper permissions, destination mounts,
+stop-only backup behavior, and restore recovery.

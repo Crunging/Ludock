@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { after, before, describe, it } from "node:test";
+import { serve } from "bun";
+import { afterAll as after, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -10,24 +9,17 @@ const [{ createApp }, { listUsers }] = await Promise.all([
   import("../src/database.js"),
 ]);
 
-const server = createServer(createApp({ frontendDist: false }));
-let baseUrl = "";
-
-before(async () => {
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
+const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+const baseUrl = server.url.origin;
 
 after(async () => {
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve()))
-  );
+  await server.stop(true);
 });
 
 describe("concurrent initial setup", () => {
   it("creates at most one administrator when setup requests race", async () => {
     const attempt = (username: string) =>
-      fetch(`${baseUrl}/api/auth/setup`, {
+      fetch(`${baseUrl}/api/v1/auth/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password: "race-test-password-1" }),

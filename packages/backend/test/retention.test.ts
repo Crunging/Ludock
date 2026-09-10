@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.AUDIT_LOG_MAX_ROWS = "1000";

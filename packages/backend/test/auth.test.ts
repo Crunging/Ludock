@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import type { IncomingMessage } from "node:http";
-import { describe, it } from "node:test";
-import type { Request } from "express";
+import { createHash } from "node:crypto";
+import { describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
@@ -9,6 +8,7 @@ process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
 const {
   SetupWindow,
   authenticateUser,
+  authenticateRequest,
   authenticateWsRequest,
   createInitialAdmin,
   createSession,
@@ -17,25 +17,35 @@ const {
   ludockApiToken,
   verifyPassword,
 } = await import("../src/auth.js");
+const { createSessionRecord, findSessionUser } = await import("../src/database.js");
 
 function websocketRequest(
-  headers: IncomingMessage["headers"],
+  headers: HeadersInit,
   url = "/ws/console/server"
-): IncomingMessage {
-  return {
-    headers,
-    socket: {},
-    url,
-  } as unknown as IncomingMessage;
+): Request {
+  const values = new Headers(headers);
+  return new Request(`http://${values.get("host") || "panel.example"}${url}`, { headers: values });
 }
 
 describe("account authentication", () => {
   it("hashes and verifies passwords without storing plaintext", async () => {
     const encoded = await hashPassword("a-long-test-password");
-    assert.match(encoded, /^scrypt\$32768\$8\$3\$/);
+    assert.match(encoded, /^\$argon2id\$v=19\$m=65536,t=2,p=1\$/);
     assert.equal(encoded.includes("a-long-test-password"), false);
     assert.equal(await verifyPassword("a-long-test-password", encoded), true);
     assert.equal(await verifyPassword("wrong-password", encoded), false);
+  });
+
+  it("fails closed for malformed stored hashes, including an empty decoded key", async () => {
+    const salt = Buffer.alloc(16, 1).toString("base64url");
+    const key = Buffer.alloc(64, 2).toString("base64url");
+    for (const encoded of [
+      `scrypt$32768$8$3$${salt}$!`,
+      `scrypt$32768$8$3$!$${key}`,
+      `scrypt$32769$8$3$${salt}$${key}`,
+      `scrypt$32768$8$3$${salt}$${key}$extra`,
+      `scrypt$32768$8$3$${salt}$${key.slice(1)}`,
+    ]) assert.equal(await verifyPassword("any-password", encoded), false);
   });
 
   it("locks initial setup when the startup window expires", async () => {
@@ -109,10 +119,16 @@ describe("account authentication", () => {
   it("requires same-origin WebSocket cookies and header-based API tokens", async () => {
     const user = await authenticateUser("admin", "a-long-test-password");
     assert.ok(user);
-    const session = createSession(user, {
-      ip: "127.0.0.1",
-      get: () => "test-agent",
-    } as unknown as Request);
+    const session = createSession(user, new Request("http://panel.example/", {
+      headers: { "User-Agent": "test-agent" },
+    }), "127.0.0.1");
+    assert.match(session.token, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(Buffer.from(session.token, "base64url").length, 32);
+    assert.equal(
+      findSessionUser(createHash("sha256").update(session.token).digest("hex"))?.id,
+      user.id,
+      "new sessions retain the existing SHA-256 storage format",
+    );
     const cookie = `ludock_session=${session.token}`;
 
     assert.ok(
@@ -164,6 +180,24 @@ describe("account authentication", () => {
         })
       )
     );
+  });
+
+  it("authenticates sessions stored before the native hashing conversion", async () => {
+    const user = await authenticateUser("admin", "a-long-test-password");
+    assert.ok(user);
+    const token = Buffer.alloc(32, 17).toString("base64url");
+    const now = Date.now();
+    createSessionRecord({
+      sessionId: crypto.randomUUID(),
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      userId: user.id,
+      createdAt: now,
+      expiresAt: now + 60_000,
+    });
+    const session = authenticateRequest(new Request("http://panel.example/", {
+      headers: { Cookie: `ludock_session=${token}` },
+    }));
+    assert.equal(session?.user.id, user.id);
   });
 
   it("ignores an API token below the strength floor", () => {

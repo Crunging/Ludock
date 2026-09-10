@@ -1,13 +1,19 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
+import { PASSWORD_MIN_LENGTH } from "@ludock/shared";
 import { useAuth } from "../auth-context";
+import LudockMark from "../components/LudockMark";
+import "./login.css";
 
 export default function Login() {
-  const { login, setup, setupRequired, setupLocked } = useAuth();
+  const { login, setup, setupRequired, setupLocked, refreshStatus } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [confirmationError, setConfirmationError] = useState(false);
+  const confirmationInput = useRef<HTMLInputElement>(null);
   const submitLabel = submitting
     ? setupRequired
       ? "Creating administrator..."
@@ -21,6 +27,8 @@ export default function Login() {
     if (!username.trim() || !password) return;
     if (setupRequired && password !== confirmation) {
       setError("Passwords do not match.");
+      setConfirmationError(true);
+      confirmationInput.current?.focus();
       return;
     }
 
@@ -42,7 +50,7 @@ export default function Login() {
     return (
       <main className="login-page">
         <section className="login-card" aria-labelledby="setup-expired-title">
-          <div className="sidebar__logo-icon login-card__logo">LU</div>
+          <LudockMark className="sidebar__logo-icon login-card__logo" />
           <h1 className="login-card__title" id="setup-expired-title">
             Setup window expired
           </h1>
@@ -50,6 +58,21 @@ export default function Login() {
             Restart the Ludock container, then return here within five
             minutes to create the administrator account.
           </p>
+          <button
+            className="login-card__submit"
+            type="button"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitting(true);
+              try {
+                await refreshStatus();
+              } finally {
+                setSubmitting(false);
+              }
+            }}
+          >
+            {submitting ? "Checking…" : "Check again"}
+          </button>
         </section>
       </main>
     );
@@ -58,13 +81,13 @@ export default function Login() {
   return (
     <main className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <div className="sidebar__logo-icon login-card__logo">LU</div>
+        <LudockMark className="sidebar__logo-icon login-card__logo" />
         <h1 className="login-card__title">
           {setupRequired ? "Set up Ludock" : "Sign in to Ludock"}
         </h1>
         <p className="login-card__description">
           {setupRequired
-            ? "Create the administrator account within five minutes of starting the panel."
+            ? "Create your administrator account to manage existing game servers. Setup stays open for five minutes after Ludock starts."
             : "Sign in with your Ludock account."}
         </p>
         <label className="login-card__label" htmlFor="username">
@@ -76,27 +99,45 @@ export default function Login() {
           value={username}
           onChange={(event) => setUsername(event.target.value)}
           autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
           minLength={3}
           maxLength={32}
+          pattern={setupRequired ? "[a-zA-Z0-9._\\-]+" : undefined}
+          aria-describedby={setupRequired ? "username-hint" : undefined}
           required
           autoFocus={!setupRequired}
         />
+        {setupRequired && (
+          <p className="login-card__hint" id="username-hint">
+            3–32 characters: letters, numbers, periods, hyphens, or underscores.
+          </p>
+        )}
         <label className="login-card__label" htmlFor="password">
           Password
         </label>
         <input
           id="password"
           className="login-card__input"
-          type="password"
+          type={showPassword ? "text" : "password"}
           value={password}
-          onChange={(event) => setPassword(event.target.value)}
+          onChange={(event) => {
+            setPassword(event.target.value);
+            if (confirmationError) {
+              setConfirmationError(false);
+              setError(null);
+            }
+          }}
           autoComplete={setupRequired ? "new-password" : "current-password"}
-          minLength={15}
+          minLength={PASSWORD_MIN_LENGTH}
           maxLength={128}
+          aria-describedby={setupRequired ? "password-hint" : undefined}
           required
         />
         {setupRequired && (
-          <div className="login-card__hint">Use at least 15 characters.</div>
+          <p className="login-card__hint" id="password-hint">
+            Use at least {PASSWORD_MIN_LENGTH} characters. A few words work well.
+          </p>
         )}
         {setupRequired && (
           <>
@@ -105,19 +146,36 @@ export default function Login() {
             </label>
             <input
               id="confirm-password"
+              ref={confirmationInput}
               className="login-card__input"
-              type="password"
+              type={showPassword ? "text" : "password"}
               value={confirmation}
-              onChange={(event) => setConfirmation(event.target.value)}
+              onChange={(event) => {
+                setConfirmation(event.target.value);
+                if (confirmationError) {
+                  setConfirmationError(false);
+                  setError(null);
+                }
+              }}
               autoComplete="new-password"
-              minLength={15}
+              minLength={PASSWORD_MIN_LENGTH}
               maxLength={128}
+              aria-invalid={confirmationError || undefined}
+              aria-describedby={confirmationError ? "login-error" : undefined}
               required
             />
           </>
         )}
+        <label className="login-card__visibility">
+          <input
+            type="checkbox"
+            checked={showPassword}
+            onChange={(event) => setShowPassword(event.target.checked)}
+          />
+          {setupRequired ? "Show passwords" : "Show password"}
+        </label>
         {error && (
-          <div className="login-card__error" role="alert">
+          <div className="login-card__error" id="login-error" role="alert">
             {error}
           </div>
         )}
@@ -133,6 +191,11 @@ export default function Login() {
         >
           {submitLabel}
         </button>
+        {!setupRequired && (
+          <p className="login-card__account-help">
+            Need an account or a password reset? Ask the person who runs this Ludock panel.
+          </p>
+        )}
       </form>
     </main>
   );

@@ -14,23 +14,65 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-
-      - name: Enable Corepack
-        run: corepack enable
+          bun-version-file: .bun-version
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      - name: Audit dependencies for vulnerabilities
+        run: bun audit --audit-level=high
 
       - name: Type-check, lint, test, and build
-        run: pnpm check
+        run: bun run check
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+
+      - name: Build frontend and shared contracts
+        run: |
+          bun run --filter @ludock/shared build
+          bun run --filter @ludock/frontend build
+
+      - name: Install Chromium
+        working-directory: packages/frontend
+        run: bun x --bun playwright install --with-deps chromium
+
+      - name: Check desktop and mobile browser workflows
+        run: bun run --filter @ludock/frontend test:e2e
+
+      - name: Retain browser failure details
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-failures
+          path: |
+            packages/frontend/test-results/
+            packages/frontend/playwright-report/
+          retention-days: 7
 
   workflows:
     name: Workflows
@@ -39,50 +81,62 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Lint workflows
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        uses: docker://rhysd/actionlint:latest
 
   container:
-    name: Container
-    runs-on: ubuntu-latest
+    name: Container (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build production image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          pull: true
+          platforms: ${{ matrix.platform }}
           push: false
           load: true
           tags: ludock:ci
-          cache-from: type=gha,scope=ci
-          cache-to: type=gha,mode=min,scope=ci
+          cache-from: type=gha,scope=ci-${{ runner.arch }}
+          cache-to: type=gha,mode=min,scope=ci-${{ runner.arch }}
 
       - name: Smoke-test the image
         shell: bash
         run: |
           set -euo pipefail
 
+          docker run --rm ludock:ci bun --version
+          docker run --rm ludock:ci docker --version
+          docker run --rm ludock:ci docker compose version
           docker run -d --name smoke -p 3000:3000 ludock:ci
-          trap 'docker rm -f smoke >/dev/null 2>&1 || true' EXIT
+          trap 'docker rm -fv smoke >/dev/null 2>&1 || true' EXIT
 
           # Without a Docker socket, "degraded" confirms the process is serving.
           for _ in $(seq 1 30); do
             body="$(curl --silent --show-error --max-time 2 \
-              http://localhost:3000/api/health || true)"
+              http://localhost:3000/api/v1/health || true)"
             if [[ -n "$body" ]]; then
               echo "Health response: $body"
               if [[ "$body" == '{"status":"degraded"}' ]]; then
@@ -92,9 +146,40 @@ jobs:
             sleep 2
           done
 
-          echo "::error::The image did not serve /api/health within 60s."
+          echo "::error::The image did not serve /api/v1/health within 60s."
           docker logs smoke
           exit 1
+
+      - name: Set up Bun for storage integration
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install test harness dependencies
+        run: |
+          bun install --frozen-lockfile
+
+      - name: Check Compose updates with disposable services
+        run: bun scripts/test-compose.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Check backend suites in the Linux production runtime
+        run: bun scripts/test-linux.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Check scoped file helpers with disposable data
+        run: |
+          docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
+          bun scripts/test-files.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+
+      - name: Check backup and restore recovery with disposable data
+        run: bun scripts/test-backups.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
 
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0

@@ -1,0 +1,14 @@
+.dashboard-empty-action {
+  margin-top: 20px;
+  min-height: 44px;
+}
+
+.dashboard-page .help-panel h3 {
+  margin-top: 18px;
+  font-size: 13px;
+}
+
+.dashboard-page .alert .text-link {
+  display: inline-block;
+  margin-top: 8px;
+}

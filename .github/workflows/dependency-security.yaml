@@ -1,0 +1,94 @@
+name: Dependency security
+
+on:
+  schedule:
+    - cron: "23 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dependency-security
+  cancel-in-progress: false
+
+jobs:
+  dependencies:
+    name: Package vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Audit dependencies for vulnerabilities
+        run: bun audit --audit-level=high
+
+  images:
+    name: Image vulnerabilities (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Select published and helper images
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repository="$(bun --print 'process.env.GITHUB_REPOSITORY.toLowerCase()')"
+          helper_image="$(bun --print '(await import("./packages/backend/src/runtime-images.ts")).DEFAULT_HELPER_IMAGE')"
+          {
+            echo "release=ghcr.io/${repository}:latest"
+            echo "helper=${helper_image}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Scan published release image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.images.outputs.release }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          timeout: 8m
+
+      - name: Scan helper image
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.images.outputs.helper }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          timeout: 8m

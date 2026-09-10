@@ -1,0 +1,79 @@
+.admin-form-help {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.admin-setup-help {
+  display: grid;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 850px;
+}
+
+.admin-setup-help ol {
+  padding-left: 20px;
+}
+
+.admin-setup-help li + li {
+  margin-top: 8px;
+}
+
+.admin-setup-help code {
+  overflow-wrap: anywhere;
+}
+
+.admin-setup-help a,
+.admin-settings-feedback a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-setup-help > button {
+  justify-self: start;
+}
+
+.admin-root-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-root-options button {
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+}
+
+.admin-root-list {
+  padding-left: 20px;
+}
+
+.admin-compose-guidance {
+  margin-bottom: 20px;
+}
+
+.admin-settings-feedback {
+  display: grid;
+  gap: 8px;
+}
+
+.grants-selection-summary {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.grants-editor .grants-presets {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 700px) {
+  .grants-editor .grants-presets button {
+    min-height: 44px;
+  }
+}

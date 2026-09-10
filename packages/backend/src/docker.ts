@@ -2,36 +2,45 @@ import Docker from "dockerode";
 import { docker } from "./docker-client.js";
 import {
   getGameConsoleAdapterSummary,
+  resolveGameConsoleAdapter,
   type GameConsoleAdapterId,
 } from "./game-console.js";
 import { getFileRoots, type FileRoot } from "./file-storage.js";
-import { inferGameType } from "./server-presets.js";
+import {
+  getGameCapabilities,
+  inferGameType,
+  type GameCapabilities,
+} from "./server-presets.js";
+import {
+  approvedConfigurationLabels,
+  composeIdentityLabels,
+  evaluateContainerEligibility,
+  hasInvalidComposeIdentity,
+  LABEL_ENABLE,
+  LABEL_NAME,
+  LABEL_GAME,
+} from "./discovery.js";
+import type { ServerObservation } from "./identity.js";
+import {
+  dockerContainerIdSchema,
+  type DockerContainerId,
+} from "@ludock/shared";
 
-export const LABEL_PREFIX = "ludock";
-
-const CONTAINER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
-const CONTAINER_ID_MAX_LENGTH = 128;
+export { LABEL_ENABLE, LABEL_NAME, LABEL_GAME } from "./discovery.js";
 
 // Keep untrusted identifiers from altering dockerode's Docker API request path.
-export function assertValidContainerId(id: unknown): string {
-  if (
-    typeof id !== "string" ||
-    id.length === 0 ||
-    id.length > CONTAINER_ID_MAX_LENGTH ||
-    !CONTAINER_ID_PATTERN.test(id)
-  ) {
+function assertValidContainerId(id: unknown): DockerContainerId {
+  const parsed = dockerContainerIdSchema.safeParse(id);
+  if (!parsed.success) {
     const error = new Error("Invalid container identifier");
     Object.assign(error, { statusCode: 400, code: "INVALID_CONTAINER_ID" });
     throw error;
   }
-  return id;
+  return parsed.data;
 }
-export const LABEL_ENABLE = `${LABEL_PREFIX}.enable`;
-export const LABEL_NAME = `${LABEL_PREFIX}.name`;
-export const LABEL_GAME = `${LABEL_PREFIX}.game`;
 
 export interface ManagedContainer {
-  id: string;
+  id: DockerContainerId;
   shortId: string;
   name: string;
   displayName: string;
@@ -39,6 +48,7 @@ export interface ManagedContainer {
   state: string;
   status: string;
   gameType: string;
+  capabilities?: GameCapabilities;
   gameConsole: {
     id: GameConsoleAdapterId;
     name: string;
@@ -51,35 +61,118 @@ export interface ManagedContainer {
 }
 
 export async function listManagedContainers(): Promise<ManagedContainer[]> {
-  const containers = await docker.listContainers({
-    all: true,
-    filters: {
-      label: [`${LABEL_ENABLE}=true`],
-    },
-  });
+  const containers = await docker.listContainers({ all: true });
+  return containers
+    .filter(
+      (container) =>
+        evaluateContainerEligibility(container.Image, container.Labels || {})
+          .eligible && !hasInvalidComposeIdentity(container.Labels || {}),
+    )
+    .map(toManagedContainer);
+}
 
-  return containers.map(toManagedContainer);
+export interface DiscoveryDiagnostic {
+  containerId: string;
+  name: string;
+  code: "INVALID_ENABLE_LABEL" | "INVALID_COMPOSE_IDENTITY";
+  message: string;
+}
+
+/** Administrator-only diagnostics. Never include the untrusted label value. */
+export async function getDiscoveryDiagnostics(): Promise<
+  DiscoveryDiagnostic[]
+> {
+  const containers = await docker.listContainers({ all: true });
+  return containers.flatMap((container): DiscoveryDiagnostic[] => {
+    const eligibility = evaluateContainerEligibility(
+      container.Image,
+      container.Labels || {},
+    );
+    const invalidLabel = eligibility.reason === "invalid-enable-label";
+    const invalidIdentity =
+      eligibility.eligible && hasInvalidComposeIdentity(container.Labels || {});
+    if (!invalidLabel && !invalidIdentity) return [];
+    return [
+      {
+        containerId: container.Id,
+        name: (container.Names[0] || "").replace(/^\//, ""),
+        code: invalidLabel
+          ? "INVALID_ENABLE_LABEL"
+          : "INVALID_COMPOSE_IDENTITY",
+        message: invalidLabel
+          ? "Container excluded: ludock.enable must be true or false (case-insensitive; surrounding spaces are allowed)."
+          : "Container excluded: Compose project, service, and replica number must form a complete identity. Correct the owning manager's metadata before managing this container.",
+      },
+    ];
+  });
 }
 
 export async function getManagedContainer(
-  id: string
+  id: DockerContainerId,
 ): Promise<ManagedContainer> {
+  return (await getManagedContainerObservation(id)).container;
+}
+
+export interface ManagedContainerObservation {
+  container: ManagedContainer;
+  observation: ServerObservation;
+}
+
+export async function listManagedContainerObservations(): Promise<
+  ManagedContainerObservation[]
+> {
+  const containers = await docker.listContainers({ all: true });
+  const observations: ManagedContainerObservation[] = [];
+  // Inspect in a bounded sequence: list state can race an external manager, and
+  // fingerprints must use current inspect data, not stale event attributes.
+  for (const container of containers) {
+    if (
+      !evaluateContainerEligibility(container.Image, container.Labels || {})
+        .eligible
+    )
+      continue;
+    try {
+      observations.push(
+        await getManagedContainerObservation(
+          assertValidContainerId(container.Id),
+        ),
+      );
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode;
+      if (
+        code === 404 ||
+        code === 403 ||
+        (error as { code?: string }).code === "INVALID_COMPOSE_IDENTITY"
+      )
+        continue;
+      throw error;
+    }
+  }
+  return observations;
+}
+
+export async function getManagedContainerObservation(
+  id: DockerContainerId,
+): Promise<ManagedContainerObservation> {
   const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
+  assertEligible(info);
+  const managed = toInspectedManagedContainer(info);
+  return {
+    container: managed,
+    observation: toServerObservation(info, managed),
+  };
+}
 
+function toInspectedManagedContainer(
+  info: Docker.ContainerInspectInfo,
+): ManagedContainer {
   const labels = info.Config.Labels || {};
-  if (labels[LABEL_ENABLE] !== "true") {
-    const error = new Error(`Container ${id} is not managed by Ludock`);
-    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
-    throw error;
-  }
-
   const managed = {
-    id: info.Id,
+    id: assertValidContainerId(info.Id),
     shortId: info.Id.substring(0, 12),
     name: info.Name.replace(/^\//, ""),
-    displayName:
-      labels[LABEL_NAME] || info.Name.replace(/^\//, ""),
+    displayName: labels[LABEL_NAME] || info.Name.replace(/^\//, ""),
     image: info.Config.Image,
     state: info.State.Status,
     status: `${info.State.Status}${info.State.Health ? ` (${info.State.Health.Status})` : ""}`,
@@ -88,28 +181,78 @@ export async function getManagedContainer(
       ([containerPort, bindings]) => {
         if (!bindings) return [];
         const [port, type] = containerPort.split("/");
-        return bindings.map((b) => ({
+        return bindings.map((binding) => ({
           private: parseInt(port, 10),
-          public: parseInt(b.HostPort, 10),
+          public: parseInt(binding.HostPort, 10),
           type: type || "tcp",
         }));
-      }
+      },
     ),
     created: new Date(info.Created).getTime(),
-    labels: ludockLabels(labels),
+    labels: approvedConfigurationLabels(labels),
   };
   return {
     ...managed,
+    capabilities: capabilitiesForContainer(managed),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, info.Mounts || []),
   };
 }
 
+/** Internal only: raw mounts/configuration are hashed by identity.ts, never serialized as server DTOs. */
+function toServerObservation(
+  info: Docker.ContainerInspectInfo,
+  server: ManagedContainer,
+): ServerObservation {
+  const labels = info.Config.Labels || {};
+  const compose = composeIdentityLabels(labels);
+  const adapter = resolveGameConsoleAdapter(server);
+  const credentialNames = new Set(adapter?.passwordEnvCandidates || []);
+  if (labels["ludock.console.password-env"])
+    credentialNames.add(labels["ludock.console.password-env"]);
+  const gameConfiguration = Object.fromEntries(
+    Object.entries(server.labels).filter(
+      ([key]) => key !== LABEL_ENABLE && key !== LABEL_NAME,
+    ),
+  );
+  for (const entry of info.Config.Env || []) {
+    const split = entry.indexOf("=");
+    if (split === -1) continue;
+    const key = entry.slice(0, split);
+    if (
+      credentialNames.has(key) ||
+      /password|passwd|secret|token|credential|rconpw/i.test(key) ||
+      key === "RCON_PORT" ||
+      key === "ENABLE_RCON"
+    )
+      gameConfiguration[`env:${key}`] = entry.slice(split + 1);
+  }
+  if (adapter?.id === "stdin-console") {
+    gameConfiguration["stdin:open"] = String(info.Config.OpenStdin);
+    gameConfiguration["stdin:once"] = String(info.Config.StdinOnce);
+  }
+  return {
+    containerId: assertValidContainerId(info.Id),
+    name: server.name,
+    displayName: server.displayName,
+    gameType: server.gameType,
+    ...(compose ? { compose } : {}),
+    mounts: (info.Mounts || []).map((mount) => ({
+      type: mount.Type,
+      source: mount.Source,
+      destination: mount.Destination,
+      writable: mount.RW,
+      ...(mount.Name ? { name: mount.Name } : {}),
+    })),
+    gameConfiguration,
+  };
+}
+
 export async function getContainerStats(
-  id: string
+  id: DockerContainerId,
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
-  const container = await getManagedDockerContainer(id);
-  const stats = (await container.stats({ stream: false }));
+  const { container } = await getManagedDockerContainer(id);
+  const stats = await container.stats({ stream: false });
 
   const cpuDelta =
     stats.cpu_stats.cpu_usage.total_usage -
@@ -130,18 +273,30 @@ export async function getContainerStats(
   };
 }
 
-export async function startContainer(id: string): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function startContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.start();
 }
 
-export async function stopContainer(id: string): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function stopContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.stop();
 }
 
-export async function restartContainer(id: string): Promise<void> {
-  const container = await getManagedDockerContainer(id);
+export async function restartContainer(
+  id: DockerContainerId,
+  assertAccess?: (observation: ServerObservation) => void,
+): Promise<void> {
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
   await container.restart();
 }
 
@@ -153,32 +308,26 @@ export async function checkDockerConnection(): Promise<void> {
   await docker.ping();
 }
 
-export function getContainer(id: string): Docker.Container {
+export function getContainer(id: DockerContainerId): Docker.Container {
   return docker.getContainer(assertValidContainerId(id));
 }
 
-async function getManagedDockerContainer(id: string): Promise<Docker.Container> {
+async function getManagedDockerContainer(
+  id: DockerContainerId,
+): Promise<{ container: Docker.Container; info: Docker.ContainerInspectInfo }> {
   const container = docker.getContainer(assertValidContainerId(id));
   const info = await container.inspect();
-  const labels = info.Config.Labels || {};
+  assertEligible(info);
 
-  if (labels[LABEL_ENABLE] !== "true") {
-    const error = new Error(`Container ${id} is not managed by Ludock`);
-    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
-    throw error;
-  }
-
-  return container;
+  return { container, info };
 }
 
-function toManagedContainer(
-  container: Docker.ContainerInfo
-): ManagedContainer {
+function toManagedContainer(container: Docker.ContainerInfo): ManagedContainer {
   const labels = container.Labels || {};
   const name = (container.Names[0] || "").replace(/^\//, "");
 
   const managed = {
-    id: container.Id,
+    id: assertValidContainerId(container.Id),
     shortId: container.Id.substring(0, 12),
     name,
     displayName: labels[LABEL_NAME] || name,
@@ -192,19 +341,54 @@ function toManagedContainer(
       type: p.Type || "tcp",
     })),
     created: container.Created * 1000,
-    labels: ludockLabels(labels),
+    labels: approvedConfigurationLabels(labels),
   };
   return {
     ...managed,
+    capabilities: capabilitiesForContainer(managed),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, container.Mounts || []),
   };
 }
 
-function ludockLabels(labels: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(labels).filter(([key]) =>
-      key.startsWith(`${LABEL_PREFIX}.`)
-    )
-  );
+function assertEligible(info: Docker.ContainerInspectInfo): void {
+  if (
+    !evaluateContainerEligibility(
+      info.Config.Image || "",
+      info.Config.Labels || {},
+    ).eligible
+  ) {
+    const error = new Error("Container is not managed by Ludock");
+    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
+    throw error;
+  }
+  if (hasInvalidComposeIdentity(info.Config.Labels || {})) {
+    const error = new Error(
+      "Container Compose identity is incomplete; administrator review required",
+    );
+    Object.assign(error, { statusCode: 409, code: "INVALID_COMPOSE_IDENTITY" });
+    throw error;
+  }
+}
+
+function capabilitiesForContainer(
+  server: Pick<ManagedContainer, "gameType" | "image" | "labels">,
+): GameCapabilities {
+  const capabilities = getGameCapabilities(server.gameType);
+  // An explicit game override does not turn an unknown image into a recognized repository.
+  capabilities.recognition = getGameCapabilities(
+    inferGameType(server.image),
+  ).recognition;
+  const configured = server.labels["ludock.console"]?.trim().toLowerCase();
+  if (configured) {
+    const adapter = resolveGameConsoleAdapter(server);
+    capabilities.console = {
+      status: adapter ? "conditional" : "unsupported",
+      description: adapter
+        ? "An explicit console adapter is configured. Its protocol, address, port, and credentials must be validated independently for this image."
+        : "Console access is disabled for this container.",
+      evidence: ["test/game-console.test.ts"],
+    };
+  }
+  return capabilities;
 }

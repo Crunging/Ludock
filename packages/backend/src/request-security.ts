@@ -1,6 +1,4 @@
-import type { IncomingMessage } from "node:http";
-
-type RequestMetadata = Pick<IncomingMessage, "headers" | "socket">;
+type RequestMetadata = Pick<Request, "headers" | "url">;
 
 export function isExternalHttpsRequest(request: RequestMetadata): boolean {
   return externalProtocols(request).includes("https:");
@@ -10,7 +8,7 @@ export function isSameOriginRequest(request: RequestMetadata): boolean {
   const origin = parseRequestOrigin(request);
   if (!origin) return false;
 
-  const fetchSite = headerValue(request.headers["sec-fetch-site"])
+  const fetchSite = (request.headers.get("sec-fetch-site") || "")
     .trim()
     .toLowerCase();
   if (fetchSite === "same-origin") return true;
@@ -36,26 +34,23 @@ export function requestOriginDiagnostic(request: RequestMetadata): {
   return {
     originHost: origin?.host || "missing-or-invalid",
     originProtocol: origin?.protocol || "missing-or-invalid",
-    host: request.headers.host || "missing",
+    host: (request.headers.get("host") || new URL(request.url).host) || "missing",
     forwardedHost:
-      headerValue(request.headers["x-forwarded-host"]) || "missing",
+      (request.headers.get("x-forwarded-host") || "") || "missing",
     forwardedProtocol:
-      headerValue(request.headers["x-forwarded-proto"]) || "missing",
-    fetchSite: headerValue(request.headers["sec-fetch-site"]) || "missing",
+      (request.headers.get("x-forwarded-proto") || "") || "missing",
+    fetchSite: (request.headers.get("sec-fetch-site") || "") || "missing",
     resolvedHosts: externalHosts(request).join(",") || "none",
     resolvedProtocols: externalProtocols(request).join(",") || "none",
   };
 }
 
 function externalProtocols(request: RequestMetadata): string[] {
-  if (
-    (request.socket as IncomingMessage["socket"] & { encrypted?: boolean })
-      .encrypted
-  ) {
+  if (new URL(request.url).protocol === "https:") {
     return ["https:"];
   }
 
-  const forwarded = forwardedValues(request.headers["x-forwarded-proto"])
+  const forwarded = forwardedValues(request.headers.get("x-forwarded-proto"))
     .map((value) => value.toLowerCase())
     .flatMap((value) => {
       if (value === "https" || value === "wss") return ["https:"];
@@ -66,7 +61,7 @@ function externalProtocols(request: RequestMetadata): string[] {
 }
 
 function parseRequestOrigin(request: RequestMetadata): URL | null {
-  const value = request.headers.origin;
+  const value = request.headers.get("origin");
   if (!value) return null;
 
   try {
@@ -90,13 +85,13 @@ function parseRequestOrigin(request: RequestMetadata): URL | null {
 function externalHosts(request: RequestMetadata): string[] {
   const protocols = externalProtocols(request);
   const forwardedHosts = forwardedValues(
-    request.headers["x-forwarded-host"]
+    request.headers.get("x-forwarded-host")
   );
   const forwardedPorts = forwardedValues(
-    request.headers["x-forwarded-port"]
+    request.headers.get("x-forwarded-port")
   ).filter(isPort);
   const rawHosts = [
-    request.headers.host,
+    (request.headers.get("host") || new URL(request.url).host),
     ...forwardedHosts,
     ...forwardedHosts.flatMap((host) =>
       hostHasPort(host)
@@ -118,15 +113,15 @@ function externalHosts(request: RequestMetadata): string[] {
   return [...new Set(hosts)];
 }
 
-function forwardedValues(value: string | string[] | undefined): string[] {
+function forwardedValues(value: string | null): string[] {
   return headerValue(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function headerValue(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value.join(",") : value || "";
+function headerValue(value: string | null): string {
+  return value || "";
 }
 
 function hostHasPort(host: string): boolean {

@@ -1,0 +1,33 @@
+.lifecycle-confirmation {
+  width: min(440px, calc(100% - 32px));
+  margin: auto;
+  padding: 24px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lifecycle-confirmation::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+.lifecycle-confirmation h2 {
+  margin-bottom: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.lifecycle-confirmation p {
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.lifecycle-confirmation__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}

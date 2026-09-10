@@ -1,5 +1,6 @@
 import type Docker from "dockerode";
 import type { ManagedContainer } from "./docker.js";
+import { getGameIntegration } from "./server-presets.js";
 
 export const LABEL_CONSOLE = "ludock.console";
 export const LABEL_CONSOLE_PORT = "ludock.console.port";
@@ -92,124 +93,14 @@ const ADAPTERS: Record<GameConsoleAdapterId, GameConsoleAdapter> = {
   "stdin-console": stdinConsoleAdapter,
 };
 
-interface GamePreset {
-  adapter: GameConsoleAdapterId;
-  name?: string;
-  placeholder?: string;
-  defaultPort?: number;
-  passwordEnvCandidates?: readonly string[];
-}
-
-const GAME_PRESETS: Record<string, GamePreset> = {
-  minecraft: { adapter: "minecraft-rcon" },
-  factorio: {
-    adapter: "source-rcon",
-    name: "Factorio RCON",
-    defaultPort: 27015,
-    placeholder: "/players, /server-save, /config get",
-  },
-  palworld: {
-    adapter: "source-rcon",
-    name: "Palworld RCON",
-    defaultPort: 25575,
-    placeholder: "Info, ShowPlayers, Broadcast Hello",
-  },
-  ark: {
-    adapter: "source-rcon",
-    name: "ARK RCON",
-    defaultPort: 27020,
-    placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
-  },
-  "ark-survival-evolved": {
-    adapter: "source-rcon",
-    name: "ARK RCON",
-    defaultPort: 27020,
-    placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
-  },
-  "ark-survival-ascended": {
-    adapter: "source-rcon",
-    name: "ARK RCON",
-    defaultPort: 27020,
-    placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
-  },
-  asa: {
-    adapter: "source-rcon",
-    name: "ARK RCON",
-    defaultPort: 27020,
-    placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
-  },
-  cs2: {
-    adapter: "source-rcon",
-    name: "Source RCON",
-    defaultPort: 27015,
-    placeholder: "status, changelevel de_dust2, say Hello",
-    passwordEnvCandidates: ["CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"],
-  },
-  csgo: {
-    adapter: "source-rcon",
-    name: "Source RCON",
-    defaultPort: 27015,
-    placeholder: "status, changelevel de_dust2, say Hello",
-  },
-  "counter-strike-2": {
-    adapter: "source-rcon",
-    name: "Source RCON",
-    defaultPort: 27015,
-    placeholder: "status, changelevel de_dust2, say Hello",
-  },
-  "project-zomboid": {
-    adapter: "source-rcon",
-    name: "Project Zomboid RCON",
-    defaultPort: 27015,
-    placeholder: "players, save, servermsg Hello",
-  },
-  projectzomboid: {
-    adapter: "source-rcon",
-    name: "Project Zomboid RCON",
-    defaultPort: 27015,
-    placeholder: "players, save, servermsg Hello",
-  },
-  "conan-exiles": {
-    adapter: "source-rcon",
-    name: "Conan Exiles RCON",
-    defaultPort: 25575,
-  },
-  "v-rising": {
-    adapter: "source-rcon",
-    name: "V Rising RCON",
-    defaultPort: 25575,
-  },
-  rust: {
-    adapter: "rust-webrcon",
-    passwordEnvCandidates: ["RUST_RCON_PASSWORD", "RCON_PASSWORD"],
-  },
-  terraria: {
-    adapter: "stdin-console",
-    name: "Terraria console",
-    placeholder: "playing, save, say Hello",
-  },
-  "7-days-to-die": {
-    adapter: "telnet-console",
-    name: "7 Days to Die Telnet",
-    defaultPort: 8081,
-    placeholder: "listplayers, saveworld, say Hello",
-  },
-  "7dtd": {
-    adapter: "telnet-console",
-    name: "7 Days to Die Telnet",
-    defaultPort: 8081,
-    placeholder: "listplayers, saveworld, say Hello",
-  },
-};
-
 export function resolveGameConsoleAdapter(
-  server: Pick<ManagedContainer, "gameType" | "labels">
+  server: Pick<ManagedContainer, "gameType" | "labels">,
 ): GameConsoleAdapter | null {
   const configured = server.labels[LABEL_CONSOLE]?.trim().toLowerCase();
   if (configured === "disabled" || configured === "none") return null;
   if (configured && isAdapterId(configured)) return ADAPTERS[configured];
 
-  const preset = GAME_PRESETS[normalizeGameType(server.gameType)];
+  const preset = getGameIntegration(server.gameType)?.console;
   if (!preset) return null;
   const adapter = ADAPTERS[preset.adapter];
   return {
@@ -223,8 +114,12 @@ export function resolveGameConsoleAdapter(
 }
 
 export function getGameConsoleAdapterSummary(
-  server: Pick<ManagedContainer, "gameType" | "labels">
-): { id: GameConsoleAdapterId; name: string; commandPlaceholder: string } | null {
+  server: Pick<ManagedContainer, "gameType" | "labels">,
+): {
+  id: GameConsoleAdapterId;
+  name: string;
+  commandPlaceholder: string;
+} | null {
   const adapter = resolveGameConsoleAdapter(server);
   return adapter
     ? {
@@ -233,10 +128,6 @@ export function getGameConsoleAdapterSummary(
         commandPlaceholder: adapter.commandPlaceholder,
       }
     : null;
-}
-
-function normalizeGameType(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
 function isAdapterId(value: string): value is GameConsoleAdapterId {

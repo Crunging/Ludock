@@ -1,38 +1,51 @@
-import type { IncomingMessage } from "node:http";
-import type { WebSocket } from "ws";
+import { StringDecoder } from "node:string_decoder";
+import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
-import { getContainer, getManagedContainer } from "./docker.js";
-import { createLogger, errorMessage } from "./logger.js";
+import { getContainer } from "./docker.js";
+import { createLogger } from "./logger.js";
+import { authorizeServerSocket } from "./server-socket-access.js";
+import {
+  ConsoleOutputRedactor,
+  observationSecrets,
+} from "./console-redaction.js";
 
 const logger = createLogger("container-logs");
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export async function handleContainerLogsConnection(
-  ws: WebSocket,
-  req: IncomingMessage,
-  auth: WebSocketAuth
+  ws: SocketChannel,
+  req: Request,
+  auth: WebSocketAuth,
+  remoteAddress?: string,
 ): Promise<void> {
-  const url = new URL(req.url || "", `http://${req.headers.host}`);
-  const containerId = url.pathname.split("/").filter(Boolean).at(-1);
-  if (!containerId) {
-    sendMessage(ws, "error", "Missing container ID");
-    ws.close(1008, "Missing container ID");
+  const url = new URL(req.url);
+  const serverId = url.pathname.split("/").filter(Boolean).at(-1);
+  if (!serverId) {
+    sendMessage(ws, "error", "Missing server ID");
+    ws.close(1008, "Missing server ID");
     return;
   }
-
+  let access;
   try {
-    await getManagedContainer(containerId);
-  } catch (error) {
-    logger.warn("Rejected log connection for unmanaged container", {
-      container: shortContainerId(containerId),
-      error: errorMessage(error),
-    });
-    sendMessage(ws, "error", `Container ${containerId} is not managed`);
-    ws.close(1008, "Container not managed");
+    access = await authorizeServerSocket(ws, auth, serverId, "logs.read");
+  } catch {
+    sendMessage(
+      ws,
+      "error",
+      "Server logs are unavailable or access was denied",
+    );
+    ws.close(1008, "Server access unavailable");
     return;
   }
-
+  if (!access.allowed()) return;
+  const containerId = access.context.logical.containerId;
+  const send = (
+    type: "stdout" | "stderr" | "system" | "error",
+    data: string,
+  ) => {
+    if (access.allowed()) sendMessage(ws, type, data);
+  };
   const user = auth.user;
   const container = getContainer(containerId);
   logger.info("Docker log connection opened", {
@@ -41,21 +54,34 @@ export async function handleContainerLogsConnection(
   });
   writeAuditLog({
     userId: user.id === "api-token" ? undefined : user.id,
-    action: "container.logs.opened",
-    targetType: "container",
-    targetId: containerId,
-    ipAddress: req.socket.remoteAddress,
+    action: "server.logs.opened",
+    targetType: "server",
+    targetId: serverId,
+    details: {
+      containerId,
+      bindingRevision: access.context.logical.bindingRevision,
+    },
+    ipAddress: remoteAddress,
   });
-  sendMessage(
-    ws,
-    "system",
-    `Following Docker logs for ${shortContainerId(containerId)}`
-  );
+  send("system", "Following Docker logs");
 
   let logStream: NodeJS.ReadableStream | null = null;
-  const decoder = new DockerLogDecoder((type, data) =>
-    sendMessage(ws, type, data)
+  const secrets = observationSecrets(access.context.observation);
+  const stdout = new ConsoleOutputRedactor(secrets, (value) =>
+    send("stdout", value),
   );
+  const stderr = new ConsoleOutputRedactor(secrets, (value) =>
+    send("stderr", value),
+  );
+  const decoder = new DockerLogDecoder((type, data) =>
+    (type === "stdout" ? stdout : stderr).push(data),
+  );
+  const destroyLogStream = () => {
+    if (!logStream) return;
+    (logStream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+    logStream = null;
+  };
+  ws.onClose(destroyLogStream);
   try {
     const stream = await container.logs({
       follow: true,
@@ -65,13 +91,16 @@ export async function handleContainerLogsConnection(
       timestamps: true,
     });
     logStream = stream;
+    if (!access.allowed()) {
+      destroyLogStream();
+      return;
+    }
     stream.on("data", (chunk: Buffer) => decoder.push(chunk));
-    stream.on("error", (error: Error) => {
+    stream.on("error", () => {
       logger.warn("Docker log stream failed", {
         container: shortContainerId(containerId),
-        error: error.message,
       });
-      sendMessage(ws, "error", "Docker log stream failed");
+      send("error", "Docker log stream failed");
     });
     stream.on("end", () => {
       if (!decoder.end()) {
@@ -79,59 +108,46 @@ export async function handleContainerLogsConnection(
           container: shortContainerId(containerId),
         });
       }
-      sendMessage(ws, "system", "Log stream ended (container may have stopped)");
+      stdout.end();
+      stderr.end();
+      send("system", "Log stream ended (container may have stopped)");
     });
-  } catch (error) {
+  } catch {
     logger.warn("Failed to attach Docker log stream", {
       container: shortContainerId(containerId),
-      error: errorMessage(error),
     });
-    sendMessage(ws, "error", "Failed to open Docker logs");
+    send("error", "Failed to open Docker logs");
   }
 
-  ws.on("message", () => {
-    const currentUser = auth.validate();
-    if (!currentUser) {
-      ws.close(1008, "Session expired or access revoked");
-      return;
-    }
-    auth.user = currentUser;
-    sendMessage(ws, "error", "Docker logs are read-only");
+  ws.onMessage(() => {
+    send("error", "Docker logs are read-only");
   });
-
-  const destroyLogStream = () => {
-    if (!logStream) return;
-    (logStream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
-    logStream = null;
-  };
-  ws.on("close", (code) => {
+  ws.onClose((code) => {
     logger.info("Docker log connection closed", {
       container: shortContainerId(containerId),
       code,
     });
     destroyLogStream();
   });
-  ws.on("error", (error) => {
-    logger.warn("Docker log WebSocket failed", {
-      container: shortContainerId(containerId),
-      error: error.message,
-    });
-    destroyLogStream();
-  });
+
 }
 
 export class DockerLogDecoder {
   private mode: "unknown" | "raw" | "multiplexed" = "unknown";
   private buffer = Buffer.alloc(0);
+  private readonly text = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
 
   constructor(
-    private readonly output: (type: "stdout" | "stderr", data: string) => void
+    private readonly output: (type: "stdout" | "stderr", data: string) => void,
   ) {}
 
   push(chunk: Buffer): void {
     if (chunk.length === 0) return;
     if (this.mode === "raw") {
-      this.output("stdout", chunk.toString());
+      this.write("stdout", chunk);
       return;
     }
 
@@ -169,7 +185,7 @@ export class DockerLogDecoder {
       }
       if (this.buffer.length < 8 + frameSize) return;
       const payload = this.buffer.subarray(8, 8 + frameSize);
-      this.output(streamType === 2 ? "stderr" : "stdout", payload.toString());
+      this.write(streamType === 2 ? "stderr" : "stdout", payload);
       this.buffer = this.buffer.subarray(8 + frameSize);
     }
   }
@@ -178,24 +194,33 @@ export class DockerLogDecoder {
     if (this.mode === "unknown" && this.buffer.length > 0) {
       this.useRawMode();
     }
+    for (const type of ["stdout", "stderr"] as const) {
+      const final = this.text[type].end();
+      if (final) this.output(type, final);
+    }
     return this.buffer.length === 0;
+  }
+
+  private write(type: "stdout" | "stderr", chunk: Buffer): void {
+    const value = this.text[type].write(chunk);
+    if (value) this.output(type, value);
   }
 
   private useRawMode(): void {
     this.mode = "raw";
     if (this.buffer.length > 0) {
-      this.output("stdout", this.buffer.toString());
+      this.write("stdout", this.buffer);
       this.buffer = Buffer.alloc(0);
     }
   }
 }
 
 function sendMessage(
-  ws: WebSocket,
+  ws: SocketChannel,
   type: "stdout" | "stderr" | "system" | "error",
-  data: string
+  data: string,
 ): void {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data }));
+  if (ws.isOpen) ws.send(JSON.stringify({ type, data }));
 }
 
 function shortContainerId(containerId: string): string {

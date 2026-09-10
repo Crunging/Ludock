@@ -1,61 +1,113 @@
-import { useCallback, useEffect, useState } from "react";
-import type { ManagedContainer, ContainerEvent } from "../types";
-import { useWebSocket } from "./useWebSocket";
-import { apiFetch, authenticatedWebSocketUrl } from "../api";
+import { serversResponseSchema, serverEventSchema } from "@ludock/shared";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ManagedContainer } from "../types";
+import { useWebSocket, type ConnectionStatus } from "./useWebSocket";
+import { ApiRequestError, apiJson, authenticatedWebSocketUrl } from "../api";
+import { useAuth } from "../auth-context";
 
 interface UseServersResult {
   servers: ManagedContainer[];
   loading: boolean;
   error: string | null;
-  refresh: () => void;
+  stale: boolean;
+  lastUpdated: number | null;
+  connectionStatus: ConnectionStatus;
+  connectionError: string | null;
+  accessDenied: boolean;
+  canRetry: boolean;
+  retry: () => void;
+  refresh: () => Promise<void>;
+}
+
+interface Snapshot {
+  actor: string;
+  servers: ManagedContainer[];
+  lastUpdated: number | null;
+  loading: boolean;
+  error: string | null;
 }
 
 export function useServers(): UseServersResult {
-  const [servers, setServers] = useState<ManagedContainer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  const actor = `${user?.id || ""}:${user?.role || ""}`;
+  const [snapshot, setSnapshot] = useState<Snapshot>({
+    actor, servers: [], lastUpdated: null, loading: true, error: null,
+  });
+  const requestRef = useRef<AbortController | null>(null);
+  const activeRef = useRef(false);
 
   const fetchServers = useCallback(async () => {
+    if (!activeRef.current) return;
+    requestRef.current?.abort();
+    const request = new AbortController();
+    requestRef.current = request;
+    setSnapshot((previous) => ({
+      ...(previous.actor === actor ? previous : { actor, servers: [], lastUpdated: null }),
+      loading: true,
+      error: null,
+    }));
     try {
-      setLoading(true);
-      setError(null);
-      const response = await apiFetch("/api/servers");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      setServers(body.servers);
+      const body = await apiJson("/servers", serversResponseSchema, { signal: request.signal });
+      if (requestRef.current !== request || request.signal.aborted || !activeRef.current) return;
+      setSnapshot({ actor, servers: body.servers, lastUpdated: Date.now(), loading: false, error: null });
     } catch (error: unknown) {
-      setError(
-        error instanceof Error ? error.message : "Failed to fetch servers"
-      );
-    } finally {
-      setLoading(false);
+      if (requestRef.current !== request || request.signal.aborted || !activeRef.current) return;
+      // Only transient transport/server failures may keep an explicitly stale
+      // snapshot. Authorization and contract failures must clear its contents.
+      const transient = !(error instanceof ApiRequestError) || error.status >= 500;
+      setSnapshot((previous) => ({
+        actor,
+        servers: transient && previous.actor === actor ? previous.servers : [],
+        lastUpdated: transient && previous.actor === actor ? previous.lastUpdated : null,
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to fetch servers",
+      }));
     }
-  }, []);
+  }, [actor]);
 
-  const handleEvent = useCallback(
-    (raw: string) => {
-      try {
-        const event: ContainerEvent = JSON.parse(raw);
-        if (event.type === "container_event") {
-          fetchServers();
-        }
-      } catch {
-        return;
-      }
-    },
-    [fetchServers]
-  );
+  const handleEvent = useCallback((raw: string) => {
+    try {
+      const event = serverEventSchema.parse(JSON.parse(raw));
+      if (event.type === "container_event") void fetchServers();
+    } catch { /* Malformed events never invalidate a verified snapshot. */ }
+  }, [fetchServers]);
 
-  const wsUrl = authenticatedWebSocketUrl("/ws/events");
-
-  useWebSocket({
-    url: wsUrl,
+  const { status, error: connectionError, retry, canRetry, accessDenied } = useWebSocket({
+    url: authenticatedWebSocketUrl("/ws/v1/events"),
     onMessage: handleEvent,
+    // Events during a disconnect are not replayed. Every connection needs a
+    // fresh authorized snapshot, including the first connection after mount.
+    onOpen: fetchServers,
   });
 
   useEffect(() => {
-    fetchServers();
+    activeRef.current = true;
+    void fetchServers();
+    return () => {
+      activeRef.current = false;
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
   }, [fetchServers]);
 
-  return { servers, loading, error, refresh: fetchServers };
+  useEffect(() => {
+    // A policy close may mean session expiry or revoked access. Hide cached
+    // data immediately and let the HTTP response revalidate authentication.
+    if (accessDenied) void fetchServers();
+  }, [accessDenied, fetchServers]);
+
+  const currentActor = snapshot.actor === actor && !accessDenied;
+  return {
+    servers: currentActor ? snapshot.servers : [],
+    loading: snapshot.actor !== actor || snapshot.loading,
+    error: currentActor ? snapshot.error : null,
+    lastUpdated: currentActor ? snapshot.lastUpdated : null,
+    stale: !currentActor || snapshot.lastUpdated === null || Boolean(snapshot.error) || status !== "connected",
+    connectionStatus: status,
+    connectionError,
+    accessDenied,
+    canRetry,
+    retry,
+    refresh: fetchServers,
+  };
 }

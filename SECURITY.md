@@ -19,6 +19,10 @@ and include:
 ## Deployment boundary
 
 Docker socket access grants host-level power. Only deploy this panel on a
-trusted Docker host, opt in containers deliberately, and use an HTTPS reverse
-proxy for remote access. See the [README](./README.md#security) for deployment
+trusted Docker host and use an HTTPS reverse proxy for remote access. Recognized
+game images are enrolled automatically unless opted out; image recognition is
+not proof of provenance. Administrators see eligible servers immediately, while
+other users require explicit per-server/action grants. Approve narrow Compose
+and backup roots, and keep registry and webhook credentials out of exposed game
+file roots. See the [README](./README.md#security) for deployment
 guidance.

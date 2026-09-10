@@ -1,18 +1,12 @@
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  scrypt,
-  timingSafeEqual,
-} from "node:crypto";
-import type { IncomingMessage } from "node:http";
-import type { Request, Response, NextFunction } from "express";
+import { timingSafeEqual } from "node:crypto";
+import { Cookie } from "bun";
 import {
   countUsers,
   createSessionRecord,
   createUser,
   deleteSessionRecord,
   findSessionUser,
+  findUserById,
   findUserByUsername,
   upgradeUserPasswordHash,
   writeAuditLog,
@@ -24,14 +18,15 @@ import {
   requestOriginDiagnostic,
 } from "./request-security.js";
 import { createLogger } from "./logger.js";
+import { hashPassword, verifyPassword, passwordHashNeedsUpgrade } from "./password.js";
+export { hashPassword, verifyPassword } from "./password.js";
 
-const SESSION_COOKIE = "ludock_session";
+import { developmentInstance } from "./development-instance.js";
+const SESSION_COOKIE = developmentInstance
+  ? `ludock_session_${developmentInstance}`
+  : "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MIN_API_TOKEN_LENGTH = 32;
-const SCRYPT_N = 32768;
-const SCRYPT_R = 8;
-const SCRYPT_P = 3;
-const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;
 const logger = createLogger("auth");
 
@@ -75,7 +70,7 @@ export class SetupWindow {
 
   constructor(
     private readonly now: () => number = Date.now,
-    durationMs = SETUP_WINDOW_MS
+    durationMs = SETUP_WINDOW_MS,
   ) {
     this.expiresAt = now() + durationMs;
   }
@@ -105,7 +100,7 @@ export function isSetupRequired(): boolean {
 }
 
 export function logSetupInstructions(
-  setupWindow: SetupWindow = defaultSetupWindow
+  setupWindow: SetupWindow = defaultSetupWindow,
 ): void {
   if (!isSetupRequired()) return;
 
@@ -116,82 +111,19 @@ export function logSetupInstructions(
   });
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16);
-  const key = await derivePassword(password, salt, 64, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-    maxmem: SCRYPT_MAX_MEMORY,
-  });
-
-  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
-}
-
-export async function verifyPassword(
-  password: string,
-  encoded: string
-): Promise<boolean> {
-  const [algorithm, n, r, p, saltValue, keyValue] = encoded.split("$");
-  if (
-    algorithm !== "scrypt" ||
-    !n ||
-    !r ||
-    !p ||
-    !saltValue ||
-    !keyValue
-  ) {
-    return false;
-  }
-
-  const expected = Buffer.from(keyValue, "base64url");
-  const options = {
-    N: Number(n),
-    r: Number(r),
-    p: Number(p),
-  };
-  if (
-    !Number.isInteger(options.N) ||
-    !Number.isInteger(options.r) ||
-    !Number.isInteger(options.p) ||
-    options.N < 2 ||
-    options.N > 131072 ||
-    options.r < 1 ||
-    options.r > 16 ||
-    options.p < 1 ||
-    options.p > 10
-  ) {
-    return false;
-  }
-  const actual = await derivePassword(
-    password,
-    Buffer.from(saltValue, "base64url"),
-    expected.length,
-    {
-      ...options,
-      maxmem: Math.max(
-        SCRYPT_MAX_MEMORY,
-        128 * options.N * options.r + 16 * 1024 * 1024
-      ),
-    }
-  );
-
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
 export async function createInitialAdmin(
   input: {
     username: string;
     password: string;
     ipAddress?: string;
   },
-  setupWindow: SetupWindow = defaultSetupWindow
+  setupWindow: SetupWindow = defaultSetupWindow,
 ): Promise<SessionUser> {
   setupWindow.assertOpen();
 
   const now = Date.now();
   const user: SessionUser = {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     username: input.username,
     role: "admin",
   };
@@ -215,7 +147,7 @@ export async function createInitialAdmin(
 
 export async function authenticateUser(
   username: string,
-  password: string
+  password: string,
 ): Promise<SessionUser | null> {
   const record = findUserByUsername(username);
   if (!record || record.disabled) {
@@ -223,58 +155,71 @@ export async function authenticateUser(
     return null;
   }
   if (!(await verifyPassword(password, record.passwordHash))) return null;
-  if (passwordHashNeedsUpgrade(record.passwordHash)) {
-    upgradeUserPasswordHash(record.id, await hashPassword(password));
-  }
+  const upgradedHash = passwordHashNeedsUpgrade(record.passwordHash)
+    ? await hashPassword(password)
+    : undefined;
+  // Password verification and upgrades yield to other requests. A reset or
+  // disabled account must invalidate the credentials that were just checked.
+  const current = findUserById(record.id);
+  if (
+    !current || current.disabled || current.passwordHash !== record.passwordHash
+  )
+    return null;
+  if (upgradedHash) upgradeUserPasswordHash(current.id, upgradedHash);
 
-  return { id: record.id, username: record.username, role: record.role };
+  return { id: current.id, username: current.username, role: current.role };
 }
 
 export function createSession(
   user: SessionUser,
-  request: Request
+  request: Request,
+  ipAddress?: string,
 ): { token: string; expiresAt: number } {
-  const token = randomBytes(32).toString("base64url");
+  const token = crypto.getRandomValues(Buffer.alloc(32)).toString("base64url");
   const now = Date.now();
   const expiresAt = now + SESSION_TTL_MS;
   createSessionRecord({
-    sessionId: randomUUID(),
+    sessionId: crypto.randomUUID(),
     tokenHash: hashToken(token),
     userId: user.id,
     createdAt: now,
     expiresAt,
-    ipAddress: request.ip,
-    userAgent: request.get("user-agent"),
+    ipAddress,
+    userAgent: request.headers.get("user-agent") || undefined,
   });
   return { token, expiresAt };
 }
 
 export function setSessionCookie(
-  response: Response,
+  headers: Headers,
   request: Request,
-  token: string
+  token: string,
 ): void {
-  response.cookie(SESSION_COOKIE, token, {
+  const cookie = new Cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "strict",
     secure: isExternalHttpsRequest(request),
     path: "/",
-    maxAge: SESSION_TTL_MS,
+    maxAge: SESSION_TTL_MS / 1000,
   });
+  headers.append("Set-Cookie", cookie.toString());
 }
 
-export function clearSessionCookie(response: Response): void {
-  response.clearCookie(SESSION_COOKIE, {
+export function clearSessionCookie(headers: Headers): void {
+  const cookie = new Cookie(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "strict",
     path: "/",
+    maxAge: 0,
+    expires: new Date(0),
   });
+  headers.append("Set-Cookie", cookie.toString());
 }
 
 export function getRequestSession(
-  request: Pick<IncomingMessage, "headers">
+  request: Pick<Request, "headers">,
 ): { token: string; tokenHash: string; user: SessionUser } | null {
-  const token = cookieValue(request.headers.cookie || "", SESSION_COOKIE);
+  const token = cookieValue(request.headers.get("cookie") || "", SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = hashToken(token);
   const user = findSessionUser(tokenHash, Date.now());
@@ -286,47 +231,43 @@ export function deleteRequestSession(request: Request): void {
   if (session) deleteSessionRecord(session.tokenHash);
 }
 
-export function authMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const session = getRequestSession(req);
+/** Recheck the exact request principal after asynchronous preparation and
+ * immediately before dispatching an action. Account state alone cannot detect
+ * an explicitly revoked session or a password reset. */
+export function assertRequestUser(
+  request: Request,
+  expected: SessionUser,
+): SessionUser {
+  if (expected.id === "api-token") {
+    const token = ludockApiToken();
+    const candidate = bearerToken(request.headers.get("authorization"));
+    if (token && candidate && tokensMatch(candidate, token)) return expected;
+  } else {
+    const session = getRequestSession(request);
+    if (session?.user.id === expected.id) return session.user;
+  }
+  throw new AuthError("AUTHENTICATION_REQUIRED", 401, "Authentication required");
+}
+
+export function authenticateRequest(
+  request: Request,
+): { user: SessionUser; sessionTokenHash?: string } | null {
+  const session = getRequestSession(request);
   if (session) {
-    res.locals.user = session.user;
-    res.locals.sessionTokenHash = session.tokenHash;
-    next();
-    return;
+    return { user: session.user, sessionTokenHash: session.tokenHash };
   }
 
   const apiToken = ludockApiToken();
-  const candidate = bearerToken(req.headers.authorization);
+  const candidate = bearerToken(request.headers.get("authorization"));
   if (apiToken && candidate && tokensMatch(candidate, apiToken)) {
-    res.locals.user = {
-      id: "api-token",
-      username: "api-token",
-      role: "admin",
-    } satisfies SessionUser;
-    next();
-    return;
+    return { user: { id: "api-token", username: "api-token", role: "admin" } };
   }
 
-  res.status(401).json({ error: "Authentication required" });
-}
-
-export function requireRole(...roles: SessionUser["role"][]) {
-  return (_req: Request, res: Response, next: NextFunction): void => {
-    const user = res.locals.user as SessionUser | undefined;
-    if (!user || !roles.includes(user.role)) {
-      res.status(403).json({ error: "Insufficient permissions" });
-      return;
-    }
-    next();
-  };
+  return null;
 }
 
 export function authenticateWsRequest(
-  request: IncomingMessage
+  request: Request,
 ): WebSocketAuth | null {
   const session = getRequestSession(request);
   if (session) {
@@ -355,14 +296,14 @@ export function authenticateWsRequest(
     });
     return null;
   }
-  if (request.headers.origin && !isSameOriginRequest(request)) {
+  if (request.headers.has("origin") && !isSameOriginRequest(request)) {
     logger.debug("WebSocket authentication rejected", {
       reason: "api-token-origin-mismatch",
       ...requestOriginDiagnostic(request),
     });
     return null;
   }
-  const candidate = bearerToken(request.headers.authorization);
+  const candidate = bearerToken(request.headers.get("authorization"));
   if (!candidate || !tokensMatch(candidate, apiToken)) {
     logger.debug("WebSocket authentication rejected", {
       reason: candidate ? "invalid-api-token" : "missing-bearer-token",
@@ -375,52 +316,30 @@ export function authenticateWsRequest(
   });
   return {
     user: { id: "api-token", username: "api-token", role: "admin" },
-    validate: () => ({
-      id: "api-token",
-      username: "api-token",
-      role: "admin",
-    }),
+    validate: () => {
+      const current = ludockApiToken();
+      return current && tokensMatch(candidate, current)
+        ? { id: "api-token", username: "api-token", role: "admin" }
+        : null;
+    },
   };
 }
 
 export class AuthError extends Error {
   constructor(
     public readonly code: string,
-    public readonly statusCode: number
+    public readonly statusCode: number,
+    message = code,
   ) {
-    super(code);
+    super(message);
   }
 }
 
 function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return new Bun.CryptoHasher("sha256").update(token).digest("hex");
 }
 
-function derivePassword(
-  password: string,
-  salt: Buffer,
-  keyLength: number,
-  options: { N: number; r: number; p: number; maxmem: number }
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    scrypt(password, salt, keyLength, options, (error, derivedKey) => {
-      if (error) reject(error);
-      else resolve(derivedKey);
-    });
-  });
-}
-
-function passwordHashNeedsUpgrade(encoded: string): boolean {
-  const [algorithm, n, r, p] = encoded.split("$");
-  return (
-    algorithm !== "scrypt" ||
-    Number(n) !== SCRYPT_N ||
-    Number(r) !== SCRYPT_R ||
-    Number(p) !== SCRYPT_P
-  );
-}
-
-function bearerToken(authorization: string | undefined): string {
+function bearerToken(authorization: string | null): string {
   if (!authorization) return "";
   const separator = authorization.indexOf(" ");
   if (

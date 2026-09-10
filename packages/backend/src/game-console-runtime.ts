@@ -1,7 +1,5 @@
-import net from "node:net";
 import { PassThrough } from "node:stream";
 import type Docker from "dockerode";
-import WebSocket, { type RawData } from "ws";
 import { getDockerInstance } from "./docker.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
@@ -15,6 +13,7 @@ import { rawDataToString } from "./ws-message.js";
 const CONNECT_TIMEOUT_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 10_000;
 const MAX_RCON_PACKET_SIZE = 4 * 1024 * 1024;
+const MAX_TCP_RECEIVED_BYTES = MAX_RCON_PACKET_SIZE + 64 * 1024;
 
 export interface GameCommandOutput {
   stdout(data: string): void;
@@ -27,8 +26,10 @@ export async function executeGameCommand(
   server: Pick<ManagedContainer, "labels" | "state">,
   adapter: GameConsoleAdapter,
   command: string,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
+  assertAccess?.();
   if (server.state !== "running") {
     throw new Error("The game server must be running to accept console commands");
   }
@@ -38,11 +39,13 @@ export async function executeGameCommand(
       if (!adapter.createExecOptions) {
         throw new Error("The console adapter is missing its command configuration");
       }
-      await executeInContainer(container, adapter.createExecOptions(command), output);
+      await executeInContainer(
+        container, adapter.createExecOptions(command), output, assertAccess,
+      );
       return;
     }
     case "container-stdin":
-      await writeContainerStdin(container, command, output);
+      await writeContainerStdin(container, command, output, assertAccess);
       return;
     case "source-rcon": {
       const target = await resolveNetworkTarget(container, server, adapter);
@@ -50,7 +53,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
       return;
@@ -61,7 +65,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
       return;
@@ -72,7 +77,8 @@ export async function executeGameCommand(
         target.host,
         target.port,
         target.password,
-        command
+        command,
+        assertAccess,
       );
       output.stdout(response || "Command completed with no response");
     }
@@ -83,70 +89,67 @@ export async function executeSourceRcon(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const socket = net.createConnection({ host, port });
-    const authId = randomRequestId();
-    const commandId = randomRequestId();
-    let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-    let authenticated = false;
-    let response = "";
-    let settled = false;
-    let responseTimer: NodeJS.Timeout | undefined;
-    const timeout = setTimeout(
-      () => finish(new Error("RCON connection timed out")),
-      COMMAND_TIMEOUT_MS
-    );
+  assertAccess?.();
+  const authId = randomRequestId();
+  const commandId = randomRequestId();
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let authenticated = false;
+  let commandSent = false;
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  let response = "";
+  let responseBytes = 0;
+  let receivedResponse = false;
+  let responseTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (responseTimer) clearTimeout(responseTimer);
-      socket.destroy();
-      if (error) reject(error);
-      else resolve(response);
-    };
-
-    socket.setNoDelay(true);
-    socket.setTimeout(CONNECT_TIMEOUT_MS, () => {
-      finish(new Error("RCON connection timed out"));
-    });
-    socket.once("error", () => {
-      finish(new Error("Could not connect to the server's RCON endpoint"));
-    });
-    socket.once("connect", () => {
-      socket.setTimeout(0);
-      socket.write(encodeRconPacket(authId, 3, password));
-    });
-    socket.on("data", (chunk) => {
+  return runConsoleTcp({
+    host, port, assertAccess,
+    connectTimeoutMessage: "RCON connection timed out",
+    commandTimeoutMessage: "RCON connection timed out",
+    connectionErrorMessage: "Could not connect to the server's RCON endpoint",
+    responseLimitMessage: "RCON response is too large",
+    open(tcp) {
+      tcp.write(encodeRconPacket(authId, 3, password));
+    },
+    data(tcp, chunk) {
       buffer = Buffer.concat([buffer, chunk]);
-      try {
-        const decoded = decodeRconPackets(buffer);
-        buffer = decoded.remaining;
-        for (const packet of decoded.packets) {
-          if (!authenticated) {
-            if (packet.id === -1) {
-              finish(new Error("RCON authentication failed"));
-              return;
-            }
-            if (packet.id === authId && packet.type === 2) {
-              authenticated = true;
-              socket.write(encodeRconPacket(commandId, 2, command));
-            }
-            continue;
+      const decoded = decodeRconPackets(buffer);
+      buffer = decoded.remaining;
+      for (const packet of decoded.packets) {
+        if (tcp.settled) return;
+        if (!authenticated) {
+          if (packet.id === -1) {
+            tcp.finish(new Error("RCON authentication failed"));
+            return;
           }
-          if (packet.id !== commandId) continue;
-          response += packet.body;
-          if (responseTimer) clearTimeout(responseTimer);
-          responseTimer = setTimeout(() => finish(), 150);
+          if (packet.id === authId && packet.type === 2) {
+            authenticated = true;
+            tcp.write(encodeRconPacket(commandId, 2, command), () => { commandSent = true; });
+          }
+          continue;
         }
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
+        if (!commandSent || packet.id !== commandId) continue;
+        receivedResponse = true;
+        responseBytes += packet.body.length;
+        if (responseBytes > MAX_RCON_PACKET_SIZE) {
+          tcp.finish(new Error("RCON response is too large"));
+          return;
+        }
+        response += decoder.decode(packet.body, { stream: true });
       }
-    });
-    socket.once("end", () => finish());
+      if (responseTimer) clearTimeout(responseTimer);
+      if (receivedResponse && buffer.length === 0)
+        responseTimer = setTimeout(() => tcp.finish(undefined, response + decoder.decode()), 150);
+    },
+    end(tcp) {
+      if (!authenticated) tcp.finish(new Error("RCON authentication did not complete"));
+      else if (!commandSent) tcp.finish(new Error("RCON connection closed before the command was sent"));
+      else if (buffer.length) tcp.finish(new Error("The RCON server returned an incomplete packet"));
+      else tcp.finish(undefined, response + decoder.decode());
+    },
+    cleanup() { if (responseTimer) clearTimeout(responseTimer); },
   });
 }
 
@@ -154,37 +157,58 @@ export async function executeRustWebRcon(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
+  assertAccess?.();
   return new Promise<string>((resolve, reject) => {
     const identifier = randomRequestId();
     const url = `ws://${formatHost(host)}:${port}/${encodeURIComponent(password)}`;
-    const socket = new WebSocket(url, { handshakeTimeout: CONNECT_TIMEOUT_MS });
+    const socket = new globalThis.WebSocket(url);
+    socket.binaryType = "arraybuffer";
     let settled = false;
     const timeout = setTimeout(() => {
       finish(new Error("WebRCON command timed out"));
     }, COMMAND_TIMEOUT_MS);
+    const handshakeTimeout = setTimeout(() => {
+      finish(new Error("WebRCON connection timed out"));
+    }, CONNECT_TIMEOUT_MS);
 
     const finish = (error?: Error, response = "") => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      socket.close();
+      clearTimeout(handshakeTimeout);
+      if (error) socket.terminate();
+      else socket.close();
       if (error) reject(error);
       else resolve(response);
     };
 
-    socket.once("open", () => {
-      socket.send(
-        JSON.stringify({
-          Identifier: identifier,
-          Message: command,
-          Name: "Ludock",
-        })
-      );
-    });
-    socket.on("message", (raw: RawData) => {
+    socket.addEventListener("open", () => {
+      clearTimeout(handshakeTimeout);
+      if (settled) return;
       try {
+        assertAccess?.();
+        socket.send(
+          JSON.stringify({
+            Identifier: identifier,
+            Message: command,
+            Name: "Ludock",
+          }),
+        );
+      } catch {
+        finish(new Error("Console access changed"));
+      }
+    });
+    socket.addEventListener("message", (event) => {
+      if (settled) return;
+      try {
+        const raw: unknown = event.data;
+        if (typeof raw !== "string" && !(raw instanceof ArrayBuffer))
+          throw new Error("Unsupported WebRCON message");
+        if ((typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength) > MAX_RCON_PACKET_SIZE)
+          throw new Error("WebRCON response is too large");
         const message = JSON.parse(rawDataToString(raw)) as {
           Identifier?: unknown;
           Message?: unknown;
@@ -200,9 +224,12 @@ export async function executeRustWebRcon(
         finish(new Error("The WebRCON server returned an invalid response"));
       }
     });
-    socket.once("error", () => {
+    socket.addEventListener("error", () => {
       finish(new Error("Could not connect or authenticate with Rust WebRCON"));
     });
+    socket.addEventListener("close", () => finish(
+      new Error("WebRCON connection closed before the command response"),
+    ));
   });
 }
 
@@ -210,58 +237,204 @@ export async function executeTelnetCommand(
   host: string,
   port: number,
   password: string,
-  command: string
+  command: string,
+  assertAccess?: () => void,
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const socket = net.createConnection({ host, port });
-    let output = "";
-    let commandSent = false;
-    let settled = false;
-    let quietTimer: NodeJS.Timeout | undefined;
-    const timeout = setTimeout(
-      () => finish(new Error("Telnet console command timed out")),
-      COMMAND_TIMEOUT_MS
-    );
+  assertAccess?.();
+  let output = "";
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  let passwordSent = false;
+  let commandSent = false;
+  let quietTimer: ReturnType<typeof setTimeout> | undefined;
+  let commandTimer: ReturnType<typeof setTimeout> | undefined;
+  const telnet = createTelnetDecoder();
+  const finishResponse = (tcp: ConsoleTcpSession) => {
+    tcp.finish(undefined, cleanTelnetOutput(output + decoder.decode(), command));
+  };
 
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (quietTimer) clearTimeout(quietTimer);
-      socket.destroy();
-      if (error) reject(error);
-      else resolve(cleanTelnetOutput(output, command));
-    };
-
-    socket.setTimeout(CONNECT_TIMEOUT_MS, () =>
-      finish(new Error("Telnet console connection timed out"))
-    );
-    socket.once("error", () =>
-      finish(new Error("Could not connect to the server's Telnet console"))
-    );
-    socket.once("connect", () => socket.setTimeout(0));
-    socket.on("data", (chunk) => {
-      respondToTelnetNegotiation(socket, chunk);
-      const text = stripTelnetNegotiation(chunk).toString("utf8");
-      output += text;
-      if (!commandSent && /password\s*[:>]?/i.test(output)) {
-        socket.write(`${password}\n`);
-        commandSent = true;
-        setTimeout(() => {
-          if (!settled) socket.write(`${command}\n`);
-        }, 50);
+  return runConsoleTcp({
+    host, port, assertAccess,
+    connectTimeoutMessage: "Telnet console connection timed out",
+    commandTimeoutMessage: "Telnet console command timed out",
+    connectionErrorMessage: "Could not connect to the server's Telnet console",
+    responseLimitMessage: "Telnet console response is too large",
+    data(tcp, chunk) {
+      output += decoder.decode(telnet(chunk, tcp), { stream: true });
+      if (tcp.settled) return;
+      if (!passwordSent && /password\s*[:>]?/i.test(output)) {
+        passwordSent = true;
+        tcp.write(Buffer.from(`${password}\n`), () => {
+          commandTimer = setTimeout(() => {
+            if (tcp.settled) return;
+            tcp.write(Buffer.from(`${command}\n`), () => {
+              commandSent = true;
+              quietTimer = setTimeout(() => finishResponse(tcp), 250);
+            });
+          }, 50);
+        });
         return;
       }
-      if (commandSent) {
+      if (passwordSent) {
         if (/incorrect|invalid password|authentication failed/i.test(output)) {
-          finish(new Error("Telnet console authentication failed"));
+          tcp.finish(new Error("Telnet console authentication failed"));
           return;
         }
-        if (quietTimer) clearTimeout(quietTimer);
-        quietTimer = setTimeout(() => finish(), 250);
+        if (commandSent) {
+          if (quietTimer) clearTimeout(quietTimer);
+          quietTimer = setTimeout(() => finishResponse(tcp), 250);
+        }
       }
-    });
-    socket.once("end", () => finish());
+    },
+    end(tcp) {
+      if (commandSent) finishResponse(tcp);
+      else tcp.finish(new Error("Telnet console closed before the command was sent"));
+    },
+    cleanup() {
+      if (quietTimer) clearTimeout(quietTimer);
+      if (commandTimer) clearTimeout(commandTimer);
+    },
+  });
+}
+
+interface ConsoleTcpSession {
+  readonly settled: boolean;
+  write(data: Buffer, written?: () => void): void;
+  finish(error?: Error, response?: string): void;
+}
+
+function runConsoleTcp(options: {
+  host: string;
+  port: number;
+  assertAccess?: () => void;
+  connectTimeoutMessage: string;
+  commandTimeoutMessage: string;
+  connectionErrorMessage: string;
+  responseLimitMessage: string;
+  open?(tcp: ConsoleTcpSession): void;
+  data(tcp: ConsoleTcpSession, chunk: Buffer): void;
+  end(tcp: ConsoleTcpSession): void;
+  cleanup(): void;
+}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let socket: Bun.Socket | undefined;
+    let settled = false;
+    let receivedBytes = 0;
+    let queuedBytes = 0;
+    let draining = false;
+    let blocked = false;
+    const writes: Array<{ data: Buffer; offset: number; written?: () => void }> = [];
+    const connectTimer = setTimeout(() => {
+      tcp.finish(new Error(options.connectTimeoutMessage));
+    }, CONNECT_TIMEOUT_MS);
+    const commandTimer = setTimeout(() => {
+      tcp.finish(new Error(options.commandTimeoutMessage));
+    }, COMMAND_TIMEOUT_MS);
+    const tcp: ConsoleTcpSession = {
+      get settled() { return settled; },
+      finish(error, response = "") {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        clearTimeout(commandTimer);
+        options.cleanup();
+        writes.length = 0;
+        queuedBytes = 0;
+        socket?.terminate();
+        if (error) reject(error);
+        else resolve(response);
+      },
+      write(data, written) {
+        if (settled) return;
+        if (queuedBytes + data.length > MAX_RCON_PACKET_SIZE + 4) {
+          tcp.finish(new Error("Console command or credential is too large"));
+          return;
+        }
+        writes.push({ data, offset: 0, written });
+        queuedBytes += data.length;
+        drainWrites();
+      },
+    };
+    const invoke = (callback: () => void) => {
+      if (settled) return;
+      try { callback(); }
+      catch (error) {
+        tcp.finish(error instanceof Error ? error : new Error("The console server returned an invalid response"));
+      }
+    };
+    const drainWrites = () => {
+      if (!socket || settled || draining || blocked) return;
+      draining = true;
+      try {
+        while (writes.length && !settled) {
+          const next = writes[0];
+          try { options.assertAccess?.(); }
+          catch {
+            tcp.finish(new Error("Console access changed"));
+            return;
+          }
+          let count: number;
+          try { count = socket.write(next.data, next.offset, next.data.length - next.offset); }
+          catch {
+            tcp.finish(new Error(options.connectionErrorMessage));
+            return;
+          }
+          if (count < 0) {
+            tcp.finish(new Error(options.connectionErrorMessage));
+            return;
+          }
+          next.offset += count;
+          queuedBytes -= count;
+          // Bun does not queue the remaining bytes; drain resumes this exact frame.
+          if (next.offset < next.data.length) {
+            blocked = true;
+            return;
+          }
+          writes.shift();
+          if (next.written) invoke(next.written);
+        }
+      } finally { draining = false; }
+    };
+    try {
+      void Bun.connect({
+        hostname: options.host,
+        port: options.port,
+        socket: {
+          open(connected) {
+            socket = connected;
+            if (settled) { connected.terminate(); return; }
+            clearTimeout(connectTimer);
+            connected.setNoDelay(true);
+            invoke(() => options.open?.(tcp));
+          },
+          data(_socket, chunk) {
+            if (settled) return;
+            receivedBytes += chunk.length;
+            if (receivedBytes > MAX_TCP_RECEIVED_BYTES) {
+              tcp.finish(new Error(options.responseLimitMessage));
+              return;
+            }
+            invoke(() => options.data(tcp, chunk));
+          },
+          drain() { blocked = false; drainWrites(); },
+          end() { invoke(() => options.end(tcp)); },
+          close(_socket, error) {
+            if (error) tcp.finish(new Error(options.connectionErrorMessage));
+            else invoke(() => options.end(tcp));
+          },
+          error() { tcp.finish(new Error(options.connectionErrorMessage)); },
+          connectError(failed) {
+            if (settled) { failed.terminate(); return; }
+            socket = failed;
+            tcp.finish(new Error(options.connectionErrorMessage));
+          },
+        },
+      }).then((connected) => {
+        // A deadline may expire while DNS/connect is still pending.
+        if (settled) connected.terminate();
+      }, () => tcp.finish(new Error(options.connectionErrorMessage)));
+    } catch {
+      tcp.finish(new Error(options.connectionErrorMessage));
+    }
   });
 }
 
@@ -352,17 +525,23 @@ function parseEnvironment(values: string[]): Record<string, string> {
 async function executeInContainer(
   container: Docker.Container,
   options: Docker.ExecCreateOptions,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
   const exec = await container.exec(options);
+  assertAccess?.();
   const stream = await exec.start({ hijack: true, stdin: false });
   await streamExecOutput(stream, output);
+  const result = await exec.inspect();
+  if (result.Running || result.ExitCode !== 0)
+    throw new Error("Game console command failed");
 }
 
 async function writeContainerStdin(
   container: Docker.Container,
   command: string,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  assertAccess?: () => void,
 ): Promise<void> {
   const info = await container.inspect();
   if (!info.Config.OpenStdin) {
@@ -384,6 +563,7 @@ async function writeContainerStdin(
     hijack: true,
   });
   try {
+    assertAccess?.();
     await writeAttachedInput(stream, `${command}\n`);
   } finally {
     (stream as NodeJS.ReadWriteStream & { destroy(): void }).destroy();
@@ -409,17 +589,26 @@ async function streamExecOutput(
 ): Promise<void> {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  stdout.on("data", (chunk: Buffer) => output.stdout(chunk.toString()));
-  stderr.on("data", (chunk: Buffer) => output.stderr(chunk.toString()));
-  getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-  await new Promise<void>((resolve, reject) => {
-    stream.once("end", resolve);
-    stream.once("close", resolve);
-    stream.once("error", reject);
-  });
+  stdout.setEncoding("utf8");
+  stderr.setEncoding("utf8");
+  stdout.on("data", (chunk: string) => output.stdout(chunk));
+  stderr.on("data", (chunk: string) => output.stderr(chunk));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      stream.once("end", resolve);
+      stream.once("close", resolve);
+      stream.once("error", reject);
+      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
+    });
+  } finally {
+    stdout.end();
+    stderr.end();
+  }
 }
 
 function encodeRconPacket(id: number, type: number, body: string): Buffer {
+  if (Buffer.byteLength(body, "utf8") > MAX_RCON_PACKET_SIZE - 10)
+    throw new Error("RCON command or credential is too large");
   const payload = Buffer.from(body, "utf8");
   const packet = Buffer.alloc(payload.length + 14);
   packet.writeInt32LE(payload.length + 10, 0);
@@ -430,10 +619,10 @@ function encodeRconPacket(id: number, type: number, body: string): Buffer {
 }
 
 function decodeRconPackets(buffer: Buffer): {
-  packets: Array<{ id: number; type: number; body: string }>;
+  packets: Array<{ id: number; type: number; body: Buffer }>;
   remaining: Buffer;
 } {
-  const packets: Array<{ id: number; type: number; body: string }> = [];
+  const packets: Array<{ id: number; type: number; body: Buffer }> = [];
   let offset = 0;
   while (buffer.length - offset >= 4) {
     const size = buffer.readInt32LE(offset);
@@ -445,7 +634,7 @@ function decodeRconPackets(buffer: Buffer): {
     packets.push({
       id: buffer.readInt32LE(offset + 4),
       type: buffer.readInt32LE(offset + 8),
-      body: buffer.subarray(offset + 12, end - 2).toString("utf8"),
+      body: buffer.subarray(offset + 12, end - 2),
     });
     offset = end;
   }
@@ -469,30 +658,42 @@ function isValidConsoleHost(host: string): boolean {
   );
 }
 
-function respondToTelnetNegotiation(socket: net.Socket, chunk: Buffer): void {
-  for (let index = 0; index + 2 < chunk.length; index += 1) {
-    if (chunk[index] !== 255) continue;
-    const command = chunk[index + 1];
-    const option = chunk[index + 2];
-    if (command === 251 || command === 252) {
-      socket.write(Buffer.from([255, 254, option]));
-    } else if (command === 253 || command === 254) {
-      socket.write(Buffer.from([255, 252, option]));
+function createTelnetDecoder(): (chunk: Buffer, tcp: ConsoleTcpSession) => Buffer {
+  let state: "text" | "command" | "option" | "subnegotiation" | "subcommand" = "text";
+  let command = 0;
+  return (chunk, tcp) => {
+    const output = Buffer.allocUnsafe(chunk.length);
+    let length = 0;
+    for (const byte of chunk) {
+      if (tcp.settled) break;
+      switch (state) {
+        case "text":
+          if (byte === 255) state = "command";
+          else output[length++] = byte;
+          break;
+        case "command":
+          if (byte === 255) {
+            output[length++] = byte;
+            state = "text";
+          } else if (byte >= 251 && byte <= 254) {
+            command = byte;
+            state = "option";
+          } else state = byte === 250 ? "subnegotiation" : "text";
+          break;
+        case "option":
+          tcp.write(Buffer.from([255, command <= 252 ? 254 : 252, byte]));
+          state = "text";
+          break;
+        case "subnegotiation":
+          if (byte === 255) state = "subcommand";
+          break;
+        case "subcommand":
+          state = byte === 240 ? "text" : "subnegotiation";
+          break;
+      }
     }
-    index += 2;
-  }
-}
-
-function stripTelnetNegotiation(chunk: Buffer): Buffer {
-  const bytes: number[] = [];
-  for (let index = 0; index < chunk.length; index += 1) {
-    if (chunk[index] === 255 && index + 2 < chunk.length) {
-      index += 2;
-      continue;
-    }
-    bytes.push(chunk[index]);
-  }
-  return Buffer.from(bytes);
+    return output.subarray(0, length);
+  };
 }
 
 function cleanTelnetOutput(output: string, command: string): string {

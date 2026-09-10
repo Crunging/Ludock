@@ -1,48 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "../api";
+import { ApiRequestError, apiJson } from "../api";
 
-type LogLevel = "debug" | "info" | "warn" | "error";
-
-interface LogEntry {
-  id: number;
-  timestamp: number;
-  level: LogLevel;
-  component: string;
-  message: string;
-  context?: Record<string, string | number | boolean | null>;
-}
+import {
+  type ApplicationLogEntry,
+  applicationLogsResponseSchema,
+} from "@ludock/shared";
 
 const MAX_VISIBLE_ENTRIES = 1_000;
 
 export default function ApplicationLogs() {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [entries, setEntries] = useState<ApplicationLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(true);
   const generation = useRef<string | null>(null);
   const lastId = useRef(0);
-  const requestInFlight = useRef(false);
+  const request = useRef<AbortController | null>(null);
   const logOutput = useRef<HTMLDivElement>(null);
 
-  const loadLogs = useCallback(async (initial = false) => {
-    if (requestInFlight.current) return;
-    requestInFlight.current = true;
+  useEffect(() => () => {
+    request.current?.abort();
+    request.current = null;
+  }, []);
+
+  const loadLogs = useCallback(async () => {
+    if (request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setLoading(true);
+    const initial = generation.current === null;
     try {
       const after = initial ? 0 : lastId.current;
       const processGeneration = generation.current
         ? `&generation=${encodeURIComponent(generation.current)}`
         : "";
-      const response = await apiFetch(
-        `/api/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`
+      const body = await apiJson(
+        `/application-logs?limit=${initial ? 250 : 1000}&after=${after}${processGeneration}`,
+        applicationLogsResponseSchema,
+        { signal: controller.signal },
       );
-      const body = (await response.json().catch(() => ({}))) as {
-        generation?: string;
-        entries?: LogEntry[];
-        error?: string;
-      };
-      if (!response.ok || !body.generation || !body.entries) {
-        throw new Error(body.error || "Failed to load application logs");
-      }
+      if (controller.signal.aborted || request.current !== controller) return;
 
       const processRestarted =
         generation.current !== null && generation.current !== body.generation;
@@ -55,32 +52,44 @@ export default function ApplicationLogs() {
         lastId.current = body.entries[body.entries.length - 1].id;
         setEntries((current) =>
           (initial || processRestarted
-            ? body.entries!
-            : [...current, ...body.entries!]
-          ).slice(-MAX_VISIBLE_ENTRIES)
+            ? body.entries
+            : [...current, ...body.entries]
+          ).slice(-MAX_VISIBLE_ENTRIES),
         );
       }
       setError(null);
     } catch (reason: unknown) {
+      if (controller.signal.aborted || request.current !== controller) return;
+      if (reason instanceof ApiRequestError && reason.status < 500) {
+        generation.current = null;
+        lastId.current = 0;
+        setEntries([]);
+      }
       setError(
         reason instanceof Error
           ? reason.message
-          : "Failed to load application logs"
+          : "Failed to load application logs",
       );
     } finally {
-      requestInFlight.current = false;
-      setLoading(false);
+      if (request.current === controller && !controller.signal.aborted) {
+        request.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    void loadLogs(true);
-  }, [loadLogs]);
-
-  useEffect(() => {
-    if (paused) return;
+    if (paused) {
+      setLoading(false);
+      return;
+    }
+    void loadLogs();
     const interval = window.setInterval(() => void loadLogs(), 2_000);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      request.current?.abort();
+      request.current = null;
+    };
   }, [loadLogs, paused]);
 
   useEffect(() => {
@@ -105,6 +114,7 @@ export default function ApplicationLogs() {
           <button
             className="secondary-btn"
             type="button"
+            aria-pressed={paused}
             onClick={() => setPaused((value) => !value)}
           >
             {paused ? "Resume" : "Pause"}
@@ -112,6 +122,7 @@ export default function ApplicationLogs() {
           <button
             className="secondary-btn"
             type="button"
+            disabled={loading}
             onClick={() => void loadLogs()}
           >
             Refresh
@@ -119,11 +130,12 @@ export default function ApplicationLogs() {
         </div>
       </div>
 
-      {error && <div className="alert alert--error">{error}</div>}
+      {error && <div className="alert alert--error" role="alert">{error}</div>}
       <div
         className="application-logs-output"
         ref={logOutput}
         role="log"
+        aria-busy={loading}
         aria-live={paused ? "off" : "polite"}
         aria-label="Ludock application logs"
       >
@@ -136,7 +148,9 @@ export default function ApplicationLogs() {
               {new Date(entry.timestamp).toLocaleString()}
             </time>
             <span className="application-log__level">{entry.level}</span>
-            <span className="application-log__component">{entry.component}</span>
+            <span className="application-log__component">
+              {entry.component}
+            </span>
             <pre>
               {entry.message}
               {entry.context ? ` ${JSON.stringify(entry.context)}` : ""}

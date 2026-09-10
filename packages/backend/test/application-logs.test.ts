@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import {
   listApplicationLogs,
   recordApplicationLog,
@@ -25,6 +25,33 @@ describe("application log buffer", () => {
       assert.doesNotMatch(redacted, new RegExp(secret));
     }
     assert.match(redacted, /safe=value/);
+  });
+
+  it("redacts development session cookies before buffering logs", () => {
+    recordApplicationLog({
+      timestamp: 122,
+      level: "warn",
+      component: "test",
+      message:
+        "ludock_session_012345abcdef=development-secret; Path=/; HttpOnly",
+      context: {
+        detail: "theme=dark; ludock_session_fedcba543210=context-secret",
+      },
+    });
+    const entry = listApplicationLogs({ limit: 1 }).entries[0];
+    assert.ok(entry);
+    assert.doesNotMatch(
+      JSON.stringify(entry),
+      /development-secret|context-secret/,
+    );
+    assert.equal(
+      entry.message,
+      "ludock_session_012345abcdef=[REDACTED]; Path=/; HttpOnly",
+    );
+    assert.equal(
+      entry.context?.detail,
+      "theme=dark; ludock_session_fedcba543210=[REDACTED]",
+    );
   });
 
   it("returns structured entries and resets stale process cursors", () => {
