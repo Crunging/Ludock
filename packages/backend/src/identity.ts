@@ -80,7 +80,7 @@ export function getDockerHostId(name = "local"): string {
   const db = getDatabase();
   const existing = db
     .prepare("SELECT id FROM docker_hosts WHERE name = ?")
-    .get(name) as { id: string } | undefined;
+    .get(name) as { id: string } | null;
   if (existing) return existing.id;
   const id = randomUUID();
   db.prepare(
@@ -206,7 +206,7 @@ export function listLogicalServers(hostId?: string): LogicalServer[] {
 export function getLogicalServer(serverId: string): LogicalServer | null {
   const row = getDatabase()
     .prepare("SELECT * FROM logical_servers WHERE id = ?")
-    .get(serverId) as unknown as ServerRow | undefined;
+    .get(serverId) as ServerRow | null;
   return row ? toLogicalServer(row) : null;
 }
 

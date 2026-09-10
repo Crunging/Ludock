@@ -1,674 +1,306 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import express, {
-  type Express,
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
 import { z } from "zod";
 import {
-  PASSWORD_MIN_LENGTH,
-  credentialsRequestSchema,
-  setupRequestSchema,
-  createUserRequestSchema,
-  userAccessRequestSchema,
-  resetPasswordRequestSchema,
-  changePasswordRequestSchema,
-  authStatusSchema,
-  authUserResponseSchema,
-  usersResponseSchema,
-  userResponseSchema,
-  sessionsResponseSchema,
-  auditResponseSchema,
-  applicationLogsResponseSchema,
-  okResponseSchema,
-} from "@ludock/shared";
-import { respond } from "./routes/request.js";
-import { router } from "./routes.js";
-import { advancedRouter } from "./advanced-routes.js";
-import { AppError } from "./errors.js";
-import { AuthorizationError, assertAdministrator } from "./authorization.js";
-import { ServerBindingError } from "./identity.js";
-import {
-  AuthError,
-  assertRequestUser,
-  authMiddleware,
-  authenticateUser,
-  clearSessionCookie,
-  createInitialAdmin,
-  createSession,
-  defaultSetupWindow,
-  deleteRequestSession,
-  getRequestSession,
-  hashPassword,
-  isSetupRequired,
-  verifyPassword,
-  requireRole,
-  setSessionCookie,
-  type SetupWindow,
+  AuthError, authenticateRequest, defaultSetupWindow, type SetupWindow,
 } from "./auth.js";
+import { AuthorizationError } from "./authorization.js";
+import { checkDatabase } from "./database.js";
+import { developmentInstance, matchesDevelopmentInstance } from "./development-instance.js";
 import { checkDockerConnection } from "./docker.js";
-import {
-  isExternalHttpsRequest,
-  isSameOriginRequest,
-} from "./request-security.js";
-import {
-  countEnabledAdmins,
-  checkDatabase,
-  clearLoginThrottle,
-  createUser,
-  deleteUser,
-  deleteUserSessionById,
-  findUserById,
-  getLoginThrottle,
-  listAuditLog,
-  listUserSessions,
-  listUsers,
-  recordLoginFailure,
-  updateUserAccess,
-  updateUserPassword,
-  writeAuditLog,
-  type SessionUser,
-  type UserRecord,
-} from "./database.js";
+import { AppError } from "./errors.js";
+import { ServerBindingError } from "./identity.js";
 import { createLogger, errorMessage } from "./logger.js";
-import { listApplicationLogs } from "./application-logs.js";
+import { isExternalHttpsRequest, isSameOriginRequest } from "./request-security.js";
+import { accessRoutes } from "./routes/access.js";
+import { accountRoutes } from "./routes/accounts.js";
+import { backupsRoutes } from "./routes/backups.js";
+import { composeRoutes } from "./routes/compose.js";
+import { filesRoutes } from "./routes/files.js";
 import {
-  developmentInstance,
-  matchesDevelopmentInstance,
-} from "./development-instance.js";
+  trackResponse, type ApiHandler, type ApiRoutes, type HttpMethod,
+  type NativeHandler, type NativeRoutes, type RequestContext,
+} from "./routes/request.js";
+import { schedulesRoutes } from "./routes/schedules.js";
+import { serversRoutes } from "./routes/servers.js";
+import { settingsRoutes } from "./routes/settings.js";
+import { statusRoutes } from "./routes/status.js";
+import { getMaxUploadBytes } from "./upload-limit.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const logger = createLogger("api");
-
+const JSON_LIMIT = 64 * 1024;
+const publicEndpoints = new Set([
+  "GET /api/v1/auth/status", "POST /api/v1/auth/setup",
+  "POST /api/v1/auth/login", "POST /api/v1/auth/logout", "GET /api/v1/health",
+]);
 interface CreateAppOptions {
   frontendDist?: string | false;
   setupWindow?: SetupWindow;
+  /** Additional routes receive the same request and authentication policy. */
+  routes?: ApiRoutes;
 }
 
-function publicUser(user: UserRecord | null) {
-  if (!user)
-    throw new AppError(
-      "INVALID_RESPONSE",
-      500,
-      "The server could not produce a valid response",
-    );
-  return {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    disabled: user.disabled,
-    createdAt: user.createdAt,
-  };
+function responseHeaders(request: Request, url: URL, requestId: string): Headers {
+  const headers = new Headers({
+    "X-Request-ID": requestId,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Origin-Agent-Cluster": "?1",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  });
+  if (developmentInstance) headers.set("X-Ludock-Dev-Instance", developmentInstance);
+  if (url.pathname.toLowerCase().startsWith("/api/")) headers.set("Cache-Control", "no-store");
+  if (isExternalHttpsRequest(request))
+    headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  return headers;
 }
 
-function loginThrottleKey(
-  scope: "account" | "password-change",
-  value: string,
-): string {
-  return createHash("sha256").update(`${scope}:${value}`).digest("hex");
-}
-
-function stringProperty(value: unknown, property: string): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const propertyValue = (value as Record<string, unknown>)[property];
-  return typeof propertyValue === "string" ? propertyValue : undefined;
-}
-
-export function createApp(options: CreateAppOptions = {}): Express {
-  const app = express();
-  const setupWindow = options.setupWindow || defaultSetupWindow;
-
-  app.disable("x-powered-by");
-  app.use((req, res, next) => {
-    if (developmentInstance)
-      res.setHeader("X-Ludock-Dev-Instance", developmentInstance);
-    if (!matchesDevelopmentInstance(req.headers["x-ludock-dev-instance"])) {
-      res.status(409).json({
-        error: "This request belongs to a different development checkout.",
-      });
-      return;
-    }
-    next();
-  });
-  app.use((req, res, next) => {
-    const requestId = randomUUID();
-    res.locals.requestId = requestId;
-    res.setHeader("X-Request-ID", requestId);
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-    res.setHeader("Origin-Agent-Cluster", "?1");
-    res.setHeader(
-      "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=(), payment=()",
-    );
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-    );
-    if (req.path.startsWith("/api/v1/")) {
-      res.setHeader("Cache-Control", "no-store");
-    }
-    if (isExternalHttpsRequest(req)) {
-      res.setHeader(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    }
-    const startedAt = performance.now();
-    res.once("finish", () => {
-      if (req.path === "/api/v1/application-logs") return;
-      logger.debug("HTTP request completed", {
-        requestId,
-        method: req.method,
-        path: req.path,
-        status: res.statusCode,
-        durationMs: Math.round(performance.now() - startedAt),
-        remoteAddress: req.ip,
-      });
-    });
-    next();
-  });
-  // Enforce origin checks before parsing request bodies.
-  app.use((req, res, next) => {
-    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      if (req.get("sec-fetch-site") === "cross-site") {
-        res.status(403).json({ error: "Cross-origin request rejected" });
-        return;
+async function jsonBody(request: Request): Promise<unknown> {
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
+    return undefined;
+  if (Number(request.headers.get("content-length")) > JSON_LIMIT)
+    throw new AppError("BODY_TOO_LARGE", 413, "Request body exceeds 64 KiB");
+  if (!request.body) return undefined;
+  const reader = (request.body as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => {});
+  }, 30_000);
+  deadline.unref();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (timedOut) throw new AppError("BODY_TIMEOUT", 408, "Request body timed out");
+      if (done) break;
+      length += value.byteLength;
+      if (length > JSON_LIMIT) {
+        await reader.cancel();
+        throw new AppError("BODY_TOO_LARGE", 413, "Request body exceeds 64 KiB");
       }
-      const origin = req.get("origin");
-      if (origin && !isSameOriginRequest(req)) {
-        res.status(403).json({ error: "Cross-origin request rejected" });
-        return;
-      }
+      chunks.push(value);
     }
-    next();
-  });
-  app.use(express.json({ limit: "64kb" }));
-  app.get("/api/v1/auth/status", (req, res) => {
-    const session = getRequestSession(req);
-    const setup = setupWindow.getState();
-    const authentication = session
-      ? { authenticated: true as const, user: session.user }
-      : { authenticated: false as const, user: null };
-    respond(res, authStatusSchema, {
-      setupRequired: setup.required,
-      setupLocked: setup.locked,
-      setupExpiresAt: setup.expiresAt,
-      setupRemainingMs: setup.remainingMs,
-      ...authentication,
-    });
-  });
-  app.post("/api/v1/auth/setup", async (req, res) => {
-    const parsed = setupRequestSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({
-        error: `Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
-      });
-      return;
-    }
-
-    try {
-      const user = await createInitialAdmin(
-        {
-          ...parsed.data,
-          ipAddress: req.ip,
-        },
-        setupWindow,
-      );
-      const session = createSession(user, req);
-      setSessionCookie(res, req, session.token);
-      respond(res.status(201), authUserResponseSchema, { user });
-    } catch (error) {
-      if (error instanceof AuthError) {
-        res.status(error.statusCode).json({
-          error:
-            error.code === "SETUP_LOCKED"
-              ? "Initial setup has expired. Restart the panel to reopen setup."
-              : "Initial setup has already been completed",
-        });
-        return;
-      }
-      throw error;
-    }
-  });
-  app.post("/api/v1/auth/login", async (req, res) => {
-    const now = Date.now();
-    const requestedUsername = (
-      stringProperty(req.body as unknown, "username") || ""
-    )
-      .trim()
-      .toLowerCase()
-      .slice(0, 32);
-    const accountKey = requestedUsername
-      ? loginThrottleKey("account", requestedUsername)
-      : null;
-    const blocked =
-      accountKey !== null &&
-      getLoginThrottle(accountKey, now, LOGIN_WINDOW_MS).blockedUntil > now;
-    if (blocked) {
-      res.status(429).json({ error: "Too many attempts. Try again later." });
-      return;
-    }
-
-    const parsed = credentialsRequestSchema.safeParse(req.body);
-    if (!parsed.success || isSetupRequired()) {
-      res.status(401).json({ error: "Invalid username or password" });
-      return;
-    }
-
-    const user = await authenticateUser(
-      parsed.data.username,
-      parsed.data.password,
-    );
-    if (!user) {
-      if (accountKey) {
-        recordLoginFailure(accountKey, now, LOGIN_WINDOW_MS, 5);
-      }
-      writeAuditLog({
-        action: "auth.login.failed",
-        targetType: "user",
-        details: {
-          username:
-            typeof parsed.data.username === "string"
-              ? parsed.data.username.slice(0, 32)
-              : null,
-        },
-        ipAddress: req.ip,
-      });
-      res.status(401).json({ error: "Invalid username or password" });
-      return;
-    }
-
-    if (accountKey) clearLoginThrottle(accountKey);
-    const session = createSession(user, req);
-    setSessionCookie(res, req, session.token);
-    writeAuditLog({
-      userId: user.id,
-      action: "auth.login",
-      targetType: "session",
-      ipAddress: req.ip,
-    });
-    respond(res, authUserResponseSchema, { user });
-  });
-  app.post("/api/v1/auth/logout", (req, res) => {
-    const session = getRequestSession(req);
-    deleteRequestSession(req);
-    clearSessionCookie(res);
-    // Cookie clearing is host-wide, so development checkouts on other ports
-    // must retain their sessions. clearSessionCookie removes this one's cookie.
-    res.setHeader(
-      "Clear-Site-Data",
-      developmentInstance
-        ? '"cache", "storage"'
-        : '"cache", "cookies", "storage"',
-    );
-    if (session) {
-      writeAuditLog({
-        userId: session.user.id,
-        action: "auth.logout",
-        targetType: "session",
-        ipAddress: req.ip,
-      });
-    }
-    respond(res, okResponseSchema, { ok: true });
-  });
-  // Public for container health checks.
-  const HEALTH_CACHE_MS = 5_000;
-  let healthCache: { checkedAt: number; healthy: boolean } | null = null;
-  let healthProbe: Promise<boolean> | null = null;
-
-  const probeHealth = async (): Promise<boolean> => {
-    const now = Date.now();
-    if (healthCache && now - healthCache.checkedAt < HEALTH_CACHE_MS) {
-      return healthCache.healthy;
-    }
-    healthProbe ||= (async () => {
-      try {
-        checkDatabase();
-        await checkDockerConnection();
-        return true;
-      } catch {
-        return false;
-      }
-    })().then((healthy) => {
-      healthCache = { checkedAt: Date.now(), healthy };
-      healthProbe = null;
-      return healthy;
-    });
-    return healthProbe;
-  };
-
-  app.get("/api/v1/health", async (_req, res) => {
-    if (await probeHealth()) {
-      res.json({ status: "ok", docker: "connected", database: "connected" });
-      return;
-    }
-    res.status(503).json({ status: "degraded" });
-  });
-  app.use("/api/v1", authMiddleware);
-  app.get("/api/v1/auth/me", (_req, res) => {
-    respond(res, authUserResponseSchema, {
-      user: res.locals.user as SessionUser,
-    });
-  });
-  app.post("/api/v1/account/change-password", async (req, res) => {
-    const parsed = changePasswordRequestSchema.safeParse(req.body);
-    const actor = res.locals.user as SessionUser;
-    if (!parsed.success) {
-      res.status(400).json({
-        error: `New password must be between ${PASSWORD_MIN_LENGTH} and 128 characters`,
-      });
-      return;
-    }
-
-    // Throttle current-password guesses so a stolen session cannot be brute
-    // forced into a permanent account takeover.
-    const now = Date.now();
-    const throttleKey = loginThrottleKey("password-change", actor.id);
-    if (
-      getLoginThrottle(throttleKey, now, LOGIN_WINDOW_MS).blockedUntil > now
-    ) {
-      res.status(429).json({ error: "Too many attempts. Try again later." });
-      return;
-    }
-
-    const record = findUserById(actor.id);
-    const verified = record !== null &&
-      await verifyPassword(parsed.data.currentPassword, record.passwordHash);
-    assertRequestUser(req, actor);
-    if (!record || !verified) {
-      recordLoginFailure(throttleKey, now, LOGIN_WINDOW_MS, 5);
-      writeAuditLog({
-        userId: actor.id === "api-token" ? undefined : actor.id,
-        action: "auth.password.change-failed",
-        targetType: "user",
-        targetId: actor.id,
-        ipAddress: req.ip,
-      });
-      res.status(400).json({ error: "Current password is incorrect" });
-      return;
-    }
-
-    const passwordHash = await hashPassword(parsed.data.newPassword);
-    const current = assertRequestUser(req, actor);
-    if (findUserById(actor.id)?.passwordHash !== record.passwordHash) {
-      throw new AppError(
-        "PASSWORD_CHANGED", 409, "Password changed; sign in again",
-      );
-    }
-    clearLoginThrottle(throttleKey);
-    updateUserPassword(actor.id, passwordHash);
-    const session = createSession(current, req);
-    setSessionCookie(res, req, session.token);
-    writeAuditLog({
-      userId: actor.id === "api-token" ? undefined : actor.id,
-      action: "auth.password.changed",
-      targetType: "user",
-      targetId: actor.id,
-      ipAddress: req.ip,
-    });
-    respond(res, okResponseSchema, { ok: true });
-  });
-  app.get("/api/v1/account/sessions", (_req, res) => {
-    const actor = res.locals.user as SessionUser;
-    const tokenHash = res.locals.sessionTokenHash as string | undefined;
-    respond(res, sessionsResponseSchema, {
-      sessions: tokenHash ? listUserSessions(actor.id, tokenHash) : [],
-    });
-  });
-  app.delete("/api/v1/account/sessions/:id", (req, res) => {
-    const actor = res.locals.user as SessionUser;
-    const sessionId = req.params.id;
-    const removed = deleteUserSessionById(actor.id, sessionId);
-    if (!removed) {
-      res.status(404).json({ error: "Session not found" });
-      return;
-    }
-    writeAuditLog({
-      userId: actor.id === "api-token" ? undefined : actor.id,
-      action: "auth.session.revoked",
-      targetType: "session",
-      targetId: sessionId,
-      ipAddress: req.ip,
-    });
-    respond(res, okResponseSchema, { ok: true });
-  });
-  app.get("/api/v1/users", requireRole("admin"), (_req, res) => {
-    respond(res, usersResponseSchema, { users: listUsers() });
-  });
-  app.post("/api/v1/users", requireRole("admin"), async (req, res) => {
-    const parsed = createUserRequestSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Invalid user details" });
-      return;
-    }
-
-    const now = Date.now();
-    const id = randomUUID();
-    const actor = res.locals.user as SessionUser;
-    try {
-      const passwordHash = await hashPassword(parsed.data.password);
-      assertAdministrator(assertRequestUser(req, actor));
-      createUser({
-        id,
-        username: parsed.data.username,
-        passwordHash,
-        role: parsed.data.role,
-        disabled: false,
-        createdAt: now,
-      });
-    } catch (error) {
-      if (String(error).includes("UNIQUE constraint failed")) {
-        res.status(409).json({ error: "Username is already in use" });
-        return;
-      }
-      throw error;
-    }
-
-    writeAuditLog({
-      userId: actor.id === "api-token" ? undefined : actor.id,
-      action: "user.created",
-      targetType: "user",
-      targetId: id,
-      details: { username: parsed.data.username, role: parsed.data.role },
-      ipAddress: req.ip,
-    });
-    respond(res.status(201), userResponseSchema, {
-      user: publicUser(findUserById(id)),
-    });
-  });
-  app.patch("/api/v1/users/:id", requireRole("admin"), (req, res) => {
-    const parsed = userAccessRequestSchema.safeParse(req.body);
-    const target = findUserById(req.params.id as string);
-    if (!parsed.success || !target) {
-      res.status(target ? 400 : 404).json({
-        error: target ? "Invalid access settings" : "User not found",
-      });
-      return;
-    }
-
-    const removesAdmin =
-      target.role === "admin" &&
-      !target.disabled &&
-      (parsed.data.role !== "admin" || parsed.data.disabled);
-    if (removesAdmin && countEnabledAdmins() <= 1) {
-      res.status(409).json({ error: "At least one active admin is required" });
-      return;
-    }
-
-    updateUserAccess(target.id, parsed.data.role, parsed.data.disabled);
-    const actor = res.locals.user as SessionUser;
-    writeAuditLog({
-      userId: actor.id === "api-token" ? undefined : actor.id,
-      action: "user.access.updated",
-      targetType: "user",
-      targetId: target.id,
-      details: parsed.data,
-      ipAddress: req.ip,
-    });
-    respond(res, userResponseSchema, {
-      user: publicUser(findUserById(target.id)),
-    });
-  });
-  app.post(
-    "/api/v1/users/:id/reset-password",
-    requireRole("admin"),
-    async (req, res) => {
-      const parsed = resetPasswordRequestSchema.safeParse(req.body);
-      const target = findUserById(req.params.id as string);
-      if (!parsed.success || !target) {
-        res.status(target ? 400 : 404).json({
-          error: target
-            ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters`
-            : "User not found",
-        });
-        return;
-      }
-
-      const actor = res.locals.user as SessionUser;
-      const passwordHash = await hashPassword(parsed.data.password);
-      assertAdministrator(assertRequestUser(req, actor));
-      if (!findUserById(target.id)) {
-        throw new AppError("USER_NOT_FOUND", 404, "User not found");
-      }
-      updateUserPassword(target.id, passwordHash);
-      writeAuditLog({
-        userId: actor.id === "api-token" ? undefined : actor.id,
-        action: "user.password.reset",
-        targetType: "user",
-        targetId: target.id,
-        ipAddress: req.ip,
-      });
-      respond(res, okResponseSchema, { ok: true });
-    },
-  );
-  app.delete("/api/v1/users/:id", requireRole("admin"), (req, res) => {
-    const target = findUserById(req.params.id as string);
-    const actor = res.locals.user as SessionUser;
-    if (!target) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-    if (target.id === actor.id) {
-      res.status(409).json({ error: "You cannot delete your own account" });
-      return;
-    }
-    if (
-      target.role === "admin" &&
-      !target.disabled &&
-      countEnabledAdmins() <= 1
-    ) {
-      res.status(409).json({ error: "At least one active admin is required" });
-      return;
-    }
-
-    deleteUser(target.id);
-    writeAuditLog({
-      userId: actor.id === "api-token" ? undefined : actor.id,
-      action: "user.deleted",
-      targetType: "user",
-      targetId: target.id,
-      details: { username: target.username, role: target.role },
-      ipAddress: req.ip,
-    });
-    respond(res, okResponseSchema, { ok: true });
-  });
-  app.get("/api/v1/audit", requireRole("admin"), (req, res) => {
-    const requested = Number(req.query.limit || 100);
-    const limit = Number.isFinite(requested)
-      ? Math.max(1, Math.min(250, Math.trunc(requested)))
-      : 100;
-    respond(res, auditResponseSchema, { entries: listAuditLog(limit) });
-  });
-  app.get("/api/v1/application-logs", requireRole("admin"), (req, res) => {
-    const requestedLimit = Number(req.query.limit || 250);
-    const requestedAfter = Number(req.query.after || 0);
-    const limit = Number.isFinite(requestedLimit)
-      ? Math.max(1, Math.min(1_000, Math.trunc(requestedLimit)))
-      : 250;
-    const after =
-      Number.isSafeInteger(requestedAfter) && requestedAfter >= 0
-        ? requestedAfter
-        : 0;
-    const generation =
-      typeof req.query.generation === "string"
-        ? req.query.generation.slice(0, 64)
-        : undefined;
-    respond(
-      res,
-      applicationLogsResponseSchema,
-      listApplicationLogs({ after, limit, generation }),
-    );
-  });
-  app.use(router);
-  app.use(advancedRouter);
-  app.use("/api/{*splat}", (_req, res) => {
-    res.status(404).json({ error: "API endpoint not found" });
-  });
-
-  const frontendDist =
-    options.frontendDist === undefined
-      ? path.resolve(__dirname, "../../frontend/dist")
-      : options.frontendDist;
-
-  if (frontendDist !== false) {
-    app.use(express.static(frontendDist));
-    app.get("/{*splat}", (_req, res) => {
-      res.sendFile(path.join(frontendDist, "index.html"));
-    });
+  } finally { clearTimeout(deadline); reader.releaseLock(); }
+  if (length === 0) return undefined;
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try {
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (body === null || typeof body !== "object") throw new Error("JSON object or array required");
+    return body;
+  } catch {
+    throw new AppError("INVALID_JSON", 400, "Invalid JSON request body");
   }
+}
 
-  // Registered last so it also catches failures from the static and SPA
-  // handlers, which would otherwise fall through to Express' default handler
-  // and leak a stack trace.
-  app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
-    if (error instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({ error: "Invalid request", code: "INVALID_REQUEST" });
-      return;
-    }
-    if (
-      error instanceof AppError ||
-      error instanceof AuthError ||
-      error instanceof AuthorizationError ||
-      error instanceof ServerBindingError
-    ) {
-      res
-        .status(error.statusCode)
-        .json({ error: error.message, code: error.code });
-      return;
-    }
-    const requestId =
-      typeof res.locals.requestId === "string"
-        ? res.locals.requestId
-        : "unknown";
-    logger.error("Unhandled request error", {
-      requestId,
-      method: req.method,
-      path: req.path,
-      error: errorMessage(error),
-    });
-    if (res.headersSent) {
-      next(error);
-      return;
-    }
-    if (req.path.startsWith("/api/v1/")) {
-      res.status(500).json({
-        error: "Internal server error",
-        requestId,
-      });
-      return;
-    }
-    res.status(500).type("text/plain").send("Internal server error");
+function requestError(error: unknown, context: RequestContext, requestId: string): Response {
+  if (error instanceof z.ZodError)
+    return Response.json({ error: "Invalid request", code: "INVALID_REQUEST" }, { status: 400 });
+  if (error instanceof AppError || error instanceof AuthError || error instanceof AuthorizationError || error instanceof ServerBindingError)
+    return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
+  logger.error("Unhandled request error", {
+    requestId, method: context.request.method, path: context.url.pathname,
+    error: errorMessage(error),
   });
+  return context.url.pathname.toLowerCase().startsWith("/api/")
+    ? Response.json({ error: "Internal server error", requestId }, { status: 500 })
+    : new Response("Internal server error", { status: 500 });
+}
 
-  return app;
+type RoutedHandler = (
+  request: Parameters<NativeHandler>[0],
+  server: Parameters<NativeHandler>[1],
+  encodedParams?: Record<string, string>,
+) => ReturnType<NativeHandler>;
+
+function requestHandler(handler: ApiHandler, publicEndpoint = false): RoutedHandler {
+  return async (request, server, encodedParams) => {
+    // Bound incoming JSON before allowing long operations or file transfers.
+    server.timeout(request, 30);
+    const url = new URL(request.url);
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+    const context: RequestContext = {
+      request, url, params: request.params || {}, body: undefined,
+      headers: responseHeaders(request, url, requestId),
+      ipAddress: server.requestIP(request)?.address,
+      user: null,
+    };
+    let response: Response;
+    try {
+      if (encodedParams) {
+        try {
+          context.params = Object.fromEntries(Object.entries(encodedParams)
+            .map(([name, value]) => [name, decodeURIComponent(value)]));
+        } catch {
+          throw new AppError("INVALID_PATH", 400, "Invalid request path");
+        }
+      }
+      if (!matchesDevelopmentInstance(request.headers.get("x-ludock-dev-instance") || undefined)) {
+        response = Response.json({ error: "This request belongs to a different development checkout." }, { status: 409 });
+      } else if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && (
+        request.headers.get("sec-fetch-site") === "cross-site" ||
+        (request.headers.has("origin") && !isSameOriginRequest(request))
+      )) {
+        response = Response.json({ error: "Cross-origin request rejected" }, { status: 403 });
+      } else {
+        const authentication = authenticateRequest(request);
+        if (authentication) Object.assign(context, authentication);
+        if (!publicEndpoint && !authentication) {
+          response = Response.json({ error: "Authentication required" }, { status: 401 });
+        } else {
+          context.body = await jsonBody(request);
+          // Transfers may be quiet while helpers validate paths or stop a
+          // game. Their cancellation and operation limits own the lifetime.
+          server.timeout(request, 0);
+          // The body can arrive slowly. Session revocation and role changes
+          // during that wait must take effect before a route can mutate state.
+          const current = authenticateRequest(request);
+          context.user = current?.user ?? null;
+          context.sessionTokenHash = current?.sessionTokenHash;
+          response = !publicEndpoint && !current
+            ? Response.json({ error: "Authentication required" }, { status: 401 })
+            : await handler(context);
+        }
+      }
+    } catch (error) {
+      response = requestError(error, context, requestId);
+    }
+    for (const [name, value] of context.headers) {
+      if (name !== "set-cookie") response.headers.set(name, value);
+    }
+    for (const cookie of context.headers.getSetCookie()) response.headers.append("Set-Cookie", cookie);
+    response = trackResponse(response, request.signal, () => {
+      if (url.pathname === "/api/v1/application-logs") return;
+      logger.debug("HTTP request completed", {
+        requestId, method: request.method, path: url.pathname, status: response.status,
+        durationMs: Math.round(performance.now() - startedAt), remoteAddress: context.ipAddress,
+      });
+    });
+    if (request.method === "HEAD") {
+      await response.body?.cancel();
+      return new Response(null, { status: response.status, headers: response.headers });
+    }
+    return response;
+  };
+}
+
+function matchingRoute(pathname: string, patterns: string[]): {
+  pattern: string;
+  encodedParams: Record<string, string>;
+} | null {
+  const parts = pathname.replace(/\/$/, "").split("/");
+  for (const pattern of patterns) {
+    const expected = pattern.split("/");
+    if (expected.length !== parts.length) continue;
+    if (!expected.every((part, index) => part.startsWith(":")
+      ? parts[index].length > 0 : part.toLowerCase() === parts[index].toLowerCase())) continue;
+    return {
+      pattern,
+      encodedParams: Object.fromEntries(expected.flatMap((part, index) =>
+        part.startsWith(":") ? [[part.slice(1), parts[index]]] : [])),
+    };
+  }
+  return null;
+}
+
+async function staticResponse(context: RequestContext, directory: string | false): Promise<Response> {
+  if (!["GET", "HEAD"].includes(context.request.method) || directory === false)
+    return new Response("Not found", { status: 404 });
+  const root = await realpath(directory);
+  let pathname: string;
+  try { pathname = decodeURIComponent(context.url.pathname); }
+  catch { return new Response("Not found", { status: 404 }); }
+  if (pathname.includes("\0") || pathname.split("/").some((part) => part.startsWith(".")))
+    return new Response("Not found", { status: 404 });
+  const requested = path.resolve(root, `.${pathname}`);
+  if (requested !== root && !requested.startsWith(`${root}${path.sep}`))
+    return new Response("Not found", { status: 404 });
+  const physical = await realpath(requested).catch(() => null);
+  if (physical && physical !== root && !physical.startsWith(`${root}${path.sep}`))
+    return new Response("Not found", { status: 404 });
+  if (physical && (await stat(physical)).isFile())
+    return new Response(Bun.file(physical), { headers: { "Cache-Control": "no-cache" } });
+  const index = await realpath(path.join(root, "index.html"));
+  if (!index.startsWith(`${root}${path.sep}`)) return new Response("Not found", { status: 404 });
+  return new Response(Bun.file(index), { headers: { "Cache-Control": "no-cache" } });
+}
+
+export function createApp(options: CreateAppOptions = {}): {
+  routes: NativeRoutes;
+  fetch: NativeHandler;
+  maxRequestBodySize: number;
+} {
+  let healthCache: { checkedAt: number; healthy: boolean; } | null = null;
+  let healthProbe: Promise<boolean> | null = null;
+  const health: ApiHandler = async () => {
+    if (!healthCache || Date.now() - healthCache.checkedAt >= 5000) {
+      healthProbe ||= (async () => {
+        try { checkDatabase(); await checkDockerConnection(); return true; }
+        catch { return false; }
+      })().then((healthy) => {
+        healthCache = { checkedAt: Date.now(), healthy };
+        healthProbe = null;
+        return healthy;
+      });
+      await healthProbe;
+    }
+    return healthCache?.healthy
+      ? Response.json({ status: "ok", docker: "connected", database: "connected" })
+      : Response.json({ status: "degraded" }, { status: 503 });
+  };
+  const handlers: ApiRoutes = {
+    ...accountRoutes(options.setupWindow || defaultSetupWindow),
+    "/api/v1/health": { GET: health },
+    ...accessRoutes, ...backupsRoutes, ...composeRoutes, ...filesRoutes,
+    ...schedulesRoutes, ...serversRoutes, ...settingsRoutes, ...statusRoutes,
+    ...options.routes,
+  };
+  const routes: Record<string, Partial<Record<HttpMethod, RoutedHandler>>> = {};
+  for (const [pathname, methods] of Object.entries(handlers)) {
+    const native: Partial<Record<HttpMethod, RoutedHandler>> = {};
+    for (const [method, handler] of Object.entries(methods)) {
+      native[method as HttpMethod] = requestHandler(handler, publicEndpoints.has(`${method} ${pathname}`));
+    }
+    // Bun suppresses a HEAD body, but explicit cancellation also releases file
+    // helper and authorization lifetimes created by the GET handler.
+    if (native.GET && !native.HEAD) native.HEAD = native.GET;
+    native.OPTIONS ||= requestHandler(() => new Response(null, {
+      status: 204, headers: { Allow: Object.keys(native).join(", ") },
+    }));
+    routes[pathname] = native;
+  }
+  const frontendDist = options.frontendDist === undefined
+    ? path.resolve(import.meta.dir, "../../frontend/dist") : options.frontendDist;
+  const fallback: ApiHandler = async (context) => {
+    if (/^\/(api|ws)(\/|$)/i.test(context.url.pathname))
+      return Response.json({ error: "API endpoint not found" }, { status: 404 });
+    return staticResponse(context, frontendDist);
+  };
+  const publicFallback = requestHandler(fallback, true);
+  const apiFallback = requestHandler(fallback);
+  const patterns = Object.keys(routes);
+  return {
+    routes,
+    maxRequestBodySize: Math.max(JSON_LIMIT, getMaxUploadBytes()),
+    fetch: (request, server) => {
+      const pathname = new URL(request.url).pathname;
+      const match = matchingRoute(pathname, patterns);
+      const handler = match && routes[match.pattern][request.method as HttpMethod];
+      // Dispatch variants before policy or body consumption, using the same
+      // method-specific handler as native routes. A redirect would require a
+      // client to replay uploads and could hide public routes behind auth.
+      if (handler && match) return handler(request, server, match.encodedParams);
+      return /^\/api\/v1(?:\/|$)/i.test(pathname)
+        ? apiFallback(request, server) : publicFallback(request, server);
+    },
+  };
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
@@ -6,35 +6,37 @@ import { apiJson } from "../src/api";
 import { useWebSocket } from "../src/hooks/useWebSocket";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
 import { NavigationContext } from "../src/navigation-context";
-import Console from "../src/pages/Console";
 import type { ManagedContainer } from "../src/types";
 
-const { terminals } = vi.hoisted(() => ({
-  terminals: [] as Array<{
-    write: ReturnType<typeof vi.fn>;
-    clear: ReturnType<typeof vi.fn>;
-    reset: ReturnType<typeof vi.fn>;
-    dispose: ReturnType<typeof vi.fn>;
-  }>,
-}));
-vi.mock("@xterm/xterm", () => ({
+const terminals: Array<{
+  write: ReturnType<typeof mock>;
+  clear: ReturnType<typeof mock>;
+  reset: ReturnType<typeof mock>;
+  dispose: ReturnType<typeof mock>;
+}> = [];
+mock.module("@xterm/xterm", () => ({
   Terminal: class {
-    write = vi.fn();
-    clear = vi.fn();
-    reset = vi.fn();
-    dispose = vi.fn();
-    loadAddon = vi.fn();
-    open = vi.fn();
+    write = mock();
+    clear = mock();
+    reset = mock();
+    dispose = mock();
+    loadAddon = mock();
+    open = mock();
     constructor() { terminals.push(this); }
   },
 }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
-vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
-vi.mock("../src/hooks/useWebSocket", () => ({ useWebSocket: vi.fn() }));
-vi.mock("../src/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/api")>()),
-  apiJson: vi.fn(),
+mock.module("@xterm/addon-fit", () => ({ FitAddon: class { fit = mock(); } }));
+mock.module("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
+const useWebSocketMock = mock<typeof useWebSocket>();
+mock.module("../src/hooks/useWebSocket", () => ({ useWebSocket: useWebSocketMock }));
+const originalApi = { ...await import("../src/api") };
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiJson: apiJsonMock,
 }));
+
+const { default: Console } = await import("../src/pages/Console");
 
 const server: ManagedContainer = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
@@ -60,23 +62,23 @@ beforeEach(() => {
   terminals.length = 0;
   transport = {
     status: "connected",
-    send: vi.fn().mockReturnValue(true),
-    retry: vi.fn(),
+    send: mock().mockReturnValue(true),
+    retry: mock(),
     canRetry: false,
     accessDenied: false,
     error: null,
   };
-  vi.mocked(useWebSocket).mockImplementation((options) => {
+  useWebSocketMock.mockImplementation((options) => {
     socketOptions = options;
     return options.url ? transport : {
       ...transport, status: "disconnected", canRetry: false, accessDenied: false, error: null,
     };
   });
-  vi.mocked(apiJson).mockResolvedValue({ server, stats: null });
+  apiJsonMock.mockResolvedValue({ server, stats: null });
 });
 
 function consolePage(role: AuthUser["role"] = "admin", containerId = server.id) {
-  const navigate = vi.fn();
+  const navigate = mock();
   const user: AuthUser = { id: "friend", username: "friend", role };
   const content = (id: string) => (
     <AuthContext.Provider value={{ user } as AuthContextValue}>
@@ -104,7 +106,7 @@ describe("console recovery", () => {
     await openConnection();
     const input = screen.getByRole("textbox", { name: "Game command" });
     await userEvent.type(input, "  list  ");
-    vi.mocked(transport.send).mockReturnValueOnce(false);
+    (transport.send as ReturnType<typeof mock>).mockReturnValueOnce(false);
     await userEvent.click(screen.getByRole("button", { name: "Send", exact: true }));
     expect((input as HTMLInputElement).value).toBe("  list  ");
     expect(transport.send).toHaveBeenCalledWith(JSON.stringify({ type: "input", data: "list" }));
@@ -139,7 +141,7 @@ describe("console recovery", () => {
 
   it("rechecks grants after reconnecting before allowing a command", async () => {
     let current = server;
-    vi.mocked(apiJson).mockImplementation(async () => ({ server: current, stats: null }));
+    apiJsonMock.mockImplementation(async () => ({ server: current, stats: null }));
     const page = consolePage("operator");
     await openConnection();
     await userEvent.type(screen.getByRole("textbox", { name: "Game command" }), "list");
@@ -152,7 +154,7 @@ describe("console recovery", () => {
     expect(screen.queryByRole("textbox", { name: "Game command" })).toBeNull();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Docker Logs"]);
     expect(transport.send).not.toHaveBeenCalled();
-    expect(vi.mocked(apiJson).mock.calls.length).toBe(3);
+    expect(apiJsonMock.mock.calls.length).toBe(3);
   });
 
   it("hides stale identity, drafts, and output on explicit access denial until details are reloaded", async () => {
@@ -180,7 +182,7 @@ describe("console recovery", () => {
 
   it("ignores a late permission response after the connection has denied access", async () => {
     let completeVerification: (value: unknown) => void = () => {};
-    vi.mocked(apiJson)
+    apiJsonMock
       .mockResolvedValueOnce({ server, stats: null })
       .mockImplementationOnce(() => new Promise((resolve) => { completeVerification = resolve; }));
     const page = consolePage();
@@ -198,7 +200,7 @@ describe("console recovery", () => {
   });
 
   it("provides a real server-details link and recovers from a failed details request", async () => {
-    vi.mocked(apiJson).mockRejectedValueOnce(new Error("private API detail"));
+    apiJsonMock.mockRejectedValueOnce(new Error("private API detail"));
     const { navigate } = consolePage();
     expect((await screen.findByRole("alert")).textContent).toContain("Server details could not be loaded");
     expect(screen.queryByText("private API detail")).toBeNull();
@@ -212,7 +214,7 @@ describe("console recovery", () => {
   });
 
   it("keeps actual paused state visible, prevents commands, and still allows granted logs", async () => {
-    vi.mocked(apiJson).mockResolvedValue({ server: { ...server, state: "paused" }, stats: null });
+    apiJsonMock.mockResolvedValue({ server: { ...server, state: "paused" }, stats: null });
     consolePage();
     await screen.findByRole("tab", { name: "Game Console" });
     expect(socketOptions.url).toBe("");
@@ -230,7 +232,7 @@ describe("console recovery", () => {
   });
 
   it("does not offer logs or imply start access when neither permission is granted", async () => {
-    vi.mocked(apiJson).mockResolvedValue({
+    apiJsonMock.mockResolvedValue({
       server: { ...server, state: "exited", permissions: ["server.view", "console.execute"] },
       stats: null,
     });
@@ -278,7 +280,7 @@ describe("console keyboard navigation", () => {
 
   it("does not carry private drafts between different servers", async () => {
     const nextId = "6e174d0b-c46b-4fb3-a1c1-9ad6779517a0";
-    vi.mocked(apiJson).mockImplementation(async (path) => ({
+    apiJsonMock.mockImplementation(async (path) => ({
       server: { ...server, id: path.includes(nextId) ? nextId : server.id }, stats: null,
     }));
     const page = consolePage();

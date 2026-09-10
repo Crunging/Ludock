@@ -7,6 +7,7 @@ import { createLogger } from "./logger.js";
 import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
+import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
 
 export const LABEL_FILES = "ludock.files";
 const logger = createLogger("files");
@@ -459,7 +460,7 @@ export async function pumpDockerDownload(
 
 function helperOptions(request: FileRequest): Docker.ExecCreateOptions {
   return {
-    Cmd: ["node", "-e", FILE_HELPER_SCRIPT, JSON.stringify(request)],
+    Cmd: ["bun", "-e", FILE_HELPER_SCRIPT, JSON.stringify(request)],
     AttachStdout: true,
     AttachStderr: true,
     AttachStdin: request.operation === "upload",
@@ -569,10 +570,10 @@ export async function acquireFileContainer(
     };
   });
   const proof = await createMountProof(selected);
-  const image = process.env.FILE_HELPER_IMAGE || "node:24-alpine";
+  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
   const containerOptions: Docker.ContainerCreateOptions = {
     Image: image,
-    Entrypoint: ["node", "-e"],
+    Entrypoint: ["bun", "-e"],
     Cmd: [
       "setInterval(() => {}, 3600000); setTimeout(() => process.exit(0), 2100000)",
     ],

@@ -1,7 +1,6 @@
-import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type Docker from "dockerode";
-import type { WebSocket } from "ws";
+import type { SocketChannel } from "./socket-channel.js";
 import { getContainer, getDockerInstance } from "./docker.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
 import { rawDataToString } from "./ws-message.js";
@@ -26,12 +25,13 @@ const logger = createLogger("console");
 const MAX_PENDING_MESSAGES = 10;
 
 export async function handleConsoleConnection(
-  ws: WebSocket,
-  req: IncomingMessage,
+  ws: SocketChannel,
+  req: Request,
   auth: WebSocketAuth,
   mode: ConsoleMode,
+  remoteAddress?: string,
 ): Promise<void> {
-  const url = new URL(req.url || "", `http://${req.headers.host}`);
+  const url = new URL(req.url);
   const serverId = url.pathname.split("/").filter(Boolean).at(-1);
   if (!serverId) {
     sendMessage(ws, "error", "Missing server ID");
@@ -90,7 +90,7 @@ export async function handleConsoleConnection(
       containerId,
       bindingRevision: access.context.logical.bindingRevision,
     },
-    ipAddress: req.socket.remoteAddress,
+    ipAddress: remoteAddress,
   });
 
   let logStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
@@ -102,8 +102,7 @@ export async function handleConsoleConnection(
   };
   const pendingMessages: string[] = [];
   let processing = false;
-  ws.once("close", cleanup);
-  ws.once("error", cleanup);
+  ws.onClose(cleanup);
 
   const execute = async (raw: string): Promise<void> => {
     if (!access.allowed()) return;
@@ -164,7 +163,7 @@ export async function handleConsoleConnection(
             containerId,
             bindingRevision: current.logical.bindingRevision,
           },
-          ipAddress: req.socket.remoteAddress,
+          ipAddress: remoteAddress,
         });
         try {
           if (mode === "game")
@@ -222,7 +221,7 @@ export async function handleConsoleConnection(
       processing = false;
     }
   };
-  ws.on("message", (raw) => {
+  ws.onMessage((raw) => {
     if (!access.allowed()) return;
     if (pendingMessages.length >= MAX_PENDING_MESSAGES) {
       send("error", "Too many commands queued");
@@ -312,9 +311,9 @@ async function executeShell(
 }
 
 function sendMessage(
-  ws: WebSocket,
+  ws: SocketChannel,
   type: "stdout" | "stderr" | "system" | "error",
   data: string,
 ): void {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data }));
+  if (ws.isOpen) ws.send(JSON.stringify({ type, data }));
 }

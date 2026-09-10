@@ -2,7 +2,6 @@ import net from "node:net";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type Docker from "dockerode";
-import WebSocket, { type RawData } from "ws";
 import { getDockerInstance } from "./docker.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
@@ -180,22 +179,30 @@ export async function executeRustWebRcon(
   return new Promise<string>((resolve, reject) => {
     const identifier = randomRequestId();
     const url = `ws://${formatHost(host)}:${port}/${encodeURIComponent(password)}`;
-    const socket = new WebSocket(url, { handshakeTimeout: CONNECT_TIMEOUT_MS });
+    const socket = new globalThis.WebSocket(url);
+    socket.binaryType = "arraybuffer";
     let settled = false;
     const timeout = setTimeout(() => {
       finish(new Error("WebRCON command timed out"));
     }, COMMAND_TIMEOUT_MS);
+    const handshakeTimeout = setTimeout(() => {
+      finish(new Error("WebRCON connection timed out"));
+    }, CONNECT_TIMEOUT_MS);
 
     const finish = (error?: Error, response = "") => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      socket.close();
+      clearTimeout(handshakeTimeout);
+      if (error) socket.terminate();
+      else socket.close();
       if (error) reject(error);
       else resolve(response);
     };
 
-    socket.once("open", () => {
+    socket.addEventListener("open", () => {
+      clearTimeout(handshakeTimeout);
+      if (settled) return;
       try {
         assertAccess?.();
         socket.send(
@@ -209,8 +216,14 @@ export async function executeRustWebRcon(
         finish(new Error("Console access changed"));
       }
     });
-    socket.on("message", (raw: RawData) => {
+    socket.addEventListener("message", (event) => {
+      if (settled) return;
       try {
+        const raw: unknown = event.data;
+        if (typeof raw !== "string" && !(raw instanceof ArrayBuffer))
+          throw new Error("Unsupported WebRCON message");
+        if ((typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength) > MAX_RCON_PACKET_SIZE)
+          throw new Error("WebRCON response is too large");
         const message = JSON.parse(rawDataToString(raw)) as {
           Identifier?: unknown;
           Message?: unknown;
@@ -226,10 +239,10 @@ export async function executeRustWebRcon(
         finish(new Error("The WebRCON server returned an invalid response"));
       }
     });
-    socket.once("error", () => {
+    socket.addEventListener("error", () => {
       finish(new Error("Could not connect or authenticate with Rust WebRCON"));
     });
-    socket.once("close", () => finish(
+    socket.addEventListener("close", () => finish(
       new Error("WebRCON connection closed before the command response"),
     ));
   });

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, spyOn } from "bun:test";
 import Account from "../src/pages/Account";
 import Audit from "../src/pages/Audit";
 import ApplicationLogs from "../src/pages/ApplicationLogs";
@@ -26,7 +26,7 @@ describe("account and history recovery", () => {
   it("preserves password success and newer edits when the following sessions read fails", async () => {
     const saved = deferred<Response>();
     let sessionReads = 0;
-    const request = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+    const request = spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       if (init?.method === "POST") return saved.promise;
       return ++sessionReads === 1
         ? Response.json({ sessions: [] })
@@ -61,7 +61,7 @@ describe("account and history recovery", () => {
 
   it("shows audit loading and failure without claiming there is no activity", async () => {
     const pending = deferred<Response>();
-    const request = vi.spyOn(globalThis, "fetch").mockReturnValueOnce(pending.promise);
+    const request = spyOn(globalThis, "fetch").mockReturnValueOnce(pending.promise);
     render(<Audit />);
     expect(screen.getByRole("status").textContent).toContain("Loading audit log");
     expect(screen.queryByText("No audit activity yet")).toBeNull();
@@ -76,7 +76,7 @@ describe("account and history recovery", () => {
 
   it("hides stale diagnostics and its no-issues message after a failed refresh", async () => {
     let unavailable = false;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       if (String(url).endsWith("/integrations")) return Response.json({ integrations: [] });
       return unavailable
         ? Response.json({ error: "Diagnostics unavailable" }, { status: 503 })
@@ -95,7 +95,7 @@ describe("account and history recovery", () => {
 
   it("offers connection recovery without claiming discovery succeeded while Docker is unavailable", async () => {
     let connected = false;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+    spyOn(globalThis, "fetch").mockImplementation(async (url) =>
       String(url).endsWith("/integrations")
         ? Response.json({ integrations: [] })
         : Response.json({ diagnostics: [], dockerConnected: connected, composeAvailable: false }),
@@ -116,7 +116,7 @@ describe("account and history recovery", () => {
 
   it("aborts a paused log read and ignores its late response after resuming", async () => {
     const older = deferred<Response>();
-    const request = vi.spyOn(globalThis, "fetch")
+    const request = spyOn(globalThis, "fetch")
       .mockReturnValueOnce(older.promise)
       .mockResolvedValueOnce(logs("Resumed data", 12));
     render(<ApplicationLogs />);
@@ -135,7 +135,7 @@ describe("account and history recovery", () => {
     const denied = status === 200
       ? Response.json({ entries: [], secret: "invalid-response-private-value" })
       : Response.json({ error: "Log access denied" }, { status });
-    const request = vi.spyOn(globalThis, "fetch")
+    const request = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(logs("Previously visible log", 12))
       .mockResolvedValueOnce(denied)
       .mockResolvedValueOnce(logs("Recovered log", 20));
@@ -154,7 +154,7 @@ describe("account and history recovery", () => {
 
   it("aborts a pending manual refresh when unmounted while logs are paused", async () => {
     const pending = deferred<Response>();
-    const request = vi.spyOn(globalThis, "fetch")
+    const request = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(logs("Initial log"))
       .mockReturnValueOnce(pending.promise);
     const view = render(<ApplicationLogs />);

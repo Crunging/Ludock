@@ -74,7 +74,7 @@ const toBackup = (row: BackupRow): Backup => ({
 function backupRow(serverId: string, id: string): BackupRow {
   const row = getDatabase()
     .prepare("SELECT * FROM backups WHERE server_id=? AND id=?")
-    .get(serverId, id) as unknown as BackupRow | undefined;
+    .get(serverId, id) as BackupRow | null;
   if (!row || row.state !== "complete")
     throw failBackup("BACKUP_NOT_FOUND", "Backup not found.");
   return row;
@@ -577,7 +577,7 @@ async function restoreStep(
   assertAccess?: () => void,
 ): Promise<Record<string, unknown>> {
   const command = [
-    "node",
+    "bun",
     "-e",
     RESTORE_HELPER_SCRIPT,
     JSON.stringify({ operation, root, stage: stageName(job) }),

@@ -1,156 +1,107 @@
-import {
-  backupSettingsResponseSchema,
-  backupsResponseSchema,
-  operationResponseSchema,
-  okResponseSchema,
-  backupSettingsSchema,
-  restoreRequestSchema,
-  type BackupSettings,
-} from "@ludock/shared";
-import { Router, type Router as RouterType } from "express";
-import { requireRole, getRequestSession } from "../auth.js";
+import { backupSettingsResponseSchema, backupSettingsSchema, backupsResponseSchema, okResponseSchema, operationResponseSchema, restoreRequestSchema, type BackupSettings, } from "@ludock/shared";
+import { Readable } from "node:stream";
+import { assertRequestUser } from "../auth.js";
 import { assertServerCapability } from "../authorization.js";
+import { deleteBackup, getBackup, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
+import { AppError } from "../errors.js";
+import { enqueueOperation } from "../operations.js";
 import { refreshServers, resolveAuthorizedServer } from "../servers.js";
 import { getSetting, setSetting } from "../settings.js";
-import { enqueueOperation } from "../operations.js";
-import {
-  validateBackupSettings,
-  listBackups,
-  getBackup,
-  openBackupDownload,
-  deleteBackup,
-} from "../backups.js";
-import { AppError } from "../errors.js";
-import { respond, actor, id, audit, requestKey } from "./request.js";
+import { administrator, audit, id, requestKey, requestUser, respond, trackResponse, type ApiRoutes } from "./request.js";
 
-export const backupsRouter: RouterType = Router();
-
-backupsRouter.get(
-  "/api/v1/settings/backups",
-  requireRole("admin"),
-  (_req, res) =>
-    respond(res, backupSettingsResponseSchema, {
+export const backupsRoutes: ApiRoutes = {
+  "/api/v1/settings/backups": {
+    GET: administrator(() => respond(backupSettingsResponseSchema, {
       settings: getSetting<BackupSettings>("backups"),
-    }),
-);
-backupsRouter.put(
-  "/api/v1/settings/backups",
-  requireRole("admin"),
-  async (req, res) => {
-    const settings = backupSettingsSchema.parse(req.body);
-    await validateBackupSettings(settings);
-    setSetting("backups", settings);
-    audit(actor(res), "settings.backups.updated");
-    respond(res, backupSettingsResponseSchema, { settings });
+    })),
+    PUT: administrator(async (ctx) => {
+      const settings = backupSettingsSchema.parse(ctx.body);
+      await validateBackupSettings(settings);
+      setSetting("backups", settings);
+      audit(requestUser(ctx), "settings.backups.updated");
+      return respond(backupSettingsResponseSchema, { settings });
+    })
   },
-);
-backupsRouter.get("/api/v1/servers/:id/backups", async (req, res) => {
-  const serverId = id(req.params.id);
-  await refreshServers();
-  const user = actor(res);
-  assertServerCapability(
-    user,
-    serverId,
-    user.role === "admin" ? "backups.read" : "backups.create",
-  );
-  respond(res, backupsResponseSchema, { backups: listBackups(serverId) });
-});
-backupsRouter.post("/api/v1/servers/:id/backups", async (req, res) => {
-  const serverId = id(req.params.id);
-  const user = actor(res);
-  const context = await resolveAuthorizedServer(
-    user,
-    serverId,
-    "backups.create",
-  );
-  respond(res.status(202), operationResponseSchema, {
-    operation: enqueueOperation({
-      serverId,
-      actorId: user.id,
-      kind: "backup",
-      bindingRevision: context.logical.bindingRevision,
-      idempotencyKey: requestKey(req.get("Idempotency-Key")),
-    }),
-  });
-});
-backupsRouter.get(
-  "/api/v1/servers/:id/backups/:backupId/download",
-  requireRole("admin"),
-  async (req, res) => {
-    const serverId = id(req.params.id);
-    assertServerCapability(actor(res), serverId, "backups.read");
-    const backupId = id(req.params.backupId);
-    getBackup(serverId, backupId);
-    const stream = await openBackupDownload(serverId, backupId);
-    res.setHeader("Content-Type", "application/x-tar");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="ludock-${backupId}.tar"`,
-    );
-    audit(actor(res), "backup.downloaded", serverId, { backupId });
-    const user = actor(res);
-    const revalidate = setInterval(() => {
-      try {
-        if (user.id !== "api-token" && !getRequestSession(req))
-          throw new AppError("ACCESS_REVOKED", 401, "Session expired");
-        assertServerCapability(user, serverId, "backups.read");
-      } catch {
-        stream.destroy();
-        res.destroy();
-      }
-    }, 1000);
-    revalidate.unref();
-    const cleanup = () => {
-      clearInterval(revalidate);
-      stream.destroy();
-    };
-    stream.on("error", () => res.destroy());
-    res.once("close", cleanup);
-    res.once("finish", cleanup);
-    stream.pipe(res);
+  "/api/v1/servers/:id/backups": {
+    GET: async (ctx) => {
+      const serverId = id(ctx.params.id);
+      await refreshServers();
+      const user = requestUser(ctx);
+      assertServerCapability(user, serverId, user.role === "admin" ? "backups.read" : "backups.create");
+      return respond(backupsResponseSchema, { backups: listBackups(serverId) });
+    },
+    POST: async (ctx) => {
+      const serverId = id(ctx.params.id);
+      const user = requestUser(ctx);
+      const context = await resolveAuthorizedServer(user, serverId, "backups.create");
+      return respond(operationResponseSchema, {
+        operation: enqueueOperation({
+          serverId,
+          actorId: user.id,
+          kind: "backup",
+          bindingRevision: context.logical.bindingRevision,
+          idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
+        }),
+      }, 202);
+    }
   },
-);
-backupsRouter.delete(
-  "/api/v1/servers/:id/backups/:backupId",
-  requireRole("admin"),
-  async (req, res) => {
-    const serverId = id(req.params.id);
-    assertServerCapability(actor(res), serverId, "backups.delete");
-    await deleteBackup(serverId, id(req.params.backupId));
-    audit(actor(res), "backup.deleted", serverId, {
-      backupId: req.params.backupId,
-    });
-    respond(res, okResponseSchema, { ok: true });
-  },
-);
-backupsRouter.post(
-  "/api/v1/servers/:id/restores",
-  requireRole("admin"),
-  async (req, res) => {
-    const user = actor(res);
-    const serverId = id(req.params.id);
-    const input = restoreRequestSchema.parse(req.body);
-    const context = await resolveAuthorizedServer(
-      user,
-      serverId,
-      "backups.restore",
-    );
-    if (input.confirmation !== context.container.displayName)
-      throw new AppError(
-        "CONFIRMATION_REQUIRED",
-        400,
-        "Type the server name to confirm the restore",
+  "/api/v1/servers/:id/backups/:backupId/download": {
+    GET: administrator(async (ctx) => {
+      const serverId = id(ctx.params.id);
+      assertServerCapability(requestUser(ctx), serverId, "backups.read");
+      const backupId = id(ctx.params.backupId);
+      getBackup(serverId, backupId);
+      const stream = await openBackupDownload(serverId, backupId);
+      ctx.headers.set("Content-Type", "application/x-tar");
+      ctx.headers.set("Content-Disposition", `attachment; filename="ludock-${backupId}.tar"`);
+      audit(requestUser(ctx), "backup.downloaded", serverId, { backupId });
+      const user = requestUser(ctx);
+      const revoked = new AbortController();
+      const signal = AbortSignal.any([ctx.request.signal, revoked.signal]);
+      const revalidate = setInterval(() => {
+        try {
+          const current = assertRequestUser(ctx.request, user);
+          assertServerCapability(current, serverId, "backups.read");
+        }
+        catch (error) { revoked.abort(error); }
+      }, 1000);
+      revalidate.unref();
+      return trackResponse(
+        new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>), signal,
+        () => { clearInterval(revalidate); stream.destroy(); },
       );
-    getBackup(serverId, input.backupId);
-    respond(res.status(202), operationResponseSchema, {
-      operation: enqueueOperation({
-        serverId,
-        actorId: user.id,
-        kind: "restore",
-        bindingRevision: context.logical.bindingRevision,
-        input,
-        idempotencyKey: requestKey(req.get("Idempotency-Key")),
-      }),
-    });
+    })
   },
-);
+  "/api/v1/servers/:id/backups/:backupId": {
+    DELETE: administrator(async (ctx) => {
+      const serverId = id(ctx.params.id);
+      assertServerCapability(requestUser(ctx), serverId, "backups.delete");
+      await deleteBackup(serverId, id(ctx.params.backupId));
+      audit(requestUser(ctx), "backup.deleted", serverId, {
+        backupId: ctx.params.backupId,
+      });
+      return respond(okResponseSchema, { ok: true });
+    })
+  },
+  "/api/v1/servers/:id/restores": {
+    POST: administrator(async (ctx) => {
+      const user = requestUser(ctx);
+      const serverId = id(ctx.params.id);
+      const input = restoreRequestSchema.parse(ctx.body);
+      const context = await resolveAuthorizedServer(user, serverId, "backups.restore");
+      if (input.confirmation !== context.container.displayName)
+        throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm the restore");
+      getBackup(serverId, input.backupId);
+      return respond(operationResponseSchema, {
+        operation: enqueueOperation({
+          serverId,
+          actorId: user.id,
+          kind: "restore",
+          bindingRevision: context.logical.bindingRevision,
+          input,
+          idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
+        }),
+      }, 202);
+    })
+  }
+};

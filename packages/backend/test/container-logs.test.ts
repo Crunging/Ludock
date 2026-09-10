@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { after, afterEach, beforeEach, describe, it } from "node:test";
-import type { WebSocket } from "ws";
+import { afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
+import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import { ConsoleOutputRedactor } from "../src/console-redaction.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -33,7 +32,10 @@ const administrator = {
   role: "admin" as const,
 };
 
-class FakeWebSocket extends EventEmitter {
+class FakeWebSocket extends EventEmitter implements SocketChannel {
+  get isOpen() { return this.readyState === 1; }
+  onMessage(listener: (message: SocketMessage) => void): void { this.on("message", listener); }
+  onClose(listener: (code: number) => void): void { this.once("close", listener); }
   readonly OPEN = 1;
   readyState = this.OPEN;
   sent: Array<{ type: string; data: string }> = [];
@@ -145,7 +147,7 @@ describe("Docker log WebSocket", () => {
     );
     const ws = new FakeWebSocket();
     await handleContainerLogsConnection(
-      ws as unknown as WebSocket,
+      ws,
       request(`/ws/v1/logs/${logicalId}`),
       viewerAuth(),
     );
@@ -191,7 +193,7 @@ describe("Docker log WebSocket", () => {
       (async () => []) as unknown as typeof docker.listContainers;
     const ws = new FakeWebSocket();
     await handleContainerLogsConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("/ws/v1/logs/unmanaged-id"),
       viewerAuth(),
     );
@@ -215,12 +217,8 @@ function viewerAuth() {
   return { user, validate: () => user };
 }
 
-function request(path: string): IncomingMessage {
-  return {
-    url: path,
-    headers: { host: "localhost" },
-    socket: { remoteAddress: "127.0.0.1" },
-  } as unknown as IncomingMessage;
+function request(path: string): Request {
+  return new Request(`http://localhost${path}`);
 }
 
 function managedInspect(id: string, managed: boolean) {

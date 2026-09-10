@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it } from "bun:test";
 import type Docker from "dockerode";
-import { WebSocketServer } from "ws";
+import { serve } from "bun";
 import {
   executeGameCommand,
   executeRustWebRcon,
@@ -92,15 +92,37 @@ describe("Source RCON transport", () => {
 });
 
 describe("Rust WebRCON transport", () => {
+  it("rejects malformed responses without exposing connection credentials", async () => {
+    const server = serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) {
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: { message(socket) { socket.send("invalid credential-response"); } },
+    });
+    closers.push(() => server.stop(true));
+    await assert.rejects(executeRustWebRcon("127.0.0.1", server.port!, "do-not-leak", "status"), (error: Error) => {
+      assert.match(error.message, /invalid response/);
+      assert.doesNotMatch(error.message, /do-not-leak|credential-response/);
+      return true;
+    });
+  });
+
   it("does not send a command after access changes during the WebSocket handshake", async () => {
     let allowed = true;
     let sent = false;
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    server.on("connection", (socket) => {
-      allowed = false;
-      socket.on("message", () => { sent = true; });
+    const server = serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) {
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: {
+        open() { allowed = false; },
+        message() { sent = true; },
+      },
     });
-    const port = await websocketPort(server);
+    closers.push(() => server.stop(true));
+    const port = server.port!;
     await assert.rejects(executeRustWebRcon("127.0.0.1", port, "credential", "stop", () => {
       if (!allowed) throw new Error("Access revoked");
     }), /Console access changed/);
@@ -108,27 +130,28 @@ describe("Rust WebRCON transport", () => {
   });
   it("uses the WebRCON request envelope and matches its response", async () => {
     let requestPath = "";
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    server.on("connection", (socket, request) => {
-      requestPath = request.url || "";
-      socket.once("message", (raw) => {
-        const message = JSON.parse(raw.toString()) as {
-          Identifier: number;
-          Message: string;
-          Name: string;
-        };
-        assert.equal(message.Message, "server.save");
-        assert.equal(message.Name, "Ludock");
-        socket.send(
-          JSON.stringify({
-            Identifier: message.Identifier,
-            Message: "Saved",
-            Name: "WebRcon",
-          })
-        );
-      });
+    const server = serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) {
+        requestPath = new URL(request.url).pathname;
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: {
+        message(socket, raw) {
+          const message = JSON.parse(raw.toString()) as {
+            Identifier: number;
+            Message: string;
+            Name: string;
+          };
+          assert.equal(message.Message, "server.save");
+          assert.equal(message.Name, "Ludock");
+          socket.send(JSON.stringify({ Identifier: message.Identifier + 1, Message: "Unrelated event" }));
+          socket.send(new TextEncoder().encode(JSON.stringify({ Identifier: message.Identifier, Message: "Saved", Name: "WebRcon" })));
+        },
+      },
     });
-    const port = await websocketPort(server);
+    closers.push(() => server.stop(true));
+    const port = server.port!;
 
     const response = await executeRustWebRcon(
       "127.0.0.1",
@@ -327,24 +350,6 @@ async function listen(server: net.Server): Promise<number> {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  closers.push(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      })
-  );
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  return address.port;
-}
-
-async function websocketPort(server: WebSocketServer): Promise<number> {
-  if (!server.address()) {
-    await new Promise<void>((resolve, reject) => {
-      server.once("listening", resolve);
-      server.once("error", reject);
-    });
-  }
   closers.push(
     () =>
       new Promise<void>((resolve, reject) => {

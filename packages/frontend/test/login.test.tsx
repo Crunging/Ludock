@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import { AuthContext, type AuthContextValue } from "../src/auth-context";
 import Login from "../src/pages/Login";
 
@@ -12,10 +12,10 @@ function loginPage(overrides: Partial<AuthContextValue> = {}) {
     setupLocked: false,
     authenticated: false,
     user: null,
-    refreshStatus: vi.fn().mockResolvedValue(undefined),
-    login: vi.fn().mockResolvedValue(null),
-    setup: vi.fn().mockResolvedValue(null),
-    logout: vi.fn().mockResolvedValue(undefined),
+    refreshStatus: mock().mockResolvedValue(undefined),
+    login: mock().mockResolvedValue(null),
+    setup: mock().mockResolvedValue(null),
+    logout: mock().mockResolvedValue(undefined),
     ...overrides,
   };
   const content = () => <AuthContext.Provider value={auth}><Login /></AuthContext.Provider>;
@@ -71,16 +71,16 @@ describe("first sign-in", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(confirmation.hasAttribute("aria-invalid")).toBe(false);
     await userEvent.click(screen.getByRole("button", { name: "Create administrator" }));
-    expect(auth.setup).toHaveBeenCalledOnce();
+    expect(auth.setup).toHaveBeenCalledTimes(1);
   });
 
   it("keeps expired setup locked while checking the server after a restart", async () => {
     let finish!: () => void;
-    const refreshStatus = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const refreshStatus = mock().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
     const { auth, update } = loginPage({ setupLocked: true, refreshStatus });
     expect(screen.queryByRole("textbox")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));
-    expect(refreshStatus).toHaveBeenCalledOnce();
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
     expect((screen.getByRole("button", { name: "Checking…" }) as HTMLButtonElement).disabled).toBe(true);
     expect(auth.setup).not.toHaveBeenCalled();
     await act(async () => finish());

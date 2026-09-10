@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import type Docker from "dockerode";
 import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
+import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
 
 export interface MountIdentity {
   dev: string;
@@ -71,10 +72,10 @@ export async function createMountProof(
       destination: path.posix.normalize(mount.Destination).replace(/\/$/, ""),
     }));
   if (!sources.length) return { identities: {}, cleanup: async () => {} };
-  const image = process.env.FILE_HELPER_IMAGE || "node:24-alpine";
+  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
   const options: Docker.ContainerCreateOptions = {
     Image: image,
-    Entrypoint: ["node", "-e"],
+    Entrypoint: ["bun", "-e"],
     Cmd: [
       MOUNT_PROOF_SCRIPT,
       JSON.stringify(sources),
@@ -219,7 +220,7 @@ const fs=require("node:fs/promises"),C=require("node:fs").constants;
 }})().catch(()=>{process.exitCode=1});
 `;
   const execution = await container.exec({
-    Cmd: ["node", "-e", script, JSON.stringify(identities)],
+    Cmd: ["bun", "-e", script, JSON.stringify(identities)],
     AttachStdout: true,
     AttachStderr: true,
   });

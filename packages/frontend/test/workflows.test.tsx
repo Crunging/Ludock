@@ -1,5 +1,5 @@
 import ViewPreferencesProvider from "../src/ViewPreferences";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -19,9 +19,11 @@ import ServerGrants from "../src/components/ServerGrants";
 import type { ManagedContainer } from "../src/types";
 import { apiJson } from "../src/api";
 
-vi.mock("../src/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/api")>()),
-  apiJson: vi.fn(),
+const originalApi = { ...await import("../src/api") };
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiJson: apiJsonMock,
 }));
 const server: ManagedContainer = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
@@ -73,7 +75,7 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
     ...(role === "admin" ? { permissions: [...SERVER_CAPABILITIES] } : {}),
     ...options.server,
   };
-  vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+  apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const response = await options.onRequest?.(path, init);
     if (response !== undefined) return response;
     if (init?.method && init.method !== "GET")
@@ -114,7 +116,7 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
       }
     >
       <NavigationContext.Provider
-        value={{ pathname: `/servers/${server.id}`, navigate: vi.fn() }}
+        value={{ pathname: `/servers/${server.id}`, navigate: mock() }}
       >
         <ViewPreferencesProvider><ServerDetail serverId={server.id} /></ViewPreferencesProvider>
       </NavigationContext.Provider>
@@ -325,7 +327,7 @@ describe("server management panels", () => {
   });
 
   it("asks before creating a stopped backup and refreshes Activity after queuing", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirm = spyOn(window, "confirm").mockReturnValue(false);
     detail();
     await userEvent.click(await screen.findByRole("tab", { name: "Backups" }));
     await userEvent.click(
@@ -335,16 +337,14 @@ describe("server management panels", () => {
       expect.stringContaining("stops for the entire copy"),
     );
     expect(
-      vi
-        .mocked(apiJson)
+      apiJsonMock
         .mock.calls.some(
           ([path, , init]) =>
             path.endsWith("/backups") && init?.method === "POST",
         ),
     ).toBe(false);
     confirm.mockReturnValue(true);
-    const initialRefreshes = vi
-      .mocked(apiJson)
+    const initialRefreshes = apiJsonMock
       .mock.calls.filter(([path]) => path.endsWith("/operations")).length;
     await userEvent.click(
       screen.getByRole("button", { name: "Create backup" }),
@@ -361,8 +361,7 @@ describe("server management panels", () => {
       expect.objectContaining({ method: "POST", body: "{}" }),
     );
     expect(
-      vi
-        .mocked(apiJson)
+      apiJsonMock
         .mock.calls.filter(([path]) => path.endsWith("/operations")).length,
     ).toBeGreaterThan(initialRefreshes);
   });
@@ -447,7 +446,7 @@ describe("server management panels", () => {
     expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restore…" })).toBeNull();
     expect(
-      vi.mocked(apiJson).mock.calls.some(([path]) => path.endsWith("/backups")),
+      apiJsonMock.mock.calls.some(([path]) => path.endsWith("/backups")),
     ).toBe(false);
   });
 
@@ -608,7 +607,7 @@ describe("server management panels", () => {
   });
 
   it("polls active operations faster and returns to the idle cadence after refresh", async () => {
-    const interval = vi.spyOn(window, "setInterval");
+    const interval = spyOn(window, "setInterval");
     let operations: Operation[] = [
       { ...completedUpdate, status: "running", phase: "backing_up" },
     ];
@@ -631,7 +630,7 @@ describe("server management panels", () => {
 
 describe("server sharing", () => {
   it("start and stop preset saves only the selected server's three explicit grants", async () => {
-    vi.mocked(apiJson).mockImplementation(async (path) =>
+    apiJsonMock.mockImplementation(async (path) =>
       path === "/servers" ? { servers: [server] } : { grants: [] },
     );
     render(
@@ -639,7 +638,7 @@ describe("server sharing", () => {
         userId="friend"
         username="Friend"
         role="operator"
-        onClose={vi.fn()}
+        onClose={mock()}
       />,
     );
     await userEvent.click(
@@ -679,7 +678,7 @@ describe("server sharing", () => {
     );
   });
   it("viewer grants expose only status, logs, and file read options", async () => {
-    vi.mocked(apiJson).mockImplementation(async (path) =>
+    apiJsonMock.mockImplementation(async (path) =>
       path === "/servers" ? { servers: [server] } : { grants: [] },
     );
     render(
@@ -687,7 +686,7 @@ describe("server sharing", () => {
         userId="viewer"
         username="Viewer"
         role="viewer"
-        onClose={vi.fn()}
+        onClose={mock()}
       />,
     );
     await screen.findByRole("checkbox", { name: "View server" });
@@ -746,7 +745,7 @@ describe("server detail request ownership", () => {
     const submit = screen.getByRole("button", { name: "Restore game data" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.submit(submit.closest("form")!);
-    expect(vi.mocked(apiJson).mock.calls.some(([path, , init]) => path.endsWith("/restores") && init?.method === "POST")).toBe(false);
+    expect(apiJsonMock.mock.calls.some(([path, , init]) => path.endsWith("/restores") && init?.method === "POST")).toBe(false);
   });
 
   it("consumes update confirmation when the action succeeds but its refresh fails", async () => {

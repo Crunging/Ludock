@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import { mountsOverlap, stopForDataOperation } from "../src/backups.js";
 import type { ServerObservation } from "../src/identity.js";
 import { listLogicalServers } from "../src/identity.js";

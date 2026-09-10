@@ -46,7 +46,7 @@ After signing in:
 To test a local build:
 
 ```bash
-docker build -t ludock:test .
+docker build --pull -t ludock:test .
 docker run --rm -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v ludock-data:/data \
@@ -55,6 +55,7 @@ docker run --rm -p 3000:3000 \
   ludock:test
 ```
 
+`--pull` refreshes the Bun 1 and Alpine 3 base images used by the local build.
 Container images target **Linux AMD64 and ARM64**. Each platform requires its own
 runtime smoke checks; see [Testing](./TESTING.md). This does not imply that all
 recognized game images support both architectures.
@@ -106,7 +107,8 @@ flows, limitations, and recovery behavior.
 - [Operations](./docs/OPERATIONS.md): deployment settings, permissions, backups,
   schedules, Compose updates, monitoring, notifications, and recovery.
 - [Testing](./TESTING.md): automated checks and disposable-server acceptance.
-- [Contributing](./CONTRIBUTING.md): Node.js 24 / pnpm 10 development workflow.
+- [Contributing](./CONTRIBUTING.md): development with Bun 1 and manual tool and
+  dependency updates.
 - [Architecture](./docs/ARCHITECTURE.md): shared contracts, feature modules, and
   development instance boundaries.
 - [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
@@ -118,9 +120,10 @@ does not make Docker API requests read-only. Deploy one Ludock instance per
 managed Docker host, keep it on a trusted network, and use an HTTPS reverse
 proxy for remote access.
 
-Browser sessions use revocable HttpOnly cookies, passwords are hashed with
-scrypt, and authorization is enforced in the API, WebSockets, and background
-jobs. Discovery eligibility is separate from a user's permission to access a
+Browser sessions use revocable HttpOnly cookies. New passwords use Argon2id;
+existing scrypt hashes remain valid and are upgraded after a successful sign-in.
+Authorization is enforced in the API, WebSockets, and background jobs.
+Discovery eligibility is separate from a user's permission to access a
 server. Console credentials and notification webhooks are never returned to
 the browser.
 

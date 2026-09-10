@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { Database } from "bun:sqlite";
 import { applyMigrations, assertCompatibleDatabase } from "./migrations.js";
 
 import type {
@@ -22,9 +22,9 @@ export interface LoginThrottle {
   blockedUntil: number;
 }
 
-let database: DatabaseSync | null = null;
+let database: Database | null = null;
 
-export function getDatabase(): DatabaseSync {
+export function getDatabase(): Database {
   if (database) return database;
 
   const configuredPath = process.env.LUDOCK_DB_PATH;
@@ -40,29 +40,29 @@ export function getDatabase(): DatabaseSync {
     fs.existsSync(dbPath) &&
     fs.statSync(dbPath).size > 0
   ) {
-    const existing = new DatabaseSync(dbPath, { readOnly: true });
+    const existing = new Database(dbPath, { readonly: true });
     try {
       assertCompatibleDatabase(existing);
     } finally {
-      existing.close();
+      existing.close(true);
     }
   }
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
   }
-  const opened = new DatabaseSync(dbPath, {
-    enableForeignKeyConstraints: true,
-    timeout: 5000,
+  const opened = new Database(dbPath, {
+    strict: true,
   });
   try {
     assertCompatibleDatabase(opened);
     opened.exec("PRAGMA foreign_keys = ON");
+    opened.exec("PRAGMA busy_timeout = 5000");
     applyMigrations(opened);
     opened.exec("PRAGMA journal_mode = WAL");
     if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
     database = opened;
   } catch (error) {
-    opened.close();
+    opened.close(true);
     throw error;
   }
 
@@ -81,7 +81,7 @@ export function getLoginThrottle(
     )
     .get(attemptKey) as
     | { failures: number; window_started_at: number; blocked_until: number }
-    | undefined;
+    | null;
 
   if (
     !row ||
@@ -110,7 +110,7 @@ export function recordLoginFailure(
     .prepare(
       "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?",
     )
-    .get(attemptKey) as { window_started_at: number } | undefined;
+    .get(attemptKey) as { window_started_at: number } | null;
   getDatabase()
     .prepare(
       `INSERT INTO login_attempts
@@ -189,7 +189,7 @@ export function findUserByUsername(username: string): UserRecord | null {
         disabled: number;
         created_at: number;
       }
-    | undefined;
+    | null;
 
   return row
     ? {
@@ -218,7 +218,7 @@ export function findUserById(id: string): UserRecord | null {
         disabled: number;
         created_at: number;
       }
-    | undefined;
+    | null;
   return row
     ? {
         id: row.id,
@@ -410,7 +410,7 @@ export function findSessionUser(
         expires_at: number;
         last_seen_at: number;
       }
-    | undefined;
+    | null;
 
   if (!row || row.disabled === 1 || row.expires_at <= now) {
     if (row) deleteSessionRecord(tokenHash);
@@ -522,6 +522,6 @@ export function listAuditLog(limit: number): AuditRecord[] {
 }
 
 export function closeDatabase(): void {
-  database?.close();
+  database?.close(true);
   database = null;
 }

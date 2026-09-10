@@ -85,7 +85,7 @@ export function createSchedule(
   return publicSchedule(
     getDatabase()
       .prepare("SELECT * FROM schedules WHERE id=?")
-      .get(id) as unknown as ScheduleRow,
+      .get(id) as ScheduleRow,
   );
 }
 export function deleteSchedule(
@@ -96,7 +96,7 @@ export function deleteSchedule(
   assertServerCapability(actor, serverId, "schedules.manage");
   const row = getDatabase()
     .prepare("SELECT * FROM schedules WHERE id=? AND server_id=?")
-    .get(id, serverId) as unknown as ScheduleRow | undefined;
+    .get(id, serverId) as ScheduleRow | null;
   if (!row || (actor.role !== "admin" && row.owner_id !== actor.id))
     throw new AppError("NOT_FOUND", 404, "Schedule not found");
   getDatabase().prepare("DELETE FROM schedules WHERE id=?").run(id);

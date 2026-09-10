@@ -1,27 +1,10 @@
-import {
-  updateCapabilityResponseSchema,
-  operationResponseSchema,
-  composeProjectsResponseSchema,
-  composeProjectResponseSchema,
-  okResponseSchema,
-  updateRequestSchema,
-} from "@ludock/shared";
-import { Router, type Router as RouterType } from "express";
-import { requireRole } from "../auth.js";
+import { composeProjectResponseSchema, composeProjectsResponseSchema, okResponseSchema, operationResponseSchema, updateCapabilityResponseSchema, updateRequestSchema, } from "@ludock/shared";
+import { deleteComposeProject, listComposeProjects, registerComposeProject, updateCapability, validatedProject, type ComposeProject, } from "../compose.js";
 import { getDatabase } from "../database.js";
-import { resolveAuthorizedServer } from "../servers.js";
-import { enqueueOperation } from "../operations.js";
-import {
-  deleteComposeProject,
-  listComposeProjects,
-  registerComposeProject,
-  updateCapability,
-  validatedProject,
-  type ComposeProject,
-} from "../compose.js";
 import { AppError } from "../errors.js";
-import { respond, actor, id, audit, requestKey } from "./request.js";
-
+import { enqueueOperation } from "../operations.js";
+import { resolveAuthorizedServer } from "../servers.js";
+import { administrator, audit, id, requestKey, requestUser, respond, type ApiRoutes } from "./request.js";
 function publicProject(project: ComposeProject) {
   return {
     id: project.id,
@@ -33,103 +16,69 @@ function publicProject(project: ComposeProject) {
   };
 }
 
-export const composeRouter: RouterType = Router();
-
-composeRouter.get(
-  "/api/v1/servers/:id/update-capability",
-  requireRole("admin"),
-  async (req, res) => {
-    const context = await resolveAuthorizedServer(
-      actor(res),
-      id(req.params.id),
-      "server.update",
-    );
-    respond(res, updateCapabilityResponseSchema, {
-      capability: await updateCapability(context),
-    });
-  },
-);
-composeRouter.post(
-  "/api/v1/servers/:id/updates",
-  requireRole("admin"),
-  async (req, res) => {
-    const user = actor(res);
-    const serverId = id(req.params.id);
-    const request = updateRequestSchema.parse(req.body);
-    const context = await resolveAuthorizedServer(
-      user,
-      serverId,
-      request.forceRecreate ? "server.recreate" : "server.update",
-    );
-    if (
-      !request.createBackup &&
-      request.skipBackupConfirmation !== context.container.displayName
-    )
-      throw new AppError(
-        "CONFIRMATION_REQUIRED",
-        400,
-        "Type the server name to confirm skipping backup",
-      );
-    const { snapshot } = await validatedProject(context);
-    try {
-      audit(user, "server.update.confirmed", serverId, {
-        createBackup: request.createBackup,
-        forceRecreate: request.forceRecreate,
-        sourceFingerprint: snapshot.fingerprint,
+export const composeRoutes: ApiRoutes = {
+  "/api/v1/servers/:id/update-capability": {
+    GET: administrator(async (ctx) => {
+      const context = await resolveAuthorizedServer(requestUser(ctx), id(ctx.params.id), "server.update");
+      return respond(updateCapabilityResponseSchema, {
+        capability: await updateCapability(context),
       });
-      respond(res.status(202), operationResponseSchema, {
-        operation: enqueueOperation({
-          serverId,
-          actorId: user.id,
-          kind: "update",
-          bindingRevision: context.logical.bindingRevision,
-          input: { request, sourceFingerprint: snapshot.fingerprint },
-          idempotencyKey: requestKey(req.get("Idempotency-Key")),
-        }),
-      });
-    } finally {
-      await snapshot.cleanup();
-    }
+    })
   },
-);
-composeRouter.get(
-  "/api/v1/compose-projects",
-  requireRole("admin"),
-  (_req, res) =>
-    respond(res, composeProjectsResponseSchema, {
+  "/api/v1/servers/:id/updates": {
+    POST: administrator(async (ctx) => {
+      const user = requestUser(ctx);
+      const serverId = id(ctx.params.id);
+      const request = updateRequestSchema.parse(ctx.body);
+      const context = await resolveAuthorizedServer(user, serverId, request.forceRecreate ? "server.recreate" : "server.update");
+      if (!request.createBackup &&
+        request.skipBackupConfirmation !== context.container.displayName)
+        throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
+      const { snapshot } = await validatedProject(context);
+      try {
+        audit(user, "server.update.confirmed", serverId, {
+          createBackup: request.createBackup,
+          forceRecreate: request.forceRecreate,
+          sourceFingerprint: snapshot.fingerprint,
+        });
+        return respond(operationResponseSchema, {
+          operation: enqueueOperation({
+            serverId,
+            actorId: user.id,
+            kind: "update",
+            bindingRevision: context.logical.bindingRevision,
+            input: { request, sourceFingerprint: snapshot.fingerprint },
+            idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
+          }),
+        }, 202);
+      }
+      finally {
+        await snapshot.cleanup();
+      }
+    })
+  },
+  "/api/v1/compose-projects": {
+    GET: administrator(() => respond(composeProjectsResponseSchema, {
       projects: listComposeProjects().map(publicProject),
-    }),
-);
-composeRouter.post(
-  "/api/v1/compose-projects",
-  requireRole("admin"),
-  async (req, res) => {
-    const project = publicProject(await registerComposeProject(req.body));
-    audit(actor(res), "compose.project.registered", undefined, {
-      projectId: project.id,
-    });
-    respond(res.status(201), composeProjectResponseSchema, { project });
+    })),
+    POST: administrator(async (ctx) => {
+      const project = publicProject(await registerComposeProject(ctx.body));
+      audit(requestUser(ctx), "compose.project.registered", undefined, {
+        projectId: project.id,
+      });
+      return respond(composeProjectResponseSchema, { project }, 201);
+    })
   },
-);
-composeRouter.delete(
-  "/api/v1/compose-projects/:id",
-  requireRole("admin"),
-  (req, res) => {
-    const projectId = id(req.params.id);
-    if (
-      getDatabase()
-        .prepare(
-          "SELECT id FROM operations WHERE kind='update' AND status IN ('queued','running')",
-        )
-        .get()
-    )
-      throw new AppError(
-        "OPERATION_CONFLICT",
-        409,
-        "Wait for queued or running updates before unregistering a project",
-      );
-    deleteComposeProject(projectId);
-    audit(actor(res), "compose.project.deleted", undefined, { projectId });
-    respond(res, okResponseSchema, { ok: true });
-  },
-);
+  "/api/v1/compose-projects/:id": {
+    DELETE: administrator((ctx) => {
+      const projectId = id(ctx.params.id);
+      if (getDatabase()
+        .prepare("SELECT id FROM operations WHERE kind='update' AND status IN ('queued','running')")
+        .get())
+        throw new AppError("OPERATION_CONFLICT", 409, "Wait for queued or running updates before unregistering a project");
+      deleteComposeProject(projectId);
+      audit(requestUser(ctx), "compose.project.deleted", undefined, { projectId });
+      return respond(okResponseSchema, { ok: true });
+    })
+  }
+};

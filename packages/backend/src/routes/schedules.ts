@@ -1,28 +1,20 @@
-import {
-  schedulesResponseSchema,
-  scheduleResponseSchema,
-  okResponseSchema,
-} from "@ludock/shared";
-import { Router, type Router as RouterType } from "express";
+import { okResponseSchema, scheduleResponseSchema, schedulesResponseSchema, } from "@ludock/shared";
 import { createSchedule, deleteSchedule, listSchedules } from "../schedules.js";
-import { respond, actor, id } from "./request.js";
+import { id, requestUser, respond, type ApiRoutes } from "./request.js";
 
-export const schedulesRouter: RouterType = Router();
-
-schedulesRouter.get("/api/v1/servers/:id/schedules", (req, res) =>
-  respond(res, schedulesResponseSchema, {
-    schedules: listSchedules(actor(res), id(req.params.id)),
-  }),
-);
-schedulesRouter.post("/api/v1/servers/:id/schedules", (req, res) =>
-  respond(res.status(201), scheduleResponseSchema, {
-    schedule: createSchedule(actor(res), id(req.params.id), req.body),
-  }),
-);
-schedulesRouter.delete(
-  "/api/v1/servers/:id/schedules/:scheduleId",
-  (req, res) => {
-    deleteSchedule(actor(res), id(req.params.id), id(req.params.scheduleId));
-    respond(res, okResponseSchema, { ok: true });
+export const schedulesRoutes: ApiRoutes = {
+  "/api/v1/servers/:id/schedules": {
+    GET: (ctx) => respond(schedulesResponseSchema, {
+      schedules: listSchedules(requestUser(ctx), id(ctx.params.id)),
+    }),
+    POST: (ctx) => respond(scheduleResponseSchema, {
+      schedule: createSchedule(requestUser(ctx), id(ctx.params.id), ctx.body),
+    }, 201)
   },
-);
+  "/api/v1/servers/:id/schedules/:scheduleId": {
+    DELETE: (ctx) => {
+      deleteSchedule(requestUser(ctx), id(ctx.params.id), id(ctx.params.scheduleId));
+      return respond(okResponseSchema, { ok: true });
+    }
+  }
+};

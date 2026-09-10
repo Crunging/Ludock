@@ -1,4 +1,4 @@
-/** Executed only inside the isolated Node helper. Descriptor-relative traversal
+/** Executed only inside the isolated Bun helper. Descriptor-relative traversal
  * pins each directory before using it, so swapping a parent for a symlink never
  * redirects a later read/write to another root. Keep this dependency-free. */
 export const FILE_HELPER_SCRIPT = String.raw`

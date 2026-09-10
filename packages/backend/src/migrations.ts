@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { Database } from "bun:sqlite";
 
 // The "LUDK" marker identifies Ludock-owned SQLite files independently of the
 // schema version. Never infer ownership merely from a familiar table name.
@@ -134,13 +134,13 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
   },
 ];
 
-function schemaVersion(db: DatabaseSync): number {
+function schemaVersion(db: Database): number {
   return (db.prepare("PRAGMA user_version").get() as { user_version: number })
     .user_version;
 }
 
 export function assertCompatibleDatabase(
-  db: DatabaseSync,
+  db: Database,
   latestVersion = DATABASE_MIGRATIONS.at(-1)!.version,
 ): void {
   const marker = (
@@ -167,7 +167,7 @@ export function assertCompatibleDatabase(
 }
 
 export function applyMigrations(
-  db: DatabaseSync,
+  db: Database,
   migrations: readonly DatabaseMigration[] = DATABASE_MIGRATIONS,
 ): void {
   for (let index = 0; index < migrations.length; index += 1) {

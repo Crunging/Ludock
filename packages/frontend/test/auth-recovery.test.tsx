@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, spyOn, jest } from "bun:test";
 import { AuthProvider } from "../src/AuthContext";
 import { useAuth } from "../src/auth-context";
 import { AUTH_REQUIRED_EVENT } from "../src/api";
@@ -19,14 +19,14 @@ function renderAuth() {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
+  jest.restoreAllMocks();
+  jest.useRealTimers();
 });
 
 describe("authentication request ownership", () => {
   it("does not restore a signed-out user from an older status response", async () => {
     const oldStatus = deferredResponse();
-    const fetch = vi.spyOn(globalThis, "fetch")
+    const fetch = spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => oldStatus.promise)
       .mockResolvedValueOnce(Response.json({ ok: true }));
     const auth = renderAuth();
@@ -39,7 +39,7 @@ describe("authentication request ownership", () => {
 
   it("only applies the newest status refresh", async () => {
     const oldStatus = deferredResponse();
-    vi.spyOn(globalThis, "fetch")
+    spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => oldStatus.promise)
       .mockResolvedValueOnce(status());
     const auth = renderAuth();
@@ -51,7 +51,7 @@ describe("authentication request ownership", () => {
 
   it("ignores an aborted read's late 401 after a successful sign-in", async () => {
     const oldStatus = deferredResponse();
-    vi.spyOn(globalThis, "fetch")
+    spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => oldStatus.promise)
       .mockResolvedValueOnce(Response.json({ user }));
     const auth = renderAuth();
@@ -62,7 +62,7 @@ describe("authentication request ownership", () => {
 
   it("serializes cookie changes and rejects a response invalidated by session expiration", async () => {
     const signingIn = deferredResponse();
-    const fetch = vi.spyOn(globalThis, "fetch")
+    const fetch = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(status())
       .mockImplementationOnce(() => signingIn.promise);
     const auth = renderAuth();
@@ -84,7 +84,7 @@ describe("authentication request ownership", () => {
   });
 
   it("preserves a failed sign-in error and allows a subsequent attempt", async () => {
-    vi.spyOn(globalThis, "fetch")
+    spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(status())
       .mockResolvedValueOnce(Response.json({ error: "Invalid username or password" }, { status: 401 }))
       .mockResolvedValueOnce(Response.json({ user }));
@@ -99,7 +99,7 @@ describe("authentication request ownership", () => {
   });
 
   it("reports an unconfirmed sign-out without rejecting the event handler", async () => {
-    vi.spyOn(globalThis, "fetch")
+    spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(status(true))
       .mockRejectedValueOnce(new TypeError("Network unavailable"))
       .mockResolvedValueOnce(status(true));
@@ -115,20 +115,20 @@ describe("authentication request ownership", () => {
   });
 
   it("cancels retry timers on unmount", async () => {
-    vi.useFakeTimers();
-    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Offline"));
+    jest.useFakeTimers();
+    const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Offline"));
     const auth = renderAuth();
     await act(async () => {});
     expect(fetch).toHaveBeenCalledTimes(1);
     auth.unmount();
-    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await act(async () => { jest.advanceTimersByTime(10_000); });
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   it("aborts pending authentication on unmount", async () => {
     const signingIn = deferredResponse();
-    const fetch = vi.spyOn(globalThis, "fetch")
+    const fetch = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(status())
       .mockImplementationOnce(() => signingIn.promise);
     const auth = renderAuth();

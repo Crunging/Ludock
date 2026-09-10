@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { Request, Response } from "express";
-import { after, it } from "node:test";
+import { serve } from "bun";
+import { afterAll as after, it } from "bun:test";
 
 process.env.NODE_ENV = "development";
 process.env.LUDOCK_DEV_INSTANCE = "012345abcdef";
@@ -29,49 +27,38 @@ it("keeps sessions separate when development checkouts share a browser host", ()
     disabled: false,
   };
   createUser(user);
-  const request = {
-    ip: "127.0.0.1",
-    headers: {},
-    socket: {},
-    get: () => undefined,
-  } as unknown as Request;
-  const { token } = createSession(user, request);
-  let cookieName = "";
-  let clearedName = "";
-  const response = {
-    cookie: (name: string, value: string, options: Record<string, unknown>) => {
-      cookieName = name;
-      assert.equal(value, token);
-      assert.equal(options.httpOnly, true);
-      assert.equal(options.sameSite, "strict");
-    },
-    clearCookie: (name: string) => {
-      clearedName = name;
-    },
-  } as unknown as Response;
-  setSessionCookie(response, request, token);
+  const request = new Request("http://127.0.0.1/");
+  const { token } = createSession(user, request, "127.0.0.1");
+  const headers = new Headers();
+  setSessionCookie(headers, request, token);
+  const cookie = headers.get("Set-Cookie")!;
+  const cookieName = cookie.split("=", 1)[0];
+  assert.ok(cookie.startsWith(`${cookieName}=${token};`));
+  assert.match(cookie, /; HttpOnly(?:;|$)/i);
+  assert.match(cookie, /; SameSite=Strict(?:;|$)/i);
   assert.equal(cookieName, "ludock_session_012345abcdef");
   assert.equal(
-    getRequestSession({
+    getRequestSession(new Request(request, {
       headers: {
         cookie: `ludock_session=${token}; ludock_session_fedcba543210=${token}`,
       },
-    }),
+    })),
     null,
   );
   assert.equal(
-    getRequestSession({ headers: { cookie: `${cookieName}=${token}` } })?.user
+    getRequestSession(new Request(request, { headers: { cookie: `${cookieName}=${token}` } }))?.user
       .id,
     user.id,
   );
-  clearSessionCookie(response);
-  assert.equal(clearedName, cookieName);
+  const cleared = new Headers();
+  clearSessionCookie(cleared);
+  assert.ok(cleared.get("Set-Cookie")?.startsWith(`${cookieName}=;`));
+  assert.match(cleared.get("Set-Cookie")!, /; Max-Age=0(?:;|$)/i);
 });
 
 it("rejects another checkout before processing its HTTP request", async () => {
-  const server = createServer(createApp({ frontendDist: false }));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+  const origin = server.url.origin;
   try {
     const response = await fetch(`${origin}/api/v1/auth/logout`, {
       method: "POST",
@@ -92,16 +79,13 @@ it("rejects another checkout before processing its HTTP request", async () => {
       await status.body?.cancel();
     }
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await server.stop(true);
   }
 });
 
 it("logs out one checkout without clearing cookies for its peers", async () => {
-  const server = createServer(createApp({ frontendDist: false }));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+  const origin = server.url.origin;
   try {
     const response = await fetch(`${origin}/api/v1/auth/logout`, {
       method: "POST",
@@ -115,8 +99,6 @@ it("logs out one checkout without clearing cookies for its peers", async () => {
     );
     assert.deepEqual(await response.json(), { ok: true });
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await server.stop(true);
   }
 });

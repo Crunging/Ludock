@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import type Docker from "dockerode";
 import { getDockerInstance, getManagedContainer } from "../src/docker.js";
 import {
@@ -13,23 +13,23 @@ import {
   deleteFileEntry,
 } from "../src/file-storage.js";
 import { createMountProof, assertMountIdentities } from "../src/mount-proof.js";
+import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 
 /** Explicit Docker acceptance harness; never included by the ordinary test glob.
- * Run LUDOCK_DOCKER_TESTS=1 pnpm exec tsx --test test/docker-storage.integration.ts
+ * Run LUDOCK_DOCKER_TESTS=1 bun test ./test/docker-storage.integration.ts
  * from packages/backend. Every fixture uses a disposable named volume. */
-describe(
+describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
   "Docker storage acceptance",
-  { skip: process.env.LUDOCK_DOCKER_TESTS !== "1" },
   () => {
     const docker = getDockerInstance();
-    const image = process.env.FILE_HELPER_IMAGE || "node:24-alpine";
+    const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
 
     it("uses scoped helpers for complete file operations on stopped and running servers", async () => {
       const volumeName = `ludock-test-${randomUUID()}`;
       await docker.createVolume({ Name: volumeName });
       const game = await docker.createContainer({
         Image: image,
-        Cmd: ["node", "-e", "setInterval(() => {}, 3600000)"],
+        Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
         Labels: { "ludock.enable": "true" },
         HostConfig: {
           Mounts: [{ Type: "volume", Source: volumeName, Target: "/data" }],
@@ -78,7 +78,7 @@ describe(
         await game.remove({ force: true });
         await docker.getVolume(volumeName).remove();
       }
-    });
+    }, 120_000);
 
     it("proves bind source identity and rejects symlink or swapped source directories", async () => {
       const name = `ludock-proof-${randomUUID()}`;
@@ -88,7 +88,7 @@ describe(
       const setup = await docker.createContainer({
         Image: image,
         Cmd: [
-          "node",
+          "bun",
           "-e",
           "const fs=require('fs');fs.mkdirSync('/data/target');fs.mkdirSync('/data/other');fs.symlinkSync('target','/data/link')",
         ],
@@ -112,7 +112,7 @@ describe(
         const fixture = (source: string) =>
           docker.createContainer({
             Image: image,
-            Cmd: ["node", "-e", "setInterval(() => {}, 3600000)"],
+            Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
             HostConfig: {
               Mounts: [{ Type: "bind", Source: source, Target: "/data" }],
             },
@@ -144,6 +144,6 @@ describe(
         await setup.remove({ force: true });
         await volume.remove();
       }
-    });
+    }, 120_000);
   },
 );

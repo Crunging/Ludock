@@ -1,6 +1,5 @@
-import type { IncomingMessage } from "node:http";
 import { StringDecoder } from "node:string_decoder";
-import type { WebSocket } from "ws";
+import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
 import { getContainer } from "./docker.js";
@@ -15,11 +14,12 @@ const logger = createLogger("container-logs");
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export async function handleContainerLogsConnection(
-  ws: WebSocket,
-  req: IncomingMessage,
+  ws: SocketChannel,
+  req: Request,
   auth: WebSocketAuth,
+  remoteAddress?: string,
 ): Promise<void> {
-  const url = new URL(req.url || "", `http://${req.headers.host}`);
+  const url = new URL(req.url);
   const serverId = url.pathname.split("/").filter(Boolean).at(-1);
   if (!serverId) {
     sendMessage(ws, "error", "Missing server ID");
@@ -61,7 +61,7 @@ export async function handleContainerLogsConnection(
       containerId,
       bindingRevision: access.context.logical.bindingRevision,
     },
-    ipAddress: req.socket.remoteAddress,
+    ipAddress: remoteAddress,
   });
   send("system", "Following Docker logs");
 
@@ -81,8 +81,7 @@ export async function handleContainerLogsConnection(
     (logStream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
     logStream = null;
   };
-  ws.once("close", destroyLogStream);
-  ws.once("error", destroyLogStream);
+  ws.onClose(destroyLogStream);
   try {
     const stream = await container.logs({
       follow: true,
@@ -120,22 +119,17 @@ export async function handleContainerLogsConnection(
     send("error", "Failed to open Docker logs");
   }
 
-  ws.on("message", () => {
+  ws.onMessage(() => {
     send("error", "Docker logs are read-only");
   });
-  ws.on("close", (code) => {
+  ws.onClose((code) => {
     logger.info("Docker log connection closed", {
       container: shortContainerId(containerId),
       code,
     });
     destroyLogStream();
   });
-  ws.on("error", () => {
-    logger.warn("Docker log WebSocket failed", {
-      container: shortContainerId(containerId),
-    });
-    destroyLogStream();
-  });
+
 }
 
 export class DockerLogDecoder {
@@ -222,11 +216,11 @@ export class DockerLogDecoder {
 }
 
 function sendMessage(
-  ws: WebSocket,
+  ws: SocketChannel,
   type: "stdout" | "stderr" | "system" | "error",
   data: string,
 ): void {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data }));
+  if (ws.isOpen) ws.send(JSON.stringify({ type, data }));
 }
 
 function shortContainerId(containerId: string): string {

@@ -1,23 +1,18 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, it } from "node:test";
-import express, {
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
-import { AuthError, authMiddleware, createSession } from "../src/auth.js";
+import type { Server } from "bun";
+import { afterEach, beforeEach, describe, it } from "bun:test";
+import { createApp } from "../src/app.js";
+import { createSession } from "../src/auth.js";
 import {
   closeDatabase,
   createUser,
   deleteUserSessions,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant, AuthorizationError } from "../src/authorization.js";
+import { setServerGrant } from "../src/authorization.js";
 import { getDockerInstance, startContainer } from "../src/docker.js";
 import { AppError } from "../src/errors.js";
-import { listLogicalServers, ServerBindingError } from "../src/identity.js";
+import { listLogicalServers } from "../src/identity.js";
 import {
   acquireLocks,
   isServerBusy,
@@ -43,7 +38,7 @@ const friend: SessionUser = {
 const docker = getDockerInstance();
 const originalList = docker.listContainers.bind(docker);
 const originalGet = docker.getContainer.bind(docker);
-let http: Server;
+let http: Server<unknown>;
 let baseUrl: string;
 let serverId: string;
 let cookie: string;
@@ -76,10 +71,9 @@ beforeEach(async () => {
     disabled: false,
     createdAt: 0,
   });
-  sessionToken = createSession(friend, {
-    ip: "127.0.0.1",
-    get: () => "fixture",
-  } as unknown as Request).token;
+  sessionToken = createSession(friend, new Request("http://127.0.0.1", {
+    headers: { "User-Agent": "fixture" },
+  }), "127.0.0.1").token;
   cookie = `ludock_session=${sessionToken}`;
   calls = [];
   beforeResponse = undefined;
@@ -121,78 +115,68 @@ beforeEach(async () => {
   await refreshServers();
   serverId = listLogicalServers()[0].id;
   inspectCount = 0;
-  const app = express();
-  app.use(authMiddleware);
   let disconnected!: () => void;
-  clientClosed = new Promise((resolve) => {
-    disconnected = resolve;
-  });
-  app.use((_req, res, next) => {
-    res.once("close", () => {
-      if (!res.writableFinished) disconnected();
-    });
-    next();
-  });
+  clientClosed = new Promise((resolve) => { disconnected = resolve; });
+  const watchDisconnect = (action: ReturnType<typeof serverAction>): ReturnType<typeof serverAction> =>
+    (ctx) => {
+      ctx.request.signal.addEventListener("abort", disconnected, { once: true });
+      return action(ctx);
+    };
   // An unfamiliar route demonstrates that policy travels with registration;
   // it cannot silently miss a separately maintained path/method allowlist.
-  app.post(
-    "/servers/:id/start",
-    serverAction("server.start", async (_req, res, context) => {
-      await startContainer(context.container.id, context.assertAccess);
-      res.json({ ok: true });
-    }),
-  );
-  app.post(
-    "/servers/:id/new-console-action",
-    serverAction("console.execute", async (_req, res, context) => {
-      calls.push(context.container.id);
-      res.json({ ok: true });
-    }),
-  );
-  app.get(
-    "/servers/:id/stream",
-    serverAction("logs.read", async (_req, res, context) => {
-      calls.push(context.container.id);
-      res.write("first chunk\n");
-      if (beforeResponse) await beforeResponse;
-      res.end("last chunk\n");
-      if (afterResponse) await afterResponse;
-    }),
-  );
-  app.post(
-    "/servers/:id/failure",
-    serverAction("server.stop", async () => {
-      throw new AppError("FIXTURE_FAILURE", 409, "Fixture failure");
-    }),
-  );
-  app.get("/servers/:id/response", (_req, res) => {
-    // @ts-expect-error This fixture deliberately injects corrupt producer data.
-    respond(res, okResponseSchema, output);
-  });
-  app.use(
-    (error: unknown, _req: Request, res: Response, next: NextFunction) => {
-      if (res.headersSent) {
-        next(error);
-        return;
-      }
-      const status =
-        error instanceof AppError || error instanceof AuthorizationError || error instanceof AuthError || error instanceof ServerBindingError
-          ? error.statusCode
-          : 500;
-      res
-        .status(status)
-        .json({ error: error instanceof Error ? error.message : "Failure" });
+  const app = createApp({ frontendDist: false, routes: {
+    "/servers/:id/start": {
+      POST: serverAction("server.start", async (_ctx, context) => {
+        await startContainer(context.container.id, context.assertAccess);
+        return Response.json({ ok: true });
+      }),
     },
-  );
-  http = createServer(app);
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  baseUrl = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+    "/servers/:id/new-console-action": {
+      POST: watchDisconnect(serverAction("console.execute", async (_ctx, context) => {
+        calls.push(context.container.id);
+        return Response.json({ ok: true });
+      })),
+    },
+    "/servers/:id/stream": {
+      GET: serverAction("logs.read", async (_ctx, context) => {
+        calls.push(context.container.id);
+        let canceled = false;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const producing = (async () => {
+              controller.enqueue(new TextEncoder().encode("first chunk\n"));
+              if (beforeResponse) await beforeResponse;
+              if (!canceled) {
+                controller.enqueue(new TextEncoder().encode("last chunk\n"));
+                controller.close();
+              }
+              if (afterResponse) await afterResponse;
+            })();
+            context.waitForCleanup(producing);
+          },
+          cancel() { canceled = true; },
+        });
+        return new Response(stream);
+      }),
+    },
+    "/servers/:id/failure": {
+      POST: serverAction("server.stop", async () => {
+        throw new AppError("FIXTURE_FAILURE", 409, "Fixture failure");
+      }),
+    },
+    "/servers/:id/response": {
+      GET: () => {
+        // @ts-expect-error This fixture deliberately injects corrupt producer data.
+        return respond(okResponseSchema, output);
+      },
+    },
+  } });
+  http = Bun.serve({ ...app, hostname: "127.0.0.1", port: 0 });
+  baseUrl = `http://127.0.0.1:${http.port}`;
 });
 afterEach(async () => {
   releases.splice(0).forEach((release) => release());
-  await new Promise<void>((resolve, reject) =>
-    http.close((error) => (error ? reject(error) : resolve())),
-  );
+  await http.stop(true);
   await waitForLocksReleased();
   docker.listContainers = originalList;
   docker.getContainer = originalGet;
@@ -288,7 +272,7 @@ describe("explicit server action policies", () => {
       if (revoke === "grant")
         setServerGrant(friend.id, serverId, ["server.view"], admin);
       else deleteUserSessions(friend.id);
-      await assert.rejects(reader.read(), /terminated|aborted|socket/i);
+      await assert.rejects(reader.read(), /terminated|aborted|socket|closed|connection/i);
       assert.equal(isServerBusy(serverId), true);
       releases.splice(0).forEach((release) => release());
       await waitForLocksReleased();

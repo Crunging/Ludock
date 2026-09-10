@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import {
   SERVER_CAPABILITIES,
   type FileEntry,
@@ -23,10 +23,13 @@ import { NavigationContext } from "../src/navigation-context";
 import Files from "../src/pages/Files";
 import type { ManagedContainer } from "../src/types";
 
-vi.mock("../src/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/api")>()),
-  apiFetch: vi.fn(),
-  apiJson: vi.fn(),
+const originalApi = { ...await import("../src/api") };
+const apiFetchMock = mock<typeof apiFetch>();
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiFetch: apiFetchMock,
+  apiJson: apiJsonMock,
 }));
 
 const roots = [
@@ -99,9 +102,9 @@ function filesPage({
   read?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
   write?: (path: string, init?: RequestInit) => Response | Promise<Response>;
 } = {}) {
-  const navigate = vi.fn();
+  const navigate = mock();
   const authUser = { id: "user1", username: "friend", role };
-  vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+  apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const custom = await read?.(path, init);
     if (custom !== undefined) return custom;
     if (/^\/servers\/[^/]+$/.test(path))
@@ -112,7 +115,7 @@ function filesPage({
       url.searchParams.get("path") || "",
     );
   });
-  vi.mocked(apiFetch).mockImplementation(async (path, init) =>
+  apiFetchMock.mockImplementation(async (path, init) =>
     write ? write(String(path), init) : response(),
   );
   const content = (id: string, user = authUser) => (
@@ -414,12 +417,12 @@ describe("file uploads", () => {
     await screen.findByText(
       "Your account can browse and download files but cannot change them.",
     );
-    const callsBeforeCompletion = vi.mocked(apiJson).mock.calls.length;
+    const callsBeforeCompletion = apiJsonMock.mock.calls.length;
     await act(async () => pending.resolve(response()));
     expect(uploadSignal?.aborted).toBe(true);
     expect(screen.queryByText(/uploaded\.$/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Choose files" })).toBeNull();
-    expect(vi.mocked(apiJson).mock.calls.length).toBe(callsBeforeCompletion);
+    expect(apiJsonMock.mock.calls.length).toBe(callsBeforeCompletion);
   });
 });
 
@@ -606,7 +609,7 @@ describe("uncertain file mutation results", () => {
     await screen.findByText(config.name);
     expect(screen.getByRole("alert").textContent).toContain("could not be confirmed");
     expect(apiFetch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(apiJson).mock.calls.filter(([path]) => path.includes("/files?"))).toHaveLength(2);
+    expect(apiJsonMock.mock.calls.filter(([path]) => path.includes("/files?"))).toHaveLength(2);
 
     await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: "Rename" }));
     expect((screen.getByRole("textbox", { name: "New name" }) as HTMLInputElement).value).toBe("edited.properties");

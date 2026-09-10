@@ -1,5 +1,5 @@
 import ViewPreferencesProvider from "../src/ViewPreferences";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
@@ -13,9 +13,11 @@ import { NavigationContext } from "../src/navigation-context";
 import ServerDetail from "../src/pages/ServerDetail";
 import type { ManagedContainer } from "../src/types";
 
-vi.mock("../src/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/api")>()),
-  apiJson: vi.fn(),
+const originalApi = { ...await import("../src/api") };
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiJson: apiJsonMock,
 }));
 
 const server: ManagedContainer = {
@@ -48,8 +50,8 @@ function detail({
   current?: ManagedContainer;
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
 } = {}) {
-  const navigate = vi.fn();
-  vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+  const navigate = mock();
+  apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const response = await onRequest?.(path, init);
     if (response !== undefined) return response;
     if (path.endsWith("/operations")) return { operations: [] };
@@ -106,7 +108,7 @@ describe("server detail navigation", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
     await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
     await userEvent.click(screen.getByRole("button", { name: "Update server", exact: true }));
-    await waitFor(() => expect(vi.mocked(apiJson).mock.calls.some(
+    await waitFor(() => expect(apiJsonMock.mock.calls.some(
       ([path, , init]) => path.endsWith("/updates") && init?.method === "POST",
     )).toBe(true));
 
@@ -116,12 +118,12 @@ describe("server detail navigation", () => {
     const timezone = screen.getByRole("textbox", { name: "Time zone" });
     await userEvent.clear(timezone);
     await userEvent.type(timezone, "Europe/London");
-    const requestsBeforeCompletion = vi.mocked(apiJson).mock.calls.length;
+    const requestsBeforeCompletion = apiJsonMock.mock.calls.length;
     await act(async () => { finishUpdate(); });
 
     expect(screen.getByRole("tabpanel", { name: "Schedules" })).toBeTruthy();
     expect((timezone as HTMLInputElement).value).toBe("Europe/London");
-    expect(vi.mocked(apiJson).mock.calls.length).toBe(requestsBeforeCompletion);
+    expect(apiJsonMock.mock.calls.length).toBe(requestsBeforeCompletion);
   });
 
   it("uses one tab stop with arrow, Home, End and linked panels without discarding drafts", async () => {
@@ -189,7 +191,7 @@ describe("server detail navigation", () => {
     await userEvent.click(screen.getByRole("link", { name: "All servers" }));
     expect(navigate).toHaveBeenLastCalledWith("/");
     expect(
-      vi.mocked(apiJson).mock.calls.some(([path]) =>
+      apiJsonMock.mock.calls.some(([path]) =>
         /\/(backups|schedules|availability|update-capability)$/.test(path),
       ),
     ).toBe(false);
@@ -255,7 +257,7 @@ describe("server detail navigation", () => {
     await userEvent.keyboard("{Enter}");
     expect(document.activeElement).toBe(screen.getByRole("tabpanel", { name: "Activity" }));
     expect(screen.getByRole("status").textContent).toBe("copying data");
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "POST"))
       .toBe(false);
   });
 
@@ -281,14 +283,14 @@ describe("server detail navigation", () => {
     const update = await screen.findByRole("button", { name: "Update server", exact: true });
     expect((update as HTMLButtonElement).disabled).toBe(true);
     expect(document.activeElement).toBe(screen.getByRole("tabpanel", { name: "Update" }));
-    expect(vi.mocked(apiJson).mock.calls.filter(([path]) => path.endsWith("/update-capability")))
+    expect(apiJsonMock.mock.calls.filter(([path]) => path.endsWith("/update-capability")))
       .toHaveLength(2);
-    expect(vi.mocked(apiJson).mock.calls.filter(([path]) => path.endsWith("/availability")))
+    expect(apiJsonMock.mock.calls.filter(([path]) => path.endsWith("/availability")))
       .toHaveLength(1);
     await userEvent.click(screen.getByRole("tab", { name: "Availability" }));
     expect((screen.getByRole("spinbutton", { name: "Failure grace period (seconds)" }) as HTMLInputElement).value)
       .toBe("240");
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "POST"))
       .toBe(false);
   });
 
@@ -333,7 +335,7 @@ describe("server detail navigation", () => {
       expect(screen.getByRole("status").textContent).toMatch(
         /Paused in Docker|Restart in progress|Removal in progress|Container state: dead/,
       );
-      expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+      expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "POST"))
         .toBe(false);
     },
   );
@@ -395,7 +397,7 @@ describe("server detail navigation", () => {
         .disabled,
     ).toBe(true);
     await userEvent.click(stop);
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "POST"))
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "POST"))
       .toBe(false);
   });
 });

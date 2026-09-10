@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
+  copyFile,
   readFile,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
-import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { after, before, it } from "node:test";
+import { afterAll as after, beforeAll as before, it } from "bun:test";
 import {
   developmentConfig,
   lockDevelopmentState,
@@ -207,12 +207,15 @@ it("locks a shared database override across checkouts and directory aliases", as
 
 it("checks backend instance identity before accepting an occupied API port", async () => {
   let identity = "012345abcdef";
-  const server = createHttpServer((_request, response) => {
-    response.setHeader("X-Ludock-Dev-Instance", identity);
-    response.writeHead(503).end('{"status":"degraded"}');
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => Response.json({ status: "degraded" }, {
+      status: 503,
+      headers: { "X-Ludock-Dev-Instance": identity },
+    }),
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
+  const port = server.port;
   try {
     assert.equal(await verifyDevelopmentBackend(identity, port), true);
     identity = "abcdef123456";
@@ -221,7 +224,98 @@ it("checks backend instance identity before accepting an occupied API port", asy
       /different backend/,
     );
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await server.stop(true);
   }
   assert.equal(await verifyDevelopmentBackend(identity, port), false);
 });
+
+it("retains development locks until children drain after repeated shutdown signals", async () => {
+  const checkout = path.join(directory, "shutdown-checkout");
+  for (const folder of [
+    "scripts",
+    "packages/shared/node_modules/typescript/bin",
+    "packages/shared/dist",
+    "packages/backend/src",
+    "packages/frontend/scripts",
+  ]) await mkdir(path.join(checkout, folder), { recursive: true });
+  for (const filename of ["dev.mjs", "watch-backend.mjs"]) {
+    await copyFile(
+      new URL(`../${filename}`, import.meta.url),
+      path.join(checkout, "scripts", filename),
+    );
+  }
+  await writeFile(path.join(checkout, "packages/shared/package.json"), "{}");
+  await writeFile(
+    path.join(checkout, "packages/shared/node_modules/typescript/bin/tsc"),
+    `if (process.argv.includes("--watch")) {
+      const timer = setInterval(() => {}, 1000);
+      process.on("SIGTERM", () => clearInterval(timer));
+    }`,
+  );
+  const events = path.join(checkout, "events");
+  await writeFile(path.join(checkout, "packages/backend/src/index.ts"), `
+    import { appendFileSync } from "node:fs";
+    const events = ${JSON.stringify(events)};
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: Number(process.env.PORT),
+      fetch: () => Response.json({ status: "ok" }, {
+        headers: { "x-ludock-dev-instance": process.env.LUDOCK_DEV_INSTANCE },
+      }),
+    });
+    let stopping = false;
+    process.on("SIGTERM", () => {
+      if (stopping) return;
+      stopping = true;
+      appendFileSync(events, "backend-stopping\\n");
+      setTimeout(async () => {
+        await server.stop(true);
+        appendFileSync(events, "backend-drained\\n");
+      }, 500);
+    });
+  `);
+  await writeFile(path.join(checkout, "packages/frontend/scripts/dev.ts"), `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(${JSON.stringify(events)}, "frontend-started\\n");
+    const timer = setInterval(() => {}, 1000);
+    process.on("SIGTERM", () => clearInterval(timer));
+  `);
+  const env = {
+    ...process.env,
+    LUDOCK_DEV_HOME: path.join(directory, "shutdown-state"),
+    DOCKER_SOCKET: "",
+  };
+  const config = await developmentConfig(checkout, env);
+  const child = Bun.spawn([process.execPath, "scripts/dev.mjs"], {
+    cwd: checkout, env, stdin: "ignore", stdout: "ignore", stderr: "pipe",
+  });
+  const waitFor = async (event) => {
+    for (let attempt = 0; attempt < 300; attempt++) {
+      const actual = await readFile(events, "utf8").catch(() => "");
+      if (actual.includes(`${event}\n`)) return;
+      if (child.exitCode !== null) {
+        throw new Error(`Development run exited: ${await new Response(child.stderr).text()}`);
+      }
+      await Bun.sleep(10);
+    }
+    assert.fail(`Development fixture did not report ${event}`);
+  };
+  try {
+    await waitFor("frontend-started");
+    child.kill("SIGTERM");
+    await waitFor("backend-stopping");
+    child.kill("SIGTERM");
+    child.kill("SIGINT");
+    await Bun.sleep(20);
+    assert.equal(child.exitCode, null, "Launcher must remain alive while the backend drains");
+    await assert.rejects(lockDevelopmentState(config), /already has a development lock/);
+    assert.equal(await child.exited, 0);
+    assert.match(await readFile(events, "utf8"), /backend-drained\n/);
+    const release = await lockDevelopmentState(config);
+    await release();
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await child.exited;
+    }
+  }
+}, 10_000);

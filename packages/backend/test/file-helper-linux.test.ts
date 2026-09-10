@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import { FILE_HELPER_SCRIPT } from "../src/file-helper-script.js";
 import { extract } from "tar-stream";
 
-// Run directly with Node24 in the Linux container as part of Docker acceptance.
+// Run directly with Bun in the Linux container as part of Docker acceptance.
 // macOS has no /proc/self/fd and must not substitute weaker path semantics.
-describe(
+describe.skipIf(Boolean(process.platform !== "linux"))(
   "Linux file helper descriptor protections",
-  { skip: process.platform !== "linux" },
-  () => {
+    () => {
     let directory: string;
     let root: string;
     beforeEach(() => {
@@ -28,9 +26,9 @@ describe(
       extra: Record<string, unknown> = {},
       input?: string,
     ) {
-      return spawnSync(
-        process.execPath,
+      const result = Bun.spawnSync(
         [
+          process.execPath,
           "-e",
           FILE_HELPER_SCRIPT,
           JSON.stringify({
@@ -41,14 +39,24 @@ describe(
             ...extra,
           }),
         ],
-        { input, encoding: "utf8", timeout: 10_000 },
+        {
+          stdin: input === undefined ? "ignore" : Buffer.from(input),
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 10_000,
+        },
       );
+      return {
+        exitCode: result.exitCode,
+        stdout: result.stdout.toString(),
+        stderr: result.stderr.toString(),
+      };
     }
 
     it("lists, reads, writes, renames, and deletes files without a shell or archive mutation", () => {
-      assert.equal(run("mkdir", "world").status, 0);
+      assert.equal(run("mkdir", "world").exitCode, 0);
       assert.equal(
-        run("upload", "world/config.txt", { size: 12 }, "hello world!").status,
+        run("upload", "world/config.txt", { size: 12 }, "hello world!").exitCode,
         0,
       );
       assert.equal(run("download", "world/config.txt").stdout, "hello world!");
@@ -62,11 +70,11 @@ describe(
       );
       assert.equal(
         run("rename", "world/config.txt", { destination: "world/renamed.txt" })
-          .status,
+          .exitCode,
         0,
       );
-      assert.equal(run("download", "world/config.txt").status, 1);
-      assert.equal(run("delete", "world").status, 0);
+      assert.equal(run("download", "world/config.txt").exitCode, 1);
+      assert.equal(run("delete", "world").exitCode, 0);
       assert.equal(fs.existsSync(path.join(root, "world")), false);
     });
 
@@ -75,14 +83,14 @@ describe(
       fs.mkdirSync(outside);
       fs.writeFileSync(path.join(outside, "canary"), "outside-secret");
       fs.symlinkSync(outside, path.join(root, "escape"));
-      assert.equal(run("download", "escape/canary").status, 1);
+      assert.equal(run("download", "escape/canary").exitCode, 1);
       assert.equal(
-        run("upload", "escape/canary", { size: 7 }, "changed").status,
+        run("upload", "escape/canary", { size: 7 }, "changed").exitCode,
         1,
       );
-      assert.equal(run("list", "escape").status, 1);
+      assert.equal(run("list", "escape").exitCode, 1);
       assert.equal(
-        run("check", "", { root: path.join(root, "escape") }).status,
+        run("check", "", { root: path.join(root, "escape") }).exitCode,
         1,
       );
       assert.equal(
@@ -90,7 +98,7 @@ describe(
         "outside-secret",
       );
       assert.equal(
-        run("delete", "escape").status,
+        run("delete", "escape").exitCode,
         0,
         "deleting the link itself remains allowed",
       );
@@ -104,18 +112,18 @@ describe(
         path.join(root, "world", "file"),
         path.join(root, "hardlink"),
       );
-      assert.equal(run("download", "hardlink").status, 1);
-      assert.equal(run("upload", "hardlink", { size: 1 }, "x").status, 1);
+      assert.equal(run("download", "hardlink").exitCode, 1);
+      assert.equal(run("upload", "hardlink", { size: 1 }, "x").exitCode, 1);
       assert.equal(
         fs.readFileSync(path.join(root, "world", "file"), "utf8"),
         "contents",
       );
       fs.unlinkSync(path.join(root, "hardlink"));
       assert.equal(
-        spawnSync("mkfifo", [path.join(root, "world", "pipe")]).status,
+        Bun.spawnSync(["mkfifo", path.join(root, "world", "pipe")]).exitCode,
         0,
       );
-      assert.equal(run("download", "world").status, 1);
+      assert.equal(run("download", "world").exitCode, 1);
     });
 
     it("never crosses a blocked nested mount, including ancestor archive and mutations", () => {
@@ -126,11 +134,11 @@ describe(
         JSON.parse(run("list", "world", { blocked }).stdout),
         [],
       );
-      assert.equal(run("list", "world/private", { blocked }).status, 1);
-      assert.equal(run("download", "world", { blocked }).status, 1);
-      assert.equal(run("delete", "world", { blocked }).status, 1);
+      assert.equal(run("list", "world/private", { blocked }).exitCode, 1);
+      assert.equal(run("download", "world", { blocked }).exitCode, 1);
+      assert.equal(run("delete", "world", { blocked }).exitCode, 1);
       assert.equal(
-        run("rename", "world", { blocked, destination: "renamed" }).status,
+        run("rename", "world", { blocked, destination: "renamed" }).exitCode,
         1,
       );
       assert.equal(fs.existsSync(path.join(root, "world", "private")), true);
@@ -139,7 +147,8 @@ describe(
     it("produces a standard tar archive from pinned regular files", () => {
       fs.mkdirSync(path.join(root, "world"));
       fs.writeFileSync(path.join(root, "world", "config.txt"), "hello");
-      const archive = spawnSync(process.execPath, [
+      const archive = Bun.spawnSync([
+        process.execPath,
         "-e",
         FILE_HELPER_SCRIPT,
         JSON.stringify({
@@ -149,20 +158,22 @@ describe(
           blocked: [],
         }),
       ]);
-      assert.equal(archive.status, 0);
-      const contents = spawnSync("tar", ["-tf", "-"], {
-        input: archive.stdout,
-        encoding: "utf8",
+      assert.equal(archive.exitCode, 0);
+      const contents = Bun.spawnSync(["tar", "-tf", "-"], {
+        stdin: archive.stdout,
+        stdout: "pipe",
+        stderr: "pipe",
       });
-      assert.equal(contents.status, 0);
-      assert.match(contents.stdout, /world\/config\.txt/);
+      assert.equal(contents.exitCode, 0);
+      assert.match(contents.stdout.toString(), /world\/config\.txt/);
     });
 
     it("preserves long Unicode archive paths using standard PAX records", () => {
       const name = "\u4e16\u754c".repeat(36) + ".txt";
       fs.mkdirSync(path.join(root, "world"));
       fs.writeFileSync(path.join(root, "world", name), "long path contents");
-      const archive = spawnSync(process.execPath, [
+      const archive = Bun.spawnSync([
+        process.execPath,
         "-e",
         FILE_HELPER_SCRIPT,
         JSON.stringify({
@@ -172,13 +183,14 @@ describe(
           blocked: [],
         }),
       ]);
-      assert.equal(archive.status, 0);
-      const contents = spawnSync("tar", ["-xOf", "-", `world/${name}`], {
-        input: archive.stdout,
-        encoding: "utf8",
+      assert.equal(archive.exitCode, 0);
+      const contents = Bun.spawnSync(["tar", "-xOf", "-", `world/${name}`], {
+        stdin: archive.stdout,
+        stdout: "pipe",
+        stderr: "pipe",
       });
-      assert.equal(contents.status, 0, contents.stderr);
-      assert.equal(contents.stdout, "long path contents");
+      assert.equal(contents.exitCode, 0, contents.stderr.toString());
+      assert.equal(contents.stdout.toString(), "long path contents");
     });
 
     it("represents files larger than eight GiB without octal truncation", async () => {
@@ -187,9 +199,9 @@ describe(
       fs.writeFileSync(filename, "");
       const size = 9 * 1024 ** 3;
       fs.truncateSync(filename, size);
-      const archive = spawn(
-        process.execPath,
+      const archive = Bun.spawn(
         [
+          process.execPath,
           "-e",
           FILE_HELPER_SCRIPT,
           JSON.stringify({
@@ -199,23 +211,16 @@ describe(
             blocked: [],
           }),
         ],
-        { stdio: ["ignore", "pipe", "ignore"] },
+        { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
       );
       let buffer = Buffer.alloc(0);
-      const stopped = new Promise<void>((resolve) =>
-        archive.once("exit", () => resolve()),
-      );
+      const reader = archive.stdout.getReader();
       try {
-        await new Promise<void>((resolve, reject) => {
-          archive.once("error", reject);
-          archive.stdout.on("data", (chunk: Buffer) => {
-            buffer = Buffer.concat([buffer, chunk]);
-            if (buffer.length >= 1024) {
-              archive.stdout.pause();
-              resolve();
-            }
-          });
-        });
+        while (buffer.length < 1024) {
+          const { done, value } = await reader.read();
+          assert.equal(done, false, "Archive ended before its PAX size header");
+          buffer = Buffer.concat([buffer, value!]);
+        }
         const parser = extract();
         const parsed = new Promise<number>((resolve, reject) => {
           parser.once("error", reject);
@@ -233,7 +238,9 @@ describe(
         }
       } finally {
         archive.kill("SIGKILL");
-        await stopped;
+        await archive.exited;
+        await reader.cancel();
+        reader.releaseLock();
       }
     });
 
@@ -245,9 +252,9 @@ describe(
       fs.mkdirSync(outside);
       fs.writeFileSync(path.join(folder, "canary"), "inside");
       fs.writeFileSync(path.join(outside, "canary"), "outside-secret");
-      const racer = spawn(
-        process.execPath,
+      const racer = Bun.spawn(
         [
+          process.execPath,
           "-e",
           `
       const fs = require("node:fs"); const [folder,parked,outside] = process.argv.slice(1);
@@ -260,18 +267,19 @@ describe(
           parked,
           outside,
         ],
-        { stdio: ["ignore", "pipe", "ignore"] },
+        { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
       );
-      await new Promise<void>((resolve) =>
-        racer.stdout.once("data", () => resolve()),
-      );
+      const reader = racer.stdout.getReader();
       try {
+        const { done, value } = await reader.read();
+        assert.equal(done, false, "Symlink racer exited before becoming ready");
+        assert.equal(Buffer.from(value!).toString(), "ready");
         for (let attempt = 0; attempt < 24; attempt++) {
           const result =
             attempt % 2
               ? run("upload", "folder/canary", { size: 6 }, "inside")
               : run("download", "folder/canary");
-          assert.ok(result.status === 0 || result.status === 1);
+          assert.ok(result.exitCode === 0 || result.exitCode === 1);
           assert.doesNotMatch(result.stdout, /outside-secret/);
           assert.equal(
             fs.readFileSync(path.join(outside, "canary"), "utf8"),
@@ -279,12 +287,11 @@ describe(
           );
         }
       } finally {
-        const exited = new Promise<void>((resolve) =>
-          racer.once("exit", () => resolve()),
-        );
         racer.kill("SIGKILL");
-        await exited;
+        await racer.exited;
+        await reader.cancel();
+        reader.releaseLock();
       }
-    });
+    }, 60_000);
   },
 );

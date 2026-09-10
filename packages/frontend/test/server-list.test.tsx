@@ -1,5 +1,5 @@
 import ViewPreferencesProvider from "../src/ViewPreferences";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
@@ -9,7 +9,8 @@ import Dashboard from "../src/pages/Dashboard";
 import { useServers } from "../src/hooks/useServers";
 import type { ManagedContainer } from "../src/types";
 
-vi.mock("../src/hooks/useServers", () => ({ useServers: vi.fn() }));
+const useServersMock = mock<typeof useServers>();
+mock.module("../src/hooks/useServers", () => ({ useServers: useServersMock }));
 
 const user: AuthUser = { id: "friend", username: "friend", role: "operator" };
 const server: ManagedContainer = {
@@ -35,9 +36,9 @@ const server: ManagedContainer = {
 };
 
 function card(value = server, role: AuthUser["role"] = "operator") {
-  const action = vi.fn<(id: string, action: "start" | "stop" | "restart") => Promise<void>>()
+  const action = mock<(id: string, action: "start" | "stop" | "restart") => Promise<void>>()
     .mockResolvedValue(undefined);
-  const navigate = vi.fn();
+  const navigate = mock();
   const content = (current: ManagedContainer, actionsDisabled = false) => (
     <AuthContext.Provider value={{ user: { ...user, role } } as AuthContextValue}>
       <NavigationContext.Provider value={{ pathname: "/", navigate }}>
@@ -58,18 +59,18 @@ const fixtures = [
 ];
 
 beforeEach(() => {
-  vi.mocked(useServers).mockReturnValue({
+  useServersMock.mockReturnValue({
     servers: fixtures,
     loading: false,
     error: null,
-    refresh: vi.fn().mockResolvedValue(undefined),
+    refresh: mock().mockResolvedValue(undefined),
     stale: false,
     lastUpdated: 1,
     connectionStatus: "connected",
     connectionError: null,
     accessDenied: false,
     canRetry: false,
-    retry: vi.fn(),
+    retry: mock(),
   });
 });
 
@@ -227,7 +228,7 @@ describe("server filters", () => {
   function dashboard(role: AuthUser["role"] = "operator") {
     const content = () => (
       <AuthContext.Provider value={{ user: { ...user, role } } as AuthContextValue}>
-        <NavigationContext.Provider value={{ pathname: "/", navigate: vi.fn() }}>
+        <NavigationContext.Provider value={{ pathname: "/", navigate: mock() }}>
           <ViewPreferencesProvider><Dashboard /></ViewPreferencesProvider>
         </NavigationContext.Provider>
       </AuthContext.Provider>
@@ -237,8 +238,8 @@ describe("server filters", () => {
   }
 
   it("gives a new administrator a discovery check before image-label instructions", async () => {
-    vi.mocked(useServers).mockReturnValue({
-      ...vi.mocked(useServers)(), servers: [],
+    useServersMock.mockReturnValue({
+      ...useServersMock(), servers: [],
     });
     dashboard("admin");
     expect(screen.getByRole("link", { name: "Check Docker and image support" }).getAttribute("href")).toBe("/diagnostics");
@@ -254,8 +255,8 @@ describe("server filters", () => {
   });
 
   it("identifies an unassigned account without showing administrator discovery controls", () => {
-    vi.mocked(useServers).mockReturnValue({
-      ...vi.mocked(useServers)(), servers: [],
+    useServersMock.mockReturnValue({
+      ...useServersMock(), servers: [],
     });
     dashboard("viewer");
     expect(screen.getByRole("heading", { name: "No servers assigned" })).toBeTruthy();
@@ -265,8 +266,8 @@ describe("server filters", () => {
   });
 
   it("routes administrators with a discovery failure to diagnostics instead of an empty result", () => {
-    vi.mocked(useServers).mockReturnValue({
-      ...vi.mocked(useServers)(), servers: [], error: "Docker unavailable", stale: true,
+    useServersMock.mockReturnValue({
+      ...useServersMock(), servers: [], error: "Docker unavailable", stale: true,
     });
     dashboard("admin");
     expect(screen.getByRole("alert").textContent).toContain("Docker unavailable");
@@ -297,18 +298,18 @@ describe("server filters", () => {
     const { update } = dashboard();
     const state = screen.getByRole("combobox", { name: "State" });
     await userEvent.selectOptions(state, "paused");
-    vi.mocked(useServers).mockReturnValue({
+    useServersMock.mockReturnValue({
       servers: fixtures.filter((fixture) => fixture.state !== "paused"),
       loading: false,
       error: null,
-      refresh: vi.fn().mockResolvedValue(undefined),
+      refresh: mock().mockResolvedValue(undefined),
     stale: false,
     lastUpdated: 1,
     connectionStatus: "connected",
     connectionError: null,
     accessDenied: false,
     canRetry: false,
-    retry: vi.fn(),
+    retry: mock(),
     });
     update();
     expect((state as HTMLSelectElement).value).toBe("paused");

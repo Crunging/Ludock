@@ -2,11 +2,9 @@ import {
   createHash,
   randomBytes,
   randomUUID,
-  scrypt,
   timingSafeEqual,
 } from "node:crypto";
-import type { IncomingMessage } from "node:http";
-import type { Request, Response, NextFunction } from "express";
+import { Cookie } from "bun";
 import {
   countUsers,
   createSessionRecord,
@@ -25,6 +23,8 @@ import {
   requestOriginDiagnostic,
 } from "./request-security.js";
 import { createLogger } from "./logger.js";
+import { hashPassword, verifyPassword, passwordHashNeedsUpgrade } from "./password.js";
+export { hashPassword, verifyPassword } from "./password.js";
 
 import { developmentInstance } from "./development-instance.js";
 const SESSION_COOKIE = developmentInstance
@@ -32,10 +32,6 @@ const SESSION_COOKIE = developmentInstance
   : "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MIN_API_TOKEN_LENGTH = 32;
-const SCRYPT_N = 32768;
-const SCRYPT_R = 8;
-const SCRYPT_P = 3;
-const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;
 const logger = createLogger("auth");
 
@@ -120,76 +116,6 @@ export function logSetupInstructions(
   });
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16);
-  const key = await derivePassword(password, salt, 64, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-    maxmem: SCRYPT_MAX_MEMORY,
-  });
-
-  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
-}
-
-export async function verifyPassword(
-  password: string,
-  encoded: string,
-): Promise<boolean> {
-  const [algorithm, n, r, p, saltValue, keyValue, extra] = encoded.split("$");
-  if (
-    algorithm !== "scrypt" || !n || !r || !p || !saltValue || !keyValue ||
-    extra !== undefined
-  ) {
-    return false;
-  }
-
-  const expected = Buffer.from(keyValue, "base64url");
-  const salt = Buffer.from(saltValue, "base64url");
-  // Buffer's base64 decoder silently accepts malformed input, including values
-  // that decode to an empty key. A zero-length derived key would match every
-  // password, so validate the stored encoding before performing verification.
-  if (
-    expected.length !== 64 || salt.length !== 16 ||
-    expected.toString("base64url") !== keyValue ||
-    salt.toString("base64url") !== saltValue
-  )
-    return false;
-  const options = {
-    N: Number(n),
-    r: Number(r),
-    p: Number(p),
-  };
-  if (
-    !Number.isInteger(options.N) ||
-    !Number.isInteger(options.r) ||
-    !Number.isInteger(options.p) ||
-    options.N < 2 ||
-    options.N > 131072 ||
-    (options.N & (options.N - 1)) !== 0 ||
-    options.r < 1 ||
-    options.r > 16 ||
-    options.p < 1 ||
-    options.p > 10
-  ) {
-    return false;
-  }
-  const actual = await derivePassword(
-    password,
-    salt,
-    expected.length,
-    {
-      ...options,
-      maxmem: Math.max(
-        SCRYPT_MAX_MEMORY,
-        128 * options.N * options.r + 16 * 1024 * 1024,
-      ),
-    },
-  );
-
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
 export async function createInitialAdmin(
   input: {
     username: string;
@@ -252,6 +178,7 @@ export async function authenticateUser(
 export function createSession(
   user: SessionUser,
   request: Request,
+  ipAddress?: string,
 ): { token: string; expiresAt: number } {
   const token = randomBytes(32).toString("base64url");
   const now = Date.now();
@@ -262,38 +189,42 @@ export function createSession(
     userId: user.id,
     createdAt: now,
     expiresAt,
-    ipAddress: request.ip,
-    userAgent: request.get("user-agent"),
+    ipAddress,
+    userAgent: request.headers.get("user-agent") || undefined,
   });
   return { token, expiresAt };
 }
 
 export function setSessionCookie(
-  response: Response,
+  headers: Headers,
   request: Request,
   token: string,
 ): void {
-  response.cookie(SESSION_COOKIE, token, {
+  const cookie = new Cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "strict",
     secure: isExternalHttpsRequest(request),
     path: "/",
-    maxAge: SESSION_TTL_MS,
+    maxAge: SESSION_TTL_MS / 1000,
   });
+  headers.append("Set-Cookie", cookie.toString());
 }
 
-export function clearSessionCookie(response: Response): void {
-  response.clearCookie(SESSION_COOKIE, {
+export function clearSessionCookie(headers: Headers): void {
+  const cookie = new Cookie(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "strict",
     path: "/",
+    maxAge: 0,
+    expires: new Date(0),
   });
+  headers.append("Set-Cookie", cookie.toString());
 }
 
 export function getRequestSession(
-  request: Pick<IncomingMessage, "headers">,
+  request: Pick<Request, "headers">,
 ): { token: string; tokenHash: string; user: SessionUser } | null {
-  const token = cookieValue(request.headers.cookie || "", SESSION_COOKIE);
+  const token = cookieValue(request.headers.get("cookie") || "", SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = hashToken(token);
   const user = findSessionUser(tokenHash, Date.now());
@@ -314,7 +245,7 @@ export function assertRequestUser(
 ): SessionUser {
   if (expected.id === "api-token") {
     const token = ludockApiToken();
-    const candidate = bearerToken(request.headers.authorization);
+    const candidate = bearerToken(request.headers.get("authorization"));
     if (token && candidate && tokensMatch(candidate, token)) return expected;
   } else {
     const session = getRequestSession(request);
@@ -323,47 +254,25 @@ export function assertRequestUser(
   throw new AuthError("AUTHENTICATION_REQUIRED", 401, "Authentication required");
 }
 
-export function authMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
-  const session = getRequestSession(req);
+export function authenticateRequest(
+  request: Request,
+): { user: SessionUser; sessionTokenHash?: string } | null {
+  const session = getRequestSession(request);
   if (session) {
-    res.locals.user = session.user;
-    res.locals.sessionTokenHash = session.tokenHash;
-    next();
-    return;
+    return { user: session.user, sessionTokenHash: session.tokenHash };
   }
 
   const apiToken = ludockApiToken();
-  const candidate = bearerToken(req.headers.authorization);
+  const candidate = bearerToken(request.headers.get("authorization"));
   if (apiToken && candidate && tokensMatch(candidate, apiToken)) {
-    res.locals.user = {
-      id: "api-token",
-      username: "api-token",
-      role: "admin",
-    } satisfies SessionUser;
-    next();
-    return;
+    return { user: { id: "api-token", username: "api-token", role: "admin" } };
   }
 
-  res.status(401).json({ error: "Authentication required" });
-}
-
-export function requireRole(...roles: SessionUser["role"][]) {
-  return (_req: Request, res: Response, next: NextFunction): void => {
-    const user = res.locals.user as SessionUser | undefined;
-    if (!user || !roles.includes(user.role)) {
-      res.status(403).json({ error: "Insufficient permissions" });
-      return;
-    }
-    next();
-  };
+  return null;
 }
 
 export function authenticateWsRequest(
-  request: IncomingMessage,
+  request: Request,
 ): WebSocketAuth | null {
   const session = getRequestSession(request);
   if (session) {
@@ -392,14 +301,14 @@ export function authenticateWsRequest(
     });
     return null;
   }
-  if (request.headers.origin && !isSameOriginRequest(request)) {
+  if (request.headers.has("origin") && !isSameOriginRequest(request)) {
     logger.debug("WebSocket authentication rejected", {
       reason: "api-token-origin-mismatch",
       ...requestOriginDiagnostic(request),
     });
     return null;
   }
-  const candidate = bearerToken(request.headers.authorization);
+  const candidate = bearerToken(request.headers.get("authorization"));
   if (!candidate || !tokensMatch(candidate, apiToken)) {
     logger.debug("WebSocket authentication rejected", {
       reason: candidate ? "invalid-api-token" : "missing-bearer-token",
@@ -412,11 +321,12 @@ export function authenticateWsRequest(
   });
   return {
     user: { id: "api-token", username: "api-token", role: "admin" },
-    validate: () => ({
-      id: "api-token",
-      username: "api-token",
-      role: "admin",
-    }),
+    validate: () => {
+      const current = ludockApiToken();
+      return current && tokensMatch(candidate, current)
+        ? { id: "api-token", username: "api-token", role: "admin" }
+        : null;
+    },
   };
 }
 
@@ -434,31 +344,7 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function derivePassword(
-  password: string,
-  salt: Buffer,
-  keyLength: number,
-  options: { N: number; r: number; p: number; maxmem: number },
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    scrypt(password, salt, keyLength, options, (error, derivedKey) => {
-      if (error) reject(error);
-      else resolve(derivedKey);
-    });
-  });
-}
-
-function passwordHashNeedsUpgrade(encoded: string): boolean {
-  const [algorithm, n, r, p] = encoded.split("$");
-  return (
-    algorithm !== "scrypt" ||
-    Number(n) !== SCRYPT_N ||
-    Number(r) !== SCRYPT_R ||
-    Number(p) !== SCRYPT_P
-  );
-}
-
-function bearerToken(authorization: string | undefined): string {
+function bearerToken(authorization: string | null): string {
   if (!authorization) return "";
   const separator = authorization.indexOf(" ");
   if (

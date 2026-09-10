@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it } from "bun:test";
 import {
   FileStorageError,
   getFileRoots,
@@ -14,6 +14,7 @@ import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
 import { PassThrough, Readable } from "node:stream";
 import type Docker from "dockerode";
 import { createMountProof } from "../src/mount-proof.js";
+import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 
 function frame(channel: number, payload: string | Buffer): Buffer {
   const content = Buffer.from(payload);
@@ -308,12 +309,15 @@ describe("scoped file helper projections", () => {
     getVolume: docker.getVolume,
     createContainer: docker.createContainer,
     demux: docker.modem.demuxStream,
+    helperImage: process.env.FILE_HELPER_IMAGE,
   };
   afterEach(() => {
     docker.getContainer = originals.getContainer;
     docker.getVolume = originals.getVolume;
     docker.createContainer = originals.createContainer;
     docker.modem.demuxStream = originals.demux;
+    if (originals.helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
+    else process.env.FILE_HELPER_IMAGE = originals.helperImage;
   });
   it("rejects a rename after authorization before proving or exposing mounts", async () => {
     let inspectedVolumes = 0;
@@ -407,9 +411,15 @@ describe("scoped file helper projections", () => {
       assert.equal(dispatched.includes("download"), false);
     });
   }
-  for (const state of ["running", "exited"]) {
-    it(`projects approved mounts for a ${state} server and never inherits its sockets`, async () => {
+  for (const [state, helperImage] of [
+    ["running", undefined],
+    ["exited", "example/custom-bun-helper:test"],
+  ] as const) {
+    it(`projects approved mounts for a ${state} server using the ${helperImage ? "custom" : "default"} helper without inheriting sockets`, async () => {
+      if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
+      else process.env.FILE_HELPER_IMAGE = helperImage;
       let created: Docker.ContainerCreateOptions | undefined;
+      let validatorImage: string | undefined;
       let removed = false;
       const mounts = [
         { Type: "bind", Source: "/srv/game", Destination: "/data", RW: true },
@@ -456,6 +466,7 @@ describe("scoped file helper projections", () => {
         options: Docker.ContainerCreateOptions,
       ) => {
         if (options.Labels?.["ludock.internal"] === "mount-validator") {
+          validatorImage = options.Image;
           return {
             start: async () => {},
             remove: async () => {},
@@ -500,7 +511,8 @@ describe("scoped file helper projections", () => {
         { id: "root-0", name: "data", path: "/data" },
         { readOnly: true },
       );
-      assert.equal(created?.Image, "node:24-alpine");
+      assert.equal(created?.Image, helperImage || DEFAULT_HELPER_IMAGE);
+      assert.equal(validatorImage, helperImage || DEFAULT_HELPER_IMAGE);
       assert.equal(created?.HostConfig?.VolumesFrom, undefined);
       assert.deepEqual(
         created?.HostConfig?.Mounts?.map((mount) => [

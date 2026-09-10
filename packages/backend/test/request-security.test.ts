@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import type { IncomingMessage } from "node:http";
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import {
   isExternalHttpsRequest,
   isSameOriginRequest,
@@ -8,15 +7,11 @@ import {
 } from "../src/request-security.js";
 
 function request(
-  headers: IncomingMessage["headers"],
+  headers: HeadersInit,
   encrypted = false
-): Pick<IncomingMessage, "headers" | "socket"> {
-  return {
-    headers,
-    socket: { encrypted } as IncomingMessage["socket"] & {
-      encrypted?: boolean;
-    },
-  };
+): Request {
+  const values = new Headers(headers);
+  return new Request(`${encrypted ? "https" : "http"}://${values.get("host") || "panel.example"}/`, { headers: values });
 }
 
 describe("request security metadata", () => {

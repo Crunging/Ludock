@@ -1,7 +1,10 @@
 import { parseByteSize } from "@ludock/shared";
 
 export function getMaxUploadBytes(
-  env: { MAX_UPLOAD_SIZE?: string; MAX_UPLOAD_BYTES?: string } = process.env,
+  env: { MAX_UPLOAD_SIZE?: string; MAX_UPLOAD_BYTES?: string } = {
+    MAX_UPLOAD_SIZE: process.env.MAX_UPLOAD_SIZE,
+    MAX_UPLOAD_BYTES: process.env.MAX_UPLOAD_BYTES,
+  },
 ): number {
   const size = env.MAX_UPLOAD_SIZE?.trim();
   if (size) {

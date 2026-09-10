@@ -1,163 +1,120 @@
-import {
-  Router,
-  type Request,
-  type Response,
-  type Router as RouterType,
-} from "express";
-import {
-  serversResponseSchema,
-  serverResponseSchema,
-  serverStatsSchema,
-  okResponseSchema,
-} from "@ludock/shared";
-import { writeAuditLog, type SessionUser } from "../database.js";
-import {
-  getContainerStats,
-  restartContainer,
-  startContainer,
-  stopContainer,
-} from "../docker.js";
-import { createLogger, errorMessage } from "../logger.js";
-import { listServers, getServer, resolveAuthorizedServer } from "../servers.js";
-import { AppError } from "../errors.js";
+import { okResponseSchema, serverResponseSchema, serversResponseSchema, serverStatsSchema, } from "@ludock/shared";
 import { AuthError } from "../auth.js";
 import { AuthorizationError } from "../authorization.js";
+import { writeAuditLog } from "../database.js";
+import { getContainerStats, restartContainer, startContainer, stopContainer, } from "../docker.js";
+import { AppError } from "../errors.js";
 import { ServerBindingError } from "../identity.js";
+import { createLogger, errorMessage } from "../logger.js";
 import { setIntentionalStop, suppressMonitoring } from "../monitoring.js";
-import { respond } from "./request.js";
+import { getServer, listServers, resolveAuthorizedServer } from "../servers.js";
+import { requestUser, respond, type ApiRoutes, type RequestContext } from "./request.js";
 import { serverAction } from "./server-action.js";
-
-export const serversRouter: RouterType = Router();
 const logger = createLogger("api");
 interface DockerRouteError extends Error {
   statusCode?: number;
   code?: string;
 }
-
-function sendDockerError(
-  res: Response,
-  caught: unknown,
-  fallbackMessage: string,
-): void {
+function sendDockerError(caught: unknown, fallbackMessage: string): Response {
   const error = caught as DockerRouteError;
   if (error instanceof AppError || error instanceof AuthError || error instanceof AuthorizationError || error instanceof ServerBindingError) {
-    res
-      .status(error.statusCode)
-      .json({ error: error.message, code: error.code });
-    return;
+    return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
   }
-
   if (error.statusCode === 304) {
-    respond(res, okResponseSchema, { ok: true });
-    return;
+    return respond(okResponseSchema, { ok: true });
   }
-
   if (error.code === "INVALID_CONTAINER_ID") {
-    res.status(400).json({ error: "Invalid container identifier" });
-    return;
+    return Response.json({ error: "Invalid container identifier" }, { status: 400 });
   }
-
   if (error.statusCode === 403 || error.code === "FORBIDDEN") {
-    res.status(403).json({ error: "Container is not managed by Ludock" });
-    return;
+    return Response.json({ error: "Container is not managed by Ludock" }, { status: 403 });
   }
-
   if (error.statusCode === 404) {
-    res.status(404).json({ error: "Container not found" });
-    return;
+    return Response.json({ error: "Container not found" }, { status: 404 });
   }
-
   logger.error(fallbackMessage, { error: errorMessage(caught) });
-  res.status(500).json({ error: fallbackMessage });
+  return Response.json({ error: fallbackMessage }, { status: 500 });
 }
-
-function auditContainerAction(
-  req: Request,
-  res: Response,
-  action: string,
-  containerId: string,
-): void {
-  const user = res.locals.user as SessionUser;
+function auditContainerAction(ctx: RequestContext, action: string, containerId: string): void {
+  const user = requestUser(ctx);
   writeAuditLog({
     userId: user.id === "api-token" ? undefined : user.id,
     action: `server.${action}`,
     targetType: "server",
     targetId: containerId,
-    ipAddress: req.ip,
+    ipAddress: ctx.ipAddress,
   });
 }
 
-serversRouter.get("/api/v1/servers", async (_req: Request, res: Response) => {
-  respond(res, serversResponseSchema, {
-    servers: await listServers(res.locals.user as SessionUser),
-  });
-});
-
-serversRouter.get(
-  "/api/v1/servers/:id",
-  async (req: Request, res: Response) => {
-    const actor = res.locals.user as SessionUser;
-    const id = req.params.id as string;
-    const server = await getServer(actor, id);
-    let stats = null;
-    if (server.bindingStatus === "active") {
-      try {
-        const context = await resolveAuthorizedServer(actor, id, "server.view");
-        stats = serverStatsSchema.parse(
-          await getContainerStats(context.container.id),
-        );
-      } catch {
-        /* Status remains useful without stats. */
-      }
+export const serversRoutes: ApiRoutes = {
+  "/api/v1/servers": {
+    GET: async (ctx) => {
+      return respond(serversResponseSchema, {
+        servers: await listServers(requestUser(ctx)),
+      });
     }
-    respond(res, serverResponseSchema, { server, stats });
   },
-);
-
-serversRouter.post(
-  "/api/v1/servers/:id/start",
-  serverAction("server.start", async (req, res, context) => {
-    try {
-      const id = context.logical.id;
-      suppressMonitoring(id);
-      await startContainer(context.container.id, context.assertAccess);
-      setIntentionalStop(id, false);
-      auditContainerAction(req, res, "start", id);
-      respond(res, okResponseSchema, { ok: true });
-    } catch (error: unknown) {
-      sendDockerError(res, error, "Failed to start container");
+  "/api/v1/servers/:id": {
+    GET: async (ctx) => {
+      const actor = requestUser(ctx);
+      const id = ctx.params.id;
+      const server = await getServer(actor, id);
+      let stats = null;
+      if (server.bindingStatus === "active") {
+        try {
+          const context = await resolveAuthorizedServer(actor, id, "server.view");
+          stats = serverStatsSchema.parse(await getContainerStats(context.container.id));
+        }
+        catch {
+          // A server remains inspectable when live statistics are unavailable.
+        }
+      }
+      return respond(serverResponseSchema, { server, stats });
     }
-  }),
-);
-
-serversRouter.post(
-  "/api/v1/servers/:id/stop",
-  serverAction("server.stop", async (req, res, context) => {
-    try {
-      const id = context.logical.id;
-      suppressMonitoring(id);
-      await stopContainer(context.container.id, context.assertAccess);
-      setIntentionalStop(id, true);
-      auditContainerAction(req, res, "stop", id);
-      respond(res, okResponseSchema, { ok: true });
-    } catch (error: unknown) {
-      sendDockerError(res, error, "Failed to stop container");
-    }
-  }),
-);
-
-serversRouter.post(
-  "/api/v1/servers/:id/restart",
-  serverAction("server.restart", async (req, res, context) => {
-    try {
-      const id = context.logical.id;
-      suppressMonitoring(id);
-      await restartContainer(context.container.id, context.assertAccess);
-      setIntentionalStop(id, false);
-      auditContainerAction(req, res, "restart", id);
-      respond(res, okResponseSchema, { ok: true });
-    } catch (error: unknown) {
-      sendDockerError(res, error, "Failed to restart container");
-    }
-  }),
-);
+  },
+  "/api/v1/servers/:id/start": {
+    POST: serverAction("server.start", async (ctx, context) => {
+      try {
+        const id = context.logical.id;
+        suppressMonitoring(id);
+        await startContainer(context.container.id, context.assertAccess);
+        setIntentionalStop(id, false);
+        auditContainerAction(ctx, "start", id);
+        return respond(okResponseSchema, { ok: true });
+      }
+      catch (error: unknown) {
+        return sendDockerError(error, "Failed to start container");
+      }
+    })
+  },
+  "/api/v1/servers/:id/stop": {
+    POST: serverAction("server.stop", async (ctx, context) => {
+      try {
+        const id = context.logical.id;
+        suppressMonitoring(id);
+        await stopContainer(context.container.id, context.assertAccess);
+        setIntentionalStop(id, true);
+        auditContainerAction(ctx, "stop", id);
+        return respond(okResponseSchema, { ok: true });
+      }
+      catch (error: unknown) {
+        return sendDockerError(error, "Failed to stop container");
+      }
+    })
+  },
+  "/api/v1/servers/:id/restart": {
+    POST: serverAction("server.restart", async (ctx, context) => {
+      try {
+        const id = context.logical.id;
+        suppressMonitoring(id);
+        await restartContainer(context.container.id, context.assertAccess);
+        setIntentionalStop(id, false);
+        auditContainerAction(ctx, "restart", id);
+        return respond(okResponseSchema, { ok: true });
+      }
+      catch (error: unknown) {
+        return sendDockerError(error, "Failed to restart container");
+      }
+    })
+  }
+};

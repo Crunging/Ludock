@@ -93,7 +93,7 @@ export function publicOperation(job: Job): Operation {
 export function getOperation(id: string): Job | null {
   const row = getDatabase()
     .prepare("SELECT * FROM operations WHERE id = ?")
-    .get(id) as unknown as OperationRow | undefined;
+    .get(id) as OperationRow | null;
   return row ? toJob(row) : null;
 }
 export function listOperations(serverId: string): Operation[] {
@@ -127,7 +127,7 @@ export function enqueueOperation(options: {
   if (key) {
     const prior = getDatabase()
       .prepare("SELECT * FROM operations WHERE request_key = ?")
-      .get(key) as unknown as OperationRow | undefined;
+      .get(key) as OperationRow | null;
     if (prior) {
       if (prior.input_json !== input)
         throw new AppError(
@@ -236,7 +236,7 @@ async function runNext() {
     .prepare(
       "SELECT * FROM operations WHERE status='queued' ORDER BY created_at,id LIMIT 1",
     )
-    .get() as unknown as OperationRow | undefined;
+    .get() as OperationRow | null;
   if (!row) return;
   running = true;
   const job = toJob(row);

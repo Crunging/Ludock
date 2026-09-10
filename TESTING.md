@@ -11,28 +11,43 @@ Documentation-only edits need content, link, and diff checks. CI runs the full
 source, browser, and container suites for code changes; the commands below are
 available for broader local validation, not required before every commit.
 
-Use Node.js 24 and pnpm 10. For a full source check and local image build:
+Use the latest stable Bun 1 release (minimum 1.4.2), as selected by
+[`.bun-version`](./.bun-version). Update a local standalone installation with
+`bun upgrade`, or use its package manager, keeping it on the Bun 1 release line.
+For a full source check and local image build:
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm check
-docker build -t ludock:test .
+bun install --frozen-lockfile
+bun run check
+docker build --pull -t ludock:test .
 ```
 
-`pnpm check` builds shared runtime contracts, checks types and lint, runs
-development-runner, backend unit/HTTP, and frontend component tests, then builds
-production artifacts. Compile-only checks cover logical versus Docker identity
-boundaries and required route capabilities/response contracts.
+CI selects the latest stable Bun release within the major in `.bun-version`.
+Local tool installations and cached images need an explicit update. `--pull`
+refreshes the Bun 1 and Alpine 3 base-image tags; `bun install --frozen-lockfile`
+still uses the dependency versions in `bun.lock`. Review available updates with
+`bun outdated --recursive`. After `bun update --recursive`, review the manifest
+and lockfile changes and run `bun run check`, plus browser and platform checks
+for affected behavior. See [Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies)
+for the manual update policy.
+
+`bun run check` builds shared runtime contracts, checks types and lint, runs
+development-runner, backend unit/HTTP, frontend component, and frontend serving
+tests with Bun, then builds production artifacts. Compile-only checks cover
+logical versus Docker identity boundaries and required route capabilities/response
+contracts.
 For focused work:
 
 ```bash
-pnpm --filter @ludock/frontend test
-pnpm --filter @ludock/backend test
+bun run --filter @ludock/frontend test
+bun run --filter @ludock/backend test
 ```
 
-Backend suites include discovery, identity, grants, database schema handling,
-protocol adapters, filesystem boundaries, archive/restore validation, operation
+Backend suites use `bun:test` with a separate module environment per file.
+Frontend component tests preload jsdom and use React Testing Library with the
+same test runner. Backend coverage includes discovery, identity, grants,
+database schema handling, protocol adapters, filesystem boundaries,
+archive/restore validation, operation
 locks and recovery, schedule authority/DST handling, monitoring, and notification
 retries.
 Frontend tests cover independent action grants, role ceilings, runtime response
@@ -43,22 +58,24 @@ across stream chunks, deterministic Compose environment snapshots, and shared
 bind-root overlap. Frontend cases cover stale session reads, failed editor loads,
 overlapping mutations, preserved new drafts, and honest history/error states.
 Development tests cover isolated state/cookies, shared database locks, port
-collisions, and backend instance checks. Fixture tests do not replace real
-Docker, Compose, or game-world validation.
+collisions, backend instance checks, streaming HTTP proxy behavior, and
+WebSocket forwarding. Fixture tests do not replace real Docker, Compose, or
+game-world validation.
 
 ## Browser regression checks
 
-The browser suite serves a production frontend build and intercepts API and
-WebSocket requests with per-test fixtures validated by the shared contracts. It
-does not start a backend, connect to Docker, or read application storage. The
-dedicated preview configuration has no backend proxy, and unexpected API or
+The browser suite uses Bun's preview server for a production frontend build and
+intercepts API and WebSocket requests with per-test fixtures validated by the
+shared contracts. It does not start a backend, connect to Docker, or read
+application storage. The
+dedicated preview server has no backend proxy, and unexpected API or
 external requests fail the test.
 
 ```bash
-pnpm --filter @ludock/shared build
-pnpm --filter @ludock/frontend build
-pnpm --filter @ludock/frontend exec playwright install chromium
-pnpm --filter @ludock/frontend test:e2e
+bun run --filter @ludock/shared build
+bun run --filter @ludock/frontend build
+(cd packages/frontend && bun x --bun playwright install chromium)
+bun run --filter @ludock/frontend test:e2e
 ```
 
 The separate **Browser** CI job installs Chromium with its Linux dependencies
@@ -95,9 +112,9 @@ For each platform:
 - Build the production image and initialize fresh SQLite storage.
 - Check `/api/v1/health`, the setup page, and static assets. Without a socket,
   health reports degraded; with the test daemon it reports healthy.
-- Run the bundled `node`, `docker --version`, and `docker compose version`.
-- Resolve and run the configured `node:24-alpine` helper on that platform; verify
-  file access, stopped-server backup, and restore against disposable volumes.
+- Run the bundled `bun --version`, `docker --version`, and `docker compose version`.
+- Resolve and run the configured `oven/bun:1-alpine` helper on that platform;
+  verify file access, stopped-server backup, and restore against disposable volumes.
 - Exercise Compose source validation inside the Linux Ludock runtime. Host
   macOS/Windows unit execution cannot establish descriptor-path compatibility.
 - Verify no build-host-specific native artifact entered the target runtime.
@@ -109,19 +126,23 @@ that a given host's Compose bind paths and mount permissions work.
 
 ## Docker integration harnesses
 
-After installing dependencies and building `ludock:test`, run:
+After installing the latest stable Bun 1 and building `ludock:test`, run:
 
 ```bash
-docker pull node:24-alpine
-node scripts/test-linux.mjs
-python3 scripts/test-compose.py
-node scripts/test-files.mjs
-node scripts/test-backups.mjs
+docker pull oven/bun:1-alpine
+bun scripts/test-linux.mjs
+bun scripts/test-compose.mjs
+bun scripts/test-files.mjs
+bun scripts/test-backups.mjs
 ```
 
-The Node scripts require Node.js 24 and the installed workspace TypeScript
-package. The Linux suite runs the backend tests against the production modules,
-including descriptor-based path tests skipped on macOS. All scripts use `LUDOCK_TEST_IMAGE` when set; otherwise they run the
+All harnesses use Bun.
+The Linux suite first starts the bundled backend without source mounts and checks
+health, the frontend document, and its built script. It then mounts backend source
+and tests read-only and runs the TypeScript suites with the production image's
+Bun runtime and production dependencies, including descriptor-based path tests
+skipped on macOS. These fixtures have no Docker socket or external network.
+All scripts use `LUDOCK_TEST_IMAGE` when set; otherwise they run the
 local `ludock:test` image. They create uniquely named fixture containers and
 volumes and remove their fixtures afterward. The Compose harness checks current
 images, forced recreation of running/stopped services, retained logical identity,

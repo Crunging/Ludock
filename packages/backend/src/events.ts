@@ -1,6 +1,6 @@
 import { SERVER_STATE_ACTIONS, serverEventSchema } from "@ludock/shared";
 import { StringDecoder } from "node:string_decoder";
-import type { WebSocket } from "ws";
+import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { currentActor, hasServerCapability } from "./authorization.js";
 import { getDockerInstance } from "./docker.js";
@@ -8,7 +8,8 @@ import { listLogicalServers } from "./identity.js";
 import { refreshServers } from "./servers.js";
 import { createLogger } from "./logger.js";
 
-const eventClients = new Map<WebSocket, WebSocketAuth>();
+const eventClients = new Map<SocketChannel, WebSocketAuth>();
+const eventDeliveries = new Set<Promise<void>>();
 let eventStreamActive = false;
 let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
   null;
@@ -51,18 +52,18 @@ export function dockerEventDecoder(
   };
 }
 
-export function addEventClient(ws: WebSocket, auth: WebSocketAuth): void {
+export function addEventClient(ws: SocketChannel, auth: WebSocketAuth): void {
+  if (!ws.isOpen) return;
   eventClients.set(ws, auth);
   const removeClient = () => {
     eventClients.delete(ws);
-    if (eventClients.size === 0) stopEventStream();
+    if (eventClients.size === 0) void stopEventStream();
   };
-  ws.on("close", removeClient);
-  ws.on("error", removeClient);
+  ws.onClose(removeClient);
   if (!eventStreamActive) void startEventStream();
 }
 
-export function stopEventStream(): void {
+export async function stopEventStream(): Promise<void> {
   streamGeneration++;
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -70,10 +71,19 @@ export function stopEventStream(): void {
   eventStream = null;
   eventStreamActive = false;
   stream?.destroy?.();
+  // A decoded event may still be awaiting a Docker refresh. It must finish
+  // before shutdown closes the database used by its authorization checks.
+  await Promise.allSettled(eventDeliveries);
 }
 
 /** Send only logical identifiers after a fresh eligible snapshot and grant check. */
-export async function dispatchDockerEvent(event: DockerEvent): Promise<void> {
+export function dispatchDockerEvent(event: DockerEvent): Promise<void> {
+  const delivery = deliverDockerEvent(event).finally(() => eventDeliveries.delete(delivery));
+  eventDeliveries.add(delivery);
+  return delivery;
+}
+
+async function deliverDockerEvent(event: DockerEvent): Promise<void> {
   if (typeof event.Action !== "string" || !STATE_ACTIONS.has(event.Action))
     return;
   const containerId = event.Actor?.ID || event.id;
@@ -85,7 +95,7 @@ export async function dispatchDockerEvent(event: DockerEvent): Promise<void> {
   const previous = listLogicalServers().find(
     (server) => server.containerId === containerId,
   );
-  const previouslyVisible = new Set<WebSocket>();
+  const previouslyVisible = new Set<SocketChannel>();
   if (previous) {
     for (const [client, auth] of eventClients) {
       if (hasServerCapability(auth.validate(), previous.id, "server.view"))
@@ -97,7 +107,7 @@ export async function dispatchDockerEvent(event: DockerEvent): Promise<void> {
     (server) => server.containerId === containerId,
   );
   for (const [client, auth] of eventClients) {
-    if (client.readyState !== client.OPEN) continue;
+    if (!client.isOpen) continue;
     const user = currentActor(auth.validate());
     if (!user) {
       client.close(1008, "Authentication expired");
@@ -185,7 +195,7 @@ async function startEventStream(): Promise<void> {
 
 function scheduleReconnect(delay: number): void {
   if (reconnectTimer) return;
-  stopEventStream();
+  void stopEventStream();
   if (eventClients.size === 0) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;

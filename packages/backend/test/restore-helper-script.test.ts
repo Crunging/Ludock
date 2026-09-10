@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
   mkdtemp,
   mkdir,
@@ -12,7 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import { RESTORE_HELPER_SCRIPT } from "../src/restore-helper-script.js";
 
 const stage = ".ludock-restore-11111111-1111-4111-8111-111111111111";
@@ -37,9 +36,9 @@ function run(
     okay?: boolean;
   } = {},
 ) {
-  const result = spawnSync(
-    process.execPath,
+  const result = Bun.spawnSync(
     [
+      process.execPath,
       "-e",
       (options.prelude || "") + RESTORE_HELPER_SCRIPT,
       JSON.stringify({
@@ -48,14 +47,14 @@ function run(
         stage: options.stage || stage,
       }),
     ],
-    { encoding: "utf8", timeout: 10_000 },
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10_000 },
   );
   if (options.okay === false) {
-    assert.notEqual(result.status, 0, "Unsafe operation succeeded");
+    assert.notEqual(result.exitCode, 0, "Unsafe operation succeeded");
     return undefined;
   }
-  assert.equal(result.status, 0, result.stderr);
-  return JSON.parse(result.stdout) as { ok?: boolean; availableBytes?: number };
+  assert.equal(result.exitCode, 0, result.stderr.toString());
+  return JSON.parse(result.stdout.toString()) as { ok?: boolean; availableBytes?: number };
 }
 async function sentinel() {
   assert.equal(
@@ -64,15 +63,11 @@ async function sentinel() {
   );
 }
 
-describe(
-  "descriptor-confined restore helpers",
-  {
-    skip:
-      process.platform !== "linux"
+describe.skipIf(Boolean(process.platform !== "linux"
         ? "Linux /proc/self/fd traversal runs in the Docker harness"
-        : false,
-  },
-  () => {
+        : false))(
+  "descriptor-confined restore helpers",
+    () => {
     it("creates exclusive staging, moves dotfiles, and cleans committed old data", async () => {
       await writeFile(path.join(root, "world"), "old-world");
       await writeFile(path.join(root, ".settings"), "old-settings");

@@ -1,5 +1,4 @@
-#!/usr/bin/env node
-import { spawn } from "node:child_process";
+#!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
@@ -253,23 +252,20 @@ export async function runDevelopment(config) {
   };
   const launch = (label, executable, args, cwd, env) => {
     if (stopping) return;
-    const child = spawn(executable, args, {
+    const child = Bun.spawn([executable, ...args], {
       cwd,
       env,
-      stdio: "inherit",
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
       detached: process.platform !== "win32",
     });
     children.add(child);
-    child.once("error", (error) => {
-      console.error(`${label} failed to start: ${error.message}`);
-      process.exitCode = 1;
-      stop();
-    });
-    child.once("close", (code, signal) => {
+    void child.exited.then((code) => {
       children.delete(child);
       if (!stopping) {
         console.error(
-          `${label} stopped (${signal || code}). Stopping the development run.`,
+          `${label} stopped (${child.signalCode || code}). Stopping the development run.`,
         );
         process.exitCode = 1;
         stop();
@@ -278,24 +274,28 @@ export async function runDevelopment(config) {
     });
     return child;
   };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  // Repeated signals must keep waiting for children to drain; removing a
+  // one-shot listener would restore immediate termination during cleanup.
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
   try {
     ports = await reserveDevelopmentPorts(config);
     if (stopping) return;
     const tsc = script("shared", "typescript/bin/tsc");
     // Build once before either app imports the contracts, then watch all three
-    // packages. Node watches the backend and its imported shared modules.
-    const built = spawn(process.execPath, [tsc], {
+    // packages. The backend watcher waits for shutdown before each restart.
+    const built = Bun.spawn([process.execPath, tsc], {
       cwd: path.join(config.directory, "packages/shared"),
-      stdio: "inherit",
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
       detached: process.platform !== "win32",
     });
     children.add(built);
-    const buildCode = await new Promise((resolve, reject) => {
-      built.once("error", reject);
-      built.once("close", resolve);
-    }).finally(() => children.delete(built));
+    const buildCode = await built.exited.finally(() => {
+      children.delete(built);
+      if (stopping && children.size === 0) stopped();
+    });
     if (stopping) return;
     if (buildCode !== 0) throw new Error("Shared contract build failed.");
     const env = {
@@ -321,11 +321,7 @@ export async function runDevelopment(config) {
       "Backend",
       process.execPath,
       [
-        "--watch",
-        "--watch-preserve-output",
-        "--import",
-        script("backend", "tsx"),
-        "src/index.ts",
+        path.join(config.directory, "scripts/watch-backend.mjs"),
       ],
       path.join(config.directory, "packages/backend"),
       env,
@@ -346,15 +342,11 @@ export async function runDevelopment(config) {
     console.log(
       `Ludock development: http://127.0.0.1:${ports.frontendPort}\nAPI: http://127.0.0.1:${ports.backendPort}\nDatabase: ${config.database}\nDocker: ${config.dockerConfigured ? config.dockerSocket : "disconnected (set DOCKER_SOCKET for a development daemon)"}`,
     );
-    const vite = path.join(
-      path.dirname(script("frontend", "vite/package.json")),
-      "bin/vite.js",
-    );
     launch(
       "Frontend",
       process.execPath,
       [
-        vite,
+        "scripts/dev.ts",
         "--host",
         "127.0.0.1",
         "--port",
@@ -399,11 +391,11 @@ if (
   try {
     if (args.includes("--help")) {
       console.log(
-        "pnpm dev [--print-config]\nPer-checkout storage, ports and cookies. Overrides: LUDOCK_DEV_HOME, LUDOCK_DEV_PORT, LUDOCK_DEV_API_PORT, LUDOCK_DB_PATH, DOCKER_SOCKET. Stop with Ctrl+C.",
+        "bun run dev [--print-config]\nPer-checkout storage, ports and cookies. Overrides: LUDOCK_DEV_HOME, LUDOCK_DEV_PORT, LUDOCK_DEV_API_PORT, LUDOCK_DB_PATH, DOCKER_SOCKET. Stop with Ctrl+C.",
       );
     } else {
       if (args.some((argument) => argument !== "--print-config"))
-        throw new Error("Unknown development option. Run pnpm dev --help.");
+        throw new Error("Unknown development option. Run bun run dev --help.");
       const config = await developmentConfig(repository);
       if (args.includes("--print-config"))
         console.log(JSON.stringify(config, null, 2));

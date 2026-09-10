@@ -14,23 +14,23 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-
-      - name: Enable Corepack
-        run: corepack enable
+          bun-version-file: .bun-version
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
+
+      - name: Audit dependencies for vulnerabilities
+        run: bun audit --audit-level=high
 
       - name: Type-check, lint, test, and build
-        run: pnpm check
+        run: bun run check
 
   browser:
     name: Browser
@@ -39,34 +39,34 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: |
-          corepack enable
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
 
       - name: Build frontend and shared contracts
         run: |
-          pnpm --filter @ludock/shared build
-          pnpm --filter @ludock/frontend build
+          bun run --filter @ludock/shared build
+          bun run --filter @ludock/frontend build
 
       - name: Install Chromium
-        run: pnpm --filter @ludock/frontend exec playwright install --with-deps chromium
+        working-directory: packages/frontend
+        run: bun x --bun playwright install --with-deps chromium
 
       - name: Check desktop and mobile browser workflows
-        run: pnpm --filter @ludock/frontend test:e2e
+        run: bun run --filter @ludock/frontend test:e2e
 
       - name: Retain browser failure details
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-failures
           path: |
@@ -81,12 +81,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Lint workflows
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        uses: docker://rhysd/actionlint:latest
 
   container:
     name: Container (${{ matrix.platform }})
@@ -103,17 +103,18 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build production image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
+          pull: true
           platforms: ${{ matrix.platform }}
           push: false
           load: true
@@ -126,6 +127,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          docker run --rm ludock:ci bun --version
           docker run --rm ludock:ci docker --version
           docker run --rm ludock:ci docker compose version
           docker run -d --name smoke -p 3000:3000 ludock:ci
@@ -148,35 +150,34 @@ jobs:
           docker logs smoke
           exit 1
 
-      - name: Check Compose updates with disposable services
-        run: python3 scripts/test-compose.py
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
-
-      - name: Set up Node.js for storage integration
-        uses: actions/setup-node@v4
+      - name: Set up Bun for storage integration
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
+          bun-version-file: .bun-version
 
       - name: Install test harness dependencies
         run: |
-          corepack enable
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
+
+      - name: Check Compose updates with disposable services
+        run: bun scripts/test-compose.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
 
       - name: Check backend suites in the Linux production runtime
-        run: node scripts/test-linux.mjs
+        run: bun scripts/test-linux.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
 
       - name: Check scoped file helpers with disposable data
         run: |
-          docker pull node:24-alpine
-          node scripts/test-files.mjs
+          docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
+          bun scripts/test-files.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
 
       - name: Check backup and restore recovery with disposable data
-        run: node scripts/test-backups.mjs
+        run: bun scripts/test-backups.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
 

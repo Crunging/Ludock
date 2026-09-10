@@ -22,6 +22,7 @@ import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { RESTORE_EXTRACT_SCRIPT } from "./restore-extract-script.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
+import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
 
 export interface BackupRoot {
   id: string;
@@ -522,12 +523,12 @@ export async function createDataHelper(
   if (checkedMounts.some((mount) => !isSafeWritableDataMount(mount)))
     throw failBackup("UNSAFE_BACKUP_ROOT", "A selected data mount is unsafe.");
   const proof = await createMountProof(checkedMounts, operationId);
-  const image = process.env.FILE_HELPER_IMAGE || "node:24-alpine";
+  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
   const options: Docker.ContainerCreateOptions = {
     Image: image,
     User: "0",
-    Entrypoint: ["/bin/sh", "-c"],
-    Cmd: ["while :; do sleep 3600; done"],
+    Entrypoint: ["bun", "-e"],
+    Cmd: ["setInterval(() => {}, 3600000)"],
     Labels: {
       "ludock.enable": "false",
       "ludock.internal": "backup-helper",
@@ -572,7 +573,7 @@ export async function createDataHelper(
     // Resolve label-selected subdirectories without following symbolic links.
     for (let index = 0; index < roots.length; index++) {
       await helperExec(container, [
-        "node",
+        "bun",
         "-e",
         FILE_HELPER_SCRIPT,
         JSON.stringify({
@@ -683,7 +684,7 @@ async function helperArchive(
 ): Promise<Readable> {
   const execution = await container.exec({
     Cmd: [
-      "node",
+      "bun",
       "-e",
       FILE_HELPER_SCRIPT,
       JSON.stringify({ operation: "backup", root, path: "", blocked: [] }),
@@ -919,7 +920,7 @@ export async function extractRootToStage(
 ): Promise<void> {
   const execution = await helper.exec({
     Cmd: [
-      "node",
+      "bun",
       "-e",
       RESTORE_EXTRACT_SCRIPT,
       JSON.stringify({ root: rootPath, stage: stageName, maxBytes }),

@@ -46,7 +46,7 @@ docker compose up -d --force-recreate ludock
 | `LUDOCK_DOCKER_CONFIG` | Optional read-only Docker client configuration directory for private-registry credentials; otherwise `/nonexistent` |
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
 | `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an alias |
-| `FILE_HELPER_IMAGE` | File and backup helper image; `node:24-alpine` |
+| `FILE_HELPER_IMAGE` | File and backup helper image; `oven/bun:1-alpine` |
 | `MAX_UPLOAD_SIZE` | Maximum size of each uploaded file; `2 GiB` by default. Examples: `500 MB`, `1.5 GiB` |
 | `MAX_UPLOAD_BYTES` | Byte-only upload setting, used when `MAX_UPLOAD_SIZE` is unset or blank |
 | `AUDIT_LOG_MAX_ROWS` | Retained audit entries; 100,000 by default |
@@ -108,8 +108,8 @@ writable-layer paths are not supported. Host roots, broad system directories,
 Docker sockets, read-only mounts, sensitive paths, and symlink traversal are
 blocked. See [Game servers](./GAME-SERVERS.md#file-roots).
 
-Every file operation uses a temporary `node:24-alpine` helper, whether the game
-is running or stopped. It mounts only approved data, has no network, uses a
+Every file operation uses a temporary `oven/bun:1-alpine` helper, whether the
+game is running or stopped. It mounts only approved data, has no network, uses a
 read-only root filesystem and `no-new-privileges`, drops capabilities, and adds
 only required data-access capabilities. Helpers run as UID 0 to access game
 files; this does not remove the Docker-host trust requirement. File requests
@@ -136,10 +136,19 @@ Docker Desktop host aliases, and hosts without recursive read-only bind support
 can make bind access unavailable. Named volumes must use the local driver without
 host-remapping options.
 
-The default helper must be available for the Docker host's architecture. A
-custom `FILE_HELPER_IMAGE` must supply Node.js 24, `/bin/sh`, and `sleep`, and run
-with Linux `/proc/self/fd` support; a plain Alpine image is insufficient.
-Validate overrides on both architectures before distributing them.
+The default helper follows Bun 1's stable Alpine tag and must be available for
+the Docker host's architecture. Ludock pulls a missing helper image, but can
+reuse a locally cached image. Refresh that image explicitly on the managed
+Docker host:
+
+```bash
+docker pull oven/bun:1-alpine
+```
+
+A custom `FILE_HELPER_IMAGE` must supply a supported Bun 1 runtime (minimum 1.4.2),
+`/bin/sh`, and `sleep`, and run with Linux `/proc/self/fd` support; a plain Alpine
+image is insufficient. Validate overrides on both architectures before
+distributing them.
 
 ## Configure backups
 
@@ -339,7 +348,7 @@ history, then run:
 ```bash
 docker compose stop ludock
 docker compose run --rm -e LUDOCK_RECOVERY_PASSWORD \
-  ludock node packages/backend/dist/recovery.js admin
+  ludock bun packages/backend/dist/recovery.js admin
 unset LUDOCK_RECOVERY_PASSWORD
 docker compose start ludock
 ```

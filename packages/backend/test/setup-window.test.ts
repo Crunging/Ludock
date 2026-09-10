@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { after, before, describe, it } from "node:test";
+import { serve } from "bun";
+import { afterAll as after, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -13,18 +12,11 @@ const [{ createApp }, { SetupWindow }] = await Promise.all([
 let now = 1_000;
 const setupWindow = new SetupWindow(() => now, 100);
 now = 1_100;
-const server = createServer(createApp({ frontendDist: false, setupWindow }));
-let baseUrl = "";
-
-before(async () => {
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
+const server = serve({ ...createApp({ frontendDist: false, setupWindow }), hostname: "127.0.0.1", port: 0 });
+const baseUrl = server.url.origin;
 
 after(async () => {
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await server.stop(true);
 });
 
 describe("initial setup window", () => {

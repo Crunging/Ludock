@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, mock, jest } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import { useWebSocket } from "../src/hooks/useWebSocket";
 
@@ -11,8 +11,8 @@ class FakeWebSocket {
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: ((event: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
-  send = vi.fn<(data: string) => void>();
-  close = vi.fn(() => { this.readyState = 2; });
+  send = mock<(data: string) => void>();
+  close = mock(() => { this.readyState = 2; });
 
   constructor(readonly url: string) {
     if (FakeWebSocket.failConstruction) throw new Error("private socket detail");
@@ -28,15 +28,17 @@ class FakeWebSocket {
   }
 }
 
+const originalWebSocket = globalThis.WebSocket;
+
 beforeEach(() => {
-  vi.useFakeTimers();
+  jest.useFakeTimers();
   FakeWebSocket.instances = [];
   FakeWebSocket.failConstruction = false;
-  vi.stubGlobal("WebSocket", FakeWebSocket);
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
 });
 afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  jest.useRealTimers();
+  globalThis.WebSocket = originalWebSocket;
 });
 
 const latest = () => FakeWebSocket.instances.at(-1)!;
@@ -53,7 +55,7 @@ describe("WebSocket recovery", () => {
     expect(ws.close).toHaveBeenCalledTimes(1);
     expect(result.current.send("still kept")).toBe(false);
     act(() => ws.serverClose());
-    act(() => vi.advanceTimersByTime(2000));
+    act(() => jest.advanceTimersByTime(2000));
     act(() => latest().open());
     expect(latest().send).not.toHaveBeenCalled();
     expect(ws.send.mock.calls.map(([data]) => data)).toEqual(["first", "kept draft"]);
@@ -68,8 +70,8 @@ describe("WebSocket recovery", () => {
   });
 
   it("ignores all callbacks and controls from a replaced URL", () => {
-    const onMessage = vi.fn();
-    const onOpen = vi.fn();
+    const onMessage = mock();
+    const onOpen = mock();
     const { result, rerender } = renderHook(
       ({ url }) => useWebSocket({ url, onMessage, onOpen }),
       { initialProps: { url: "ws://local/one" } },
@@ -94,7 +96,7 @@ describe("WebSocket recovery", () => {
       saved.close({ code: 1008, reason: "old denial" });
       saved.error();
       saved.retry();
-      vi.advanceTimersByTime(5000);
+      jest.advanceTimersByTime(5000);
     });
     expect(onMessage).not.toHaveBeenCalled();
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -111,21 +113,21 @@ describe("WebSocket recovery", () => {
   });
 
   it("exhausts bounded retries even if each connection briefly opens", () => {
-    const onOpen = vi.fn();
+    const onOpen = mock();
     const { result } = renderHook(() => useWebSocket({
       url: "ws://local/one", maxRetries: 2, reconnectDelay: 10, onOpen,
     }));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       act(() => latest().open());
       act(() => latest().serverClose());
-      act(() => vi.advanceTimersByTime(10));
+      act(() => jest.advanceTimersByTime(10));
     }
     expect(FakeWebSocket.instances).toHaveLength(3);
     expect(onOpen).toHaveBeenCalledTimes(3);
     expect(result.current.status).toBe("disconnected");
     expect(result.current.canRetry).toBe(true);
     expect(result.current.error).toContain("Automatic retries have stopped");
-    act(() => vi.advanceTimersByTime(100_000));
+    act(() => jest.advanceTimersByTime(100_000));
     expect(FakeWebSocket.instances).toHaveLength(3);
     act(() => result.current.retry());
     expect(FakeWebSocket.instances).toHaveLength(4);
@@ -145,7 +147,7 @@ describe("WebSocket recovery", () => {
       expect(result.current.error).not.toContain("secret-token-value");
       act(() => {
         result.current.retry();
-        vi.advanceTimersByTime(100_000);
+        jest.advanceTimersByTime(100_000);
       });
       expect(FakeWebSocket.instances).toHaveLength(1);
     },
@@ -154,7 +156,7 @@ describe("WebSocket recovery", () => {
   it("waits for the close code after an error so denial cannot trigger recovery", () => {
     const { result } = renderHook(() => useWebSocket({ url: "ws://local/one" }));
     act(() => latest().onerror?.());
-    act(() => vi.advanceTimersByTime(5000));
+    act(() => jest.advanceTimersByTime(5000));
     expect(FakeWebSocket.instances).toHaveLength(1);
     act(() => latest().serverClose(1008));
     act(() => result.current.retry());
@@ -163,8 +165,8 @@ describe("WebSocket recovery", () => {
   });
 
   it("cleans up pending recovery and suppresses saved callbacks after unmount", () => {
-    const onMessage = vi.fn();
-    const onOpen = vi.fn();
+    const onMessage = mock();
+    const onOpen = mock();
     const { result, unmount } = renderHook(() => useWebSocket({
       url: "ws://local/one", onMessage, onOpen,
     }));
@@ -175,7 +177,7 @@ describe("WebSocket recovery", () => {
     act(() => first.serverClose());
     unmount();
     act(() => {
-      vi.advanceTimersByTime(100_000);
+      jest.advanceTimersByTime(100_000);
       lateMessage({ data: "late output" });
       lateOpen();
       retry();
@@ -190,7 +192,7 @@ describe("WebSocket recovery", () => {
     const { result } = renderHook(() => useWebSocket({
       url: "ws://local/one", maxRetries: 1, reconnectDelay: 10,
     }));
-    act(() => vi.advanceTimersByTime(10));
+    act(() => jest.advanceTimersByTime(10));
     expect(result.current.canRetry).toBe(true);
     expect(result.current.error).not.toContain("private socket detail");
     FakeWebSocket.failConstruction = false;
@@ -205,12 +207,12 @@ describe("WebSocket recovery", () => {
       url: "ws://local/one", maxRetries: 1, reconnectDelay: 10,
     }));
     act(() => latest().serverClose());
-    act(() => vi.advanceTimersByTime(10));
+    act(() => jest.advanceTimersByTime(10));
     act(() => latest().open());
-    act(() => vi.advanceTimersByTime(30_000));
+    act(() => jest.advanceTimersByTime(30_000));
     act(() => latest().serverClose());
     expect(result.current.canRetry).toBe(false);
-    act(() => vi.advanceTimersByTime(10));
+    act(() => jest.advanceTimersByTime(10));
     expect(FakeWebSocket.instances).toHaveLength(3);
   });
 });

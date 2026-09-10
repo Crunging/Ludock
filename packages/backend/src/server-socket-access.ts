@@ -1,4 +1,4 @@
-import type { WebSocket } from "ws";
+import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { hasServerCapability, type ServerCapability } from "./authorization.js";
 import { getLogicalServer } from "./identity.js";
@@ -8,7 +8,7 @@ import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
  * Check local revocation before every output frame, and refresh Docker while
  * idle so external recreation also closes an otherwise silent connection. */
 export async function authorizeServerSocket(
-  ws: WebSocket,
+  ws: SocketChannel,
   auth: WebSocketAuth,
   serverId: string,
   capability: ServerCapability,
@@ -24,7 +24,7 @@ export async function authorizeServerSocket(
   const revision = context.logical.bindingRevision;
 
   const allowed = (required = capability): boolean => {
-    if (ws.readyState !== ws.OPEN) return false;
+    if (!ws.isOpen) return false;
     const currentUser = auth.validate();
     const binding = getLogicalServer(serverId);
     if (
@@ -70,8 +70,7 @@ export async function authorizeServerSocket(
   }, 2_000);
   interval.unref();
   const cleanup = () => clearInterval(interval);
-  ws.once("close", cleanup);
-  ws.once("error", cleanup);
-  if (ws.readyState !== ws.OPEN) cleanup();
+  ws.onClose(cleanup);
+  if (!ws.isOpen) cleanup();
   return { context, allowed, refresh };
 }

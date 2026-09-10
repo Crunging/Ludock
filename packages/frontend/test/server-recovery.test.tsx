@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useServers } from "../src/hooks/useServers";
@@ -7,10 +7,14 @@ import { apiJson, ApiRequestError } from "../src/api";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
 import type { ManagedContainer } from "../src/types";
 
-vi.mock("../src/api", async (original) => ({
-  ...(await original<typeof import("../src/api")>()), apiJson: vi.fn(),
+const originalApi = { ...await import("../src/api") };
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiJson: apiJsonMock,
 }));
-vi.mock("../src/hooks/useWebSocket", () => ({ useWebSocket: vi.fn() }));
+const useWebSocketMock = mock<typeof useWebSocket>();
+mock.module("../src/hooks/useWebSocket", () => ({ useWebSocket: useWebSocketMock }));
 
 const server = { id: "server-1", displayName: "World", permissions: ["server.view"] } as ManagedContainer;
 const administrator: AuthUser = { id: "admin", username: "admin", role: "admin" };
@@ -31,9 +35,9 @@ function deferred<T>() {
 
 beforeEach(() => {
   currentUser = administrator;
-  transport = { status: "connected", send: vi.fn(() => true), retry: vi.fn(), canRetry: false, error: null, accessDenied: false };
-  vi.mocked(useWebSocket).mockImplementation((options) => { callbacks = options; return transport; });
-  vi.mocked(apiJson).mockReset().mockResolvedValue({ servers: [server] });
+  transport = { status: "connected", send: mock(() => true), retry: mock(), canRetry: false, error: null, accessDenied: false };
+  useWebSocketMock.mockImplementation((options) => { callbacks = options; return transport; });
+  apiJsonMock.mockReset().mockResolvedValue({ servers: [server] });
 });
 
 describe("server snapshot recovery", () => {
@@ -47,10 +51,10 @@ describe("server snapshot recovery", () => {
     expect(view.result.current.servers).toEqual([server]);
     expect(view.result.current.connectionError).toBe("Connection lost.");
     view.result.current.retry();
-    expect(transport.retry).toHaveBeenCalledOnce();
+    expect(transport.retry).toHaveBeenCalledTimes(1);
 
     const changed = { ...server, displayName: "Renamed while offline" };
-    vi.mocked(apiJson).mockResolvedValue({ servers: [changed] });
+    apiJsonMock.mockResolvedValue({ servers: [changed] });
     transport = { ...transport, status: "connected", canRetry: false, error: null, accessDenied: false };
     view.rerender();
     await act(async () => { await callbacks.onOpen?.(); });
@@ -62,9 +66,9 @@ describe("server snapshot recovery", () => {
   it("aborts superseded reads and ignores a late response even if the transport ignores abort", async () => {
     const older = deferred<{ servers: ManagedContainer[] }>();
     const newer = deferred<{ servers: ManagedContainer[] }>();
-    vi.mocked(apiJson).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    apiJsonMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
     const view = renderHook(useServers, { wrapper });
-    const firstSignal = vi.mocked(apiJson).mock.calls[0][2]?.signal;
+    const firstSignal = apiJsonMock.mock.calls[0][2]?.signal;
     act(() => { callbacks.onOpen?.(); });
     expect(firstSignal?.aborted).toBe(true);
     const updated = { ...server, displayName: "Latest state" };
@@ -77,12 +81,12 @@ describe("server snapshot recovery", () => {
   it("keeps a stale snapshot for transient failures and replaces it on successful refresh", async () => {
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.loading).toBe(false));
-    vi.mocked(apiJson).mockRejectedValueOnce(new TypeError("Network unavailable"));
+    apiJsonMock.mockRejectedValueOnce(new TypeError("Network unavailable"));
     await act(async () => { await view.result.current.refresh(); });
     expect(view.result.current.servers).toEqual([server]);
     expect(view.result.current.stale).toBe(true);
     expect(view.result.current.error).toBe("Network unavailable");
-    vi.mocked(apiJson).mockResolvedValueOnce({ servers: [] });
+    apiJsonMock.mockResolvedValueOnce({ servers: [] });
     await act(async () => { await view.result.current.refresh(); });
     expect(view.result.current.servers).toEqual([]);
     expect(view.result.current.stale).toBe(false);
@@ -92,7 +96,7 @@ describe("server snapshot recovery", () => {
   it.each([401, 403, 200])("clears stored data on authorization or contract failure (HTTP %s)", async (status) => {
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.servers).toEqual([server]));
-    vi.mocked(apiJson).mockRejectedValueOnce(new ApiRequestError("Access or response rejected", status));
+    apiJsonMock.mockRejectedValueOnce(new ApiRequestError("Access or response rejected", status));
     await act(async () => { await view.result.current.refresh(); });
     expect(view.result.current.servers).toEqual([]);
     expect(view.result.current.lastUpdated).toBeNull();
@@ -103,10 +107,10 @@ describe("server snapshot recovery", () => {
     const late = deferred<{ servers: ManagedContainer[] }>();
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.servers).toEqual([server]));
-    vi.mocked(apiJson).mockReturnValueOnce(late.promise);
+    apiJsonMock.mockReturnValueOnce(late.promise);
     act(() => { void view.result.current.refresh(); });
     currentUser = { id: "viewer", username: "viewer", role: "viewer" };
-    vi.mocked(apiJson).mockResolvedValueOnce({ servers: [] });
+    apiJsonMock.mockResolvedValueOnce({ servers: [] });
     view.rerender();
     expect(view.result.current.servers).toEqual([]);
     await waitFor(() => expect(view.result.current.loading).toBe(false));
@@ -118,7 +122,7 @@ describe("server snapshot recovery", () => {
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.servers).toEqual([server]));
     const revalidation = deferred<{ servers: ManagedContainer[] }>();
-    vi.mocked(apiJson).mockReturnValueOnce(revalidation.promise);
+    apiJsonMock.mockReturnValueOnce(revalidation.promise);
     transport = { ...transport, status: "disconnected", accessDenied: true, canRetry: false };
     view.rerender();
     expect(view.result.current.servers).toEqual([]);
@@ -131,14 +135,14 @@ describe("server snapshot recovery", () => {
 
   it("aborts pending reads on unmount and ignores malformed events", async () => {
     const late = deferred<{ servers: ManagedContainer[] }>();
-    vi.mocked(apiJson).mockReturnValueOnce(late.promise);
+    apiJsonMock.mockReturnValueOnce(late.promise);
     const view = renderHook(useServers, { wrapper });
-    const signal = vi.mocked(apiJson).mock.calls[0][2]?.signal;
+    const signal = apiJsonMock.mock.calls[0][2]?.signal;
     act(() => { callbacks.onMessage?.("not JSON"); });
-    expect(apiJson).toHaveBeenCalledOnce();
+    expect(apiJson).toHaveBeenCalledTimes(1);
     view.unmount();
     expect(signal?.aborted).toBe(true);
     await act(async () => { late.resolve({ servers: [server] }); });
-    expect(apiJson).toHaveBeenCalledOnce();
+    expect(apiJson).toHaveBeenCalledTimes(1);
   });
 });

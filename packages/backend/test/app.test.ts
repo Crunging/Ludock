@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { after, before, describe, it } from "node:test";
+import { serve, type Server } from "bun";
+import { afterAll as after, beforeAll as before, describe, it } from "bun:test";
 import path from "node:path";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -22,7 +21,7 @@ const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const originalGetContainer = docker.getContainer.bind(docker);
 
-let server: Server;
+let server: Server<unknown>;
 let baseUrl: string;
 let managedStopCalled = false;
 let managedStartCalled = false;
@@ -78,10 +77,8 @@ before(async () => {
     };
   }) as unknown as typeof docker.getContainer;
 
-  server = createServer(createApp({ frontendDist: false }));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address() as AddressInfo;
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+  baseUrl = server.url.origin;
   const listed = await authorizedFetch("/api/v1/servers");
   const body = (await listed.json()) as { servers: Array<{ id: string }> };
   managedServerId = body.servers[0].id;
@@ -91,9 +88,7 @@ after(async () => {
   docker.ping = originalPing;
   docker.listContainers = originalListContainers;
   docker.getContainer = originalGetContainer;
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await server.stop(true);
 });
 
 function authorizedFetch(path: string, init: RequestInit = {}) {

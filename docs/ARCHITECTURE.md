@@ -1,9 +1,40 @@
 # Architecture and feature boundaries
 
-Ludock is a TypeScript modular monolith: an Express backend, a React frontend,
+Ludock is a TypeScript modular monolith: a Bun backend, a React frontend,
 and shared Zod contracts. The backend uses ordinary functions and explicit
 dependencies. Docker, SQLite, filesystem helpers, and Compose are the external
 boundaries.
+
+## Runtime and persistence
+
+Bun supplies the application runtime, workspace installation, JavaScript builds,
+and test runner. Development and CI follow the latest stable Bun 1 release,
+selected by [`.bun-version`](../.bun-version), with 1.4.2 as the supported minimum.
+Dependency manifests use compatibility ranges; `bun.lock` and the isolated
+workspace linker define resolved versions. The backend build bundles `index.ts`
+and `recovery.ts` for Bun with external production packages. The frontend build starts from
+`index.html` and bundles its scripts, styles, and assets for browsers. TypeScript
+checks types and emits the shared package's JavaScript and declarations.
+
+`database.ts` uses `bun:sqlite` and the existing schema validation and migration
+boundary. Existing nonempty databases are checked read-only before enabling WAL
+or applying supported migrations; unrelated or unsupported storage is rejected
+without writes. `password.ts` uses Bun's Argon2id hashing for new passwords and
+bounded verification of legacy scrypt hashes. Successful sign-in upgrades an
+older hash only after rechecking that the account is enabled and its password
+has not changed during asynchronous verification.
+
+Filesystem confinement retains descriptor-based `node:fs` operations and Linux
+`/proc/self/fd` checks in file, backup, restore, and Compose validation paths.
+Dockerode, tar-stream, and YAML retain
+their protocol and format responsibilities. Helper containers use
+`oven/bun:1-alpine`, defined centrally in
+[`runtime-images.ts`](../packages/backend/src/runtime-images.ts); the production
+image copies the target platform's Bun executable into `alpine:3` alongside the
+Docker CLI and Compose plugin. These tags follow stable releases within their
+majors when pulled. Updating local tools, pulling cached images, and refreshing
+locked dependency versions are explicit actions; the manual update policy is
+described in [Contributing](../CONTRIBUTING.md#updating-tools-and-dependencies).
 
 ## Shared contracts
 
@@ -33,11 +64,14 @@ boundaries and the route response/policy signatures.
 
 ## Backend routes and domain logic
 
-`app.ts` installs shared HTTP handling and account endpoints. `routes.ts` and
-`advanced-routes.ts` compose feature routers from `src/routes`:
+`index.ts` owns the native `Bun.serve` listener and coordinated shutdown.
+`app.ts` composes Bun's route table, authentication, request limits, security
+headers, and static frontend responses. Feature handlers in `src/routes` receive
+a typed request context and return native `Response` objects:
 
 | Module | HTTP responsibility |
 | --- | --- |
+| `accounts.ts` | Setup, sign-in, sessions, passwords, and account administration |
 | `servers.ts` | Server lists/details and direct lifecycle actions |
 | `files.ts` | File browsing, transfers, and mutations |
 | `access.ts` | Per-user grants and reviewed server bindings |
@@ -46,6 +80,12 @@ boundaries and the route response/policy signatures.
 | `schedules.ts` | Schedule creation, listing, and removal |
 | `status.ts` | Operation progress and availability configuration |
 | `settings.ts` | Notification settings and administrator diagnostics/integrations |
+
+`websocket-server.ts` owns native Bun upgrades, connection and payload limits,
+session revalidation, and shutdown. Console and log handlers use a socket channel
+that preserves bounded buffering and connection cleanup; game-specific protocol
+behavior stays in adapters. Response streams propagate cancellation and retain
+the authorization, resource-lock, and helper-cleanup lifetimes of their work.
 
 Direct lifecycle and file handlers use `serverAction(capability, handler)`.
 Declaring the capability is required by its signature. The helper resolves the
@@ -95,18 +135,25 @@ For parallel work, assign a feature's contract, router/domain changes, panel,
 and focused tests together when practical. Coordinate edits to shared transport,
 authorization, operation lifetime, and page orchestration explicitly. A feature
 split still needs verification of the integrated behavior. Choose checks for the
-affected boundaries; use `pnpm check` for broad integration concerns. CI runs the
-full source suite for code changes.
+affected boundaries; use `bun run check` for broad integration concerns. CI runs
+the full source suite for code changes.
 
 ## Development instances
 
-`pnpm dev` runs `scripts/dev.mjs`. It uses the checkout's canonical path to select
-stable preferred ports, an external state directory, and a distinct session
-cookie. It builds and watches shared contracts alongside the backend and Vite.
-Node's built-in backend watcher follows imported modules and waits for shutdown
-before restarting. Repeated stop signals retain the backend's in-progress drain.
+`bun run dev` runs `scripts/dev.mjs`. It uses the checkout's canonical path to
+select stable preferred ports, an external state directory, and a distinct
+session cookie. It builds and watches shared contracts alongside the backend
+and Bun's frontend development server. `scripts/watch-backend.mjs` watches backend source
+and shared output, signals the current Bun child, and waits for its shutdown
+before starting a replacement. This preserves active operation and helper cleanup
+across reloads. Repeated stop signals retain the backend's in-progress drain.
 The frontend starts after its backend identifies the expected checkout; proxy
 requests carry that identity and only that checkout's session cookie.
+
+The frontend's Bun development server provides HTML bundling and hot reloading,
+plus streaming HTTP and WebSocket proxies. Its separate preview server serves
+only built files and has no backend proxy, so browser fixtures cannot reach a
+development backend through preview.
 
 Checkout and database locks prevent overlapping managed development runs, even
 when different checkouts specify the same database through directory aliases.

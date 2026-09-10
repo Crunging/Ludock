@@ -42,7 +42,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "pnpm exec vite preview --config e2e/preview.config.ts",
+    command: "bun scripts/preview.ts",
     url: origin,
     env: { LUDOCK_E2E_PORT: String(port) },
     // Never reuse a development backend or a server owned by another checkout.

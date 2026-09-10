@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -57,56 +56,94 @@ export async function runCompose(
   args: string[],
   timeoutMs = 120_000,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", ["compose", ...args], {
+  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    child = Bun.spawn(["docker", "compose", ...args], {
       env: composeEnvironment(),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: process.platform !== "win32",
     });
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let timedOut = false;
-    let kill: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      kill = setTimeout(() => child.kill("SIGKILL"), 5000);
-    }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
-      bytes += chunk.length;
-      if (bytes > 8 * 1024 * 1024) {
-        timedOut = true;
-        child.kill("SIGKILL");
-      } else chunks.push(chunk);
-    });
-    // Raw diagnostics and resolved configuration can contain arbitrary secrets.
-    child.stderr.resume();
-    child.once("error", () => {
-      clearTimeout(timer);
-      if (kill) clearTimeout(kill);
-      reject(
-        new AppError(
-          "COMPOSE_UNAVAILABLE",
-          409,
-          "Docker Compose could not be executed",
-        ),
-      );
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      if (kill) clearTimeout(kill);
-      if (code !== 0 || timedOut)
-        reject(
-          new AppError(
-            "COMPOSE_FAILED",
-            409,
-            timedOut
-              ? "Docker Compose exceeded its execution limit"
-              : "Docker Compose failed. Review the project through its owning manager.",
-          ),
-        );
-      else resolve(Buffer.concat(chunks).toString("utf8"));
-    });
+  } catch {
+    throw new AppError(
+      "COMPOSE_UNAVAILABLE",
+      409,
+      "Docker Compose could not be executed",
+    );
+  }
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let limited = false;
+  let kill: ReturnType<typeof setTimeout> | undefined;
+  const signal = (value: "SIGTERM" | "SIGKILL") => {
+    try {
+      // Docker launches the Compose plugin as a child. Keep both in the same
+      // group so cancellation cannot leave a plugin running after lock release.
+      if (process.platform !== "win32") process.kill(-child.pid, value);
+      else child.kill(value);
+    } catch {
+      // The process or group may have exited between the deadline and signal.
+      try {
+        child.kill(value);
+      } catch {
+        // Already exited.
+      }
+    }
+  };
+  const timer = setTimeout(() => {
+    limited = true;
+    signal("SIGTERM");
+    kill = setTimeout(() => signal("SIGKILL"), 5000);
+  }, timeoutMs);
+  const drain = async (stream: ReadableStream<Uint8Array>, capture: boolean) => {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // Raw diagnostics and resolved configuration can contain arbitrary
+        // secrets. Drain stderr without retaining or exposing its contents.
+        if (!capture) continue;
+        bytes += value.byteLength;
+        if (bytes > 8 * 1024 * 1024) {
+          limited = true;
+          signal("SIGKILL");
+        } else chunks.push(value);
+      }
+    } catch (error) {
+      signal("SIGKILL");
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  };
+  // Keep the deadline active until inherited output pipes close as well as the
+  // CLI exiting: an orphaned plugin may still hold them and modify the project.
+  const [exit, stdout, stderr] = await Promise.allSettled([
+    child.exited,
+    drain(child.stdout, true),
+    drain(child.stderr, false),
+  ]).finally(() => {
+    clearTimeout(timer);
+    if (kill) clearTimeout(kill);
   });
+  if (
+    limited ||
+    exit.status !== "fulfilled" ||
+    exit.value !== 0 ||
+    stdout.status === "rejected" ||
+    stderr.status === "rejected"
+  ) {
+    throw new AppError(
+      "COMPOSE_FAILED",
+      409,
+      limited
+        ? "Docker Compose exceeded its execution limit"
+        : "Docker Compose failed. Review the project through its owning manager.",
+    );
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 export async function isComposeAvailable(): Promise<boolean> {
   try {

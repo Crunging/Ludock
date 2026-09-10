@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -34,8 +34,8 @@ const server: ManagedContainer = {
   permissions: ["server.view", "server.start", "server.stop"],
 };
 function renderServer(value: ManagedContainer, user = friend) {
-  const action = vi.fn().mockResolvedValue(undefined);
-  const navigate = vi.fn();
+  const action = mock().mockResolvedValue(undefined);
+  const navigate = mock();
   render(
     <AuthContext.Provider value={{ user } as AuthContextValue}>
       <NavigationContext.Provider value={{ pathname: "/", navigate }}>

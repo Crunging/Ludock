@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { after, beforeEach, describe, it } from "node:test";
+import { Database } from "bun:sqlite";
+import { afterAll as after, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import {
   applyMigrations,
@@ -23,6 +23,20 @@ after(() => {
 });
 
 describe("application database ownership and schema migrations", () => {
+  it("preserves foreign keys, busy timeout, and native result types", () => {
+    const db = getDatabase();
+    assert.equal(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys, 1);
+    assert.equal(db.prepare("PRAGMA busy_timeout").get()?.timeout, 5000);
+    assert.equal(db.prepare("SELECT id FROM users WHERE id = 'missing'").get(), null);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM users").get()?.count, 0);
+    assert.throws(() => db.prepare(
+      "INSERT INTO sessions (token_hash, session_id, user_id, created_at, expires_at, last_seen_at) VALUES ('token', 'session', 'missing', 1, 2, 1)",
+    ).run(), /FOREIGN KEY/i);
+    const statement = db.prepare("SELECT 1 AS value");
+    closeDatabase();
+    assert.throws(() => statement.get(), /closed/i);
+  });
+
   it("initializes fresh storage and safely opens the same schema again", () => {
     const dbPath = path.join(directory, "fresh.db");
     process.env.LUDOCK_DB_PATH = dbPath;
@@ -49,11 +63,11 @@ describe("application database ownership and schema migrations", () => {
 
   it("rejects an unrelated database without changing its bytes, schema, or permissions", () => {
     const dbPath = path.join(directory, "unrelated.db");
-    const unrelated = new DatabaseSync(dbPath);
+    const unrelated = new Database(dbPath);
     unrelated.exec(
       "CREATE TABLE inventory_items (id TEXT, description TEXT); INSERT INTO inventory_items VALUES ('asset-1', 'preserve-this');",
     );
-    unrelated.close();
+    unrelated.close(true);
     fs.chmodSync(dbPath, 0o640);
     const original = fs.readFileSync(dbPath);
     process.env.LUDOCK_DB_PATH = dbPath;
@@ -67,7 +81,7 @@ describe("application database ownership and schema migrations", () => {
   });
 
   it("does not infer database ownership from familiar table names", () => {
-    const db = new DatabaseSync(":memory:");
+    const db = new Database(":memory:");
     try {
       db.exec("CREATE TABLE users (id TEXT)");
       assert.throws(() => applyMigrations(db), /incompatible with Ludock/);
@@ -77,12 +91,12 @@ describe("application database ownership and schema migrations", () => {
         1,
       );
     } finally {
-      db.close();
+      db.close(true);
     }
   });
 
   it("applies a future schema addition without replacing existing records", () => {
-    const db = new DatabaseSync(":memory:");
+    const db = new Database(":memory:");
     try {
       applyMigrations(db);
       db.exec("INSERT INTO users VALUES ('u','player','hash','viewer',0,1,1)");
@@ -108,12 +122,12 @@ describe("application database ownership and schema migrations", () => {
         "preserved account");
       assert.doesNotThrow(() => applyMigrations(db, migrations));
     } finally {
-      db.close();
+      db.close(true);
     }
   });
 
   it("rolls back an interrupted migration and leaves the prior version usable", () => {
-    const db = new DatabaseSync(":memory:");
+    const db = new Database(":memory:");
     try {
       applyMigrations(db);
       const currentVersion = DATABASE_MIGRATIONS.at(-1)!.version;
@@ -133,16 +147,16 @@ describe("application database ownership and schema migrations", () => {
             "SELECT name FROM sqlite_schema WHERE name = 'should_rollback'",
           )
           .get(),
-        undefined,
+        null,
       );
       assert.doesNotThrow(() => applyMigrations(db));
     } finally {
-      db.close();
+      db.close(true);
     }
   });
 
   it("rejects newer schemas and unrelated application markers", () => {
-    const db = new DatabaseSync(":memory:");
+    const db = new Database(":memory:");
     try {
       applyMigrations(db);
       db.exec("PRAGMA user_version = 999");
@@ -150,7 +164,7 @@ describe("application database ownership and schema migrations", () => {
       db.exec("PRAGMA user_version = 1; PRAGMA application_id = 123");
       assert.throws(() => applyMigrations(db), /incompatible/);
     } finally {
-      db.close();
+      db.close(true);
     }
   });
 });

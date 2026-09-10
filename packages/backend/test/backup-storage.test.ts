@@ -11,7 +11,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { Duplex, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import * as tar from "tar-stream";
 import { createHash, randomUUID } from "node:crypto";
 import type Docker from "dockerode";
@@ -21,25 +21,34 @@ import {
   approvedBackupDirectory,
   archiveValidator,
   backupFilePath,
+  createDataHelper,
   extractRootToStage,
   helperExec,
   validateArchive,
   validateArchiveEntry,
 } from "../src/backup-storage.js";
+import { getDockerInstance } from "../src/docker.js";
+import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
+import type { ServerContext } from "../src/servers.js";
 
 const roots = [{ id: "root-0", path: "/data" }];
 let directory: string;
 let oldRoots: string | undefined;
+let oldHelperImage: string | undefined;
 beforeEach(async () => {
   directory = await realpath(
     await mkdtemp(path.join(tmpdir(), "ludock-backup-test-")),
   );
   oldRoots = process.env.LUDOCK_BACKUP_ROOTS;
+  oldHelperImage = process.env.FILE_HELPER_IMAGE;
   process.env.LUDOCK_BACKUP_ROOTS = directory;
 });
 afterEach(async () => {
+  mock.restore();
   if (oldRoots === undefined) delete process.env.LUDOCK_BACKUP_ROOTS;
   else process.env.LUDOCK_BACKUP_ROOTS = oldRoots;
+  if (oldHelperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
+  else process.env.FILE_HELPER_IMAGE = oldHelperImage;
   await rm(directory, { recursive: true, force: true });
 });
 async function archive(
@@ -63,6 +72,47 @@ async function archive(
 }
 
 describe("backup storage boundaries", () => {
+  for (const helperImage of [undefined, "example/custom-bun-helper:test"]) {
+    it(`uses the ${helperImage ? "configured" : "pinned default"} image for a scoped backup helper`, async () => {
+      if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
+      else process.env.FILE_HELPER_IMAGE = helperImage;
+      const docker = getDockerInstance();
+      let removed = false;
+      const helper = {
+        start: async () => {},
+        remove: async () => { removed = true; },
+        exec: async () => ({
+          start: async () => Readable.from([]),
+          inspect: async () => ({ ExitCode: 0 }),
+        }),
+      } as unknown as Docker.Container;
+      spyOn(docker, "getVolume").mockReturnValue({
+        inspect: async () => ({ Driver: "local", Options: {} }),
+      } as unknown as Docker.Volume);
+      const create = spyOn(docker, "createContainer").mockResolvedValue(helper);
+      const access = await createDataHelper({
+        container: { fileRoots: roots },
+        observation: {
+          mounts: [{
+            type: "volume", name: "game-data",
+            source: "/var/lib/docker/volumes/game-data/_data",
+            destination: "/data", writable: true,
+          }],
+        },
+      } as ServerContext, true, randomUUID());
+      try {
+        const options = create.mock.calls[0][0];
+        assert.equal(options.Image, helperImage || DEFAULT_HELPER_IMAGE);
+        assert.deepEqual(options.HostConfig?.Mounts, [{
+          Type: "volume", Source: "game-data", Target: "/mounts/root-0", ReadOnly: true,
+        }]);
+        assert.equal(options.HostConfig?.NetworkMode, "none");
+      } finally {
+        await access.cleanup();
+      }
+      assert.equal(removed, true);
+    });
+  }
   it("rechecks access after helper exec preparation before starting a restore", async () => {
     let allowed = true;
     let starts = 0;
@@ -76,7 +126,7 @@ describe("backup storage boundaries", () => {
       if (!allowed) throw new Error("Access revoked during preparation");
     };
     await assert.rejects(
-      helperExec(helper, ["node", "restore-helper"], {}, assertAccess),
+      helperExec(helper, ["bun", "restore-helper"], {}, assertAccess),
       /Access revoked/,
     );
     allowed = true;
@@ -90,9 +140,8 @@ describe("backup storage boundaries", () => {
     );
     assert.equal(starts, 0);
   });
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "stops streaming restore data when access changes after extraction starts",
-    { skip: process.platform !== "linux" },
     async () => {
       const bytes = await archive([
         {
@@ -245,9 +294,8 @@ describe("backup storage boundaries", () => {
       /size/,
     );
   });
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "verifies archive checksums and refuses symlink archive files",
-    { skip: process.platform !== "linux" },
     async () => {
       const bytes = await archive([
         { header: { name: "snapshot", type: "directory" } },

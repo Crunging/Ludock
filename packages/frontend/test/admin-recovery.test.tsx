@@ -1,7 +1,7 @@
 import { act, fireEvent, render as renderComponent, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import { apiJson } from "../src/api";
 import ServerGrants from "../src/components/ServerGrants";
 import Settings from "../src/pages/Settings";
@@ -9,9 +9,11 @@ import Users from "../src/pages/Users";
 import { AuthContext, type AuthContextValue } from "../src/auth-context";
 import { NavigationProvider } from "../src/navigation";
 
-vi.mock("../src/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/api")>()),
-  apiJson: vi.fn(),
+const originalApi = { ...await import("../src/api") };
+const apiJsonMock = mock<typeof apiJson>();
+mock.module("../src/api", () => ({
+  ...originalApi,
+  apiJson: apiJsonMock,
 }));
 
 function deferred<T>() {
@@ -33,10 +35,10 @@ function renderUsers() {
 
 describe("administration recovery", () => {
   it("does not resubmit hidden operator grants after a user becomes a viewer", async () => {
-    vi.mocked(apiJson).mockImplementation(async (path) => path === "/servers"
+    apiJsonMock.mockImplementation(async (path) => path === "/servers"
       ? { servers: [{ id: "world", displayName: "World" }] }
       : { grants: [{ serverId: "world", capabilities: ["server.view", "server.stop", "logs.read"] }] });
-    render(<ServerGrants userId="member" username="friend" role="viewer" onClose={vi.fn()} />);
+    render(<ServerGrants userId="member" username="friend" role="viewer" onClose={mock()} />);
     await userEvent.click(await screen.findByRole("button", { name: "Save server access" }));
     expect(apiJson).toHaveBeenLastCalledWith("/users/member/server-grants", expect.anything(), expect.objectContaining({
       method: "PUT", body: JSON.stringify({ grants: [{ serverId: "world", capabilities: ["server.view", "logs.read"] }] }),
@@ -45,24 +47,24 @@ describe("administration recovery", () => {
 
   it("keeps grants unavailable after a failed read and retries without saving empty defaults", async () => {
     let unavailable = true;
-    vi.mocked(apiJson).mockImplementation(async (path) => {
+    apiJsonMock.mockImplementation(async (path) => {
       if (path === "/servers") return { servers: [] };
       if (unavailable) throw new Error("Server access unavailable");
       return { grants: [] };
     });
-    render(<ServerGrants userId="member" username="friend" role="operator" onClose={vi.fn()} />);
+    render(<ServerGrants userId="member" username="friend" role="operator" onClose={mock()} />);
     await screen.findByRole("alert");
     expect(screen.queryByRole("button", { name: "Save server access" })).toBeNull();
     expect(screen.queryByText("No eligible servers are available to assign.")).toBeNull();
     unavailable = false;
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await screen.findByRole("button", { name: "Save server access" });
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
   });
 
   it("does not expose settings defaults when one of the initial reads fails", async () => {
     let unavailable = true;
-    vi.mocked(apiJson).mockImplementation(async (path) => {
+    apiJsonMock.mockImplementation(async (path) => {
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: { destination: "/saved", retentionCount: 4, maxBytes: 1024 ** 3, reserveBytes: 0 } };
       if (path === "/compose-projects") return { projects: [] };
@@ -81,7 +83,7 @@ describe("administration recovery", () => {
 
   it("keeps a newer webhook draft after an earlier settings save finishes", async () => {
     const pending = deferred<unknown>();
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return pending.promise;
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
@@ -103,7 +105,7 @@ describe("administration recovery", () => {
     const pending = deferred<unknown>();
     let submitted: unknown;
     let saveCount = 0;
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") {
         submitted = JSON.parse(String(init.body));
         if (++saveCount > 1) return { settings: submitted };
@@ -161,7 +163,7 @@ describe("administration recovery", () => {
       destination: "/backups", retentionCount: 4,
       maxBytes: 10_000_017, reserveBytes: 1,
     };
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return { settings: JSON.parse(String(init.body)) };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings };
@@ -183,7 +185,7 @@ describe("administration recovery", () => {
     const user = userEvent.setup();
     const pending = deferred<unknown>();
     let unavailable = true;
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (path === "/settings/deployment") {
         if (unavailable) throw new Error("Deployment unavailable");
         return pending.promise;
@@ -203,7 +205,7 @@ describe("administration recovery", () => {
     await user.click(screen.getByRole("button", { name: "Use /approved/backups" }));
     expect(destination.value).toBe("/approved/backups");
     expect(document.activeElement).toBe(destination);
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Save backup settings" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("Destination is not mounted");
@@ -213,7 +215,7 @@ describe("administration recovery", () => {
 
   it("opens server sharing after creating an operator and returns focus when sharing is done", async () => {
     const user = userEvent.setup();
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (path === "/users") return init?.method === "POST" ? { user: member } : { users: [] };
       if (path === "/servers") return { servers: [{ id: "world", displayName: "World" }] };
       return init?.method === "PUT" ? JSON.parse(String(init.body)) : { grants: [] };
@@ -225,7 +227,7 @@ describe("administration recovery", () => {
     const heading = await screen.findByRole("heading", { name: "Server access for friend" });
     expect(document.activeElement).toBe(heading);
     expect((screen.getByLabelText("Initial password") as HTMLInputElement).value).toBe("");
-    expect(vi.mocked(apiJson).mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
     await user.click(await screen.findByRole("button", { name: "Start and stop" }));
     await user.click(screen.getByRole("button", { name: "Save server access" }));
     await screen.findByText("Server access saved for friend. Access changes take effect immediately.");
@@ -239,7 +241,7 @@ describe("administration recovery", () => {
 
   it("uses the registered project response without wiping a newer project draft", async () => {
     const pending = deferred<unknown>();
-    vi.mocked(apiJson).mockImplementation(async (path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "POST") return pending.promise;
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
@@ -264,13 +266,13 @@ describe("administration recovery", () => {
     await screen.findByText("Compose project registered.");
     expect((name as HTMLInputElement).value).toBe("next-project");
     expect(screen.getByRole("cell", { name: "games/compose/games" })).toBeTruthy();
-    expect(vi.mocked(apiJson).mock.calls.filter(([path, , init]) => path === "/compose-projects" && init?.method === "POST")).toHaveLength(1);
-    expect(vi.mocked(apiJson).mock.calls.filter(([path, , init]) => path === "/compose-projects" && !init?.method)).toHaveLength(1);
+    expect(apiJsonMock.mock.calls.filter(([path, , init]) => path === "/compose-projects" && init?.method === "POST")).toHaveLength(1);
+    expect(apiJsonMock.mock.calls.filter(([path, , init]) => path === "/compose-projects" && !init?.method)).toHaveLength(1);
   });
 
   it("serializes user access writes and uses the returned role for the next change", async () => {
     const pending = deferred<unknown>();
-    vi.mocked(apiJson).mockImplementation(async (_path, _schema, init) => {
+    apiJsonMock.mockImplementation(async (_path, _schema, init) => {
       if (!init?.method) return { users: [member] };
       if (JSON.parse(String(init.body)).disabled) return { user: { ...member, role: "viewer", disabled: true } };
       return pending.promise;
@@ -282,7 +284,7 @@ describe("administration recovery", () => {
     const disable = screen.getByRole("button", { name: "Disable" });
     expect((disable as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(disable);
-    expect(vi.mocked(apiJson).mock.calls.filter(([, , init]) => init?.method === "PATCH")).toHaveLength(1);
+    expect(apiJsonMock.mock.calls.filter(([, , init]) => init?.method === "PATCH")).toHaveLength(1);
     await act(async () => pending.resolve({ user: { ...member, role: "viewer" } }));
     await waitFor(() => expect((disable as HTMLButtonElement).disabled).toBe(false));
     await userEvent.click(disable);
@@ -291,7 +293,7 @@ describe("administration recovery", () => {
 
   it("preserves a newer password reset draft and rejects duplicate submissions", async () => {
     const pending = deferred<unknown>();
-    vi.mocked(apiJson).mockImplementation(async (_path, _schema, init) => init?.method ? pending.promise : { users: [member] });
+    apiJsonMock.mockImplementation(async (_path, _schema, init) => init?.method ? pending.promise : { users: [member] });
     renderUsers();
     const input = await screen.findByLabelText("New password for friend");
     fireEvent.change(input, { target: { value: "first-password-123" } });
@@ -301,6 +303,6 @@ describe("administration recovery", () => {
     fireEvent.change(input, { target: { value: "second-password-123" } });
     await act(async () => pending.resolve({ ok: true }));
     expect((input as HTMLInputElement).value).toBe("second-password-123");
-    expect(vi.mocked(apiJson).mock.calls.filter(([, , init]) => init?.method === "POST")).toHaveLength(1);
+    expect(apiJsonMock.mock.calls.filter(([, , init]) => init?.method === "POST")).toHaveLength(1);
   });
 });

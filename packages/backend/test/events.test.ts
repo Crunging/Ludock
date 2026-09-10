@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, it } from "node:test";
-import type { WebSocket } from "ws";
+import { afterEach, beforeEach, describe, it } from "bun:test";
+import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import {
   addEventClient,
   dispatchDockerEvent,
@@ -51,7 +51,10 @@ function fixture(id: string) {
     Created: "2026-01-01T00:00:00.000Z",
   };
 }
-class FakeSocket extends EventEmitter {
+class FakeSocket extends EventEmitter implements SocketChannel {
+  get isOpen() { return this.readyState === 1; }
+  onMessage(listener: (message: SocketMessage) => void): void { this.on("message", listener); }
+  onClose(listener: (code: number) => void): void { this.once("close", listener); }
   OPEN = 1;
   readyState = 1;
   messages: string[] = [];
@@ -68,7 +71,7 @@ class FakeSocket extends EventEmitter {
 function client(user: SessionUser): FakeSocket {
   const socket = new FakeSocket();
   clients.push(socket);
-  addEventClient(socket as unknown as WebSocket, {
+  addEventClient(socket, {
     user,
     validate: () => user,
   });
@@ -109,9 +112,9 @@ beforeEach(async () => {
     admin,
   );
 });
-afterEach(() => {
+afterEach(async () => {
   for (const socket of clients.splice(0)) socket.close();
-  stopEventStream();
+  await stopEventStream();
   Object.assign(docker, originals);
   closeDatabase();
 });
@@ -140,6 +143,29 @@ describe("Docker event framing", () => {
 });
 
 describe("scoped Docker event delivery", () => {
+  it("waits for an in-flight state refresh before event shutdown finishes", async () => {
+    let started!: () => void;
+    const pending = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const list = docker.listContainers;
+    docker.listContainers = (async () => {
+      started();
+      await gate;
+      return list.call(docker);
+    }) as typeof docker.listContainers;
+    const delivery = dispatchDockerEvent({ Action: "start", Actor: { ID: "first" } });
+    await pending;
+    let stopped = false;
+    const stopping = stopEventStream().then(() => { stopped = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+    release();
+    await delivery;
+    await stopping;
+    assert.equal(stopped, true);
+  });
+
   it("sends only assigned logical server changes to non-administrators", async () => {
     const owner = client(admin),
       allowed = client(friend),

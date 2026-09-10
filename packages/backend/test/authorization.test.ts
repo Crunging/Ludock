@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, beforeEach, describe, it } from "node:test";
+import { afterAll as after, beforeEach, describe, it } from "bun:test";
 import {
   closeDatabase,
   createUser,

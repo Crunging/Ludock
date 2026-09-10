@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, describe, it } from "node:test";
+import { afterAll as after, beforeAll as before, describe, it, spyOn, afterEach, mock } from "bun:test";
 import {
   mkdtemp,
   mkdir,
@@ -12,8 +12,6 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   approvedPath,
   configuredRoots,
@@ -34,6 +32,8 @@ import {
 let directory: string;
 const priorPath = process.env.PATH;
 const priorRoots = process.env.LUDOCK_COMPOSE_ROOTS;
+afterEach(() => mock.restore());
+
 before(async () => {
   directory = await mkdtemp(path.join(os.tmpdir(), "ludock-compose-test-"));
   await mkdir(path.join(directory, "bin"));
@@ -43,7 +43,14 @@ before(async () => {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if(args.includes("secret-failure")){process.stderr.write("password=fixture-secret");process.exit(1);}
-if(args.includes("hang")){setTimeout(()=>{},30000);}
+if(args.includes("large-output")){process.stdout.write(Buffer.alloc(9 * 1024 * 1024));}
+else if(args.includes("orphaned-plugin")){
+  const marker = args.at(-1);
+  const script = 'const fs=require("node:fs");const marker=process.argv[1];fs.writeFileSync(marker+".pid",String(process.pid));process.on("SIGTERM",()=>setTimeout(()=>{fs.writeFileSync(marker,"stopped");process.exit(0);},50));setTimeout(()=>{},30000);';
+  Bun.spawn([process.execPath,"-e",script,marker],{stdout:"inherit",stderr:"inherit"});
+  process.exit(0);
+}
+else if(args.includes("hang")){setTimeout(()=>{},30000);}
 else if(args.includes("config")){
   const files = args.flatMap((arg,i)=>arg==="-f"?[args[i+1]]:[]);
   const models=files.map(file=>JSON.parse(fs.readFileSync(file,"utf8")));
@@ -94,6 +101,50 @@ describe("Compose execution boundary", () => {
     );
     await assert.rejects(runCompose(["hang"], 30), /execution limit/);
   });
+  it("passes shell metacharacters as literal arguments", async () => {
+    const literal = "fixture; $(printf unsafe) `printf unsafe` > /unapproved";
+    const result = JSON.parse(await runCompose(["version", literal])) as {
+      args: string[];
+    };
+    assert.deepEqual(result.args, ["compose", "version", literal]);
+  });
+  it("terminates output that exceeds the configuration size limit", async () => {
+    await assert.rejects(runCompose(["large-output"]), /execution limit/);
+  });
+  it("reports an unavailable executable without subprocess details", async () => {
+    const currentPath = process.env.PATH;
+    process.env.PATH = path.join(directory, "missing-bin");
+    try {
+      await assert.rejects(
+        runCompose(["version"]),
+        (error) => error instanceof Error &&
+          error.message === "Docker Compose could not be executed",
+      );
+    } finally {
+      process.env.PATH = currentPath;
+    }
+  });
+  it.skipIf(process.platform === "win32")(
+    "waits for a surviving plugin to terminate before releasing the operation",
+    async () => {
+      const marker = path.join(directory, "plugin-stopped");
+      try {
+        await assert.rejects(
+          // Allow both Bun processes to initialize under CPU emulation before
+          // exercising the surviving plugin's delayed shutdown handler.
+          runCompose(["orphaned-plugin", marker], 5000),
+          /execution limit/,
+        );
+        assert.equal(await readFile(marker, "utf8"), "stopped");
+      } finally {
+        const pid = Number(await readFile(`${marker}.pid`, "utf8").catch(() => ""));
+        if (pid > 0) {
+          try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+        }
+      }
+    },
+    15_000,
+  );
   it("rejects broad roots, prefix escapes and unsupported service replication", () => {
     assert.throws(() => configuredRoots("/"), /dedicated/);
     assert.throws(
@@ -117,9 +168,8 @@ describe("Compose execution boundary", () => {
       validateUpdateService({ depends_on: ["db"], profiles: ["games"] }),
     );
   });
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "pins safe file parents and rejects symlink inputs",
-    { skip: process.platform !== "linux" },
     async () => {
       await mkdir(path.join(directory, "safe"));
       await writeFile(
@@ -154,21 +204,22 @@ describe("Compose execution boundary", () => {
       );
     },
   );
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "rejects named-pipe inputs without waiting for a writer",
-    { skip: process.platform !== "linux", timeout: 2000 },
     async () => {
       const fifo = path.join(directory, "blocked.yaml");
-      await promisify(execFile)("mkfifo", [fifo]);
+      const fifoProcess = Bun.spawn(["mkfifo", fifo], {
+        stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      });
+      assert.equal(await fifoProcess.exited, 0);
       await assert.rejects(
         readApprovedFile(fifo, [directory]),
         /regular files/,
       );
-    },
+    }, 2000,
   );
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "snapshots ordered sources, strips build contexts and hashes source changes",
-    { skip: process.platform !== "linux" },
     async () => {
       const first = path.join(directory, "first.yaml"),
         second = path.join(directory, "second.yaml");
@@ -212,10 +263,9 @@ describe("Compose execution boundary", () => {
       }
     },
   );
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "keeps environment-file fingerprints stable when read timings change",
-    { skip: process.platform !== "linux" },
-    async (context) => {
+    async () => {
       const filename = path.join(directory, "env-order.yaml");
       const firstEnv = path.join(directory, "first.env");
       const secondEnv = path.join(directory, "second.env");
@@ -234,7 +284,7 @@ describe("Compose execution boundary", () => {
       await firstHandle.close();
       await secondHandle.close();
       let delayedInode = firstInode;
-      context.mock.method(prototype, "read", async function (
+      spyOn(prototype, "read").mockImplementation(async function (
         this: FileHandle,
         buffer: Buffer,
         offset: number,
@@ -276,9 +326,8 @@ describe("Compose execution boundary", () => {
       }
     },
   );
-  it(
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "rejects file-reading Compose features before spawning config",
-    { skip: process.platform !== "linux" },
     async () => {
       for (const yaml of [
         "include: /etc/shadow\nservices: {}",

@@ -15,10 +15,10 @@ interface AvailabilityRow {
   intentionally_stopped: number;
   last_state: string | null;
 }
-function rowFor(serverId: string): AvailabilityRow | undefined {
+function rowFor(serverId: string): AvailabilityRow | null {
   return getDatabase()
     .prepare("SELECT * FROM availability WHERE server_id=?")
-    .get(serverId) as unknown as AvailabilityRow | undefined;
+    .get(serverId) as AvailabilityRow | null;
 }
 export function getAvailability(serverId: string) {
   const row = rowFor(serverId);

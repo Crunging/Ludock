@@ -1,57 +1,16 @@
-import {
-  notificationSettingsResponseSchema,
-  notificationSettingsRequestSchema,
-  diagnosticsResponseSchema,
-  integrationsResponseSchema,
-  deploymentSettingsResponseSchema,
-  type DiscoveryDiagnostic,
-  type GameCapability,
-  type GameIntegration,
-} from "@ludock/shared";
-import { Router, type Router as RouterType } from "express";
+import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic, type GameCapability, type GameIntegration, } from "@ludock/shared";
 import path from "node:path";
-import { assertRequestUser, requireRole } from "../auth.js";
+import { assertRequestUser, } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
-import { getDiscoveryDiagnostics } from "../docker.js";
-import {
-  getGameCapabilityMatrix,
-  type GameCapability as RegistryCapability,
-} from "../server-presets.js";
-import {
-  configureNotifications,
-  notificationConfiguration,
-} from "../notifications.js";
 import { isComposeAvailable } from "../compose.js";
-import { respond, actor, audit } from "./request.js";
-
-export const settingsRouter: RouterType = Router();
-
-settingsRouter.get(
-  "/api/v1/settings/deployment",
-  requireRole("admin"),
-  async (req, res) => {
-    const composeAvailable = await isComposeAvailable();
-    assertAdministrator(assertRequestUser(req, actor(res)));
-    respond(res, deploymentSettingsResponseSchema, {
-      backupRoots: [...new Set(
-        (process.env.LUDOCK_BACKUP_ROOTS || "").split(path.delimiter).filter(Boolean),
-      )],
-      composeRoots: [...new Set(
-        (process.env.LUDOCK_COMPOSE_ROOTS || "")
-          .split(path.delimiter).map((root) => root.trim()).filter(Boolean),
-      )],
-      composeAvailable,
-    });
-  },
-);
-
+import { getDiscoveryDiagnostics } from "../docker.js";
+import { configureNotifications, notificationConfiguration, } from "../notifications.js";
+import { getGameCapabilityMatrix, type GameCapability as RegistryCapability, } from "../server-presets.js";
+import { administrator, audit, requestUser, respond, type ApiRoutes } from "./request.js";
 function publicCapability(capability: RegistryCapability): GameCapability {
   return { ...capability, evidence: [...capability.evidence] };
 }
-
-function publicIntegration(
-  integration: ReturnType<typeof getGameCapabilityMatrix>[number],
-): GameIntegration {
+function publicIntegration(integration: ReturnType<typeof getGameCapabilityMatrix>[number]): GameIntegration {
   const { capabilities } = integration;
   return {
     gameType: integration.gameType,
@@ -67,43 +26,48 @@ function publicIntegration(
   };
 }
 
-settingsRouter.get("/api/v1/notifications", requireRole("admin"), (_req, res) =>
-  respond(res, notificationSettingsResponseSchema, notificationConfiguration()),
-);
-settingsRouter.put(
-  "/api/v1/notifications",
-  requireRole("admin"),
-  (req, res) => {
-    const input = notificationSettingsRequestSchema.parse(req.body);
-    configureNotifications(input.enabled, input.webhookUrl);
-    audit(actor(res), "notifications.configured");
-    respond(
-      res,
-      notificationSettingsResponseSchema,
-      notificationConfiguration(),
-    );
+export const settingsRoutes: ApiRoutes = {
+  "/api/v1/settings/deployment": {
+    GET: administrator(async (ctx) => {
+      const composeAvailable = await isComposeAvailable();
+      assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
+      return respond(deploymentSettingsResponseSchema, {
+        backupRoots: [...new Set((process.env.LUDOCK_BACKUP_ROOTS || "").split(path.delimiter).filter(Boolean))],
+        composeRoots: [...new Set((process.env.LUDOCK_COMPOSE_ROOTS || "")
+          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
+        composeAvailable,
+      });
+    })
   },
-);
-settingsRouter.get(
-  "/api/v1/diagnostics",
-  requireRole("admin"),
-  async (_req, res) => {
-    let diagnostics: DiscoveryDiagnostic[] = [];
-    let dockerConnected = true;
-    try {
-      diagnostics = await getDiscoveryDiagnostics();
-    } catch {
-      dockerConnected = false;
-    }
-    respond(res, diagnosticsResponseSchema, {
-      diagnostics,
-      dockerConnected,
-      composeAvailable: await isComposeAvailable(),
-    });
+  "/api/v1/notifications": {
+    GET: administrator(() => respond(notificationSettingsResponseSchema, notificationConfiguration())),
+    PUT: administrator((ctx) => {
+      const input = notificationSettingsRequestSchema.parse(ctx.body);
+      configureNotifications(input.enabled, input.webhookUrl);
+      audit(requestUser(ctx), "notifications.configured");
+      return respond(notificationSettingsResponseSchema, notificationConfiguration());
+    })
   },
-);
-settingsRouter.get("/api/v1/integrations", requireRole("admin"), (_req, res) =>
-  respond(res, integrationsResponseSchema, {
-    integrations: getGameCapabilityMatrix().map(publicIntegration),
-  }),
-);
+  "/api/v1/diagnostics": {
+    GET: administrator(async () => {
+      let diagnostics: DiscoveryDiagnostic[] = [];
+      let dockerConnected = true;
+      try {
+        diagnostics = await getDiscoveryDiagnostics();
+      }
+      catch {
+        dockerConnected = false;
+      }
+      return respond(diagnosticsResponseSchema, {
+        diagnostics,
+        dockerConnected,
+        composeAvailable: await isComposeAvailable(),
+      });
+    })
+  },
+  "/api/v1/integrations": {
+    GET: administrator(() => respond(integrationsResponseSchema, {
+      integrations: getGameCapabilityMatrix().map(publicIntegration),
+    }))
+  }
+};

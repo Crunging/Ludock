@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
   mkdtemp,
   mkdir,
@@ -12,7 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import { RESTORE_EXTRACT_SCRIPT } from "../src/restore-extract-script.js";
 
 const stage = ".ludock-restore-11111111-1111-4111-8111-111111111111";
@@ -54,18 +53,18 @@ function run(
   input: Buffer,
   options: { prelude?: string; maxBytes?: number; okay?: boolean } = {},
 ) {
-  const result = spawnSync(
-    process.execPath,
+  const result = Bun.spawnSync(
     [
+      process.execPath,
       "-e",
       (options.prelude || "") + RESTORE_EXTRACT_SCRIPT,
       JSON.stringify({ root, stage, maxBytes: options.maxBytes ?? 1_000_000 }),
     ],
-    { input, encoding: "utf8", timeout: 10_000 },
+    { stdin: input, stdout: "pipe", stderr: "pipe", timeout: 10_000 },
   );
   if (options.okay === false)
-    assert.notEqual(result.status, 0, "Unsafe extraction succeeded");
-  else assert.equal(result.status, 0, result.stderr);
+    assert.notEqual(result.exitCode, 0, "Unsafe extraction succeeded");
+  else assert.equal(result.exitCode, 0, result.stderr.toString());
 }
 async function sentinel() {
   assert.equal(
@@ -74,15 +73,11 @@ async function sentinel() {
   );
 }
 
-describe(
-  "descriptor-confined restore extraction",
-  {
-    skip:
-      process.platform !== "linux"
+describe.skipIf(Boolean(process.platform !== "linux"
         ? "Linux /proc/self/fd traversal runs in the Docker harness"
-        : false,
-  },
-  () => {
+        : false))(
+  "descriptor-confined restore extraction",
+    () => {
     it("restores nested binary data and empty directories with ownership, modes and times", async () => {
       run(
         Buffer.concat([

@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import type Docker from "dockerode";
 import { getDockerInstance } from "../src/docker.js";
 import { closeDatabase, createUser } from "../src/database.js";
@@ -30,6 +30,7 @@ import {
   helperRoot,
 } from "../src/backup-storage.js";
 import type { JobContext } from "../src/operations.js";
+import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 
 const enabled = process.env.LUDOCK_DOCKER_TESTS === "1";
 function context(
@@ -62,10 +63,9 @@ function context(
   };
 }
 
-describe(
+describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
   "Docker backup and restore",
-  { skip: !enabled || process.platform !== "linux", timeout: 120_000 },
-  () => {
+    () => {
     it("copies stopped data, preserves state, rejects shared writers/links, and restores through a safety backup", async () => {
       process.env.LUDOCK_DB_PATH = ":memory:";
       const directory = await realpath(
@@ -87,7 +87,7 @@ describe(
         });
         volumes.push(volume);
         const source = await docker.createContainer({
-          Image: "node:24-alpine",
+          Image: DEFAULT_HELPER_IMAGE,
           name: `ludock-backup-test-${randomUUID()}`,
           Labels: { "ludock.enable": "true", "ludock.name": "Backup fixture" },
           Entrypoint: ["/bin/sh", "-c"],
@@ -105,7 +105,7 @@ describe(
         ]);
         const self = !oldSelf
           ? await docker.createContainer({
-              Image: "node:24-alpine",
+              Image: DEFAULT_HELPER_IMAGE,
               Cmd: ["true"],
               HostConfig: {
                 Mounts: [
@@ -147,7 +147,7 @@ describe(
         );
 
         const aliased = await docker.createContainer({
-          Image: "node:24-alpine",
+          Image: DEFAULT_HELPER_IMAGE,
           Cmd: ["true"],
           Labels: {
             "ludock.enable": "true",
@@ -176,7 +176,7 @@ describe(
         await aliased.remove();
         containers.splice(containers.indexOf(aliased), 1);
         await helperExec(source, [
-          "node",
+          "bun",
           "-e",
           'const fs=require("node:fs");fs.writeFileSync("/data/high-owner","metadata");fs.chownSync("/data/high-owner",1000000,2000000);fs.utimesSync("/data/high-owner",2208988800,2208988800);',
         ]);
@@ -274,7 +274,7 @@ describe(
         );
         assert.equal(
           await helperExec(source, [
-            "node",
+            "bun",
             "-e",
             'const s=require("node:fs").statSync("/data/high-owner");process.stdout.write(JSON.stringify([s.uid,s.gid,s.mtimeMs/1000]));',
           ]),
@@ -325,7 +325,7 @@ describe(
         await helperExec(source, ["rm", "/data/unsafe-link"]);
 
         const writer = await docker.createContainer({
-          Image: "node:24-alpine",
+          Image: DEFAULT_HELPER_IMAGE,
           Cmd: ["sleep", "3600"],
           HostConfig: {
             Mounts: [
@@ -493,6 +493,6 @@ describe(
         else process.env.LUDOCK_SELF_CONTAINER = oldSelf;
         await rm(directory, { recursive: true, force: true });
       }
-    });
+    }, 120_000);
   },
 );

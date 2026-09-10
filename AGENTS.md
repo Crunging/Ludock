@@ -1,7 +1,7 @@
 # Ludock
 
-Ludock is a self-hosted control panel for existing Docker game servers: an
-Express backend, a React/Vite frontend, and shared Zod contracts.
+Ludock is a self-hosted control panel for existing Docker game servers: a
+Bun backend, a React frontend built and served by Bun, and shared Zod contracts.
 
 ## Product priorities
 
@@ -68,10 +68,18 @@ coverage, not a requirement to exercise every feature on every task.
 
 ## Local development and fixtures
 
-- Use the Node.js and pnpm versions declared in `package.json`.
-- `pnpm install --frozen-lockfile` installs dependencies; `pnpm dev` starts the
+- Use the latest stable Bun 1 release; `.bun-version` selects the major and
+  `package.json` declares the supported minimum of 1.4.2. Refresh a local
+  standalone installation with `bun upgrade`, keeping it on the Bun 1 release line.
+- `bun install --frozen-lockfile` installs dependencies; `bun run dev` starts the
   managed instance. Read its printed URLs and state path rather than assuming
-  ports. `pnpm dev --print-config` inspects configuration without starting it.
+  ports. `bun run dev --print-config` inspects configuration without starting it.
+- Check dependency updates with `bun outdated --recursive`, refresh them with
+  `bun update --recursive`, review manifest and `bun.lock` changes, and run
+  `bun run check`. Updates are maintainer-driven; do not add dependency bot PRs.
+- Use supported major-version tags for runtime images and GitHub Actions. Keep
+  the Bun major aligned across `.bun-version`, the Docker build, and the helper
+  image defined in `packages/backend/src/runtime-images.ts`.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.
@@ -89,11 +97,12 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, overrides, and lock recovery
   details. Do not rerun successful checks unless something relevant changed.
 - Documentation-only edits need content, link, and diff checks, not application
   tests or container builds.
-- Use `pnpm check` for broad changes or integration concerns. It is not required
+- Use `bun run check` for broad changes or integration concerns. It is not required
   before every commit; CI runs the full source suite for code changes.
 - Use relevant browser checks for interaction changes. The separate command is
-  `pnpm --filter @ludock/frontend test:e2e` after building the frontend.
-- Build `ludock:test` when an image/runtime change needs local validation; use
+  `bun run --filter @ludock/frontend test:e2e` after building the frontend.
+- Build `ludock:test` with `docker build --pull -t ludock:test .` when an
+  image/runtime change needs local validation; use
   `docker compose config` for Compose configuration changes. Validate affected
   runtime/helper behavior on both `linux/amd64` and `linux/arm64` when it depends
   on architecture. CI and release validation cover the complete platform matrix.

@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { after, afterEach, beforeEach, describe, it } from "node:test";
-import type { WebSocket } from "ws";
+import { afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
+import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import { getDockerInstance } from "../src/docker.js";
 import { handleConsoleConnection } from "../src/console.js";
 import { handleContainerLogsConnection } from "../src/container-logs.js";
@@ -43,7 +42,10 @@ let containerId = "physical-server";
 let serverId: string;
 const sockets: FakeWebSocket[] = [];
 
-class FakeWebSocket extends EventEmitter {
+class FakeWebSocket extends EventEmitter implements SocketChannel {
+  get isOpen() { return this.readyState === 1; }
+  onMessage(listener: (message: SocketMessage) => void): void { this.on("message", listener); }
+  onClose(listener: (code: number) => void): void { this.once("close", listener); }
   readonly OPEN = 1;
   readyState = this.OPEN;
   sent: Array<{ type: string; data: string }> = [];
@@ -128,14 +130,14 @@ describe("WebSocket server capability boundaries", () => {
     );
     const console = new FakeWebSocket();
     await handleConsoleConnection(
-      console as unknown as WebSocket,
+      console,
       request("game-console"),
       auth(),
       "game",
     );
     const logs = new FakeWebSocket();
     await handleContainerLogsConnection(
-      logs as unknown as WebSocket,
+      logs,
       request("logs"),
       auth(),
     );
@@ -154,7 +156,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleConsoleConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("game-console"),
       auth(),
       "game",
@@ -176,7 +178,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleContainerLogsConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("logs"),
       auth(),
     );
@@ -199,7 +201,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleConsoleConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("game-console"),
       auth(),
       "game",
@@ -220,7 +222,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleConsoleConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("game-console"),
       auth(),
       "game",
@@ -249,7 +251,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleConsoleConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("game-console"),
       auth(),
       "game",
@@ -270,7 +272,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     const ws = new FakeWebSocket();
     await handleConsoleConnection(
-      ws as unknown as WebSocket,
+      ws,
       request("shell"),
       auth(),
       "shell",
@@ -313,13 +315,10 @@ describe("console credential redaction", () => {
 function auth() {
   return { user: operator, validate: () => operator };
 }
-function request(endpoint: string): IncomingMessage {
-  return {
-    url: `/ws/v1/${endpoint}/${serverId}`,
-    headers: { host: "localhost" },
-    socket: { remoteAddress: "127.0.0.1" },
-  } as unknown as IncomingMessage;
+function request(endpoint: string): Request {
+  return new Request(`http://localhost/ws/v1/${endpoint}/${serverId}`);
 }
+
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }

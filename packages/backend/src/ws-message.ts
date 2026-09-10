@@ -1,15 +1,8 @@
-import type { RawData } from "ws";
+import type { SocketMessage } from "./socket-channel.js";
 
-/**
- * Decode a WebSocket payload as UTF-8 text.
- *
- * `RawData` is `Buffer | ArrayBuffer | Buffer[]`, and calling `toString()` on
- * it directly only behaves for the `Buffer` case: a fragmented message arrives
- * as `Buffer[]` and stringifies to comma-joined garbage, while an `ArrayBuffer`
- * yields "[object ArrayBuffer]".
- */
-export function rawDataToString(raw: RawData): string {
-  if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
+/** Bun supplies text messages as strings and binary messages as byte buffers. */
+export function rawDataToString(raw: SocketMessage): string {
+  if (typeof raw === "string") return raw;
   if (Buffer.isBuffer(raw)) return raw.toString("utf8");
   return Buffer.from(raw).toString("utf8");
 }

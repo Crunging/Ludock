@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, mock, spyOn, jest } from "bun:test";
 import {
   apiFetch,
   apiJson,
@@ -15,21 +15,20 @@ import {
   serversResponseSchema,
 } from "@ludock/shared";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => jest.restoreAllMocks());
 
 describe("authenticated requests", () => {
   it("uses same-origin cookies and notifies the auth provider on expiration", async () => {
-    const request = vi
-      .spyOn(globalThis, "fetch")
+    const request = spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("{}", { status: 401 }));
-    const expired = vi.fn();
+    const expired = mock();
     window.addEventListener(AUTH_REQUIRED_EVENT, expired);
     await apiFetch("/api/v1/servers");
     expect(request).toHaveBeenCalledWith(
       "/api/v1/servers",
       expect.objectContaining({ credentials: "same-origin" }),
     );
-    expect(expired).toHaveBeenCalledOnce();
+    expect(expired).toHaveBeenCalledTimes(1);
     window.removeEventListener(AUTH_REQUIRED_EVENT, expired);
   });
   it("constructs a versioned websocket without credentials in the URL", () => {
@@ -42,7 +41,7 @@ describe("authenticated requests", () => {
 
 describe("API response contracts", () => {
   it("validates successful data and strips fields outside the shared contract", async () => {
-    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const request = spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({
         user: {
           id: "1675bade-833b-4c97-8bab-be48f44b5691",
