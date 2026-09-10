@@ -118,6 +118,7 @@ export function keyedComposeSourceFingerprint(digest: string): string {
   return protectComposeSourceFingerprint(digest, fingerprintKey!);
 }
 
+/** Identify an API-token generation for durable work, not a password verifier. */
 export function keyedCredentialFingerprint(value: string): string {
   getDatabase();
   return createHmac("sha256", fingerprintKey!)
@@ -156,11 +157,12 @@ export function recordLoginFailure(
   now: number,
   windowMs: number,
   maxFailures: number,
+  blockMs = windowMs,
 ): LoginThrottle {
   const current = getLoginThrottle(attemptKey, now, windowMs);
   const failures = current.failures + 1;
   const blockedUntil =
-    failures >= maxFailures ? now + windowMs : current.blockedUntil;
+    failures >= maxFailures ? now + blockMs : current.blockedUntil;
   const existing = getDatabase()
     .prepare(
       "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?",
@@ -179,7 +181,7 @@ export function recordLoginFailure(
     .run(
       attemptKey,
       failures,
-      existing?.window_started_at || now,
+      existing?.window_started_at ?? now,
       blockedUntil,
       now,
     );
@@ -509,6 +511,13 @@ export function pruneAuditLog(): void {
     .run(AUDIT_LOG_MAX_ROWS);
 }
 
+/** Flush deferred maintenance only after the owning mutation has committed. */
+export function pruneAuditLogIfNeeded(): void {
+  if (auditWritesSincePrune < AUDIT_PRUNE_INTERVAL) return;
+  pruneAuditLog();
+  auditWritesSincePrune = 0;
+}
+
 export function writeAuditLog(input: {
   userId?: string;
   action: string;
@@ -516,7 +525,7 @@ export function writeAuditLog(input: {
   targetId?: string;
   details?: unknown;
   ipAddress?: string;
-}): void {
+}, options: { prune?: boolean } = {}): void {
   getDatabase()
     .prepare(
       `INSERT INTO audit_log
@@ -534,10 +543,7 @@ export function writeAuditLog(input: {
     );
 
   auditWritesSincePrune += 1;
-  if (auditWritesSincePrune >= AUDIT_PRUNE_INTERVAL) {
-    auditWritesSincePrune = 0;
-    pruneAuditLog();
-  }
+  if (options.prune !== false) pruneAuditLogIfNeeded();
 }
 
 export function listAuditLog(limit: number): AuditRecord[] {

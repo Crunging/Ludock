@@ -569,6 +569,69 @@ describe("Docker exec console transport", () => {
     commandPlaceholder: "help", createExecOptions: (command) => ({ Cmd: ["fixture", command] }),
   };
   const output = { stdout: () => {}, stderr: () => {}, system: () => {} };
+  it("times out exec creation without starting a late result", async () => {
+    const expire = captureDeadline(5_000);
+    let created!: (exec: Docker.Exec) => void;
+    let starts = 0;
+    const pendingCreation = new Promise<Docker.Exec>((resolve) => { created = resolve; });
+    const container = { exec: () => pendingCreation } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container, { state: "running", labels: {} }, adapter, "stop", output,
+    );
+    expire();
+    await assert.rejects(pending, /preparation timed out/);
+    created({ start: async () => { starts++; return endedStream(); } } as unknown as Docker.Exec);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(starts, 0);
+  });
+  it("cancels pending exec creation without starting a late result", async () => {
+    const controller = new AbortController();
+    let created!: (exec: Docker.Exec) => void;
+    let starts = 0;
+    const pendingCreation = new Promise<Docker.Exec>((resolve) => { created = resolve; });
+    const container = { exec: () => pendingCreation } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container, { state: "running", labels: {} }, adapter, "stop", output,
+      undefined, controller.signal,
+    );
+    controller.abort();
+    await assert.rejects(pending, /cancelled/);
+    created({ start: async () => { starts++; return endedStream(); } } as unknown as Docker.Exec);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(starts, 0);
+  });
+  it("does not settle an indeterminate start before its late stream is cleaned up", async () => {
+    const controller = new AbortController();
+    const mainStream = new PassThrough();
+    let returnStream!: (stream: PassThrough) => void;
+    let starting!: () => void;
+    let cancellationStarted!: () => void;
+    const didStart = new Promise<void>((resolve) => { starting = resolve; });
+    const didCancel = new Promise<void>((resolve) => { cancellationStarted = resolve; });
+    const delayedStart = new Promise<PassThrough>((resolve) => { returnStream = resolve; });
+    let creations = 0;
+    const container = {
+      exec: async () => ++creations === 1
+        ? { start: () => { starting(); return delayedStart; } }
+        : { start: async () => { cancellationStarted(); return endedStream(); } },
+    } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container, { state: "running", labels: {} }, adapter, "stop", output,
+      undefined, controller.signal,
+    );
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await didStart;
+    controller.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, "an unknown start outcome must retain the caller's lock");
+    returnStream(mainStream);
+    await didCancel;
+    assert.equal(settled, false, "late execution still needs cleanup before releasing the lock");
+    mainStream.end();
+    await assert.rejects(pending, /cancelled/);
+  });
+
   it("keeps the command literal while adding an in-container deadline", async () => {
     const command = 'say "hello"; touch /tmp/not-executed';
     let received: Docker.ExecCreateOptions | undefined;

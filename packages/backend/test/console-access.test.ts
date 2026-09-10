@@ -169,6 +169,56 @@ describe("WebSocket server capability boundaries", () => {
     assert.ok(ws.sent.some((message) => message.data.includes("Command sent")));
   });
 
+  it("closes the console when log access is revoked during asynchronous attachment", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute", "logs.read"],
+      administrator,
+    );
+    let attachLogs!: (stream: PassThrough) => void;
+    let requestedLogs!: () => void;
+    const pendingLogs = new Promise<PassThrough>((resolve) => { attachLogs = resolve; });
+    const didRequestLogs = new Promise<void>((resolve) => { requestedLogs = resolve; });
+    const getFixtureContainer = docker.getContainer;
+    docker.getContainer = ((id: string) => ({
+      ...getFixtureContainer(id),
+      logs: async () => {
+        logCalls++;
+        requestedLogs();
+        return pendingLogs;
+      },
+    })) as unknown as typeof docker.getContainer;
+
+    const ws = new FakeWebSocket();
+    const connection = handleConsoleConnection(ws, request("game-console"), auth(), "game");
+    await didRequestLogs;
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    attachLogs(logStream);
+    await connection;
+
+    assert.equal(ws.isOpen, false);
+    assert.equal(ws.closeCode, 1008);
+    assert.equal(logStream.destroyed, true);
+    ws.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    await settle();
+    assert.equal(attachCalls, 0);
+
+    // The remaining command grant works on a fresh, command-only connection.
+    const reconnected = new FakeWebSocket();
+    await handleConsoleConnection(reconnected, request("game-console"), auth(), "game");
+    reconnected.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    await settle();
+    assert.equal(reconnected.isOpen, true);
+    assert.equal(logCalls, 1);
+    assert.equal(attachCalls, 1);
+  });
+
   it("closes and destroys the log stream before sending any frame after grants are revoked", async () => {
     setServerGrant(
       operator.id,

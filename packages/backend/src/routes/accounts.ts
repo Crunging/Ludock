@@ -42,6 +42,11 @@ import { administrator, requestUser, respond, type ApiRoutes } from "./request.j
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ACCOUNT_SOURCE_MAX_FAILURES = 5;
 const LOGIN_SOURCE_MAX_FAILURES = 20;
+const LOGIN_ACCOUNT_COOLDOWN_THRESHOLD = 20;
+const LOGIN_ACCOUNT_COOLDOWN_BASE_MS = 250;
+const LOGIN_ACCOUNT_COOLDOWN_MAX_MS = 5_000;
+const SETUP_SOURCE_MAX_FAILURES = 20;
+const setupThrottleScopes = new WeakMap<SetupWindow, string>();
 function publicUser(user: UserRecord | null) {
   if (!user)
     throw new AppError("INVALID_RESPONSE", 500, "The server could not produce a valid response");
@@ -68,10 +73,15 @@ function tooManyAttempts(
       getLoginThrottle(key, now, windowMs).blockedUntil > now,
   );
 }
-function busyResponse(): Response {
+function busyResponse(retryAfterMs?: number): Response {
   return Response.json(
     { error: "Too many attempts. Try again later." },
-    { status: 429 },
+    {
+      status: 429,
+      ...(retryAfterMs === undefined ? {} : {
+        headers: { "Retry-After": String(Math.max(1, Math.ceil(retryAfterMs / 1_000))) },
+      }),
+    },
   );
 }
 function stringProperty(value: unknown, property: string): string | undefined {
@@ -81,6 +91,13 @@ function stringProperty(value: unknown, property: string): string | undefined {
   return typeof propertyValue === "string" ? propertyValue : undefined;
 }
 export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
+  // Rebuilding routes for the same window must not reset its source limits;
+  // a fresh startup/window must not inherit a previous setup lockout.
+  let setupScope = setupThrottleScopes.get(setupWindow);
+  if (!setupScope) {
+    setupScope = crypto.randomUUID();
+    setupThrottleScopes.set(setupWindow, setupScope);
+  }
   return {
     "/api/v1/auth/status": {
       GET: (ctx) => {
@@ -100,12 +117,30 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
     },
     "/api/v1/auth/setup": {
       POST: async (ctx) => {
+        const sourceKey = loginThrottleKey(
+          "setup-source",
+          `${setupScope}:${ctx.ipAddress ?? "unknown"}`,
+        );
         try {
+          // Completed/expired setup stays authoritative even for a blocked
+          // source. Invalid code attempts never reach password work.
+          setupWindow.assertOpen();
+          if (tooManyAttempts([
+            { key: sourceKey, windowMs: LOGIN_WINDOW_MS },
+          ], Date.now())) return busyResponse();
           // Authorize before schema validation or password hashing. Missing and
           // incorrect codes intentionally receive the same response.
           setupWindow.assertAuthorized(stringProperty(ctx.body, "bootstrapCode"));
         } catch (error) {
           if (error instanceof AuthError) {
+            if (error.code === "SETUP_AUTHORIZATION_REQUIRED") {
+              recordLoginFailure(
+                sourceKey,
+                Date.now(),
+                LOGIN_WINDOW_MS,
+                SETUP_SOURCE_MAX_FAILURES,
+              );
+            }
             return Response.json({
               error: error.code === "SETUP_LOCKED"
                 ? "Initial setup has expired. Restart the panel to reopen setup."
@@ -116,6 +151,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           }
           throw error;
         }
+        clearLoginThrottle(sourceKey);
         const parsed = setupRequestSchema.safeParse(ctx.body);
         if (!parsed.success) {
           return Response.json({
@@ -169,6 +205,14 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         if (!parsed.success || isSetupRequired()) {
           return Response.json({ error: "Invalid username or password" }, { status: 401 });
         }
+        const accountKey = loginThrottleKey("login-account-failures", requestedUsername);
+        const accountCooldown = getLoginThrottle(
+          accountKey,
+          now,
+          LOGIN_WINDOW_MS,
+        );
+        if (accountCooldown.blockedUntil > now)
+          return busyResponse(accountCooldown.blockedUntil - now);
         let user;
         try {
           user = await withPasswordWork(
@@ -198,6 +242,25 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
               LOGIN_WINDOW_MS,
               LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
             );
+          // A rotating source cannot avoid this account-wide slowdown. Keep
+          // the cooldown short: the old five-guess account lockout let anyone
+          // deny the owner access for fifteen minutes. Rejected retries do not
+          // extend this cooldown, and successful authentication clears it.
+          const accountFailures = getLoginThrottle(accountKey, failedAt, LOGIN_WINDOW_MS).failures + 1;
+          const step = Math.max(0, Math.min(5, Math.floor(
+            (accountFailures - LOGIN_ACCOUNT_COOLDOWN_THRESHOLD) / 5,
+          )));
+          const cooldownMs = Math.min(
+            LOGIN_ACCOUNT_COOLDOWN_MAX_MS,
+            LOGIN_ACCOUNT_COOLDOWN_BASE_MS * 2 ** step,
+          );
+          recordLoginFailure(
+            accountKey,
+            failedAt,
+            LOGIN_WINDOW_MS,
+            LOGIN_ACCOUNT_COOLDOWN_THRESHOLD,
+            cooldownMs,
+          );
           writeAuditLog({
             action: "auth.login.failed",
             targetType: "user",
@@ -211,6 +274,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           return Response.json({ error: "Invalid username or password" }, { status: 401 });
         }
         if (accountSourceKey) clearLoginThrottle(accountSourceKey);
+        clearLoginThrottle(accountKey);
         const session = createSession(user, ctx.request, ctx.ipAddress);
         setSessionCookie(ctx.headers, ctx.request, session.token);
         writeAuditLog({

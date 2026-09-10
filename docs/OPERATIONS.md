@@ -30,11 +30,20 @@ written directly to the container console and is excluded from Ludock's applicat
 API and UI. Restart Ludock to reopen an expired setup window and generate a new
 code. Passwords must be between 15 and 128 characters.
 
-For unattended deployment, set a private `LUDOCK_SETUP_CODE` of 32–128
-characters before the first start. A configured code is not printed. Remove the
+For unattended deployment, set a private, randomly generated `LUDOCK_SETUP_CODE`
+of 32–128 characters before the first start, for example with
+`openssl rand -hex 32`. A configured code is not printed. Remove the
 setting after the administrator exists; setup codes cannot reopen or replace a
 completed installation. Do not place a setup code in a URL, Compose label, or
-support message.
+support message. Twenty incorrect or missing codes block that source for the
+remaining setup window. Restarting opens a new window without carrying over
+the previous source limit.
+
+Sign-in attempts are limited by source and account/source pair. Repeated failures
+against one account from different sources also introduce a short progressive
+cooldown, beginning after 20 failures and capped at five seconds. Rejected retries
+do not extend it, and a successful sign-in clears it. These limits do not replace
+a strong password or network access restrictions.
 
 Use HTTPS for remote access. A reverse proxy must preserve the public host,
 forward the external protocol, and support WebSocket upgrades. Browser API
@@ -335,7 +344,10 @@ updates or arbitrary shell commands. Review a failed/suspended schedule's
 reported result and recreate it after fixing its permissions or data binding.
 An installation supports at most 100 schedules per server and 1,000 in total,
 including disabled schedules. Delete unused schedules before adding more when
-either limit is reached.
+either limit is reached. Invalid saved schedule configurations are suspended
+without preventing other schedules from running. Application logs identify the
+affected schedule and warn if restored data exceeds the global limit; schedules
+beyond that limit are not evaluated.
 
 Availability is disabled by default. When enabled, the server is expected to
 be available 24/7, with a default two-minute failure grace period. Current

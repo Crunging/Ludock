@@ -3,6 +3,7 @@ import {
   getDatabase,
   findUserById,
   writeAuditLog,
+  pruneAuditLogIfNeeded,
   type SessionUser,
 } from "./database.js";
 import {
@@ -14,7 +15,10 @@ import { resolveServerBinding } from "./identity.js";
 import { enqueueOperation } from "./operations.js";
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
+import { createLogger } from "./logger.js";
 import type { ServerCapability } from "@ludock/shared";
+
+const logger = createLogger("schedules");
 
 interface ScheduleRow {
   id: string;
@@ -111,17 +115,29 @@ export function createSchedule(
       binding.bindingRevision,
       Date.now(),
     );
-    writeAuditLog({
-      userId: actor.id,
-      action: "schedule.created",
-      targetType: "server",
-      targetId: serverId,
-      details: { scheduleId: id, action: data.action },
-    });
+    writeAuditLog(
+      {
+        userId: actor.id,
+        action: "schedule.created",
+        targetType: "server",
+        targetId: serverId,
+        details: { scheduleId: id, action: data.action },
+      },
+      { prune: false },
+    );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // A failed commit may already have ended the transaction. Keep its cause.
+    }
     throw error;
+  }
+  try {
+    pruneAuditLogIfNeeded();
+  } catch {
+    logger.warn("Audit retention cleanup failed after schedule creation; it will be retried");
   }
   return publicSchedule(
     db.prepare("SELECT * FROM schedules WHERE id=?").get(id) as ScheduleRow,
@@ -176,16 +192,23 @@ export function scheduleSlot(input: ScheduleInput, now: number): string | null {
 export function runSchedules(now = Date.now()): void {
   const rows = getDatabase()
     .prepare("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
-    .all(MAX_SCHEDULES_TOTAL) as unknown as ScheduleRow[];
-  for (const row of rows) {
-    const data = scheduleSchema.parse(JSON.parse(row.input_json));
-    if (!data.enabled) continue;
-    const slot = scheduleSlot(data, now);
-    if (!slot || slot === row.last_slot) continue;
-    getDatabase()
-      .prepare("UPDATE schedules SET last_slot=? WHERE id=?")
-      .run(slot, row.id);
+    .all(MAX_SCHEDULES_TOTAL + 1) as unknown as ScheduleRow[];
+  if (rows.length > MAX_SCHEDULES_TOTAL)
+    logger.warn("Schedule limit exceeded; schedules beyond the limit are not evaluated", {
+      limit: MAX_SCHEDULES_TOTAL,
+    });
+  for (const row of rows.slice(0, MAX_SCHEDULES_TOTAL)) {
+    let slot: string | null = null;
+    let configurationValid = false;
     try {
+      const data = scheduleSchema.parse(JSON.parse(row.input_json));
+      if (!data.enabled) continue;
+      slot = scheduleSlot(data, now);
+      configurationValid = true;
+      if (!slot || slot === row.last_slot) continue;
+      getDatabase()
+        .prepare("UPDATE schedules SET last_slot=? WHERE id=?")
+        .run(slot, row.id);
       const user = findUserById(row.owner_id);
       if (
         !user ||
@@ -227,19 +250,31 @@ export function runSchedules(now = Date.now()): void {
         .prepare("UPDATE schedules SET last_result=? WHERE id=?")
         .run(`Queued operation ${op.id}`, row.id);
     } catch (error) {
-      const reason =
-        error instanceof AppError &&
+      const reason = !configurationValid
+        ? "Suspended: saved schedule configuration is invalid; recreate this schedule"
+        : error instanceof AppError &&
         (error.code === "SCHEDULE_REVOKED" ||
           error.code === "SCHEDULE_BINDING_CHANGED")
           ? error.message
           : "Skipped: server state or a conflicting operation prevented this run";
-      getDatabase()
-        .prepare("UPDATE schedules SET last_result=? WHERE id=?")
-        .run(reason, row.id);
-      notifyEvent(
-        `schedule:${row.id}:${slot}`,
-        "A scheduled Ludock action could not run. Review its server and permissions.",
-      );
+      try {
+        getDatabase()
+          .prepare("UPDATE schedules SET last_result=? WHERE id=?")
+          .run(reason, row.id);
+        if (!configurationValid && row.last_result !== reason)
+          logger.warn("Saved schedule configuration is invalid; recreate the schedule", {
+            scheduleId: row.id,
+          });
+        notifyEvent(
+          `schedule:${row.id}:${slot ?? "invalid"}`,
+          "A scheduled Ludock action could not run. Review its server and permissions.",
+        );
+      } catch {
+        // Diagnostics for one row must not prevent unrelated schedules running.
+        logger.warn("Could not record or notify a skipped schedule run", {
+          scheduleId: row.id,
+        });
+      }
     }
   }
 }

@@ -38,6 +38,13 @@ rejected during read-only inspection. UUIDs and session-token randomness use Web
 Crypto. HMAC, constant-time comparisons, and legacy scrypt verification use
 `node:crypto`.
 
+Queued API-token operations carry a separate domain-separated HMAC identifying
+the configured credential generation. This is not a user-password verifier:
+request authentication still checks the bearer token, while workers compare the
+generation to reject work queued before token rotation. A database-only copy
+does not contain the HMAC key. Administrative API tokens must still be random;
+the minimum length alone does not guarantee entropy.
+
 Filesystem confinement retains descriptor-based `node:fs` operations and Linux
 `/proc/self/fd` checks in file, backup, restore, and Compose validation paths.
 The remaining libraries preserve capabilities beyond a direct native replacement:
@@ -129,10 +136,12 @@ Minecraft's Docker-exec adapter keeps commands as literal argument-array values
 and runs an in-container watchdog: 15 seconds before termination, then a
 three-second kill grace period. Output is capped at 4 MiB, and a closed or revoked
 console requests cancellation while retaining its lock through stream cleanup.
-These bounds cover command execution, not an indefinitely stalled Docker
-control plane. A disconnected `exec.start` request cannot prove that Docker did
-not accept the mutation; releasing its lock on an HTTP-only timeout would be
-unsafe. Docker availability and recovery remain deployment responsibilities.
+Waiting for exec creation is limited to five seconds and can be cancelled before
+starting; late creation results are discarded without executing them. These bounds do not
+cover an indefinitely stalled Docker start request. A disconnected `exec.start`
+request cannot prove that Docker did not accept the mutation; releasing its lock
+on an HTTP-only timeout would be unsafe. Docker availability and recovery remain
+deployment responsibilities.
 
 Direct lifecycle and file handlers use `serverAction(capability, handler)`.
 Declaring the capability is required by its signature. The helper resolves the

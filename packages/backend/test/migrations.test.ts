@@ -236,6 +236,7 @@ describe("application database ownership and schema migrations", () => {
       assert.deepEqual(fs.readFileSync(dbPath), databaseBytes);
     };
     reject();
+    assert.equal(fs.existsSync(keyDirectory), false);
 
     fs.writeFileSync(keyDirectory, "not-a-directory", { mode: 0o600 });
     reject();

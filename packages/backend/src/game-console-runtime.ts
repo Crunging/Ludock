@@ -19,6 +19,7 @@ export const MAX_DOCKER_EXEC_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DOCKER_EXEC_TIMEOUT_SECONDS = 15;
 const DOCKER_EXEC_KILL_GRACE_SECONDS = 3;
 const DOCKER_EXEC_STREAM_GRACE_MS = 5_000;
+const DOCKER_EXEC_CREATE_TIMEOUT_MS = 5_000;
 const DOCKER_EXEC_INSPECT_TIMEOUT_MS = 5_000;
 
 // Docker has no API for signaling an individual exec process, and closing its
@@ -590,7 +591,7 @@ async function executeInContainer(
   if (signal?.aborted) throw new Error("Console command cancelled");
 
   const controlPath = `/tmp/.ludock-console-${crypto.randomUUID()}`;
-  const exec = await container.exec({
+  const exec = await createDockerExec(container, {
     ...options,
     Cmd: [
       "/bin/sh",
@@ -602,9 +603,11 @@ async function executeInContainer(
       String(DOCKER_EXEC_KILL_GRACE_SECONDS),
       ...options.Cmd,
     ],
-  });
+  }, signal);
   assertAccess?.();
   if (signal?.aborted) throw new Error("Console command cancelled");
+  // Starting is a mutation: an HTTP timeout cannot prove Docker rejected it.
+  // Keep the caller's lock until the outcome and subsequent cleanup are known.
   const stream = await exec.start({ hijack: true, stdin: false });
   let cancellationRequested = false;
   let cancelled = false;
@@ -681,6 +684,33 @@ async function executeInContainer(
     throw new Error("Console command cancelled");
   if (result.Running || result.ExitCode !== 0)
     throw new Error("Game console command failed");
+}
+
+async function createDockerExec(
+  container: Docker.Container,
+  options: Docker.ExecCreateOptions,
+  signal?: AbortSignal,
+): Promise<Docker.Exec> {
+  if (signal?.aborted) throw new Error("Console command cancelled");
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<Docker.Exec>((resolve, reject) => {
+      onAbort = () => reject(new Error("Console command cancelled"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      deadline = setTimeout(
+        () => reject(new Error("Game console preparation timed out")),
+        DOCKER_EXEC_CREATE_TIMEOUT_MS,
+      );
+      deadline.unref();
+      // Creation only allocates an exec configuration. A late result is ignored
+      // and can never proceed to start after this promise has been rejected.
+      void container.exec(options).then(resolve, reject);
+    });
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 async function cancelDockerExec(
