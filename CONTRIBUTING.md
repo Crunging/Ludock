@@ -94,6 +94,11 @@ supported major tags such as `@v7`; use an available stable release tag when an
 action does not publish a major tag. Review upstream changes when updating those
 references. Security checks report findings without opening dependency update PRs.
 
+`tar-stream` currently stays on 3.2.0. Its 3.2.1 patch introduces incompatible
+header and Node stream type declarations; remove this constraint when the archive
+integration type-checks against a compatible release. The lockfile keeps the
+validated archive implementation reproducible in the meantime.
+
 Run the source checks after updating dependencies or Bun, and add relevant
 browser and platform checks from [TESTING.md](./TESTING.md) for affected behavior.
 

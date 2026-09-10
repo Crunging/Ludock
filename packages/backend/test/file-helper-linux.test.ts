@@ -78,6 +78,131 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       assert.equal(fs.existsSync(path.join(root, "world")), false);
     });
 
+    it("leaves existing files intact and new files absent after incomplete or invalid uploads", () => {
+      const existing = path.join(root, "world.cfg");
+      fs.writeFileSync(existing, "original-world-settings");
+      for (const relative of ["world.cfg", "new.cfg"]) {
+        for (const input of [
+          { size: 10, body: "short" },
+          { size: 2, body: "too much" },
+          { size: -1, body: "" },
+          { size: 1.5, body: "x" },
+        ]) {
+          const result = run("upload", relative, { size: input.size }, input.body);
+          assert.equal(result.exitCode, 1, `${relative}: ${JSON.stringify(input)}`);
+          assert.equal(fs.readFileSync(existing, "utf8"), "original-world-settings");
+          assert.equal(fs.existsSync(path.join(root, "new.cfg")), false);
+          assert.deepEqual(fs.readdirSync(root), ["world.cfg"], "Failed uploads must remove their temporary files");
+        }
+      }
+    });
+
+    it("replaces complete uploads while preserving existing file ownership and permissions", () => {
+      const filename = path.join(root, "world.cfg");
+      fs.writeFileSync(filename, "old-settings");
+      if (process.getuid!() === 0) fs.chownSync(filename, 1234, 2345);
+      fs.chmodSync(filename, 0o640);
+      const original = fs.statSync(filename);
+      for (const body of ["new\0settings\n", ""]) {
+        const result = run("upload", "world.cfg", { size: Buffer.byteLength(body) }, body);
+        assert.equal(result.exitCode, 0, result.stderr);
+        assert.equal(fs.readFileSync(filename, "utf8"), body);
+        const replaced = fs.statSync(filename);
+        assert.equal(replaced.mode & 0o777, 0o640);
+        assert.equal(replaced.uid, original.uid);
+        assert.equal(replaced.gid, original.gid);
+        assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+      }
+    });
+
+    it("refuses to replace a destination symlink during upload", () => {
+      const outside = path.join(directory, "outside.cfg");
+      const link = path.join(root, "world.cfg");
+      fs.writeFileSync(outside, "outside-settings");
+      fs.symlinkSync(outside, link);
+      assert.equal(run("upload", "world.cfg", { size: 3 }, "new").exitCode, 1);
+      assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+      assert.equal(fs.readFileSync(outside, "utf8"), "outside-settings");
+      assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+    });
+
+    it("commits a production upload only after its complete payload and matching completion token", () => {
+      const filename = path.join(root, "world.cfg");
+      const uploadId = "11111111-1111-4111-8111-111111111111";
+      const anotherId = "22222222-2222-4222-8222-222222222222";
+      const body = "new-settings";
+      fs.writeFileSync(filename, "old-settings");
+      for (const input of [body, body + anotherId, body + uploadId + "extra"]) {
+        const result = run("upload", "world.cfg", { size: body.length, uploadId }, input);
+        assert.equal(result.exitCode, 1);
+        assert.equal(fs.readFileSync(filename, "utf8"), "old-settings");
+        assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+      }
+      const committed = run("upload", "world.cfg", { size: body.length, uploadId }, body + uploadId);
+      assert.equal(committed.exitCode, 0, committed.stderr);
+      assert.equal(fs.readFileSync(filename, "utf8"), body);
+      assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+    });
+
+    it("cleans up only the selected upload's temporary sibling within its approved parent", () => {
+      const uploadId = "11111111-1111-4111-8111-111111111111";
+      const otherId = "22222222-2222-4222-8222-222222222222";
+      const temporary = `.ludock-upload-${uploadId}.tmp`;
+      const otherTemporary = `.ludock-upload-${otherId}.tmp`;
+      const outside = path.join(directory, "outside");
+      fs.mkdirSync(outside);
+      fs.mkdirSync(path.join(root, "world"));
+      fs.writeFileSync(path.join(root, "world", "settings.cfg"), "original-settings");
+      fs.writeFileSync(path.join(root, "world", temporary), "partial-upload");
+      fs.writeFileSync(path.join(root, "world", otherTemporary), "other-upload");
+      fs.writeFileSync(path.join(outside, temporary), "outside-data");
+      fs.symlinkSync(outside, path.join(root, "escape"));
+      assert.equal(run("upload-cleanup", "world/settings.cfg", { uploadId: "../escape" }).exitCode, 1);
+      assert.equal(run("upload-cleanup", "escape/settings.cfg", { uploadId }).exitCode, 1);
+      assert.equal(fs.readFileSync(path.join(outside, temporary), "utf8"), "outside-data");
+      const result = run("upload-cleanup", "world/settings.cfg", { uploadId });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(fs.existsSync(path.join(root, "world", temporary)), false);
+      assert.equal(fs.readFileSync(path.join(root, "world", otherTemporary), "utf8"), "other-upload");
+      assert.equal(fs.readFileSync(path.join(root, "world", "settings.cfg"), "utf8"), "original-settings");
+    });
+
+    it("refuses uploads when their destination is created or replaced before commit", async () => {
+      const filename = path.join(root, "world.cfg");
+      for (const existing of [true, false]) {
+        if (existing) fs.writeFileSync(filename, "original-settings");
+        const uploadId = crypto.randomUUID();
+        const temporary = path.join(root, `.ludock-upload-${uploadId}.tmp`);
+        const upload = Bun.spawn([
+          process.execPath, "-e", FILE_HELPER_SCRIPT,
+          JSON.stringify({ operation: "upload", root, path: "world.cfg", size: 12, uploadId, blocked: [] }),
+        ], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+        try {
+          upload.stdin.write("new-");
+          await upload.stdin.flush();
+          for (let attempt = 0; attempt < 200 && !fs.existsSync(temporary); attempt++) {
+            assert.equal(upload.exitCode, null, "Upload exited before creating temporary storage");
+            await Bun.sleep(5);
+          }
+          assert.equal(fs.existsSync(temporary), true, "Upload must prepare its temporary file before the target changes");
+          if (existing) fs.renameSync(filename, path.join(root, "previous.cfg"));
+          fs.writeFileSync(filename, "external-replacement");
+          upload.stdin.write("settings" + uploadId);
+          upload.stdin.end();
+          assert.equal(await upload.exited, 1);
+          assert.equal(fs.readFileSync(filename, "utf8"), "external-replacement");
+          assert.equal(fs.existsSync(temporary), false);
+        } finally {
+          if (upload.exitCode === null) {
+            upload.kill("SIGKILL");
+            await upload.exited;
+          }
+        }
+        fs.unlinkSync(filename);
+      }
+      assert.equal(fs.readFileSync(path.join(root, "previous.cfg"), "utf8"), "original-settings");
+    });
+
     it("rejects root and intermediate symbolic links for both reads and writes", () => {
       const outside = path.join(directory, "outside");
       fs.mkdirSync(outside);

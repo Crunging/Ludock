@@ -347,10 +347,12 @@ export function listComposeProjects(): ComposeProject[] {
 }
 export async function registerComposeProject(
   input: unknown,
+  assertAccess?: () => void,
 ): Promise<ComposeProject> {
   const registration = composeRegistrationSchema.parse(input);
   const snapshot = await createComposeSnapshot(registration);
   try {
+    assertAccess?.();
     const existing = listComposeProjects().find(
       (project) => project.projectName === registration.projectName,
     );

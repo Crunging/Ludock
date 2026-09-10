@@ -42,12 +42,14 @@ interface FileRequest {
     | "delete"
     | "rename"
     | "upload"
+    | "upload-cleanup"
     | "download";
   root: string;
   path: string;
   blocked: string[];
   destination?: string;
   size?: number;
+  uploadId?: string;
 }
 
 export function getFileRoots(
@@ -289,20 +291,45 @@ export async function uploadFile(
     rootId,
     joinRelative(relativeParent, name),
   );
-  const access = await acquireFileContainer(server, target.root, { assertAccess });
+  // The HTTP body may be aborted while Docker is still preparing its helper.
+  const ignoreInputError = () => {};
+  source.on("error", ignoreInputError);
   try {
-    await helperRequest(
-      access,
-      {
-        operation: "upload",
-        root: target.root.path,
-        path: target.relativePath,
-        size,
-      },
-      source,
-    );
+    const access = await acquireFileContainer(server, target.root, { assertAccess });
+    const uploadId = crypto.randomUUID();
+    try {
+      await helperRequest(
+        access,
+        {
+          operation: "upload",
+          root: target.root.path,
+          path: target.relativePath,
+          size,
+          uploadId,
+        },
+        source,
+        Buffer.from(uploadId),
+      );
+    } finally {
+      try {
+        // Cleanup has no user-controlled operation or filename. It must remain
+        // available after cancellation/revocation so staging files are removed.
+        await helperRequest({ ...access, assertAccess: undefined }, {
+          operation: "upload-cleanup",
+          root: target.root.path,
+          path: target.relativePath,
+          uploadId,
+        });
+      } catch {
+        logger.warn("Failed to clean up an upload temporary file", {
+          container: server.id.slice(0, 12),
+        });
+      } finally {
+        await access.cleanup();
+      }
+    }
   } finally {
-    await access.cleanup();
+    source.off("error", ignoreInputError);
   }
 }
 
@@ -491,12 +518,14 @@ async function helperRequest(
   access: FileContainerAccess,
   request: Omit<FileRequest, "blocked">,
   input?: Readable,
+  inputTrailer?: Buffer,
 ): Promise<{ stdout: string }> {
   return runExec(
     access.container,
     helperOptions({ ...request, blocked: access.blockedPaths }),
     input,
     access.assertAccess,
+    inputTrailer,
   );
 }
 
@@ -585,7 +614,7 @@ export async function acquireFileContainer(
       ReadonlyRootfs: true,
       AutoRemove: true,
       CapDrop: ["ALL"],
-      CapAdd: ["DAC_OVERRIDE"],
+      CapAdd: options.readOnly ? ["DAC_OVERRIDE"] : ["DAC_OVERRIDE", "CHOWN"],
       SecurityOpt: ["no-new-privileges"],
       PidsLimit: 32,
       Memory: 256 * 1024 * 1024,
@@ -664,8 +693,11 @@ async function runExec(
   options: Docker.ExecCreateOptions,
   input?: Readable,
   assertAccess?: () => void,
+  inputTrailer?: Buffer,
 ): Promise<{ stdout: string }> {
   assertAccess?.();
+  if (input?.destroyed && !input.readableEnded)
+    throw new FileStorageError("FILE_UPLOAD_FAILED", 400);
   const execution = await container.exec(options);
   assertAccess?.();
   const stream = await execution.start({
@@ -684,28 +716,64 @@ async function runExec(
   });
   stderr.resume();
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let inputEnded = false;
+    let inputFailure: Error | undefined;
+    let cancellationTimeout: ReturnType<typeof setTimeout> | undefined;
     const timeout = setTimeout(
       () => {
         stream.destroy();
-        reject(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
+        finish(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
       },
       input ? 30 * 60_000 : 60_000,
     );
     const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
-      if (error) reject(error);
+      clearTimeout(cancellationTimeout);
+      input?.unpipe(stream);
+      input?.off("end", endInput);
+      input?.off("error", errorInput);
+      input?.off("close", closeInput);
+      const failure = inputFailure || error;
+      if (failure) reject(failure);
       else resolve();
     };
+    const failInput = (error?: Error) => {
+      if (settled || inputFailure) return;
+      inputFailure = error || new FileStorageError("FILE_UPLOAD_FAILED", 400);
+      input?.unpipe(stream);
+      // Missing commit trailer makes even a full-length cancelled body fail.
+      // Keep the read side alive until the helper finishes its own cleanup.
+      stream.end();
+      cancellationTimeout = setTimeout(() => {
+        stream.destroy();
+        finish(inputFailure);
+      }, 5_000);
+    };
+    const endInput = () => {
+      inputEnded = true;
+      if (settled || inputFailure) return;
+      try { assertAccess?.(); }
+      catch (error) { failInput(error as Error); return; }
+      stream.end(inputTrailer);
+    };
+    const closeInput = () => { if (!inputEnded) failInput(); };
+    const errorInput = () => failInput();
     stream.once("end", () => finish());
+    stream.once("close", () => finish(new FileStorageError("FILE_OPERATION_FAILED", 409)));
     stream.once("error", () =>
       finish(new FileStorageError("FILE_OPERATION_FAILED", 409)),
     );
     docker.modem.demuxStream(stream, stdout, stderr);
     if (input) {
-      input.once("error", () =>
-        stream.destroy(new FileStorageError("FILE_UPLOAD_FAILED", 400)),
-      );
-      input.pipe(stream);
+      input.once("error", errorInput);
+      input.once("end", endInput);
+      input.once("close", closeInput);
+      if (input.destroyed && !input.readableEnded) failInput();
+      else if (input.readableEnded) endInput();
+      else input.pipe(stream, { end: false });
     }
   });
   const status = await execution.inspect();

@@ -34,6 +34,11 @@ then choose **Check again** in the panel.
 The example creates separate volumes for Ludock application data and backups.
 Existing game containers and game-data volumes stay in place.
 
+Installations from before this rewrite need a new application volume. Keep the
+old application volume for rollback and follow the
+[storage upgrade guidance](./docs/OPERATIONS.md#deployment-and-application-storage)
+before starting the new image.
+
 After signing in:
 
 1. Open **Servers**. Recognized game containers appear automatically; use
@@ -107,8 +112,8 @@ flows, limitations, and recovery behavior.
 - [Operations](./docs/OPERATIONS.md): deployment settings, permissions, backups,
   schedules, Compose updates, monitoring, notifications, and recovery.
 - [Testing](./TESTING.md): automated checks and disposable-server acceptance.
-- [Contributing](./CONTRIBUTING.md): development with Bun 1 and manual tool and
-  dependency updates.
+- [Contributing](./CONTRIBUTING.md): development with Bun 1 and tool and
+  dependency maintenance.
 - [Architecture](./docs/ARCHITECTURE.md): shared contracts, feature modules, and
   development instance boundaries.
 - [Security](./SECURITY.md): deployment boundary and vulnerability reporting.

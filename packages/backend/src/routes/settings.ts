@@ -49,7 +49,7 @@ export const settingsRoutes: ApiRoutes = {
     })
   },
   "/api/v1/diagnostics": {
-    GET: administrator(async () => {
+    GET: administrator(async (ctx) => {
       let diagnostics: DiscoveryDiagnostic[] = [];
       let dockerConnected = true;
       try {
@@ -58,10 +58,12 @@ export const settingsRoutes: ApiRoutes = {
       catch {
         dockerConnected = false;
       }
+      const composeAvailable = await isComposeAvailable();
+      assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       return respond(diagnosticsResponseSchema, {
         diagnostics,
         dockerConnected,
-        composeAvailable: await isComposeAvailable(),
+        composeAvailable,
       });
     })
   },

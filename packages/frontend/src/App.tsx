@@ -8,6 +8,7 @@ import { useAuth } from "./auth-context";
 import { NavLink } from "./navigation";
 import { useLocation, useNavigate } from "./navigation-context";
 import LudockMark from "./components/LudockMark";
+import PageBoundary from "./components/PageBoundary";
 import ViewPreferencesProvider from "./ViewPreferences";
 
 const Console = lazy(() => import("./pages/Console"));
@@ -19,8 +20,9 @@ const ApplicationLogs = lazy(() => import("./pages/ApplicationLogs"));
 
 function PageFallback() {
   return (
-    <div className="loading-spinner loading-spinner--page">
-      <div className="loading-spinner__ring" />
+    <div className="loading-spinner loading-spinner--page" role="status">
+      <div className="loading-spinner__ring" aria-hidden="true" />
+      <span className="sr-only">Loading Ludock…</span>
     </div>
   );
 }
@@ -74,11 +76,7 @@ function App() {
   }, [authenticated, knownPath, location.pathname, navigate, user?.role]);
 
   if (loading) {
-    return (
-      <div className="loading-spinner loading-spinner--page">
-        <div className="loading-spinner__ring" />
-      </div>
-    );
+    return <PageFallback />;
   }
 
   if (statusError) {
@@ -120,41 +118,17 @@ function App() {
   } else if (location.pathname === "/audit" && user?.role === "admin") {
     page = <Audit />;
   } else if (location.pathname === "/logs" && user?.role === "admin") {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <ApplicationLogs />
-      </Suspense>
-    );
+    page = <ApplicationLogs />;
   } else if (location.pathname === "/diagnostics" && user?.role === "admin") {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <Diagnostics />
-      </Suspense>
-    );
+    page = <Diagnostics />;
   } else if (location.pathname === "/settings" && user?.role === "admin") {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <Settings />
-      </Suspense>
-    );
+    page = <Settings />;
   } else if (serverId) {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <ServerDetail key={serverId} serverId={serverId} />
-      </Suspense>
-    );
+    page = <ServerDetail key={serverId} serverId={serverId} />;
   } else if (consoleId) {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <Console containerId={consoleId} />
-      </Suspense>
-    );
+    page = <Console containerId={consoleId} />;
   } else if (filesId) {
-    page = (
-      <Suspense fallback={<PageFallback />}>
-        <Files containerId={filesId} />
-      </Suspense>
-    );
+    page = <Files containerId={filesId} />;
   }
 
   return (
@@ -238,7 +212,9 @@ function App() {
         tabIndex={-1}
         className={`main-content ${isConsolePage ? "main-content--console" : ""}`}
       >
-        {page}
+        <PageBoundary key={location.pathname}>
+          <Suspense fallback={<PageFallback />}>{page}</Suspense>
+        </PageBoundary>
       </main>
     </div>
     </ViewPreferencesProvider>

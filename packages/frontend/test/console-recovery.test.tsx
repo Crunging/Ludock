@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
-import { apiJson } from "../src/api";
+import { ApiRequestError, apiJson } from "../src/api";
 import { useWebSocket } from "../src/hooks/useWebSocket";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
 import { NavigationContext } from "../src/navigation-context";
@@ -139,12 +139,14 @@ describe("console recovery", () => {
     expect((screen.getByRole("button", { name: "Send", exact: true }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("rechecks grants after reconnecting before allowing a command", async () => {
+  it("rechecks grants after reconnecting and fails closed when fallback log access is denied", async () => {
     let current = server;
     apiJsonMock.mockImplementation(async () => ({ server: current, stats: null }));
     const page = consolePage("operator");
     await openConnection();
     await userEvent.type(screen.getByRole("textbox", { name: "Game command" }), "list");
+    act(() => socketOptions.onMessage?.(JSON.stringify({ type: "stdout", data: "private game output" })));
+    const resets = terminals[0].reset.mock.calls.length;
     transport = { ...transport, status: "disconnected", canRetry: true };
     page.update();
     current = { ...server, permissions: ["server.view", "logs.read"] };
@@ -153,8 +155,16 @@ describe("console recovery", () => {
     await openConnection();
     expect(screen.queryByRole("textbox", { name: "Game command" })).toBeNull();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Docker Logs"]);
+    expect(terminals[0].reset.mock.calls.length).toBeGreaterThan(resets);
+    expect(terminals[0].write).toHaveBeenLastCalledWith(expect.stringContaining("Switched to Docker Logs"));
     expect(transport.send).not.toHaveBeenCalled();
     expect(apiJsonMock.mock.calls.length).toBe(3);
+    apiJsonMock.mockRejectedValueOnce(new ApiRequestError("Log access no longer available", 403));
+    await openConnection();
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(socketOptions.url).toBe("");
+    expect(transport.retry).not.toHaveBeenCalled();
   });
 
   it("hides stale identity, drafts, and output on explicit access denial until details are reloaded", async () => {
@@ -178,6 +188,55 @@ describe("console recovery", () => {
     await openConnection();
     expect((screen.getByRole("textbox", { name: "Game command" }) as HTMLInputElement).value).toBe("private draft");
     expect(transport.send).not.toHaveBeenCalled();
+  });
+
+  for (const status of [403, 404]) it(`hides cached output after an HTTP ${status} details reload and preserves an unsent draft`, async () => {
+    consolePage();
+    await openConnection();
+    await userEvent.type(screen.getByRole("textbox", { name: "Game command" }), "private draft");
+    act(() => socketOptions.onMessage?.(JSON.stringify({ type: "stdout", data: "old output" })));
+    const resets = terminals[0].reset.mock.calls.length;
+    apiJsonMock.mockRejectedValueOnce(new ApiRequestError("Access no longer available", status));
+    await userEvent.click(screen.getByRole("button", { name: "Reload details" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(terminals[0].reset.mock.calls.length).toBeGreaterThan(resets);
+    expect(socketOptions.url).toBe("");
+    expect(transport.retry).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Reload details" }));
+    await openConnection();
+    expect((screen.getByRole("textbox", { name: "Game command" }) as HTMLInputElement).value).toBe("private draft");
+    expect(transport.send).not.toHaveBeenCalled();
+  });
+
+  it("hides cached output when reconnect authorization fails before a policy close arrives", async () => {
+    consolePage();
+    await openConnection();
+    act(() => socketOptions.onMessage?.(JSON.stringify({ type: "stdout", data: "old output" })));
+    const resets = terminals[0].reset.mock.calls.length;
+    apiJsonMock.mockRejectedValueOnce(new ApiRequestError("Access no longer available", 403));
+    await act(async () => { socketOptions.onOpen?.(); });
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(terminals[0].reset.mock.calls.length).toBeGreaterThan(resets);
+    expect(socketOptions.url).toBe("");
+    expect(transport.send).not.toHaveBeenCalled();
+  });
+
+  it("clears cached output when server details retain view access without console or logs", async () => {
+    consolePage("operator");
+    await openConnection();
+    act(() => socketOptions.onMessage?.(JSON.stringify({ type: "stdout", data: "old output" })));
+    const resets = terminals[0].reset.mock.calls.length;
+    apiJsonMock.mockResolvedValue({ server: { ...server, permissions: ["server.view"] }, stats: null });
+    await userEvent.click(screen.getByRole("button", { name: "Reload details" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("do not have console or log access");
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(terminals[0].reset.mock.calls.length).toBeGreaterThan(resets);
+    expect(socketOptions.url).toBe("");
   });
 
   it("ignores a late permission response after the connection has denied access", async () => {

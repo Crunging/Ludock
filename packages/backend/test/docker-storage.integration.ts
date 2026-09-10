@@ -15,6 +15,26 @@ import {
 import { createMountProof, assertMountIdentities } from "../src/mount-proof.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 
+async function cleanupFixtures(
+  cleanup: Array<() => Promise<unknown>>,
+  testPassed: boolean,
+) {
+  const errors: unknown[] = [];
+  for (const remove of cleanup.reverse()) {
+    try {
+      await remove();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    const failure = new AggregateError(errors, "Docker fixture cleanup failed");
+    if (testPassed) throw failure;
+    // Keep the original test failure while reporting any resources left behind.
+    console.error(failure);
+  }
+}
+
 /** Explicit Docker acceptance harness; never included by the ordinary test glob.
  * Run LUDOCK_DOCKER_TESTS=1 bun test ./test/docker-storage.integration.ts
  * from packages/backend. Every fixture uses a disposable named volume. */
@@ -25,17 +45,21 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
     const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
 
     it("uses scoped helpers for complete file operations on stopped and running servers", async () => {
-      const volumeName = `ludock-test-${randomUUID()}`;
-      await docker.createVolume({ Name: volumeName });
-      const game = await docker.createContainer({
-        Image: image,
-        Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
-        Labels: { "ludock.enable": "true" },
-        HostConfig: {
-          Mounts: [{ Type: "volume", Source: volumeName, Target: "/data" }],
-        },
-      });
+      const cleanup: Array<() => Promise<unknown>> = [];
+      let testPassed = false;
       try {
+        const volumeName = `ludock-test-${randomUUID()}`;
+        const volume = await docker.createVolume({ Name: volumeName });
+        cleanup.push(() => volume.remove());
+        const game = await docker.createContainer({
+          Image: image,
+          Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
+          Labels: { "ludock.enable": "true" },
+          HostConfig: {
+            Mounts: [{ Type: "volume", Source: volumeName, Target: "/data" }],
+          },
+        });
+        cleanup.push(() => game.remove({ force: true }));
         for (const state of ["stopped", "running"]) {
           if (state === "running") await game.start();
           const server = await getManagedContainer(game.id);
@@ -74,34 +98,35 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           assert.ok(bytes >= 2048);
           await deleteFileEntry(server, root.id, state);
         }
+        testPassed = true;
       } finally {
-        await game.remove({ force: true });
-        await docker.getVolume(volumeName).remove();
+        await cleanupFixtures(cleanup, testPassed);
       }
     }, 120_000);
 
     it("proves bind source identity and rejects symlink or swapped source directories", async () => {
-      const name = `ludock-proof-${randomUUID()}`;
-      await docker.createVolume({ Name: name });
-      const volume = docker.getVolume(name);
-      const mountpoint = (await volume.inspect()).Mountpoint;
-      const setup = await docker.createContainer({
-        Image: image,
-        Cmd: [
-          "bun",
-          "-e",
-          "const fs=require('fs');fs.mkdirSync('/data/target');fs.mkdirSync('/data/other');fs.symlinkSync('target','/data/link')",
-        ],
-        HostConfig: {
-          Mounts: [{ Type: "volume", Source: name, Target: "/data" }],
-        },
-      });
-      let proof: Awaited<ReturnType<typeof createMountProof>> | undefined;
-      let data: Docker.Container | undefined;
+      const cleanup: Array<() => Promise<unknown>> = [];
+      let testPassed = false;
       try {
+        const name = `ludock-proof-${randomUUID()}`;
+        const volume = await docker.createVolume({ Name: name });
+        cleanup.push(() => volume.remove());
+        const mountpoint = (await volume.inspect()).Mountpoint;
+        const setup = await docker.createContainer({
+          Image: image,
+          Cmd: [
+            "bun",
+            "-e",
+            "const fs=require('fs');fs.mkdirSync('/data/target');fs.mkdirSync('/data/other');fs.symlinkSync('target','/data/link')",
+          ],
+          HostConfig: {
+            Mounts: [{ Type: "volume", Source: name, Target: "/data" }],
+          },
+        });
+        cleanup.push(() => setup.remove({ force: true }));
         await setup.start();
         await setup.wait();
-        proof = await createMountProof([
+        const proof = await createMountProof([
           {
             Type: "bind",
             Source: `${mountpoint}/target`,
@@ -109,6 +134,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             RW: true,
           },
         ]);
+        cleanup.push(() => proof.cleanup());
         const fixture = (source: string) =>
           docker.createContainer({
             Image: image,
@@ -117,7 +143,8 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
               Mounts: [{ Type: "bind", Source: source, Target: "/data" }],
             },
           });
-        data = await fixture(`${mountpoint}/target`);
+        let data: Docker.Container | undefined = await fixture(`${mountpoint}/target`);
+        cleanup.push(async () => { if (data) await data.remove({ force: true }); });
         await data.start();
         await assertMountIdentities(data, proof.identities);
         await assert.rejects(
@@ -132,17 +159,16 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           /could not be verified/,
         );
         await data.remove({ force: true });
+        data = undefined;
         data = await fixture(`${mountpoint}/other`);
         await data.start();
         await assert.rejects(
           assertMountIdentities(data, proof.identities),
           /could not be verified/,
         );
+        testPassed = true;
       } finally {
-        if (data) await data.remove({ force: true });
-        if (proof) await proof.cleanup();
-        await setup.remove({ force: true });
-        await volume.remove();
+        await cleanupFixtures(cleanup, testPassed);
       }
     }, 120_000);
   },

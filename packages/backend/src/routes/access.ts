@@ -1,5 +1,6 @@
 import { bindingReviewRequestSchema, bindingReviewResponseSchema, serverGrantsResponseSchema, serverGrantsSchema, } from "@ludock/shared";
-import { listUserServerGrants, setUserServerGrants } from "../authorization.js";
+import { assertRequestUser } from "../auth.js";
+import { assertAdministrator, listUserServerGrants, setUserServerGrants } from "../authorization.js";
 import { findUserById } from "../database.js";
 import { AppError } from "../errors.js";
 import { getLogicalServer, reviewServerBinding } from "../identity.js";
@@ -20,7 +21,7 @@ export const accessRoutes: ApiRoutes = {
       const input = serverGrantsSchema.parse(ctx.body);
       await refreshServers();
       return respond(serverGrantsResponseSchema, {
-        grants: setUserServerGrants(id(ctx.params.userId), input.grants, requestUser(ctx)),
+        grants: setUserServerGrants(id(ctx.params.userId), input.grants, assertRequestUser(ctx.request, requestUser(ctx))),
       });
     })
   },
@@ -35,6 +36,7 @@ export const accessRoutes: ApiRoutes = {
       if (input.confirmation !== server.displayName)
         throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to accept the changed binding");
       await withLocks([`server:${serverId}`], () => {
+        assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
         reviewServerBinding(serverId, server.pendingFingerprint!);
       });
       audit(requestUser(ctx), "server.binding.reviewed", serverId);

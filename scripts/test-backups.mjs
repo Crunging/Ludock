@@ -27,10 +27,7 @@ try {
       "-v", backups + ":/backup-fixtures",
       process.env.LUDOCK_TEST_IMAGE || "ludock:test",
       "bun", "test", "--isolate",
-      "./packages/backend/test/backup-storage.test.ts",
       "./packages/backend/test/backup-docker.test.ts",
-      "./packages/backend/test/restore-helper-script.test.ts",
-      "./packages/backend/test/restore-extract-script.test.ts",
     ],
     { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
   );

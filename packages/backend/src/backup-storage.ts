@@ -224,13 +224,13 @@ export async function archiveReadStream(
   if (!uuidPattern.test(id))
     throw failBackup("BACKUP_ID", "Invalid backup identifier.");
   const pinned = await pinBackupDirectory(directory);
+  let handle: FileHandle | undefined;
   try {
-    const handle = await open(
+    handle = await open(
       `${pinned.path}/${id}.tar`,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
     if (!(await handle.stat()).isFile()) {
-      await handle.close();
       throw failBackup(
         "INVALID_BACKUP",
         "The backup archive is not a regular file.",
@@ -242,7 +242,7 @@ export async function archiveReadStream(
     });
     return stream;
   } catch (error) {
-    await pinned.descriptor.close();
+    await Promise.allSettled([handle?.close(), pinned.descriptor.close()]);
     throw error;
   }
 }
@@ -1047,6 +1047,7 @@ export async function extractRootToStage(
 export async function removeArchive(
   directory: string,
   id: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   if (!uuidPattern.test(id))
     throw failBackup("BACKUP_ID", "Invalid backup identifier.");
@@ -1062,6 +1063,7 @@ export async function removeArchive(
         "INVALID_BACKUP",
         "Refusing to remove an archive that is not a regular file.",
       );
+    assertAccess?.();
     await rm(filename, { force: true });
     await pinned.descriptor.sync();
   } finally {

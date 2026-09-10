@@ -7,13 +7,15 @@ const fsp = require("node:fs/promises");
 const path = require("node:path").posix;
 const C = fs.constants;
 const request = JSON.parse(process.argv[1]);
+let uploadAborted = false;
+const abortUpload = () => { uploadAborted = true; process.stdin.destroy(new Error("Upload interrupted")); };
 // The deadline belongs to the command as well as its Docker connection: losing
 // the connection must not leave a writer running after the API times out.
-const deadline = setTimeout(() => process.exit(1), ["backup", "download", "upload"].includes(request.operation) ? 30 * 60_000 : 55_000);
+const deadline = setTimeout(() => request.operation === "upload" ? abortUpload() : process.exit(1), ["backup", "download", "upload"].includes(request.operation) ? 30 * 60_000 : 55_000);
 deadline.unref();
 const opened = new Set();
 const fail = (message) => { throw new Error(message); };
-const pin = async (name, flags) => { const file = await fsp.open(name, flags); opened.add(file); return file; };
+const pin = async (name, flags, mode) => { const file = await fsp.open(name, flags, mode); opened.add(file); return file; };
 const close = async (file) => { opened.delete(file); await file.close(); };
 const link = (directory, name = "") => "/proc/self/fd/" + directory.fd + (name ? "/" + name : "");
 const directoryFlags = C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW;
@@ -45,11 +47,16 @@ async function parentOf(root, relative) {
   if (!parts.length) fail("The root cannot be changed or downloaded");
   return { parent: await pinDirectory(root, parts.slice(0, -1).join("/")), name: parts.at(-1) };
 }
-async function openRegular(parent, name, flags = fileFlags) {
-  const file = await pin(link(parent, name), flags);
-  const stat = await file.stat();
-  if (!stat.isFile() || stat.nlink !== 1) fail("Only regular files without hard links are supported");
-  return { file, stat };
+function uploadName(id) {
+  if (typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) fail("Invalid upload identifier");
+  return ".ludock-upload-" + id + ".tmp";
+}
+async function uploadTarget(parent, name) {
+  try {
+    const info = await fsp.lstat(link(parent, name));
+    if (!info.isFile() || info.nlink !== 1) fail("Only regular files without hard links are supported");
+    return info;
+  } catch (error) { if (error.code !== "ENOENT") throw error; return undefined; }
 }
 function json(value) { process.stdout.write(JSON.stringify(value)); }
 async function write(value) { await new Promise((resolve, reject) => process.stdout.write(value, (error) => error ? reject(error) : resolve())); }
@@ -162,16 +169,52 @@ async function main() {
   }
   if (request.operation === "upload") {
     if (!Number.isSafeInteger(request.size) || request.size < 0) fail("Invalid upload size");
-    const { file } = await openRegular(parent, name, C.O_WRONLY | C.O_CREAT | C.O_NOFOLLOW | C.O_NONBLOCK);
-    await file.truncate(0); let received = 0;
-    const idle = setTimeout(() => process.exit(1), 60_000); idle.unref();
-    try { for await (const chunk of process.stdin) {
-      idle.refresh(); received += chunk.length; if (received > request.size) fail("Upload exceeded its declared size");
-      let offset = 0;
-      while (offset < chunk.length) { const result = await file.write(chunk, offset, chunk.length - offset); offset += result.bytesWritten; }
-    } } finally { clearTimeout(idle); }
-    if (received !== request.size) fail("Upload did not match its declared size");
-    await file.sync(); return json({ ok: true });
+    const temporary = uploadName(request.uploadId || crypto.randomUUID());
+    const trailer = request.uploadId ? Buffer.from(request.uploadId) : Buffer.alloc(0);
+    const original = await uploadTarget(parent, name);
+    const file = await pin(link(parent, temporary), C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK, 0o600);
+    const idle = setTimeout(abortUpload, 60_000); idle.unref();
+    let received = 0; let committed = 0;
+    try {
+      for await (const chunk of process.stdin) {
+        idle.refresh();
+        const payload = Math.min(chunk.length, request.size - received);
+        let offset = 0;
+        while (offset < payload) {
+          const result = await file.write(chunk, offset, payload - offset);
+          if (!result.bytesWritten) fail("Upload write made no progress");
+          offset += result.bytesWritten;
+        }
+        received += payload;
+        const tail = chunk.subarray(payload);
+        if (committed + tail.length > trailer.length || !tail.equals(trailer.subarray(committed, committed + tail.length))) fail("Upload exceeded its declared size or was interrupted");
+        committed += tail.length;
+      }
+      if (uploadAborted || received !== request.size || committed !== trailer.length) fail("Upload did not match its declared size or was interrupted");
+      // Set permissions while the helper still owns the new inode; CHOWN is
+      // sufficient to restore game ownership without granting FOWNER.
+      await file.chmod(original ? original.mode & 0o777 : 0o666 & ~process.umask());
+      if (original) await file.chown(original.uid, original.gid);
+      await file.sync();
+      const current = await uploadTarget(parent, name);
+      if (Boolean(current) !== Boolean(original) || (original && ["dev", "ino", "mode", "uid", "gid", "size", "mtimeMs", "ctimeMs"].some((field) => original[field] !== current[field]))) fail("The upload target changed");
+      if (uploadAborted) fail("Upload interrupted");
+      if (original) await fsp.rename(link(parent, temporary), link(parent, name));
+      else {
+        await fsp.link(link(parent, temporary), link(parent, name));
+        await fsp.unlink(link(parent, temporary));
+      }
+      await parent.sync();
+      return json({ ok: true });
+    } finally {
+      clearTimeout(idle);
+      try { await close(file); }
+      finally { await fsp.unlink(link(parent, temporary)).catch((error) => { if (error.code !== "ENOENT") throw error; }); }
+    }
+  }
+  if (request.operation === "upload-cleanup") {
+    await fsp.unlink(link(parent, uploadName(request.uploadId))).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    return json({ ok: true });
   }
   const file = await pin(link(parent, name), fileFlags);
   const info = await file.stat();

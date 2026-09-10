@@ -1,4 +1,6 @@
 import { composeProjectResponseSchema, composeProjectsResponseSchema, okResponseSchema, operationResponseSchema, updateCapabilityResponseSchema, updateRequestSchema, } from "@ludock/shared";
+import { assertRequestUser } from "../auth.js";
+import { assertAdministrator, assertServerCapability } from "../authorization.js";
 import { deleteComposeProject, listComposeProjects, registerComposeProject, updateCapability, validatedProject, type ComposeProject, } from "../compose.js";
 import { getDatabase } from "../database.js";
 import { AppError } from "../errors.js";
@@ -20,8 +22,10 @@ export const composeRoutes: ApiRoutes = {
   "/api/v1/servers/:id/update-capability": {
     GET: administrator(async (ctx) => {
       const context = await resolveAuthorizedServer(requestUser(ctx), id(ctx.params.id), "server.update");
+      const capability = await updateCapability(context);
+      assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       return respond(updateCapabilityResponseSchema, {
-        capability: await updateCapability(context),
+        capability,
       });
     })
   },
@@ -36,6 +40,7 @@ export const composeRoutes: ApiRoutes = {
         throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
       const { snapshot } = await validatedProject(context);
       try {
+        assertServerCapability(assertRequestUser(ctx.request, user), serverId, request.forceRecreate ? "server.recreate" : "server.update");
         audit(user, "server.update.confirmed", serverId, {
           createBackup: request.createBackup,
           forceRecreate: request.forceRecreate,
@@ -62,7 +67,9 @@ export const composeRoutes: ApiRoutes = {
       projects: listComposeProjects().map(publicProject),
     })),
     POST: administrator(async (ctx) => {
-      const project = publicProject(await registerComposeProject(ctx.body));
+      const project = publicProject(await registerComposeProject(ctx.body, () => {
+        assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
+      }));
       audit(requestUser(ctx), "compose.project.registered", undefined, {
         projectId: project.id,
       });

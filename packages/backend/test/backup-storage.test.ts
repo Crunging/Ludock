@@ -5,6 +5,7 @@ import {
   mkdir,
   symlink,
   writeFile,
+  readFile,
   realpath,
 } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,7 @@ import {
   helperExec,
   validateArchive,
   validateArchiveEntry,
+  removeArchive,
 } from "../src/backup-storage.js";
 import { getDockerInstance } from "../src/docker.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
@@ -72,6 +74,38 @@ async function archive(
 }
 
 describe("backup storage boundaries", () => {
+  it.skipIf(process.platform !== "linux")("rejects FIFO archives without waiting for a writer", async () => {
+    const id = randomUUID();
+    const filename = await backupFilePath(directory, id);
+    const fifo = Bun.spawn(["mkfifo", filename], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+    assert.equal(await fifo.exited, 0, await new Response(fifo.stderr).text());
+    // Isolate a blocking-open regression so the test deadline can clean up its
+    // process even if the runtime is waiting for a FIFO writer in native code.
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { archiveReadStream } from ${JSON.stringify(new URL("../src/backup-storage.ts", import.meta.url).href)};
+      try {
+        const stream = await archiveReadStream(${JSON.stringify(directory)}, ${JSON.stringify(id)});
+        stream.destroy(); process.exitCode = 2;
+      } catch (error) {
+        if (error.code !== "INVALID_BACKUP") { console.error(error); process.exitCode = 3; }
+      }
+    `], {
+      env: { ...process.env, LUDOCK_BACKUP_ROOTS: directory },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 2000);
+    try { assert.equal(await child.exited, 0, await new Response(child.stderr).text()); }
+    finally { clearTimeout(deadline); child.kill("SIGKILL"); await child.exited; }
+  }, 4000);
+
+  it.skipIf(process.platform !== "linux")("keeps an archive when access is revoked before unlink dispatch", async () => {
+    const id = randomUUID();
+    const filename = await backupFilePath(directory, id);
+    await writeFile(filename, "keep this backup");
+    await assert.rejects(removeArchive(directory, id, () => { throw new Error("Access revoked"); }), /Access revoked/);
+    assert.equal(await readFile(filename, "utf8"), "keep this backup");
+  });
+
   for (const helperImage of [undefined, "example/custom-bun-helper:test"]) {
     it(`uses the ${helperImage ? "configured" : "pinned default"} image for a scoped backup helper`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;

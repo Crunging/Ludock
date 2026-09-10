@@ -7,11 +7,12 @@ import {
   isSafeWritableDataMount,
   acquireFileContainer,
   createDirectory,
+  uploadFile,
   openDownload,
   pumpDockerDownload,
 } from "../src/file-storage.js";
 import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
-import { PassThrough, Readable } from "node:stream";
+import { Duplex, PassThrough, Readable } from "node:stream";
 import type Docker from "dockerode";
 import { createMountProof } from "../src/mount-proof.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
@@ -529,9 +530,97 @@ describe("scoped file helper projections", () => {
       assert.equal(created?.HostConfig?.ReadonlyRootfs, true);
       assert.equal(created?.HostConfig?.NetworkMode, "none");
       assert.deepEqual(created?.HostConfig?.CapDrop, ["ALL"]);
+      assert.deepEqual(created?.HostConfig?.CapAdd, ["DAC_OVERRIDE"]);
       assert.equal(created?.Labels?.["ludock.enable"], "false");
       await access.cleanup();
       assert.equal(removed, true);
+    });
+  }
+
+  for (const outcome of ["complete", "cancelled", "revoked"] as const) {
+    it(`commits only a complete authorized upload and drains cleanup when ${outcome}`, async () => {
+      let allowed = true;
+      let removed = false;
+      let helperEnded = false;
+      let uploadId = "";
+      let cleanupId = "";
+      const sent: Buffer[] = [];
+      const server = {
+        id: "physical", name: "game", image: "example/game", gameType: "unknown",
+        labels: { "ludock.enable": "true" },
+        fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+      } as ManagedContainer;
+      docker.getContainer = (() => ({
+        inspect: async () => ({
+          Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
+          Mounts: [{ Type: "volume", Name: "game-data", Source: "game-data", Destination: "/data", RW: true }],
+        }),
+      })) as unknown as typeof docker.getContainer;
+      docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
+      docker.modem.demuxStream = ((input, stdout) =>
+        input.on("data", (chunk: Buffer) => (stdout as PassThrough).write(chunk))) as typeof docker.modem.demuxStream;
+      docker.createContainer = (async (options: Docker.ContainerCreateOptions) => {
+        assert.deepEqual(options.HostConfig?.CapAdd, ["DAC_OVERRIDE", "CHOWN"]);
+        return {
+          start: async () => {},
+          remove: async () => { assert.equal(helperEnded, true); removed = true; },
+          exec: async (options: Docker.ExecCreateOptions) => {
+            const request = JSON.parse(options.Cmd?.at(-1) || "{}") as { operation: string; uploadId?: string };
+            if (request.operation === "upload") uploadId = request.uploadId || "";
+            if (request.operation === "upload-cleanup") {
+              assert.equal(helperEnded, true, "Cleanup must await the interrupted helper's read side");
+              cleanupId = request.uploadId || "";
+            }
+            return {
+              start: async () => {
+                if (request.operation !== "upload") {
+                  const response = new PassThrough();
+                  setImmediate(() => response.end('{"ok":true}'));
+                  return response;
+                }
+                const duplex = new Duplex({
+                  read() {},
+                  write(chunk: Buffer, _encoding, callback) { sent.push(Buffer.from(chunk)); callback(); },
+                  final(callback) {
+                    callback();
+                    setTimeout(() => {
+                      helperEnded = true;
+                      duplex.push('{"ok":true}');
+                      duplex.push(null);
+                    }, 10);
+                  },
+                });
+                return duplex;
+              },
+              inspect: async () => ({ ExitCode: 0, Running: false }),
+            };
+          },
+        };
+      }) as unknown as typeof docker.createContainer;
+      let pushed = false;
+      const source = new Readable({
+        read() {
+          if (pushed) return;
+          pushed = true;
+          this.push("complete-body");
+          setImmediate(() => {
+            if (outcome === "cancelled") this.destroy(new Error("private request failure"));
+            else {
+              if (outcome === "revoked") allowed = false;
+              this.push(null);
+            }
+          });
+        },
+      });
+      const uploading = uploadFile(server, "root-0", "", "world.cfg", 13, source, () => {
+        if (!allowed) throw new Error("Access revoked");
+      });
+      if (outcome === "complete") await uploading;
+      else await assert.rejects(uploading, outcome === "revoked" ? /Access revoked/ : /FILE_UPLOAD_FAILED/);
+      assert.equal(removed, true);
+      assert.match(uploadId, /^[a-f0-9-]{36}$/);
+      assert.equal(cleanupId, uploadId);
+      assert.equal(Buffer.concat(sent).toString(), "complete-body" + (outcome === "complete" ? uploadId : ""));
     });
   }
 

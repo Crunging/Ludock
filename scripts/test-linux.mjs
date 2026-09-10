@@ -69,9 +69,16 @@ async function smokeProductionBundle() {
     console.log("Production bundle serves health, frontend, and built assets.");
   } finally {
     child.kill("SIGTERM");
-    const stopTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+    let forced = false;
+    const stopTimer = setTimeout(() => {
+      forced = true;
+      child.kill("SIGKILL");
+    }, 5000);
     try {
-      await child.exited;
+      const exitCode = await child.exited;
+      if (forced || exitCode !== 0) {
+        throw new Error("Production bundle did not shut down cleanly (exit " + exitCode + ")");
+      }
     } finally {
       clearTimeout(stopTimer);
     }

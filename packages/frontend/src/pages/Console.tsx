@@ -6,7 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useWebSocket } from "../hooks/useWebSocket";
 import type { ManagedContainer } from "../types";
-import { apiJson, authenticatedWebSocketUrl } from "../api";
+import { ApiRequestError, apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth, type AuthUser } from "../auth-context";
 import { can } from "../permissions";
 import { NavLink } from "../navigation";
@@ -49,6 +49,7 @@ function ConsoleSession({ containerId, user }: {
   user: AuthUser | null;
 }) {
   const [mode, setMode] = useState<ConsoleMode>("logs");
+  const modeRef = useRef<ConsoleMode>("logs");
   const [paused, setPaused] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -83,6 +84,31 @@ function ConsoleSession({ containerId, user }: {
   const bindingActive = serverInfo?.bindingStatus === "active";
   const detailsPath = `/servers/${encodeURIComponent(containerId)}`;
 
+  const resetOutput = useCallback(() => {
+    terminalRef.current?.reset();
+    pausedMessagesRef.current = [];
+    pausedMessageCharsRef.current = 0;
+    pausedOutputDroppedRef.current = false;
+    setPaused(false);
+    setCommandFeedback(null);
+  }, [setCommandFeedback]);
+
+  const selectMode = useCallback((nextMode: ConsoleMode, announce = true) => {
+    if (modeRef.current === nextMode) return;
+    modeRef.current = nextMode;
+    setMode(nextMode);
+    setVerifiedUrl(null);
+    resetOutput();
+    if (announce)
+      terminalRef.current?.write(`\x1b[36m[system] Switched to ${MODE_LABELS[nextMode]}\x1b[0m\r\n`);
+  }, [resetOutput]);
+
+  const denyAccess = useCallback(() => {
+    detailsRequestRef.current += 1;
+    setAccessBlocked(true);
+    resetOutput();
+  }, [resetOutput]);
+
   const loadDetails = useCallback(async (preserveMode: boolean) => {
     if (!preserveMode) hasLoadedRef.current = false;
     const request = ++detailsRequestRef.current;
@@ -96,30 +122,27 @@ function ConsoleSession({ containerId, user }: {
       if (request !== detailsRequestRef.current) return;
       const nextModes = allowedModes(user, server);
       const keepCurrentMode = preserveMode && hasLoadedRef.current;
+      selectMode(keepCurrentMode && nextModes.includes(modeRef.current)
+        ? modeRef.current : initialMode(nextModes), hasLoadedRef.current);
       hasLoadedRef.current = true;
       setServerInfo(server);
       setServerState("loaded");
       setAccessBlocked(false);
-      setMode((current) => keepCurrentMode && nextModes.includes(current)
-        ? current : initialMode(nextModes));
-    } catch {
+      if (nextModes.length === 0) resetOutput();
+    } catch (error) {
       if (request !== detailsRequestRef.current) return;
+      if (error instanceof ApiRequestError && [401, 403, 404].includes(error.status)) denyAccess();
       setServerInfo(null);
       setServerState("error");
     }
-  }, [containerId, user]);
+  }, [containerId, user, denyAccess, resetOutput, selectMode]);
 
   useEffect(() => {
     setDrafts({ game: "", shell: "" });
-    setCommandFeedback(null);
-    setPaused(false);
-    pausedMessagesRef.current = [];
-    pausedMessageCharsRef.current = 0;
-    pausedOutputDroppedRef.current = false;
-    terminalRef.current?.reset();
+    resetOutput();
     void loadDetails(false);
     return () => { detailsRequestRef.current += 1; };
-  }, [loadDetails]);
+  }, [loadDetails, resetOutput]);
 
   useEffect(() => {
     if (!termRef.current) return;
@@ -241,16 +264,18 @@ function ConsoleSession({ containerId, user }: {
         if (request !== detailsRequestRef.current) return;
         const nextModes = allowedModes(user, server);
         setServerInfo(server);
-        setMode((current) => nextModes.includes(current) ? current : initialMode(nextModes));
+        selectMode(nextModes.includes(modeRef.current) ? modeRef.current : initialMode(nextModes));
+        if (nextModes.length === 0) resetOutput();
         setVerifiedUrl(wsUrl);
       })
-      .catch(() => {
+      .catch((error) => {
         if (request !== detailsRequestRef.current) return;
+        if (error instanceof ApiRequestError && [401, 403, 404].includes(error.status)) denyAccess();
         setVerifiedUrl(null);
         setServerInfo(null);
         setServerState("error");
       });
-  }, [containerId, user, wsUrl]);
+  }, [containerId, user, wsUrl, denyAccess, resetOutput, selectMode]);
 
   const { status, send, retry, canRetry, accessDenied, error: connectionError } = useWebSocket({
     url: wsUrl,
@@ -258,18 +283,12 @@ function ConsoleSession({ containerId, user }: {
     onOpen: verifyConnection,
   });
   const accessUnavailable = accessDenied || accessBlocked;
+  const outputUnavailable = accessUnavailable || (serverState === "loaded" && !modes.includes(mode));
 
   useEffect(() => {
     if (!accessDenied) return;
-    detailsRequestRef.current += 1;
-    setAccessBlocked(true);
-    terminalRef.current?.reset();
-    pausedMessagesRef.current = [];
-    pausedMessageCharsRef.current = 0;
-    pausedOutputDroppedRef.current = false;
-    setPaused(false);
-    setCommandFeedback(null);
-  }, [accessDenied]);
+    denyAccess();
+  }, [accessDenied, denyAccess]);
 
   const readyToSend = status === "connected" && verifiedUrl === wsUrl &&
     Boolean(wsUrl) && !accessUnavailable && canSendCommand && isRunning && bindingActive;
@@ -292,15 +311,7 @@ function ConsoleSession({ containerId, user }: {
   const switchMode = (nextMode: ConsoleMode) => {
     if (mode === nextMode) return;
     detailsRequestRef.current += 1;
-    setMode(nextMode);
-    setVerifiedUrl(null);
-    setPaused(false);
-    pausedMessagesRef.current = [];
-    pausedMessageCharsRef.current = 0;
-    pausedOutputDroppedRef.current = false;
-    setCommandFeedback(null);
-    terminalRef.current?.clear();
-    terminalRef.current?.write(`\x1b[36m[system] Switched to ${MODE_LABELS[nextMode]}\x1b[0m\r\n`);
+    selectMode(nextMode);
   };
 
   const statusLabel = serverState === "loading" ? "Loading…"
@@ -397,14 +408,14 @@ function ConsoleSession({ containerId, user }: {
       </div>
 
       <div
-        className={`console-terminal ${accessUnavailable ? "console-terminal--blocked" : ""}`}
+        className={`console-terminal ${outputUnavailable ? "console-terminal--blocked" : ""}`}
         ref={termRef}
         id={`${tabsId}-panel`}
         role="tabpanel"
         aria-labelledby={!accessUnavailable && modes.includes(mode) ? `${tabsId}-tab-${mode}` : undefined}
         aria-label={!accessUnavailable && modes.includes(mode) ? undefined : "Console output"}
-        aria-hidden={accessUnavailable || undefined}
-        tabIndex={accessUnavailable ? -1 : 0}
+        aria-hidden={outputUnavailable || undefined}
+        tabIndex={outputUnavailable ? -1 : 0}
       />
 
       {connectionError && !accessUnavailable && (

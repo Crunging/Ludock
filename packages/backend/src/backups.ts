@@ -101,10 +101,11 @@ export async function openBackupDownload(
 export async function deleteBackup(
   serverId: string,
   id: string,
+  assertAccess?: () => void,
 ): Promise<void> {
   const row = backupRow(serverId, id);
   await withLocks([`server:${serverId}`, "backups:storage"], async () => {
-    await removeArchive(row.destination, id);
+    await removeArchive(row.destination, id, assertAccess);
     getDatabase()
       .prepare("DELETE FROM backups WHERE id=? AND server_id=?")
       .run(id, serverId);

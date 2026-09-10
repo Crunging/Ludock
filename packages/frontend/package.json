@@ -15,26 +15,26 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "@ludock/shared": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@eslint/js": "^10.0.1",
-    "@types/node": "^24.13.3",
+    "@types/node": "^24.13.4",
     "@types/bun": "^1.4.2",
     "@types/jsdom": "^27.0.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "eslint": "^10.8.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.8.0",
+    "eslint-plugin-react-refresh": "^0.5.6",
+    "globals": "^17.12.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.65.0",
-    "jsdom": "^29.0.0",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1"
+    "typescript-eslint": "^8.70.0",
+    "jsdom": "^29.1.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7"
   }
 }

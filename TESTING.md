@@ -152,6 +152,10 @@ disposable volumes and a separate mounted backup destination. The file harness
 checks scoped helper CRUD, mount-source verification, and directory replacement
 races against disposable data.
 
+The file and backup harnesses run only Docker integration cases. Pure filesystem,
+archive, and restore-helper tests run in the Linux suite above, once per image
+architecture, without repeating them in the socket-enabled harnesses.
+
 These harnesses require a reachable Docker daemon, a usable socket mount, and
 host bind paths visible at their declared absolute locations. The fixture game
 containers require the default helper image to be present; a Buildx build does
@@ -235,6 +239,10 @@ absolute paths on the Docker host and inside Ludock.
   across stream chunks and verify complete redaction and readable output.
 - Large downloads respect consumer backpressure. Verify long Unicode archive
   paths and files larger than 8 GiB without truncated names or size metadata.
+- Incomplete, oversized, cancelled, or revoked uploads preserve an existing
+  destination and do not leave a partial new file. Complete replacements retain
+  ordinary ownership and permissions; cleanup removes only that upload's temporary
+  sibling and never follows a substituted parent or destination symlink.
 
 ### Backups and restore failure handling
 
@@ -318,6 +326,9 @@ absolute paths on the Docker host and inside Ludock.
   Servers restores the list filters. Sign-out clears these in-memory choices.
   A late operation response from a page that was left cannot change the new
   page's tab.
+- A failed deferred page download shows recovery controls while navigation and
+  remembered filters remain available. Reloading the document retries the failed
+  download; the fallback does not expose raw errors or module paths.
 - Disconnected lists label retained data as stale and disable lifecycle actions.
   Every live connection refreshes the authorized snapshot before controls resume;
   denied access hides cached rows and requires revalidation.

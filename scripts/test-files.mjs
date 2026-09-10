@@ -18,7 +18,6 @@ try {
       "-v", repository + "/packages/backend/test:/app/packages/backend/test:ro",
       process.env.LUDOCK_TEST_IMAGE || "ludock:test",
       "bun", "test", "--isolate",
-      "./packages/backend/test/file-helper-linux.test.ts",
       "./packages/backend/test/docker-storage.integration.ts",
     ],
     { stdin: "inherit", stdout: "inherit", stderr: "inherit" },

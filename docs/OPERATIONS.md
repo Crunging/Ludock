@@ -14,6 +14,14 @@ application storage. Unrelated databases and unsupported schemas are rejected
 without changing their contents. Do not remove game containers or game-data
 volumes when setting up Ludock.
 
+This rewrite requires fresh Ludock application storage. When upgrading from a
+pre-rewrite release, stop the old Ludock instance, retain its application volume,
+and mount a new empty volume at `/data` for the new image. Create the administrator
+and configure access, backup storage, and Compose registrations again. Keep all
+existing game-container and game-data mounts unchanged. To return to the earlier
+build, stop the new instance and pair the old image with its original application
+volume; never run both backends against the same Docker host at once.
+
 Create the first administrator within five minutes of starting an empty
 installation. Restart Ludock to reopen an expired setup window. Passwords must
 be between 15 and 128 characters.
@@ -122,6 +130,11 @@ or renaming an ancestor that contains an excluded mount is also rejected.
 Downloads and overwrites reject hard-linked files; directory downloads reject
 symlinks and special files anywhere in the archive. Deleting a symlink removes
 the link itself.
+
+Uploads stage the incoming file beside its destination and replace the destination
+only after the complete transfer is validated. A failed transfer before replacement
+leaves the existing file intact; allow space for both the old and incoming file.
+Canceling a batch does not undo files that already finished uploading.
 
 Directory listings accept at most 10,000 entries. Uploads and downloads have a
 30-minute execution limit; uploads also stop after 60 seconds without input.

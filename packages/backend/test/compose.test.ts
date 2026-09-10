@@ -22,7 +22,10 @@ import {
   createComposeSnapshot,
   runCompose,
   validateUpdateService,
+  registerComposeProject,
+  listComposeProjects,
 } from "../src/compose.js";
+import { closeDatabase } from "../src/database.js";
 import {
   updateRequestSchema,
   serverGrantsSchema,
@@ -32,6 +35,7 @@ import {
 let directory: string;
 const priorPath = process.env.PATH;
 const priorRoots = process.env.LUDOCK_COMPOSE_ROOTS;
+process.env.LUDOCK_DB_PATH = ":memory:";
 afterEach(() => mock.restore());
 
 before(async () => {
@@ -64,6 +68,7 @@ else if(args.includes("config")){
   process.env.LUDOCK_COMPOSE_ROOTS = directory;
 });
 after(async () => {
+  closeDatabase();
   process.env.PATH = priorPath;
   if (priorRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
   else process.env.LUDOCK_COMPOSE_ROOTS = priorRoots;
@@ -71,6 +76,18 @@ after(async () => {
 });
 
 describe("Compose execution boundary", () => {
+  it.skipIf(process.platform !== "linux")("rechecks registration access after validating the source snapshot", async () => {
+    closeDatabase();
+    const filename = path.join(directory, "registration.yaml");
+    await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n");
+    let checked = false;
+    await assert.rejects(registerComposeProject({
+      projectName: "registration-fixture", projectDirectory: directory, composeFiles: [filename], envFiles: [],
+    }, () => { checked = true; throw new Error("Access revoked"); }), /Access revoked/);
+    assert.equal(checked, true);
+    assert.deepEqual(listComposeProjects(), []);
+  });
+
   it("uses the configured daemon with no inherited secrets or Compose overrides", async () => {
     process.env.LUDOCK_PRIVATE_TEST_SECRET = "never-inherit";
     process.env.COMPOSE_FILE = "/unapproved/compose.yaml";

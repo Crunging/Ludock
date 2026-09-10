@@ -125,6 +125,13 @@ asynchronous preparation, immediately before dispatch. Lifecycle dispatch also
 checks the final inspected observation. Console transports apply the same rule
 before sending credentials or commands.
 
+Uploads use an exclusive temporary sibling beneath the pinned destination
+directory. The helper requires the exact payload and a completion token sent only
+after a clean, authorized input end, then preserves ordinary ownership/mode and
+replaces the destination. Writable file helpers add `CHOWN` for that preservation;
+read-only helpers do not. Scoped temporary-file cleanup remains available after
+request cancellation or access revocation.
+
 Durable actions enqueue operations with their actor and binding revision.
 `operations.ts` and `jobs.ts` own execution and recovery; their handlers recheck
 authorization and acquire the server/project/shared-root locks. A queued request
