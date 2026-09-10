@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, it, spyOn } from "bun:test";
 import type Docker from "dockerode";
@@ -8,6 +9,7 @@ import {
   executeRustWebRcon,
   executeSourceRcon,
   executeTelnetCommand,
+  MAX_DOCKER_EXEC_OUTPUT_BYTES,
 } from "../src/game-console-runtime.js";
 import type { GameConsoleAdapter } from "../src/game-console.js";
 
@@ -567,6 +569,57 @@ describe("Docker exec console transport", () => {
     commandPlaceholder: "help", createExecOptions: (command) => ({ Cmd: ["fixture", command] }),
   };
   const output = { stdout: () => {}, stderr: () => {}, system: () => {} };
+  it("keeps the command literal while adding an in-container deadline", async () => {
+    const command = 'say "hello"; touch /tmp/not-executed';
+    let received: Docker.ExecCreateOptions | undefined;
+    const container = {
+      exec: async (options: Docker.ExecCreateOptions) => {
+        received = options;
+        return {
+          start: async () => endedStream(),
+          inspect: async () => ({ Running: false, ExitCode: 0 }),
+        };
+      },
+    } as unknown as Docker.Container;
+
+    await executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      command,
+      output,
+    );
+
+    assert.deepEqual(received?.Cmd?.slice(-2), ["fixture", command]);
+    assert.equal(received?.Cmd?.[0], "/bin/sh");
+    assert.equal(received?.Cmd?.[1], "-c");
+    assert.match(received?.Cmd?.[2] || "", /"\$@"/);
+    assert.match(received?.Cmd?.[2] || "", /mkdir "\$control"/);
+    assert.ok((received?.Cmd?.[2]?.indexOf(': > "$ready"') ?? -1) <
+      (received?.Cmd?.[2]?.indexOf('"$@" &') ?? -1));
+    assert.equal(received?.Cmd?.[2]?.includes(command), false);
+
+    const controlPath = `/tmp/.ludock-console-test-${crypto.randomUUID()}`;
+    const process = Bun.spawn([
+      "/bin/sh",
+      "-c",
+      received?.Cmd?.[2] || "",
+      "ludock-console-test",
+      controlPath,
+      "1",
+      "1",
+      "/bin/sh",
+      "-c",
+      'trap "" TERM; exec sleep 30',
+    ], { stdout: "ignore", stderr: "ignore" });
+    const emergency = setTimeout(() => process.kill(9), 5_000);
+    try {
+      assert.equal(await process.exited, 124);
+    } finally {
+      clearTimeout(emergency);
+      rmSync(controlPath, { force: true, recursive: true });
+    }
+  });
   it("does not start a prepared exec after access is revoked", async () => {
     let allowed = true;
     let started = false;
@@ -593,7 +646,217 @@ describe("Docker exec console transport", () => {
     } as unknown as Docker.Container;
     await assert.rejects(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", output), /Game console command failed/);
   });
+  it("reports the watchdog deadline separately from an ordinary failure", async () => {
+    const container = {
+      exec: async () => ({
+        start: async () => endedStream(),
+        inspect: async () => ({ Running: false, ExitCode: 124 }),
+      }),
+    } as unknown as Docker.Container;
+    await assert.rejects(
+      executeGameCommand(
+        container,
+        { state: "running", labels: {} },
+        adapter,
+        "stop",
+        output,
+      ),
+      /timed out/,
+    );
+  });
+  it("bounds the stream lifetime if Docker never reports wrapper exit", async () => {
+    const expire = captureDeadline(23_000);
+    const mainStream = new PassThrough();
+    let executionCount = 0;
+    const container = {
+      exec: async () => {
+        executionCount++;
+        if (executionCount === 1) {
+          return {
+            start: async () => mainStream,
+            inspect: async () => ({ Running: true, ExitCode: null }),
+          };
+        }
+        return { start: async () => endedStream() };
+      },
+    } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      "stop",
+      output,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expire();
+    await assert.rejects(pending, /timed out/);
+    assert.equal(mainStream.destroyed, true);
+    assert.equal(executionCount, 2);
+  });
+  it("bounds the status check after the exec stream closes", async () => {
+    const expire = captureDeadline(5_000);
+    let inspecting!: () => void;
+    const didInspect = new Promise<void>((resolve) => { inspecting = resolve; });
+    const container = {
+      exec: async () => ({
+        start: async () => endedStream(),
+        inspect: () => {
+          inspecting();
+          return new Promise<never>(() => {});
+        },
+      }),
+    } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      "stop",
+      output,
+    );
+    await didInspect;
+    expire();
+    await assert.rejects(pending, /status check timed out/);
+  });
+  it("cancels the real exec and does not settle until its stream ends", async () => {
+    const controller = new AbortController();
+    const mainStream = new PassThrough();
+    const executions: Docker.ExecCreateOptions[] = [];
+    let started!: () => void;
+    let cancellationStarted!: () => void;
+    const didStart = new Promise<void>((resolve) => { started = resolve; });
+    const didCancel = new Promise<void>((resolve) => {
+      cancellationStarted = resolve;
+    });
+    const container = {
+      exec: async (options: Docker.ExecCreateOptions) => {
+        executions.push(options);
+        if (executions.length === 1) {
+          return {
+            start: async () => {
+              started();
+              return mainStream;
+            },
+            inspect: async () => ({ Running: false, ExitCode: 125 }),
+          };
+        }
+        return {
+          start: async () => {
+            cancellationStarted();
+            return endedStream();
+          },
+        };
+      },
+    } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      "stop",
+      output,
+      undefined,
+      controller.signal,
+    );
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await didStart;
+    controller.abort();
+    await didCancel;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(executions.length, 2);
+    assert.match(executions[1].Cmd?.[2] || "", /\/cancel/);
+    assert.match(executions[1].Cmd?.[2] || "", /while .*ready/);
+    assert.equal(executions[1].Cmd?.at(-1), executions[0].Cmd?.[4]);
+    mainStream.end();
+    await assert.rejects(pending, /cancelled/);
+
+    const delayedControl = `/tmp/.ludock-console-test-${crypto.randomUUID()}`;
+    const cancellation = Bun.spawn([
+      ...(executions[1].Cmd?.slice(0, -1) ?? []),
+      delayedControl,
+    ], { stdout: "ignore", stderr: "ignore" });
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      mkdirSync(delayedControl, { mode: 0o700 });
+      writeFileSync(`${delayedControl}/ready`, "", { mode: 0o600 });
+      assert.equal(await cancellation.exited, 0);
+      assert.equal(existsSync(`${delayedControl}/cancel`), true);
+    } finally {
+      cancellation.kill(9);
+      rmSync(delayedControl, { force: true, recursive: true });
+    }
+  });
+  it("bounds combined Docker exec output and terminates the command", async () => {
+    const mainStream = new PassThrough();
+    const executions: Docker.ExecCreateOptions[] = [];
+    let cancellationStarted!: () => void;
+    const didCancel = new Promise<void>((resolve) => {
+      cancellationStarted = resolve;
+    });
+    const received: string[] = [];
+    const container = {
+      exec: async (options: Docker.ExecCreateOptions) => {
+        executions.push(options);
+        if (executions.length === 1) {
+          return {
+            start: async () => {
+              setImmediate(() => {
+                mainStream.write(dockerFrame(
+                  1,
+                  Buffer.alloc(MAX_DOCKER_EXEC_OUTPUT_BYTES / 2, 97),
+                ));
+                mainStream.write(dockerFrame(
+                  2,
+                  Buffer.alloc(MAX_DOCKER_EXEC_OUTPUT_BYTES / 2 + 1, 98),
+                ));
+              });
+              return mainStream;
+            },
+            inspect: async () => ({ Running: false, ExitCode: 125 }),
+          };
+        }
+        return {
+          start: async () => {
+            cancellationStarted();
+            mainStream.end();
+            return endedStream();
+          },
+        };
+      },
+    } as unknown as Docker.Container;
+    const pending = executeGameCommand(
+      container,
+      { state: "running", labels: {} },
+      adapter,
+      "list",
+      {
+        ...output,
+        stdout: (value) => received.push(value),
+        stderr: (value) => received.push(value),
+      },
+    );
+
+    await didCancel;
+    await assert.rejects(pending, /output exceeded its limit/);
+    assert.ok(Buffer.byteLength(received.join("")) <=
+      MAX_DOCKER_EXEC_OUTPUT_BYTES);
+    assert.equal(executions.length, 2);
+  });
 });
+
+function endedStream(): PassThrough {
+  const stream = new PassThrough();
+  setImmediate(() => stream.end());
+  return stream;
+}
+
+function dockerFrame(type: 1 | 2, value: string | Buffer): Buffer {
+  const payload = Buffer.from(value);
+  const header = Buffer.alloc(8);
+  header[0] = type;
+  header.writeUInt32BE(payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
 
 function listen(socket: SocketHandler<undefined>): number {
   const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket });

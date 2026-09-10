@@ -34,8 +34,14 @@ import {
 } from "../database.js";
 import { developmentInstance } from "../development-instance.js";
 import { AppError } from "../errors.js";
+import {
+  PasswordWorkBusyError,
+  withPasswordWork,
+} from "../password.js";
 import { administrator, requestUser, respond, type ApiRoutes } from "./request.js";
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_ACCOUNT_SOURCE_MAX_FAILURES = 5;
+const LOGIN_SOURCE_MAX_FAILURES = 20;
 function publicUser(user: UserRecord | null) {
   if (!user)
     throw new AppError("INVALID_RESPONSE", 500, "The server could not produce a valid response");
@@ -47,8 +53,26 @@ function publicUser(user: UserRecord | null) {
     createdAt: user.createdAt,
   };
 }
-function loginThrottleKey(scope: "account" | "password-change", value: string): string {
+function loginThrottleKey(scope: string, value: string): string {
   return new Bun.CryptoHasher("sha256").update(`${scope}:${value}`).digest("hex");
+}
+function passwordWorkSourceKey(ipAddress: string | undefined): string {
+  return loginThrottleKey("password-work-source", ipAddress ?? "unknown");
+}
+function tooManyAttempts(
+  keys: Array<{ key: string; windowMs: number }>,
+  now: number,
+): boolean {
+  return keys.some(
+    ({ key, windowMs }) =>
+      getLoginThrottle(key, now, windowMs).blockedUntil > now,
+  );
+}
+function busyResponse(): Response {
+  return Response.json(
+    { error: "Too many attempts. Try again later." },
+    { status: 429 },
+  );
 }
 function stringProperty(value: unknown, property: string): string | undefined {
   if (typeof value !== "object" || value === null)
@@ -76,6 +100,22 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
     },
     "/api/v1/auth/setup": {
       POST: async (ctx) => {
+        try {
+          // Authorize before schema validation or password hashing. Missing and
+          // incorrect codes intentionally receive the same response.
+          setupWindow.assertAuthorized(stringProperty(ctx.body, "bootstrapCode"));
+        } catch (error) {
+          if (error instanceof AuthError) {
+            return Response.json({
+              error: error.code === "SETUP_LOCKED"
+                ? "Initial setup has expired. Restart the panel to reopen setup."
+                : error.code === "SETUP_COMPLETE"
+                  ? "Initial setup has already been completed"
+                  : "Initial setup authorization failed",
+            }, { status: error.statusCode });
+          }
+          throw error;
+        }
         const parsed = setupRequestSchema.safeParse(ctx.body);
         if (!parsed.success) {
           return Response.json({
@@ -92,6 +132,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           return respond(authUserResponseSchema, { user }, 201);
         }
         catch (error) {
+          if (error instanceof PasswordWorkBusyError) return busyResponse();
           if (error instanceof AuthError) {
             return Response.json({
               error: error.code === "SETUP_LOCKED"
@@ -106,27 +147,57 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
     "/api/v1/auth/login": {
       POST: async (ctx) => {
         const now = Date.now();
+        const source = ctx.ipAddress ?? "unknown";
         const requestedUsername = (stringProperty(ctx.body, "username") || "")
           .trim()
           .toLowerCase()
           .slice(0, 32);
-        const accountKey = requestedUsername
-          ? loginThrottleKey("account", requestedUsername)
+        const sourceKey = loginThrottleKey("login-source", source);
+        const accountSourceKey = requestedUsername
+          ? loginThrottleKey(
+              "login-account-source",
+              `${source}\0${requestedUsername}`,
+            )
           : null;
-        const blocked = accountKey !== null &&
-          getLoginThrottle(accountKey, now, LOGIN_WINDOW_MS).blockedUntil > now;
-        if (blocked) {
-          return Response.json({ error: "Too many attempts. Try again later." }, { status: 429 });
-        }
+        if (tooManyAttempts([
+          { key: sourceKey, windowMs: LOGIN_WINDOW_MS },
+          ...(accountSourceKey
+            ? [{ key: accountSourceKey, windowMs: LOGIN_WINDOW_MS }]
+            : []),
+        ], now)) return busyResponse();
         const parsed = credentialsRequestSchema.safeParse(ctx.body);
         if (!parsed.success || isSetupRequired()) {
           return Response.json({ error: "Invalid username or password" }, { status: 401 });
         }
-        const user = await authenticateUser(parsed.data.username, parsed.data.password);
+        let user;
+        try {
+          user = await withPasswordWork(
+            passwordWorkSourceKey(ctx.ipAddress),
+            loginThrottleKey(
+              "password-work-login-subject",
+              parsed.data.username.toLowerCase(),
+            ),
+            () => authenticateUser(parsed.data.username, parsed.data.password),
+          );
+        } catch (error) {
+          if (error instanceof PasswordWorkBusyError) return busyResponse();
+          throw error;
+        }
         if (!user) {
-          if (accountKey) {
-            recordLoginFailure(accountKey, now, LOGIN_WINDOW_MS, 5);
-          }
+          const failedAt = Date.now();
+          recordLoginFailure(
+            sourceKey,
+            failedAt,
+            LOGIN_WINDOW_MS,
+            LOGIN_SOURCE_MAX_FAILURES,
+          );
+          if (accountSourceKey)
+            recordLoginFailure(
+              accountSourceKey,
+              failedAt,
+              LOGIN_WINDOW_MS,
+              LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
+            );
           writeAuditLog({
             action: "auth.login.failed",
             targetType: "user",
@@ -139,8 +210,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           });
           return Response.json({ error: "Invalid username or password" }, { status: 401 });
         }
-        if (accountKey)
-          clearLoginThrottle(accountKey);
+        if (accountSourceKey) clearLoginThrottle(accountSourceKey);
         const session = createSession(user, ctx.request, ctx.ipAddress);
         setSessionCookie(ctx.headers, ctx.request, session.token);
         writeAuditLog({
@@ -190,18 +260,65 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           }, { status: 400 });
         }
         // Throttle current-password guesses so a stolen session cannot be brute
-        // forced into a permanent account takeover.
+        // forced into a permanent account takeover. The credential-specific
+        // key prevents one stolen session from locking every session for a user.
         const now = Date.now();
-        const throttleKey = loginThrottleKey("password-change", actor.id);
-        if (getLoginThrottle(throttleKey, now, LOGIN_WINDOW_MS).blockedUntil > now) {
-          return Response.json({ error: "Too many attempts. Try again later." }, { status: 429 });
+        const source = ctx.ipAddress ?? "unknown";
+        const credential = ctx.sessionTokenHash ?? `principal:${actor.id}`;
+        const sourceThrottleKey = loginThrottleKey(
+          "password-change-source",
+          source,
+        );
+        const credentialThrottleKey = loginThrottleKey(
+          "password-change-credential",
+          credential,
+        );
+        if (tooManyAttempts([
+          { key: sourceThrottleKey, windowMs: LOGIN_WINDOW_MS },
+          { key: credentialThrottleKey, windowMs: LOGIN_WINDOW_MS },
+        ], now)) return busyResponse();
+
+        let work;
+        try {
+          work = await withPasswordWork(
+            passwordWorkSourceKey(ctx.ipAddress),
+            loginThrottleKey("password-work-change-subject", credential),
+            async () => {
+              const record = findUserById(actor.id);
+              const verified = record !== null &&
+                await verifyPassword(
+                  parsed.data.currentPassword,
+                  record.passwordHash,
+                );
+              assertRequestUser(ctx.request, actor);
+              return {
+                record,
+                verified,
+                passwordHash: verified
+                  ? await hashPassword(parsed.data.newPassword)
+                  : null,
+              };
+            },
+          );
+        } catch (error) {
+          if (error instanceof PasswordWorkBusyError) return busyResponse();
+          throw error;
         }
-        const record = findUserById(actor.id);
-        const verified = record !== null &&
-          await verifyPassword(parsed.data.currentPassword, record.passwordHash);
-        assertRequestUser(ctx.request, actor);
-        if (!record || !verified) {
-          recordLoginFailure(throttleKey, now, LOGIN_WINDOW_MS, 5);
+        const { record, verified, passwordHash } = work;
+        if (!record || !verified || !passwordHash) {
+          const failedAt = Date.now();
+          recordLoginFailure(
+            sourceThrottleKey,
+            failedAt,
+            LOGIN_WINDOW_MS,
+            LOGIN_SOURCE_MAX_FAILURES,
+          );
+          recordLoginFailure(
+            credentialThrottleKey,
+            failedAt,
+            LOGIN_WINDOW_MS,
+            LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
+          );
           writeAuditLog({
             userId: actor.id === "api-token" ? undefined : actor.id,
             action: "auth.password.change-failed",
@@ -211,12 +328,11 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           });
           return Response.json({ error: "Current password is incorrect" }, { status: 400 });
         }
-        const passwordHash = await hashPassword(parsed.data.newPassword);
         const current = assertRequestUser(ctx.request, actor);
         if (findUserById(actor.id)?.passwordHash !== record.passwordHash) {
           throw new AppError("PASSWORD_CHANGED", 409, "Password changed; sign in again");
         }
-        clearLoginThrottle(throttleKey);
+        clearLoginThrottle(credentialThrottleKey);
         updateUserPassword(actor.id, passwordHash);
         const session = createSession(current, ctx.request, ctx.ipAddress);
         setSessionCookie(ctx.headers, ctx.request, session.token);
@@ -270,7 +386,14 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         const id = crypto.randomUUID();
         const actor = requestUser(ctx);
         try {
-          const passwordHash = await hashPassword(parsed.data.password);
+          const passwordHash = await withPasswordWork(
+            passwordWorkSourceKey(ctx.ipAddress),
+            loginThrottleKey(
+              "password-work-admin-subject",
+              ctx.sessionTokenHash ?? actor.id,
+            ),
+            () => hashPassword(parsed.data.password),
+          );
           assertAdministrator(assertRequestUser(ctx.request, actor));
           createUser({
             id,
@@ -282,6 +405,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           });
         }
         catch (error) {
+          if (error instanceof PasswordWorkBusyError) return busyResponse();
           if (String(error).includes("UNIQUE constraint failed")) {
             return Response.json({ error: "Username is already in use" }, { status: 409 });
           }
@@ -367,7 +491,20 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           }, { status: target ? 400 : 404 });
         }
         const actor = requestUser(ctx);
-        const passwordHash = await hashPassword(parsed.data.password);
+        let passwordHash;
+        try {
+          passwordHash = await withPasswordWork(
+            passwordWorkSourceKey(ctx.ipAddress),
+            loginThrottleKey(
+              "password-work-admin-subject",
+              ctx.sessionTokenHash ?? actor.id,
+            ),
+            () => hashPassword(parsed.data.password),
+          );
+        } catch (error) {
+          if (error instanceof PasswordWorkBusyError) return busyResponse();
+          throw error;
+        }
         assertAdministrator(assertRequestUser(ctx.request, actor));
         if (!findUserById(target.id)) {
           throw new AppError("USER_NOT_FOUND", 404, "User not found");

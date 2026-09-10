@@ -263,6 +263,89 @@ describe("WebSocket server capability boundaries", () => {
     assert.equal(attachCalls, 0);
   });
 
+  it("keeps the server lock until a disconnected Docker exec has ended", async () => {
+    closeDatabase();
+    createUser({
+      ...operator,
+      passwordHash: "fixture",
+      disabled: false,
+      createdAt: 1,
+    });
+    const mainStream = new PassThrough();
+    let executionCount = 0;
+    let started!: () => void;
+    let cancellationStarted!: () => void;
+    const didStart = new Promise<void>((resolve) => { started = resolve; });
+    const didCancel = new Promise<void>((resolve) => {
+      cancellationStarted = resolve;
+    });
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: containerId,
+        Name: "/game",
+        Config: {
+          Image: "fixture:latest",
+          Labels: {
+            "ludock.enable": "true",
+            "ludock.console": "minecraft-rcon",
+          },
+          OpenStdin: false,
+          StdinOnce: false,
+          Env: [],
+        },
+        State: { Status: "running" },
+        NetworkSettings: { Ports: {} },
+        Created: "2026-09-01T00:00:00Z",
+        Mounts: [],
+      }),
+      exec: async () => {
+        executionCount++;
+        if (executionCount === 1) {
+          return {
+            start: async () => {
+              started();
+              return mainStream;
+            },
+            inspect: async () => ({ Running: false, ExitCode: 125 }),
+          };
+        }
+        return {
+          start: async () => {
+            cancellationStarted();
+            const stream = new PassThrough();
+            setImmediate(() => stream.end());
+            return stream;
+          },
+        };
+      },
+    })) as unknown as typeof docker.getContainer;
+    await refreshServers();
+    serverId = listLogicalServers()[0].id;
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    await didStart;
+    assert.equal(serverLockIsHeld(), true);
+
+    ws.close(1000);
+    await didCancel;
+    assert.equal(serverLockIsHeld(), true);
+    mainStream.end();
+    await settle();
+    assert.equal(serverLockIsHeld(), false);
+  });
+
   it("does not grant administrator shell access through an operator's console grant", async () => {
     setServerGrant(
       operator.id,
@@ -321,4 +404,16 @@ function request(endpoint: string): Request {
 
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function serverLockIsHeld(): boolean {
+  let release: (() => void) | undefined;
+  try {
+    release = acquireLocks([`server:${serverId}`]);
+    return false;
+  } catch {
+    return true;
+  } finally {
+    release?.();
+  }
 }

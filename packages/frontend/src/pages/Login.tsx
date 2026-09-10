@@ -1,5 +1,9 @@
 import { useRef, useState, type FormEvent } from "react";
-import { PASSWORD_MIN_LENGTH } from "@ludock/shared";
+import {
+  PASSWORD_MIN_LENGTH,
+  SETUP_CODE_MAX_LENGTH,
+  SETUP_CODE_MIN_LENGTH,
+} from "@ludock/shared";
 import { useAuth } from "../auth-context";
 import LudockMark from "../components/LudockMark";
 import "./login.css";
@@ -8,6 +12,7 @@ export default function Login() {
   const { login, setup, setupRequired, setupLocked, refreshStatus } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [bootstrapCode, setBootstrapCode] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -36,7 +41,7 @@ export default function Login() {
     setError(null);
     try {
       const result = setupRequired
-        ? await setup(username.trim(), password)
+        ? await setup(username.trim(), password, bootstrapCode)
         : await login(username.trim(), password);
       setError(result);
     } catch {
@@ -90,6 +95,29 @@ export default function Login() {
             ? "Create your administrator account to manage existing game servers. Setup stays open for five minutes after Ludock starts."
             : "Sign in with your Ludock account."}
         </p>
+        {setupRequired && (
+          <>
+            <label className="login-card__label" htmlFor="bootstrap-code">
+              Setup code
+            </label>
+            <input
+              id="bootstrap-code"
+              className="login-card__input"
+              type={showPassword ? "text" : "password"}
+              value={bootstrapCode}
+              onChange={(event) => setBootstrapCode(event.target.value)}
+              autoComplete="off"
+              minLength={SETUP_CODE_MIN_LENGTH}
+              maxLength={SETUP_CODE_MAX_LENGTH}
+              aria-describedby="bootstrap-code-hint"
+              required
+              autoFocus
+            />
+            <p className="login-card__hint" id="bootstrap-code-hint">
+              Use the most recent one-time code from <code>docker compose logs ludock</code> on the Docker host.
+            </p>
+          </>
+        )}
         <label className="login-card__label" htmlFor="username">
           Username
         </label>
@@ -184,6 +212,7 @@ export default function Login() {
           type="submit"
           disabled={
             submitting ||
+            (setupRequired && !bootstrapCode) ||
             !username.trim() ||
             !password ||
             (setupRequired && !confirmation)

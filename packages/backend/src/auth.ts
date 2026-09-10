@@ -1,5 +1,9 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Cookie } from "bun";
+import {
+  SETUP_CODE_MAX_LENGTH,
+  SETUP_CODE_MIN_LENGTH,
+} from "@ludock/shared";
 import {
   countUsers,
   createSessionRecord,
@@ -8,6 +12,7 @@ import {
   findSessionUser,
   findUserById,
   findUserByUsername,
+  keyedCredentialFingerprint,
   upgradeUserPasswordHash,
   writeAuditLog,
   type SessionUser,
@@ -18,7 +23,12 @@ import {
   requestOriginDiagnostic,
 } from "./request-security.js";
 import { createLogger } from "./logger.js";
-import { hashPassword, verifyPassword, passwordHashNeedsUpgrade } from "./password.js";
+import {
+  hashPassword,
+  passwordHashNeedsUpgrade,
+  verifyPassword,
+  withPasswordWork,
+} from "./password.js";
 export { hashPassword, verifyPassword } from "./password.js";
 
 import { developmentInstance } from "./development-instance.js";
@@ -28,6 +38,8 @@ const SESSION_COOKIE = developmentInstance
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MIN_API_TOKEN_LENGTH = 32;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;
+const API_TOKEN_OPERATION_ACTOR_PREFIX = "api-token:";
+const API_TOKEN_OPERATION_ACTOR_PATTERN = /^api-token:[0-9a-f]{64}$/;
 const logger = createLogger("auth");
 
 export interface SetupState {
@@ -67,12 +79,28 @@ export function ludockApiToken(): string {
 
 export class SetupWindow {
   readonly expiresAt: number;
+  private readonly authorizationHash: Buffer;
+  private pendingGeneratedCode: string | null;
 
   constructor(
     private readonly now: () => number = Date.now,
     durationMs = SETUP_WINDOW_MS,
+    bootstrapCode?: string,
   ) {
     this.expiresAt = now() + durationMs;
+    const configured = bootstrapCode ?? process.env.LUDOCK_SETUP_CODE;
+    const generated = !configured;
+    const code = configured || randomBytes(32).toString("base64url");
+    if (
+      code.length < SETUP_CODE_MIN_LENGTH ||
+      code.length > SETUP_CODE_MAX_LENGTH
+    ) {
+      throw new Error(
+        `LUDOCK_SETUP_CODE must be between ${SETUP_CODE_MIN_LENGTH} and ${SETUP_CODE_MAX_LENGTH} characters`,
+      );
+    }
+    this.authorizationHash = createHash("sha256").update(code).digest();
+    this.pendingGeneratedCode = generated ? code : null;
   }
 
   getState(): SetupState {
@@ -91,6 +119,35 @@ export class SetupWindow {
     if (!state.required) throw new AuthError("SETUP_COMPLETE", 409);
     if (state.locked) throw new AuthError("SETUP_LOCKED", 403);
   }
+
+  assertAuthorized(candidate: unknown): void {
+    this.assertOpen();
+    const value = typeof candidate === "string" ? candidate : "";
+    const candidateHash = createHash("sha256").update(value).digest();
+    const matches = timingSafeEqual(candidateHash, this.authorizationHash);
+    if (
+      !matches ||
+      value.length < SETUP_CODE_MIN_LENGTH ||
+      value.length > SETUP_CODE_MAX_LENGTH
+    ) {
+      throw new AuthError(
+        "SETUP_AUTHORIZATION_REQUIRED",
+        403,
+        "Initial setup authorization failed",
+      );
+    }
+  }
+
+  takeGeneratedCode(): string | null {
+    const code = this.pendingGeneratedCode;
+    this.pendingGeneratedCode = null;
+    return code;
+  }
+
+  markCompleted(): void {
+    this.pendingGeneratedCode = null;
+    this.authorizationHash.fill(0);
+  }
 }
 
 export const defaultSetupWindow = new SetupWindow();
@@ -104,6 +161,15 @@ export function logSetupInstructions(
 ): void {
   if (!isSetupRequired()) return;
 
+  const generatedCode = setupWindow.takeGeneratedCode();
+  if (generatedCode) {
+    // This credential belongs in the local process/container console, not the
+    // structured logger whose ring buffer is available through the web UI.
+    process.stdout.write(
+      `Ludock initial setup code: ${generatedCode}\n` +
+        "Enter this one-time code in the setup page within five minutes.\n",
+    );
+  }
   const minutes = Math.round(SETUP_WINDOW_MS / 60_000);
   logger.info("Initial administrator setup is available", {
     durationMinutes: minutes,
@@ -115,11 +181,12 @@ export async function createInitialAdmin(
   input: {
     username: string;
     password: string;
+    bootstrapCode: string;
     ipAddress?: string;
   },
   setupWindow: SetupWindow = defaultSetupWindow,
 ): Promise<SessionUser> {
-  setupWindow.assertOpen();
+  setupWindow.assertAuthorized(input.bootstrapCode);
 
   const now = Date.now();
   const user: SessionUser = {
@@ -127,8 +194,12 @@ export async function createInitialAdmin(
     username: input.username,
     role: "admin",
   };
-  const passwordHash = await hashPassword(input.password);
-  setupWindow.assertOpen();
+  const passwordHash = await withPasswordWork(
+    hashToken(`setup-source:${input.ipAddress ?? "unknown"}`),
+    "initial-setup",
+    () => hashPassword(input.password),
+  );
+  setupWindow.assertAuthorized(input.bootstrapCode);
   createUser({
     ...user,
     passwordHash,
@@ -142,6 +213,7 @@ export async function createInitialAdmin(
     targetId: user.id,
     ipAddress: input.ipAddress,
   });
+  setupWindow.markCompleted();
   return user;
 }
 
@@ -247,6 +319,42 @@ export function assertRequestUser(
     if (session?.user.id === expected.id) return session.user;
   }
   throw new AuthError("AUTHENTICATION_REQUIRED", 401, "Authentication required");
+}
+
+/** Bind durable work to the exact API credential generation that requested it. */
+export function operationActorId(
+  request: Request,
+  expected: SessionUser,
+): string {
+  const current = assertRequestUser(request, expected);
+  if (current.id !== "api-token") return current.id;
+  const token = ludockApiToken();
+  if (!token) throw new AuthError("AUTHENTICATION_REQUIRED", 401);
+  return `${API_TOKEN_OPERATION_ACTOR_PREFIX}${keyedCredentialFingerprint(token)}`;
+}
+
+export function isApiTokenOperationActor(actorId: string): boolean {
+  return (
+    actorId === "api-token" ||
+    API_TOKEN_OPERATION_ACTOR_PATTERN.test(actorId)
+  );
+}
+
+export function isCurrentApiTokenOperationActor(actorId: string): boolean {
+  if (
+    actorId === "api-token" ||
+    !actorId.startsWith(API_TOKEN_OPERATION_ACTOR_PREFIX)
+  ) {
+    return false;
+  }
+  const token = ludockApiToken();
+  if (!token) return false;
+  const current = `${API_TOKEN_OPERATION_ACTOR_PREFIX}${keyedCredentialFingerprint(token)}`;
+  return tokensMatch(actorId, current);
+}
+
+export function publicOperationActorId(actorId: string): string {
+  return isApiTokenOperationActor(actorId) ? "api-token" : actorId;
 }
 
 export function authenticateRequest(

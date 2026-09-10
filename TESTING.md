@@ -113,7 +113,7 @@ For each platform:
 - Check `/api/v1/health`, the setup page, and static assets. Without a socket,
   health reports degraded; with the test daemon it reports healthy.
 - Run the bundled `bun --version`, `docker --version`, and `docker compose version`.
-- Resolve and run the configured `oven/bun:1-alpine` helper on that platform;
+- Resolve and run the digest-pinned `oven/bun:1-alpine` helper on that platform;
   verify file access, stopped-server backup, and restore against disposable volumes.
 - Exercise Compose source validation inside the Linux Ludock runtime. Host
   macOS/Windows unit execution cannot establish descriptor-path compatibility.
@@ -129,7 +129,7 @@ that a given host's Compose bind paths and mount permissions work.
 After installing the latest stable Bun 1 and building `ludock:test`, run:
 
 ```bash
-docker pull oven/bun:1-alpine
+docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
 bun scripts/test-linux.mjs
 bun scripts/test-compose.mjs
 bun scripts/test-files.mjs
@@ -176,11 +176,18 @@ absolute paths on the Docker host and inside Ludock.
 
 ### Initial setup and authentication
 
-- Empty application storage opens first-administrator setup. Unrelated databases
-  and unsupported schemas are rejected without changing those files or game data.
-- Setup expires after five minutes and reopens on restart while no account exists.
+- Empty application storage opens first-administrator setup. It requires the
+  one-time code printed to the local container console (or the configured
+  `LUDOCK_SETUP_CODE`) before account validation or password hashing. The code
+  never appears in the application-log API/UI. Unrelated databases and
+  unsupported schemas are rejected without changing those files or game data.
+- Setup expires after five minutes and reopens with a newly generated code on
+  restart while no account exists. A completed setup cannot be reopened with an
+  old or configured code.
 - Sign-in requires a valid username and 15–128 character password; repeated
-  failures are throttled and do not disclose whether a user exists.
+  failures are throttled by source and credential without letting one source
+  lock the account for everyone. Concurrent memory-hard password work is
+  bounded and does not disclose whether a user exists.
 - Cookies survive normal restart, are HttpOnly, and are Secure behind HTTPS.
 - Sign-out and password changes revoke the correct sessions. Disabling an
   account or revoking access closes its streams and blocks further commands.

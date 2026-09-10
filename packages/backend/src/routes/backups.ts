@@ -1,6 +1,6 @@
 import { backupSettingsResponseSchema, backupSettingsSchema, backupsResponseSchema, okResponseSchema, operationResponseSchema, restoreRequestSchema, type BackupSettings, } from "@ludock/shared";
 import { Readable } from "node:stream";
-import { assertRequestUser } from "../auth.js";
+import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
 import { deleteBackup, getBackup, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
 import { AppError } from "../errors.js";
@@ -24,13 +24,13 @@ export const backupsRoutes: ApiRoutes = {
     })
   },
   "/api/v1/servers/:id/backups": {
-    GET: async (ctx) => {
+    GET: administrator(async (ctx) => {
       const serverId = id(ctx.params.id);
       await refreshServers();
       const user = requestUser(ctx);
-      assertServerCapability(user, serverId, user.role === "admin" ? "backups.read" : "backups.create");
+      assertServerCapability(user, serverId, "backups.read");
       return respond(backupsResponseSchema, { backups: listBackups(serverId) });
-    },
+    }),
     POST: async (ctx) => {
       const serverId = id(ctx.params.id);
       const user = requestUser(ctx);
@@ -39,7 +39,7 @@ export const backupsRoutes: ApiRoutes = {
       return respond(operationResponseSchema, {
         operation: enqueueOperation({
           serverId,
-          actorId: user.id,
+          actorId: operationActorId(ctx.request, user),
           kind: "backup",
           bindingRevision: context.logical.bindingRevision,
           idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
@@ -106,7 +106,7 @@ export const backupsRoutes: ApiRoutes = {
       return respond(operationResponseSchema, {
         operation: enqueueOperation({
           serverId,
-          actorId: user.id,
+          actorId: operationActorId(ctx.request, user),
           kind: "restore",
           bindingRevision: context.logical.bindingRevision,
           input,

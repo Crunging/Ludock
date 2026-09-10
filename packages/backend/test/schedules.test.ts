@@ -10,12 +10,16 @@ import {
   type SessionUser,
 } from "../src/database.js";
 import {
+  MAX_SCHEDULE_PAYLOAD_BYTES,
+  MAX_SCHEDULES_PER_SERVER,
+  MAX_SCHEDULES_TOTAL,
   createSchedule,
   deleteSchedule,
   listSchedules,
   runSchedules,
   scheduleSlot,
 } from "../src/schedules.js";
+import { AppError } from "../src/errors.js";
 import { setServerGrant } from "../src/authorization.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
@@ -48,6 +52,31 @@ const input: ScheduleInput = {
 };
 const due = Date.parse("2026-09-09T15:00:00Z");
 let serverId: string;
+
+function insertScheduleRows(
+  count: number,
+  options: {
+    serverId?: string;
+    ownerId?: string;
+    data?: ScheduleInput;
+    inputJson?: string;
+  } = {},
+): void {
+  const statement = getDatabase().prepare(
+    "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
+  );
+  for (let index = 0; index < count; index += 1) {
+    statement.run(
+      crypto.randomUUID(),
+      options.serverId ?? serverId,
+      options.ownerId ?? friend.id,
+      options.inputJson ?? JSON.stringify(options.data ?? input),
+      1,
+      index,
+    );
+  }
+}
+
 beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
@@ -117,6 +146,15 @@ describe("schedule authority", () => {
     );
     assert.equal(listSchedules(admin, serverId).length, 1);
   });
+  it("uses current account roles when enforcing schedule ownership", () => {
+    const schedule = createSchedule(admin, serverId, input);
+    const staleAdministrator = { ...friend, role: "admin" as const };
+    assert.equal(listSchedules(staleAdministrator, serverId).length, 0);
+    assert.throws(
+      () => deleteSchedule(staleAdministrator, serverId, schedule.id),
+      /not found/,
+    );
+  });
   it("does not run twice in a slot and does not catch up after a missed slot", () => {
     createSchedule(friend, serverId, input);
     runSchedules(due);
@@ -175,5 +213,66 @@ describe("schedule authority", () => {
       listSchedules(admin, serverId)[0].lastResult!,
       /server configuration changed/,
     );
+  });
+});
+
+describe("schedule resource limits", () => {
+  it("rejects schedule payloads above the endpoint-specific byte limit", () => {
+    assert.throws(
+      () =>
+        createSchedule(friend, serverId, {
+          ...input,
+          padding: "x".repeat(MAX_SCHEDULE_PAYLOAD_BYTES),
+        }),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_PAYLOAD_TOO_LARGE" &&
+        error.statusCode === 413,
+    );
+    assert.equal(listSchedules(friend, serverId).length, 0);
+  });
+
+  it("caps each server and every list response", () => {
+    insertScheduleRows(MAX_SCHEDULES_PER_SERVER, { ownerId: admin.id });
+    insertScheduleRows(1, { ownerId: friend.id });
+
+    assert.equal(listSchedules(admin, serverId).length, MAX_SCHEDULES_PER_SERVER);
+    assert.equal(listSchedules(friend, serverId).length, 1);
+    assert.throws(
+      () => createSchedule(admin, serverId, input),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_LIMIT_REACHED" &&
+        error.message.includes(String(MAX_SCHEDULES_PER_SERVER)),
+    );
+  });
+
+  it("caps total schedules and scheduler work per tick", () => {
+    insertScheduleRows(MAX_SCHEDULES_TOTAL, {
+      ownerId: admin.id,
+      data: { ...input, enabled: false },
+    });
+    const nextServer = reconcileServers([
+      observation,
+      {
+        ...observation,
+        containerId: "second",
+        name: "second-world",
+        displayName: "Second World",
+      },
+    ]).find((server) => server.containerId === "second")!;
+
+    assert.throws(
+      () => createSchedule(admin, nextServer.id, input),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_LIMIT_REACHED" &&
+        error.message.includes(String(MAX_SCHEDULES_TOTAL)),
+    );
+    insertScheduleRows(1, {
+      ownerId: admin.id,
+      inputJson: "not valid JSON",
+    });
+    assert.doesNotThrow(() => runSchedules(due));
   });
 });

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll as after, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import {
@@ -14,9 +17,16 @@ import {
   type ServerObservation,
 } from "../src/identity.js";
 
+const identityDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "ludock-identity-"));
 process.env.LUDOCK_DB_PATH = ":memory:";
-beforeEach(() => closeDatabase());
-after(() => closeDatabase());
+beforeEach(() => {
+  closeDatabase();
+  process.env.LUDOCK_DB_PATH = ":memory:";
+});
+after(() => {
+  closeDatabase();
+  fs.rmSync(identityDirectory, { recursive: true, force: true });
+});
 
 function observation(
   overrides: Partial<ServerObservation> = {},
@@ -40,11 +50,19 @@ function observation(
 }
 
 describe("logical server identities", () => {
-  it("preserves persisted fingerprints across the hashing implementation change", () => {
-    assert.equal(
-      bindingFingerprint(observation()),
-      "c0c7db1b3d3d4e526b3b86f116b918a80272cf5f3cfdcde8bc6696fac968ce99",
-    );
+  it("keeps fingerprints stable per installation while detecting changed secrets", () => {
+    const firstPath = path.join(identityDirectory, "first.db");
+    process.env.LUDOCK_DB_PATH = firstPath;
+    const original = bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } }));
+    assert.match(original, /^hmac-sha256:[a-f0-9]{64}$/);
+    assert.equal(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
+    assert.notEqual(original, bindingFingerprint(observation({ gameConfiguration: { password: "second-secret" } })));
+    closeDatabase();
+    assert.equal(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
+
+    closeDatabase();
+    process.env.LUDOCK_DB_PATH = path.join(identityDirectory, "second.db");
+    assert.notEqual(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
   });
 
   it("reattaches ordinary recreations to the same UUID and revises observed-container attribution", () => {

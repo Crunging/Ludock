@@ -53,10 +53,15 @@ The integration registry is
 
 These ports are console ports, not player connection ports. Minecraft's
 `rcon-cli` runs inside the game container; its RCON port does not need to be
-published for Ludock. Other network adapters require a reachable address,
-enabled protocol, and configured credentials. Put Ludock and those servers on
-a suitable Docker network. Do not expose RCON or Telnet directly to the public
-internet.
+published for Ludock. The image must provide `rcon-cli`, `/bin/sh`, and `sleep`;
+Ludock uses the latter two to terminate a command that times out or whose client
+disconnects. Other network adapters require a reachable address, enabled
+protocol, and configured credentials. Their native RCON, WebRCON, and Telnet
+transports are plaintext, so put Ludock and those servers on a trusted Docker
+network or use a separately managed authenticated TLS tunnel. Do not expose
+them directly to the public internet. Treat `ludock.console.host` as a trusted
+deployment setting: Ludock sends the configured console credential to that
+endpoint.
 
 ## Capability matrix and evidence
 

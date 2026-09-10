@@ -9,6 +9,7 @@ const [{ createApp }, auth, database] = await Promise.all([
   import("../src/auth.js"),
   import("../src/database.js"),
 ]);
+const { accountRoutes } = await import("../src/routes/accounts.js");
 const password = "original-password-123";
 const passwordHash = await auth.hashPassword(password);
 const resetHash = await auth.hashPassword("reset-password-123");
@@ -77,6 +78,126 @@ const post = (path: string, body: unknown) => fetch(`${baseUrl}${path}`, {
 });
 
 describe("account changes during password work", () => {
+  it("rejects overlapping password verification for the same login", async () => {
+    const hold = pausePasswordWork();
+    const first = fetch(`${baseUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "incorrect-password" }),
+    });
+    await hold.pending;
+    const overlapping = await Promise.all(
+      [
+        "wrong-one-password",
+        "wrong-two-password",
+        "wrong-three-password",
+        "wrong-four-password",
+        password,
+      ].map((candidate) => fetch(`${baseUrl}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "admin", password: candidate }),
+      })),
+    );
+    assert.deepEqual(overlapping.map((response) => response.status), [
+      429, 429, 429, 429, 429,
+    ]);
+    hold.release();
+    assert.equal((await first).status, 401);
+  });
+
+  it("scopes a login lockout to the source and account pair", async () => {
+    database.deleteUser("admin");
+    database.createUser({
+      id: crypto.randomUUID(),
+      username: "admin",
+      role: "admin",
+      disabled: false,
+      passwordHash,
+      createdAt: 1,
+    });
+    const handler = accountRoutes(
+      new auth.SetupWindow(Date.now, 60_000, "fixture-code-0123456789abcdef012345"),
+    )["/api/v1/auth/login"].POST!;
+    const login = (ipAddress: string, candidate: string) =>
+      handler({
+        request: new Request("http://panel.example/api/v1/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }),
+        url: new URL("http://panel.example/api/v1/auth/login"),
+        params: {},
+        body: { username: "admin", password: candidate },
+        headers: new Headers(),
+        ipAddress,
+        user: null,
+      });
+
+    for (let attempt = 0; attempt < 5; attempt += 1)
+      assert.equal((await login("192.0.2.10", "incorrect-password")).status, 401);
+    assert.equal((await login("192.0.2.10", password)).status, 429);
+    assert.equal((await login("198.51.100.20", password)).status, 200);
+  });
+
+  it("rejects overlapping password changes for the same session", async () => {
+    const hold = pausePasswordWork();
+    const first = post("/api/v1/account/change-password", {
+      currentPassword: "incorrect-password",
+      newPassword: "new-password-123",
+    });
+    await hold.pending;
+    const overlapping = await Promise.all(
+      [
+        "wrong-one-password",
+        "wrong-two-password",
+        "wrong-three-password",
+        "wrong-four-password",
+        password,
+      ].map((candidate) => post("/api/v1/account/change-password", {
+        currentPassword: candidate,
+        newPassword: "other-password-123",
+      })),
+    );
+    assert.deepEqual(overlapping.map((response) => response.status), [
+      429, 429, 429, 429, 429,
+    ]);
+    hold.release();
+    assert.equal((await first).status, 400);
+  });
+
+  it("locks current-password guesses to one session rather than the account", async () => {
+    const token = cookie.slice("ludock_session=".length);
+    const tokenHash = new Bun.CryptoHasher("sha256").update(token).digest("hex");
+    const throttleKey = new Bun.CryptoHasher("sha256")
+      .update(`password-change-credential:${tokenHash}`)
+      .digest("hex");
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      database.recordLoginFailure(throttleKey, Date.now(), 15 * 60_000, 5);
+    }
+    assert.equal((await post("/api/v1/account/change-password", {
+      currentPassword: password,
+      newPassword: "new-password-123",
+    })).status, 429);
+
+    const otherSession = auth.createSession(
+      { id: "admin", username: "admin", role: "admin" },
+      new Request("http://127.0.0.1/"),
+      "127.0.0.1",
+    );
+    const response = await fetch(`${baseUrl}/api/v1/account/change-password`, {
+      method: "POST",
+      headers: {
+        Cookie: `ludock_session=${otherSession.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        currentPassword: password,
+        newPassword: "new-password-123",
+      }),
+    });
+    assert.equal(response.status, 200);
+  });
+
   it("upgrades a valid legacy password only after authentication succeeds", async () => {
     const salt = Buffer.alloc(16, 1);
     const key = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });

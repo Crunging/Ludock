@@ -36,13 +36,14 @@ describe("application log buffer", () => {
         "ludock_session_012345abcdef=development-secret; Path=/; HttpOnly",
       context: {
         detail: "theme=dark; ludock_session_fedcba543210=context-secret",
+        apiKey: "unlabelled-key-secret",
       },
     });
     const entry = listApplicationLogs({ limit: 1 }).entries[0];
     assert.ok(entry);
     assert.doesNotMatch(
       JSON.stringify(entry),
-      /development-secret|context-secret/,
+      /development-secret|context-secret|unlabelled-key-secret/,
     );
     assert.equal(
       entry.message,
@@ -52,6 +53,7 @@ describe("application log buffer", () => {
       entry.context?.detail,
       "theme=dark; ludock_session_fedcba543210=[REDACTED]",
     );
+    assert.equal(entry.context?.apiKey, "[REDACTED]");
   });
 
   it("returns structured entries and resets stale process cursors", () => {

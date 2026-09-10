@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type Docker from "dockerode";
 import { getDockerInstance } from "./docker.js";
 import {
@@ -14,6 +15,56 @@ const CONNECT_TIMEOUT_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 10_000;
 const MAX_RCON_PACKET_SIZE = 4 * 1024 * 1024;
 const MAX_TCP_RECEIVED_BYTES = MAX_RCON_PACKET_SIZE + 64 * 1024;
+export const MAX_DOCKER_EXEC_OUTPUT_BYTES = 4 * 1024 * 1024;
+const DOCKER_EXEC_TIMEOUT_SECONDS = 15;
+const DOCKER_EXEC_KILL_GRACE_SECONDS = 3;
+const DOCKER_EXEC_STREAM_GRACE_MS = 5_000;
+const DOCKER_EXEC_INSPECT_TIMEOUT_MS = 5_000;
+
+// Docker has no API for signaling an individual exec process, and closing its
+// hijacked stream does not stop it. Keep the watchdog inside the container so
+// the command really terminates even if Ludock disconnects or is interrupted.
+// User input remains a positional argument to "$@" and is never shell source.
+const BOUNDED_DOCKER_EXEC_SCRIPT = String.raw`
+control="$1"; deadline="$2"; grace="$3"; shift 3
+ready="$control/ready"; cancel="$control/cancel"; reason="$control/reason"
+umask 077
+if ! mkdir "$control"; then exit 126; fi
+cleanup() {
+  rm -f "$ready" "$cancel" "$reason"
+  rmdir "$control" 2>/dev/null || true
+}
+if ! : > "$ready"; then cleanup; exit 126; fi
+if [ -e "$cancel" ]; then cleanup; exit 125; fi
+"$@" &
+child=$!
+(
+  remaining="$deadline"
+  while [ "$remaining" -gt 0 ] && [ ! -e "$cancel" ]; do
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+  if [ -e "$cancel" ]; then
+    printf '%s\n' cancelled > "$reason"
+  else
+    printf '%s\n' timeout > "$reason"
+  fi
+  kill -TERM "$child" 2>/dev/null || exit 0
+  sleep "$grace"
+  kill -KILL "$child" 2>/dev/null || true
+) &
+watchdog=$!
+wait "$child"
+status=$?
+kill "$watchdog" 2>/dev/null || true
+wait "$watchdog" 2>/dev/null || true
+cause=""
+if [ -r "$reason" ]; then IFS= read -r cause < "$reason" || true; fi
+cleanup
+if [ "$cause" = timeout ]; then exit 124; fi
+if [ "$cause" = cancelled ]; then exit 125; fi
+exit "$status"
+`;
 
 export interface GameCommandOutput {
   stdout(data: string): void;
@@ -28,6 +79,7 @@ export async function executeGameCommand(
   command: string,
   output: GameCommandOutput,
   assertAccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   assertAccess?.();
   if (server.state !== "running") {
@@ -40,7 +92,11 @@ export async function executeGameCommand(
         throw new Error("The console adapter is missing its command configuration");
       }
       await executeInContainer(
-        container, adapter.createExecOptions(command), output, assertAccess,
+        container,
+        adapter.createExecOptions(command),
+        output,
+        assertAccess,
+        signal,
       );
       return;
     }
@@ -527,14 +583,145 @@ async function executeInContainer(
   options: Docker.ExecCreateOptions,
   output: GameCommandOutput,
   assertAccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const exec = await container.exec(options);
+  if (!options.Cmd?.length)
+    throw new Error("The console adapter is missing its command configuration");
+  if (signal?.aborted) throw new Error("Console command cancelled");
+
+  const controlPath = `/tmp/.ludock-console-${crypto.randomUUID()}`;
+  const exec = await container.exec({
+    ...options,
+    Cmd: [
+      "/bin/sh",
+      "-c",
+      BOUNDED_DOCKER_EXEC_SCRIPT,
+      "ludock-console",
+      controlPath,
+      String(DOCKER_EXEC_TIMEOUT_SECONDS),
+      String(DOCKER_EXEC_KILL_GRACE_SECONDS),
+      ...options.Cmd,
+    ],
+  });
   assertAccess?.();
+  if (signal?.aborted) throw new Error("Console command cancelled");
   const stream = await exec.start({ hijack: true, stdin: false });
-  await streamExecOutput(stream, output);
-  const result = await exec.inspect();
+  let cancellationRequested = false;
+  let cancelled = false;
+  let outputLimited = false;
+  let forcedDeadline = false;
+  const requestCancellation = () => {
+    if (cancellationRequested) return;
+    cancellationRequested = true;
+    void cancelDockerExec(container, controlPath, options.User).catch(() => {});
+  };
+  const onAbort = () => {
+    cancelled = true;
+    requestCancellation();
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+
+  const guardedOutput: GameCommandOutput = {
+    stdout(value) {
+      try {
+        assertAccess?.();
+        if (!cancelled) output.stdout(value);
+      } catch {
+        cancelled = true;
+        requestCancellation();
+      }
+    },
+    stderr(value) {
+      try {
+        assertAccess?.();
+        if (!cancelled) output.stderr(value);
+      } catch {
+        cancelled = true;
+        requestCancellation();
+      }
+    },
+    system: (value) => output.system(value),
+  };
+  const hardDeadline = setTimeout(() => {
+    forcedDeadline = true;
+    requestCancellation();
+    (stream as NodeJS.ReadWriteStream & { destroy(error?: Error): void }).destroy(
+      new Error("Game console command timed out"),
+    );
+  },
+  (DOCKER_EXEC_TIMEOUT_SECONDS + DOCKER_EXEC_KILL_GRACE_SECONDS) * 1000 +
+    DOCKER_EXEC_STREAM_GRACE_MS);
+  hardDeadline.unref();
+  let streamFailure: unknown;
+  try {
+    await streamExecOutput(stream, guardedOutput, () => {
+      outputLimited = true;
+      requestCancellation();
+    });
+  } catch (error) {
+    streamFailure = error;
+  } finally {
+    clearTimeout(hardDeadline);
+    signal?.removeEventListener("abort", onAbort);
+  }
+
+  if (outputLimited)
+    throw new Error("Game console output exceeded its limit");
+  if (cancelled) throw new Error("Console command cancelled");
+  if (forcedDeadline) throw new Error("Game console command timed out");
+  if (streamFailure !== undefined) {
+    if (streamFailure instanceof Error) throw streamFailure;
+    throw new Error("Game console stream failed");
+  }
+  const result = await inspectDockerExec(exec);
+  if (result.ExitCode === 124)
+    throw new Error("Game console command timed out");
+  if (result.ExitCode === 125)
+    throw new Error("Console command cancelled");
   if (result.Running || result.ExitCode !== 0)
     throw new Error("Game console command failed");
+}
+
+async function cancelDockerExec(
+  container: Docker.Container,
+  controlPath: string,
+  user?: string,
+): Promise<void> {
+  const cancellation = await container.exec({
+    Cmd: [
+      "/bin/sh",
+      "-c",
+      'remaining=5; while [ "$remaining" -gt 0 ] && [ ! -r "$1/ready" ]; do sleep 1; remaining=$((remaining - 1)); done; if [ -r "$1/ready" ]; then umask 077; : > "$1/cancel"; fi',
+      "ludock-console-cancel",
+      controlPath,
+    ],
+    AttachStdout: false,
+    AttachStderr: false,
+    AttachStdin: false,
+    Tty: false,
+    ...(user ? { User: user } : {}),
+  });
+  const stream = await cancellation.start({ hijack: true, stdin: false });
+  (stream as NodeJS.ReadableStream & { resume?: () => void }).resume?.();
+}
+
+async function inspectDockerExec(exec: Docker.Exec): Promise<Docker.ExecInspectInfo> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exec.inspect(),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error("Game console status check timed out")),
+          DOCKER_EXEC_INSPECT_TIMEOUT_MS,
+        );
+        deadline.unref();
+      }),
+    ]);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
 }
 
 async function writeContainerStdin(
@@ -585,14 +772,30 @@ async function writeAttachedInput(
 
 async function streamExecOutput(
   stream: NodeJS.ReadWriteStream,
-  output: GameCommandOutput
+  output: GameCommandOutput,
+  onLimit: () => void,
 ): Promise<void> {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  stdout.setEncoding("utf8");
-  stderr.setEncoding("utf8");
-  stdout.on("data", (chunk: string) => output.stdout(chunk));
-  stderr.on("data", (chunk: string) => output.stderr(chunk));
+  const decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
+  let receivedBytes = 0;
+  let limited = false;
+  const receive = (type: "stdout" | "stderr", chunk: Buffer) => {
+    if (limited) return;
+    receivedBytes += chunk.length;
+    if (receivedBytes > MAX_DOCKER_EXEC_OUTPUT_BYTES) {
+      limited = true;
+      onLimit();
+      return;
+    }
+    const value = decoders[type].write(chunk);
+    if (value) output[type](value);
+  };
+  stdout.on("data", (chunk: Buffer) => receive("stdout", chunk));
+  stderr.on("data", (chunk: Buffer) => receive("stderr", chunk));
   try {
     await new Promise<void>((resolve, reject) => {
       stream.once("end", resolve);
@@ -600,6 +803,12 @@ async function streamExecOutput(
       stream.once("error", reject);
       getDockerInstance().modem.demuxStream(stream, stdout, stderr);
     });
+    if (!limited) {
+      const finalStdout = decoders.stdout.end();
+      const finalStderr = decoders.stderr.end();
+      if (finalStdout) output.stdout(finalStdout);
+      if (finalStderr) output.stderr(finalStderr);
+    }
   } finally {
     stdout.end();
     stderr.end();

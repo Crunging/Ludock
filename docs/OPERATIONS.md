@@ -14,17 +14,27 @@ application storage. Unrelated databases and unsupported schemas are rejected
 without changing their contents. Do not remove game containers or game-data
 volumes when setting up Ludock.
 
-This rewrite requires fresh Ludock application storage. When upgrading from a
-pre-rewrite release, stop the old Ludock instance, retain its application volume,
-and mount a new empty volume at `/data` for the new image. Create the administrator
+The supported schema starts at version 2; older development schemas have no
+conversion path. To replace an unsupported development installation, stop its
+Ludock instance, retain its application volume, and mount a new empty volume at
+`/data` for the new image. Create the administrator
 and configure access, backup storage, and Compose registrations again. Keep all
 existing game-container and game-data mounts unchanged. To return to the earlier
 build, stop the new instance and pair the old image with its original application
 volume; never run both backends against the same Docker host at once.
 
 Create the first administrator within five minutes of starting an empty
-installation. Restart Ludock to reopen an expired setup window. Passwords must
-be between 15 and 128 characters.
+installation. Run `docker compose logs ludock` on the Docker host and enter the
+most recent generated one-time setup code in the browser. That credential is
+written directly to the container console and is excluded from Ludock's application-log
+API and UI. Restart Ludock to reopen an expired setup window and generate a new
+code. Passwords must be between 15 and 128 characters.
+
+For unattended deployment, set a private `LUDOCK_SETUP_CODE` of 32–128
+characters before the first start. A configured code is not printed. Remove the
+setting after the administrator exists; setup codes cannot reopen or replace a
+completed installation. Do not place a setup code in a URL, Compose label, or
+support message.
 
 Use HTTPS for remote access. A reverse proxy must preserve the public host,
 forward the external protocol, and support WebSocket upgrades. Browser API
@@ -48,13 +58,14 @@ docker compose up -d --force-recreate ludock
 | `LOG_LEVEL` | `error`, `warn`, `info` (default), or `debug` |
 | `LUDOCK_DB_PATH` | Application database; `/data/ludock.db` in the image |
 | `DOCKER_SOCKET` | Socket path inside Ludock; `/var/run/docker.sock` |
+| `LUDOCK_SETUP_CODE` | Optional first-administrator setup code, 32–128 characters; otherwise a new code is printed to the local container console on each start while setup is required |
 | `LUDOCK_API_TOKEN` | Optional full-administrator API token, at least 32 characters; shorter values are ignored |
 | `LUDOCK_COMPOSE_ROOTS` | Approved directories containing Compose inputs; empty disables project access |
 | `LUDOCK_BACKUP_ROOTS` | Approved mounted backup directories; `/backups` in the example Compose file. An explicitly empty value disables backup destination configuration |
 | `LUDOCK_DOCKER_CONFIG` | Optional read-only Docker client configuration directory for private-registry credentials; otherwise `/nonexistent` |
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
 | `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an alias |
-| `FILE_HELPER_IMAGE` | File and backup helper image; `oven/bun:1-alpine` |
+| `FILE_HELPER_IMAGE` | Trusted file and backup helper image, with an immutable `@sha256:` digest; defaults to the Bun 1 Alpine digest shipped with Ludock |
 | `MAX_UPLOAD_SIZE` | Maximum size of each uploaded file; `2 GiB` by default. Examples: `500 MB`, `1.5 GiB` |
 | `MAX_UPLOAD_BYTES` | Byte-only upload setting, used when `MAX_UPLOAD_SIZE` is unset or blank |
 | `AUDIT_LOG_MAX_ROWS` | Retained audit entries; 100,000 by default |
@@ -66,6 +77,11 @@ case-insensitive, and a positive whole number without a unit is treated as bytes
 `MAX_UPLOAD_SIZE` takes precedence over the byte-only `MAX_UPLOAD_BYTES` setting.
 Invalid limits stop startup with a configuration error, so a typo cannot silently
 use a different limit.
+
+Changing or removing `LUDOCK_API_TOKEN` invalidates queued operations requested
+with the previous token. This does not skip restart recovery: interrupted data
+operations still perform their safety cleanup, but old-token work cannot begin
+new privileged steps under a replacement credential.
 
 Root lists use the platform path separator: `:` in the Linux container. Use
 dedicated absolute directories, not `/` or system directories. Environment
@@ -116,7 +132,7 @@ writable-layer paths are not supported. Host roots, broad system directories,
 Docker sockets, read-only mounts, sensitive paths, and symlink traversal are
 blocked. See [Game servers](./GAME-SERVERS.md#file-roots).
 
-Every file operation uses a temporary `oven/bun:1-alpine` helper, whether the
+Every file operation uses a temporary digest-pinned Bun 1 Alpine helper, whether the
 game is running or stopped. It mounts only approved data, has no network, uses a
 read-only root filesystem and `no-new-privileges`, drops capabilities, and adds
 only required data-access capabilities. Helpers run as UID 0 to access game
@@ -149,16 +165,13 @@ Docker Desktop host aliases, and hosts without recursive read-only bind support
 can make bind access unavailable. Named volumes must use the local driver without
 host-remapping options.
 
-The default helper follows Bun 1's stable Alpine tag and must be available for
-the Docker host's architecture. Ludock pulls a missing helper image, but can
-reuse a locally cached image. Refresh that image explicitly on the managed
-Docker host:
+The default helper uses the immutable multi-platform digest shipped with your
+Ludock release. Ludock pulls that exact image when missing and can reuse its
+local cache. Updating Ludock adopts any newly reviewed helper digest; pulling a
+floating tag alone does not change the helper selected by an existing release.
 
-```bash
-docker pull oven/bun:1-alpine
-```
-
-A custom `FILE_HELPER_IMAGE` must supply a supported Bun 1 runtime (minimum 1.4.2),
+A custom `FILE_HELPER_IMAGE` must include its trusted `@sha256:` manifest digest,
+be available for the Docker host's architecture, and supply Bun 1 (minimum 1.4.2),
 `/bin/sh`, and `sleep`, and run with Linux `/proc/self/fd` support; a plain Alpine
 image is insufficient. Validate overrides on both architectures before
 distributing them.
@@ -320,6 +333,9 @@ selected weekdays. Time zones are explicit. Missed times and spring-forward
 gaps are skipped; a repeated fall-back time runs once. Ludock does not schedule
 updates or arbitrary shell commands. Review a failed/suspended schedule's
 reported result and recreate it after fixing its permissions or data binding.
+An installation supports at most 100 schedules per server and 1,000 in total,
+including disabled schedules. Delete unused schedules before adding more when
+either limit is reached.
 
 Availability is disabled by default. When enabled, the server is expected to
 be available 24/7, with a default two-minute failure grace period. Current
@@ -339,8 +355,14 @@ still result in a repeated message. There is no image-update-available watcher.
 
 ## Application backup, logs, and account recovery
 
-Stop Ludock before copying its application database and associated files. Keep
-game backup archives separately; copying `/data` does not back up game worlds.
+Stop Ludock before copying its application database and associated files. Include
+the entire `.identity-key` directory beside the database (normally
+`/data/ludock.db.identity-key/`) and keep the backup private. Its `key` file
+protects server identity fingerprints, Compose-source fingerprints, and queued
+API-token credentials; the database and key directory must be restored together.
+Ludock refuses a missing, unsafe, or mismatched key. Preserve a lost key directory
+from an earlier application-data backup rather than generating a replacement.
+Keep game backup archives separately; copying `/data` does not back up game worlds.
 With the example deployment:
 
 ```bash

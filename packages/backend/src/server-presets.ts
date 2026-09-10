@@ -235,7 +235,7 @@ export function getGameCapabilities(gameType: string): GameCapabilities {
   const adapter = game?.console?.adapter;
   const consoleDescription =
     adapter === "minecraft-rcon"
-      ? "Requires rcon-cli in the container and configured Minecraft RCON. Commands are passed as argument arrays."
+      ? "Requires rcon-cli, /bin/sh, and sleep in the container plus configured Minecraft RCON. Commands are passed as argument arrays and bounded by an in-container watchdog."
       : adapter === "stdin-console"
         ? "Requires an interactive server process with open stdin and StdinOnce disabled. Transport fixtures do not verify a game release."
         : adapter

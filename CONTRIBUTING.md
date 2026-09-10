@@ -87,12 +87,35 @@ dependency manifests and include the updated lockfile. For major upgrades, revie
 upstream release notes and migrate the affected code and tests before committing.
 Upgrading Bun does not update workspace dependencies automatically.
 
-Runtime images follow `oven/bun:1-alpine` and `alpine:3`. Keep the Bun major aligned
-across `.bun-version`, [Dockerfile](./Dockerfile), and the helper image in
-[`runtime-images.ts`](./packages/backend/src/runtime-images.ts). GitHub Actions use
-supported major tags such as `@v7`; use an available stable release tag when an
-action does not publish a major tag. Review upstream changes when updating those
-references. Security checks report findings without opening dependency update PRs.
+Runtime images use `oven/bun:1-alpine` and `alpine:3` with immutable multi-platform
+manifest digests. Keep the Bun major aligned with `.bun-version` and the complete
+Bun image reference identical in [Dockerfile](./Dockerfile) and
+[`runtime-images.ts`](./packages/backend/src/runtime-images.ts). Update the
+Compose acceptance fixture's expected Alpine digest with the build's Alpine
+digest. That fixture must exercise a pullable tag for update behavior, so its
+harness verifies the tag against the reviewed digest before creating services.
+GitHub Actions use full upstream commit SHAs with the intended version in an inline
+comment; container actions use image digests. Local reusable workflows continue
+to use the checked-out repository.
+
+Agents maintain these pins alongside ordinary dependency maintenance and before
+releases, without Dependabot PRs. Resolve the supported upstream tags, review the
+release notes and code changes, update references in one coherent batch, and run
+the affected source, workflow, and image checks. Resolve annotated Git tags to
+their peeled commit (`^{}`), not the tag object's SHA. Useful read-only commands:
+
+```bash
+git ls-remote https://github.com/actions/checkout.git 'refs/tags/v7' 'refs/tags/v7^{}'
+docker buildx imagetools inspect oven/bun:1-alpine
+docker buildx imagetools inspect alpine:3
+docker buildx imagetools inspect rhysd/actionlint:latest
+```
+
+Confirm image indexes contain both `linux/amd64` and `linux/arm64`; do not substitute
+one architecture's child digest. A pin controls the artifact that runs, but does
+not prove new upstream code is safe. Do not blindly replace pins on every CI run.
+The scheduled security checks continue to scan the pinned helper and published
+release images and report findings without opening dependency update PRs.
 
 `tar-stream` currently stays on 3.2.0. Its 3.2.1 patch introduces incompatible
 header and Node stream type declarations; remove this constraint when the archive
@@ -109,6 +132,11 @@ the root `package.json` version and `.release-please-manifest.json` unchanged in
 ordinary feature and fix PRs. The manifest records release-please's current version
 baseline; advancing it manually can make the next generated release skip the
 intended version.
+
+Dependency review and release-please serve different purposes: agents review and
+validate dependency and immutable-pin updates before the release PR is merged;
+release-please prepares the version and changelog from the resulting commits.
+Merge those reviewed updates first so the release PR includes them.
 
 Merge the generated release PR when ready to publish. The resulting root package
 version change triggers the stable image and GitHub release workflow. Merging a
@@ -134,8 +162,10 @@ For image or runtime changes that need local validation, build:
 docker build --pull -t ludock:test .
 ```
 
-The build uses floating Bun 1 and Alpine 3 base-image tags. `--pull` refreshes
-those tags before building; an existing local image does not update itself.
+The build uses pinned Bun 1 and Alpine 3 image digests. `--pull` fetches or checks
+those exact artifacts; it does not move the pins. Update the digests before
+building to adopt a newer upstream release. Existing deployed containers do not
+update themselves when a source pin changes.
 
 Use `docker compose config` to validate Compose configuration changes. Validate
 affected runtime and helper behavior on both Linux AMD64 and ARM64 when it

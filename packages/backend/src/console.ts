@@ -95,12 +95,14 @@ export async function handleConsoleConnection(
 
   let logStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
     null;
+  const pendingMessages: string[] = [];
+  const commandLifetime = new AbortController();
   const cleanup = () => {
+    commandLifetime.abort();
     logStream?.destroy?.();
     logStream = null;
     pendingMessages.length = 0;
   };
-  const pendingMessages: string[] = [];
   let processing = false;
   ws.onClose(cleanup);
 
@@ -174,6 +176,7 @@ export async function handleConsoleConnection(
               command,
               output,
               assertAccess,
+              commandLifetime.signal,
             );
           else await executeShell(getContainer(containerId), command, output, assertAccess);
           writeAuditLog({

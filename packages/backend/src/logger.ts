@@ -1,6 +1,5 @@
 import {
   recordApplicationLog,
-  type ApplicationLogContext,
 } from "./application-logs.js";
 
 export const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
@@ -17,7 +16,6 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
   info: 2,
   debug: 3,
 };
-const SENSITIVE_KEY_PATTERN = /(authorization|cookie|password|secret|token)/i;
 
 export interface LogLevelConfiguration {
   level: LogLevel;
@@ -61,31 +59,21 @@ function writeLog(
   const configuredLevel = getLogLevelConfiguration().level;
   if (LOG_LEVEL_PRIORITY[level] > LOG_LEVEL_PRIORITY[configuredLevel]) return;
 
-  const fields = context ? redactContext(context) : undefined;
-  const suffix =
-    fields && Object.keys(fields).length > 0 ? ` ${JSON.stringify(fields)}` : "";
   const timestamp = Date.now();
-  const line = `${new Date(timestamp).toISOString()} ${level.toUpperCase()} [${component}] ${message}${suffix}`;
-
-  recordApplicationLog({
+  const sanitized = recordApplicationLog({
     timestamp,
     level,
     component,
     message,
-    context: fields,
+    context,
   });
+  const fields = sanitized.context;
+  const suffix =
+    fields && Object.keys(fields).length > 0 ? ` ${JSON.stringify(fields)}` : "";
+  const line = `${new Date(timestamp).toISOString()} ${level.toUpperCase()} [${component}] ${sanitized.message}${suffix}`;
 
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else if (level === "debug") console.debug(line);
   else console.info(line);
-}
-
-function redactContext(context: LogContext): ApplicationLogContext {
-  const fields: ApplicationLogContext = {};
-  for (const [key, value] of Object.entries(context)) {
-    if (value === undefined) continue;
-    fields[key] = SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : value;
-  }
-  return fields;
 }

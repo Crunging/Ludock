@@ -10,7 +10,10 @@ import { NativeSocketChannel, MAX_SOCKET_BUFFER_BYTES } from "../src/socket-chan
 import {
   createWebSocketGateway,
   MAX_WEBSOCKET_CONNECTIONS,
+  MAX_WEBSOCKET_CONNECTIONS_PER_SESSION,
+  MAX_WEBSOCKET_CONNECTIONS_PER_USER,
   MAX_WEBSOCKET_PAYLOAD_BYTES,
+  RESERVED_ADMIN_WEBSOCKET_CONNECTIONS,
 } from "../src/websocket-server.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -112,15 +115,80 @@ describe("native WebSocket admission and lifetime", () => {
     assert.equal(gateway.connectionCount, 0);
   });
 
-  it("counts concurrent handshakes against the connection cap and releases closed slots", async () => {
-    const connected = await Promise.all(Array.from({ length: MAX_WEBSOCKET_CONNECTIONS }, () => connect()));
-    assert.equal(gateway.connectionCount, MAX_WEBSOCKET_CONNECTIONS);
-    assert.equal(await upgradeStatus("/ws/v1/events", { Authorization: `Bearer ${apiToken}` }), 503);
+  it("isolates users and sessions and releases their closed slots", async () => {
+    const first = sessionHeaders("viewer");
+    const connected = await Promise.all(Array.from(
+      { length: MAX_WEBSOCKET_CONNECTIONS_PER_SESSION },
+      () => connect(first),
+    ));
+    assert.equal(await upgradeStatus("/ws/v1/events", first), 429);
+
+    const second = sessionHeaders("viewer");
+    await Promise.all(Array.from(
+      {
+        length: MAX_WEBSOCKET_CONNECTIONS_PER_USER -
+          MAX_WEBSOCKET_CONNECTIONS_PER_SESSION,
+      },
+      () => connect(second),
+    ));
+    assert.equal(await upgradeStatus("/ws/v1/events", second), 429);
+
+    createUser({ id: "admin", username: "admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
+    await connect(sessionHeaders("admin", "admin"));
+    assert.equal(gateway.connectionCount,
+      MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
+
     const closing = closed(connected[0]);
     connected[0].close();
     await closing;
-    await connect();
+    await connect(first);
+    assert.equal(gateway.connectionCount,
+      MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
+  });
+
+  it("retains the global cap across many administrator principals", async () => {
+    const headers: Record<string, string>[] = [];
+    for (let index = 0; headers.length < MAX_WEBSOCKET_CONNECTIONS; index++) {
+      const id = `administrator-${index}`;
+      createUser({ id, username: id, role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
+      const credentials = sessionHeaders(id, "admin");
+      for (let count = 0;
+        count < MAX_WEBSOCKET_CONNECTIONS_PER_SESSION &&
+          headers.length < MAX_WEBSOCKET_CONNECTIONS;
+        count++) headers.push(credentials);
+    }
+    await Promise.all(headers.map((credentials) => connect(credentials)));
     assert.equal(gateway.connectionCount, MAX_WEBSOCKET_CONNECTIONS);
+    createUser({ id: "later-admin", username: "later-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
+    assert.equal(await upgradeStatus(
+      "/ws/v1/events",
+      sessionHeaders("later-admin", "admin"),
+    ), 503);
+  });
+
+  it("reserves global capacity for administrators", async () => {
+    const nonAdminLimit = MAX_WEBSOCKET_CONNECTIONS -
+      RESERVED_ADMIN_WEBSOCKET_CONNECTIONS;
+    const headers: Record<string, string>[] = [];
+    for (let index = 0; headers.length < nonAdminLimit; index++) {
+      const id = `viewer-${index}`;
+      createUser({ id, username: id, role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
+      const credentials = sessionHeaders(id);
+      for (let count = 0;
+        count < MAX_WEBSOCKET_CONNECTIONS_PER_SESSION &&
+          headers.length < nonAdminLimit;
+        count++) headers.push(credentials);
+    }
+    await Promise.all(headers.map((credentials) => connect(credentials)));
+    createUser({ id: "later-viewer", username: "later-viewer", role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
+    assert.equal(await upgradeStatus(
+      "/ws/v1/events",
+      sessionHeaders("later-viewer"),
+    ), 503);
+
+    createUser({ id: "reserved-admin", username: "reserved-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
+    await connect(sessionHeaders("reserved-admin", "admin"));
+    assert.equal(gateway.connectionCount, nonAdminLimit + 1);
   });
 
   it("sends shutdown close frames and rejects further admission", async () => {
@@ -132,6 +200,17 @@ describe("native WebSocket admission and lifetime", () => {
     assert.equal(await upgradeStatus("/ws/v1/events", { Authorization: `Bearer ${apiToken}` }), 503);
   });
 });
+
+function sessionHeaders(id: string, role: "viewer" | "admin" = "viewer") {
+  const session = createSession(
+    { id, username: id, role },
+    new Request(server.url),
+  );
+  return {
+    Cookie: `ludock_session=${session.token}`,
+    Origin: server.url.origin,
+  };
+}
 
 describe("native socket output bounds", () => {
   it("disconnects a slow reader and releases its stream before another frame can be sent", () => {

@@ -12,7 +12,11 @@ export interface AuthContextValue {
   user: AuthUser | null;
   refreshStatus: () => Promise<void>;
   login: (username: string, password: string) => Promise<string | null>;
-  setup: (username: string, password: string) => Promise<string | null>;
+  setup: (
+    username: string,
+    password: string,
+    bootstrapCode: string,
+  ) => Promise<string | null>;
   logout: () => Promise<void>;
 }
 

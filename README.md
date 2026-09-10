@@ -27,15 +27,25 @@ docker compose up -d
 ```
 
 Open `http://localhost:3000` (or your chosen port). From another device, replace
-`localhost` with your Docker host's address. Create the first administrator
-within five minutes. If setup expires, run `docker compose restart ludock`,
-then choose **Check again** in the panel.
+`localhost` with your Docker host's address. On the Docker host, retrieve the
+one-time setup code:
+
+```bash
+docker compose logs ludock
+```
+
+Enter the most recent code in the setup page and create the first administrator
+within five minutes. The generated code is written directly to the local container console,
+not Ludock's browser-accessible application logs. If setup expires, run
+`docker compose restart ludock`, retrieve the newly generated code, then choose
+**Check again** in the panel. You can instead configure a private
+`LUDOCK_SETUP_CODE` in `.env`; configured codes are not printed.
 
 The example creates separate volumes for Ludock application data and backups.
 Existing game containers and game-data volumes stay in place.
 
-Installations from before this rewrite need a new application volume. Keep the
-old application volume for rollback and follow the
+Unsupported application databases are rejected without modification. If reusing
+an older development database, keep its volume for rollback and follow the
 [storage upgrade guidance](./docs/OPERATIONS.md#deployment-and-application-storage)
 before starting the new image.
 

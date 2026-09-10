@@ -7,6 +7,7 @@ process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
 process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
 process.env.MAX_UPLOAD_BYTES = "1";
+process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
 const [{ createApp }, { getDockerInstance }, { createLogger }] =
   await Promise.all([
@@ -179,6 +180,7 @@ describe("HTTP application", () => {
       body: JSON.stringify({
         username: "admin",
         password: "integration-password",
+        bootstrapCode: "integration-setup-code-0123456789abcdef",
       }),
     });
     assert.equal(response.status, 201);

@@ -10,7 +10,8 @@ const [{ createApp }, { SetupWindow }] = await Promise.all([
 ]);
 
 let now = 1_000;
-const setupWindow = new SetupWindow(() => now, 100);
+const setupCode = "fixture-window-setup-code-0123456789abcdef";
+const setupWindow = new SetupWindow(() => now, 100, setupCode);
 now = 1_100;
 const server = serve({ ...createApp({ frontendDist: false, setupWindow }), hostname: "127.0.0.1", port: 0 });
 const baseUrl = server.url.origin;
@@ -40,6 +41,7 @@ describe("initial setup window", () => {
       body: JSON.stringify({
         username: "admin",
         password: "locked-test-password",
+        bootstrapCode: setupCode,
       }),
     });
     assert.equal(response.status, 403);

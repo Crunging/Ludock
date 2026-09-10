@@ -6,6 +6,9 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+// The update API intentionally requires a pullable tag. Check its current
+// contents against the reviewed pin before creating any fixture services.
+const expectedFixtureImage = "alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b";
 const project = `ludock-compose-smoke-${crypto.randomUUID().slice(0, 8)}`;
 const root = await realpath(await mkdtemp(path.join(process.env.LUDOCK_TEST_DIRECTORY || tmpdir(), `${project}-`)));
 const app = `${project}-app`;
@@ -15,7 +18,7 @@ let base;
 let serverId;
 await Bun.write(compose, `services:
   game:
-    image: alpine:latest
+    image: alpine:3
     command: ["sleep", "infinity"]
     environment:
       LITERAL: "cash$$value"
@@ -25,7 +28,7 @@ await Bun.write(compose, `services:
       ludock.name: "Compose Smoke"
     depends_on: [dependency]
   dependency:
-    image: alpine:latest
+    image: alpine:3
     command: ["sleep", "infinity"]
 `);
 
@@ -61,6 +64,11 @@ async function update(forceRecreate) {
 }
 
 try {
+  const [fixtureTag, expectedDigest] = expectedFixtureImage.split("@");
+  docker("pull", fixtureTag);
+  const fixture = JSON.parse(docker("image", "inspect", fixtureTag))[0];
+  assert.ok(fixture.RepoDigests.some((reference) => reference.endsWith(`@${expectedDigest}`)),
+    "The fixture image tag changed; review and update its pin before running Compose acceptance");
   cli("up", "-d");
   const before = cli("ps", "-q", "game");
   const dependency = cli("ps", "-q", "dependency");
@@ -79,7 +87,8 @@ try {
   assert.ok(ready, "Fixture API must become healthy");
   serverId = (await request("/servers")).servers.find((server) => server.displayName === "Compose Smoke").id;
   await request("/compose-projects", { projectName: project, projectDirectory: root, composeFiles: ["compose.yaml"], envFiles: [] });
-  assert.equal((await request(`/servers/${serverId}/update-capability`)).capability.available, true);
+  const { capability } = await request(`/servers/${serverId}/update-capability`);
+  assert.equal(capability.available, true, capability.unavailableReason);
   const unchanged = await update(false);
   assert.equal(unchanged.status, "already_current");
   assert.equal(cli("ps", "-q", "game"), before);

@@ -25,7 +25,7 @@ import {
   registerComposeProject,
   listComposeProjects,
 } from "../src/compose.js";
-import { closeDatabase } from "../src/database.js";
+import { closeDatabase, getDatabase } from "../src/database.js";
 import {
   updateRequestSchema,
   serverGrantsSchema,
@@ -256,6 +256,7 @@ describe("Compose execution boundary", () => {
       };
       const snapshot = await createComposeSnapshot(input);
       try {
+        assert.match(snapshot.fingerprint, /^hmac-sha256:[a-f0-9]{64}$/);
         const services = snapshot.model.services as Record<
           string,
           Record<string, unknown>
@@ -340,6 +341,70 @@ describe("Compose execution boundary", () => {
         }
       } finally {
         await first.cleanup();
+      }
+    },
+  );
+  it.skipIf(Boolean(process.platform !== "linux"))(
+    "keys source fingerprints per installation and preserves them across reopen",
+    async () => {
+      const filename = path.join(directory, "keyed-source.yaml");
+      const environment = path.join(directory, "keyed-source.env");
+      await writeFile(
+        filename,
+        "services:\n  game:\n    image: alpine:latest\n    env_file: keyed-source.env\n",
+      );
+      await writeFile(environment, "PASSWORD=small-secret\n");
+      const input = {
+        projectName: "keyed-source",
+        projectDirectory: directory,
+        composeFiles: [filename],
+        envFiles: [],
+      };
+      const firstDatabase = path.join(directory, "compose-key-first.db");
+      closeDatabase();
+      process.env.LUDOCK_DB_PATH = firstDatabase;
+      const first = await createComposeSnapshot(input);
+      try {
+        const repeated = await createComposeSnapshot(input);
+        try {
+          assert.match(first.fingerprint, /^hmac-sha256:[a-f0-9]{64}$/);
+          assert.equal(repeated.fingerprint, first.fingerprint);
+        } finally {
+          await repeated.cleanup();
+        }
+        await registerComposeProject(input);
+        const stored = getDatabase()
+          .prepare("SELECT source_fingerprint,registration_json FROM compose_projects WHERE project_name=?")
+          .get(input.projectName) as {
+            source_fingerprint: string;
+            registration_json: string;
+          };
+        assert.equal(stored.source_fingerprint, first.fingerprint);
+        assert.equal(JSON.stringify(stored).includes("small-secret"), false);
+
+        closeDatabase();
+        const reopened = await createComposeSnapshot(input);
+        try {
+          assert.equal(reopened.fingerprint, first.fingerprint);
+        } finally {
+          await reopened.cleanup();
+        }
+
+        closeDatabase();
+        process.env.LUDOCK_DB_PATH = path.join(
+          directory,
+          "compose-key-second.db",
+        );
+        const otherInstallation = await createComposeSnapshot(input);
+        try {
+          assert.notEqual(otherInstallation.fingerprint, first.fingerprint);
+        } finally {
+          await otherInstallation.cleanup();
+        }
+      } finally {
+        await first.cleanup();
+        closeDatabase();
+        process.env.LUDOCK_DB_PATH = ":memory:";
       }
     },
   );

@@ -47,6 +47,8 @@ export const sessionsResponseSchema = z.object({
 });
 
 export const PASSWORD_MIN_LENGTH = 15;
+export const SETUP_CODE_MIN_LENGTH = 32;
+export const SETUP_CODE_MAX_LENGTH = 128;
 
 export const credentialsRequestSchema = z.object({
   username: z
@@ -57,7 +59,14 @@ export const credentialsRequestSchema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
 });
-export const setupRequestSchema = credentialsRequestSchema;
+export const setupRequestSchema = credentialsRequestSchema
+  .extend({
+    bootstrapCode: z
+      .string()
+      .min(SETUP_CODE_MIN_LENGTH)
+      .max(SETUP_CODE_MAX_LENGTH),
+  })
+  .strict();
 export const createUserRequestSchema = credentialsRequestSchema.extend({
   role: roleSchema,
 });

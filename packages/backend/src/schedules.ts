@@ -7,6 +7,7 @@ import {
 } from "./database.js";
 import {
   assertServerCapability,
+  currentActor,
   hasServerCapability,
 } from "./authorization.js";
 import { resolveServerBinding } from "./identity.js";
@@ -25,6 +26,11 @@ interface ScheduleRow {
   last_result: string | null;
   created_at: number;
 }
+
+export const MAX_SCHEDULE_PAYLOAD_BYTES = 4 * 1024;
+export const MAX_SCHEDULES_PER_SERVER = 100;
+export const MAX_SCHEDULES_TOTAL = 1_000;
+
 const actionCapability = (action: ScheduleInput["action"]): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
 function publicSchedule(row: ScheduleRow) {
@@ -38,19 +44,29 @@ function publicSchedule(row: ScheduleRow) {
 }
 export function listSchedules(actor: SessionUser, serverId: string) {
   assertServerCapability(actor, serverId, "schedules.manage");
-  return (
-    getDatabase()
-      .prepare("SELECT * FROM schedules WHERE server_id=? ORDER BY created_at")
-      .all(serverId) as unknown as ScheduleRow[]
-  )
-    .filter((row) => actor.role === "admin" || row.owner_id === actor.id)
-    .map(publicSchedule);
+  const current = currentActor(actor)!;
+  const query = current.role === "admin"
+    ? "SELECT * FROM schedules WHERE server_id=? ORDER BY created_at,id LIMIT ?"
+    : "SELECT * FROM schedules WHERE server_id=? AND owner_id=? ORDER BY created_at,id LIMIT ?";
+  const rows = current.role === "admin"
+    ? getDatabase().prepare(query).all(serverId, MAX_SCHEDULES_PER_SERVER)
+    : getDatabase()
+        .prepare(query)
+        .all(serverId, current.id, MAX_SCHEDULES_PER_SERVER);
+  return (rows as unknown as ScheduleRow[]).map(publicSchedule);
 }
 export function createSchedule(
   actor: SessionUser,
   serverId: string,
   input: unknown,
 ) {
+  const inputBytes = new TextEncoder().encode(JSON.stringify(input) ?? "").byteLength;
+  if (inputBytes > MAX_SCHEDULE_PAYLOAD_BYTES)
+    throw new AppError(
+      "SCHEDULE_PAYLOAD_TOO_LARGE",
+      413,
+      `Schedule payloads cannot exceed ${MAX_SCHEDULE_PAYLOAD_BYTES} bytes`,
+    );
   const data = scheduleSchema.parse(input);
   assertServerCapability(actor, serverId, "schedules.manage");
   assertServerCapability(actor, serverId, actionCapability(data.action));
@@ -62,11 +78,32 @@ export function createSchedule(
     );
   const binding = resolveServerBinding(serverId);
   const id = crypto.randomUUID();
-  getDatabase()
-    .prepare(
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Check the global boundary first. If an older database already exceeds it,
+    // this query still stops after a bounded number of rows.
+    const globalLimitReached = db
+      .prepare("SELECT 1 AS present FROM schedules ORDER BY rowid LIMIT 1 OFFSET ?")
+      .get(MAX_SCHEDULES_TOTAL - 1);
+    if (globalLimitReached)
+      throw new AppError(
+        "SCHEDULE_LIMIT_REACHED",
+        409,
+        `Ludock supports up to ${MAX_SCHEDULES_TOTAL} schedules`,
+      );
+    const count = db
+      .prepare("SELECT COUNT(*) AS count FROM schedules WHERE server_id=?")
+      .get(serverId) as { count: number };
+    if (count.count >= MAX_SCHEDULES_PER_SERVER)
+      throw new AppError(
+        "SCHEDULE_LIMIT_REACHED",
+        409,
+        `A server can have up to ${MAX_SCHEDULES_PER_SERVER} schedules`,
+      );
+    db.prepare(
       "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
-    )
-    .run(
+    ).run(
       id,
       serverId,
       actor.id,
@@ -74,17 +111,20 @@ export function createSchedule(
       binding.bindingRevision,
       Date.now(),
     );
-  writeAuditLog({
-    userId: actor.id,
-    action: "schedule.created",
-    targetType: "server",
-    targetId: serverId,
-    details: { scheduleId: id, action: data.action },
-  });
+    writeAuditLog({
+      userId: actor.id,
+      action: "schedule.created",
+      targetType: "server",
+      targetId: serverId,
+      details: { scheduleId: id, action: data.action },
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   return publicSchedule(
-    getDatabase()
-      .prepare("SELECT * FROM schedules WHERE id=?")
-      .get(id) as ScheduleRow,
+    db.prepare("SELECT * FROM schedules WHERE id=?").get(id) as ScheduleRow,
   );
 }
 export function deleteSchedule(
@@ -96,7 +136,8 @@ export function deleteSchedule(
   const row = getDatabase()
     .prepare("SELECT * FROM schedules WHERE id=? AND server_id=?")
     .get(id, serverId) as ScheduleRow | null;
-  if (!row || (actor.role !== "admin" && row.owner_id !== actor.id))
+  const current = currentActor(actor)!;
+  if (!row || (current.role !== "admin" && row.owner_id !== current.id))
     throw new AppError("NOT_FOUND", 404, "Schedule not found");
   getDatabase().prepare("DELETE FROM schedules WHERE id=?").run(id);
   writeAuditLog({
@@ -134,8 +175,8 @@ export function scheduleSlot(input: ScheduleInput, now: number): string | null {
 }
 export function runSchedules(now = Date.now()): void {
   const rows = getDatabase()
-    .prepare("SELECT * FROM schedules")
-    .all() as unknown as ScheduleRow[];
+    .prepare("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
+    .all(MAX_SCHEDULES_TOTAL) as unknown as ScheduleRow[];
   for (const row of rows) {
     const data = scheduleSchema.parse(JSON.parse(row.input_json));
     if (!data.enabled) continue;

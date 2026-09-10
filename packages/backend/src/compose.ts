@@ -7,7 +7,10 @@ import {
   type ComposeProjectRegistration,
   type UpdateCapability,
 } from "@ludock/shared";
-import { getDatabase } from "./database.js";
+import {
+  getDatabase,
+  keyedComposeSourceFingerprint,
+} from "./database.js";
 import {
   approvedPath,
   configuredRoots,
@@ -193,6 +196,9 @@ export async function createComposeSnapshot(
   input: ComposeProjectRegistration,
 ): Promise<ComposeSnapshot> {
   const registration = composeRegistrationSchema.parse(input);
+  // Fail before reading source files or invoking Compose if the installation
+  // key needed to protect their digest is unavailable.
+  getDatabase();
   const roots = configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS);
   const base = approvedPath(registration.projectDirectory, roots);
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-compose-"));
@@ -324,7 +330,7 @@ export async function createComposeSnapshot(
       directory,
       configPath,
       model,
-      fingerprint: hash.digest("hex"),
+      fingerprint: keyedComposeSourceFingerprint(hash.digest("hex")),
       project: registration,
       cleanup,
     };

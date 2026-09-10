@@ -8,6 +8,9 @@ import { createLogger } from "./logger.js";
 import { MAX_SOCKET_BUFFER_BYTES, NativeSocketChannel } from "./socket-channel.js";
 
 export const MAX_WEBSOCKET_CONNECTIONS = 100;
+export const MAX_WEBSOCKET_CONNECTIONS_PER_USER = 12;
+export const MAX_WEBSOCKET_CONNECTIONS_PER_SESSION = 8;
+export const RESERVED_ADMIN_WEBSOCKET_CONNECTIONS = 10;
 export const MAX_WEBSOCKET_PAYLOAD_BYTES = 64 * 1024;
 const logger = createLogger("websocket");
 
@@ -32,6 +35,11 @@ export function createWebSocketGateway() {
     if (session.admissionTimer) clearTimeout(session.admissionTimer);
     sessions.delete(session);
     if (sessions.size === 0) socketsClosed?.();
+  };
+  const countSessions = (matches: (session: SocketSession) => boolean) => {
+    let count = 0;
+    for (const session of sessions) if (matches(session)) count++;
+    return count;
   };
   const valid = (session: SocketSession) => {
     const user = session.auth.validate();
@@ -106,8 +114,6 @@ export function createWebSocketGateway() {
       const pathname = new URL(request.url).pathname;
       const auth = authenticateWsRequest(request);
       if (!auth) return new Response("Authentication required", { status: 401 });
-      if (sessions.size >= MAX_WEBSOCKET_CONNECTIONS)
-        return new Response("WebSocket connection limit reached", { status: 503 });
       const kind = pathname === "/ws/v1/events" ? "events"
         : pathname.startsWith("/ws/v1/logs/") ? "logs"
           : pathname.startsWith("/ws/v1/game-console/") || pathname.startsWith("/ws/v1/console/") ? "game"
@@ -115,6 +121,19 @@ export function createWebSocketGateway() {
       if (!kind) return new Response("Unknown WebSocket endpoint", { status: 404 });
       if (kind === "shell" && auth.user.role !== "admin")
         return new Response("Administrator access required", { status: 403 });
+      if (countSessions((session) => session.auth.user.id === auth.user.id) >=
+        MAX_WEBSOCKET_CONNECTIONS_PER_USER)
+        return new Response("WebSocket user connection limit reached", { status: 429 });
+      if (auth.sessionTokenHash && countSessions((session) =>
+        session.auth.sessionTokenHash === auth.sessionTokenHash) >=
+          MAX_WEBSOCKET_CONNECTIONS_PER_SESSION)
+        return new Response("WebSocket session connection limit reached", { status: 429 });
+      if (sessions.size >= MAX_WEBSOCKET_CONNECTIONS)
+        return new Response("WebSocket connection limit reached", { status: 503 });
+      if (auth.user.role !== "admin" && countSessions((session) =>
+        session.auth.user.role !== "admin") >=
+          MAX_WEBSOCKET_CONNECTIONS - RESERVED_ADMIN_WEBSOCKET_CONNECTIONS)
+        return new Response("WebSocket capacity reserved for administrators", { status: 503 });
       const session: SocketSession = {
         request, auth, kind, remoteAddress: server.requestIP(request)?.address,
       };

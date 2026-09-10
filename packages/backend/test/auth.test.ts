@@ -7,6 +7,7 @@ process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
 
 const {
   SetupWindow,
+  SETUP_WINDOW_MS,
   authenticateUser,
   authenticateRequest,
   authenticateWsRequest,
@@ -18,6 +19,7 @@ const {
   verifyPassword,
 } = await import("../src/auth.js");
 const { createSessionRecord, findSessionUser } = await import("../src/database.js");
+const setupCode = "fixture-setup-code-0123456789abcdef";
 
 function websocketRequest(
   headers: HeadersInit,
@@ -50,7 +52,7 @@ describe("account authentication", () => {
 
   it("locks initial setup when the startup window expires", async () => {
     let now = 1_000;
-    const setupWindow = new SetupWindow(() => now, 100);
+    const setupWindow = new SetupWindow(() => now, 100, setupCode);
     now = 1_100;
 
     assert.deepEqual(setupWindow.getState(), {
@@ -64,6 +66,7 @@ describe("account authentication", () => {
         {
           username: "admin",
           password: "a-long-test-password",
+          bootstrapCode: setupCode,
         },
         setupWindow
       ),
@@ -80,8 +83,9 @@ describe("account authentication", () => {
       {
         username: "admin",
         password: "a-long-test-password",
+        bootstrapCode: setupCode,
       },
-      new SetupWindow()
+      new SetupWindow(Date.now, SETUP_WINDOW_MS, setupCode)
     );
     assert.equal(user.role, "admin");
     assert.equal(isSetupRequired(), false);
@@ -91,8 +95,9 @@ describe("account authentication", () => {
         {
           username: "other",
           password: "another-long-password",
+          bootstrapCode: setupCode,
         },
-        new SetupWindow()
+        new SetupWindow(Date.now, SETUP_WINDOW_MS, setupCode)
       ),
       (error: Error & { code?: string }) => {
         assert.equal(error.code, "SETUP_COMPLETE");

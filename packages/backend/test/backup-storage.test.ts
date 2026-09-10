@@ -106,7 +106,7 @@ describe("backup storage boundaries", () => {
     assert.equal(await readFile(filename, "utf8"), "keep this backup");
   });
 
-  for (const helperImage of [undefined, "example/custom-bun-helper:test"]) {
+  for (const helperImage of [undefined, `example/custom-bun-helper:test@sha256:${"a".repeat(64)}`]) {
     it(`uses the ${helperImage ? "configured" : "pinned default"} image for a scoped backup helper`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
       else process.env.FILE_HELPER_IMAGE = helperImage;
