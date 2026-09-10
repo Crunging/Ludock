@@ -102,6 +102,20 @@ validated archive implementation reproducible in the meantime.
 Run the source checks after updating dependencies or Bun, and add relevant
 browser and platform checks from [TESTING.md](./TESTING.md) for affected behavior.
 
+## Release versions
+
+Release-please prepares the next stable version from Conventional Commits. Keep
+the root `package.json` version and `.release-please-manifest.json` unchanged in
+ordinary feature and fix PRs. The manifest records release-please's current version
+baseline; advancing it manually can make the next generated release skip the
+intended version.
+
+Merge the generated release PR when ready to publish. The resulting root package
+version change triggers the stable image and GitHub release workflow. Merging a
+version change from any other PR into `main` triggers that same workflow, so feature
+names and rewrite scope must not set release versions manually. Preserve versions
+and tags that have already been published.
+
 ## Before opening a pull request
 
 Run checks appropriate to the change. Focused tests, lint, and type checks are

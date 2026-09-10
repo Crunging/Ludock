@@ -119,6 +119,10 @@ Useful, validated commits are authorized without per-commit approval. Work
 through coherent changes, use Conventional Commits, and explain the problem,
 resulting behavior, and relevant validation in pull requests.
 
+Leave release versions to release-please. Do not advance the root package version
+or release manifest in ordinary feature or fix PRs; see
+[CONTRIBUTING.md](./CONTRIBUTING.md#release-versions).
+
 Keep private notes, temporary plans, and disposable scratch outside the repo,
 without adding gitignore entries for them. Reusable scripts, fixtures, and design
 documentation belong in the repository when they are part of the delivered change.
