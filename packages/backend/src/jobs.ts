@@ -32,15 +32,19 @@ import {
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { suppressMonitoring, setIntentionalStop } from "./monitoring.js";
-import { ludockApiToken } from "./auth.js";
+import {
+  isApiTokenOperationActor,
+  isCurrentApiTokenOperationActor,
+} from "./auth.js";
 import { assertObservedServerBinding } from "./identity.js";
 
 export function jobActor(context: JobContext): SessionUser {
   const id = context.job.actorId;
-  const actor =
-    id === "api-token" && ludockApiToken()
-      ? { id, username: "API token", role: "admin" as const }
-      : findUserById(id);
+  const actor = isApiTokenOperationActor(id)
+    ? isCurrentApiTokenOperationActor(id)
+      ? { id: "api-token", username: "API token", role: "admin" as const }
+      : null
+    : findUserById(id);
   if (!actor || ("disabled" in actor && actor.disabled))
     throw new AppError(
       "ACCESS_REVOKED",

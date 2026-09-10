@@ -3,13 +3,22 @@ import { serve } from "bun";
 import { afterAll as after, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
+const setupCode = "fixture-race-setup-code-0123456789abcdef";
 
-const [{ createApp }, { listUsers }] = await Promise.all([
+const [{ createApp }, { SetupWindow }, { listUsers }] = await Promise.all([
   import("../src/app.js"),
+  import("../src/auth.js"),
   import("../src/database.js"),
 ]);
 
-const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+const server = serve({
+  ...createApp({
+    frontendDist: false,
+    setupWindow: new SetupWindow(Date.now, 60_000, setupCode),
+  }),
+  hostname: "127.0.0.1",
+  port: 0,
+});
 const baseUrl = server.url.origin;
 
 after(async () => {
@@ -22,7 +31,11 @@ describe("concurrent initial setup", () => {
       fetch(`${baseUrl}/api/v1/auth/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password: "race-test-password-1" }),
+        body: JSON.stringify({
+          username,
+          password: "race-test-password-1",
+          bootstrapCode: setupCode,
+        }),
       });
 
     const responses = await Promise.all([

@@ -1,17 +1,20 @@
 import type { Database } from "bun:sqlite";
+import { initializeFingerprintKey } from "./fingerprints.js";
 
 // The "LUDK" marker identifies Ludock-owned SQLite files independently of the
 // schema version. Never infer ownership merely from a familiar table name.
 export const DATABASE_APPLICATION_ID = 0x4c55444b;
+export const DATABASE_BASE_SCHEMA_VERSION = 2;
 
 export interface DatabaseMigration {
   version: number;
   sql: string;
+  upgrade?(db: Database, fingerprintKey?: Uint8Array): void;
 }
 
 export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
   {
-    version: 1,
+    version: DATABASE_BASE_SCHEMA_VERSION,
     sql: `
       CREATE TABLE users (
         id TEXT PRIMARY KEY,
@@ -131,6 +134,7 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL
       ) STRICT;
     `,
+    upgrade: initializeFingerprintKey,
   },
 ];
 
@@ -139,9 +143,18 @@ function schemaVersion(db: Database): number {
     .user_version;
 }
 
+function incompatibleDatabaseError(): Error {
+  const error = new Error(
+    "This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.",
+  );
+  Object.assign(error, { code: "INCOMPATIBLE_DATABASE" });
+  return error;
+}
+
 export function assertCompatibleDatabase(
   db: Database,
   latestVersion = DATABASE_MIGRATIONS.at(-1)!.version,
+  earliestVersion = DATABASE_MIGRATIONS[0].version,
 ): void {
   const marker = (
     db.prepare("PRAGMA application_id").get() as { application_id: number }
@@ -155,30 +168,32 @@ export function assertCompatibleDatabase(
   if (marker === 0 && version === 0 && tables.length === 0) return;
   if (
     marker !== DATABASE_APPLICATION_ID ||
-    version < 1 ||
+    version < earliestVersion ||
     version > latestVersion
   ) {
-    const error = new Error(
-      "This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.",
-    );
-    Object.assign(error, { code: "INCOMPATIBLE_DATABASE" });
-    throw error;
+    throw incompatibleDatabaseError();
   }
 }
 
 export function applyMigrations(
   db: Database,
   migrations: readonly DatabaseMigration[] = DATABASE_MIGRATIONS,
+  fingerprintKey?: Uint8Array,
 ): void {
+  const firstVersion = migrations[0]?.version ?? 0;
+  if (firstVersion !== DATABASE_BASE_SCHEMA_VERSION)
+    throw new Error(
+      `Database migrations must start at version ${DATABASE_BASE_SCHEMA_VERSION}`,
+    );
   for (let index = 0; index < migrations.length; index += 1) {
-    if (migrations[index].version !== index + 1) {
+    if (firstVersion < 1 || migrations[index].version !== firstVersion + index) {
       throw new Error(
-        "Database migrations must have consecutive versions starting at 1",
+        "Database migrations must have consecutive versions",
       );
     }
   }
   const latestVersion = migrations.at(-1)?.version ?? 0;
-  assertCompatibleDatabase(db, latestVersion);
+  assertCompatibleDatabase(db, latestVersion, firstVersion);
   // One transaction ensures a failed upgrade never leaves half a schema behind.
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -186,6 +201,7 @@ export function applyMigrations(
     for (const migration of migrations) {
       if (migration.version <= current) continue;
       db.exec(migration.sql);
+      migration.upgrade?.(db, fingerprintKey);
       db.exec(`PRAGMA user_version = ${migration.version}`);
     }
     db.exec(`PRAGMA application_id = ${DATABASE_APPLICATION_ID}`);

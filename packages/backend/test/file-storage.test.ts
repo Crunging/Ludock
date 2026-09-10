@@ -414,7 +414,7 @@ describe("scoped file helper projections", () => {
   }
   for (const [state, helperImage] of [
     ["running", undefined],
-    ["exited", "example/custom-bun-helper:test"],
+    ["exited", `example/custom-bun-helper:test@sha256:${"a".repeat(64)}`],
   ] as const) {
     it(`projects approved mounts for a ${state} server using the ${helperImage ? "custom" : "default"} helper without inheriting sockets`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;

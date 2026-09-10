@@ -7,7 +7,7 @@ import { createLogger } from "./logger.js";
 import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
-import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
+import { getHelperImage } from "./runtime-images.js";
 
 export const LABEL_FILES = "ludock.files";
 const logger = createLogger("files");
@@ -599,7 +599,7 @@ export async function acquireFileContainer(
     };
   });
   const proof = await createMountProof(selected);
-  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
+  const image = getHelperImage();
   const containerOptions: Docker.ContainerCreateOptions = {
     Image: image,
     Entrypoint: ["bun", "-e"],

@@ -81,9 +81,12 @@ coverage, not a requirement to exercise every feature on every task.
   Handle major upgrades when needed; involve the maintainer only for product
   decisions or unresolved blockers. Avoid dependency churn on unrelated small tasks.
   See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-tools-and-dependencies) for commands.
-- Use supported major-version tags for runtime images and GitHub Actions. Keep
-  the Bun major aligned across `.bun-version`, the Docker build, and the helper
-  image defined in `packages/backend/src/runtime-images.ts`.
+- Pin GitHub Actions to full upstream commit SHAs and runtime images to verified
+  multi-platform manifest digests. Keep readable version tags/comments and keep
+  the Bun image identical in the Docker build and
+  `packages/backend/src/runtime-images.ts`, on the major in `.bun-version`.
+  Refresh these pins in reviewed, tested batches during substantive development
+  and release maintenance; do not create Dependabot update PRs or leave pins stale.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.

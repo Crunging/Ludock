@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { ScheduleInput } from "@ludock/shared";
+import * as database from "../src/database.js";
 import {
   closeDatabase,
   createUser,
@@ -10,12 +11,16 @@ import {
   type SessionUser,
 } from "../src/database.js";
 import {
+  MAX_SCHEDULE_PAYLOAD_BYTES,
+  MAX_SCHEDULES_PER_SERVER,
+  MAX_SCHEDULES_TOTAL,
   createSchedule,
   deleteSchedule,
   listSchedules,
   runSchedules,
   scheduleSlot,
 } from "../src/schedules.js";
+import { AppError } from "../src/errors.js";
 import { setServerGrant } from "../src/authorization.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
@@ -48,6 +53,35 @@ const input: ScheduleInput = {
 };
 const due = Date.parse("2026-09-09T15:00:00Z");
 let serverId: string;
+
+function insertScheduleRows(
+  count: number,
+  options: {
+    serverId?: string;
+    ownerId?: string;
+    data?: ScheduleInput;
+    inputJson?: string;
+  } = {},
+): string[] {
+  const statement = getDatabase().prepare(
+    "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
+  );
+  const ids: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const id = crypto.randomUUID();
+    ids.push(id);
+    statement.run(
+      id,
+      options.serverId ?? serverId,
+      options.ownerId ?? friend.id,
+      options.inputJson ?? JSON.stringify(options.data ?? input),
+      1,
+      index,
+    );
+  }
+  return ids;
+}
+
 beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
@@ -68,6 +102,7 @@ beforeEach(async () => {
     );
 });
 afterEach(async () => {
+  mock.restore();
   await stopOperationRunner();
   closeDatabase();
 });
@@ -96,6 +131,59 @@ describe("schedule clock semantics", () => {
   });
 });
 
+describe("schedule creation audit transaction", () => {
+  it("commits creation and its audit before attempting retention cleanup", () => {
+    const db = getDatabase();
+    let cleanupInTransaction: boolean | undefined;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const cleanup = spyOn(database, "pruneAuditLogIfNeeded").mockImplementation(() => {
+      cleanupInTransaction = db.inTransaction;
+      throw new Error("fixture-retention-private-detail");
+    });
+
+    const schedule = createSchedule(friend, serverId, input);
+
+    assert.equal(cleanup.mock.calls.length, 1);
+    assert.equal(cleanupInTransaction, false);
+    assert.equal(listSchedules(friend, serverId)[0].id, schedule.id);
+    const audit = db.prepare(
+      "SELECT details_json FROM audit_log WHERE action='schedule.created'",
+    ).get() as { details_json: string };
+    assert.equal(JSON.parse(audit.details_json).scheduleId, schedule.id);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0][0]), /retention cleanup failed/);
+    assert.doesNotMatch(String(warn.mock.calls[0][0]), /fixture-retention-private-detail/);
+  });
+
+  it("rolls back creation when its audit cannot be written", () => {
+    const db = getDatabase();
+    db.exec(`CREATE TRIGGER fail_schedule_audit BEFORE INSERT ON audit_log
+      WHEN NEW.action='schedule.created'
+      BEGIN SELECT RAISE(ABORT, 'fixture schedule audit failure'); END`);
+
+    assert.throws(
+      () => createSchedule(friend, serverId, input),
+      /fixture schedule audit failure/,
+    );
+    assert.equal(listSchedules(friend, serverId).length, 0);
+    assert.equal(db.inTransaction, false);
+  });
+
+  it("preserves the original failure when SQLite has already rolled back", () => {
+    const db = getDatabase();
+    db.exec(`CREATE TRIGGER rollback_schedule_audit BEFORE INSERT ON audit_log
+      WHEN NEW.action='schedule.created'
+      BEGIN SELECT RAISE(ROLLBACK, 'fixture original audit failure'); END`);
+
+    assert.throws(
+      () => createSchedule(friend, serverId, input),
+      /fixture original audit failure/,
+    );
+    assert.equal(listSchedules(friend, serverId).length, 0);
+    assert.equal(db.inTransaction, false);
+  });
+});
+
 describe("schedule authority", () => {
   it("requires an independently granted action, in addition to schedule management", () => {
     assert.throws(
@@ -116,6 +204,15 @@ describe("schedule authority", () => {
       /not found/,
     );
     assert.equal(listSchedules(admin, serverId).length, 1);
+  });
+  it("uses current account roles when enforcing schedule ownership", () => {
+    const schedule = createSchedule(admin, serverId, input);
+    const staleAdministrator = { ...friend, role: "admin" as const };
+    assert.equal(listSchedules(staleAdministrator, serverId).length, 0);
+    assert.throws(
+      () => deleteSchedule(staleAdministrator, serverId, schedule.id),
+      /not found/,
+    );
   });
   it("does not run twice in a slot and does not catch up after a missed slot", () => {
     createSchedule(friend, serverId, input);
@@ -175,5 +272,144 @@ describe("schedule authority", () => {
       listSchedules(admin, serverId)[0].lastResult!,
       /server configuration changed/,
     );
+  });
+});
+
+describe("schedule failure isolation", () => {
+  for (const [kind, inputJson] of [
+    ["malformed JSON", "fixture-schedule-private-detail: not JSON"],
+    ["invalid schema", JSON.stringify({ ...input, action: "fixture-schedule-private-detail" })],
+    ["invalid timezone", JSON.stringify({ ...input, timezone: "fixture-schedule-private-detail" })],
+  ]) {
+    it(`isolates a selected row with ${kind} and still queues the next due schedule`, () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      const [invalidId] = insertScheduleRows(1, { inputJson });
+      const valid = createSchedule(friend, serverId, input);
+
+      assert.doesNotThrow(() => runSchedules(due));
+
+      const operations = listOperations(serverId);
+      assert.equal(operations.length, 1);
+      assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
+      const invalid = getDatabase().prepare(
+        "SELECT last_slot,last_result FROM schedules WHERE id=?",
+      ).get(invalidId) as { last_slot: string | null; last_result: string | null };
+      assert.equal(invalid.last_slot, null);
+      assert.match(invalid.last_result!, /Suspended: saved schedule configuration is invalid; recreate/);
+      assert.equal(warn.mock.calls.length, 1);
+      assert.doesNotMatch(JSON.stringify(warn.mock.calls), /fixture-schedule-private-detail/);
+      assert.doesNotMatch(invalid.last_result!, /fixture-schedule-private-detail/);
+
+      runSchedules(due + 30_000);
+      assert.equal(listOperations(serverId).length, 1);
+      assert.equal(warn.mock.calls.length, 1, "unchanged invalid rows must not repeat diagnostics");
+    });
+  }
+
+  it("does not evaluate disabled schedules or consume their slots", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const disabled = createSchedule(friend, serverId, { ...input, enabled: false });
+    const valid = createSchedule(friend, serverId, input);
+
+    runSchedules(due);
+
+    const operations = listOperations(serverId);
+    assert.equal(operations.length, 1);
+    assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
+    const state = getDatabase().prepare(
+      "SELECT last_slot,last_result FROM schedules WHERE id=?",
+    ).get(disabled.id) as { last_slot: string | null; last_result: string | null };
+    assert.equal(state.last_slot, null);
+    assert.equal(state.last_result, null);
+    assert.equal(warn.mock.calls.length, 0);
+  });
+
+  it("continues when recording an invalid row's result fails", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    insertScheduleRows(1, { inputJson: "not valid JSON" });
+    const valid = createSchedule(friend, serverId, input);
+    getDatabase().exec(`CREATE TRIGGER fail_invalid_schedule_result BEFORE UPDATE ON schedules
+      WHEN OLD.input_json='not valid JSON'
+      BEGIN SELECT RAISE(ABORT, 'fixture-schedule-private-detail'); END`);
+
+    assert.doesNotThrow(() => runSchedules(due));
+
+    const operations = listOperations(serverId);
+    assert.equal(operations.length, 1);
+    assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0][0]), /Could not record or notify/);
+    assert.doesNotMatch(JSON.stringify(warn.mock.calls), /fixture-schedule-private-detail/);
+  });
+});
+
+describe("schedule resource limits", () => {
+  it("rejects schedule payloads above the endpoint-specific byte limit", () => {
+    assert.throws(
+      () =>
+        createSchedule(friend, serverId, {
+          ...input,
+          padding: "x".repeat(MAX_SCHEDULE_PAYLOAD_BYTES),
+        }),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_PAYLOAD_TOO_LARGE" &&
+        error.statusCode === 413,
+    );
+    assert.equal(listSchedules(friend, serverId).length, 0);
+  });
+
+  it("caps each server and every list response", () => {
+    insertScheduleRows(MAX_SCHEDULES_PER_SERVER, { ownerId: admin.id });
+    insertScheduleRows(1, { ownerId: friend.id });
+
+    assert.equal(listSchedules(admin, serverId).length, MAX_SCHEDULES_PER_SERVER);
+    assert.equal(listSchedules(friend, serverId).length, 1);
+    assert.throws(
+      () => createSchedule(admin, serverId, input),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_LIMIT_REACHED" &&
+        error.message.includes(String(MAX_SCHEDULES_PER_SERVER)),
+    );
+  });
+
+  it("caps total schedules and scheduler work per tick", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    insertScheduleRows(MAX_SCHEDULES_TOTAL, {
+      ownerId: admin.id,
+      data: { ...input, enabled: false },
+    });
+    const nextServer = reconcileServers([
+      observation,
+      {
+        ...observation,
+        containerId: "second",
+        name: "second-world",
+        displayName: "Second World",
+      },
+    ]).find((server) => server.containerId === "second")!;
+
+    assert.throws(
+      () => createSchedule(admin, nextServer.id, input),
+      (error) =>
+        error instanceof AppError &&
+        error.code === "SCHEDULE_LIMIT_REACHED" &&
+        error.message.includes(String(MAX_SCHEDULES_TOTAL)),
+    );
+    assert.doesNotThrow(() => runSchedules(due));
+    assert.equal(warn.mock.calls.length, 0, "exactly the supported cap is not overflow");
+    const [overflowId] = insertScheduleRows(1, {
+      ownerId: admin.id,
+      inputJson: "not valid JSON",
+    });
+    assert.doesNotThrow(() => runSchedules(due));
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0][0]), /Schedule limit exceeded/);
+    const overflow = getDatabase().prepare(
+      "SELECT last_slot,last_result FROM schedules WHERE id=?",
+    ).get(overflowId) as { last_slot: string | null; last_result: string | null };
+    assert.equal(overflow.last_slot, null);
+    assert.equal(overflow.last_result, null, "rows beyond the cap must not be evaluated");
   });
 });

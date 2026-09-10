@@ -1,7 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Database } from "bun:sqlite";
-import { applyMigrations, assertCompatibleDatabase } from "./migrations.js";
+import { createHmac } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { Database, constants as sqliteConstants } from "bun:sqlite";
+import {
+  applyMigrations,
+  assertCompatibleDatabase,
+  DATABASE_BASE_SCHEMA_VERSION,
+} from "./migrations.js";
+import {
+  assertFingerprintKey,
+  loadFingerprintKey,
+  protectBindingFingerprint,
+  protectComposeSourceFingerprint,
+} from "./fingerprints.js";
 
 import type {
   AuthUser,
@@ -23,6 +35,7 @@ export interface LoginThrottle {
 }
 
 let database: Database | null = null;
+let fingerprintKey: Buffer | null = null;
 
 export function getDatabase(): Database {
   if (database) return database;
@@ -40,7 +53,21 @@ export function getDatabase(): Database {
     fs.existsSync(dbPath) &&
     fs.statSync(dbPath).size > 0
   ) {
-    const existing = new Database(dbPath, { readonly: true });
+    const canonicalPath = fs.realpathSync(dbPath);
+    const hasJournal = ["-wal", "-journal"].some((suffix) =>
+      fs.existsSync(`${canonicalPath}${suffix}`) && fs.statSync(`${canonicalPath}${suffix}`).size > 0,
+    );
+    // SQLite cannot always open a checkpointed WAL-mode database read-only
+    // when its shared-memory files are absent. Immutable inspection avoids
+    // creating sidecars; use the normal reader if journaled changes exist.
+    const inspectionPath = hasJournal
+      ? canonicalPath
+      : `${pathToFileURL(canonicalPath).href}?immutable=1`;
+    const inspectionOptions = hasJournal
+      ? { readonly: true }
+      : sqliteConstants.SQLITE_OPEN_READONLY |
+        sqliteConstants.SQLITE_OPEN_URI;
+    const existing = new Database(inspectionPath, inspectionOptions);
     try {
       assertCompatibleDatabase(existing);
     } finally {
@@ -53,20 +80,49 @@ export function getDatabase(): Database {
   const opened = new Database(dbPath, {
     strict: true,
   });
+  let key: Buffer | null = null;
   try {
     assertCompatibleDatabase(opened);
+    const version = (opened.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    const keyed = version >= DATABASE_BASE_SCHEMA_VERSION;
+    key = loadFingerprintKey(dbPath, keyed);
+    if (keyed) assertFingerprintKey(opened, key);
     opened.exec("PRAGMA foreign_keys = ON");
     opened.exec("PRAGMA busy_timeout = 5000");
-    applyMigrations(opened);
+    applyMigrations(opened, undefined, key);
     opened.exec("PRAGMA journal_mode = WAL");
     if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
     database = opened;
+    fingerprintKey = key;
+    key = null;
   } catch (error) {
-    opened.close(true);
+    key?.fill(0);
+    try {
+      opened.close(true);
+    } catch {
+      // Preserve the initialization error while still clearing key material.
+    }
     throw error;
   }
 
   return database;
+}
+
+export function keyedBindingFingerprint(digest: string): string {
+  getDatabase();
+  return protectBindingFingerprint(digest, fingerprintKey!);
+}
+
+export function keyedComposeSourceFingerprint(digest: string): string {
+  getDatabase();
+  return protectComposeSourceFingerprint(digest, fingerprintKey!);
+}
+
+/** Identify an API-token generation for durable work, not a password verifier. */
+export function keyedCredentialFingerprint(value: string): string {
+  getDatabase();
+  return createHmac("sha256", fingerprintKey!)
+    .update(`ludock:credential:v1:${value}`).digest("hex");
 }
 
 export function getLoginThrottle(
@@ -101,11 +157,12 @@ export function recordLoginFailure(
   now: number,
   windowMs: number,
   maxFailures: number,
+  blockMs = windowMs,
 ): LoginThrottle {
   const current = getLoginThrottle(attemptKey, now, windowMs);
   const failures = current.failures + 1;
   const blockedUntil =
-    failures >= maxFailures ? now + windowMs : current.blockedUntil;
+    failures >= maxFailures ? now + blockMs : current.blockedUntil;
   const existing = getDatabase()
     .prepare(
       "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?",
@@ -124,7 +181,7 @@ export function recordLoginFailure(
     .run(
       attemptKey,
       failures,
-      existing?.window_started_at || now,
+      existing?.window_started_at ?? now,
       blockedUntil,
       now,
     );
@@ -454,6 +511,13 @@ export function pruneAuditLog(): void {
     .run(AUDIT_LOG_MAX_ROWS);
 }
 
+/** Flush deferred maintenance only after the owning mutation has committed. */
+export function pruneAuditLogIfNeeded(): void {
+  if (auditWritesSincePrune < AUDIT_PRUNE_INTERVAL) return;
+  pruneAuditLog();
+  auditWritesSincePrune = 0;
+}
+
 export function writeAuditLog(input: {
   userId?: string;
   action: string;
@@ -461,7 +525,7 @@ export function writeAuditLog(input: {
   targetId?: string;
   details?: unknown;
   ipAddress?: string;
-}): void {
+}, options: { prune?: boolean } = {}): void {
   getDatabase()
     .prepare(
       `INSERT INTO audit_log
@@ -479,10 +543,7 @@ export function writeAuditLog(input: {
     );
 
   auditWritesSincePrune += 1;
-  if (auditWritesSincePrune >= AUDIT_PRUNE_INTERVAL) {
-    auditWritesSincePrune = 0;
-    pruneAuditLog();
-  }
+  if (options.prune !== false) pruneAuditLogIfNeeded();
 }
 
 export function listAuditLog(limit: number): AuditRecord[] {
@@ -522,6 +583,13 @@ export function listAuditLog(limit: number): AuditRecord[] {
 }
 
 export function closeDatabase(): void {
-  database?.close(true);
+  const opened = database;
   database = null;
+  const key = fingerprintKey;
+  fingerprintKey = null;
+  try {
+    opened?.close(true);
+  } finally {
+    key?.fill(0);
+  }
 }

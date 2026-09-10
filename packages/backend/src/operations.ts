@@ -1,5 +1,6 @@
 import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
+import { isApiTokenOperationActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
 
 interface OperationRow {
@@ -166,7 +167,9 @@ export function enqueueOperation(options: {
       now,
     );
   writeAuditLog({
-    userId: options.actorId === "api-token" ? undefined : options.actorId,
+    userId: isApiTokenOperationActor(options.actorId)
+      ? undefined
+      : options.actorId,
     action: `server.${options.kind}.queued`,
     targetType: "server",
     targetId: options.serverId,
@@ -209,7 +212,7 @@ function finish(
     );
   writeAuditLog({
     userId:
-      job.actorId !== "api-token" && findUserById(job.actorId)
+      !isApiTokenOperationActor(job.actorId) && findUserById(job.actorId)
         ? job.actorId
         : undefined,
     action: `server.${job.kind}.${status}`,
@@ -217,7 +220,7 @@ function finish(
     targetId: job.serverId,
     details: {
       operationId: job.id,
-      actorId: job.actorId,
+      actorId: publicOperationActorId(job.actorId),
       ...(error ? { error } : {}),
     },
   });

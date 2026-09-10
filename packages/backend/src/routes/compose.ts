@@ -1,5 +1,5 @@
 import { composeProjectResponseSchema, composeProjectsResponseSchema, okResponseSchema, operationResponseSchema, updateCapabilityResponseSchema, updateRequestSchema, } from "@ludock/shared";
-import { assertRequestUser } from "../auth.js";
+import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
 import { deleteComposeProject, listComposeProjects, registerComposeProject, updateCapability, validatedProject, type ComposeProject, } from "../compose.js";
 import { getDatabase } from "../database.js";
@@ -49,7 +49,7 @@ export const composeRoutes: ApiRoutes = {
         return respond(operationResponseSchema, {
           operation: enqueueOperation({
             serverId,
-            actorId: user.id,
+            actorId: operationActorId(ctx.request, user),
             kind: "update",
             bindingRevision: context.logical.bindingRevision,
             input: { request, sourceFingerprint: snapshot.fingerprint },

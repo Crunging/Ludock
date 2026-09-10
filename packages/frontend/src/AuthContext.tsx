@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AUTH_REQUIRED_EVENT, ApiRequestError, apiJson, jsonBody } from "./api";
 import {
+  type AuthStatus,
   type CredentialsRequest,
+  type SetupRequest,
   authStatusSchema,
   authUserResponseSchema,
   okResponseSchema,
@@ -34,6 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const statusRequest = useRef<AbortController | null>(null);
   const authRequest = useRef<AbortController | null>(null);
 
+  const applyStatus = useCallback((status: AuthStatus) => {
+    setSetupRequired(status.setupRequired);
+    setSetupLocked(status.setupLocked);
+    setSetupRemainingMs(status.setupRemainingMs);
+    setUser(status.authenticated ? status.user : null);
+  }, []);
+
   const invalidateStatus = useCallback(() => {
     revision.current += 1;
     statusRequest.current?.abort();
@@ -56,10 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           signal: controller.signal,
         });
         if (controller.signal.aborted || revision.current !== owner) return;
-        setSetupRequired(status.setupRequired);
-        setSetupLocked(status.setupLocked);
-        setSetupRemainingMs(status.setupRemainingMs);
-        setUser(status.authenticated ? status.user : null);
+        applyStatus(status);
         statusRequest.current = null;
         setLoading(false);
         return;
@@ -76,7 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await retryDelay(delay, controller.signal);
       }
     }
-  }, [invalidateStatus]);
+  }, [applyStatus, invalidateStatus]);
 
   useEffect(() => {
     const requireAuth = () => {
@@ -109,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       path: "/auth/login" | "/auth/setup",
       username: string,
       password: string,
+      bootstrapCode?: string,
     ): Promise<string | null> => {
       // Serialize cookie-changing requests; aborting a request cannot undo a Set-Cookie response.
       if (authRequest.current)
@@ -117,8 +124,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const controller = new AbortController();
       authRequest.current = controller;
       try {
+        const body: CredentialsRequest | SetupRequest = path === "/auth/setup"
+          ? { username, password, bootstrapCode: bootstrapCode ?? "" }
+          : { username, password };
         const { user } = await apiJson(path, authUserResponseSchema, {
-          ...jsonBody("POST", { username, password } satisfies CredentialsRequest),
+          ...jsonBody("POST", body),
           signal: controller.signal,
         });
         if (controller.signal.aborted || revision.current !== owner)
@@ -135,14 +145,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           !controller.signal.aborted && revision.current === owner &&
           path === "/auth/setup" && error instanceof ApiRequestError &&
           error.status === 403
-        )
-          setSetupLocked(true);
+        ) {
+          // A 403 also covers an invalid bootstrap code. Ask the server whether
+          // setup actually expired before replacing the form, and leave its
+          // local draft mounted when the status check is unavailable.
+          try {
+            const status = await apiJson("/auth/status", authStatusSchema, {
+              signal: controller.signal,
+            });
+            if (!controller.signal.aborted && revision.current === owner) {
+              applyStatus(status);
+              setStatusError(false);
+            }
+          } catch {
+            // The setup error remains actionable; a failed probe is not proof
+            // that the time-limited setup window is locked.
+          }
+        }
         return error instanceof Error ? error.message : "Unable to sign in.";
       } finally {
         if (authRequest.current === controller) authRequest.current = null;
       }
     },
-    [invalidateStatus],
+    [applyStatus, invalidateStatus],
   );
 
   const login = useCallback(
@@ -150,7 +175,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [authenticate],
   );
   const setup = useCallback(
-    (username: string, password: string) => authenticate("/auth/setup", username, password),
+    (username: string, password: string, bootstrapCode: string) =>
+      authenticate("/auth/setup", username, password, bootstrapCode),
     [authenticate],
   );
 

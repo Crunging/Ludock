@@ -21,7 +21,7 @@ import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { RESTORE_EXTRACT_SCRIPT } from "./restore-extract-script.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
-import { DEFAULT_HELPER_IMAGE } from "./runtime-images.js";
+import { getHelperImage } from "./runtime-images.js";
 
 export interface BackupRoot {
   id: string;
@@ -522,7 +522,7 @@ export async function createDataHelper(
   if (checkedMounts.some((mount) => !isSafeWritableDataMount(mount)))
     throw failBackup("UNSAFE_BACKUP_ROOT", "A selected data mount is unsafe.");
   const proof = await createMountProof(checkedMounts, operationId);
-  const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
+  const image = getHelperImage();
   const options: Docker.ContainerCreateOptions = {
     Image: image,
     User: "0",

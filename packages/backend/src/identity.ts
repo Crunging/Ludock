@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getDatabase } from "./database.js";
+import { getDatabase, keyedBindingFingerprint } from "./database.js";
 import {
   dockerContainerIdSchema,
   logicalServerIdSchema,
@@ -21,7 +21,7 @@ export interface ServerObservation {
     writable: boolean;
     name?: string;
   }>;
-  /** Input only: values are hashed, never stored or returned by this module. */
+  /** Input only: values are keyed-hashed, never stored or returned by this module. */
   gameConfiguration?: Record<string, string>;
 }
 
@@ -144,7 +144,7 @@ export function bindingFingerprint(observation: ServerObservation): string {
   const configuration = Object.entries(
     observation.gameConfiguration ?? {},
   ).sort(([left], [right]) => left.localeCompare(right));
-  return new Bun.CryptoHasher("sha256")
+  const digest = new Bun.CryptoHasher("sha256")
     .update(
       JSON.stringify({
         projectRegistrationId: observation.projectRegistrationId ?? null,
@@ -154,6 +154,7 @@ export function bindingFingerprint(observation: ServerObservation): string {
       }),
     )
     .digest("hex");
+  return keyedBindingFingerprint(digest);
 }
 
 function toLogicalServer(row: ServerRow): LogicalServer {

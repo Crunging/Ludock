@@ -4,6 +4,59 @@ import { scrypt, timingSafeEqual } from "node:crypto";
 const ARGON_MEMORY_KIB = 65536;
 const ARGON_TIME_COST = 2;
 const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
+const MAX_ACTIVE_PASSWORD_WORK = 4;
+const MAX_ACTIVE_PASSWORD_WORK_PER_SOURCE = 2;
+const MAX_ACTIVE_PASSWORD_WORK_PER_SUBJECT = 1;
+
+let activePasswordWork = 0;
+const activePasswordWorkBySource = new Map<string, number>();
+const activePasswordWorkBySubject = new Map<string, number>();
+
+export class PasswordWorkBusyError extends Error {
+  constructor() {
+    super("Password verification is busy");
+    this.name = "PasswordWorkBusyError";
+  }
+}
+
+function releasePasswordWork(counter: Map<string, number>, key: string): void {
+  const remaining = (counter.get(key) ?? 1) - 1;
+  if (remaining > 0) counter.set(key, remaining);
+  else counter.delete(key);
+}
+
+/**
+ * Atomically reserve bounded password work before starting a memory-hard KDF.
+ * Requests are rejected instead of queued so an attacker cannot build an
+ * unbounded backlog. Callers provide opaque, non-secret source and credential
+ * keys; the limits are deliberately independent of persistent login throttles.
+ */
+export async function withPasswordWork<T>(
+  sourceKey: string,
+  subjectKey: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const sourceCount = activePasswordWorkBySource.get(sourceKey) ?? 0;
+  const subjectCount = activePasswordWorkBySubject.get(subjectKey) ?? 0;
+  if (
+    activePasswordWork >= MAX_ACTIVE_PASSWORD_WORK ||
+    sourceCount >= MAX_ACTIVE_PASSWORD_WORK_PER_SOURCE ||
+    subjectCount >= MAX_ACTIVE_PASSWORD_WORK_PER_SUBJECT
+  ) {
+    throw new PasswordWorkBusyError();
+  }
+
+  activePasswordWork += 1;
+  activePasswordWorkBySource.set(sourceKey, sourceCount + 1);
+  activePasswordWorkBySubject.set(subjectKey, subjectCount + 1);
+  try {
+    return await work();
+  } finally {
+    activePasswordWork -= 1;
+    releasePasswordWork(activePasswordWorkBySource, sourceKey);
+    releasePasswordWork(activePasswordWorkBySubject, subjectKey);
+  }
+}
 
 export function hashPassword(password: string): Promise<string> {
   return bunPassword.hash(password, {

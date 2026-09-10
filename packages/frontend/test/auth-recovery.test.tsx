@@ -9,6 +9,14 @@ const status = (authenticated = false) => Response.json({
   setupRequired: false, setupLocked: false, setupExpiresAt: null,
   setupRemainingMs: null, authenticated, user: authenticated ? user : null,
 });
+const setupStatus = (setupLocked = false) => Response.json({
+  setupRequired: true,
+  setupLocked,
+  setupExpiresAt: setupLocked ? Date.now() : Date.now() + 60_000,
+  setupRemainingMs: setupLocked ? 0 : 60_000,
+  authenticated: false,
+  user: null,
+});
 function deferredResponse() {
   let resolve!: (response: Response) => void;
   const promise = new Promise<Response>((complete) => { resolve = complete; });
@@ -24,6 +32,111 @@ afterEach(() => {
 });
 
 describe("authentication request ownership", () => {
+  it("submits the one-time setup code only with initial setup", async () => {
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({
+        setupRequired: true,
+        setupLocked: false,
+        setupExpiresAt: Date.now() + 60_000,
+        setupRemainingMs: 60_000,
+        authenticated: false,
+        user: null,
+      }))
+      .mockResolvedValueOnce(Response.json({ user }));
+    const auth = renderAuth();
+    await waitFor(() => expect(auth.result.current.loading).toBe(false));
+    await act(async () => {
+      expect(await auth.result.current.setup(
+        "admin",
+        "valid password for tests",
+        "fixture-setup-code-0123456789abcdef",
+      )).toBeNull();
+    });
+    expect(fetch.mock.calls[1][0]).toBe("/api/v1/auth/setup");
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body))).toEqual({
+      username: "admin",
+      password: "valid password for tests",
+      bootstrapCode: "fixture-setup-code-0123456789abcdef",
+    });
+  });
+
+  it("keeps setup unlocked after a rejected code when fresh status confirms it is open", async () => {
+    const fetch = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(setupStatus())
+      .mockResolvedValueOnce(Response.json({ error: "Setup code is invalid" }, { status: 403 }))
+      .mockResolvedValueOnce(setupStatus());
+    const auth = renderAuth();
+    await waitFor(() => expect(auth.result.current.loading).toBe(false));
+    await act(async () => {
+      expect(await auth.result.current.setup(
+        "admin",
+        "valid password for tests",
+        "rejected-fixture-setup-code-123456",
+      )).toBe("Setup code is invalid");
+    });
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/auth/status",
+      "/api/v1/auth/setup",
+      "/api/v1/auth/status",
+    ]);
+    expect(auth.result.current.setupRequired).toBe(true);
+    expect(auth.result.current.setupLocked).toBe(false);
+  });
+
+  it("locks setup only when fresh status confirms the window expired", async () => {
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(setupStatus())
+      .mockResolvedValueOnce(Response.json({ error: "Setup is unavailable" }, { status: 403 }))
+      .mockResolvedValueOnce(setupStatus(true));
+    const auth = renderAuth();
+    await waitFor(() => expect(auth.result.current.loading).toBe(false));
+    await act(async () => {
+      expect(await auth.result.current.setup(
+        "admin",
+        "valid password for tests",
+        "expired-fixture-setup-code-1234567",
+      )).toBe("Setup is unavailable");
+    });
+    expect(auth.result.current.setupRequired).toBe(true);
+    expect(auth.result.current.setupLocked).toBe(true);
+  });
+
+  it("does not infer expiry when the status probe is unavailable", async () => {
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(setupStatus())
+      .mockResolvedValueOnce(Response.json({ error: "Setup is unavailable" }, { status: 403 }))
+      .mockRejectedValueOnce(new TypeError("Network unavailable"));
+    const auth = renderAuth();
+    await waitFor(() => expect(auth.result.current.loading).toBe(false));
+    await act(async () => {
+      expect(await auth.result.current.setup(
+        "admin",
+        "valid password for tests",
+        "unknown-fixture-setup-code-1234567",
+      )).toBe("Setup is unavailable");
+    });
+    expect(auth.result.current.setupRequired).toBe(true);
+    expect(auth.result.current.setupLocked).toBe(false);
+  });
+
+  it("moves to normal sign-in when another client completes setup during submission", async () => {
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(setupStatus())
+      .mockResolvedValueOnce(Response.json({ error: "Setup is unavailable" }, { status: 403 }))
+      .mockResolvedValueOnce(status());
+    const auth = renderAuth();
+    await waitFor(() => expect(auth.result.current.loading).toBe(false));
+    await act(async () => {
+      expect(await auth.result.current.setup(
+        "admin",
+        "valid password for tests",
+        "completed-fixture-setup-code-12345",
+      )).toBe("Setup is unavailable");
+    });
+    expect(auth.result.current.setupRequired).toBe(false);
+    expect(auth.result.current.setupLocked).toBe(false);
+  });
+
   it("does not restore a signed-out user from an older status response", async () => {
     const oldStatus = deferredResponse();
     const fetch = spyOn(globalThis, "fetch")
@@ -70,7 +183,11 @@ describe("authentication request ownership", () => {
     let first!: Promise<string | null>;
     await act(async () => {
       first = auth.result.current.login("admin", "valid password for tests");
-      expect(await auth.result.current.setup("another", "another valid password")).toContain("still in progress");
+      expect(await auth.result.current.setup(
+        "another",
+        "another valid password",
+        "fixture-setup-code-0123456789abcdef",
+      )).toContain("still in progress");
       await auth.result.current.logout();
       await auth.result.current.refreshStatus();
     });

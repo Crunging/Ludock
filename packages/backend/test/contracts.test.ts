@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import {
   credentialsRequestSchema,
+  setupRequestSchema,
   createUserRequestSchema,
   userAccessRequestSchema,
   resetPasswordRequestSchema,
@@ -183,6 +184,7 @@ test("identifier boundary parsers preserve supported Docker references and rejec
 
 test("shared account requests normalize input, validate password changes, and strip unknown fields", () => {
   const password = "long-enough-password";
+  const bootstrapCode = "fixture-setup-code-0123456789abcdef";
   assert.deepEqual(
     credentialsRequestSchema.parse({
       username: "  admin  ",
@@ -191,6 +193,31 @@ test("shared account requests normalize input, validate password changes, and st
     }),
     { username: "admin", password },
   );
+  assert.deepEqual(
+    setupRequestSchema.parse({
+      username: "  admin  ",
+      password,
+      bootstrapCode,
+    }),
+    { username: "admin", password, bootstrapCode },
+  );
+  assert(!setupRequestSchema.safeParse({ username: "admin", password }).success);
+  assert(!setupRequestSchema.safeParse({
+    username: "admin",
+    password,
+    bootstrapCode: "x".repeat(31),
+  }).success);
+  assert(!setupRequestSchema.safeParse({
+    username: "admin",
+    password,
+    bootstrapCode: "x".repeat(129),
+  }).success);
+  assert(!setupRequestSchema.safeParse({
+    username: "admin",
+    password,
+    bootstrapCode,
+    ignored: true,
+  }).success);
   assert.deepEqual(
     createUserRequestSchema.parse({
       username: "friend",

@@ -24,10 +24,26 @@ bounded verification of legacy scrypt hashes. Successful sign-in upgrades an
 older hash only after rechecking that the account is enabled and its password
 has not changed during asynchronous verification.
 
-SHA-256 token hashes, binding fingerprints, operation keys, and backup checksums
-use `Bun.CryptoHasher` with their existing byte encodings. UUIDs and session-token
-randomness use Web Crypto. Constant-time token comparisons and legacy scrypt
-verification retain Bun's `node:crypto` APIs.
+SHA-256 token hashes, operation keys, and backup checksums use `Bun.CryptoHasher`
+with their existing byte encodings. From the first supported schema (version 2),
+binding and Compose-source fingerprints wrap their canonical digests in separate
+domain-separated HMACs using an installation key kept outside SQLite. This
+prevents a database-only disclosure from becoming an offline verifier for
+low-entropy game credentials or environment-file values. The key is a mode-0600
+`key` file inside an atomically published mode-0700 `.identity-key` directory
+beside the canonical database path. The key and its directory entries are synced
+before SQLite commits the schema that depends on them; missing, unsafe, or
+mismatched keys fail closed. Unsupported pre-version-2 development databases are
+rejected during read-only inspection. UUIDs and session-token randomness use Web
+Crypto. HMAC, constant-time comparisons, and legacy scrypt verification use
+`node:crypto`.
+
+Queued API-token operations carry a separate domain-separated HMAC identifying
+the configured credential generation. This is not a user-password verifier:
+request authentication still checks the bearer token, while workers compare the
+generation to reject work queued before token rotation. A database-only copy
+does not contain the HMAC key. Administrative API tokens must still be random;
+the minimum length alone does not guarantee entropy.
 
 Filesystem confinement retains descriptor-based `node:fs` operations and Linux
 `/proc/self/fd` checks in file, backup, restore, and Compose validation paths.
@@ -46,14 +62,17 @@ The remaining libraries preserve capabilities beyond a direct native replacement
 - TypeScript supplies type checking and declaration output; ESLint, Playwright,
   jsdom, and Zod retain their linting, browser, DOM, and validation responsibilities.
 
-Helper containers use
-`oven/bun:1-alpine`, defined centrally in
+Helper containers use the digest-pinned
+`oven/bun:1-alpine` image, defined centrally in
 [`runtime-images.ts`](../packages/backend/src/runtime-images.ts); the production
 image copies the target platform's Bun executable into `alpine:3` alongside the
-Docker CLI and Compose plugin. These tags follow stable releases within their
-majors when pulled. Updating local tools, pulling cached images, and refreshing
-locked dependency versions are explicit actions; the maintenance policy is
-described in [Contributing](../CONTRIBUTING.md#updating-tools-and-dependencies).
+Docker CLI and Compose plugin. Build and helper image digests are updated together
+after reviewing upstream releases. Digest-pinned helper overrides are required;
+Docker verifies image content against the requested digest when pulling. The
+validator's host-root mount remains a privileged trust boundary even with a
+read-only mount and disabled networking, so only trusted helper images may be
+selected. Updating tools, pins, and locked dependencies follows the maintenance
+policy in [Contributing](../CONTRIBUTING.md#updating-tools-and-dependencies).
 
 ## Shared contracts
 
@@ -112,6 +131,17 @@ and authorization checks remain inside their adapters. Pending native connection
 cannot be canceled until Bun exposes their sockets, so late connections are closed
 and the CLI exits after coordinated shutdown has drained application work and
 closed SQLite. Calling the imported server's `shutdown()` does not exit the process.
+
+Minecraft's Docker-exec adapter keeps commands as literal argument-array values
+and runs an in-container watchdog: 15 seconds before termination, then a
+three-second kill grace period. Output is capped at 4 MiB, and a closed or revoked
+console requests cancellation while retaining its lock through stream cleanup.
+Waiting for exec creation is limited to five seconds and can be cancelled before
+starting; late creation results are discarded without executing them. These bounds do not
+cover an indefinitely stalled Docker start request. A disconnected `exec.start`
+request cannot prove that Docker did not accept the mutation; releasing its lock
+on an HTTP-only timeout would be unsafe. Docker availability and recovery remain
+deployment responsibilities.
 
 Direct lifecycle and file handlers use `serverAction(capability, handler)`.
 Declaring the capability is required by its signature. The helper resolves the

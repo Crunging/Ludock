@@ -169,6 +169,56 @@ describe("WebSocket server capability boundaries", () => {
     assert.ok(ws.sent.some((message) => message.data.includes("Command sent")));
   });
 
+  it("closes the console when log access is revoked during asynchronous attachment", async () => {
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute", "logs.read"],
+      administrator,
+    );
+    let attachLogs!: (stream: PassThrough) => void;
+    let requestedLogs!: () => void;
+    const pendingLogs = new Promise<PassThrough>((resolve) => { attachLogs = resolve; });
+    const didRequestLogs = new Promise<void>((resolve) => { requestedLogs = resolve; });
+    const getFixtureContainer = docker.getContainer;
+    docker.getContainer = ((id: string) => ({
+      ...getFixtureContainer(id),
+      logs: async () => {
+        logCalls++;
+        requestedLogs();
+        return pendingLogs;
+      },
+    })) as unknown as typeof docker.getContainer;
+
+    const ws = new FakeWebSocket();
+    const connection = handleConsoleConnection(ws, request("game-console"), auth(), "game");
+    await didRequestLogs;
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    attachLogs(logStream);
+    await connection;
+
+    assert.equal(ws.isOpen, false);
+    assert.equal(ws.closeCode, 1008);
+    assert.equal(logStream.destroyed, true);
+    ws.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    await settle();
+    assert.equal(attachCalls, 0);
+
+    // The remaining command grant works on a fresh, command-only connection.
+    const reconnected = new FakeWebSocket();
+    await handleConsoleConnection(reconnected, request("game-console"), auth(), "game");
+    reconnected.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    await settle();
+    assert.equal(reconnected.isOpen, true);
+    assert.equal(logCalls, 1);
+    assert.equal(attachCalls, 1);
+  });
+
   it("closes and destroys the log stream before sending any frame after grants are revoked", async () => {
     setServerGrant(
       operator.id,
@@ -263,6 +313,89 @@ describe("WebSocket server capability boundaries", () => {
     assert.equal(attachCalls, 0);
   });
 
+  it("keeps the server lock until a disconnected Docker exec has ended", async () => {
+    closeDatabase();
+    createUser({
+      ...operator,
+      passwordHash: "fixture",
+      disabled: false,
+      createdAt: 1,
+    });
+    const mainStream = new PassThrough();
+    let executionCount = 0;
+    let started!: () => void;
+    let cancellationStarted!: () => void;
+    const didStart = new Promise<void>((resolve) => { started = resolve; });
+    const didCancel = new Promise<void>((resolve) => {
+      cancellationStarted = resolve;
+    });
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: containerId,
+        Name: "/game",
+        Config: {
+          Image: "fixture:latest",
+          Labels: {
+            "ludock.enable": "true",
+            "ludock.console": "minecraft-rcon",
+          },
+          OpenStdin: false,
+          StdinOnce: false,
+          Env: [],
+        },
+        State: { Status: "running" },
+        NetworkSettings: { Ports: {} },
+        Created: "2026-09-01T00:00:00Z",
+        Mounts: [],
+      }),
+      exec: async () => {
+        executionCount++;
+        if (executionCount === 1) {
+          return {
+            start: async () => {
+              started();
+              return mainStream;
+            },
+            inspect: async () => ({ Running: false, ExitCode: 125 }),
+          };
+        }
+        return {
+          start: async () => {
+            cancellationStarted();
+            const stream = new PassThrough();
+            setImmediate(() => stream.end());
+            return stream;
+          },
+        };
+      },
+    })) as unknown as typeof docker.getContainer;
+    await refreshServers();
+    serverId = listLogicalServers()[0].id;
+    setServerGrant(
+      operator.id,
+      serverId,
+      ["server.view", "console.execute"],
+      administrator,
+    );
+    const ws = new FakeWebSocket();
+    await handleConsoleConnection(
+      ws,
+      request("game-console"),
+      auth(),
+      "game",
+    );
+    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    await didStart;
+    assert.equal(serverLockIsHeld(), true);
+
+    ws.close(1000);
+    await didCancel;
+    assert.equal(serverLockIsHeld(), true);
+    mainStream.end();
+    await settle();
+    assert.equal(serverLockIsHeld(), false);
+  });
+
   it("does not grant administrator shell access through an operator's console grant", async () => {
     setServerGrant(
       operator.id,
@@ -321,4 +454,16 @@ function request(endpoint: string): Request {
 
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function serverLockIsHeld(): boolean {
+  let release: (() => void) | undefined;
+  try {
+    release = acquireLocks([`server:${serverId}`]);
+    return false;
+  } catch {
+    return true;
+  } finally {
+    release?.();
+  }
 }

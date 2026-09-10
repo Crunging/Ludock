@@ -29,12 +29,18 @@ function loginPage(overrides: Partial<AuthContextValue> = {}) {
 describe("first sign-in", () => {
   it("explains setup requirements and lets users check both password entries", async () => {
     const { auth } = loginPage();
+    const setupCode = screen.getByLabelText("Setup code");
     const username = screen.getByLabelText("Username");
     const password = screen.getByLabelText("Password", { exact: true });
     const confirmation = screen.getByLabelText("Confirm password");
     expect(username.getAttribute("aria-describedby")).toBe("username-hint");
     expect(screen.getByText(/3–32 characters/)).toBeTruthy();
     expect(screen.getByText(/at least 15 characters/)).toBeTruthy();
+    expect(screen.getByText(/docker compose logs ludock/)).toBeTruthy();
+    expect((setupCode as HTMLInputElement).minLength).toBe(32);
+    expect((setupCode as HTMLInputElement).maxLength).toBe(128);
+    expect(setupCode.getAttribute("autocomplete")).toBe("off");
+    await userEvent.type(setupCode, "fixture-setup-code-0123456789abcdef");
     await userEvent.type(username, "invalid name");
     await userEvent.type(password, "three friendly words");
     await userEvent.type(confirmation, "three friendly words");
@@ -47,16 +53,26 @@ describe("first sign-in", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Show passwords" }));
     expect(password.getAttribute("type")).toBe("text");
     expect(confirmation.getAttribute("type")).toBe("text");
+    expect(setupCode.getAttribute("type")).toBe("text");
     await userEvent.click(screen.getByRole("checkbox", { name: "Show passwords" }));
     expect(password.getAttribute("type")).toBe("password");
     expect(confirmation.getAttribute("type")).toBe("password");
+    expect(setupCode.getAttribute("type")).toBe("password");
     await userEvent.click(screen.getByRole("button", { name: "Create administrator" }));
-    expect(auth.setup).toHaveBeenCalledWith("admin-test_user", "three friendly words");
+    expect(auth.setup).toHaveBeenCalledWith(
+      "admin-test_user",
+      "three friendly words",
+      "fixture-setup-code-0123456789abcdef",
+    );
     expect(auth.login).not.toHaveBeenCalled();
   });
 
   it("focuses mismatched confirmation and clears its error when corrected", async () => {
     const { auth } = loginPage();
+    await userEvent.type(
+      screen.getByLabelText("Setup code"),
+      "fixture-setup-code-0123456789abcdef",
+    );
     await userEvent.type(screen.getByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password", { exact: true }), "three friendly words");
     const confirmation = screen.getByLabelText("Confirm password");
@@ -93,6 +109,7 @@ describe("first sign-in", () => {
     const { auth } = loginPage({ setupRequired: false });
     expect(screen.getByText(/Need an account or a password reset/)).toBeTruthy();
     expect(screen.queryByLabelText("Confirm password")).toBeNull();
+    expect(screen.queryByLabelText("Setup code")).toBeNull();
     expect(screen.queryByText(/3–32 characters/)).toBeNull();
     expect(screen.getByLabelText("Username").hasAttribute("pattern")).toBe(false);
     await userEvent.type(screen.getByLabelText("Username"), "friend");
