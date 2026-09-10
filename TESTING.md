@@ -29,7 +29,7 @@ still uses the dependency versions in `bun.lock`. Review available updates with
 `bun outdated --recursive`. After `bun update --recursive`, review the manifest
 and lockfile changes and run `bun run check`, plus browser and platform checks
 for affected behavior. See [Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies)
-for the manual update policy.
+for the agent-managed maintenance policy.
 
 `bun run check` builds shared runtime contracts, checks types and lint, runs
 development-runner, backend unit/HTTP, frontend component, and frontend serving

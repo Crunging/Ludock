@@ -74,9 +74,13 @@ coverage, not a requirement to exercise every feature on every task.
 - `bun install --frozen-lockfile` installs dependencies; `bun run dev` starts the
   managed instance. Read its printed URLs and state path rather than assuming
   ports. `bun run dev --print-config` inspects configuration without starting it.
-- Check dependency updates with `bun outdated --recursive`, refresh them with
-  `bun update --recursive`, review manifest and `bun.lock` changes, and run
-  `bun run check`. Updates are maintainer-driven; do not add dependency bot PRs.
+- Own routine dependency maintenance during substantive development and release
+  work, and address security findings. Update in coherent batches, fix compatibility
+  issues, validate, and commit without per-package approval or dependency bot PRs.
+  Keep `bun.lock` and frozen installs so tested dependency versions are reproducible.
+  Handle major upgrades when needed; involve the maintainer only for product
+  decisions or unresolved blockers. Avoid dependency churn on unrelated small tasks.
+  See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-tools-and-dependencies) for commands.
 - Use supported major-version tags for runtime images and GitHub Actions. Keep
   the Bun major aligned across `.bun-version`, the Docker build, and the helper
   image defined in `packages/backend/src/runtime-images.ts`.

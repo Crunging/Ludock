@@ -67,8 +67,14 @@ and styles for production.
 
 Dependency manifests use standard compatibility ranges, and `bun.lock` records
 the resolved workspace versions. Frozen installs use those recorded versions.
-Maintainers choose updates manually; this repository does not use dependency bot
-PRs. Inspect available updates, then refresh within the manifest ranges:
+Coding agents handle routine updates during substantive development and release
+work, and address security findings. Batch related updates, fix compatibility
+issues, run the relevant checks, and commit validated changes. Dependency bot PRs
+and per-package approvals are unnecessary; ask the maintainer only when a product
+decision or unresolved blocker requires their input. Unrelated small tasks do not
+need a dependency refresh.
+
+Inspect available updates, then refresh within the manifest ranges:
 
 ```bash
 bun outdated --recursive
@@ -77,9 +83,9 @@ bun run check
 ```
 
 Review the manifest and lockfile changes together. Use `bun install` after editing
-dependency manifests and include the updated lockfile. Check upstream release
-notes when changing supported major versions. Upgrading Bun does not update
-workspace dependencies automatically.
+dependency manifests and include the updated lockfile. For major upgrades, review
+upstream release notes and migrate the affected code and tests before committing.
+Upgrading Bun does not update workspace dependencies automatically.
 
 Runtime images follow `oven/bun:1-alpine` and `alpine:3`. Keep the Bun major aligned
 across `.bun-version`, [Dockerfile](./Dockerfile), and the helper image in
