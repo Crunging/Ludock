@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 import { watch } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repository = path.resolve(import.meta.dir, "..");
 
 // Bun's --watch invokes signal handlers but can restart before asynchronous
 // cleanup finishes. Operations and file helpers must drain before a new backend
@@ -91,7 +90,7 @@ export async function watchBackend(directory = repository, env = process.env) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   try {
     await watchBackend();
   } catch (error) {

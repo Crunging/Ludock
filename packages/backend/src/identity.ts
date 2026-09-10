@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { getDatabase } from "./database.js";
 import {
@@ -82,7 +81,7 @@ export function getDockerHostId(name = "local"): string {
     .prepare("SELECT id FROM docker_hosts WHERE name = ?")
     .get(name) as { id: string } | null;
   if (existing) return existing.id;
-  const id = randomUUID();
+  const id = crypto.randomUUID();
   db.prepare(
     "INSERT INTO docker_hosts (id, name, created_at) VALUES (?, ?, ?)",
   ).run(id, name, Date.now());
@@ -145,7 +144,7 @@ export function bindingFingerprint(observation: ServerObservation): string {
   const configuration = Object.entries(
     observation.gameConfiguration ?? {},
   ).sort(([left], [right]) => left.localeCompare(right));
-  return createHash("sha256")
+  return new Bun.CryptoHasher("sha256")
     .update(
       JSON.stringify({
         projectRegistrationId: observation.projectRegistrationId ?? null,
@@ -298,7 +297,7 @@ export function reconcileServers(
       const observation = group[0];
       const ambiguous = group.length !== 1;
       if (!server) {
-        const id = randomUUID();
+        const id = crypto.randomUUID();
         const fingerprint = ambiguous ? "" : bindingFingerprint(observation);
         db.prepare(
           `INSERT INTO logical_servers

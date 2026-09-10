@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -198,7 +197,7 @@ export async function createComposeSnapshot(
   const base = approvedPath(registration.projectDirectory, roots);
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-compose-"));
   const cleanup = () => rm(directory, { recursive: true, force: true });
-  const hash = createHash("sha256").update(JSON.stringify(registration));
+  const hash = new Bun.CryptoHasher("sha256").update(JSON.stringify(registration));
   let inputCount = 0;
   const snapshotFile = async (original: string) => {
     const data = await readApprovedFile(original, roots);
@@ -355,7 +354,7 @@ export async function registerComposeProject(
     const existing = listComposeProjects().find(
       (project) => project.projectName === registration.projectName,
     );
-    const id = existing?.id ?? randomUUID();
+    const id = existing?.id ?? crypto.randomUUID();
     getDatabase()
       .prepare(
         `INSERT INTO compose_projects(id,project_name,registration_json,source_fingerprint,created_at) VALUES(?,?,?,?,?) ON CONFLICT(project_name) DO UPDATE SET registration_json=excluded.registration_json,source_fingerprint=excluded.source_fingerprint,disabled=0`,

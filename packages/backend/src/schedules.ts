@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { scheduleSchema, type ScheduleInput } from "@ludock/shared";
 import {
   getDatabase,
@@ -62,7 +61,7 @@ export function createSchedule(
       "Sign in as a user to own a schedule",
     );
   const binding = resolveServerBinding(serverId);
-  const id = randomUUID();
+  const id = crypto.randomUUID();
   getDatabase()
     .prepare(
       "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",

@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -9,17 +8,10 @@ import {
   stat,
   unlink,
 } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
 
-const repository = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const repository = path.resolve(import.meta.dir, "..");
 
 function port(value, name) {
   if (!/^\d+$/.test(String(value)))
@@ -37,7 +29,7 @@ export async function developmentConfig(
   home = os.homedir(),
 ) {
   const directory = await realpath(checkout);
-  const instance = createHash("sha256")
+  const instance = new Bun.CryptoHasher("sha256")
     .update(directory)
     .digest("hex")
     .slice(0, 12);
@@ -85,16 +77,20 @@ export async function developmentConfig(
 }
 
 function reservePort(number) {
-  return new Promise((resolve, reject) => {
-    // Existing browser tabs may reconnect during startup. Reservations do not
-    // serve requests, and accepted sockets must not delay handing off the port.
-    const server = createServer((socket) => socket.destroy());
-    server.once("error", reject);
-    server.listen(number, "127.0.0.1", () => resolve(server));
+  // Existing browser tabs may reconnect during startup. Reservations do not
+  // serve requests, and accepted sockets must not delay handing off the port.
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port: number,
+    exclusive: true,
+    socket: {
+      open(socket) { socket.terminate(); },
+      data(socket) { socket.terminate(); },
+    },
   });
 }
 function closePort(server) {
-  return new Promise((resolve) => server.close(resolve));
+  server.stop(true);
 }
 
 export async function reserveDevelopmentPorts(config) {
@@ -140,7 +136,7 @@ async function lockFile(file, instance) {
       `This resource already has a development lock: ${file}. Stop its development run first. If that run crashed, verify its recorded PID has ended before removing this lock.`,
     );
   }
-  const nonce = randomUUID();
+  const nonce = crypto.randomUUID();
   try {
     await handle.writeFile(
       JSON.stringify({
@@ -226,9 +222,7 @@ export async function verifyDevelopmentBackend(instance, backendPort) {
 }
 
 function script(packageName, module) {
-  return createRequire(
-    path.join(repository, "packages", packageName, "package.json"),
-  ).resolve(module);
+  return Bun.resolveSync(module, path.join(repository, "packages", packageName));
 }
 
 export async function runDevelopment(config) {
@@ -332,7 +326,7 @@ export async function runDevelopment(config) {
         ready = true;
         break;
       }
-      await delay(100);
+      await Bun.sleep(100);
     }
     if (stopping) return;
     if (!ready)
@@ -383,10 +377,7 @@ export async function runDevelopment(config) {
   }
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (import.meta.main) {
   const args = process.argv.slice(2).filter((argument) => argument !== "--");
   try {
     if (args.includes("--help")) {

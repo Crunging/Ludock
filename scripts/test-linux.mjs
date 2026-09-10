@@ -2,15 +2,10 @@
 // Check the production bundle, then run the backend suites with its Linux
 // runtime and dependencies. Neither fixture gets a Docker socket or network.
 import { readdir, realpath } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const repository = await realpath(path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-));
-const name = "ludock-linux-tests-" + randomUUID();
+const repository = await realpath(path.resolve(import.meta.dir, ".."));
+const name = "ludock-linux-tests-" + crypto.randomUUID();
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
 
 // This function runs inside the image without source mounts, so missing bundle

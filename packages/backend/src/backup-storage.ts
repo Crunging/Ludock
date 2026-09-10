@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import { constants, createWriteStream } from "node:fs";
 import {
   lstat,
@@ -412,7 +411,7 @@ export async function validateArchive(
   checksum: string,
 ): Promise<void> {
   const input = await archiveReadStream(directory, id);
-  const hash = createHash("sha256");
+  const hash = new Bun.CryptoHasher("sha256");
   let bytes = 0;
   const meter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -761,7 +760,7 @@ export async function writeSnapshot(
   const filename = `${pinned.path}/${id}.tar.partial`;
   const output = createWriteStream(filename, { flags: "wx", mode: 0o600 });
   const pack = tar.pack();
-  const hash = createHash("sha256");
+  const hash = new Bun.CryptoHasher("sha256");
   let size = 0,
     checked = 0;
   const meter = new Transform({
@@ -973,7 +972,7 @@ export async function extractRootToStage(
     });
   const extract = tar.extract();
   const names = new Set<string>();
-  const hash = createHash("sha256");
+  const hash = new Bun.CryptoHasher("sha256");
   let total = 0;
   const meter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -1070,4 +1069,4 @@ export async function removeArchive(
   }
 }
 
-export const newBackupId = () => randomUUID();
+export const newBackupId = () => crypto.randomUUID();

@@ -4,18 +4,13 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
 
-const repository = await realpath(path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-));
+const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const folder = await realpath(
   await mkdtemp(path.join(os.tmpdir(), "ludock-backup-harness-")),
 );
 const backups = path.join(folder, "backups");
-const name = "ludock-backup-harness-" + randomUUID();
+const name = "ludock-backup-harness-" + crypto.randomUUID();
 try {
   await mkdir(backups);
   const result = Bun.spawnSync(

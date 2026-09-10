@@ -1,9 +1,4 @@
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { Cookie } from "bun";
 import {
   countUsers,
@@ -128,7 +123,7 @@ export async function createInitialAdmin(
 
   const now = Date.now();
   const user: SessionUser = {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     username: input.username,
     role: "admin",
   };
@@ -180,11 +175,11 @@ export function createSession(
   request: Request,
   ipAddress?: string,
 ): { token: string; expiresAt: number } {
-  const token = randomBytes(32).toString("base64url");
+  const token = crypto.getRandomValues(Buffer.alloc(32)).toString("base64url");
   const now = Date.now();
   const expiresAt = now + SESSION_TTL_MS;
   createSessionRecord({
-    sessionId: randomUUID(),
+    sessionId: crypto.randomUUID(),
     tokenHash: hashToken(token),
     userId: user.id,
     createdAt: now,
@@ -341,7 +336,7 @@ export class AuthError extends Error {
 }
 
 function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return new Bun.CryptoHasher("sha256").update(token).digest("hex");
 }
 
 function bearerToken(authorization: string | null): string {

@@ -3,14 +3,9 @@
 // disposable named volumes and the harness never discovers unrelated servers.
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
 
-const repository = await realpath(path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-));
-const name = "ludock-file-harness-" + randomUUID();
+const repository = await realpath(path.resolve(import.meta.dir, ".."));
+const name = "ludock-file-harness-" + crypto.randomUUID();
 try {
   const result = Bun.spawnSync(
     [

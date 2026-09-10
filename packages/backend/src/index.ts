@@ -126,14 +126,30 @@ export function startServer(options: {
 if (import.meta.main) {
   let runtime: ReturnType<typeof startServer> | undefined = undefined;
   let initialSignal: string | undefined;
+  let exitTask: Promise<void> | undefined;
   const stop = (signal: string) => {
-    if (runtime) void runtime.shutdown(signal);
-    else initialSignal = signal;
+    if (!runtime) {
+      initialSignal ??= signal;
+      return;
+    }
+    if (exitTask) return;
+    const activeRuntime = runtime;
+    exitTask = (async () => {
+      try {
+        await activeRuntime.shutdown(signal);
+      } catch {
+        logger.error("Failed to shut down cleanly");
+        process.exit(1);
+      }
+      // Pending native connects cannot be cancelled before Bun exposes a socket.
+      // All application work and SQLite cleanup have finished before exiting.
+      process.exit(process.exitCode ?? 0);
+    })();
   };
   // Install handlers before listen/readiness output so an immediate container
   // stop follows the same cleanup path as a long-running server.
   process.on("SIGINT", () => stop("SIGINT"));
   process.on("SIGTERM", () => stop("SIGTERM"));
   runtime = startServer();
-  if (initialSignal) void runtime.shutdown(initialSignal);
+  if (initialSignal) stop(initialSignal);
 }

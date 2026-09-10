@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -7,6 +8,7 @@ process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
 const {
   SetupWindow,
   authenticateUser,
+  authenticateRequest,
   authenticateWsRequest,
   createInitialAdmin,
   createSession,
@@ -15,6 +17,7 @@ const {
   ludockApiToken,
   verifyPassword,
 } = await import("../src/auth.js");
+const { createSessionRecord, findSessionUser } = await import("../src/database.js");
 
 function websocketRequest(
   headers: HeadersInit,
@@ -119,6 +122,13 @@ describe("account authentication", () => {
     const session = createSession(user, new Request("http://panel.example/", {
       headers: { "User-Agent": "test-agent" },
     }), "127.0.0.1");
+    assert.match(session.token, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(Buffer.from(session.token, "base64url").length, 32);
+    assert.equal(
+      findSessionUser(createHash("sha256").update(session.token).digest("hex"))?.id,
+      user.id,
+      "new sessions retain the existing SHA-256 storage format",
+    );
     const cookie = `ludock_session=${session.token}`;
 
     assert.ok(
@@ -170,6 +180,24 @@ describe("account authentication", () => {
         })
       )
     );
+  });
+
+  it("authenticates sessions stored before the native hashing conversion", async () => {
+    const user = await authenticateUser("admin", "a-long-test-password");
+    assert.ok(user);
+    const token = Buffer.alloc(32, 17).toString("base64url");
+    const now = Date.now();
+    createSessionRecord({
+      sessionId: crypto.randomUUID(),
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      userId: user.id,
+      createdAt: now,
+      expiresAt: now + 60_000,
+    });
+    const session = authenticateRequest(new Request("http://panel.example/", {
+      headers: { Cookie: `ludock_session=${token}` },
+    }));
+    assert.equal(session?.user.id, user.id);
   });
 
   it("ignores an API token below the strength floor", () => {

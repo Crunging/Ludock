@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 
 import type {
   ApplicationLogLevel,
@@ -14,7 +13,7 @@ export type {
 const MAX_LOG_ENTRIES = 1_000;
 const MAX_MESSAGE_LENGTH = 16_384;
 const MAX_CONTEXT_VALUE_LENGTH = 4_096;
-const generation = randomUUID();
+const generation = crypto.randomUUID();
 const entries: ApplicationLogEntry[] = [];
 let nextId = 1;
 

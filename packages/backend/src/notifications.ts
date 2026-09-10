@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { getDatabase } from "./database.js";
 import { getSetting, setSetting } from "./settings.js";
 import { AppError } from "./errors.js";
@@ -68,7 +67,7 @@ export function notifyEvent(key: string, message: string): void {
       "INSERT OR IGNORE INTO notification_deliveries(id,event_key,payload_json,next_attempt_at,created_at) VALUES(?,?,?,?,?)",
     )
     .run(
-      randomUUID(),
+      crypto.randomUUID(),
       key,
       JSON.stringify({
         content: message.slice(0, 1800),

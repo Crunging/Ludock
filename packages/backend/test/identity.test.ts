@@ -40,6 +40,13 @@ function observation(
 }
 
 describe("logical server identities", () => {
+  it("preserves persisted fingerprints across the hashing implementation change", () => {
+    assert.equal(
+      bindingFingerprint(observation()),
+      "c0c7db1b3d3d4e526b3b86f116b918a80272cf5f3cfdcde8bc6696fac968ce99",
+    );
+  });
+
   it("reattaches ordinary recreations to the same UUID and revises observed-container attribution", () => {
     const original = reconcileServers([observation()], { now: 100 })[0];
     const recreated = reconcileServers(

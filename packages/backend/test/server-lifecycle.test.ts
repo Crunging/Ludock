@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn } from "bun";
 import { afterEach, describe, it } from "bun:test";
@@ -57,8 +60,50 @@ describe("native server shutdown", () => {
     }
   });
 
-  it("handles SIGTERM through the executable entry point and exits after cleanup", async () => {
-    const child = spawn([process.execPath, "src/index.ts"], {
+  for (const exitCode of [0, 7]) it(`drains CLI shutdown once despite repeated SIGTERM and lingering handles, preserving exit code ${exitCode}`, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-cli-shutdown-"));
+    const preload = path.join(directory, "fixture.ts");
+    await Bun.write(preload, `
+      import { getDatabase } from ${JSON.stringify(new URL("../src/database.ts", import.meta.url).href)};
+      import { acquireLocks, isServerBusy } from ${JSON.stringify(new URL("../src/operation-locks.ts", import.meta.url).href)};
+      const database = getDatabase();
+      const key = "server:cli-shutdown-fixture";
+      const release = acquireLocks([key]);
+      let released = false;
+      let signals = 0;
+      process.exitCode = ${exitCode};
+      // A persistent handle models verified native Bun.connect retention without
+      // depending on operating-system backlog timing to leave a connect pending.
+      setInterval(() => {}, 1_000);
+      process.on("SIGTERM", () => {
+        signals += 1;
+        console.log("Fixture SIGTERM observed " + signals);
+        if (signals !== 2) return;
+        setTimeout(() => {
+          try {
+            if (database.prepare("SELECT 1 AS value").get()?.value !== 1)
+              throw new Error("Fixture query failed");
+            console.log("Fixture database usable before release");
+            release();
+            released = true;
+            console.log("Fixture lock released");
+          } catch {
+            console.error("Fixture database closed before operation lock release");
+            process.exitCode = 93;
+            release();
+          }
+        }, 200);
+      });
+      process.on("exit", () => {
+        let databaseClosed = false;
+        try { database.prepare("SELECT 1").get(); }
+        catch { databaseClosed = true; }
+        const lockReleased = released && !isServerBusy(key.slice("server:".length));
+        console.log("Fixture exit " + JSON.stringify({ databaseClosed, lockReleased, signals }));
+        if (!databaseClosed || !lockReleased || signals !== 2) process.exitCode = 94;
+      });
+    `);
+    const child = spawn([process.execPath, "--preload", preload, "src/index.ts"], {
       cwd: import.meta.dir + "/..",
       env: {
         ...process.env,
@@ -72,27 +117,51 @@ describe("native server shutdown", () => {
       stdout: "pipe", stderr: "pipe",
     });
     let output = "";
-    let ready!: () => void;
-    const listening = new Promise<void>((resolve) => { ready = resolve; });
+    const waiting = new Map<string, () => void>();
+    const waitForOutput = (message: string) => Promise.race([
+      new Promise<void>((resolve) => {
+        if (output.includes(message)) resolve();
+        else waiting.set(message, resolve);
+      }),
+      child.exited.then(() => { throw new Error(`Native server exited before '${message}': ${output}`); }),
+    ]);
     const readOutput = (async () => {
       const decoder = new TextDecoder();
       for await (const chunk of child.stdout) {
         output += decoder.decode(chunk, { stream: true });
-        if (output.includes("Ludock listening")) ready();
+        for (const [message, ready] of waiting) if (output.includes(message)) {
+          waiting.delete(message);
+          ready();
+        }
       }
       output += decoder.decode();
     })();
     const errors = new Response(child.stderr).text();
     const deadline = setTimeout(() => child.kill("SIGKILL"), 10_000);
     try {
-      await Promise.race([
-        listening,
-        child.exited.then(() => { throw new Error("Native server exited before listening"); }),
-      ]);
+      await waitForOutput("Ludock listening");
       child.kill("SIGTERM");
-      assert.equal(await child.exited, 0);
+      await waitForOutput("Fixture SIGTERM observed 1");
+      child.kill("SIGTERM");
+      await waitForOutput("Fixture SIGTERM observed 2");
+      assert.equal(await child.exited, exitCode);
       await readOutput;
-      assert.match(output, /Shutdown complete/);
+      assert.equal(output.match(/Shutting down/g)?.length, 1, output);
+      assert.equal(output.match(/Shutdown complete/g)?.length, 1, output);
+      const markers = [
+        "Fixture SIGTERM observed 1",
+        "Fixture SIGTERM observed 2",
+        "Fixture database usable before release",
+        "Fixture lock released",
+        "Shutdown complete",
+        'Fixture exit {"databaseClosed":true,"lockReleased":true,"signals":2}',
+      ];
+      let previous = -1;
+      for (const marker of markers) {
+        const index = output.indexOf(marker);
+        assert.ok(index > previous, `Expected '${marker}' in shutdown order: ${output}`);
+        previous = index;
+      }
       assert.doesNotMatch(await errors, /error:|Unhandled|SyntaxError/);
     } finally {
       clearTimeout(deadline);
@@ -100,6 +169,7 @@ describe("native server shutdown", () => {
       await child.exited;
       await readOutput;
       await errors;
+      await rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
 });

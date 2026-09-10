@@ -327,6 +327,27 @@ describe("Compose execution boundary", () => {
     },
   );
   it.skipIf(Boolean(process.platform !== "linux"))(
+    "rejects duplicate keys and excessive YAML aliases before running Compose",
+    async () => {
+      const filename = path.join(directory, "unsafe-yaml.yaml");
+      for (const yaml of [
+        "services:\n  game:\n    image: first\n    image: second\n",
+        `x-base: &base [a, b, c]\nx-repeated: [${Array(30).fill("*base").join(", ")}]\nservices:\n  game:\n    image: alpine\n`,
+      ]) {
+        await writeFile(filename, yaml);
+        await assert.rejects(
+          createComposeSnapshot({
+            projectName: "fixture",
+            projectDirectory: directory,
+            composeFiles: [filename],
+            envFiles: [],
+          }),
+          /YAML could not be parsed safely/,
+        );
+      }
+    },
+  );
+  it.skipIf(Boolean(process.platform !== "linux"))(
     "rejects file-reading Compose features before spawning config",
     async () => {
       for (const yaml of [

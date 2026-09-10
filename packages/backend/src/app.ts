@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -126,7 +125,7 @@ function requestHandler(handler: ApiHandler, publicEndpoint = false): RoutedHand
     // Bound incoming JSON before allowing long operations or file transfers.
     server.timeout(request, 30);
     const url = new URL(request.url);
-    const requestId = randomUUID();
+    const requestId = crypto.randomUUID();
     const startedAt = performance.now();
     const context: RequestContext = {
       request, url, params: request.params || {}, body: undefined,

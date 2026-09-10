@@ -1,4 +1,3 @@
-import { randomUUID, createHash } from "node:crypto";
 import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
 import { AppError, publicError } from "./errors.js";
@@ -118,7 +117,7 @@ export function enqueueOperation(options: {
 }): Operation {
   const input = JSON.stringify(options.input ?? {});
   const key = options.idempotencyKey
-    ? createHash("sha256")
+    ? new Bun.CryptoHasher("sha256")
         .update(
           `${options.actorId}:${options.serverId}:${options.kind}:${options.idempotencyKey}`,
         )
@@ -149,7 +148,7 @@ export function enqueueOperation(options: {
       409,
       "An operation is already queued or running for this server",
     );
-  const id = randomUUID();
+  const id = crypto.randomUUID();
   const now = Date.now();
   getDatabase()
     .prepare(

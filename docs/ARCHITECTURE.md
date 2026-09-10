@@ -24,16 +24,35 @@ bounded verification of legacy scrypt hashes. Successful sign-in upgrades an
 older hash only after rechecking that the account is enabled and its password
 has not changed during asynchronous verification.
 
+SHA-256 token hashes, binding fingerprints, operation keys, and backup checksums
+use `Bun.CryptoHasher` with their existing byte encodings. UUIDs and session-token
+randomness use Web Crypto. Constant-time token comparisons and legacy scrypt
+verification retain Bun's `node:crypto` APIs.
+
 Filesystem confinement retains descriptor-based `node:fs` operations and Linux
 `/proc/self/fd` checks in file, backup, restore, and Compose validation paths.
-Dockerode, tar-stream, and YAML retain
-their protocol and format responsibilities. Helper containers use
+The remaining libraries preserve capabilities beyond a direct native replacement:
+
+- `yaml` rejects duplicate mapping keys and limits alias expansion to 20 in Compose
+  inputs. [`Bun.YAML.parse`](https://bun.com/docs/runtime/yaml) currently does not
+  expose equivalent parser controls.
+- `tar-stream` exposes individual archive-entry streams so Ludock can validate
+  paths, entry types, ownership, and modes while enforcing byte limits and
+  backpressure.
+  [`Bun.Archive.files()`](https://bun.com/docs/runtime/archive) returns an in-memory
+  map of regular files and cannot provide that validation path.
+- Dockerode handles Docker exec/attach connection upgrades and multiplexed streams.
+  Replacing it with `fetch` would require maintaining a Docker protocol client.
+- TypeScript supplies type checking and declaration output; ESLint, Playwright,
+  jsdom, and Zod retain their linting, browser, DOM, and validation responsibilities.
+
+Helper containers use
 `oven/bun:1-alpine`, defined centrally in
 [`runtime-images.ts`](../packages/backend/src/runtime-images.ts); the production
 image copies the target platform's Bun executable into `alpine:3` alongside the
 Docker CLI and Compose plugin. These tags follow stable releases within their
 majors when pulled. Updating local tools, pulling cached images, and refreshing
-locked dependency versions are explicit actions; the manual update policy is
+locked dependency versions are explicit actions; the maintenance policy is
 described in [Contributing](../CONTRIBUTING.md#updating-tools-and-dependencies).
 
 ## Shared contracts
@@ -86,6 +105,13 @@ session revalidation, and shutdown. Console and log handlers use a socket channe
 that preserves bounded buffering and connection cleanup; game-specific protocol
 behavior stays in adapters. Response streams propagate cancellation and retain
 the authorization, resource-lock, and helper-cleanup lifetimes of their work.
+
+RCON and Telnet use `Bun.connect` with explicit connection and command deadlines,
+queued partial writes, and cleanup after failure or completion. Protocol parsing
+and authorization checks remain inside their adapters. Pending native connections
+cannot be canceled until Bun exposes their sockets, so late connections are closed
+and the CLI exits after coordinated shutdown has drained application work and
+closed SQLite. Calling the imported server's `shutdown()` does not exit the process.
 
 Direct lifecycle and file handlers use `serverAction(capability, handler)`.
 Declaring the capability is required by its signature. The helper resolves the

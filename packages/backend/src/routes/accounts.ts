@@ -15,7 +15,6 @@ import {
   userResponseSchema,
   usersResponseSchema,
 } from "@ludock/shared";
-import { createHash, randomUUID } from "node:crypto";
 import { listApplicationLogs } from "../application-logs.js";
 import {
   AuthError, assertRequestUser, authenticateUser, clearSessionCookie, createInitialAdmin,
@@ -49,7 +48,7 @@ function publicUser(user: UserRecord | null) {
   };
 }
 function loginThrottleKey(scope: "account" | "password-change", value: string): string {
-  return createHash("sha256").update(`${scope}:${value}`).digest("hex");
+  return new Bun.CryptoHasher("sha256").update(`${scope}:${value}`).digest("hex");
 }
 function stringProperty(value: unknown, property: string): string | undefined {
   if (typeof value !== "object" || value === null)
@@ -268,7 +267,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           return Response.json({ error: "Invalid user details" }, { status: 400 });
         }
         const now = Date.now();
-        const id = randomUUID();
+        const id = crypto.randomUUID();
         const actor = requestUser(ctx);
         try {
           const passwordHash = await hashPassword(parsed.data.password);

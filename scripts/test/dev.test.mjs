@@ -8,7 +8,6 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, it } from "bun:test";
@@ -75,9 +74,11 @@ it("honors explicit configuration and rejects conflicting or invalid ports", asy
 });
 
 it("finds an available pair but never silently moves explicitly requested ports", async () => {
-  const blocker = createServer();
-  await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));
-  const blockedPort = blocker.address().port;
+  const blocker = Bun.listen({
+    hostname: "127.0.0.1", port: 0, exclusive: true,
+    socket: { data(socket) { socket.terminate(); } },
+  });
+  const blockedPort = blocker.port;
   try {
     await assert.rejects(
       reserveDevelopmentPorts({
@@ -103,38 +104,63 @@ it("finds an available pair but never silently moves explicitly requested ports"
       await selected.release();
     }
   } finally {
-    await new Promise((resolve) => blocker.close(resolve));
+    blocker.stop(true);
   }
+});
+
+it("releases the first reservation when the requested API port is occupied", async () => {
+  const config = await developmentConfig(path.join(directory, "checkout"), {});
+  const selected = await reserveDevelopmentPorts(config);
+  await selected.release();
+  const blocker = Bun.listen({
+    hostname: "127.0.0.1", port: selected.backendPort, exclusive: true,
+    socket: { data(socket) { socket.terminate(); } },
+  });
+  try {
+    await assert.rejects(
+      reserveDevelopmentPorts({ ...selected, fixedPorts: true }),
+      /already in use/,
+    );
+    // The frontend reservation from the rejected pair must be available now.
+    const frontend = Bun.listen({
+      hostname: "127.0.0.1", port: selected.frontendPort, exclusive: true,
+      socket: { data(socket) { socket.terminate(); } },
+    });
+    frontend.stop(true);
+  } finally {
+    blocker.stop(true);
+  }
+  const reacquired = await reserveDevelopmentPorts({ ...selected, fixedPorts: true });
+  await reacquired.release();
 });
 
 it("hands off reserved ports even when a browser reconnects during startup", async () => {
   const config = await developmentConfig(path.join(directory, "checkout"), {});
   const selected = await reserveDevelopmentPorts(config);
-  const sockets = [selected.frontendPort, selected.backendPort].map((port) =>
-    createConnection({ host: "127.0.0.1", port }),
-  );
-  const closed = sockets.map(
-    (socket) =>
-      new Promise((resolve) => {
-        // Resetting a reservation connection is intentional.
-        socket.on("error", () => {});
-        socket.once("close", resolve);
-      }),
-  );
+  const sockets = [];
+  const closed = [];
   let timer;
   try {
     await Promise.all(
-      sockets.map(
-        (socket) =>
-          new Promise((resolve) => {
-            socket.once("connect", () => {
+      [selected.frontendPort, selected.backendPort].map((port) => {
+        const finished = Promise.withResolvers();
+        closed.push(finished.promise);
+        return Bun.connect({
+          hostname: "127.0.0.1", port,
+          socket: {
+            open(socket) {
+              sockets.push(socket);
               socket.write(
                 "GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\n\r\n",
               );
-              resolve();
-            });
-          }),
-      ),
+            },
+            data() {},
+            // Resetting a reservation connection is intentional.
+            error() {},
+            close() { finished.resolve(); },
+          },
+        });
+      }),
     );
     await Promise.race([
       Promise.all([...closed, selected.release()]),
@@ -146,9 +172,11 @@ it("hands off reserved ports even when a browser reconnects during startup", asy
         );
       }),
     ]);
+    const reacquired = await reserveDevelopmentPorts({ ...selected, fixedPorts: true });
+    await reacquired.release();
   } finally {
     clearTimeout(timer);
-    sockets.forEach((socket) => socket.destroy());
+    sockets.forEach((socket) => socket.terminate());
     await selected.release();
   }
 });
