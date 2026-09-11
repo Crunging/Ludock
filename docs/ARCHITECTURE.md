@@ -187,6 +187,12 @@ Cookie-changing authentication requests and form mutations are serialized;
 successful mutations clear only the draft values they submitted. Settings and
 grant editors require a successful initial read before they can save.
 
+The file browser keeps each folder location with its load result, dialog errors
+with their dialog, and upload progress with its pending work. A server or account
+reload resets the whole view state. Request owners remain separate so canceled
+work cannot update a later session; uncertain writes retain only a name draft
+and require a fresh confirmation after the folder is reconciled.
+
 The dashboard's header and server rows share one CSS grid through subgrid.
 Different action counts do not change a row's state or port column. Responsive
 rules switch to compact rows at narrow widths.
