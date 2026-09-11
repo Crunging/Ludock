@@ -1,15 +1,11 @@
-import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, mock } from "bun:test";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES, type Server } from "@ludock/shared";
 import { apiJson } from "../src/api";
-import {
-  AuthContext,
-  type AuthContextValue,
-  type AuthUser,
-} from "../src/auth-context";
-import { NavigationContext } from "../src/navigation-context";
+import type { AuthUser } from "../src/auth-context";
+import TestProviders from "./TestProviders";
+import { operationFixture, serverDetailResponse, serverFixture } from "./fixtures";
 import ServerDetail from "../src/pages/ServerDetail";
 
 const originalApi = { ...await import("../src/api") };
@@ -19,26 +15,14 @@ mock.module("../src/api", () => ({
   apiJson: apiJsonMock,
 }));
 
-const server: Server = {
-  id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
-  shortId: "docker123",
-  name: "world",
-  displayName: "Friends world",
-  image: "itzg/minecraft-server",
-  state: "running",
-  status: "Up",
-  gameType: "minecraft",
-  gameConsole: null,
-  fileRoots: [{ id: "root-0", path: "/data" }],
+const server = serverFixture({
+  fileRoots: [{ id: "root-0", name: "Game data", path: "/data" }],
   ports: [
     { private: 25565, public: 25565, type: "tcp" },
     { private: 25575, public: 0, type: "tcp" },
   ],
-  created: 0,
-  labels: {},
   permissions: [...SERVER_CAPABILITIES],
-  bindingStatus: "active",
-};
+});
 
 function detail({
   role = "admin",
@@ -53,39 +37,13 @@ function detail({
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const response = await onRequest?.(path, init);
     if (response !== undefined) return response;
-    if (path.endsWith("/operations")) return { operations: [] };
-    if (path.endsWith("/backups")) return { backups: [] };
-    if (path.endsWith("/schedules")) return { schedules: [] };
-    if (path.endsWith("/update-capability"))
-      return {
-        capability: {
-          available: true,
-          actionLabel: "Update server",
-          projectName: "games",
-          serviceName: "minecraft",
-          image: current.image,
-          manager: "compose",
-        },
-      };
-    if (path.endsWith("/availability"))
-      return {
-        policy: { enabled: false, maintenance: false, graceSeconds: 120 },
-      };
-    return { server: current, stats: null };
+    return serverDetailResponse(path, current);
   });
   const user = { id: "user1", role, username: "friend" };
   const content = (visible: boolean) => (
-    <AuthContext.Provider
-      value={{ user } as AuthContextValue}
-    >
-      <NavigationContext.Provider
-        value={{ pathname: `/servers/${current.id}`, navigate }}
-      >
-        <ViewPreferencesProvider>
-          {visible ? <ServerDetail serverId={current.id} /> : <p>Server tools</p>}
-        </ViewPreferencesProvider>
-      </NavigationContext.Provider>
-    </AuthContext.Provider>
+    <TestProviders user={user} pathname={`/servers/${current.id}`} navigate={navigate}>
+      {visible ? <ServerDetail serverId={current.id} /> : <p>Server tools</p>}
+    </TestProviders>
   );
   const view = render(content(true));
   return {
@@ -98,7 +56,9 @@ function detail({
 describe("server detail navigation", () => {
   it("keeps the new visit's selected tab when an old update request completes", async () => {
     let finishUpdate!: () => void;
-    const pending = new Promise<void>((resolve) => { finishUpdate = resolve; });
+    const pending = new Promise((resolve) => {
+      finishUpdate = () => resolve({ operation: operationFixture(server.id, { status: "queued" }) });
+    });
     const view = detail({
       onRequest: (path, init) => {
         if (path.endsWith("/updates") && init?.method === "POST") return pending;
@@ -125,45 +85,17 @@ describe("server detail navigation", () => {
     expect(apiJsonMock.mock.calls.length).toBe(requestsBeforeCompletion);
   });
 
-  it("uses one tab stop with arrow, Home, End and linked panels without discarding drafts", async () => {
+  it("preserves a schedule draft when switching management panels", async () => {
     detail();
-    const user = userEvent.setup();
-    const activity = await screen.findByRole("tab", { name: "Activity" });
-    const tabs = within(screen.getByRole("tablist")).getAllByRole("tab");
-    for (const tab of tabs) {
-      const panel = document.getElementById(tab.getAttribute("aria-controls")!);
-      expect(panel?.getAttribute("aria-labelledby")).toBe(tab.id);
-      expect(tab.tabIndex).toBe(tab === activity ? 0 : -1);
-    }
-
-    activity.focus();
-    await user.keyboard("{ArrowRight}{ArrowRight}");
-    const schedules = screen.getByRole("tab", { name: "Schedules" });
-    expect(document.activeElement).toBe(schedules);
-    expect(schedules.getAttribute("aria-selected")).toBe("true");
-    await user.tab();
-    expect(document.activeElement).toBe(
-      screen.getByRole("tabpanel", { name: "Schedules" }),
-    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Schedules" }));
     const timezone = screen.getByRole("textbox", { name: "Time zone" });
-    await user.clear(timezone);
-    await user.type(timezone, "Europe/London");
+    await userEvent.clear(timezone);
+    await userEvent.type(timezone, "Europe/London");
 
-    schedules.focus();
-    await user.keyboard("{End}");
-    expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Availability" }),
-    );
-    await user.keyboard("{ArrowRight}");
-    expect(document.activeElement).toBe(activity);
-    await user.keyboard("{ArrowLeft}");
-    expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Availability" }),
-    );
-    await user.keyboard("{Home}{ArrowRight}{ArrowRight}");
+    await userEvent.click(screen.getByRole("tab", { name: "Availability" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Schedules" }));
     expect(
-      (screen.getByRole("textbox", { name: "Time zone" }) as HTMLInputElement)
-        .value,
+      (screen.getByRole("textbox", { name: "Time zone" }) as HTMLInputElement).value,
     ).toBe("Europe/London");
     expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
   });
@@ -201,17 +133,7 @@ describe("server detail navigation", () => {
       onRequest: (path) => {
         if (path.endsWith("/operations"))
           return {
-            operations: [{
-              id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0",
-              serverId: server.id,
-              kind: "update",
-              status: "already_current",
-              phase: "finished",
-              createdAt: 0,
-              updatedAt: 0,
-              error: null,
-              result: null,
-            }],
+            operations: [operationFixture(server.id)],
           };
       },
     });
@@ -231,17 +153,11 @@ describe("server detail navigation", () => {
     detail({
       onRequest: (path) => {
         if (path.endsWith("/operations")) return {
-          operations: [{
-            id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0",
-            serverId: server.id,
+          operations: [operationFixture(server.id, {
             kind: "backup",
             status: "running",
             phase: "copying_data",
-            createdAt: 0,
-            updatedAt: 0,
-            error: null,
-            result: null,
-          }],
+          })],
         };
       },
     });

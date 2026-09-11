@@ -15,13 +15,10 @@ import {
   type Server,
 } from "@ludock/shared";
 import { ApiRequestError, apiFetch, apiJson } from "../src/api";
-import {
-  AuthContext,
-  type AuthContextValue,
-  type AuthUser,
-} from "../src/auth-context";
-import { NavigationContext } from "../src/navigation-context";
+import type { AuthUser } from "../src/auth-context";
 import Files from "../src/pages/Files";
+import TestProviders from "./TestProviders";
+import { serverFixture } from "./fixtures";
 
 const originalApi = { ...await import("../src/api") };
 const apiFetchMock = mock<typeof apiFetch>();
@@ -36,23 +33,10 @@ const roots = [
   { id: "data", name: "Game data", path: "/data" },
   { id: "mods", name: "Mods", path: "/mods" },
 ];
-const server: Server = {
-  id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
-  shortId: "docker123",
-  name: "world",
-  displayName: "Friends world",
-  image: "itzg/minecraft-server",
-  state: "running",
-  status: "Up",
-  gameType: "minecraft",
-  gameConsole: null,
+const server = serverFixture({
   fileRoots: roots,
-  ports: [],
-  created: 0,
-  labels: {},
   permissions: [...SERVER_CAPABILITIES],
-  bindingStatus: "active",
-};
+});
 const folder: FileEntry = {
   name: "world",
   type: "directory",
@@ -72,16 +56,6 @@ function folderListing(
   entries: FileEntry[] = [folder, config],
 ): FileListing {
   return { root: roots.find((item) => item.id === root)!, path, entries };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function response(body: unknown = { ok: true }, status = 200) {
@@ -119,13 +93,9 @@ function filesPage({
     write ? write(String(path), init) : response(),
   );
   const content = (id: string, user = authUser) => (
-    <AuthContext.Provider value={{ user } as AuthContextValue}>
-      <NavigationContext.Provider
-        value={{ pathname: `/files/${id}`, navigate }}
-      >
-        <Files containerId={id} />
-      </NavigationContext.Provider>
-    </AuthContext.Provider>
+    <TestProviders user={user} pathname={`/files/${id}`} navigate={navigate}>
+      <Files containerId={id} />
+    </TestProviders>
   );
   const view = render(content(current.id));
   return {
@@ -152,7 +122,7 @@ function fileRow(name: string): HTMLElement {
 
 describe("file locations and request ownership", () => {
   it("ignores an older root response and uses the visible root for actions", async () => {
-    const oldRoot = deferred<FileListing>();
+    const oldRoot = Promise.withResolvers<FileListing>();
     let oldSignal: AbortSignal | undefined;
     filesPage({
       read: (path, init) => {
@@ -209,7 +179,7 @@ describe("file locations and request ownership", () => {
   });
 
   it("removes old rows immediately when entering a folder and keeps a failed load distinct from an empty folder", async () => {
-    const nextFolder = deferred<FileListing>();
+    const nextFolder = Promise.withResolvers<FileListing>();
     let retry = false;
     filesPage({
       read: (path) => {
@@ -264,7 +234,7 @@ describe("file locations and request ownership", () => {
   });
 
   it("aborts reads when switching servers and ignores their late results", async () => {
-    const oldFolder = deferred<FileListing>();
+    const oldFolder = Promise.withResolvers<FileListing>();
     const secondServer = {
       ...server,
       id: "997c5e98-7489-42c5-bf94-6e0e2ea3ead8",
@@ -400,7 +370,7 @@ describe("file uploads", () => {
   });
 
   it("ignores a late upload completion after the user changes", async () => {
-    const pending = deferred<Response>();
+    const pending = Promise.withResolvers<Response>();
     let uploadSignal: AbortSignal | undefined;
     const view = filesPage({
       write: (_path, init) => {
@@ -427,6 +397,45 @@ describe("file uploads", () => {
 });
 
 describe("contextual file dialogs", () => {
+  it("keeps the new account's pending action when the previous account's write completes", async () => {
+    const previousWrite = Promise.withResolvers<Response>();
+    const currentWrite = Promise.withResolvers<Response>();
+    let previousSignal: AbortSignal | undefined;
+    let writes = 0;
+    const view = filesPage({
+      write: (_path, init) => {
+        if (++writes === 1) {
+          previousSignal = init?.signal as AbortSignal;
+          return previousWrite.promise;
+        }
+        return currentWrite.promise;
+      },
+    });
+    await screen.findByText(config.name);
+    await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete file" }));
+
+    view.changeUser("other-admin", "admin");
+    await screen.findByText(config.name);
+    expect(previousSignal?.aborted).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Folder name" }), "new-account-folder");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    const dialog = screen.getByRole("dialog");
+    const readsBeforeCompletion = apiJsonMock.mock.calls.length;
+    await act(async () => previousWrite.resolve(response()));
+
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect((within(dialog).getByRole("button", { name: "Create folder" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(`Deleted “${config.name}”.`)).toBeNull();
+    expect(apiJsonMock.mock.calls.length).toBe(readsBeforeCompletion);
+    await act(async () => currentWrite.resolve(response()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("status").textContent).toContain("Created “new-account-folder”.");
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("focuses and preserves the new folder draft after errors, then refreshes on success", async () => {
     let attempt = 0;
     const { navigate } = filesPage({
@@ -469,7 +478,7 @@ describe("contextual file dialogs", () => {
   });
 
   it("focuses Cancel for deletion, restores its trigger, and disables repeated submissions while pending", async () => {
-    const deletion = deferred<Response>();
+    const deletion = Promise.withResolvers<Response>();
     filesPage({ write: () => deletion.promise });
     await screen.findByText("server.properties");
     const trigger = within(fileRow("world")).getByRole("button", {
@@ -544,6 +553,23 @@ describe("contextual file dialogs", () => {
 });
 
 describe("uncertain file mutation results", () => {
+  it("discards the previous account's recovery notice and saved name draft", async () => {
+    const view = filesPage({ write: () => response({ unexpected: true }) });
+    await screen.findByText(config.name);
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Folder name" }), "private-folder-draft");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText(/The change may have completed/);
+
+    view.changeUser("other-admin", "admin");
+    await screen.findByText(config.name);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect((screen.getByRole("textbox", { name: "Folder name" }) as HTMLInputElement).value).toBe("");
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("reconciles a rename whose response was lost and requires a fresh confirmation", async () => {
     let renamed = false;
     const newName = "renamed.properties";

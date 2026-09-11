@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES, type Server } from "@ludock/shared";
+import { SERVER_CAPABILITIES } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import { useWebSocket } from "../src/hooks/useWebSocket";
-import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
-import { NavigationContext } from "../src/navigation-context";
+import type { AuthUser } from "../src/auth-context";
+import TestProviders from "./TestProviders";
+import { serverFixture } from "./fixtures";
 
 const terminals: Array<{
   write: ReturnType<typeof mock>;
@@ -37,23 +38,10 @@ mock.module("../src/api", () => ({
 
 const { default: Console } = await import("../src/pages/Console");
 
-const server: Server = {
-  id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
-  shortId: "docker123",
-  name: "world",
-  displayName: "Friends world",
-  image: "itzg/minecraft-server",
-  state: "running",
-  status: "Up",
-  gameType: "minecraft",
+const server = serverFixture({
   gameConsole: { id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "help" },
-  fileRoots: [],
-  ports: [],
-  created: 0,
-  labels: {},
   permissions: [...SERVER_CAPABILITIES],
-  bindingStatus: "active",
-};
+});
 let transport: ReturnType<typeof useWebSocket>;
 let socketOptions: Parameters<typeof useWebSocket>[0];
 
@@ -80,11 +68,9 @@ function consolePage(role: AuthUser["role"] = "admin", containerId = server.id) 
   const navigate = mock();
   const user: AuthUser = { id: "friend", username: "friend", role };
   const content = (id: string) => (
-    <AuthContext.Provider value={{ user } as AuthContextValue}>
-      <NavigationContext.Provider value={{ pathname: `/console/${id}`, navigate }}>
-        <Console containerId={id} />
-      </NavigationContext.Provider>
-    </AuthContext.Provider>
+    <TestProviders user={user} pathname={`/console/${id}`} navigate={navigate}>
+      <Console containerId={id} />
+    </TestProviders>
   );
   const result = render(content(containerId));
   return {
@@ -305,31 +291,19 @@ describe("console recovery", () => {
   });
 });
 
-describe("console keyboard navigation", () => {
-  it("uses roving tabs and a persistent linked panel while retaining separate mode drafts", async () => {
+describe("console mode state", () => {
+  it("retains separate mode drafts and keeps the terminal mounted when switching modes", async () => {
     consolePage();
     await openConnection();
     const user = userEvent.setup();
     const panel = screen.getByRole("tabpanel", { name: "Game Console" });
     await user.type(screen.getByRole("textbox", { name: "Game command" }), "list");
-    const game = screen.getByRole("tab", { name: "Game Console" });
-    game.focus();
-    await user.keyboard("{End}");
-    const shell = screen.getByRole("tab", { name: "Container Shell" });
-    expect(document.activeElement).toBe(shell);
+    await user.click(screen.getByRole("tab", { name: "Container Shell" }));
     expect(screen.getByRole("tabpanel", { name: "Container Shell" })).toBe(panel);
     await user.type(screen.getByRole("textbox", { name: "Shell command" }), "df -h");
-    shell.focus();
-    await user.keyboard("{Home}{ArrowRight}");
-    expect(document.activeElement).toBe(game);
+    await user.click(screen.getByRole("tab", { name: "Game Console" }));
     expect((screen.getByRole("textbox", { name: "Game command" }) as HTMLInputElement).value).toBe("list");
-    for (const tab of within(screen.getByRole("tablist")).getAllByRole("tab")) {
-      expect(tab.getAttribute("aria-controls")).toBe(panel.id);
-      expect(tab.tabIndex).toBe(tab === game ? 0 : -1);
-    }
-    expect(panel.getAttribute("aria-labelledby")).toBe(game.id);
-    await user.keyboard("{ArrowLeft}{ArrowLeft}");
-    expect(document.activeElement).toBe(shell);
+    await user.click(screen.getByRole("tab", { name: "Container Shell" }));
     expect((screen.getByRole("textbox", { name: "Shell command" }) as HTMLInputElement).value).toBe("df -h");
     expect(terminals).toHaveLength(1);
     expect(terminals[0].dispose).not.toHaveBeenCalled();

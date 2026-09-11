@@ -1,4 +1,3 @@
-import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -6,15 +5,11 @@ import {
   SERVER_CAPABILITIES,
   type Backup,
   type Operation,
-  type Schedule,
   type Server,
 } from "@ludock/shared";
-import {
-  AuthContext,
-  type AuthContextValue,
-  type AuthUser,
-} from "../src/auth-context";
-import { NavigationContext } from "../src/navigation-context";
+import type { AuthUser } from "../src/auth-context";
+import TestProviders from "./TestProviders";
+import { operationFixture, serverDetailResponse, serverFixture, type ServerDetailData } from "./fixtures";
 import ServerDetail from "../src/pages/ServerDetail";
 import ServerGrants from "../src/components/ServerGrants";
 import { apiJson } from "../src/api";
@@ -25,34 +20,10 @@ mock.module("../src/api", () => ({
   ...originalApi,
   apiJson: apiJsonMock,
 }));
-const server: Server = {
-  id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
-  shortId: "docker123",
-  name: "world",
-  displayName: "Friends world",
-  image: "itzg/minecraft-server",
-  state: "running",
-  status: "Up",
-  gameType: "minecraft",
-  gameConsole: null,
-  fileRoots: [],
-  ports: [],
-  created: 0,
-  labels: {},
+const server = serverFixture({
   permissions: ["server.view", "server.start", "server.stop"],
-  bindingStatus: "active",
-};
-const completedUpdate: Operation = {
-  id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0",
-  serverId: server.id,
-  kind: "update",
-  status: "already_current",
-  phase: "finished",
-  createdAt: 0,
-  updatedAt: 0,
-  error: null,
-  result: null,
-};
+});
+const completedUpdate = operationFixture(server.id);
 const backup: Backup = {
   id: "60c15d4e-b46a-4e57-b52d-fc08ee134b75",
   serverId: server.id,
@@ -62,11 +33,8 @@ const backup: Backup = {
   checksum: "a".repeat(64),
   state: "complete",
 };
-interface DetailOptions {
+interface DetailOptions extends ServerDetailData {
   server?: Partial<Server>;
-  backups?: Backup[];
-  schedules?: Schedule[];
-  operations?: Operation[];
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
 }
 function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
@@ -80,47 +48,19 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
     if (response !== undefined) return response;
     if (init?.method && init.method !== "GET")
       return { operation: { ...completedUpdate, status: "queued" }, ok: true };
-    if (path.endsWith("/update-capability"))
-      return {
-        capability: {
-          available: true,
-          actionLabel: "Update server",
-          projectName: "games",
-          serviceName: "minecraft",
-          image: server.image,
-          manager: "compose",
-        },
-      };
-    if (path.endsWith("/availability"))
-      return {
-        policy: { enabled: false, maintenance: false, graceSeconds: 120 },
-        state: {
-          outageStartedAt: null,
-          notified: false,
-          suppressedUntil: null,
-          intentionallyStopped: false,
-          lastState: null,
-        },
-      };
-    if (path.endsWith("/operations"))
-      return { operations: options.operations ?? [completedUpdate] };
-    if (path.endsWith("/backups")) return { backups: options.backups ?? [] };
-    if (path.endsWith("/schedules"))
-      return { schedules: options.schedules ?? [] };
-    return { server: currentServer, stats: null };
+    return serverDetailResponse(path, currentServer, {
+      ...options,
+      operations: options.operations ?? [completedUpdate],
+    });
   });
   return render(
-    <AuthContext.Provider
-      value={
-        { user: { id: "user1", role, username: "admin" } } as AuthContextValue
-      }
+    <TestProviders
+      user={{ id: "user1", role, username: "admin" }}
+      pathname={`/servers/${server.id}`}
+      navigate={mock()}
     >
-      <NavigationContext.Provider
-        value={{ pathname: `/servers/${server.id}`, navigate: mock() }}
-      >
-        <ViewPreferencesProvider><ServerDetail serverId={server.id} /></ViewPreferencesProvider>
-      </NavigationContext.Provider>
-    </AuthContext.Provider>,
+      <ServerDetail serverId={server.id} />
+    </TestProviders>,
   );
 }
 
