@@ -49,17 +49,16 @@ jobs:
           bun-version-file: .bun-version
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build frontend and shared contracts
         run: |
           bun run --filter @ludock/shared build
           bun run --filter @ludock/frontend build
 
-      - name: Install Chromium
+      - name: Install Chromium headless shell
         working-directory: packages/frontend
-        run: bun x --bun playwright install --with-deps chromium
+        run: bun x --bun playwright install --with-deps --only-shell chromium
 
       - name: Check desktop and mobile browser workflows
         run: bun run --filter @ludock/frontend test:e2e
@@ -120,35 +119,7 @@ jobs:
           load: true
           tags: ludock:ci
           cache-from: type=gha,scope=ci-${{ runner.arch }}
-          cache-to: type=gha,mode=min,scope=ci-${{ runner.arch }}
-
-      - name: Smoke-test the image
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker run --rm ludock:ci bun --version
-          docker run --rm ludock:ci docker --version
-          docker run --rm ludock:ci docker compose version
-          docker run -d --name smoke -p 3000:3000 ludock:ci
-          trap 'docker rm -fv smoke >/dev/null 2>&1 || true' EXIT
-
-          # Without a Docker socket, "degraded" confirms the process is serving.
-          for _ in $(seq 1 30); do
-            body="$(curl --silent --show-error --max-time 2 \
-              http://localhost:3000/api/v1/health || true)"
-            if [[ -n "$body" ]]; then
-              echo "Health response: $body"
-              if [[ "$body" == '{"status":"degraded"}' ]]; then
-                exit 0
-              fi
-            fi
-            sleep 2
-          done
-
-          echo "::error::The image did not serve /api/v1/health within 60s."
-          docker logs smoke
-          exit 1
+          cache-to: type=gha,mode=max,scope=ci-${{ runner.arch }}
 
       - name: Set up Bun for storage integration
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -156,15 +127,14 @@ jobs:
           bun-version-file: .bun-version
 
       - name: Install test harness dependencies
-        run: |
-          bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Check Compose updates with disposable services
         run: bun scripts/test-compose.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
 
-      - name: Check backend suites in the Linux production runtime
+      - name: Smoke-test production startup and run Linux backend suites
         run: bun scripts/test-linux.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci

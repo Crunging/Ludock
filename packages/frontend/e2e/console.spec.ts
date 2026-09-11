@@ -17,7 +17,23 @@ test("console modes keep separate drafts and keyboard navigation", async ({ app,
   await page.keyboard.press("ArrowRight");
   await expect(game).toBeFocused();
   await expect(page.getByRole("textbox", { name: "Game command", exact: true })).toHaveValue("list");
-  await expect(page.getByRole("tabpanel", { name: "Game Console", exact: true })).toBeVisible();
+  const panel = page.getByRole("tabpanel", { name: "Game Console", exact: true });
+  await expect(panel).toBeVisible();
+  await expect(game).toHaveAttribute("id", /\S+/);
+  await expect(panel).toHaveAttribute("id", /\S+/);
+  await expect(panel).toHaveAttribute("aria-labelledby", (await game.getAttribute("id"))!);
+  await expect(page.getByRole("tab", { selected: true })).toHaveCount(1);
+  await expect(game).toHaveAttribute("aria-selected", "true");
+  const panelId = (await panel.getAttribute("id"))!;
+  for (const tab of await page.getByRole("tab").all()) {
+    await expect(tab).toHaveAttribute("aria-controls", panelId);
+    await expect(tab).toHaveAttribute("tabindex", await tab.getAttribute("aria-selected") === "true" ? "0" : "-1");
+  }
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("tab", { name: "Docker Logs", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("tab", { name: "Container Shell", exact: true })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Shell command", exact: true })).toHaveValue("pwd");
   expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
   await page.setViewportSize({ width: 320, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

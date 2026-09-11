@@ -1,12 +1,11 @@
-import { serversResponseSchema, serverEventSchema } from "@ludock/shared";
+import { serversResponseSchema, serverEventSchema, type Server } from "@ludock/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ManagedContainer } from "../types";
 import { useWebSocket, type ConnectionStatus } from "./useWebSocket";
 import { ApiRequestError, apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth } from "../auth-context";
 
 interface UseServersResult {
-  servers: ManagedContainer[];
+  servers: Server[];
   loading: boolean;
   error: string | null;
   stale: boolean;
@@ -21,10 +20,15 @@ interface UseServersResult {
 
 interface Snapshot {
   actor: string;
-  servers: ManagedContainer[];
+  servers: Server[];
   lastUpdated: number | null;
   loading: boolean;
   error: string | null;
+}
+
+interface SnapshotRequest {
+  controller: AbortController;
+  invalidated: boolean;
 }
 
 export function useServers(): UseServersResult {
@@ -33,13 +37,13 @@ export function useServers(): UseServersResult {
   const [snapshot, setSnapshot] = useState<Snapshot>({
     actor, servers: [], lastUpdated: null, loading: true, error: null,
   });
-  const requestRef = useRef<AbortController | null>(null);
+  const requestRef = useRef<SnapshotRequest | null>(null);
   const activeRef = useRef(false);
 
   const fetchServers = useCallback(async () => {
     if (!activeRef.current) return;
-    requestRef.current?.abort();
-    const request = new AbortController();
+    requestRef.current?.controller.abort();
+    const request: SnapshotRequest = { controller: new AbortController(), invalidated: false };
     requestRef.current = request;
     setSnapshot((previous) => ({
       ...(previous.actor === actor ? previous : { actor, servers: [], lastUpdated: null }),
@@ -47,28 +51,44 @@ export function useServers(): UseServersResult {
       error: null,
     }));
     try {
-      const body = await apiJson("/servers", serversResponseSchema, { signal: request.signal });
-      if (requestRef.current !== request || request.signal.aborted || !activeRef.current) return;
-      setSnapshot({ actor, servers: body.servers, lastUpdated: Date.now(), loading: false, error: null });
-    } catch (error: unknown) {
-      if (requestRef.current !== request || request.signal.aborted || !activeRef.current) return;
-      // Only transient transport/server failures may keep an explicitly stale
-      // snapshot. Authorization and contract failures must clear its contents.
-      const transient = !(error instanceof ApiRequestError) || error.status >= 500;
-      setSnapshot((previous) => ({
-        actor,
-        servers: transient && previous.actor === actor ? previous.servers : [],
-        lastUpdated: transient && previous.actor === actor ? previous.lastUpdated : null,
-        loading: false,
-        error: error instanceof Error ? error.message : "Failed to fetch servers",
-      }));
+      do {
+        request.invalidated = false;
+        try {
+          const body = await apiJson("/servers", serversResponseSchema, { signal: request.controller.signal });
+          if (requestRef.current !== request || request.controller.signal.aborted || !activeRef.current) return;
+          if (request.invalidated) continue;
+          setSnapshot({ actor, servers: body.servers, lastUpdated: Date.now(), loading: false, error: null });
+        } catch (error: unknown) {
+          if (requestRef.current !== request || request.controller.signal.aborted || !activeRef.current) return;
+          // Only transient transport/server failures may keep an explicitly stale
+          // snapshot. Authorization and contract failures must clear its contents.
+          const transient = !(error instanceof ApiRequestError) || error.status >= 500;
+          const loading = request.invalidated;
+          if (loading && transient) continue;
+          setSnapshot((previous) => ({
+            actor,
+            servers: transient && previous.actor === actor ? previous.servers : [],
+            lastUpdated: transient && previous.actor === actor ? previous.lastUpdated : null,
+            loading,
+            error: error instanceof Error ? error.message : "Failed to fetch servers",
+          }));
+        }
+      } while (request.invalidated);
+    } finally {
+      if (requestRef.current === request) requestRef.current = null;
     }
   }, [actor]);
 
   const handleEvent = useCallback((raw: string) => {
     try {
       const event = serverEventSchema.parse(JSON.parse(raw));
-      if (event.type === "container_event") void fetchServers();
+      if (event.type === "container_event") {
+        // Docker often emits several events for one operation. Finish the
+        // in-flight read, discard its outdated result, then read once more.
+        // Manual refreshes and new connections still supersede it immediately.
+        if (requestRef.current) requestRef.current.invalidated = true;
+        else void fetchServers();
+      }
     } catch { /* Malformed events never invalidate a verified snapshot. */ }
   }, [fetchServers]);
 
@@ -85,7 +105,7 @@ export function useServers(): UseServersResult {
     void fetchServers();
     return () => {
       activeRef.current = false;
-      requestRef.current?.abort();
+      requestRef.current?.controller.abort();
       requestRef.current = null;
     };
   }, [fetchServers]);

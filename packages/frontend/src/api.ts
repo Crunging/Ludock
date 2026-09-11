@@ -6,11 +6,8 @@ export async function apiFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
 ): Promise<Response> {
-  const headers = new Headers(init.headers);
-
   const response = await fetch(input, {
     ...init,
-    headers,
     credentials: "same-origin",
   });
 

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { describe, it } from "bun:test";
 import type Docker from "dockerode";
-import { getDockerInstance, getManagedContainer } from "../src/docker.js";
+import { getDockerInstance, getManagedContainerObservation } from "../src/docker.js";
 import {
   createDirectory,
   uploadFile,
@@ -62,7 +62,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
         cleanup.push(() => game.remove({ force: true }));
         for (const state of ["stopped", "running"]) {
           if (state === "running") await game.start();
-          const server = await getManagedContainer(game.id);
+          const { container: server } = await getManagedContainerObservation(game.id);
           const root = server.fileRoots[0];
           assert.ok(root);
           await createDirectory(server, root.id, "", state);

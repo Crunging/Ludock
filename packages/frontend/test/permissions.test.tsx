@@ -1,3 +1,4 @@
+import type { Server } from "@ludock/shared";
 import { describe, expect, it, mock } from "bun:test";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -9,10 +10,9 @@ import {
 import { NavigationContext } from "../src/navigation-context";
 import ServerCard from "../src/components/ServerCard";
 import { can, toggleGrant } from "../src/permissions";
-import type { ManagedContainer } from "../src/types";
 
 const friend: AuthUser = { id: "friend", username: "friend", role: "operator" };
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "container123",
   name: "minecraft",
@@ -33,7 +33,7 @@ const server: ManagedContainer = {
   bindingStatus: "active",
   permissions: ["server.view", "server.start", "server.stop"],
 };
-function renderServer(value: ManagedContainer, user = friend) {
+function renderServer(value: Server, user = friend) {
   const action = mock().mockResolvedValue(undefined);
   const navigate = mock();
   render(
@@ -64,7 +64,7 @@ describe("server controls", () => {
       permissions: [
         "server.view",
         "console.execute",
-      ] as ManagedContainer["permissions"],
+      ] as Server["permissions"],
     };
     renderServer(scoped);
     expect(

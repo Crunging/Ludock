@@ -16,7 +16,6 @@ import {
 import { useAuth } from "../auth-context";
 import { can } from "../permissions";
 import { NavLink } from "../navigation";
-import type { ManagedContainer } from "../types";
 import FileActionDialog, {
   type FileAction,
 } from "../components/FileActionDialog";
@@ -30,19 +29,19 @@ import {
   serverResponseSchema,
   okResponseSchema,
   formatByteSize,
+  type Server,
 } from "@ludock/shared";
 
 interface FileLocation {
-  root: string;
-  path: string;
+  readonly root: string;
+  readonly path: string;
 }
 
-interface FolderListing {
-  location: FileLocation;
-  state: "loading" | "ready" | "error";
-  entries: FileEntry[];
-  error: string | null;
-}
+type FolderListing = { location: FileLocation } & (
+  | { state: "loading" }
+  | { state: "ready"; entries: FileEntry[] }
+  | { state: "error"; error: string }
+);
 
 interface SelectedAction {
   action: FileAction;
@@ -70,6 +69,29 @@ interface UploadProgress {
   phase: "uploading" | "canceling" | "refreshing";
 }
 
+interface BrowserState {
+  access:
+    | { state: "loading"; server: null; error: null }
+    | { state: "ready"; server: Server; error: string | null }
+    | { state: "error"; server: Server | null; error: string };
+  folder: FolderListing | null;
+  dialog: (SelectedAction & { error: string | null }) | null;
+  actionDraft: ActionDraft | null;
+  work: { kind: "action" } | ({ kind: "upload" } & UploadProgress) | null;
+  feedback: { kind: "error" | "notice"; message: string } | null;
+  dragging: boolean;
+}
+
+const initialBrowserState: BrowserState = {
+  access: { state: "loading", server: null, error: null },
+  folder: null,
+  dialog: null,
+  actionDraft: null,
+  work: null,
+  feedback: null,
+  dragging: false,
+};
+
 function joinPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
 }
@@ -88,38 +110,19 @@ function FileBrowser({ containerId }: { containerId: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const listingRequest = useRef<AbortController | null>(null);
   const mutation = useRef<PendingMutation | null>(null);
-  const [server, setServer] = useState<ManagedContainer | null>(null);
-  const [serverState, setServerState] = useState<"loading" | "ready" | "error">(
-    "loading",
-  );
-  const [serverError, setServerError] = useState<string | null>(null);
+  const [browser, setBrowser] = useState(initialBrowserState);
   const [serverReload, setServerReload] = useState(0);
-  const [location, setLocation] = useState<FileLocation | null>(null);
-  const [listing, setListing] = useState<FolderListing | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [selectedAction, setSelectedAction] = useState<SelectedAction | null>(
-    null,
-  );
-  const [dialogError, setDialogError] = useState<string | null>(null);
-  const [actionDraft, setActionDraft] = useState<ActionDraft | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
-    null,
-  );
+  const { server, state: serverState, error: serverError } = browser.access;
+  const { folder, dialog: selectedAction, actionDraft, feedback, dragging } = browser;
+  const location = folder?.location;
+  const busy = browser.work !== null;
+  const uploadProgress = browser.work?.kind === "upload" ? browser.work : null;
   const canRead = can(user, server, "files.read");
   const canManage = can(user, server, "files.write");
   const bindingBlocked = Boolean(server && server.bindingStatus !== "active");
-  const currentListing =
-    location && listing && sameLocation(location, listing.location)
-      ? listing
-      : null;
-  const loading = Boolean(
-    location && (!currentListing || currentListing.state === "loading"),
-  );
-  const listingReady = currentListing?.state === "ready";
-  const entries = listingReady ? currentListing.entries : [];
+  const loading = folder?.state === "loading";
+  const listingReady = folder?.state === "ready";
+  const entries = listingReady ? folder.entries : [];
   const canChangeFiles = canManage && !bindingBlocked && listingReady && !busy;
 
   useEffect(() => {
@@ -137,18 +140,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
     listingRequest.current = null;
     mutation.current?.controller.abort();
     mutation.current = null;
-    setServer(null);
-    setServerState("loading");
-    setServerError(null);
-    setLocation(null);
-    setListing(null);
-    setBusy(false);
-    setDragging(false);
-    setError(null);
-    setNotice(null);
-    setSelectedAction(null);
-    setActionDraft(null);
-    setUploadProgress(null);
+    setBrowser(initialBrowserState);
 
     apiJson(
       `/servers/${encodeURIComponent(containerId)}`,
@@ -159,21 +151,28 @@ function FileBrowser({ containerId }: { containerId: string }) {
     )
       .then(({ server: nextServer }) => {
         if (controller.signal.aborted) return;
-        setServer(nextServer);
-        setServerState("ready");
-        if (!can(user, nextServer, "files.read")) {
-          setServerError("You do not have file access to this server.");
-          return;
-        }
-        const root = nextServer.fileRoots[0];
-        if (root) setLocation({ root: root.id, path: "" });
+        const readable = can(user, nextServer, "files.read");
+        const root = readable ? nextServer.fileRoots[0] : undefined;
+        setBrowser((current) => ({
+          ...current,
+          access: {
+            state: "ready",
+            server: nextServer,
+            error: readable ? null : "You do not have file access to this server.",
+          },
+          folder: root ? { location: { root: root.id, path: "" }, state: "loading" } : null,
+        }));
       })
       .catch((reason) => {
         if (controller.signal.aborted) return;
-        setServerState("error");
-        setServerError(
-          reason instanceof Error ? reason.message : "Unable to load server.",
-        );
+        setBrowser((current) => ({
+          ...current,
+          access: {
+            state: "error",
+            server: null,
+            error: reason instanceof Error ? reason.message : "Unable to load server.",
+          },
+        }));
       });
     return () => controller.abort();
   }, [containerId, serverReload, user]);
@@ -183,12 +182,10 @@ function FileBrowser({ containerId }: { containerId: string }) {
       listingRequest.current?.abort();
       const controller = new AbortController();
       listingRequest.current = controller;
-      setListing({
-        location: target,
-        state: "loading",
-        entries: [],
-        error: null,
-      });
+      setBrowser((current) => ({
+        ...current,
+        folder: { location: target, state: "loading" },
+      }));
       const ownsRequest = () =>
         listingRequest.current === controller && !controller.signal.aborted;
       const query = new URLSearchParams({
@@ -205,39 +202,39 @@ function FileBrowser({ containerId }: { containerId: string }) {
           throw new Error(
             "The folder response did not match the requested location. Try again.",
           );
-        setListing({
-          location: target,
-          state: "ready",
-          entries: next.entries,
-          error: null,
-        });
+        setBrowser((current) => ({
+          ...current,
+          folder: { location: target, state: "ready", entries: next.entries },
+        }));
       } catch (reason) {
         if (!ownsRequest()) return;
         if (reason instanceof ApiRequestError && reason.status === 403) {
-          setLocation(null);
-          setListing(null);
-          setServer(
-            (current) =>
-              current && {
-                ...current,
+          setBrowser((current) => ({
+            ...current,
+            folder: null,
+            access: {
+              state: "error",
+              error: reason.message,
+              server: current.access.server && {
+                ...current.access.server,
                 fileRoots: [],
-                permissions: current.permissions.filter(
+                permissions: current.access.server.permissions.filter(
                   (permission) =>
                     permission !== "files.read" && permission !== "files.write",
                 ),
               },
-          );
-          setServerState("error");
-          setServerError(reason.message);
+            },
+          }));
           return;
         }
-        setListing({
-          location: target,
-          state: "error",
-          entries: [],
-          error:
-            reason instanceof Error ? reason.message : "Unable to list files.",
-        });
+        setBrowser((current) => ({
+          ...current,
+          folder: {
+            location: target,
+            state: "error",
+            error: reason instanceof Error ? reason.message : "Unable to list files.",
+          },
+        }));
       } finally {
         if (listingRequest.current === controller)
           listingRequest.current = null;
@@ -254,11 +251,15 @@ function FileBrowser({ containerId }: { containerId: string }) {
 
   const changeLocation = (target: FileLocation) => {
     if (mutation.current || selectedAction) return;
-    setError(null);
-    setNotice(null);
-    setDragging(false);
-    setActionDraft(null);
-    setLocation(target);
+    listingRequest.current?.abort();
+    listingRequest.current = null;
+    setBrowser((current) => ({
+      ...current,
+      feedback: null,
+      dragging: false,
+      actionDraft: null,
+      folder: { location: target, state: "loading" },
+    }));
   };
 
   const openAction = (action: FileAction) => {
@@ -271,16 +272,18 @@ function FileBrowser({ containerId }: { containerId: string }) {
       (action.kind === "create" || action.entry.name === actionDraft.sourceName)
         ? actionDraft.name
         : undefined;
-    setSelectedAction({
-      action,
-      location: { ...location },
-      folderLabel: joinPath(root?.name || "Files", location.path),
-      initialName,
-    });
-    setActionDraft(null);
-    setDialogError(null);
-    setError(null);
-    setNotice(null);
+    setBrowser((current) => ({
+      ...current,
+      dialog: {
+        action,
+        location,
+        folderLabel: joinPath(root?.name || "Files", location.path),
+        initialName,
+        error: null,
+      },
+      actionDraft: null,
+      feedback: null,
+    }));
   };
 
   const submitAction = async (name: string) => {
@@ -301,8 +304,11 @@ function FileBrowser({ containerId }: { containerId: string }) {
     };
     mutation.current = owner;
     const ownsMutation = () => mutation.current === owner;
-    setBusy(true);
-    setDialogError(null);
+    setBrowser((current) => ({
+      ...current,
+      work: { kind: "action" },
+      dialog: current.dialog && { ...current.dialog, error: null },
+    }));
     const base = `/api/v1/servers/${encodeURIComponent(containerId)}/files`;
     try {
       let response: Response;
@@ -339,9 +345,12 @@ function FileBrowser({ containerId }: { containerId: string }) {
       }
       await apiResponse(response, okResponseSchema);
       if (!ownsMutation()) return;
-      setNotice(success);
-      setActionDraft(null);
-      setSelectedAction(null);
+      setBrowser((current) => ({
+        ...current,
+        feedback: { kind: "notice", message: success },
+        actionDraft: null,
+        dialog: null,
+      }));
       await refresh(target);
     } catch (reason) {
       if (!ownsMutation() || owner.controller.signal.aborted) return;
@@ -350,12 +359,17 @@ function FileBrowser({ containerId }: { containerId: string }) {
         reason.status >= 400 &&
         reason.status < 500
       ) {
-        setDialogError(reason.message);
+        setBrowser((current) => ({
+          ...current,
+          dialog: current.dialog && { ...current.dialog, error: reason.message },
+        }));
       } else {
         // A write may have completed before its response was lost or became
         // invalid. Keep only the name draft, never a sendable old confirmation.
-        setActionDraft(
-          action.kind === "delete"
+        const targetName = action.kind === "create" ? name : action.entry.name;
+        setBrowser((current) => ({
+          ...current,
+          actionDraft: action.kind === "delete"
             ? null
             : {
                 kind: action.kind,
@@ -364,19 +378,18 @@ function FileBrowser({ containerId }: { containerId: string }) {
                   action.kind === "rename" ? action.entry.name : null,
                 name,
               },
-        );
-        setSelectedAction(null);
-        setDialogError(null);
-        const targetName = action.kind === "create" ? name : action.entry.name;
-        setError(
-          `The result for “${targetName}” could not be confirmed. The change may have completed. Review the folder before starting another action.`,
-        );
+          dialog: null,
+          feedback: {
+            kind: "error",
+            message: `The result for “${targetName}” could not be confirmed. The change may have completed. Review the folder before starting another action.`,
+          },
+        }));
         await refresh(target);
       }
     } finally {
       if (ownsMutation()) {
         mutation.current = null;
-        setBusy(false);
+        setBrowser((current) => ({ ...current, work: null }));
       }
     }
   };
@@ -390,28 +403,27 @@ function FileBrowser({ containerId }: { containerId: string }) {
       files.length === 0
     )
       return;
-    const target = { ...location };
+    const target = location;
     const owner: PendingMutation = {
       kind: "upload",
       controller: new AbortController(),
     };
     mutation.current = owner;
     const ownsMutation = () => mutation.current === owner;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
+    setBrowser((current) => ({ ...current, feedback: null }));
     let completed = 0;
     let currentName = files[0].name;
     try {
       for (const file of files) {
         owner.controller.signal.throwIfAborted();
         currentName = file.name;
-        setUploadProgress({
-          completed,
-          total: files.length,
-          name: currentName,
-          phase: "uploading",
-        });
+        const progress: BrowserState["work"] = {
+          kind: "upload", completed, total: files.length, name: currentName, phase: "uploading",
+        };
+        setBrowser((current) => ({
+          ...current,
+          work: progress,
+        }));
         const query = new URLSearchParams({
           ...target,
           name: file.name,
@@ -430,32 +442,36 @@ function FileBrowser({ containerId }: { containerId: string }) {
         completed += 1;
         owner.controller.signal.throwIfAborted();
       }
-      setNotice(`${completed} file${completed === 1 ? "" : "s"} uploaded.`);
+      setBrowser((current) => ({
+        ...current,
+        feedback: { kind: "notice", message: `${completed} file${completed === 1 ? "" : "s"} uploaded.` },
+      }));
     } catch (reason) {
       if (!ownsMutation()) return;
-      if (owner.controller.signal.aborted)
-        setNotice(
-          `Upload canceled. ${completed} of ${files.length} files confirmed complete. Check “${currentName}” before retrying; canceling does not undo data already written.`,
-        );
-      else
-        setError(
-          `Uploaded ${completed} of ${files.length} files. Could not upload “${currentName}”: ${reason instanceof Error ? reason.message : "Upload failed."}`,
-        );
+      setBrowser((current) => ({
+        ...current,
+        feedback: owner.controller.signal.aborted
+          ? {
+              kind: "notice",
+              message: `Upload canceled. ${completed} of ${files.length} files confirmed complete. Check “${currentName}” before retrying; canceling does not undo data already written.`,
+            }
+          : {
+              kind: "error",
+              message: `Uploaded ${completed} of ${files.length} files. Could not upload “${currentName}”: ${reason instanceof Error ? reason.message : "Upload failed."}`,
+            },
+      }));
     } finally {
       if (ownsMutation()) {
-        setUploadProgress({
-          completed,
-          total: files.length,
-          name: currentName,
-          phase: "refreshing",
-        });
+        setBrowser((current) => ({
+          ...current,
+          work: { kind: "upload", completed, total: files.length, name: currentName, phase: "refreshing" },
+        }));
         // Listing errors are separate from upload errors, so a partial failure
         // stays visible while the successfully uploaded files are refreshed.
         await refresh(target);
         if (ownsMutation()) {
           mutation.current = null;
-          setBusy(false);
-          setUploadProgress(null);
+          setBrowser((current) => ({ ...current, work: null }));
           if (fileInput.current) fileInput.current.value = "";
         }
       }
@@ -541,18 +557,16 @@ function FileBrowser({ containerId }: { containerId: string }) {
           )}
         </div>
       )}
-      {error && (
-        <div className="alert alert--error" role="alert">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} aria-label="Dismiss error">
-            ×
-          </button>
-        </div>
-      )}
-      {notice && (
-        <div className="alert alert--success" role="status">
-          <span>{notice}</span>
-          <button onClick={() => setNotice(null)} aria-label="Dismiss notice">
+      {feedback && (
+        <div
+          className={`alert alert--${feedback.kind === "error" ? "error" : "success"}`}
+          role={feedback.kind === "error" ? "alert" : "status"}
+        >
+          <span>{feedback.message}</span>
+          <button
+            onClick={() => setBrowser((current) => ({ ...current, feedback: null }))}
+            aria-label={`Dismiss ${feedback.kind}`}
+          >
             ×
           </button>
         </div>
@@ -634,15 +648,16 @@ function FileBrowser({ containerId }: { containerId: string }) {
               aria-disabled={!canChangeFiles}
               onDragEnter={(event: DragEvent) => {
                 event.preventDefault();
-                if (canChangeFiles) setDragging(true);
+                if (canChangeFiles) setBrowser((current) => ({ ...current, dragging: true }));
               }}
               onDragOver={(event: DragEvent) => event.preventDefault()}
               onDragLeave={(event: DragEvent) => {
-                if (event.currentTarget === event.target) setDragging(false);
+                if (event.currentTarget === event.target)
+                  setBrowser((current) => ({ ...current, dragging: false }));
               }}
               onDrop={(event: DragEvent) => {
                 event.preventDefault();
-                setDragging(false);
+                setBrowser((current) => ({ ...current, dragging: false }));
                 void uploadFiles(Array.from(event.dataTransfer.files));
               }}
             >
@@ -682,10 +697,10 @@ function FileBrowser({ containerId }: { containerId: string }) {
                   disabled={uploadProgress.phase === "canceling"}
                   onClick={() => {
                     if (mutation.current?.kind !== "upload") return;
-                    setUploadProgress({
-                      ...uploadProgress,
-                      phase: "canceling",
-                    });
+                    setBrowser((current) => ({
+                      ...current,
+                      work: { ...uploadProgress, phase: "canceling" },
+                    }));
                     mutation.current.controller.abort();
                   }}
                 >
@@ -705,10 +720,10 @@ function FileBrowser({ containerId }: { containerId: string }) {
               <p className="file-list__empty" role="status">
                 Loading folder…
               </p>
-            ) : currentListing?.state === "error" ? (
+            ) : folder?.state === "error" ? (
               <div className="file-list__error">
                 <p role="alert">
-                  Unable to load this folder: {currentListing.error}
+                  Unable to load this folder: {folder.error}
                 </p>
                 <button
                   className="secondary-btn"
@@ -811,10 +826,10 @@ function FileBrowser({ containerId }: { containerId: string }) {
           folderLabel={selectedAction.folderLabel}
           initialName={selectedAction.initialName}
           busy={busy}
-          error={dialogError}
+          error={selectedAction.error}
           onSubmit={(name) => void submitAction(name)}
           onCancel={() => {
-            if (!mutation.current) setSelectedAction(null);
+            if (!mutation.current) setBrowser((current) => ({ ...current, dialog: null }));
           }}
         />
       )}

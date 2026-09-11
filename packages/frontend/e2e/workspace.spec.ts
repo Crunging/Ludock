@@ -130,12 +130,16 @@ test("detail tabs support arrow keys, Home and End without losing drafts", async
   await expect(activity).toBeFocused();
   await page.keyboard.press("ArrowLeft");
   await expect(page.getByRole("tab", { name: "Availability", exact: true })).toBeFocused();
-  expect(await page.getByRole("tab").evaluateAll((tabs) =>
-    tabs.filter((tab) => tab.getAttribute("tabindex") === "0").length,
-  )).toBe(1);
+  expect(await page.getByRole("tab").evaluateAll((tabs) => tabs.every((tab) => {
+    const panel = document.getElementById(tab.getAttribute("aria-controls") || "");
+    return panel?.getAttribute("aria-labelledby") === tab.id &&
+      tab.getAttribute("tabindex") === (tab.getAttribute("aria-selected") === "true" ? "0" : "-1");
+  }))).toBe(true);
   const selected = page.getByRole("tab", { selected: true });
   await expect(selected).toHaveAttribute("aria-controls", await page.getByRole("tabpanel").getAttribute("id") || "");
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("tabpanel", { name: "Schedules", exact: true })).toBeFocused();
   await page.getByRole("textbox", { name: "Time zone", exact: true }).fill("America/New_York");
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();

@@ -1,5 +1,5 @@
+import type { Server } from "@ludock/shared";
 import { useState } from "react";
-import type { ManagedContainer } from "../types";
 import { useAuth } from "../auth-context";
 import { useNavigate } from "../navigation-context";
 import { NavLink } from "../navigation";
@@ -10,7 +10,7 @@ import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifec
 import "./server-list.css";
 
 interface ServerCardProps {
-  server: ManagedContainer;
+  server: Server;
   actionsDisabled?: boolean;
   onAction: (id: string, action: "start" | "stop" | "restart") => Promise<void>;
 }

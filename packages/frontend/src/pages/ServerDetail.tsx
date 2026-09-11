@@ -16,12 +16,12 @@ import {
   type Schedule,
   type ScheduleInput,
   type UpdateCapability,
+  type Server,
 } from "@ludock/shared";
 import { ApiRequestError, apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
 import { NavLink } from "../navigation";
 import { can } from "../permissions";
-import type { ManagedContainer } from "../types";
 import { operationActive } from "../operations";
 import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
 import SectionTabs from "../components/SectionTabs";
@@ -60,7 +60,7 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
 function ServerDetailSession({ serverId }: { serverId: string }) {
   const { user } = useAuth();
   const admin = user?.role === "admin";
-  const [server, setServer] = useState<ManagedContainer | null>(null);
+  const [server, setServer] = useState<Server | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [backups, setBackups] = useState<Backup[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);

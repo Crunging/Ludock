@@ -60,17 +60,6 @@ export interface ManagedContainer {
   labels: Record<string, string>;
 }
 
-export async function listManagedContainers(): Promise<ManagedContainer[]> {
-  const containers = await docker.listContainers({ all: true });
-  return containers
-    .filter(
-      (container) =>
-        evaluateContainerEligibility(container.Image, container.Labels || {})
-          .eligible && !hasInvalidComposeIdentity(container.Labels || {}),
-    )
-    .map(toManagedContainer);
-}
-
 export interface DiscoveryDiagnostic {
   containerId: string;
   name: string;
@@ -107,12 +96,6 @@ export async function getDiscoveryDiagnostics(): Promise<
   });
 }
 
-export async function getManagedContainer(
-  id: DockerContainerId,
-): Promise<ManagedContainer> {
-  return (await getManagedContainerObservation(id)).container;
-}
-
 export interface ManagedContainerObservation {
   container: ManagedContainer;
   observation: ServerObservation;
@@ -122,33 +105,46 @@ export async function listManagedContainerObservations(): Promise<
   ManagedContainerObservation[]
 > {
   const containers = await docker.listContainers({ all: true });
-  const observations: ManagedContainerObservation[] = [];
-  // Inspect in a bounded sequence: list state can race an external manager, and
-  // fingerprints must use current inspect data, not stale event attributes.
-  for (const container of containers) {
-    if (
-      !evaluateContainerEligibility(container.Image, container.Labels || {})
-        .eligible
-    )
-      continue;
-    try {
-      observations.push(
-        await getManagedContainerObservation(
-          assertValidContainerId(container.Id),
-        ),
-      );
-    } catch (error) {
-      const code = (error as { statusCode?: number }).statusCode;
-      if (
-        code === 404 ||
-        code === 403 ||
-        (error as { code?: string }).code === "INVALID_COMPOSE_IDENTITY"
-      )
-        continue;
-      throw error;
+  const eligible = containers.filter(
+    (container) =>
+      evaluateContainerEligibility(container.Image, container.Labels || {})
+        .eligible,
+  );
+  const observations = new Array<ManagedContainerObservation | undefined>(
+    eligible.length,
+  );
+  let nextIndex = 0;
+  let failure: { error: unknown } | undefined;
+
+  // Bound daemon load while inspecting fresh data for every fingerprint. Keep
+  // list order even when inspections finish out of order.
+  async function inspectNext(): Promise<void> {
+    while (!failure && nextIndex < eligible.length) {
+      const index = nextIndex++;
+      try {
+        observations[index] = await getManagedContainerObservation(
+          assertValidContainerId(eligible[index].Id),
+        );
+      } catch (error) {
+        const code = (error as { statusCode?: number })?.statusCode;
+        if (
+          code === 404 ||
+          code === 403 ||
+          (error as { code?: string })?.code === "INVALID_COMPOSE_IDENTITY"
+        )
+          continue;
+        failure ??= { error };
+      }
     }
   }
-  return observations;
+
+  // Drain launched reads before rejecting, so the caller retains refresh
+  // ownership until all work from this attempt has finished.
+  await Promise.all(
+    Array.from({ length: Math.min(4, eligible.length) }, () => inspectNext()),
+  );
+  if (failure) throw failure.error;
+  return observations.filter((observation) => observation !== undefined);
 }
 
 export async function getManagedContainerObservation(
@@ -320,35 +316,6 @@ async function getManagedDockerContainer(
   assertEligible(info);
 
   return { container, info };
-}
-
-function toManagedContainer(container: Docker.ContainerInfo): ManagedContainer {
-  const labels = container.Labels || {};
-  const name = (container.Names[0] || "").replace(/^\//, "");
-
-  const managed = {
-    id: assertValidContainerId(container.Id),
-    shortId: container.Id.substring(0, 12),
-    name,
-    displayName: labels[LABEL_NAME] || name,
-    image: container.Image,
-    state: container.State,
-    status: container.Status,
-    gameType: labels[LABEL_GAME]?.trim() || inferGameType(container.Image),
-    ports: (container.Ports || []).map((p) => ({
-      private: p.PrivatePort,
-      public: p.PublicPort || 0,
-      type: p.Type || "tcp",
-    })),
-    created: container.Created * 1000,
-    labels: approvedConfigurationLabels(labels),
-  };
-  return {
-    ...managed,
-    capabilities: capabilitiesForContainer(managed),
-    gameConsole: getGameConsoleAdapterSummary(managed),
-    fileRoots: getFileRoots(managed, container.Mounts || []),
-  };
 }
 
 function assertEligible(info: Docker.ContainerInspectInfo): void {

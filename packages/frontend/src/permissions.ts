@@ -1,5 +1,5 @@
+import type { Server, ServerCapability } from "@ludock/shared";
 import type { AuthUser } from "./auth-context";
-import type { ManagedContainer, ServerCapability } from "./types";
 
 export const CAPABILITY_LABELS = {
   "server.view": "View server",
@@ -25,7 +25,7 @@ export const VIEWER_CAPABILITIES: ServerCapability[] = [
 // stale or malformed responses; backend authorization remains authoritative.
 export function can(
   user: AuthUser | null,
-  server: ManagedContainer | null,
+  server: Server | null,
   capability: ServerCapability,
 ): boolean {
   if (!user || !server) return false;

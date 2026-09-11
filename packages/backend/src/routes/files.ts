@@ -16,9 +16,6 @@ interface FileRouteError extends Error {
   code?: string;
 }
 const maxUploadBytes = getMaxUploadBytes();
-function queryValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
 function sendFileError(error: unknown): Response {
   if (error instanceof AuthError || error instanceof AuthorizationError || error instanceof AppError || error instanceof ServerBindingError) {
     return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
@@ -71,8 +68,8 @@ export const filesRoutes: ApiRoutes = {
   "/api/v1/servers/:id/files": {
     GET: serverAction("files.read", async (ctx, context) => {
       const parsed = fileLocationSchema.safeParse({
-        root: queryValue(ctx.url.searchParams.get("root")),
-        path: queryValue(ctx.url.searchParams.get("path")) || "",
+        root: ctx.url.searchParams.get("root") ?? undefined,
+        path: ctx.url.searchParams.get("path") ?? "",
       });
       if (!parsed.success) {
         return Response.json({ error: "Invalid file location" }, { status: 400 });
@@ -87,8 +84,8 @@ export const filesRoutes: ApiRoutes = {
     }),
     DELETE: serverAction("files.write", async (ctx, context) => {
       const parsed = fileLocationSchema.safeParse({
-        root: queryValue(ctx.url.searchParams.get("root")),
-        path: queryValue(ctx.url.searchParams.get("path")) || "",
+        root: ctx.url.searchParams.get("root") ?? undefined,
+        path: ctx.url.searchParams.get("path") ?? "",
       });
       if (!parsed.success) {
         return Response.json({ error: "Invalid file location" }, { status: 400 });
@@ -108,8 +105,8 @@ export const filesRoutes: ApiRoutes = {
   "/api/v1/servers/:id/files/download": {
     GET: serverAction("files.read", async (ctx, context) => {
       const parsed = fileLocationSchema.safeParse({
-        root: queryValue(ctx.url.searchParams.get("root")),
-        path: queryValue(ctx.url.searchParams.get("path")) || "",
+        root: ctx.url.searchParams.get("root") ?? undefined,
+        path: ctx.url.searchParams.get("path") ?? "",
       });
       if (!parsed.success) {
         return Response.json({ error: "Invalid file location" }, { status: 400 });
@@ -137,9 +134,9 @@ export const filesRoutes: ApiRoutes = {
         return Response.json({ error: "Uploads must use application/octet-stream" }, { status: 415 });
       }
       const parsed = uploadFileQuerySchema.safeParse({
-        root: queryValue(ctx.url.searchParams.get("root")),
-        path: queryValue(ctx.url.searchParams.get("path")) || "",
-        name: queryValue(ctx.url.searchParams.get("name")),
+        root: ctx.url.searchParams.get("root") ?? undefined,
+        path: ctx.url.searchParams.get("path") ?? "",
+        name: ctx.url.searchParams.get("name") ?? undefined,
       });
       const size = Number(ctx.request.headers.get("content-length") ?? undefined);
       if (!parsed.success || !Number.isSafeInteger(size) || size < 0) {

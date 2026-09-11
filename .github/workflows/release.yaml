@@ -1,26 +1,28 @@
-name: Stable release
+name: Publish
 
 on:
   push:
     branches:
       - main
-    paths:
-      - package.json
+    paths-ignore:
+      - "**.md"
+      - LICENSE
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
-  group: stable-release
+  group: publish
   cancel-in-progress: false
+  # Ordinary main pushes must not replace a pending versioned release.
+  queue: max
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   validate:
-    name: Validate release
+    name: Select release tags
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -52,7 +54,7 @@ jobs:
           )"
 
           if [[ "$package_version" == "$previous_version" ]]; then
-            echo "::notice::package.json changed without a version change; no release needed."
+            echo "::notice::Root package version unchanged; publishing nightly only."
             {
               echo "should_release=false"
               echo "tag=$tag"
@@ -80,17 +82,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   check:
-    needs: validate
-    if: needs.validate.outputs.should_release == 'true'
     uses: ./.github/workflows/checks.yaml
 
   release:
-    name: Publish stable image and release
+    name: Publish image and release
     needs:
       - validate
       - check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
 
@@ -102,9 +105,18 @@ jobs:
           persist-credentials: true
 
       - name: Create release tag
+        if: needs.validate.outputs.should_release == 'true'
         shell: bash
         run: |
-          if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+          set -euo pipefail
+
+          # Recheck after validation while this job still owns publishing.
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [[ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$(git rev-parse HEAD)" ]]; then
+              echo "::error::Tag $RELEASE_TAG already exists on a different commit."
+              exit 1
+            fi
+          else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag --annotate "$RELEASE_TAG" --message "Ludock $RELEASE_TAG"
@@ -113,6 +125,7 @@ jobs:
 
       # Prevent an older hotfix from moving latest-series tags backward.
       - name: Determine which moving tags this release owns
+        if: needs.validate.outputs.should_release == 'true'
         id: rank
         shell: bash
         run: |
@@ -140,6 +153,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
+        if: needs.validate.outputs.should_release == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -189,11 +203,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.IMAGE_NAME }}
+          # Semver rules otherwise generate latest even for an older hotfix.
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ steps.rank.outputs.is_minor_latest == 'true' }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ steps.rank.outputs.is_major_latest == 'true' }}
-            type=raw,value=latest,enable=${{ steps.rank.outputs.is_latest == 'true' }}
+            type=raw,value=nightly
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }},enable=${{ needs.validate.outputs.should_release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ needs.validate.outputs.should_release == 'true' && steps.rank.outputs.is_minor_latest == 'true' }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ needs.validate.outputs.should_release == 'true' && steps.rank.outputs.is_major_latest == 'true' }}
+            type=raw,value=latest,enable=${{ needs.validate.outputs.should_release == 'true' && steps.rank.outputs.is_latest == 'true' }}
 
       - name: Build and publish image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -207,12 +224,13 @@ jobs:
           provenance: mode=max
           sbom: true
           cache-from: |
-            type=gha,scope=stable
+            type=gha,scope=publish
             type=gha,scope=ci-X64
             type=gha,scope=ci-ARM64
-          cache-to: type=gha,mode=min,scope=stable
+          cache-to: type=gha,mode=max,scope=publish
 
       - name: Create GitHub release
+        if: needs.validate.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IS_LATEST: ${{ steps.rank.outputs.is_latest }}

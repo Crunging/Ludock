@@ -6,7 +6,6 @@ import {
   toggleGrant,
   type GrantCapability,
 } from "../permissions";
-import type { ManagedContainer, ServerCapability } from "../types";
 import type { UserRole } from "../auth-context";
 import { NavLink } from "../navigation";
 import "../styles/admin-setup.css";
@@ -15,6 +14,8 @@ import {
   type ServerGrantInput,
   serverGrantsResponseSchema,
   serversResponseSchema,
+  type Server,
+  type ServerCapability,
 } from "@ludock/shared";
 
 interface Props {
@@ -34,7 +35,7 @@ function ServerGrantsEditor({
   role,
   onClose,
 }: Props) {
-  const [servers, setServers] = useState<ManagedContainer[]>([]);
+  const [servers, setServers] = useState<Server[]>([]);
   const [grants, setGrants] = useState<ServerGrantInput[]>([]);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);

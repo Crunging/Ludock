@@ -10,17 +10,14 @@ Bun backend, a React frontend built and served by Bun, and shared Zod contracts.
   remains the owner.
 - Make self-hosting straightforward: useful defaults, readable units, clear
   next steps, and practical desktop and mobile controls.
-- Keep access explicit and game data safe. Reliability matters more than adding
-  features that cannot recover predictably from failure.
+- Keep access explicit, game data safe, and operations recoverable.
 
 ## Working defaults
 
-Follow the maintainer's request and use judgment. Workflow, layout, and style
-advice here are defaults, not reasons to block a task or add approval stops.
-Prefer straightforward modules, explicit dependencies, and existing feature
-boundaries. Refactor or introduce abstractions when they clearly improve the
-change; preserve the correctness requirements below across those changes.
-Coordinate shared boundaries when working in parallel.
+Follow the maintainer's request. Workflow and style guidance are defaults, not
+approval gates. Prefer straightforward modules, explicit dependencies, and
+existing feature boundaries; refactor when it simplifies the change. Coordinate
+shared boundaries when working in parallel.
 
 ## Terms that matter
 
@@ -58,35 +55,11 @@ Coordinate shared boundaries when working in parallel.
 - **Contracts and adapters:** change shared schemas with their producers and
   consumers. Keep protocol-specific console behavior in adapters.
 
-## Consider affected paths
-
-Check the entry points, permissions, and failure states relevant to the change,
-including scheduled work when it shares the behavior. For UI changes, preserve
-keyboard access, mobile usability, form drafts, and useful empty/error states.
-Obsolete responses must not overwrite newer input. This is a prompt to consider
-coverage, not a requirement to exercise every feature on every task.
-
 ## Local development and fixtures
 
 - Use the latest stable Bun 1 release; `.bun-version` selects the major and
-  `package.json` declares the supported minimum of 1.4.2. Refresh a local
-  standalone installation with `bun upgrade`, keeping it on the Bun 1 release line.
-- `bun install --frozen-lockfile` installs dependencies; `bun run dev` starts the
-  managed instance. Read its printed URLs and state path rather than assuming
-  ports. `bun run dev --print-config` inspects configuration without starting it.
-- Own routine dependency maintenance during substantive development and release
-  work, and address security findings. Update in coherent batches, fix compatibility
-  issues, validate, and commit without per-package approval or dependency bot PRs.
-  Keep `bun.lock` and frozen installs so tested dependency versions are reproducible.
-  Handle major upgrades when needed; involve the maintainer only for product
-  decisions or unresolved blockers. Avoid dependency churn on unrelated small tasks.
-  See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-tools-and-dependencies) for commands.
-- Pin GitHub Actions to full upstream commit SHAs and runtime images to verified
-  multi-platform manifest digests. Keep readable version tags/comments and keep
-  the Bun image identical in the Docker build and
-  `packages/backend/src/runtime-images.ts`, on the major in `.bun-version`.
-  Refresh these pins in reviewed, tested batches during substantive development
-  and release maintenance; do not create Dependabot update PRs or leave pins stale.
+  `package.json` declares the minimum. Install with `bun install --frozen-lockfile`
+  and start with `bun run dev`. Use the printed URLs and state path.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.
@@ -97,47 +70,59 @@ coverage, not a requirement to exercise every feature on every task.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, overrides, and lock recovery.
 
+## Dependencies and pins
+
+Maintain dependencies and pins during substantive development and release work,
+including needed major upgrades. Address security findings. Review related
+updates in batches, fix compatibility issues, and commit validated changes without
+per-package approval or dependency bot PRs. Ask the maintainer only for product
+decisions or unresolved blockers. Avoid dependency churn on unrelated small tasks.
+
+Update `bun.lock` with dependency changes. Pin GitHub Actions to full upstream
+commit SHAs and runtime images to verified multi-platform manifest digests, with
+readable version tags/comments. Keep the Bun image reference identical in
+`Dockerfile` and `packages/backend/src/runtime-images.ts`, on the major in
+`.bun-version`. See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-tools-and-dependencies)
+for update commands and pin verification.
+
 ## Verification
 
-- Match checks to the change. Run focused tests, lint, and type checks for
-  affected code; add tests for meaningful behavior rather than implementation
-  details. Do not rerun successful checks unless something relevant changed.
+- Check affected entry points, permissions, and failure paths, including
+  scheduled work that shares the behavior.
+- Run focused tests, lint, and type checks for affected code. Test meaningful
+  behavior rather than implementation details. Do not rerun successful checks
+  unless something relevant changed.
 - Documentation-only edits need content, link, and diff checks, not application
   tests or container builds.
-- Use `bun run check` for broad changes or integration concerns. It is not required
-  before every commit; CI runs the full source suite for code changes.
-- Use relevant browser checks for interaction changes. The separate command is
-  `bun run --filter @ludock/frontend test:e2e` after building the frontend.
-- Build `ludock:test` with `docker build --pull -t ludock:test .` when an
-  image/runtime change needs local validation; use
-  `docker compose config` for Compose configuration changes. Validate affected
-  runtime/helper behavior on both `linux/amd64` and `linux/arm64` when it depends
-  on architecture. CI and release validation cover the complete platform matrix.
-- Report what ran and any material gaps. See [TESTING.md](./TESTING.md) for check
-  commands and acceptance criteria; choose the relevant parts.
+- Use `bun run check` for broad changes or integration concerns.
+- Run relevant browser checks after building the frontend for interaction changes.
+- Build the image when an image/runtime change needs local validation. Validate
+  Compose configuration changes with `docker compose config`. Check affected
+  runtime/helper behavior on both `linux/amd64` and `linux/arm64` when architecture
+  matters; CI and release validation cover the full matrix.
+- Report what ran and any material gaps. [TESTING.md](./TESTING.md) has commands
+  and acceptance criteria.
 
 ## Commits and work artifacts
 
-Useful, validated commits are authorized without per-commit approval. Work
-through coherent changes, use Conventional Commits, and explain the problem,
-resulting behavior, and relevant validation in pull requests.
+Validated commits are authorized without per-commit approval. Use Conventional
+Commits for coherent changes. Pull requests should explain the problem, resulting
+behavior, and validation.
 
 Leave release versions to release-please. Do not advance the root package version
 or release manifest in ordinary feature or fix PRs; see
 [CONTRIBUTING.md](./CONTRIBUTING.md#release-versions).
 
-Keep private notes, temporary plans, and disposable scratch outside the repo,
-without adding gitignore entries for them. Reusable scripts, fixtures, and design
-documentation belong in the repository when they are part of the delivered change.
+Keep private notes, temporary plans, and scratch outside the repo; do not add
+gitignore entries for them. Commit reusable scripts, fixtures, and design docs
+when they are part of the delivered change.
 
 ## Documentation and repository map
 
-Update guidance that a change makes inaccurate. User docs should help complete
-a task; architecture docs should explain durable decisions and constraints.
-Prefer updating an existing section over duplicating code or writing a diary.
+Update affected guidance; prefer existing sections. User docs should help
+complete tasks; architecture docs should explain durable decisions and constraints.
 
-- `packages/backend/src`: API, Docker access, identity, adapters, and operations;
-  feature HTTP handlers currently live in `routes`.
+- `packages/backend/src`: API, Docker access, identity, adapters, and operations.
 - `packages/frontend/src`: pages, components, and server-detail feature panels.
 - `packages/shared/src`: authoritative schemas, types, and shared helpers.
 - `packages/backend/test`, `packages/frontend/test`, `packages/frontend/e2e`, and
@@ -147,6 +132,9 @@ Prefer updating an existing section over duplicating code or writing a diary.
   [docs/GAME-SERVERS.md](./docs/GAME-SERVERS.md): setup and user guidance.
 
 ## Interface style
+
+Preserve keyboard access, mobile usability, form drafts, and useful empty/error
+states. Obsolete responses must not overwrite newer input.
 
 Favor readable tables, compact actions, clear status, and obvious next steps.
 Distinguish dangerous actions from ordinary controls. Avoid promotional copy,
