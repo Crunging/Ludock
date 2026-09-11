@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { serve, type Server } from "bun";
-import { afterAll as after, beforeAll as before, describe, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it } from "bun:test";
 import path from "node:path";
+import type { ServerGrantInput } from "@ludock/shared";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
@@ -9,11 +10,13 @@ process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
 process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }] =
+const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase }, { SetupWindow }] =
   await Promise.all([
     import("../src/app.js"),
     import("../src/docker.js"),
     import("../src/logger.js"),
+    import("../src/database.js"),
+    import("../src/auth.js"),
   ]);
 
 const docker = getDockerInstance();
@@ -22,15 +25,12 @@ const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const originalGetContainer = docker.getContainer.bind(docker);
 
-let server: Server<unknown>;
+let server: Server<unknown> | undefined;
 let baseUrl: string;
 let managedStopCalled = false;
 let managedStartCalled = false;
 let stopGate: Promise<void> | undefined;
 let unmanagedStopCalled = false;
-let sessionCookie = "";
-let viewerCookie = "";
-let viewerId = "";
 let managedServerId = "";
 
 const managedInfo = {
@@ -48,7 +48,7 @@ const managedInfo = {
   },
 };
 
-before(async () => {
+beforeAll(() => {
   docker.ping = (async () => "OK") as typeof docker.ping;
   docker.listContainers = (async () => [
     managedInfo,
@@ -77,19 +77,35 @@ before(async () => {
       },
     };
   }) as unknown as typeof docker.getContainer;
+});
 
-  server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
+beforeEach(async () => {
+  closeDatabase();
+  managedStopCalled = false;
+  managedStartCalled = false;
+  unmanagedStopCalled = false;
+  stopGate = undefined;
+  server = serve({
+    ...createApp({ frontendDist: false, setupWindow: new SetupWindow() }),
+    hostname: "127.0.0.1",
+    port: 0,
+  });
   baseUrl = server.url.origin;
   const listed = await authorizedFetch("/api/v1/servers");
   const body = (await listed.json()) as { servers: Array<{ id: string }> };
   managedServerId = body.servers[0].id;
 });
 
-after(async () => {
+afterEach(async () => {
+  await server?.stop(true);
+  server = undefined;
+  closeDatabase();
+});
+
+afterAll(() => {
   docker.ping = originalPing;
   docker.listContainers = originalListContainers;
   docker.getContainer = originalGetContainer;
-  await server.stop(true);
 });
 
 function authorizedFetch(path: string, init: RequestInit = {}) {
@@ -99,6 +115,67 @@ function authorizedFetch(path: string, init: RequestInit = {}) {
     "Bearer integration-api-secret-0123456789abcdef",
   );
   return fetch(`${baseUrl}${path}`, { ...init, headers });
+}
+
+async function setupAdministrator(): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/v1/auth/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: "admin",
+      password: "integration-password",
+      bootstrapCode: "integration-setup-code-0123456789abcdef",
+    }),
+  });
+  assert.equal(response.status, 201);
+  const cookie = (response.headers.get("set-cookie") || "").split(";")[0];
+  assert.match(cookie, /ludock_session=/);
+  return cookie;
+}
+
+async function createViewerSession(adminCookie: string) {
+  const created = await fetch(`${baseUrl}/api/v1/users`, {
+    method: "POST",
+    headers: { Cookie: adminCookie, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: "viewer",
+      password: "viewer-password",
+      role: "viewer",
+    }),
+  });
+  assert.equal(created.status, 201);
+  const { user } = await created.json() as { user: { id: string } };
+  const login = await fetch(`${baseUrl}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "viewer", password: "viewer-password" }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
+  assert.match(cookie, /ludock_session=/);
+  return { id: user.id, cookie };
+}
+
+async function setServerGrants(userId: string, grants: ServerGrantInput[]) {
+  const response = await authorizedFetch(`/api/v1/users/${userId}/server-grants`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ grants }),
+  });
+  assert.equal(response.status, 200);
+}
+
+async function assertAuditEntry(cookie: string, action: string, targetId?: string) {
+  const response = await fetch(`${baseUrl}/api/v1/audit`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(response.status, 200);
+  const { entries } = await response.json() as {
+    entries: Array<{ action: string; targetId: string | null }>;
+  };
+  assert.ok(entries.some((entry) =>
+    entry.action === action && (targetId === undefined || entry.targetId === targetId),
+  ), `Missing ${action} audit entry`);
 }
 
 describe("HTTP application", () => {
@@ -189,7 +266,7 @@ describe("HTTP application", () => {
     assert.match(setCookie, /HttpOnly/i);
     assert.match(setCookie, /SameSite=Strict/i);
     assert.match(setCookie, /Secure/i);
-    sessionCookie = setCookie.split(";")[0];
+    const sessionCookie = setCookie.split(";")[0];
 
     const me = await fetch(`${baseUrl}/api/v1/auth/me`, {
       headers: { Cookie: sessionCookie },
@@ -202,6 +279,7 @@ describe("HTTP application", () => {
   });
 
   it("supports password login without revealing which credential failed", async () => {
+    await setupAdministrator();
     const invalid = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -301,6 +379,7 @@ describe("HTTP application", () => {
   });
 
   it("manages users without exposing password hashes", async () => {
+    const sessionCookie = await setupAdministrator();
     const created = await fetch(`${baseUrl}/api/v1/users`, {
       method: "POST",
       headers: {
@@ -317,9 +396,9 @@ describe("HTTP application", () => {
     const createdBody = (await created.json()) as {
       user: { id: string; username: string; passwordHash?: string };
     };
-    viewerId = createdBody.user.id;
     assert.equal(createdBody.user.username, "viewer");
     assert.equal(createdBody.user.passwordHash, undefined);
+    await assertAuditEntry(sessionCookie, "user.created", createdBody.user.id);
 
     const duplicate = await fetch(`${baseUrl}/api/v1/users`, {
       method: "POST",
@@ -353,10 +432,12 @@ describe("HTTP application", () => {
       }),
     });
     assert.equal(login.status, 200);
-    viewerCookie = (login.headers.get("set-cookie") || "").split(";")[0];
+    assert.match(login.headers.get("set-cookie") || "", /ludock_session=/);
   });
 
   it("enforces role permissions and protects the final administrator", async () => {
+    const sessionCookie = await setupAdministrator();
+    const { id: viewerId, cookie: viewerCookie } = await createViewerSession(sessionCookie);
     const viewerList = await fetch(`${baseUrl}/api/v1/users`, {
       headers: { Cookie: viewerCookie },
     });
@@ -376,22 +457,10 @@ describe("HTTP application", () => {
       { method: "POST", headers: { Cookie: viewerCookie } },
     );
     assert.equal(unassignedStop.status, 404);
-    const granted = await authorizedFetch(
-      `/api/v1/users/${viewerId}/server-grants`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          grants: [
-            {
-              serverId: managedServerId,
-              capabilities: ["server.view", "logs.read", "files.read"],
-            },
-          ],
-        }),
-      },
-    );
-    assert.equal(granted.status, 200);
+    await setServerGrants(viewerId, [{
+      serverId: managedServerId,
+      capabilities: ["server.view", "logs.read", "files.read"],
+    }]);
     const viewerStop = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/stop`,
       { method: "POST", headers: { Cookie: viewerCookie } },
@@ -438,6 +507,11 @@ describe("HTTP application", () => {
   });
 
   it("lets a friend start one server without granting command or file access", async () => {
+    const { id: viewerId, cookie: viewerCookie } = await createViewerSession(await setupAdministrator());
+    await setServerGrants(viewerId, [{
+      serverId: managedServerId,
+      capabilities: ["server.view", "logs.read", "files.read"],
+    }]);
     const setRole = async (role: string) =>
       authorizedFetch(`/api/v1/users/${viewerId}`, {
         method: "PATCH",
@@ -445,22 +519,10 @@ describe("HTTP application", () => {
         body: JSON.stringify({ role, disabled: false }),
       });
     assert.equal((await setRole("operator")).status, 200);
-    const grants = await authorizedFetch(
-      `/api/v1/users/${viewerId}/server-grants`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          grants: [
-            {
-              serverId: managedServerId,
-              capabilities: ["server.view", "server.start", "server.stop"],
-            },
-          ],
-        }),
-      },
-    );
-    assert.equal(grants.status, 200);
+    await setServerGrants(viewerId, [{
+      serverId: managedServerId,
+      capabilities: ["server.view", "server.start", "server.stop"],
+    }]);
     const friendFetch = (path: string, method = "GET") =>
       fetch(`${baseUrl}/api/v1${path}`, {
         method,
@@ -541,15 +603,7 @@ describe("HTTP application", () => {
       "DELETE",
     );
     assert.equal(scheduleDenied.status, 403);
-    const revoked = await authorizedFetch(
-      `/api/v1/users/${viewerId}/server-grants`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ grants: [] }),
-      },
-    );
-    assert.equal(revoked.status, 200);
+    await setServerGrants(viewerId, []);
     assert.equal(
       (await friendFetch(`/servers/${managedServerId}/start`, "POST")).status,
       404,
@@ -558,6 +612,7 @@ describe("HTTP application", () => {
   });
 
   it("mounts feature routes with their response contracts and scoped schedules", async () => {
+    const sessionCookie = await setupAdministrator();
     const expected = [
       ["/settings/backups", "settings"],
       ["/compose-projects", "projects"],
@@ -610,6 +665,7 @@ describe("HTTP application", () => {
   });
 
   it("shows deployment root choices only to administrators without exposing other environment settings", async () => {
+    const { cookie: viewerCookie } = await createViewerSession(await setupAdministrator());
     const originalBackupRoots = process.env.LUDOCK_BACKUP_ROOTS;
     const originalComposeRoots = process.env.LUDOCK_COMPOSE_ROOTS;
     try {
@@ -684,6 +740,7 @@ describe("HTTP application", () => {
   });
 
   it("serves structured redacted Ludock logs to administrators", async () => {
+    const sessionCookie = await setupAdministrator();
     testLogger.warn("diagnostic marker", {
       requestId: "log-test-request",
       apiToken: "must-not-reach-browser",
@@ -717,6 +774,7 @@ describe("HTTP application", () => {
   });
 
   it("does not create debug log entries for log-viewer polling", async () => {
+    const sessionCookie = await setupAdministrator();
     const previousLevel = process.env.LOG_LEVEL;
     process.env.LOG_LEVEL = "debug";
     try {
@@ -750,6 +808,8 @@ describe("HTTP application", () => {
   });
 
   it("lists and revokes account sessions", async () => {
+    const sessionCookie = await setupAdministrator();
+    const { cookie: viewerCookie } = await createViewerSession(sessionCookie);
     const response = await fetch(`${baseUrl}/api/v1/account/sessions`, {
       headers: { Cookie: viewerCookie },
     });
@@ -765,6 +825,7 @@ describe("HTTP application", () => {
       { method: "DELETE", headers: { Cookie: viewerCookie } },
     );
     assert.equal(revoked.status, 200);
+    await assertAuditEntry(sessionCookie, "auth.session.revoked", body.sessions[0].id);
     assert.equal(
       (
         await fetch(`${baseUrl}/api/v1/auth/me`, {
@@ -776,6 +837,8 @@ describe("HTTP application", () => {
   });
 
   it("deletes other accounts but not the current account", async () => {
+    const sessionCookie = await setupAdministrator();
+    const { id: viewerId } = await createViewerSession(sessionCookie);
     const users = (await (
       await fetch(`${baseUrl}/api/v1/users`, {
         headers: { Cookie: sessionCookie },
@@ -795,9 +858,11 @@ describe("HTTP application", () => {
       headers: { Cookie: sessionCookie },
     });
     assert.equal(deleteViewer.status, 200);
+    await assertAuditEntry(sessionCookie, "user.deleted", viewerId);
   });
 
   it("changes passwords, revokes old sessions, and preserves the current login", async () => {
+    const sessionCookie = await setupAdministrator();
     const response = await fetch(`${baseUrl}/api/v1/account/change-password`, {
       method: "POST",
       headers: {
@@ -822,7 +887,12 @@ describe("HTTP application", () => {
       ).status,
       401,
     );
-    sessionCookie = replacementCookie;
+    assert.equal(
+      (await fetch(`${baseUrl}/api/v1/auth/me`, {
+        headers: { Cookie: replacementCookie },
+      })).status,
+      200,
+    );
 
     const oldLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
@@ -833,22 +903,16 @@ describe("HTTP application", () => {
       }),
     });
     assert.equal(oldLogin.status, 401);
-  });
-
-  it("records administrative and authentication activity", async () => {
-    const response = await fetch(`${baseUrl}/api/v1/audit`, {
-      headers: { Cookie: sessionCookie },
+    const newLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "admin",
+        password: "replacement-password",
+      }),
     });
-    assert.equal(response.status, 200);
-    const body = (await response.json()) as {
-      entries: Array<{ action: string; targetId: string | null }>;
-    };
-    const actions = body.entries.map((entry) => entry.action);
-    assert.ok(actions.includes("user.created"));
-    assert.ok(actions.includes("user.deleted"));
-    assert.ok(actions.includes("auth.password.changed"));
-    assert.ok(actions.includes("auth.session.revoked"));
-    assert.ok(body.entries.some((entry) => entry.targetId === viewerId));
+    assert.equal(newLogin.status, 200);
+    await assertAuditEntry(replacementCookie, "auth.password.changed");
   });
 
   it("lists managed containers without unrelated labels", async () => {
@@ -884,40 +948,24 @@ describe("HTTP application", () => {
   });
 
   it("throttles repeated login failures", async () => {
-    const clearPriorFailures = await fetch(`${baseUrl}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "admin",
-        password: "replacement-password",
-      }),
-    });
-    assert.equal(clearPriorFailures.status, 200);
-
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const failed = await fetch(`${baseUrl}/api/v1/auth/login`, {
+    await setupAdministrator();
+    const login = (password: string) =>
+      fetch(`${baseUrl}/api/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "admin",
-          password: "definitely-incorrect",
-        }),
+        body: JSON.stringify({ username: "admin", password }),
       });
-      assert.equal(failed.status, 401);
-    }
 
-    const blocked = await fetch(`${baseUrl}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "admin",
-        password: "replacement-password",
-      }),
-    });
-    assert.equal(blocked.status, 429);
+    assert.equal((await login("definitely-incorrect")).status, 401);
+    assert.equal((await login("integration-password")).status, 200);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      assert.equal((await login("definitely-incorrect")).status, 401);
+    }
+    assert.equal((await login("integration-password")).status, 429);
   });
 
   it("throttles current-password guessing on password change", async () => {
+    const sessionCookie = await setupAdministrator();
     const guess = () =>
       fetch(`${baseUrl}/api/v1/account/change-password`, {
         method: "POST",
@@ -937,7 +985,7 @@ describe("HTTP application", () => {
       method: "POST",
       headers: { Cookie: sessionCookie, "Content-Type": "application/json" },
       body: JSON.stringify({
-        currentPassword: "replacement-password",
+        currentPassword: "integration-password",
         newPassword: "another-replacement-password",
       }),
     });
