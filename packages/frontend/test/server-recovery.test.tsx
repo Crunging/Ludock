@@ -1,3 +1,4 @@
+import type { Server } from "@ludock/shared";
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -5,7 +6,6 @@ import { useServers } from "../src/hooks/useServers";
 import { useWebSocket } from "../src/hooks/useWebSocket";
 import { apiJson, ApiRequestError } from "../src/api";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
-import type { ManagedContainer } from "../src/types";
 
 const originalApi = { ...await import("../src/api") };
 const apiJsonMock = mock<typeof apiJson>();
@@ -16,7 +16,7 @@ mock.module("../src/api", () => ({
 const useWebSocketMock = mock<typeof useWebSocket>();
 mock.module("../src/hooks/useWebSocket", () => ({ useWebSocket: useWebSocketMock }));
 
-const server = { id: "server-1", displayName: "World", permissions: ["server.view"] } as ManagedContainer;
+const server = { id: "server-1", displayName: "World", permissions: ["server.view"] } as Server;
 const administrator: AuthUser = { id: "admin", username: "admin", role: "admin" };
 let currentUser = administrator;
 let transport: ReturnType<typeof useWebSocket>;
@@ -64,8 +64,8 @@ describe("server snapshot recovery", () => {
   });
 
   it("aborts superseded reads and ignores a late response even if the transport ignores abort", async () => {
-    const older = deferred<{ servers: ManagedContainer[] }>();
-    const newer = deferred<{ servers: ManagedContainer[] }>();
+    const older = deferred<{ servers: Server[] }>();
+    const newer = deferred<{ servers: Server[] }>();
     apiJsonMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
     const view = renderHook(useServers, { wrapper });
     const firstSignal = apiJsonMock.mock.calls[0][2]?.signal;
@@ -104,7 +104,7 @@ describe("server snapshot recovery", () => {
   });
 
   it("discards the previous account's state and ignores its late completion", async () => {
-    const late = deferred<{ servers: ManagedContainer[] }>();
+    const late = deferred<{ servers: Server[] }>();
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.servers).toEqual([server]));
     apiJsonMock.mockReturnValueOnce(late.promise);
@@ -121,7 +121,7 @@ describe("server snapshot recovery", () => {
   it("hides cached rows immediately after a policy close and revalidates over HTTP", async () => {
     const view = renderHook(useServers, { wrapper });
     await waitFor(() => expect(view.result.current.servers).toEqual([server]));
-    const revalidation = deferred<{ servers: ManagedContainer[] }>();
+    const revalidation = deferred<{ servers: Server[] }>();
     apiJsonMock.mockReturnValueOnce(revalidation.promise);
     transport = { ...transport, status: "disconnected", accessDenied: true, canRetry: false };
     view.rerender();
@@ -134,7 +134,7 @@ describe("server snapshot recovery", () => {
   });
 
   it("aborts pending reads on unmount and ignores malformed events", async () => {
-    const late = deferred<{ servers: ManagedContainer[] }>();
+    const late = deferred<{ servers: Server[] }>();
     apiJsonMock.mockReturnValueOnce(late.promise);
     const view = renderHook(useServers, { wrapper });
     const signal = apiJsonMock.mock.calls[0][2]?.signal;

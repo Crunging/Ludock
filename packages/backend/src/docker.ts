@@ -60,17 +60,6 @@ export interface ManagedContainer {
   labels: Record<string, string>;
 }
 
-export async function listManagedContainers(): Promise<ManagedContainer[]> {
-  const containers = await docker.listContainers({ all: true });
-  return containers
-    .filter(
-      (container) =>
-        evaluateContainerEligibility(container.Image, container.Labels || {})
-          .eligible && !hasInvalidComposeIdentity(container.Labels || {}),
-    )
-    .map(toManagedContainer);
-}
-
 export interface DiscoveryDiagnostic {
   containerId: string;
   name: string;
@@ -105,12 +94,6 @@ export async function getDiscoveryDiagnostics(): Promise<
       },
     ];
   });
-}
-
-export async function getManagedContainer(
-  id: DockerContainerId,
-): Promise<ManagedContainer> {
-  return (await getManagedContainerObservation(id)).container;
 }
 
 export interface ManagedContainerObservation {
@@ -320,35 +303,6 @@ async function getManagedDockerContainer(
   assertEligible(info);
 
   return { container, info };
-}
-
-function toManagedContainer(container: Docker.ContainerInfo): ManagedContainer {
-  const labels = container.Labels || {};
-  const name = (container.Names[0] || "").replace(/^\//, "");
-
-  const managed = {
-    id: assertValidContainerId(container.Id),
-    shortId: container.Id.substring(0, 12),
-    name,
-    displayName: labels[LABEL_NAME] || name,
-    image: container.Image,
-    state: container.State,
-    status: container.Status,
-    gameType: labels[LABEL_GAME]?.trim() || inferGameType(container.Image),
-    ports: (container.Ports || []).map((p) => ({
-      private: p.PrivatePort,
-      public: p.PublicPort || 0,
-      type: p.Type || "tcp",
-    })),
-    created: container.Created * 1000,
-    labels: approvedConfigurationLabels(labels),
-  };
-  return {
-    ...managed,
-    capabilities: capabilitiesForContainer(managed),
-    gameConsole: getGameConsoleAdapterSummary(managed),
-    fileRoots: getFileRoots(managed, container.Mounts || []),
-  };
 }
 
 function assertEligible(info: Docker.ContainerInspectInfo): void {

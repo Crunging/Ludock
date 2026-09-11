@@ -7,6 +7,7 @@ import {
   type Backup,
   type Operation,
   type Schedule,
+  type Server,
 } from "@ludock/shared";
 import {
   AuthContext,
@@ -16,7 +17,6 @@ import {
 import { NavigationContext } from "../src/navigation-context";
 import ServerDetail from "../src/pages/ServerDetail";
 import ServerGrants from "../src/components/ServerGrants";
-import type { ManagedContainer } from "../src/types";
 import { apiJson } from "../src/api";
 
 const originalApi = { ...await import("../src/api") };
@@ -25,7 +25,7 @@ mock.module("../src/api", () => ({
   ...originalApi,
   apiJson: apiJsonMock,
 }));
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "docker123",
   name: "world",
@@ -63,7 +63,7 @@ const backup: Backup = {
   state: "complete",
 };
 interface DetailOptions {
-  server?: Partial<ManagedContainer>;
+  server?: Partial<Server>;
   backups?: Backup[];
   schedules?: Schedule[];
   operations?: Operation[];

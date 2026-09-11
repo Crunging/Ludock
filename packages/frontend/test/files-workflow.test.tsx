@@ -12,6 +12,7 @@ import {
   SERVER_CAPABILITIES,
   type FileEntry,
   type FileListing,
+  type Server,
 } from "@ludock/shared";
 import { ApiRequestError, apiFetch, apiJson } from "../src/api";
 import {
@@ -21,7 +22,6 @@ import {
 } from "../src/auth-context";
 import { NavigationContext } from "../src/navigation-context";
 import Files from "../src/pages/Files";
-import type { ManagedContainer } from "../src/types";
 
 const originalApi = { ...await import("../src/api") };
 const apiFetchMock = mock<typeof apiFetch>();
@@ -36,7 +36,7 @@ const roots = [
   { id: "data", name: "Game data", path: "/data" },
   { id: "mods", name: "Mods", path: "/mods" },
 ];
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "docker123",
   name: "world",
@@ -97,7 +97,7 @@ function filesPage({
   read,
   write,
 }: {
-  current?: ManagedContainer;
+  current?: Server;
   role?: AuthUser["role"];
   read?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
   write?: (path: string, init?: RequestInit) => Response | Promise<Response>;

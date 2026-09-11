@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES } from "@ludock/shared";
+import { SERVER_CAPABILITIES, type Server } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import { useWebSocket } from "../src/hooks/useWebSocket";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
 import { NavigationContext } from "../src/navigation-context";
-import type { ManagedContainer } from "../src/types";
 
 const terminals: Array<{
   write: ReturnType<typeof mock>;
@@ -38,7 +37,7 @@ mock.module("../src/api", () => ({
 
 const { default: Console } = await import("../src/pages/Console");
 
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "docker123",
   name: "world",

@@ -1,12 +1,11 @@
-import { serversResponseSchema, serverEventSchema } from "@ludock/shared";
+import { serversResponseSchema, serverEventSchema, type Server } from "@ludock/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ManagedContainer } from "../types";
 import { useWebSocket, type ConnectionStatus } from "./useWebSocket";
 import { ApiRequestError, apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth } from "../auth-context";
 
 interface UseServersResult {
-  servers: ManagedContainer[];
+  servers: Server[];
   loading: boolean;
   error: string | null;
   stale: boolean;
@@ -21,7 +20,7 @@ interface UseServersResult {
 
 interface Snapshot {
   actor: string;
-  servers: ManagedContainer[];
+  servers: Server[];
   lastUpdated: number | null;
   loading: boolean;
   error: string | null;

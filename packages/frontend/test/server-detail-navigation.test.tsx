@@ -2,7 +2,7 @@ import ViewPreferencesProvider from "../src/ViewPreferences";
 import { describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES } from "@ludock/shared";
+import { SERVER_CAPABILITIES, type Server } from "@ludock/shared";
 import { apiJson } from "../src/api";
 import {
   AuthContext,
@@ -11,7 +11,6 @@ import {
 } from "../src/auth-context";
 import { NavigationContext } from "../src/navigation-context";
 import ServerDetail from "../src/pages/ServerDetail";
-import type { ManagedContainer } from "../src/types";
 
 const originalApi = { ...await import("../src/api") };
 const apiJsonMock = mock<typeof apiJson>();
@@ -20,7 +19,7 @@ mock.module("../src/api", () => ({
   apiJson: apiJsonMock,
 }));
 
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "docker123",
   name: "world",
@@ -47,7 +46,7 @@ function detail({
   onRequest,
 }: {
   role?: AuthUser["role"];
-  current?: ManagedContainer;
+  current?: Server;
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
 } = {}) {
   const navigate = mock();
@@ -344,7 +343,7 @@ describe("server detail navigation", () => {
     let stopped = false;
     const current = {
       ...server,
-      permissions: ["server.view", "server.stop"] as ManagedContainer["permissions"],
+      permissions: ["server.view", "server.stop"] as Server["permissions"],
     };
     detail({
       role: "operator",

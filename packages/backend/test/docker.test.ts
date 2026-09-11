@@ -3,10 +3,8 @@ import { afterEach, describe, it } from "bun:test";
 import {
   getContainer,
   getDockerInstance,
-  getManagedContainer,
   getManagedContainerObservation,
   getDiscoveryDiagnostics,
-  listManagedContainers,
   listManagedContainerObservations,
   restartContainer,
   startContainer,
@@ -134,11 +132,11 @@ describe("automatic discovery boundary", () => {
       })) as unknown as typeof docker.getContainer;
 
       assert.equal(
-        (await listManagedContainers()).length,
+        (await listManagedContainerObservations()).length,
         entry.included ? 1 : 0,
       );
       for (const action of [
-        getManagedContainer,
+        getManagedContainerObservation,
         startContainer,
         stopContainer,
         restartContainer,
@@ -223,7 +221,6 @@ describe("automatic discovery boundary", () => {
       inspect: async () => inspectFixture("itzg/minecraft-server", labels),
     })) as unknown as typeof docker.getContainer;
     assert.deepEqual(await listManagedContainerObservations(), []);
-    assert.deepEqual(await listManagedContainers(), []);
     assert.equal(
       (await getDiscoveryDiagnostics())[0]?.code,
       "INVALID_COMPOSE_IDENTITY",
@@ -340,7 +337,7 @@ describe("managed container image inference", () => {
     docker.getContainer = (() =>
       container) as unknown as typeof docker.getContainer;
 
-    const managed = await getManagedContainer("terraria");
+    const { container: managed } = await getManagedContainerObservation("terraria");
 
     assert.equal(managed.gameType, "terraria");
     assert.equal(managed.gameConsole?.id, "stdin-console");
@@ -355,7 +352,7 @@ describe("managed container image inference", () => {
 });
 
 describe("container identifier validation", () => {
-  // Express decodes %2f, so a raw identifier can carry "../" and escape
+  // URL decoding can turn %2f into "/", so an identifier can carry "../" and escape
   // /containers/<id>/json. The daemon 301s to the cleaned path and docker-modem
   // re-issues it over the network with a hostname taken from the identifier.
   const hostile = [
@@ -379,7 +376,7 @@ describe("container identifier validation", () => {
       }) as unknown as typeof docker.getContainer;
 
       for (const run of [
-        () => getManagedContainer(id),
+        () => getManagedContainerObservation(id),
         () => startContainer(id),
         async () => getContainer(id),
       ]) {

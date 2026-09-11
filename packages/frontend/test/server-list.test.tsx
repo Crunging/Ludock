@@ -1,3 +1,4 @@
+import type { Server } from "@ludock/shared";
 import ViewPreferencesProvider from "../src/ViewPreferences";
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
@@ -7,13 +8,12 @@ import { NavigationContext } from "../src/navigation-context";
 import ServerCard from "../src/components/ServerCard";
 import Dashboard from "../src/pages/Dashboard";
 import { useServers } from "../src/hooks/useServers";
-import type { ManagedContainer } from "../src/types";
 
 const useServersMock = mock<typeof useServers>();
 mock.module("../src/hooks/useServers", () => ({ useServers: useServersMock }));
 
 const user: AuthUser = { id: "friend", username: "friend", role: "operator" };
-const server: ManagedContainer = {
+const server: Server = {
   id: "53bfe195-b78c-4c14-aebb-1bd09384f33b",
   shortId: "container123",
   name: "world",
@@ -39,7 +39,7 @@ function card(value = server, role: AuthUser["role"] = "operator") {
   const action = mock<(id: string, action: "start" | "stop" | "restart") => Promise<void>>()
     .mockResolvedValue(undefined);
   const navigate = mock();
-  const content = (current: ManagedContainer, actionsDisabled = false) => (
+  const content = (current: Server, actionsDisabled = false) => (
     <AuthContext.Provider value={{ user: { ...user, role } } as AuthContextValue}>
       <NavigationContext.Provider value={{ pathname: "/", navigate }}>
         <ServerCard server={current} onAction={action} actionsDisabled={actionsDisabled} />
@@ -48,7 +48,7 @@ function card(value = server, role: AuthUser["role"] = "operator") {
     </AuthContext.Provider>
   );
   const result = render(content(value));
-  return { ...result, action, navigate, update: (current: ManagedContainer, actionsDisabled = false) => result.rerender(content(current, actionsDisabled)) };
+  return { ...result, action, navigate, update: (current: Server, actionsDisabled = false) => result.rerender(content(current, actionsDisabled)) };
 }
 
 const fixtures = [
@@ -169,7 +169,7 @@ describe("server list actions", () => {
   });
 
   it("offers Start only for stopped containers and explains states managed through Docker", async () => {
-    const permitted = { ...server, permissions: [...server.permissions, "server.start"] as ManagedContainer["permissions"] };
+    const permitted = { ...server, permissions: [...server.permissions, "server.start"] as Server["permissions"] };
     const { action, update } = card(permitted);
     for (const [state, guidance] of [
       ["paused", "Paused in Docker. Resume it through Docker or its owning manager."],

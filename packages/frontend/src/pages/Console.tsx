@@ -1,11 +1,10 @@
-import { serverResponseSchema, consoleMessageSchema } from "@ludock/shared";
+import { serverResponseSchema, consoleMessageSchema, type Server } from "@ludock/shared";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useWebSocket } from "../hooks/useWebSocket";
-import type { ManagedContainer } from "../types";
 import { ApiRequestError, apiJson, authenticatedWebSocketUrl } from "../api";
 import { useAuth, type AuthUser } from "../auth-context";
 import { can } from "../permissions";
@@ -21,7 +20,7 @@ const MODE_LABELS: Record<ConsoleMode, string> = {
   shell: "Container Shell",
 };
 
-function allowedModes(user: AuthUser | null, server: ManagedContainer | null): ConsoleMode[] {
+function allowedModes(user: AuthUser | null, server: Server | null): ConsoleMode[] {
   return [
     ...(can(user, server, "logs.read") ? ["logs" as const] : []),
     ...(can(user, server, "console.execute") && server?.gameConsole ? ["game" as const] : []),
@@ -66,7 +65,7 @@ function ConsoleSession({ containerId, user }: {
     error: boolean;
     message: string;
   } | null>(null);
-  const [serverInfo, setServerInfo] = useState<ManagedContainer | null>(null);
+  const [serverInfo, setServerInfo] = useState<Server | null>(null);
   const [serverState, setServerState] = useState<ServerLoadState>("loading");
   const [verifiedUrl, setVerifiedUrl] = useState<string | null>(null);
   const [accessBlocked, setAccessBlocked] = useState(false);

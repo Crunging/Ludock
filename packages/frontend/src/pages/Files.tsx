@@ -16,7 +16,6 @@ import {
 import { useAuth } from "../auth-context";
 import { can } from "../permissions";
 import { NavLink } from "../navigation";
-import type { ManagedContainer } from "../types";
 import FileActionDialog, {
   type FileAction,
 } from "../components/FileActionDialog";
@@ -30,6 +29,7 @@ import {
   serverResponseSchema,
   okResponseSchema,
   formatByteSize,
+  type Server,
 } from "@ludock/shared";
 
 interface FileLocation {
@@ -88,7 +88,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const listingRequest = useRef<AbortController | null>(null);
   const mutation = useRef<PendingMutation | null>(null);
-  const [server, setServer] = useState<ManagedContainer | null>(null);
+  const [server, setServer] = useState<Server | null>(null);
   const [serverState, setServerState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
