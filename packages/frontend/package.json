@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun scripts/dev.ts",
-    "build": "tsc -b && bun scripts/build.ts",
+    "build": "bun run typecheck && bun run build:assets",
+    "build:assets": "bun scripts/build.ts",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "bun scripts/preview.ts",

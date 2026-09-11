@@ -16,6 +16,12 @@ and `recovery.ts` for Bun with external production packages. The frontend build 
 `index.html` and bundles its scripts, styles, and assets for browsers. TypeScript
 checks types and emits the shared package's JavaScript and declarations.
 
+Docker builds compile shared contracts once for both bundles on the build
+platform, with source inputs separate from tests and local artifacts. The runtime
+copies the Bun executable for the target platform and a separate production-only
+dependency installation. CI checks both native Linux architectures before the
+publish workflow builds one image index for nightly and any stable release tags.
+
 `database.ts` uses `bun:sqlite` and validates nonempty databases read-only before
 enabling WAL or applying supported migrations; unrelated or unsupported storage
 is rejected without writes. `password.ts` uses Bun's Argon2id hashing for new passwords and

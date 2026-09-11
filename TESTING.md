@@ -27,9 +27,9 @@ upgrade them. Frozen installs use the dependency versions in `bun.lock`. See
 [Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies) to update Bun,
 dependencies, or image pins before validation.
 
-`bun run check` builds shared runtime contracts, checks types and lint, runs
+`bun run check` builds shared runtime contracts once, checks types and lint, runs
 development-runner, backend unit/HTTP, frontend component, and frontend serving
-tests with Bun, then builds production artifacts. Compile-only checks cover
+tests with Bun, then bundles the checked code. Compile-only checks cover
 logical versus Docker identity boundaries and required route capabilities/response
 contracts.
 For focused work:
@@ -127,10 +127,11 @@ bun scripts/test-backups.mjs
 ```
 
 All harnesses use Bun.
-The Linux suite first starts the bundled backend without source mounts and checks
-health, the frontend document, and its built script. It then mounts backend source
-and tests read-only and runs the TypeScript suites with the production image's
-Bun runtime and production dependencies, including descriptor-based path tests
+The Linux suite first starts the image's default command without source mounts.
+It checks the bundled Bun, Docker, and Compose commands, health, the frontend
+document and script, and graceful shutdown. It then mounts backend source and
+tests read-only and runs the TypeScript suites with the production image's Bun
+runtime and production dependencies, including descriptor-based path tests
 skipped on macOS. These fixtures have no Docker socket or external network.
 All scripts use `LUDOCK_TEST_IMAGE` when set; otherwise they run the
 local `ludock:test` image. They create uniquely named fixture containers and
