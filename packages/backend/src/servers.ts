@@ -38,11 +38,10 @@ export async function refreshServers(): Promise<Map<string, ManagedContainer>> {
   return refreshing;
 }
 function toPublicServer(
-  actor: SessionUser,
   logical: LogicalServer,
+  permissions: ServerCapability[],
   container?: ManagedContainer,
 ): Server {
-  const permissions = getEffectiveCapabilities(actor, logical);
   return serverSchema.parse({
     ...(container ?? {
       shortId: "",
@@ -71,13 +70,12 @@ function toPublicServer(
 }
 export async function listServers(actor: SessionUser): Promise<Server[]> {
   const current = await refreshServers();
-  return listLogicalServers()
-    .filter((server) =>
-      getEffectiveCapabilities(actor, server).includes("server.view"),
-    )
-    .map((server) =>
-      toPublicServer(actor, server, current.get(server.containerId ?? "")),
-    );
+  return listLogicalServers().flatMap((server) => {
+    const permissions = getEffectiveCapabilities(actor, server);
+    return permissions.includes("server.view")
+      ? [toPublicServer(server, permissions, current.get(server.containerId ?? ""))]
+      : [];
+  });
 }
 export async function getServer(
   actor: SessionUser,
@@ -85,7 +83,11 @@ export async function getServer(
 ): Promise<Server> {
   const current = await refreshServers();
   const server = assertServerCapability(actor, id, "server.view");
-  return toPublicServer(actor, server, current.get(server.containerId ?? ""));
+  return toPublicServer(
+    server,
+    getEffectiveCapabilities(actor, server),
+    current.get(server.containerId ?? ""),
+  );
 }
 export interface ServerContext {
   logical: LogicalServer & { containerId: DockerContainerId };

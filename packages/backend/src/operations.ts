@@ -18,6 +18,10 @@ interface OperationRow {
   error: string | null;
   result_json: string | null;
 }
+type PublicOperationRow = Omit<
+  OperationRow,
+  "actor_id" | "input_json" | "recovery_json" | "binding_revision"
+>;
 export interface Job extends Operation {
   actorId: string;
   input: Record<string, unknown>;
@@ -49,21 +53,26 @@ function parseObject(json: string): Record<string, unknown> {
     );
   return value as Record<string, unknown>;
 }
-function toJob(row: OperationRow): Job {
+function toOperation(row: PublicOperationRow): Operation {
   return {
     id: row.id,
     serverId: row.server_id,
-    actorId: row.actor_id,
     kind: row.kind,
     status: row.status,
     phase: row.phase,
-    bindingRevision: row.binding_revision,
-    input: parseObject(row.input_json),
-    recovery: parseObject(row.recovery_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     error: row.error,
     result: row.result_json ? parseObject(row.result_json) : null,
+  };
+}
+function toJob(row: OperationRow): Job {
+  return {
+    ...toOperation(row),
+    actorId: row.actor_id,
+    bindingRevision: row.binding_revision,
+    input: parseObject(row.input_json),
+    recovery: parseObject(row.recovery_json),
   };
 }
 export function publicOperation(job: Job): Operation {
@@ -100,10 +109,11 @@ export function listOperations(serverId: string): Operation[] {
   return (
     getDatabase()
       .prepare(
-        "SELECT * FROM operations WHERE server_id = ? ORDER BY created_at DESC LIMIT 100",
+        `SELECT id, server_id, kind, status, phase, created_at, updated_at, error, result_json
+         FROM operations WHERE server_id = ? ORDER BY created_at DESC LIMIT 100`,
       )
-      .all(serverId) as unknown as OperationRow[]
-  ).map((row) => publicOperation(toJob(row)));
+      .all(serverId) as PublicOperationRow[]
+  ).map(toOperation);
 }
 export function registerJobHandler(kind: string, handler: JobHandler): void {
   handlers.set(kind, handler);

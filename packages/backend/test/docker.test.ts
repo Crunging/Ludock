@@ -260,6 +260,107 @@ describe("automatic discovery boundary", () => {
     statusCode = 500;
     await assert.rejects(listManagedContainerObservations(), /Docker failed/);
   });
+
+  it("bounds concurrent inspections and preserves list order with fresh observations", async () => {
+    const ids = Array.from({ length: 7 }, (_, index) =>
+      index.toString(16).padStart(64, "0"),
+    );
+    docker.listContainers = (async () => [
+      listFixture("itzg/minecraft-server", { "ludock.enable": "false" }, "excluded"),
+      ...ids.map((id) => listFixture("itzg/minecraft-server", {}, id)),
+    ]) as unknown as typeof docker.listContainers;
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+    let active = 0;
+    let peak = 0;
+    docker.getContainer = ((id: string) => ({
+      inspect: async () => {
+        started.push(id);
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => releases.set(id, resolve));
+        active--;
+        if (id === ids[2])
+          throw Object.assign(new Error("Container removed"), { statusCode: 404 });
+        return { ...inspectFixture(), Id: id, Name: `/current-${id}` };
+      },
+    })) as unknown as typeof docker.getContainer;
+
+    const pending = listManagedContainerObservations();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ids.slice(0, 4));
+
+    // A removed container releases capacity; later completions keep list order.
+    releases.get(ids[2])!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ids.slice(0, 5));
+    assert.equal(active, 4);
+    releases.get(ids[0])!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ids.slice(0, 6));
+    releases.get(ids[4])!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ids);
+
+    for (const release of releases.values()) release();
+    const observations = await pending;
+    const remaining = ids.filter((id) => id !== ids[2]);
+    assert.equal(peak, 4);
+    assert.equal(active, 0);
+    assert.deepEqual(observations.map(({ container }) => container.id), remaining);
+    assert.deepEqual(
+      observations.map(({ observation }) => observation.name),
+      remaining.map((id) => `current-${id}`),
+    );
+  });
+
+  it("stops dispatching after failure and drains active reads before rejecting", async () => {
+    const ids = Array.from({ length: 7 }, (_, index) =>
+      index.toString(16).padStart(64, "0"),
+    );
+    docker.listContainers = (async () =>
+      ids.map((id) => listFixture("itzg/minecraft-server", {}, id))
+    ) as unknown as typeof docker.listContainers;
+    const started: string[] = [];
+    const inspections = new Map<string, {
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }>();
+    docker.getContainer = ((id: string) => ({
+      inspect: async () => {
+        started.push(id);
+        await new Promise<void>((resolve, reject) =>
+          inspections.set(id, { resolve, reject }),
+        );
+        return { ...inspectFixture(), Id: id };
+      },
+    })) as unknown as typeof docker.getContainer;
+
+    let settled = false;
+    const pending = listManagedContainerObservations();
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ids.slice(0, 4));
+    const failure = Object.assign(new Error("Docker failed"), { statusCode: 500 });
+    inspections.get(ids[1])!.reject(failure);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.deepEqual(started, ids.slice(0, 4));
+
+    inspections.get(ids[2])!.resolve();
+    inspections.get(ids[0])!.reject(new Error("Another inspection failed"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.deepEqual(started, ids.slice(0, 4));
+
+    inspections.get(ids[3])!.resolve();
+    await assert.rejects(pending, (error) => error === failure);
+    assert.equal(settled, true);
+    assert.deepEqual(started, ids.slice(0, 4));
+  });
 });
 
 describe("managed container lifecycle boundary", () => {

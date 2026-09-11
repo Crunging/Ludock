@@ -73,6 +73,55 @@ async function finished(id: string) {
 }
 
 describe("durable operations", () => {
+  it("lists the newest 100 public operations for only the requested server", () => {
+    const otherServerId = reconcileServers([
+      {
+        containerId: "other",
+        name: "other",
+        displayName: "Other",
+        gameType: "minecraft",
+        mounts: [],
+      },
+    ]).find((server) => server.containerId === "other")!.id;
+    const insert = getDatabase().prepare(
+      `INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at,error,result_json)
+       VALUES (?,?,'owner','restore','failed','failed',?,?,1,?,?,?,?)`,
+    );
+    for (let index = 0; index < 105; index++) {
+      insert.run(
+        `history-${index}`,
+        serverId,
+        JSON.stringify({ privateInput: "/private/input" }),
+        JSON.stringify({ privatePath: "/private/recovery" }),
+        index,
+        index + 1,
+        "Restore needs review",
+        index === 104 ? JSON.stringify({ restored: false }) : null,
+      );
+    }
+    insert.run("other-history", otherServerId, "{}", "{}", 200, 201, null, null);
+
+    const history = listOperations(serverId);
+    assert.equal(history.length, 100);
+    assert.deepEqual(history[0], {
+      id: "history-104",
+      serverId,
+      kind: "restore",
+      status: "failed",
+      phase: "failed",
+      createdAt: 104,
+      updatedAt: 105,
+      error: "Restore needs review",
+      result: { restored: false },
+    });
+    assert.equal(history[1].result, null);
+    assert.equal(history.at(-1)?.id, "history-5");
+    assert.ok(history.every((operation) => operation.serverId === serverId));
+    assert.equal(JSON.stringify(history).includes("/private/"), false);
+    assert.deepEqual(getOperation("history-104")?.recovery, {
+      privatePath: "/private/recovery",
+    });
+  });
   it("deduplicates retries while rejecting a reused key with different settings", () => {
     const first = enqueue("idempotency", "same", { createBackup: true });
     const retry = enqueue("idempotency", "same", { createBackup: true });
