@@ -133,6 +133,12 @@ ordinary feature and fix PRs. The manifest records release-please's current vers
 baseline; advancing it manually can make the next generated release skip the
 intended version.
 
+Non-breaking `fix`, `perf`, `refactor`, and `revert` commits qualify for a patch
+release; `feat` commits qualify for a minor release. Documentation, style, test,
+build, CI, and chore commits do not trigger releases on their own unless marked
+as breaking changes. For squash merges, the final commit message controls release
+classification, so choose its type for the delivered change.
+
 Merge reviewed dependency and image/action pin updates before the release PR so
 it includes those changes.
 
