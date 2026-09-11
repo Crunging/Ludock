@@ -22,14 +22,10 @@ bun run check
 docker build --pull -t ludock:test .
 ```
 
-CI selects the latest stable Bun release within the major in `.bun-version`.
-Local tool installations and cached images need an explicit update. `--pull`
-refreshes the Bun 1 and Alpine 3 base-image tags; `bun install --frozen-lockfile`
-still uses the dependency versions in `bun.lock`. Review available updates with
-`bun outdated --recursive`. After `bun update --recursive`, review the manifest
-and lockfile changes and run `bun run check`, plus browser and platform checks
-for affected behavior. See [Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies)
-for the agent-managed maintenance policy.
+`--pull` fetches or checks the pinned Bun and Alpine image digests; it does not
+upgrade them. Frozen installs use the dependency versions in `bun.lock`. See
+[Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies) to update Bun,
+dependencies, or image pins before validation.
 
 `bun run check` builds shared runtime contracts, checks types and lint, runs
 development-runner, backend unit/HTTP, frontend component, and frontend serving
@@ -47,16 +43,11 @@ Backend suites use `bun:test` with a separate module environment per file.
 Frontend component tests preload jsdom and use React Testing Library with the
 same test runner. Backend coverage includes discovery, identity, grants,
 database schema handling, protocol adapters, filesystem boundaries,
-archive/restore validation, operation
-locks and recovery, schedule authority/DST handling, monitoring, and notification
-retries.
+archive/restore validation, operation locks and recovery, schedule authority/DST
+handling, monitoring, and notification retries.
 Frontend tests cover independent action grants, role ceilings, runtime response
-validation, confirmation/draft state, polling, and extracted server panels.
-Deferred-request regressions cover password reset and session revocation during
-hashing, authority changes during Docker/helper preparation, Unicode redaction
-across stream chunks, deterministic Compose environment snapshots, and shared
-bind-root overlap. Frontend cases cover stale session reads, failed editor loads,
-overlapping mutations, preserved new drafts, and honest history/error states.
+validation, confirmation/draft state, polling, and obsolete responses during
+overlapping requests.
 Development tests cover isolated state/cookies, shared database locks, port
 collisions, backend instance checks, streaming HTTP proxy behavior, and
 WebSocket forwarding. Fixture tests do not replace real Docker, Compose, or
@@ -67,9 +58,8 @@ game-world validation.
 The browser suite uses Bun's preview server for a production frontend build and
 intercepts API and WebSocket requests with per-test fixtures validated by the
 shared contracts. It does not start a backend, connect to Docker, or read
-application storage. The
-dedicated preview server has no backend proxy, and unexpected API or
-external requests fail the test.
+application storage. The preview server has no backend proxy, and unexpected API
+or external requests fail the test.
 
 ```bash
 bun run --filter @ludock/shared build

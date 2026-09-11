@@ -133,16 +133,13 @@ ordinary feature and fix PRs. The manifest records release-please's current vers
 baseline; advancing it manually can make the next generated release skip the
 intended version.
 
-Dependency review and release-please serve different purposes: agents review and
-validate dependency and immutable-pin updates before the release PR is merged;
-release-please prepares the version and changelog from the resulting commits.
-Merge those reviewed updates first so the release PR includes them.
+Merge reviewed dependency and image/action pin updates before the release PR so
+it includes those changes.
 
 Merge the generated release PR when ready to publish. The resulting root package
 version change triggers the stable image and GitHub release workflow. Merging a
-version change from any other PR into `main` triggers that same workflow, so feature
-names and rewrite scope must not set release versions manually. Preserve versions
-and tags that have already been published.
+version change from any other PR into `main` triggers that same workflow. Preserve
+versions and tags that have already been published.
 
 ## Before opening a pull request
 

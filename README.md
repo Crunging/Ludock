@@ -58,22 +58,9 @@ After signing in:
 3. To share a server, open **Users**, create an account, then choose its servers
    and permitted actions in the access editor.
 
-To test a local build:
-
-```bash
-docker build --pull -t ludock:test .
-docker run --rm -p 3000:3000 \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -v ludock-data:/data \
-  -v ludock-backups:/backups \
-  -e LUDOCK_BACKUP_ROOTS=/backups \
-  ludock:test
-```
-
-`--pull` refreshes the Bun 1 and Alpine 3 base images used by the local build.
-Container images target **Linux AMD64 and ARM64**. Each platform requires its own
-runtime smoke checks; see [Testing](./TESTING.md). This does not imply that all
-recognized game images support both architectures.
+Ludock images target **Linux AMD64 and ARM64**; individual game images may
+support fewer platforms. For local builds and disposable test environments, see
+[Contributing](./CONTRIBUTING.md) and [Testing](./TESTING.md).
 
 ## Discover and share servers
 

@@ -16,17 +16,16 @@ and `recovery.ts` for Bun with external production packages. The frontend build 
 `index.html` and bundles its scripts, styles, and assets for browsers. TypeScript
 checks types and emits the shared package's JavaScript and declarations.
 
-`database.ts` uses `bun:sqlite` and the existing schema validation and migration
-boundary. Existing nonempty databases are checked read-only before enabling WAL
-or applying supported migrations; unrelated or unsupported storage is rejected
-without writes. `password.ts` uses Bun's Argon2id hashing for new passwords and
+`database.ts` uses `bun:sqlite` and validates nonempty databases read-only before
+enabling WAL or applying supported migrations; unrelated or unsupported storage
+is rejected without writes. `password.ts` uses Bun's Argon2id hashing for new passwords and
 bounded verification of legacy scrypt hashes. Successful sign-in upgrades an
 older hash only after rechecking that the account is enabled and its password
 has not changed during asynchronous verification.
 
-SHA-256 token hashes, operation keys, and backup checksums use `Bun.CryptoHasher`
-with their existing byte encodings. From the first supported schema (version 2),
-binding and Compose-source fingerprints wrap their canonical digests in separate
+SHA-256 token hashes, operation keys, and backup checksums use `Bun.CryptoHasher`.
+From the first supported schema (version 2), binding and Compose-source
+fingerprints wrap their canonical digests in separate
 domain-separated HMACs using an installation key kept outside SQLite. This
 prevents a database-only disclosure from becoming an offline verifier for
 low-entropy game credentials or environment-file values. The key is a mode-0600
@@ -45,9 +44,9 @@ generation to reject work queued before token rotation. A database-only copy
 does not contain the HMAC key. Administrative API tokens must still be random;
 the minimum length alone does not guarantee entropy.
 
-Filesystem confinement retains descriptor-based `node:fs` operations and Linux
+Filesystem confinement uses descriptor-based `node:fs` operations and Linux
 `/proc/self/fd` checks in file, backup, restore, and Compose validation paths.
-The remaining libraries preserve capabilities beyond a direct native replacement:
+Several dependencies provide behavior needed at these boundaries:
 
 - `yaml` rejects duplicate mapping keys and limits alias expansion to 20 in Compose
   inputs. [`Bun.YAML.parse`](https://bun.com/docs/runtime/yaml) currently does not
@@ -59,8 +58,6 @@ The remaining libraries preserve capabilities beyond a direct native replacement
   map of regular files and cannot provide that validation path.
 - Dockerode handles Docker exec/attach connection upgrades and multiplexed streams.
   Replacing it with `fetch` would require maintaining a Docker protocol client.
-- TypeScript supplies type checking and declaration output; ESLint, Playwright,
-  jsdom, and Zod retain their linting, browser, DOM, and validation responsibilities.
 
 Helper containers use the digest-pinned
 `oven/bun:1-alpine` image, defined centrally in
@@ -193,13 +190,6 @@ grant editors require a successful initial read before they can save.
 The dashboard's header and server rows share one CSS grid through subgrid.
 Different action counts do not change a row's state or port column. Responsive
 rules switch to compact rows at narrow widths.
-
-For parallel work, assign a feature's contract, router/domain changes, panel,
-and focused tests together when practical. Coordinate edits to shared transport,
-authorization, operation lifetime, and page orchestration explicitly. A feature
-split still needs verification of the integrated behavior. Choose checks for the
-affected boundaries; use `bun run check` for broad integration concerns. CI runs
-the full source suite for code changes.
 
 ## Development instances
 
