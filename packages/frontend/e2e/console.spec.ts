@@ -19,8 +19,12 @@ test("console modes keep separate drafts and keyboard navigation", async ({ app,
   await expect(page.getByRole("textbox", { name: "Game command", exact: true })).toHaveValue("list");
   const panel = page.getByRole("tabpanel", { name: "Game Console", exact: true });
   await expect(panel).toBeVisible();
-  await expect(panel).toHaveAttribute("aria-labelledby", await game.getAttribute("id") || "");
-  const panelId = await panel.getAttribute("id") || "";
+  await expect(game).toHaveAttribute("id", /\S+/);
+  await expect(panel).toHaveAttribute("id", /\S+/);
+  await expect(panel).toHaveAttribute("aria-labelledby", (await game.getAttribute("id"))!);
+  await expect(page.getByRole("tab", { selected: true })).toHaveCount(1);
+  await expect(game).toHaveAttribute("aria-selected", "true");
+  const panelId = (await panel.getAttribute("id"))!;
   for (const tab of await page.getByRole("tab").all()) {
     await expect(tab).toHaveAttribute("aria-controls", panelId);
     await expect(tab).toHaveAttribute("tabindex", await tab.getAttribute("aria-selected") === "true" ? "0" : "-1");
