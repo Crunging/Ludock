@@ -19,6 +19,7 @@ import {
 } from "../src/approved-paths.js";
 import {
   composeEnvironment,
+  isComposeAvailable,
   createComposeSnapshot,
   runCompose,
   validateUpdateService,
@@ -76,6 +77,43 @@ after(async () => {
 });
 
 describe("Compose execution boundary", () => {
+  it("does not probe Compose without supported, approved roots", async () => {
+    const currentRoots = process.env.LUDOCK_COMPOSE_ROOTS;
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("An unavailable Compose setup must not launch a process");
+    });
+    try {
+      const roots = [undefined, "", "  ", "/", "relative"];
+      if (process.platform !== "linux") roots.push(directory);
+      for (const value of roots) {
+        if (value === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
+        else process.env.LUDOCK_COMPOSE_ROOTS = value;
+        assert.equal(await isComposeAvailable(), false);
+      }
+      assert.equal(spawn.mock.calls.length, 0);
+    } finally {
+      if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
+      else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
+      spawn.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("reports availability after a successful configured probe", async () => {
+    assert.equal(await isComposeAvailable(), true);
+  });
+
+  it.skipIf(process.platform !== "linux")("rechecks approved roots after the probe finishes", async () => {
+    const currentRoots = process.env.LUDOCK_COMPOSE_ROOTS;
+    const probe = isComposeAvailable();
+    delete process.env.LUDOCK_COMPOSE_ROOTS;
+    try {
+      assert.equal(await probe, false);
+    } finally {
+      if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
+      else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
+    }
+  });
+
   it.skipIf(process.platform !== "linux")("rechecks registration access after validating the source snapshot", async () => {
     closeDatabase();
     const filename = path.join(directory, "registration.yaml");
@@ -137,6 +175,7 @@ describe("Compose execution boundary", () => {
         (error) => error instanceof Error &&
           error.message === "Docker Compose could not be executed",
       );
+      assert.equal(await isComposeAvailable(), false);
     } finally {
       process.env.PATH = currentPath;
     }

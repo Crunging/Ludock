@@ -149,6 +149,10 @@ export async function runCompose(
 }
 export async function isComposeAvailable(): Promise<boolean> {
   try {
+    if (
+      process.platform !== "linux" ||
+      configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length === 0
+    ) return false;
     await runCompose(["version", "--short"], 5000);
     return (
       process.platform === "linux" &&

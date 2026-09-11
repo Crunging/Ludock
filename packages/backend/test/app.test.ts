@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { serve, type Server } from "bun";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn } from "bun:test";
 import path from "node:path";
 import type { ServerGrantInput } from "@ludock/shared";
 
@@ -10,13 +10,14 @@ process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
 process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase }, { SetupWindow }] =
+const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase }, { SetupWindow }, compose] =
   await Promise.all([
     import("../src/app.js"),
     import("../src/docker.js"),
     import("../src/logger.js"),
     import("../src/database.js"),
     import("../src/auth.js"),
+    import("../src/compose.js"),
   ]);
 
 const docker = getDockerInstance();
@@ -24,6 +25,7 @@ const testLogger = createLogger("http-test");
 const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const originalGetContainer = docker.getContainer.bind(docker);
+const composeAvailability = spyOn(compose, "isComposeAvailable").mockResolvedValue(false);
 
 let server: Server<unknown> | undefined;
 let baseUrl: string;
@@ -80,6 +82,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
+  composeAvailability.mockReset().mockResolvedValue(false);
   closeDatabase();
   managedStopCalled = false;
   managedStartCalled = false;
@@ -106,6 +109,7 @@ afterAll(() => {
   docker.ping = originalPing;
   docker.listContainers = originalListContainers;
   docker.getContainer = originalGetContainer;
+  composeAvailability.mockRestore();
 });
 
 function authorizedFetch(path: string, init: RequestInit = {}) {
@@ -679,12 +683,13 @@ describe("HTTP application", () => {
 
       process.env.LUDOCK_BACKUP_ROOTS = ["/backups", "/archive", "/backups"].join(path.delimiter);
       process.env.LUDOCK_COMPOSE_ROOTS = ["/srv/games", "/srv/games"].join(path.delimiter);
+      composeAvailability.mockResolvedValue(true);
       const response = await authorizedFetch("/api/v1/settings/deployment");
       assert.equal(response.status, 200);
       const body = await response.json() as Record<string, unknown>;
       assert.deepEqual(body.backupRoots, ["/backups", "/archive"]);
       assert.deepEqual(body.composeRoots, ["/srv/games"]);
-      assert.equal(typeof body.composeAvailable, "boolean");
+      assert.equal(body.composeAvailable, true);
       assert.deepEqual(Object.keys(body).sort(), ["backupRoots", "composeAvailable", "composeRoots"]);
 
       for (const [headers, expected] of [
