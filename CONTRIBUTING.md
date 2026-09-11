@@ -147,6 +147,9 @@ checks once for each non-documentation push to `main`, then builds and publishes
 `nightly`. A root package version change also publishes stable tags and a GitHub
 release from that same build. Version changes from any other PR trigger the same
 release behavior. Preserve versions and tags that have already been published.
+After successful stable publication, the workflow changes the matching release
+PR from `autorelease: pending` to `autorelease: tagged` so the next release can
+be prepared.
 
 ## Before opening a pull request
 

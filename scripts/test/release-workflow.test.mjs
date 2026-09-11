@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "bun:test";
@@ -8,6 +8,7 @@ const workflow = Bun.YAML.parse(await readFile(new URL("../../.github/workflows/
 const versionScript = workflow.jobs.validate.steps.find((step) => step.id === "version").run;
 const rankScript = workflow.jobs.release.steps.find((step) => step.id === "rank").run;
 const tagScript = workflow.jobs.release.steps.find((step) => step.name === "Create release tag").run;
+const publicationStep = workflow.jobs.release.steps.find((step) => step.name === "Mark release PR as published");
 
 async function withRepository(previousVersion, currentVersion, check) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-release-test-"));
@@ -131,6 +132,123 @@ describe("release workflow decisions", () => {
           expected.map(String),
         );
       });
+    });
+  }
+});
+
+const publicationRepository = "fixture/ludock";
+const publicationSha = "a".repeat(40);
+
+function pendingPullRequest(overrides = {}) {
+  return {
+    number: 6,
+    merged_at: "2026-01-01T00:00:00Z",
+    merge_commit_sha: publicationSha,
+    base: { ref: "main", repo: { full_name: publicationRepository } },
+    labels: [{ name: "autorelease: pending" }, { name: "keep-this-label" }],
+    ...overrides,
+  };
+}
+
+async function runPublicationLabels(pages, failMethod = "") {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-release-label-test-"));
+  const callsPath = path.join(directory, "calls.jsonl");
+  const responsePath = path.join(directory, "response.jsonl");
+  const ghPath = path.join(directory, "gh");
+  try {
+    await writeFile(callsPath, "");
+    await writeFile(responsePath, pages.map((page) => JSON.stringify(page)).join("\n"));
+    await writeFile(ghPath, `#!/usr/bin/env bun
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.GH_CALLS, JSON.stringify(args) + "\\n");
+const method = args.includes("--method") ? args[args.indexOf("--method") + 1] : "GET";
+if (method === process.env.GH_FAIL_METHOD) process.exit(1);
+if (method === "GET") process.stdout.write(readFileSync(process.env.GH_RESPONSE));
+`);
+    await chmod(ghPath, 0o755);
+    const subprocess = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", publicationStep.run], {
+      cwd: directory,
+      env: {
+        PATH: [directory, path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
+        LC_ALL: "C",
+        GITHUB_REPOSITORY: publicationRepository,
+        GITHUB_SHA: publicationSha,
+        GH_CALLS: callsPath,
+        GH_RESPONSE: responsePath,
+        GH_FAIL_METHOD: failMethod,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      subprocess.exited,
+      new Response(subprocess.stdout).text(),
+      new Response(subprocess.stderr).text(),
+    ]);
+    const calls = (await readFile(callsPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return { exitCode, calls, diagnostic: stdout + stderr };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+describe("release PR publication state", () => {
+  it("updates PR state only after successful stable publication", () => {
+    const steps = workflow.jobs.release.steps;
+    assert.equal(publicationStep.if, "needs.validate.outputs.should_release == 'true'");
+    assert.ok(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Create GitHub release"));
+    assert.ok(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Build and publish image"));
+    assert.equal(workflow.jobs.release.permissions["pull-requests"], "write");
+  });
+
+  it("marks only the merged pending PR for the published commit, including later API pages", async () => {
+    const result = await runPublicationLabels([
+      [
+        pendingPullRequest({ number: 1, merged_at: null }),
+        pendingPullRequest({ number: 2, merge_commit_sha: "b".repeat(40) }),
+        pendingPullRequest({ number: 3, base: { ref: "maintenance", repo: { full_name: publicationRepository } } }),
+        pendingPullRequest({ number: 4, base: { ref: "main", repo: { full_name: "unrelated/ludock" } } }),
+        pendingPullRequest({ number: 5, labels: [{ name: "autorelease: tagged" }] }),
+      ],
+      [pendingPullRequest()],
+    ]);
+    assert.equal(result.exitCode, 0, result.diagnostic);
+    assert.deepEqual(result.calls, [
+      ["api", "--paginate", `repos/${publicationRepository}/commits/${publicationSha}/pulls`],
+      ["api", "--method", "POST", `repos/${publicationRepository}/issues/6/labels`, "-f", "labels[]=autorelease: tagged", "--silent"],
+      ["api", "--method", "DELETE", `repos/${publicationRepository}/issues/6/labels/autorelease%3A%20pending`, "--silent"],
+    ]);
+  });
+
+  for (const [description, pulls] of [
+    ["an already tagged PR", [pendingPullRequest({ labels: [{ name: "autorelease: tagged" }] })]],
+    ["a release with no associated PR", []],
+  ]) {
+    it(`does not mutate labels for ${description}`, async () => {
+      const result = await runPublicationLabels([pulls]);
+      assert.equal(result.exitCode, 0, result.diagnostic);
+      assert.equal(result.calls.length, 1);
+    });
+  }
+
+  it("retries a transition interrupted after adding the tagged label", async () => {
+    const result = await runPublicationLabels([[pendingPullRequest({ labels: [{ name: "autorelease: pending" }, { name: "autorelease: tagged" }] })]]);
+    assert.equal(result.exitCode, 0, result.diagnostic);
+    assert.deepEqual(result.calls.slice(1).map((args) => args[2]), ["POST", "DELETE"]);
+  });
+
+  it("rejects ambiguous matches without changing labels", async () => {
+    const result = await runPublicationLabels([[pendingPullRequest()], [pendingPullRequest({ number: 7 })]]);
+    assert.equal(result.exitCode, 1, result.diagnostic);
+    assert.equal(result.calls.length, 1);
+  });
+
+  for (const [method, expectedCalls] of [["GET", 1], ["POST", 2], ["DELETE", 3]]) {
+    it(`preserves a retryable pending state and fails when ${method} fails`, async () => {
+      const result = await runPublicationLabels([[pendingPullRequest()]], method);
+      assert.equal(result.exitCode, 1, result.diagnostic);
+      assert.equal(result.calls.length, expectedCalls);
     });
   }
 });

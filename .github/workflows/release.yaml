@@ -94,6 +94,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      pull-requests: write
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
 
@@ -248,3 +249,40 @@ jobs:
               --notes-file "$RUNNER_TEMP/release-notes.md" \
               --latest="$IS_LATEST"
           fi
+
+      - name: Mark release PR as published
+        if: needs.validate.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # This workflow owns publication, so it also completes Release Please's
+          # pending state after both the image and GitHub release are available.
+          pull_number="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" |
+              jq -r --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+                .[] |
+                select(.merged_at != null and .merge_commit_sha == $sha) |
+                select(.base.ref == "main" and .base.repo.full_name == $repo) |
+                select(any(.labels[]; .name == "autorelease: pending")) |
+                .number
+              '
+          )"
+
+          if [[ -z "$pull_number" ]]; then
+            echo "::notice::No pending release PR for this commit."
+            exit 0
+          fi
+          if [[ ! "$pull_number" =~ ^[0-9]+$ ]]; then
+            echo "::error::Expected exactly one pending release PR for this commit."
+            exit 1
+          fi
+
+          # Add first so an interrupted transition remains pending and retryable.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$pull_number/labels" \
+            -f 'labels[]=autorelease: tagged' --silent
+          gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/issues/$pull_number/labels/autorelease%3A%20pending" \
+            --silent

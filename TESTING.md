@@ -14,6 +14,7 @@ available for broader local validation, not required before every commit.
 Use the latest stable Bun 1 release (minimum 1.4.2), as selected by
 [`.bun-version`](./.bun-version). Update a local standalone installation with
 `bun upgrade`, or use its package manager, keeping it on the Bun 1 release line.
+The release-workflow fixtures also use Git, Bash, and `jq`.
 For a full source check and local image build:
 
 ```bash
