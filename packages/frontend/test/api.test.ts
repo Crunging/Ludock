@@ -31,6 +31,16 @@ describe("authenticated requests", () => {
     expect(expired).toHaveBeenCalledTimes(1);
     window.removeEventListener(AUTH_REQUIRED_EVENT, expired);
   });
+  it("preserves headers inherited from a Request", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      return Response.json({ accept: request.headers.get("Accept") });
+    });
+    const response = await apiFetch(new Request("http://localhost/api/v1/servers", {
+      headers: { Accept: "application/json" },
+    }));
+    expect(await response.json()).toEqual({ accept: "application/json" });
+  });
   it("constructs a versioned websocket without credentials in the URL", () => {
     const url = new URL(authenticatedWebSocketUrl("/ws/v1/events"));
     expect(url.pathname).toBe("/ws/v1/events");
