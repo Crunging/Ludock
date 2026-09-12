@@ -141,6 +141,12 @@ writable-layer paths are not supported. Host roots, broad system directories,
 Docker sockets, read-only mounts, sensitive paths, and symlink traversal are
 blocked. See [Game servers](./GAME-SERVERS.md#file-roots).
 
+In **Files**, search by filename within the current folder and sort by name,
+size, or modification time. Directories stay first. Search and sorting survive
+refreshes; opening another folder or root clears the search and keeps the sort.
+Use **Clear filter** when a filter hides the entry you need. Searching does not
+scan subfolders.
+
 Every file operation uses a temporary digest-pinned Bun 1 Alpine helper, whether the
 game is running or stopped. It mounts only approved data, has no network, uses a
 read-only root filesystem and `no-new-privileges`, drops capabilities, and adds
@@ -271,6 +277,12 @@ On Ludock startup, interrupted destructive work is reconciled rather than
 blindly replayed. Review **Server → Activity**, the actual Docker state, and
 owning-manager logs after an interruption. There is no general operation-cancel
 API; stopping Ludock is not a cancel/rollback mechanism.
+
+In **Server → Activity**, filter recent operations by status and operation type.
+The count describes the loaded recent history. Filters survive refreshes and
+tab changes. If they hide active work, **Show active work** clears them; filtering
+does not unlock server controls. A schedule's **View activity** opens its selected
+operation independently of these filters.
 
 ## Register Compose projects
 
@@ -420,6 +432,13 @@ Use **Diagnostics**, **Audit log**, and **Ludock logs** for administrator-only
 inspection. `docker compose logs --follow --tail 200 ludock` also shows backend
 logs. Use `LOG_LEVEL=debug` temporarily; credentials and command contents should
 never be included in reports.
+
+In **Ludock logs**, combine text search with severity and component filters.
+Search covers the recent entries buffered in the page, including their displayed
+context; the count shows matches out of the current buffer. **Clear filters**
+restores the full view. Turn off **Follow latest** to read older output without
+scrolling to new entries. **Pause** stops fetching new entries; **Refresh** still
+fetches on demand. Turning **Follow latest** back on scrolls to the latest match.
 
 To recover an existing administrator password, securely set and export
 `LUDOCK_RECOVERY_PASSWORD` in the shell without putting the value in command

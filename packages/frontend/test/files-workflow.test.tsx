@@ -120,6 +120,155 @@ function fileRow(name: string): HTMLElement {
   return row;
 }
 
+function visibleFilenames(): string[] {
+  return Array.from(document.querySelectorAll(
+    ".file-row__name > span:not(.file-row__icon), .file-row__name > button",
+  ), (element) => element.textContent || "");
+}
+
+describe("current-folder file filtering and sorting", () => {
+  it("filters filenames without new requests and distinguishes no matches from an empty folder", async () => {
+    let empty = false;
+    filesPage({
+      role: "viewer",
+      current: { ...server, permissions: ["server.view", "files.read"] },
+      read: (path) => empty && path.includes("/files?") ? folderListing("data", "", []) : undefined,
+    });
+    await screen.findByText(config.name);
+    const requestCount = apiJsonMock.mock.calls.length;
+    const search = screen.getByRole("searchbox", { name: "Filter filenames" });
+    await userEvent.type(search, "PROPERTIES");
+    expect(visibleFilenames()).toEqual([config.name]);
+    expect(screen.getByText("Showing 1 of 2 entries")).toBeTruthy();
+    expect(apiJsonMock.mock.calls).toHaveLength(requestCount);
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "level.dat");
+    expect(screen.getByText("No filenames match “level.dat”.")).toBeTruthy();
+    expect(screen.queryByText("This folder is empty.")).toBeNull();
+    expect(screen.getByText("Showing 0 of 2 entries")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(document.activeElement).toBe(search);
+    expect(visibleFilenames()).toEqual([folder.name, config.name]);
+
+    await userEvent.type(search, "missing");
+    empty = true;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("This folder is empty.");
+    expect(screen.queryByText(/No filenames match/)).toBeNull();
+    expect(screen.getByText("Showing 0 of 0 entries")).toBeTruthy();
+  });
+
+  it("sorts both directions with folders first, stable name ties, and unavailable values last", async () => {
+    const entries: FileEntry[] = [
+      { name: "Zeta", type: "directory", size: 0, modifiedAt: 100 },
+      { name: "alpha", type: "directory", size: 0, modifiedAt: 300 },
+      { name: "unknown.txt", type: "file", size: 0, modifiedAt: 0 },
+      { name: "log10", type: "file", size: 10, modifiedAt: 100 },
+      { name: "Log2", type: "file", size: 20, modifiedAt: 300 },
+      { name: "equal.txt", type: "file", size: 20, modifiedAt: 300 },
+      { name: "link", type: "symlink", size: 999, modifiedAt: 200 },
+    ];
+    filesPage({ read: (path) => path.includes("/files?") ? folderListing("data", "", entries) : undefined });
+    await screen.findByText("equal.txt");
+    const orders = {
+      "name-asc": ["alpha", "Zeta", "equal.txt", "link", "Log2", "log10", "unknown.txt"],
+      "name-desc": ["Zeta", "alpha", "unknown.txt", "log10", "Log2", "link", "equal.txt"],
+      "size-asc": ["alpha", "Zeta", "unknown.txt", "log10", "equal.txt", "Log2", "link"],
+      "size-desc": ["alpha", "Zeta", "equal.txt", "Log2", "log10", "unknown.txt", "link"],
+      "modified-asc": ["Zeta", "alpha", "log10", "link", "equal.txt", "Log2", "unknown.txt"],
+      "modified-desc": ["alpha", "Zeta", "equal.txt", "Log2", "link", "log10", "unknown.txt"],
+    };
+    for (const [sort, expected] of Object.entries(orders)) {
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort by" }), sort);
+      expect(visibleFilenames()).toEqual(expected);
+    }
+    expect(entries.map((entry) => entry.name)).toEqual([
+      "Zeta", "alpha", "unknown.txt", "log10", "Log2", "equal.txt", "link",
+    ]);
+  });
+
+  it("keeps browsing controls through refresh and file changes, then clears only the query on folder navigation", async () => {
+    filesPage({
+      read: (path) => path.includes("path=world")
+        ? folderListing("data", "world", [{ ...config, name: "level.dat" }])
+        : undefined,
+    });
+    await screen.findByText(config.name);
+    const search = screen.getByRole("searchbox", { name: "Filter filenames" });
+    const sort = screen.getByRole("combobox", { name: "Sort by" });
+    await userEvent.type(search, "world");
+    await userEvent.selectOptions(sort, "modified-desc");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("button", { name: "world", exact: true });
+    expect((search as HTMLInputElement).value).toBe("world");
+    expect((sort as HTMLSelectElement).value).toBe("modified-desc");
+
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Folder name" }), "new folder");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await screen.findByText("Created “new folder”.");
+    await screen.findByRole("button", { name: "world", exact: true });
+    expect((search as HTMLInputElement).value).toBe("world");
+    expect((sort as HTMLSelectElement).value).toBe("modified-desc");
+    await userEvent.click(screen.getByRole("button", { name: "world", exact: true }));
+    await screen.findByText("level.dat");
+    expect((search as HTMLInputElement).value).toBe("");
+    expect((sort as HTMLSelectElement).value).toBe("modified-desc");
+    await userEvent.type(search, "level");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Storage location" }), "mods");
+    await screen.findByText(config.name);
+    expect((search as HTMLInputElement).value).toBe("");
+    expect((sort as HTMLSelectElement).value).toBe("modified-desc");
+  });
+
+  it("shows loading and refresh errors instead of filter results until a new listing succeeds", async () => {
+    const retry = Promise.withResolvers<FileListing>();
+    let attempts = 0;
+    filesPage({
+      read: (path) => {
+        if (!path.includes("/files?")) return;
+        attempts += 1;
+        if (attempts === 2) throw new Error("Storage unavailable");
+        if (attempts === 3) return retry.promise;
+      },
+    });
+    await screen.findByText(config.name);
+    const search = screen.getByRole("searchbox", { name: "Filter filenames" });
+    await userEvent.type(search, "server");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Unable to load this folder: Storage unavailable");
+    expect(screen.queryByText(/Showing \d+ of/)).toBeNull();
+    expect(screen.queryByText(/No filenames match/)).toBeNull();
+    expect(visibleFilenames()).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Loading folder…");
+    await userEvent.clear(search);
+    await userEvent.type(search, "world");
+    await act(async () => retry.resolve(folderListing()));
+    expect(visibleFilenames()).toEqual([folder.name]);
+    expect(screen.getByText("Showing 1 of 2 entries")).toBeTruthy();
+  });
+
+  it("resets query and sort when switching accounts or servers", async () => {
+    const view = filesPage();
+    await screen.findByText(config.name);
+    await userEvent.type(screen.getByRole("searchbox", { name: "Filter filenames" }), "private query");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort by" }), "size-desc");
+    view.changeUser("other-admin", "admin");
+    await screen.findByText(config.name);
+    expect((screen.getByRole("searchbox", { name: "Filter filenames" }) as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("combobox", { name: "Sort by" }) as HTMLSelectElement).value).toBe("name-asc");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Filter filenames" }), "another query");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort by" }), "size-desc");
+    view.changeServer("another-server");
+    await screen.findByText(config.name);
+    expect((screen.getByRole("searchbox", { name: "Filter filenames" }) as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("combobox", { name: "Sort by" }) as HTMLSelectElement).value).toBe("name-asc");
+  });
+});
+
 describe("file locations and request ownership", () => {
   it("ignores an older root response and uses the visible root for actions", async () => {
     const oldRoot = Promise.withResolvers<FileListing>();
@@ -363,9 +512,7 @@ describe("file uploads", () => {
       ).toBe(false),
     );
     expect(uploadSignal?.aborted).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain(
-      "Upload canceled.",
-    );
+    expect(screen.getByText(/Upload canceled\./).closest('[role="status"]')).toBeTruthy();
     expect(apiFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -432,7 +579,7 @@ describe("contextual file dialogs", () => {
     expect(apiJsonMock.mock.calls.length).toBe(readsBeforeCompletion);
     await act(async () => currentWrite.resolve(response()));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByRole("status").textContent).toContain("Created “new-account-folder”.");
+    expect(screen.getByText("Created “new-account-folder”.").closest('[role="status"]')).toBeTruthy();
     expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
@@ -464,9 +611,7 @@ describe("contextual file dialogs", () => {
       within(dialog).getByRole("button", { name: "Create folder" }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByRole("status").textContent).toContain(
-      "Created “old-backups”.",
-    );
+    expect(screen.getByText("Created “old-backups”.").closest('[role="status"]')).toBeTruthy();
     expect(apiFetch).toHaveBeenLastCalledWith(
       `/api/v1/servers/${server.id}/files/directory`,
       expect.objectContaining({

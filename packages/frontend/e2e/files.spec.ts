@@ -2,6 +2,66 @@ import type { Route } from "@playwright/test";
 import { apiErrorSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID, RUNNING_NAME } from "./fixtures";
 
+test("filename filters and sort controls work locally with keyboard and touch", async ({ app, page }, testInfo) => {
+  app.files.set("data:", [
+    { name: "world", type: "directory", size: 0, modifiedAt: 3_000 },
+    { name: "server.properties", type: "file", size: 342, modifiedAt: 1_000 },
+    { name: "backup10.zip", type: "file", size: 2_048, modifiedAt: 2_000 },
+    { name: "backup2.zip", type: "file", size: 4_096, modifiedAt: 3_000 },
+  ]);
+  await app.open(`/files/${RUNNING_ID}`);
+  await expect(page.getByText("Showing 4 of 4 entries", { exact: true })).toBeVisible();
+  const search = page.getByRole("searchbox", { name: "Filter filenames", exact: true });
+  const sort = page.getByRole("combobox", { name: "Sort by", exact: true });
+  const names = page.locator(".file-row__name > span:not(.file-row__icon), .file-row__name > button");
+  const reads = app.requests.filter((request) => request.path.endsWith("/files")).length;
+  await sort.selectOption("size-desc");
+  await expect(names).toHaveText(["world", "backup2.zip", "backup10.zip", "server.properties"]);
+  await search.fill("BACKUP");
+  await expect(names).toHaveText(["backup2.zip", "backup10.zip"]);
+  await expect(page.getByText("Showing 2 of 4 entries", { exact: true })).toBeVisible();
+  expect(app.requests.filter((request) => request.path.endsWith("/files"))).toHaveLength(reads);
+
+  const clear = page.getByRole("button", { name: "Clear filter", exact: true });
+  for (const control of [search, sort, clear]) {
+    const box = await control.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("file-filters.png"), fullPage: true });
+
+  await search.fill("missing-file");
+  await expect(page.getByText("No filenames match “missing-file”.", { exact: true })).toBeVisible();
+  await expect(page.getByText("This folder is empty.", { exact: true })).toHaveCount(0);
+  await clear.focus();
+  await page.keyboard.press("Enter");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(names).toHaveCount(4);
+  expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
+});
+
+test("refresh keeps file filters while folder navigation clears the query and keeps the sort", async ({ app, page }) => {
+  await app.open(`/files/${RUNNING_ID}`);
+  const search = page.getByRole("searchbox", { name: "Filter filenames", exact: true });
+  const sort = page.getByRole("combobox", { name: "Sort by", exact: true });
+  await search.fill("world");
+  await sort.selectOption("modified-desc");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("Showing 1 of 2 entries", { exact: true })).toBeVisible();
+  await expect(search).toHaveValue("world");
+  await expect(sort).toHaveValue("modified-desc");
+  await page.getByRole("button", { name: "world", exact: true }).click();
+  await expect(page.getByText("level.dat", { exact: true })).toBeVisible();
+  await expect(search).toHaveValue("");
+  await expect(sort).toHaveValue("modified-desc");
+  await search.fill("level");
+  await page.getByRole("combobox", { name: "Storage location", exact: true }).selectOption("config");
+  await expect(page.getByText("settings.yml", { exact: true })).toBeVisible();
+  await expect(search).toHaveValue("");
+  await expect(sort).toHaveValue("modified-desc");
+});
+
 test("folder creation and deletion name the target and require explicit confirmation", async ({ app, page }) => {
   await app.open(`/files/${RUNNING_ID}`);
   const create = page.getByRole("button", { name: "New folder", exact: true });

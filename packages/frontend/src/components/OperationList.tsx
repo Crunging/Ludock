@@ -4,12 +4,14 @@ import { operationActive, operationLabel } from "../operations";
 
 export default function OperationList({
   operations,
+  emptyMessage = "No operations yet.",
 }: {
   operations: Operation[];
+  emptyMessage?: string;
 }) {
   return (
     <div className="table-scroll">
-      <table className="data-table">
+      <table className="data-table" aria-label="Recent operations">
         <thead>
           <tr>
             <th>Operation</th>
@@ -21,7 +23,7 @@ export default function OperationList({
           {operations.length === 0 && (
             <tr>
               <td colSpan={3} className="muted">
-                No operations yet.
+                {emptyMessage}
               </td>
             </tr>
           )}
