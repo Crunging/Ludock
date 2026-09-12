@@ -27,7 +27,7 @@ import { operationActive } from "../operations";
 import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
 import SectionTabs from "../components/SectionTabs";
 import LifecycleConfirmation from "../components/LifecycleConfirmation";
-import ActivityPanel from "../components/server-detail/ActivityPanel";
+import ActivityPanel, { type ActivityFilters } from "../components/server-detail/ActivityPanel";
 import BackupsPanel, {
   type RestoreSelection,
 } from "../components/server-detail/BackupsPanel";
@@ -117,6 +117,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     "stop" | "restart" | null
   >(null);
   // Keep drafts above the panels so changing tabs never discards a selection.
+  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ status: "all", kind: "all" });
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
   const [scheduleEdit, setScheduleEdit] = useState<ScheduleEdit | null>(null);
   const scheduleFocusTarget = useRef<string | null>(null);
@@ -662,7 +663,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             {activeOperation.status === "queued" ? " queued. " : " in progress. "}
             Server controls, backups, and updates are paused until it finishes.
           </p>
-          <button className="text-link" onClick={() => setTab("activity")}>
+          <button className="text-link" onClick={() => {
+            setActivityFilters({ status: "all", kind: "all" });
+            setTab("activity");
+          }}>
             View progress
           </button>
         </div>
@@ -676,6 +680,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         {activeTab === "activity" && (
           <ActivityPanel
             serverId={serverId}
+            filters={activityFilters}
+            onFiltersChange={setActivityFilters}
             selectedOperationId={selectedOperationId}
             onCloseOperation={() => {
               activityFocusTarget.current = "recent-operations-title";

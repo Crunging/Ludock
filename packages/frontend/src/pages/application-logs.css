@@ -1,0 +1,96 @@
+.application-logs-page .secondary-btn {
+  min-height: 44px;
+}
+
+.application-logs-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.application-logs-follow input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--blue);
+}
+
+.application-logs-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.application-logs-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.application-logs-filter input,
+.application-logs-filter select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.application-logs-filter input:focus-visible,
+.application-logs-filter select:focus-visible,
+.application-logs-follow input:focus-visible,
+.application-logs-output:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.application-logs-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 10px 0 12px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.application-logs-output {
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 1000px) {
+  .application-logs-page .application-logs-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .application-logs-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .application-logs-filter--search {
+    grid-column: 1 / -1;
+  }
+
+  .application-logs-filters > button {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 520px), (pointer: coarse) {
+  .application-logs-filter input,
+  .application-logs-filter select {
+    font-size: 16px;
+  }
+}

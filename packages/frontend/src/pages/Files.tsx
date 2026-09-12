@@ -3,6 +3,7 @@ import {
   type DragEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -31,6 +32,40 @@ import {
   formatByteSize,
   type Server,
 } from "@ludock/shared";
+import "./files.css";
+
+const fileSortOptions = {
+  "name-asc": "Name: A to Z",
+  "name-desc": "Name: Z to A",
+  "size-desc": "Size: largest first",
+  "size-asc": "Size: smallest first",
+  "modified-desc": "Modified: newest first",
+  "modified-asc": "Modified: oldest first",
+} as const;
+type FileSort = keyof typeof fileSortOptions;
+const filenameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function compareFiles(left: FileEntry, right: FileEntry, sort: FileSort): number {
+  const directoryOrder = Number(right.type === "directory") - Number(left.type === "directory");
+  if (directoryOrder) return directoryOrder;
+  const nameOrder = filenameCollator.compare(left.name, right.name)
+    || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  const direction = sort.endsWith("-desc") ? -1 : 1;
+  if (sort.startsWith("name-")) return nameOrder * direction;
+  const value = (entry: FileEntry) => sort.startsWith("size-")
+    ? entry.type === "file" ? entry.size : null
+    : entry.modifiedAt || null;
+  const leftValue = value(left);
+  const rightValue = value(right);
+  // Values rendered as a dash stay last in either direction.
+  if (leftValue === null || rightValue === null) {
+    return leftValue === rightValue ? nameOrder : leftValue === null ? 1 : -1;
+  }
+  return (leftValue - rightValue) * direction || nameOrder;
+}
 
 interface FileLocation {
   readonly root: string;
@@ -108,10 +143,13 @@ export default function Files({ containerId }: { containerId: string }) {
 function FileBrowser({ containerId }: { containerId: string }) {
   const { user } = useAuth();
   const fileInput = useRef<HTMLInputElement>(null);
+  const filterInput = useRef<HTMLInputElement>(null);
   const listingRequest = useRef<AbortController | null>(null);
   const mutation = useRef<PendingMutation | null>(null);
   const [browser, setBrowser] = useState(initialBrowserState);
   const [serverReload, setServerReload] = useState(0);
+  const [filenameFilter, setFilenameFilter] = useState("");
+  const [fileSort, setFileSort] = useState<FileSort>("name-asc");
   const { server, state: serverState, error: serverError } = browser.access;
   const { folder, dialog: selectedAction, actionDraft, feedback, dragging } = browser;
   const location = folder?.location;
@@ -123,6 +161,13 @@ function FileBrowser({ containerId }: { containerId: string }) {
   const loading = folder?.state === "loading";
   const listingReady = folder?.state === "ready";
   const entries = listingReady ? folder.entries : [];
+  const visibleEntries = useMemo(() => {
+    if (folder?.state !== "ready") return [];
+    const query = filenameFilter.trim().toLowerCase();
+    return folder.entries
+      .filter((entry) => entry.name.toLowerCase().includes(query))
+      .sort((left, right) => compareFiles(left, right, fileSort));
+  }, [folder, filenameFilter, fileSort]);
   const canChangeFiles = canManage && !bindingBlocked && listingReady && !busy;
 
   useEffect(() => {
@@ -141,6 +186,8 @@ function FileBrowser({ containerId }: { containerId: string }) {
     mutation.current?.controller.abort();
     mutation.current = null;
     setBrowser(initialBrowserState);
+    setFilenameFilter("");
+    setFileSort("name-asc");
 
     apiJson(
       `/servers/${encodeURIComponent(containerId)}`,
@@ -251,6 +298,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
 
   const changeLocation = (target: FileLocation) => {
     if (mutation.current || selectedAction) return;
+    if (!location || !sameLocation(location, target)) setFilenameFilter("");
     listingRequest.current?.abort();
     listingRequest.current = null;
     setBrowser((current) => ({
@@ -709,6 +757,49 @@ function FileBrowser({ containerId }: { containerId: string }) {
               )}
             </div>
           )}
+          <div className="file-filters">
+            <label className="file-filters__search">
+              Filter filenames
+              <input
+                ref={filterInput}
+                type="search"
+                value={filenameFilter}
+                onChange={(event) => setFilenameFilter(event.target.value)}
+                placeholder="Search this folder"
+                aria-describedby="file-filter-help"
+              />
+            </label>
+            <label className="file-filters__sort">
+              Sort by
+              <select
+                value={fileSort}
+                onChange={(event) => setFileSort(event.target.value as FileSort)}
+              >
+                {Object.entries(fileSortOptions).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            {filenameFilter && (
+              <button
+                className="secondary-btn"
+                onClick={() => {
+                  setFilenameFilter("");
+                  filterInput.current?.focus();
+                }}
+              >
+                Clear filter
+              </button>
+            )}
+          </div>
+          <div className="file-filter-summary">
+            <p id="file-filter-help">Current folder only · Folders first</p>
+            {listingReady && (
+              <p role="status">
+                Showing {visibleEntries.length} of {entries.length} entries
+              </p>
+            )}
+          </div>
           <div className="file-list">
             <div className="file-list__header">
               <span>Name</span>
@@ -735,8 +826,12 @@ function FileBrowser({ containerId }: { containerId: string }) {
               </div>
             ) : entries.length === 0 ? (
               <p className="file-list__empty">This folder is empty.</p>
+            ) : visibleEntries.length === 0 ? (
+              <p className="file-list__empty">
+                No filenames match “{filenameFilter.trim()}”.
+              </p>
             ) : (
-              entries.map((entry) => (
+              visibleEntries.map((entry) => (
                 <div className="file-row" key={entry.name}>
                   <div className="file-row__name">
                     <span className="file-row__icon" aria-hidden="true">

@@ -78,6 +78,10 @@ rename failure recovery, cancellation of obsolete listings, and upload
 cancellation. Live-state and console cases cover stale controls, denied access,
 fresh snapshots on reconnect, manual retry after repeated disconnects, separate
 command drafts, and commands never being resent automatically.
+Browsing checks cover current-folder filename filtering and sorting, combined
+log filters with independent fetching and scrolling controls, and activity
+filters that keep active work reachable. Filters retain their selections across
+refreshes and distinguish no matches from empty data.
 These browser fixtures verify frontend behavior;
 backend authorization and actual Docker mutations remain covered separately.
 
@@ -342,10 +346,22 @@ absolute paths on the Docker host and inside Ludock.
   through connection interruptions. Sending requires fresh access; failed sends
   keep their draft, and reconnecting never resends a command automatically.
 - Changing a file root or folder hides old entries and ignores obsolete reads.
+  Filename filtering applies only to the loaded folder, retains its query on
+  refresh, and clears it on folder/root navigation while preserving sort order.
+  Folders remain first for every sort direction; missing metadata has stable
+  placement and matching counts never describe stale entries.
   File dialogs name the server and folder, retain drafts after ordinary errors,
   and require a new confirmation after reconciling an uncertain write result.
   Partial upload failures remain visible after refresh; canceling stops the
   remaining batch and explains that data already written is not rolled back.
+- Ludock log search combines with exact severity and component filters over the
+  current buffer. Selected components survive buffer rollover and restarts;
+  denied access clears cached entries and component names. Disabling Follow
+  latest preserves scroll position while polling continues, and Pause stops
+  polling independently. Resuming never replaces newer filter input.
+- Activity filters survive refreshes and tab changes without altering operation
+  locks. A notice keeps hidden active work visible and reachable, View progress
+  reveals it, and schedule-linked operation details remain outside the filters.
 - At 320px and 390px widths, navigation can scroll, server actions wrap, forms
   fit, and data tables remain usable. Console input and file controls do not
   overflow. Touch actions remain at least 44px tall and text inputs avoid zoom.
