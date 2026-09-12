@@ -1,11 +1,15 @@
 import type { Page } from "@playwright/test";
 import {
   apiErrorSchema,
+  operationResponseSchema,
+  operationSchema,
   savedScheduleSchema,
   scheduleEnabledRequestSchema,
   scheduleResponseSchema,
+  scheduleSchema,
   schedulesResponseSchema,
   updateScheduleRequestSchema,
+  type NextRunUnavailableReason,
 } from "@ludock/shared";
 import { test, expect, ADMIN, RUNNING_ID } from "./fixtures";
 
@@ -13,8 +17,25 @@ const SCHEDULE_ID = "77777777-7777-4777-8777-777777777777";
 const NOW = new Date("2026-09-11T12:00:00Z");
 const NEXT_RUN = Date.UTC(2026, 8, 12, 9);
 const EDITED_NEXT_RUN = Date.UTC(2026, 8, 11, 14, 45);
+const OPERATION_ID = "88888888-8888-4888-8888-888888888888";
+const LAST_RUN = Date.UTC(2026, 8, 10, 9);
+const LAST_OPERATION = operationSchema.parse({
+  id: OPERATION_ID,
+  serverId: RUNNING_ID,
+  kind: "restart",
+  status: "failed",
+  phase: "Restarting container",
+  createdAt: LAST_RUN,
+  updatedAt: LAST_RUN + 60_000,
+  error: "Container stopped unexpectedly during restart.",
+  result: null,
+});
 
-async function mockSchedules(page: Page, enabled = true) {
+async function mockSchedules(page: Page, enabled = true, options: {
+  empty?: boolean;
+  nextRunUnavailableReason?: NextRunUnavailableReason;
+} = {}) {
+  let hasSchedule = !options.empty;
   let schedule = savedScheduleSchema.parse({
     id: SCHEDULE_ID,
     serverId: RUNNING_ID,
@@ -24,20 +45,47 @@ async function mockSchedules(page: Page, enabled = true) {
     time: "09:00",
     days: [0, 1, 2, 3, 4, 5, 6],
     timezone: "UTC",
-    lastResult: "Completed successfully",
+    lastResult: "Queued operation",
+    lastOperation: LAST_OPERATION,
+    lastRunAt: LAST_RUN,
     lastSlot: null,
     revision: 1,
-    nextRunAt: enabled ? NEXT_RUN : null,
+    nextRunAt: enabled && !options.nextRunUnavailableReason ? NEXT_RUN : null,
+    nextRunUnavailableReason: options.nextRunUnavailableReason ?? null,
   });
   const writes: { method: string; body: unknown }[] = [];
+  const operationReads: string[] = [];
   let rejectNextEdit = false;
   await page.clock.setFixedTime(NOW);
+  await page.route(`**/api/v1/operations/${OPERATION_ID}`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    operationReads.push(OPERATION_ID);
+    await route.fulfill({ json: operationResponseSchema.parse({ operation: LAST_OPERATION }) });
+  });
   await page.route(`**/api/v1/servers/${RUNNING_ID}/schedules**`, async (route) => {
     const request = route.request();
     const method = request.method();
     const pathname = new URL(request.url()).pathname;
     if (method === "GET" && pathname.endsWith("/schedules")) {
-      await route.fulfill({ json: schedulesResponseSchema.parse({ schedules: [schedule] }) });
+      await route.fulfill({ json: schedulesResponseSchema.parse({ schedules: hasSchedule ? [schedule] : [] }) });
+      return;
+    }
+    if (method === "POST" && pathname.endsWith("/schedules")) {
+      const body: unknown = request.postDataJSON();
+      const input = scheduleSchema.parse(body);
+      writes.push({ method, body });
+      schedule = savedScheduleSchema.parse({
+        ...schedule,
+        ...input,
+        lastResult: null,
+        lastOperation: null,
+        lastRunAt: null,
+        revision: 1,
+        nextRunAt: input.enabled ? EDITED_NEXT_RUN : null,
+        nextRunUnavailableReason: null,
+      });
+      hasSchedule = true;
+      await route.fulfill({ status: 201, json: scheduleResponseSchema.parse({ schedule }) });
       return;
     }
     if (pathname.endsWith(`/schedules/${SCHEDULE_ID}`) && ["PUT", "PATCH"].includes(method)) {
@@ -74,7 +122,7 @@ async function mockSchedules(page: Page, enabled = true) {
     }
     await route.fallback();
   });
-  return { writes, rejectNextEdit: () => { rejectNextEdit = true; } };
+  return { writes, operationReads, rejectNextEdit: () => { rejectNextEdit = true; } };
 }
 
 test("schedules can be edited, paused, and resumed with the latest saved revision", async ({ app, page }, testInfo) => {
@@ -84,13 +132,16 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   const table = page.getByRole("table", { name: "Schedules", exact: true });
   const row = table.getByRole("row").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) });
   await expect(row.getByRole("cell", { name: "Enabled", exact: true })).toBeVisible();
-  await expect(row.getByRole("cell", { name: "Completed successfully", exact: true })).toBeVisible();
+  await expect(row.getByRole("cell").nth(4)).toContainText("Failed");
+  await expect(row.getByRole("cell").nth(4)).not.toContainText("Queued operation");
   await expect(row.getByRole("cell").nth(3)).toContainText("UTC");
 
   const edit = row.getByRole("button", { name: "Edit", exact: true });
+  await expect(page.getByRole("checkbox", { name: "Create paused", exact: true })).toBeVisible();
   await edit.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Edit schedule", exact: true })).toBeFocused();
+  await expect(page.getByRole("checkbox", { name: "Create paused", exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Action", exact: true })).toHaveValue("restart");
   await expect(page.getByLabel("Time", { exact: true })).toHaveValue("09:00");
   await page.getByLabel("Time", { exact: true }).fill("14:45");
@@ -113,7 +164,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
 
   await row.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(row.getByRole("cell").nth(2)).toHaveText("Paused");
-  await expect(row.getByRole("cell", { name: "Completed successfully", exact: true })).toBeVisible();
+  await expect(row.getByRole("cell").nth(4)).toContainText("Failed");
   await expect(row.getByRole("cell").nth(3)).not.toContainText("UTC");
   expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: false, revision: 2 } });
 
@@ -180,3 +231,83 @@ test("invalid and rejected schedule edits preserve the draft for correction", as
   await expect(timezone).toHaveValue("UTC");
   expect(fixture.writes).toHaveLength(1);
 });
+
+test("a new schedule can be created paused and only starts running after explicit resume", async ({ app, page }, testInfo) => {
+  const fixture = await mockSchedules(page, true, { empty: true });
+  await app.open(`/servers/${RUNNING_ID}`);
+  await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+  await page.getByRole("combobox", { name: "Action", exact: true }).selectOption("restart");
+  await page.getByLabel("Time", { exact: true }).fill("14:45");
+  await page.getByLabel("Time zone", { exact: true }).fill("UTC");
+  await page.getByRole("checkbox", { name: "Create paused", exact: true }).check();
+  await expect(page.locator(".schedule-preview")).toContainText("Next run when resumed:");
+  await expect(page.locator(".schedule-preview")).toContainText("14:45");
+  const screenshot = testInfo.outputPath("schedule-create-paused.png");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach("Create a paused schedule", { path: screenshot, contentType: "image/png" });
+  await page.getByRole("button", { name: "Add schedule", exact: true }).click();
+
+  const table = page.getByRole("table", { name: "Schedules", exact: true });
+  const row = table.getByRole("row").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) });
+  await expect(row.getByRole("cell").nth(2)).toHaveText("Paused");
+  await expect(row.getByRole("cell").nth(3)).toHaveText("Paused");
+  await expect(row.getByRole("cell").nth(4)).toContainText("No runs yet");
+  expect(fixture.writes).toEqual([{
+    method: "POST",
+    body: { action: "restart", enabled: false, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC" },
+  }]);
+  await row.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(row.getByRole("cell").nth(2)).toHaveText("Enabled");
+  await expect(row.getByRole("cell").nth(3)).toContainText("14:45");
+  expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: true, revision: 1 } });
+});
+
+test("a scheduled result opens and focuses its operation even when it is absent from recent activity", async ({ app, page }, testInfo) => {
+  const fixture = await mockSchedules(page);
+  await app.open(`/servers/${RUNNING_ID}`);
+  await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+  const table = page.getByRole("table", { name: "Schedules", exact: true });
+  const row = table.getByRole("row").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) });
+  const result = row.getByRole("cell").nth(4);
+  await expect(result).toContainText("Failed");
+  await expect(result).toContainText("Sep 10");
+  await expect(result).toContainText("09:00");
+  await expect(result).toContainText("UTC");
+  expect(fixture.operationReads).toEqual([]);
+  await result.getByRole("button", { name: "View activity", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Activity", selected: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Scheduled operation", exact: true })).toBeFocused();
+  const selected = page.getByRole("region", { name: "Scheduled operation", exact: true });
+  await expect(selected).toContainText("Failed");
+  await expect(selected).toContainText("Container stopped unexpectedly during restart.");
+  await expect(page.getByText("No operations yet.", { exact: true })).toBeVisible();
+  expect(fixture.operationReads).toContain(OPERATION_ID);
+  const screenshot = testInfo.outputPath("scheduled-operation.png");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach("Scheduled operation details", { path: screenshot, contentType: "image/png" });
+});
+
+for (const unavailable of [
+  {
+    reason: "owner_disabled",
+    enabled: true,
+    message: "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
+  },
+  {
+    reason: "binding_changed",
+    enabled: true,
+    message: "Server identity changed. Ask an administrator to review the binding, then recreate this schedule.",
+  },
+] as const) {
+  test(`schedule next-run guidance explains ${unavailable.reason} while ${unavailable.enabled ? "enabled" : "paused"}`, async ({ app, page }) => {
+    await mockSchedules(page, unavailable.enabled, { nextRunUnavailableReason: unavailable.reason });
+    await app.open(`/servers/${RUNNING_ID}`);
+    await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+    const table = page.getByRole("table", { name: "Schedules", exact: true });
+    const row = table.getByRole("row").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) });
+    await expect(row.getByRole("cell").nth(2)).toHaveText(unavailable.enabled ? "Enabled" : "Paused");
+    await expect(row.getByRole("cell").nth(3)).toContainText(unavailable.message);
+  });
+}

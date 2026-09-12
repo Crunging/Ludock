@@ -181,6 +181,13 @@ local-time slot is retained across edits and pauses so the same occurrence is no
 replayed. Shared timezone helpers calculate both due slots and next-run previews,
 including skipped spring-forward times and once-only repeated fall-back times.
 Saved previews also check the owner's current authority and original binding.
+Their public reason codes distinguish disabled owners, missing access, and binding
+changes without returning private diagnostics. Each attempted slot records its
+time and, when queued, its operation association. Enqueueing and associating that
+operation are atomic. Schedule responses project the associated operation's
+current persisted result, so normal completion and interruption recovery share
+one source of truth. A later skipped attempt clears the association; an older
+operation finishing cannot replace the latest schedule result.
 
 `identity.ts` and `servers.ts` separate logical history from live Docker
 observations. `authorization.ts` owns capability and role ceilings. File helpers

@@ -56,8 +56,13 @@ export function scheduleFixture(serverId: string, overrides: Partial<Schedule> =
     timezone: "UTC",
     revision: 1,
     lastSlot: null,
-    lastResult: "Completed successfully",
+    lastResult: "Queued operation",
+    lastOperation: operationFixture(serverId, {
+      kind: "restart", status: "succeeded", createdAt: Date.UTC(2026, 8, 11, 9), updatedAt: Date.UTC(2026, 8, 11, 9, 1),
+    }),
+    lastRunAt: Date.UTC(2026, 8, 11, 9),
     nextRunAt: Date.UTC(2026, 8, 12, 9),
+    nextRunUnavailableReason: null,
     ...overrides,
   };
 }

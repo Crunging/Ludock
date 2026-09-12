@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { nextScheduleRun, scheduleSchema, type Schedule, type ScheduleInput } from "@ludock/shared";
+import { operationStatusLabels } from "../../operations";
 
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const minuteStart = () => Math.floor(Date.now() / 60_000) * 60_000;
@@ -26,15 +27,30 @@ interface Props {
   onResolveConflict: (useSaved: boolean) => void;
   onToggle: (schedule: Schedule) => void;
   onDelete: (schedule: Schedule) => void;
+  onViewActivity: (schedule: Schedule) => void;
 }
 
-function formatRun(timestamp: number, timezone: string, now: number) {
+const unavailableGuidance: Record<NonNullable<Schedule["nextRunUnavailableReason"]>, string> = {
+  owner_missing: "Schedule owner no longer exists. Recreate this schedule with an authorized owner.",
+  owner_disabled: "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
+  owner_access_removed: "Schedule owner no longer has schedule access. Ask an administrator to restore server view and schedule management grants.",
+  action_access_removed: "Schedule owner no longer has access to this action. Ask an administrator to restore the action grant, or edit the schedule to use an allowed action.",
+  binding_changed: "Server identity changed. Ask an administrator to review the binding, then recreate this schedule.",
+  binding_unavailable: "Server binding is unavailable. Ask an administrator to resolve its identity before this schedule can run.",
+  unavailable: "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
+};
+
+function formatDate(timestamp: number, timezone: string) {
   const date = new Intl.DateTimeFormat(undefined, {
     weekday: "short", year: "numeric", month: "short", day: "numeric",
     hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: timezone,
   }).format(timestamp);
+  return `${date} (${timezone})`;
+}
+
+function formatRun(timestamp: number, timezone: string, now: number) {
   const prefix = timestamp === now ? "Due now · " : timestamp < now ? "Awaiting scheduler · " : "";
-  return `${prefix}${date} (${timezone})`;
+  return `${prefix}${formatDate(timestamp, timezone)}`;
 }
 
 function when(schedule: ScheduleInput) {
@@ -44,7 +60,7 @@ function when(schedule: ScheduleInput) {
 export default function SchedulesPanel(props: Props) {
   const {
     schedules, draft: schedule, editing, conflict, onDraftChange, scheduleActions,
-    busy, saving, blocked, onSave, onEdit, onCancelEdit, onResolveConflict, onToggle, onDelete,
+    busy, saving, blocked, onSave, onEdit, onCancelEdit, onResolveConflict, onToggle, onDelete, onViewActivity,
   } = props;
   const [now, setNow] = useState(minuteStart);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -98,9 +114,18 @@ export default function SchedulesPanel(props: Props) {
                 <td className="schedule-next-run">
                   {!item.enabled ? "Paused" : item.nextRunAt !== null
                     ? formatRun(item.nextRunAt, item.timezone, now)
-                    : <>Unavailable<small className="table-detail">Owner access or server binding prevents execution.</small></>}
+                    : "Unavailable"}
+                  {(item.nextRunUnavailableReason || (item.enabled && item.nextRunAt === null)) && (
+                    <small className="table-detail">{unavailableGuidance[item.nextRunUnavailableReason ?? "unavailable"]}</small>
+                  )}
                 </td>
-                <td className="schedule-result">{item.lastResult || "No runs yet"}</td>
+                <td className="schedule-result">
+                  {item.lastOperation ? operationStatusLabels[item.lastOperation.status] : item.lastResult || "No runs yet"}
+                  {item.lastRunAt !== null && <small className="table-detail"><time dateTime={new Date(item.lastRunAt).toISOString()}>{formatDate(item.lastRunAt, item.timezone)}</time></small>}
+                  {item.lastOperation && (
+                    <button type="button" className="text-link schedule-activity-link" onClick={() => onViewActivity(item)}>View activity</button>
+                  )}
+                </td>
                 <td>
                   <div className="schedule-row-actions">
                     <button
@@ -162,6 +187,12 @@ export default function SchedulesPanel(props: Props) {
               </label>
             ))}
           </fieldset>
+          {!editing && (
+            <label className="check-label">
+              <input type="checkbox" checked={!schedule.enabled} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, enabled: !event.target.checked })} />
+              Create paused
+            </label>
+          )}
           <p className="schedule-preview">
             <strong>{schedule.enabled ? "Next run:" : "Next run when resumed:"}</strong>{" "}
             {preview === null ? "Choose a valid time, time zone, and at least one day." : formatRun(preview, schedule.timezone, now)}

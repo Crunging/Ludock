@@ -120,6 +120,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
   const [scheduleEdit, setScheduleEdit] = useState<ScheduleEdit | null>(null);
   const scheduleFocusTarget = useRef<string | null>(null);
+  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
+  const activityFocusTarget = useRef<"scheduled-operation-title" | "recent-operations-title" | null>(null);
   const [update, setUpdate] = useState<UpdateOptions>({
     createBackup: true,
     forceRecreate: false,
@@ -141,6 +143,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     document.getElementById(`schedule-edit-${scheduleFocusTarget.current}`)?.focus();
     scheduleFocusTarget.current = null;
   }, [scheduleEdit, busy, snapshotReady, tab]);
+
+  useEffect(() => {
+    if (tab !== "activity" || !activityFocusTarget.current) return;
+    document.getElementById(activityFocusTarget.current)?.focus();
+    activityFocusTarget.current = null;
+  }, [selectedOperationId, tab]);
 
   useEffect(() => {
     if (capabilityState === "loading" || !capabilityFocusPending.current) return;
@@ -667,6 +675,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       >
         {activeTab === "activity" && (
           <ActivityPanel
+            serverId={serverId}
+            selectedOperationId={selectedOperationId}
+            onCloseOperation={() => {
+              activityFocusTarget.current = "recent-operations-title";
+              setSelectedOperationId(null);
+            }}
             operations={operations}
             admin={admin}
             onRefresh={() => void refresh()}
@@ -746,6 +760,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               setError(null);
             }}
             onToggle={(item) => void toggleSchedule(item)}
+            onViewActivity={(item) => {
+              if (!item.lastOperation || !can(user, server, "server.view")) return;
+              activityFocusTarget.current = "scheduled-operation-title";
+              setSelectedOperationId(item.lastOperation.id);
+              setTab("activity");
+            }}
             onDelete={(item) => {
               if (
                 !canManageSchedules ||

@@ -1,7 +1,7 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES, nextScheduleRun, scheduleSlot, type Schedule, type Server } from "@ludock/shared";
+import { SERVER_CAPABILITIES, nextScheduleRun, scheduleSlot, type Operation, type Schedule, type Server } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import type { AuthUser } from "../src/auth-context";
 import ServerDetail from "../src/pages/ServerDetail";
@@ -32,6 +32,16 @@ function detail({
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const custom = await onRequest?.(path, init);
     if (custom !== undefined) return custom;
+    if (path === `${base}/schedules` && init?.method === "POST") {
+      schedule = scheduleFixture(server.id, {
+        ...JSON.parse(init.body as string),
+        lastOperation: null, lastRunAt: null, lastResult: null,
+      });
+      schedule.nextRunAt = nextScheduleRun(schedule, Date.now());
+      return { schedule };
+    }
+    if (schedule.lastOperation && path === `/operations/${schedule.lastOperation.id}`)
+      return { operation: schedule.lastOperation };
     if (path === itemPath && (init?.method === "PUT" || init?.method === "PATCH")) {
       const input = JSON.parse(init.body as string);
       schedule = { ...schedule, ...input, revision: schedule.revision + 1 };
@@ -87,7 +97,7 @@ describe("schedule management", () => {
     await screen.findByText("Schedule paused.");
     expect(within(row).getAllByRole("cell")[2].textContent).toBe("Paused");
     expect(within(row).getAllByRole("cell")[3].textContent).toBe("Paused");
-    expect(within(row).getByText("Completed successfully")).toBeTruthy();
+    expect(within(row).getByText("Succeeded")).toBeTruthy();
     await userEvent.click(within(row).getByRole("button", { name: "Resume" }));
     await screen.findByText("Schedule resumed.");
     expect(writes("PATCH").map(([, , init]) => JSON.parse(init!.body as string))).toEqual([
@@ -253,5 +263,157 @@ describe("schedule management", () => {
     expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe("Europe/London");
     expect(apiJsonMock.mock.calls.length).toBe(calls);
     expect(screen.queryByText("Schedule saved.")).toBeNull();
+  });
+});
+
+
+describe("schedule results and paused creation", () => {
+  it("keeps create-paused choices through tabs, pending saves, and failure before creating without a run", async () => {
+    let fail!: () => void;
+    let first = true;
+    const pending = new Promise((_resolve, reject) => { fail = () => reject(new ApiRequestError("Unable to save. Try again.", 503)); });
+    const view = detail({ onRequest: (path, init) => {
+      if (first && path === `${base}/schedules` && init?.method === "POST") {
+        first = false;
+        return pending;
+      }
+    } });
+    await openSchedules();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Create paused" }));
+    draftTimezone("UTC");
+    draftTime("12:00");
+    expect(preview().textContent).toContain("Next run when resumed:");
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await openSchedules();
+    expect((screen.getByRole("checkbox", { name: "Create paused" }) as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Add schedule" }));
+    expect((screen.getByRole("checkbox", { name: "Create paused" }) as HTMLInputElement).disabled).toBe(true);
+    await act(async () => fail());
+    await screen.findByText("Unable to save. Try again.");
+    expect((screen.getByRole("checkbox", { name: "Create paused" }) as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Add schedule" }));
+    await screen.findByText("Schedule created.");
+    expect(writes("POST").map(([, , init]) => JSON.parse(init!.body as string))).toEqual([
+      { action: "start", enabled: false, time: "12:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC" },
+      { action: "start", enabled: false, time: "12:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC" },
+    ]);
+    expect(view.schedule.enabled).toBe(false);
+    expect(view.schedule.lastOperation).toBeNull();
+    expect(view.schedule.nextRunAt).toBeNull();
+    expect(writes("PATCH")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect(screen.queryByRole("checkbox", { name: "Create paused" })).toBeNull();
+    expect(preview().textContent).toContain("Next run when resumed:");
+  });
+
+  it.each([
+    ["queued", "Queued"], ["running", "Running"], ["succeeded", "Succeeded"],
+    ["failed", "Failed"], ["interrupted", "Interrupted"],
+  ] as const)("shows the actual %s operation result and attempt time instead of a stale queue message", async (status, label) => {
+    const operation = operationFixture(server.id, { kind: "restart", status });
+    detail({ initial: scheduleFixture(server.id, { lastOperation: operation }) });
+    await openSchedules();
+    const row = within(screen.getByRole("table", { name: "Schedules" })).getAllByRole("row")[1];
+    const result = within(row).getAllByRole("cell")[4];
+    expect(within(result).getByText(label)).toBeTruthy();
+    expect(result.textContent).toContain("Sep 11, 2026");
+    expect(result.textContent).toContain("UTC");
+    expect(result.textContent).not.toContain("Queued operation");
+    expect(within(result).getByRole("button", { name: "View activity" })).toBeTruthy();
+  });
+
+  it("shows the latest skipped attempt without an unrelated prior operation link", async () => {
+    detail({ initial: scheduleFixture(server.id, { lastOperation: null, lastResult: "Skipped: another operation is active" }) });
+    await openSchedules();
+    expect(screen.getByText("Skipped: another operation is active")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View activity" })).toBeNull();
+  });
+
+  it.each([
+    ["owner_disabled", "enable the owner’s account"],
+    ["action_access_removed", "restore the action grant"],
+    ["binding_changed", "review the binding, then recreate this schedule"],
+  ] as const)("explains %s with its recovery step", async (reason, guidance) => {
+    detail({ initial: scheduleFixture(server.id, { nextRunAt: null, nextRunUnavailableReason: reason }) });
+    await openSchedules();
+    const nextRun = within(screen.getByRole("table", { name: "Schedules" })).getAllByRole("row")[1].children[3];
+    expect(nextRun.textContent).toContain("Unavailable");
+    expect(nextRun.textContent).toContain(guidance);
+  });
+
+  it("loads and focuses an older scheduled operation with its current status without blocking server controls", async () => {
+    const embedded = operationFixture(server.id, { kind: "restart", status: "queued" });
+    const fresh = { ...embedded, status: "failed" as const, error: "The game server could not be stopped.", phase: "finished" };
+    detail({ initial: scheduleFixture(server.id, { lastOperation: embedded }), onRequest: (path) =>
+      path === `/operations/${embedded.id}` ? { operation: fresh } : undefined });
+    await openSchedules();
+    draftTimezone("Europe/London");
+    await userEvent.click(screen.getByRole("button", { name: "View activity" }));
+    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    await within(region).findByText("Failed");
+    expect(within(region).getByText(fresh.error)).toBeTruthy();
+    expect(document.activeElement).toBe(within(region).getByRole("heading", { name: "Scheduled operation" }));
+    expect(screen.getByText("No operations yet.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Close operation" }));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Recent operations" }));
+    await openSchedules();
+    expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe("Europe/London");
+  });
+
+  it("refreshes a running historical result without treating it as a current server operation", async () => {
+    const intervals = spyOn(window, "setInterval");
+    let operation: Operation = operationFixture(server.id, { kind: "restart", status: "running" });
+    detail({ initial: scheduleFixture(server.id, { lastOperation: operation }), onRequest: (path) =>
+      path === `/operations/${operation.id}` ? { operation } : undefined });
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "View activity" }));
+    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    await within(region).findByText("Running");
+    expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(false);
+    operation = { ...operation, status: "succeeded", phase: "finished" };
+    const poll = intervals.mock.calls.find(([, delay]) => delay === 2000)![0] as () => void;
+    await act(async () => poll());
+    await within(region).findByText("Succeeded");
+  });
+
+  it("hides a previously visible operation after access is denied and supports a fresh retry", async () => {
+    const intervals = spyOn(window, "setInterval");
+    const operation = operationFixture(server.id, { kind: "restart", status: "succeeded" });
+    let denied = false;
+    detail({ initial: scheduleFixture(server.id, { lastOperation: operation }), onRequest: (path) => {
+      if (path === `/operations/${operation.id}`) {
+        if (denied) throw new ApiRequestError("Forbidden", 403);
+        return { operation };
+      }
+    } });
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "View activity" }));
+    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    await within(region).findByText("Succeeded");
+    denied = true;
+    const poll = intervals.mock.calls.filter(([, delay]) => delay === 10000).at(-1)![0] as () => void;
+    await act(async () => poll());
+    await within(region).findByRole("alert");
+    expect(within(region).queryByText("Succeeded")).toBeNull();
+    denied = false;
+    await userEvent.click(within(region).getByRole("button", { name: "Retry operation" }));
+    await within(region).findByText("Succeeded");
+  });
+
+  it("ignores an obsolete operation response when another view is opened", async () => {
+    const operation = operationFixture(server.id, { kind: "restart", status: "failed", error: "Old operation failed" });
+    let finish!: () => void;
+    const pending = new Promise((resolve) => { finish = () => resolve({ operation }); });
+    detail({ onRequest: (path) => path === `/operations/${operation.id}` ? pending : undefined });
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "View activity" }));
+    await screen.findByRole("region", { name: "Scheduled operation" });
+    await openSchedules();
+    draftTimezone("Europe/London");
+    await act(async () => finish());
+    expect(screen.queryByRole("region", { name: "Scheduled operation" })).toBeNull();
+    expect(screen.queryByText("Old operation failed")).toBeNull();
+    expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe("Europe/London");
   });
 });

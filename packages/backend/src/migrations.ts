@@ -140,6 +140,46 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 3,
     sql: "ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0);",
   },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE schedules ADD COLUMN last_operation_id TEXT;
+      ALTER TABLE schedules ADD COLUMN last_run_at INTEGER CHECK (last_run_at >= 0);
+    `,
+    upgrade(db) {
+      const candidates = db.prepare(`
+        SELECT schedules.id AS schedule_id, operations.id AS operation_id,
+          operations.input_json, operations.created_at
+        FROM schedules JOIN operations
+          ON schedules.last_result = 'Queued operation ' || operations.id
+          AND schedules.server_id = operations.server_id
+          AND schedules.owner_id = operations.actor_id
+        WHERE operations.created_at >= 0
+      `).all() as {
+        schedule_id: string;
+        operation_id: string;
+        input_json: string;
+        created_at: number;
+      }[];
+      const associate = db.prepare(`
+        UPDATE schedules SET last_operation_id = ?, last_run_at = ? WHERE id = ?
+      `);
+      for (const candidate of candidates) {
+        let input: unknown;
+        try {
+          input = JSON.parse(candidate.input_json);
+        } catch {
+          continue;
+        }
+        if (
+          input !== null && typeof input === "object" && !Array.isArray(input) &&
+          "scheduleId" in input && input.scheduleId === candidate.schedule_id
+        ) {
+          associate.run(candidate.operation_id, candidate.created_at, candidate.schedule_id);
+        }
+      }
+    },
+  },
 ];
 
 function schemaVersion(db: Database): number {

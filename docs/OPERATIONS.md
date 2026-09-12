@@ -339,11 +339,25 @@ rediscovered under the same Ludock UUID.
 
 Schedules support start, stop, restart, and backup at a selected local time on
 selected weekdays. Open a server's **Schedules** tab to add a schedule, edit its
-action or timing, or pause and resume it. The form previews the next matching
-time before saving; saved schedules show their next run in their selected time
-zone, separately from their last result. A next-run preview describes the timing;
-Ludock must still be running and the server must pass access, identity, and
-operation checks when that time arrives.
+action or timing, or pause and resume it. Select **Create paused** to save a new
+schedule without activating it, including when its selected time is currently due.
+The form previews the next matching time before saving; for a paused schedule,
+it previews the next run if resumed. Saved schedules show their next run in their
+selected time zone, separately from their last result. A next-run preview
+describes the timing; Ludock must still be running and the server must pass
+access, identity, and operation checks when that time arrives.
+
+**Last result** shows the latest attempted run's time and actual operation status,
+including queued, running, succeeded, failed, and interrupted work. Choose
+**View activity** to inspect that operation's progress or error. A skipped or
+suspended attempt shows its reason instead of an older operation's outcome.
+Existing records retain their available history; a missing historical run time
+is not reconstructed from the current clock.
+
+An unavailable next run explains whether the owner is disabled, required access
+is missing, or the server binding needs attention. Follow the displayed next step:
+ask an administrator to enable the owner or restore the required grant, or review
+the server and recreate a schedule whose original binding has materially changed.
 
 Missed times and spring-forward gaps are skipped; a repeated fall-back time runs
 once. Resuming does not replay missed runs. Pausing or editing prevents queued

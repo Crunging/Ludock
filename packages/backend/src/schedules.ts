@@ -1,9 +1,12 @@
 import {
   nextScheduleRun,
+  operationSchema,
   scheduleEnabledRequestSchema,
   scheduleSchema,
   scheduleSlot,
   updateScheduleRequestSchema,
+  type NextRunUnavailableReason,
+  type Operation,
   type ScheduleInput,
 } from "@ludock/shared";
 import {
@@ -17,9 +20,10 @@ import {
   assertServerCapability,
   currentActor,
   hasServerCapability,
+  getUserServerGrant,
 } from "./authorization.js";
-import { resolveServerBinding } from "./identity.js";
-import { enqueueOperation } from "./operations.js";
+import { getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
+import { enqueueOperation, getOperation, publicOperation } from "./operations.js";
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { createLogger } from "./logger.js";
@@ -37,6 +41,8 @@ interface ScheduleRow {
   revision: number;
   last_slot: string | null;
   last_result: string | null;
+  last_operation_id: string | null;
+  last_run_at: number | null;
   created_at: number;
 }
 
@@ -46,20 +52,46 @@ export const MAX_SCHEDULES_TOTAL = 1_000;
 
 const actionCapability = (action: ScheduleInput["action"]): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
+
+const unavailableMessages = {
+  owner_missing: "Suspended: the schedule owner no longer exists",
+  owner_disabled: "Suspended: the schedule owner's account is disabled",
+  owner_access_removed: "Suspended: required access to manage schedules has been removed",
+  action_access_removed: "Suspended: required access for this scheduled action has been removed",
+  binding_changed: "Suspended: server configuration changed; recreate this schedule after reviewing the server",
+  binding_unavailable: "Suspended: the server binding is unavailable or requires administrator review",
+  unavailable: "Suspended: this schedule cannot currently run; review the server and schedule",
+} satisfies Record<NextRunUnavailableReason, string>;
+
+class ScheduleUnavailableError extends AppError {
+  constructor(readonly reason: NextRunUnavailableReason) {
+    const binding = reason === "binding_changed" || reason === "binding_unavailable";
+    super(
+      reason === "binding_changed" ? "SCHEDULE_BINDING_CHANGED"
+        : binding ? "SCHEDULE_BINDING_UNAVAILABLE" : "SCHEDULE_REVOKED",
+      binding ? 409 : 403,
+      unavailableMessages[reason],
+    );
+  }
+}
+
 function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
   const user = findUserById(row.owner_id);
-  if (
-    !user ||
-    user.disabled ||
-    !hasServerCapability(user, row.server_id, "schedules.manage") ||
-    !hasServerCapability(user, row.server_id, actionCapability(data.action))
-  )
-    throw new AppError(
-      "SCHEDULE_REVOKED",
-      403,
-      "Suspended: required access has been removed",
-    );
-  const binding = resolveServerBinding(row.server_id);
+  if (!user) throw new ScheduleUnavailableError("owner_missing");
+  if (user.disabled) throw new ScheduleUnavailableError("owner_disabled");
+  // Inspect assigned grants before binding availability so a suspended binding
+  // is not misreported as a removed grant by the effective-capability mask.
+  if (user.role !== "admin") {
+    const grant = getUserServerGrant(user.id, row.server_id);
+    if (user.role !== "operator" ||
+      !grant?.capabilities.includes("server.view") ||
+      !grant.capabilities.includes("schedules.manage"))
+      throw new ScheduleUnavailableError("owner_access_removed");
+    if (!grant.capabilities.includes(actionCapability(data.action)))
+      throw new ScheduleUnavailableError("action_access_removed");
+  }
+  const logical = getLogicalServer(row.server_id);
+  if (!logical) throw new ScheduleUnavailableError("binding_unavailable");
   const original = getDatabase()
     .prepare(
       "SELECT binding_fingerprint FROM server_bindings WHERE server_id=? AND binding_revision=? AND accepted=1 ORDER BY id DESC LIMIT 1",
@@ -67,23 +99,50 @@ function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
     .get(row.server_id, row.binding_revision) as
     | { binding_fingerprint: string }
     | undefined;
-  if (!original || original.binding_fingerprint !== binding.bindingFingerprint)
-    throw new AppError(
-      "SCHEDULE_BINDING_CHANGED",
-      409,
-      "Suspended: server configuration changed; recreate this schedule after reviewing the server",
-    );
+  if (!original || original.binding_fingerprint !== logical.bindingFingerprint)
+    throw new ScheduleUnavailableError("binding_changed");
+  let binding: ReturnType<typeof resolveServerBinding>;
+  try {
+    binding = resolveServerBinding(row.server_id);
+  } catch (error) {
+    if (error instanceof ServerBindingError)
+      throw new ScheduleUnavailableError("binding_unavailable");
+    throw error;
+  }
+  // Keep the normal current role, grant, and binding authority as the final gate.
+  if (!hasServerCapability(user, row.server_id, "schedules.manage"))
+    throw new ScheduleUnavailableError("owner_access_removed");
+  if (!hasServerCapability(user, row.server_id, actionCapability(data.action)))
+    throw new ScheduleUnavailableError("action_access_removed");
   return { user, binding };
 }
+
+function latestOperation(row: ScheduleRow): Operation | null {
+  if (!row.last_operation_id) return null;
+  try {
+    const job = getOperation(row.last_operation_id);
+    if (!job || job.serverId !== row.server_id || job.actorId !== row.owner_id ||
+      job.input.scheduleId !== row.id) return null;
+    const result = operationSchema.safeParse(publicOperation(job));
+    return result.success ? result.data : null;
+  } catch {
+    // Corrupt or unrelated history never exposes an operation's private state.
+    return null;
+  }
+}
+
 function publicSchedule(row: ScheduleRow, now = Date.now()) {
   const data = scheduleSchema.parse(JSON.parse(row.input_json));
   let nextRunAt: number | null = null;
+  let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
   if (data.enabled) {
     try {
       scheduleAuthority(row, data);
       nextRunAt = nextScheduleRun(data, now, row.last_slot);
-    } catch {
-      // Preview unavailable work without exposing private binding/access details.
+      if (nextRunAt === null) nextRunUnavailableReason = "unavailable";
+    } catch (error) {
+      nextRunUnavailableReason = error instanceof ScheduleUnavailableError
+        ? error.reason : "unavailable";
     }
   }
   return {
@@ -92,9 +151,12 @@ function publicSchedule(row: ScheduleRow, now = Date.now()) {
     serverId: row.server_id,
     ownerId: row.owner_id,
     lastResult: row.last_result,
+    lastOperation: latestOperation(row),
+    lastRunAt: row.last_run_at,
     lastSlot: row.last_slot,
     revision: row.revision,
     nextRunAt,
+    nextRunUnavailableReason,
   };
 }
 export function listSchedules(actor: SessionUser, serverId: string) {
@@ -336,33 +398,53 @@ export function runSchedules(now = Date.now()): void {
       slot = scheduleSlot(data, now);
       configurationValid = true;
       if (!slot || slot === row.last_slot) continue;
-      getDatabase()
-        .prepare("UPDATE schedules SET last_slot=? WHERE id=?")
-        .run(slot, row.id);
-      const { user, binding } = scheduleAuthority(row, data);
-      const op = enqueueOperation({
-        serverId: row.server_id,
-        actorId: user.id,
-        kind: data.action,
-        bindingRevision: binding.bindingRevision,
-        input: { scheduleId: row.id, scheduleRevision: row.revision },
-        idempotencyKey: `schedule:${row.id}:${slot}`,
-      });
-      getDatabase()
-        .prepare("UPDATE schedules SET last_result=? WHERE id=?")
-        .run(`Queued operation ${op.id}`, row.id);
+      const db = getDatabase();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const { user, binding } = scheduleAuthority(row, data);
+        const op = enqueueOperation({
+          serverId: row.server_id,
+          actorId: user.id,
+          kind: data.action,
+          bindingRevision: binding.bindingRevision,
+          input: { scheduleId: row.id, scheduleRevision: row.revision },
+          idempotencyKey: `schedule:${row.id}:${slot}`,
+          deferAuditPrune: true,
+        });
+        // Queue and associate the same attempt atomically. Completing an older
+        // operation never changes this association or a newer attempt's result.
+        db.prepare(
+          "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=?",
+        ).run(slot, now, op.id, `Queued operation ${op.id}`, row.id);
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // Preserve the cause if SQLite already rolled the transaction back.
+        }
+        throw error;
+      }
+      try {
+        pruneAuditLogIfNeeded();
+      } catch {
+        logger.warn("Audit retention cleanup failed after scheduling; it will be retried");
+      }
     } catch (error) {
       const reason = !configurationValid
         ? "Suspended: saved schedule configuration is invalid; recreate this schedule"
-        : error instanceof AppError &&
-        (error.code === "SCHEDULE_REVOKED" ||
-          error.code === "SCHEDULE_BINDING_CHANGED")
+        : error instanceof ScheduleUnavailableError
           ? error.message
           : "Skipped: server state or a conflicting operation prevented this run";
       try {
-        getDatabase()
-          .prepare("UPDATE schedules SET last_result=? WHERE id=?")
-          .run(reason, row.id);
+        if (slot) {
+          getDatabase().prepare(
+            "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=?",
+          ).run(slot, now, reason, row.id);
+        } else {
+          getDatabase().prepare("UPDATE schedules SET last_result=? WHERE id=?")
+            .run(reason, row.id);
+        }
         if (!configurationValid && row.last_result !== reason)
           logger.warn("Saved schedule configuration is invalid; recreate the schedule", {
             scheduleId: row.id,

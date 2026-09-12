@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { ScheduleInput } from "@ludock/shared";
 import * as database from "../src/database.js";
+import * as identity from "../src/identity.js";
 import {
   closeDatabase,
   createUser,
@@ -28,6 +29,8 @@ import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
   listOperations,
   getOperation,
+  registerJobHandler,
+  startOperationRunner,
   stopOperationRunner,
 } from "../src/operations.js";
 
@@ -384,7 +387,7 @@ describe("schedule editing and suspension", () => {
     assert.equal(paused.ownerId, friend.id);
     assert.throws(() => setScheduleEnabled(admin, serverId, schedule.id, {
       enabled: true, revision: 2,
-    }), /required access/);
+    }), /account is disabled/);
   });
 
   it("keeps materially changed bindings suspended after pause, edit, or resume attempts", () => {
@@ -451,6 +454,238 @@ describe("schedule editing and suspension", () => {
     }).revision, 2);
     assert.equal(cleanup.mock.calls.length, 1);
     assert.doesNotMatch(JSON.stringify(warn.mock.calls), /fixture-private-cleanup-error/);
+  });
+});
+
+describe("schedule outcomes", () => {
+  it("creates paused schedules without consuming a slot or fabricating a run", () => {
+    const schedule = createSchedule(friend, serverId, { ...input, enabled: false });
+    runSchedules(due);
+    assert.equal(listOperations(serverId).length, 0);
+    assert.deepEqual(listSchedules(friend, serverId)[0], schedule);
+    assert.equal(schedule.lastOperation, null);
+    assert.equal(schedule.lastRunAt, null);
+    assert.equal(schedule.nextRunAt, null);
+    assert.equal(schedule.nextRunUnavailableReason, null);
+  });
+
+  it("projects live queued, running, and completed outcomes without exposing job state", async () => {
+    createSchedule(friend, serverId, input);
+    runSchedules(due + 12_345);
+    const queued = listSchedules(friend, serverId)[0];
+    assert.equal(queued.lastRunAt, due + 12_345);
+    assert.equal(queued.lastOperation?.status, "queued");
+    let enter!: () => void;
+    let finish!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    registerJobHandler("start", {
+      run: async (context) => {
+        context.progress("starting", { privateFixtureDetail: "fixture-private-recovery" });
+        enter();
+        await finished;
+        return { action: "start" };
+      },
+    });
+    await startOperationRunner();
+    await entered;
+    try {
+      const running = listSchedules(friend, serverId)[0];
+      assert.equal(running.lastOperation?.status, "running");
+      assert.equal(running.lastOperation?.phase, "starting");
+      assert.equal(running.lastRunAt, queued.lastRunAt);
+      assert.equal(running.lastOperation?.id, queued.lastOperation?.id);
+      assert.doesNotMatch(JSON.stringify(running), /fixture-private-recovery|actorId|recovery|scheduleRevision/);
+    } finally {
+      finish();
+      await stopOperationRunner();
+    }
+    const completed = listSchedules(friend, serverId)[0];
+    assert.equal(completed.lastOperation?.status, "succeeded");
+    assert.deepEqual(completed.lastOperation?.result, { action: "start" });
+    assert.equal(completed.lastRunAt, queued.lastRunAt);
+  });
+
+  it("shows the operation's actual failure after dispatch", async () => {
+    createSchedule(friend, serverId, input);
+    runSchedules(due);
+    registerJobHandler("start", {
+      run: () => { throw new AppError("FIXTURE_START_FAILED", 409, "The fixture could not start."); },
+    });
+    await startOperationRunner();
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (listSchedules(friend, serverId)[0].lastOperation?.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const schedule = listSchedules(friend, serverId)[0];
+    assert.equal(schedule.lastOperation?.status, "failed");
+    assert.equal(schedule.lastOperation?.error, "The fixture could not start.");
+    assert.equal(schedule.lastRunAt, due);
+  });
+
+  it("follows interrupted operation recovery through to its actual outcome", async () => {
+    createSchedule(friend, serverId, input);
+    runSchedules(due);
+    getDatabase().prepare("UPDATE operations SET status='running',phase='stopping'").run();
+    let enter!: () => void;
+    let finish!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    registerJobHandler("start", {
+      run: async () => {},
+      recover: async (context) => {
+        context.progress("restarting");
+        enter();
+        await finished;
+      },
+    });
+    const starting = startOperationRunner();
+    await entered;
+    try {
+      assert.equal(listSchedules(friend, serverId)[0].lastOperation?.phase, "restarting");
+    } finally {
+      finish();
+      await starting;
+      await stopOperationRunner();
+    }
+    const schedule = listSchedules(friend, serverId)[0];
+    assert.equal(schedule.lastOperation?.status, "interrupted");
+    assert.match(schedule.lastOperation?.error ?? "", /Ludock restarted/);
+    assert.equal(schedule.lastRunAt, due);
+  });
+
+  it("keeps a newer skipped attempt after an older queued operation finishes", () => {
+    createSchedule(friend, serverId, input);
+    runSchedules(due);
+    const older = listSchedules(friend, serverId)[0].lastOperation!;
+    runSchedules(due + 86_400_000);
+    getDatabase().prepare("UPDATE operations SET status='succeeded',phase='succeeded' WHERE id=?").run(older.id);
+    const latest = listSchedules(friend, serverId)[0];
+    assert.equal(latest.lastOperation, null);
+    assert.equal(latest.lastRunAt, due + 86_400_000);
+    assert.match(latest.lastResult!, /Skipped:/);
+    runSchedules(due + 86_400_000 + 30_000);
+    assert.equal(listSchedules(friend, serverId)[0].lastRunAt, latest.lastRunAt);
+  });
+
+  it("never projects an unrelated or malformed operation reference", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    runSchedules(due);
+    const operation = listSchedules(friend, serverId)[0].lastOperation!;
+    const another = reconcileServers([observation, { ...observation, name: "another", containerId: "another" }])
+      .find((server) => server.id !== serverId)!;
+    const db = getDatabase();
+    for (const [targetServer, owner, operationInput] of [
+      [another.id, friend.id, JSON.stringify({ scheduleId: schedule.id })],
+      [serverId, other.id, JSON.stringify({ scheduleId: schedule.id })],
+      [serverId, friend.id, JSON.stringify({ scheduleId: "another-schedule", credential: "fixture-secret" })],
+      [serverId, friend.id, "malformed-fixture-secret"],
+      [serverId, friend.id, "[]"],
+    ]) {
+      db.prepare("UPDATE operations SET server_id=?,actor_id=?,input_json=? WHERE id=?")
+        .run(targetServer, owner, operationInput, operation.id);
+      const current = listSchedules(friend, serverId)[0];
+      assert.equal(current.lastOperation, null);
+      assert.doesNotMatch(JSON.stringify(current), /fixture-secret/);
+    }
+  });
+
+  it("isolates invalid public fields on associated historical operations", () => {
+    createSchedule(friend, serverId, input);
+    runSchedules(due);
+    const operation = listSchedules(friend, serverId)[0].lastOperation!;
+    const db = getDatabase();
+    for (const [status, createdAt, updatedAt] of [
+      ["cancelled", 1, 1], ["succeeded", -1, 1], ["succeeded", 1, -1],
+    ]) {
+      db.prepare("UPDATE operations SET status=?,created_at=?,updated_at=? WHERE id=?")
+        .run(status, createdAt, updatedAt, operation.id);
+      const schedule = listSchedules(friend, serverId)[0];
+      assert.equal(schedule.lastOperation, null);
+      assert.equal(schedule.lastRunAt, due);
+    }
+  });
+
+  it("rolls back queued work if associating the attempt fails and still consumes the skipped slot", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    const db = getDatabase();
+    db.exec(`CREATE TRIGGER fail_operation_link BEFORE UPDATE ON schedules
+      WHEN NEW.last_operation_id IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'fixture association failed'); END`);
+    runSchedules(due);
+    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action='server.start.queued'").get()?.count, 0);
+    const skipped = listSchedules(friend, serverId)[0];
+    assert.equal(skipped.id, schedule.id);
+    assert.equal(skipped.lastOperation, null);
+    assert.equal(skipped.lastRunAt, due);
+    assert.match(skipped.lastResult!, /Skipped/);
+    db.exec("DROP TRIGGER fail_operation_link");
+    runSchedules(due + 30_000);
+    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(db.inTransaction, false);
+  });
+
+  it("prunes audit retention after committing the associated operation", () => {
+    createSchedule(friend, serverId, input);
+    const db = getDatabase();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const cleanup = spyOn(database, "pruneAuditLogIfNeeded").mockImplementation(() => {
+      assert.equal(db.inTransaction, false);
+      assert.equal(listSchedules(friend, serverId)[0].lastOperation?.status, "queued");
+      throw new Error("fixture-private-cleanup-error");
+    });
+    runSchedules(due);
+    assert.equal(cleanup.mock.calls.length, 1);
+    assert.equal(listSchedules(friend, serverId)[0].lastOperation?.status, "queued");
+    assert.doesNotMatch(JSON.stringify(warn.mock.calls), /fixture-private-cleanup-error/);
+  });
+});
+
+describe("schedule preview availability reasons", () => {
+  it("distinguishes missing schedule-management grants, action grants, and disabled owners", () => {
+    createSchedule(friend, serverId, input);
+    setServerGrant(friend.id, serverId, ["server.view", "schedules.manage"], admin);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "action_access_removed");
+    setServerGrant(friend.id, serverId, ["server.view", "server.start"], admin);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "owner_access_removed");
+    updateUserAccess(friend.id, "viewer", false);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "owner_access_removed");
+    updateUserAccess(friend.id, "operator", true);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "owner_disabled");
+  });
+
+  it("reports a missing owner without revealing private account details", () => {
+    createSchedule(friend, serverId, input);
+    const original = database.findUserById;
+    spyOn(database, "findUserById").mockImplementation((id) => id === friend.id ? null : original(id));
+    const schedule = listSchedules(admin, serverId)[0];
+    assert.equal(schedule.nextRunUnavailableReason, "owner_missing");
+    assert.equal(schedule.nextRunAt, null);
+  });
+
+  it("distinguishes unavailable bindings from accepted material baseline changes", () => {
+    createSchedule(friend, serverId, input);
+    getDatabase().prepare("UPDATE logical_servers SET container_id=NULL WHERE id=?").run(serverId);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "binding_unavailable");
+    const pending = reconcileServers([{ ...observation, gameType: "factorio" }])[0];
+    reviewServerBinding(serverId, pending.pendingFingerprint!);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "binding_changed");
+    getDatabase().prepare("UPDATE logical_servers SET container_id=NULL WHERE id=?").run(serverId);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunUnavailableReason, "binding_changed");
+  });
+
+  it("clears the unavailability reason while paused and hides unexpected diagnostics", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    spyOn(identity, "resolveServerBinding").mockImplementation(() => {
+      throw new Error("fixture-private-binding-detail");
+    });
+    const unavailable = listSchedules(admin, serverId)[0];
+    assert.equal(unavailable.nextRunUnavailableReason, "unavailable");
+    assert.doesNotMatch(JSON.stringify(unavailable), /fixture-private-binding-detail/);
+    const paused = setScheduleEnabled(admin, serverId, schedule.id, { enabled: false, revision: 1 });
+    assert.equal(paused.nextRunAt, null);
+    assert.equal(paused.nextRunUnavailableReason, null);
   });
 });
 

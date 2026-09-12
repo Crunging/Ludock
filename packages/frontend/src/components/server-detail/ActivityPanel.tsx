@@ -1,19 +1,31 @@
 import type { Operation } from "@ludock/shared";
 import OperationList from "../OperationList";
+import ScheduledOperationPanel from "./ScheduledOperationPanel";
 
 interface Props {
   operations: Operation[];
   admin: boolean;
   onRefresh: () => void;
   onRecreate: () => void;
+  serverId: string;
+  selectedOperationId: string | null;
+  onCloseOperation: () => void;
 }
 
 export default function ActivityPanel(props: Props) {
-  const { operations, admin, onRefresh, onRecreate } = props;
+  const { operations, admin, onRefresh, onRecreate, serverId, selectedOperationId, onCloseOperation } = props;
   return (
     <>
+      {selectedOperationId && (
+        <ScheduledOperationPanel
+          key={selectedOperationId}
+          operationId={selectedOperationId}
+          serverId={serverId}
+          onClose={onCloseOperation}
+        />
+      )}
       <div className="section-heading">
-        <h2>Recent operations</h2>
+        <h2 id="recent-operations-title" tabIndex={-1}>Recent operations</h2>
         <button className="secondary-btn" onClick={onRefresh}>
           Refresh
         </button>

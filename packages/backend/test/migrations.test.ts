@@ -34,6 +34,20 @@ function applyMigrations(db: Database, migrations = DATABASE_MIGRATIONS): void {
   migrate(db, migrations, migrationKey);
 }
 
+function legacyScheduleDatabase(): Database {
+  const db = new Database(":memory:");
+  applyMigrations(db, DATABASE_MIGRATIONS.filter(({ version }) => version <= 3));
+  db.exec("INSERT INTO users VALUES ('owner','owner','hash','operator',0,1,1), ('other','other','hash','operator',0,1,1)");
+  db.exec("INSERT INTO docker_hosts VALUES ('host','local',1)");
+  db.exec(`INSERT INTO logical_servers (
+    id,host_id,external_identity,container_id,display_name,game_type,status,
+    binding_revision,binding_fingerprint,first_seen_at,last_seen_at
+  ) VALUES
+    ('server','host','world','container','World','minecraft','active',1,'fingerprint',1,1),
+    ('other','host','other-world','other-container','Other world','minecraft','active',1,'other-fingerprint',1,1)`);
+  return db;
+}
+
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ludock-migrations-"));
 function schemaOneDatabase(name: string): string {
   const dbPath = path.join(directory, name);
@@ -344,6 +358,103 @@ describe("application database ownership and schema migrations", () => {
       assert.equal(db.prepare("SELECT input_json FROM operations WHERE id='operation'").get()?.input_json,
         '{"scheduleId":"schedule"}');
       assert.throws(() => db.exec("UPDATE schedules SET revision=0"), /CHECK/);
+    } finally {
+      db.close(true);
+    }
+  });
+
+  it("associates matching legacy schedule operations without rewriting queued or finished history", () => {
+    const db = legacyScheduleDatabase();
+    try {
+      const insertSchedule = db.prepare(`INSERT INTO schedules (
+        id,server_id,owner_id,input_json,binding_revision,last_slot,last_result,created_at,revision
+      ) VALUES (?,'server','owner','{}',1,'consumed slot',?,1,3)`);
+      const insertOperation = db.prepare(`INSERT INTO operations (
+        id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at,error,result_json
+      ) VALUES (?,'server','owner','start',?,'recorded phase',?,1,25,50,?,?)`);
+      for (const status of ["queued", "succeeded", "failed", "cancelled"]) {
+        insertSchedule.run(status, `Queued operation operation-${status}`);
+        insertOperation.run(`operation-${status}`, status, JSON.stringify({ scheduleId: status }),
+          status === "failed" ? "Previous failure" : null,
+          status === "succeeded" ? '{"message":"Completed"}' : null);
+      }
+      const originalSchedules = db.prepare("SELECT * FROM schedules ORDER BY id").all();
+      const originalOperations = db.prepare("SELECT * FROM operations ORDER BY id").all();
+
+      applyMigrations(db);
+
+      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(),
+        originalSchedules.map((schedule) => ({
+          ...schedule,
+          last_operation_id: `operation-${schedule.id}`,
+          last_run_at: 25,
+        })));
+      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
+      const migrated = db.prepare("SELECT * FROM schedules ORDER BY id").all();
+      applyMigrations(db);
+      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(), migrated);
+      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
+      assert.throws(() => db.exec("UPDATE schedules SET last_run_at = -1"), /CHECK/);
+      assert.doesNotThrow(() => db.exec("UPDATE schedules SET last_run_at = NULL"));
+    } finally {
+      db.close(true);
+    }
+  });
+
+  it("preserves unverified legacy schedule history without associating unrelated or malformed operations", () => {
+    const db = legacyScheduleDatabase();
+    try {
+      const cases: {
+        id: string;
+        serverId?: string;
+        ownerId?: string;
+        input?: string;
+        result?: string | null;
+        createdAt?: number;
+        missing?: boolean;
+      }[] = [
+        { id: "wrong-server", serverId: "other" },
+        { id: "wrong-owner", ownerId: "other" },
+        { id: "wrong-schedule", input: '{"scheduleId":"another-schedule"}' },
+        { id: "missing-schedule", input: "{}" },
+        { id: "malformed", input: '{"scheduleId":' },
+        { id: "array", input: '[{"scheduleId":"array"}]' },
+        { id: "null", input: "null" },
+        { id: "string", input: '"string"' },
+        { id: "number", input: "1" },
+        { id: "boolean", input: "true" },
+        { id: "nonstring-schedule", input: '{"scheduleId":["nonstring-schedule"]}' },
+        { id: "prefix", result: "Previously Queued operation operation-prefix" },
+        { id: "suffix", result: "Queued operation operation-suffix completed" },
+        { id: "newline", result: "Queued operation operation-newline\n" },
+        { id: "wrong-case", result: "queued operation operation-wrong-case" },
+        { id: "missing-operation", missing: true },
+        { id: "negative-time", createdAt: -1 },
+        { id: "error-history", result: "Permission denied" },
+        { id: "never-run", result: null },
+      ];
+      const insertSchedule = db.prepare(`INSERT INTO schedules (
+        id,server_id,owner_id,input_json,binding_revision,last_slot,last_result,created_at
+      ) VALUES (?,'server','owner','{}',1,'previous slot',?,1)`);
+      const insertOperation = db.prepare(`INSERT INTO operations (
+        id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at
+      ) VALUES (?,?,?,'start','queued','queued',?,1,?,50)`);
+      for (const entry of cases) {
+        insertSchedule.run(entry.id,
+          entry.result === undefined ? `Queued operation operation-${entry.id}` : entry.result);
+        if (!entry.missing) {
+          insertOperation.run(`operation-${entry.id}`, entry.serverId ?? "server", entry.ownerId ?? "owner",
+            entry.input ?? JSON.stringify({ scheduleId: entry.id }), entry.createdAt ?? 25);
+        }
+      }
+      const originalSchedules = db.prepare("SELECT * FROM schedules ORDER BY id").all();
+      const originalOperations = db.prepare("SELECT * FROM operations ORDER BY id").all();
+
+      assert.doesNotThrow(() => applyMigrations(db));
+
+      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(),
+        originalSchedules.map((schedule) => ({ ...schedule, last_operation_id: null, last_run_at: null })));
+      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
     } finally {
       db.close(true);
     }

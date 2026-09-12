@@ -1,4 +1,13 @@
-import type { Operation } from "@ludock/shared";
+import type { Operation, OperationStatus } from "@ludock/shared";
+
+export const operationStatusLabels: Record<OperationStatus, string> = {
+  queued: "Queued",
+  running: "Running",
+  succeeded: "Succeeded",
+  already_current: "Already current",
+  failed: "Failed",
+  interrupted: "Interrupted",
+};
 
 export const operationActive = (operation: Operation) =>
   operation.status === "queued" || operation.status === "running";

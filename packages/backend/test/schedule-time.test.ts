@@ -153,9 +153,12 @@ describe("schedule editing contracts", () => {
       serverId: crypto.randomUUID(),
       ownerId: crypto.randomUUID(),
       lastResult: null,
+      lastOperation: null,
+      lastRunAt: null,
       lastSlot: null,
       revision: 1,
       nextRunAt: null,
+      nextRunUnavailableReason: null,
     };
     assert.equal(savedScheduleSchema.safeParse(saved).success, true);
     assert.equal(savedScheduleSchema.safeParse({ ...saved, nextRunAt: 0 }).success, true);
@@ -163,5 +166,9 @@ describe("schedule editing contracts", () => {
     assert.equal(savedScheduleSchema.safeParse({ ...saved, nextRunAt: undefined }).success, false);
     assert.equal(savedScheduleSchema.safeParse({ ...saved, revision: undefined }).success, false);
     assert.equal(savedScheduleSchema.safeParse({ ...saved, lastSlot: undefined }).success, false);
+    for (const missing of ["lastOperation", "lastRunAt", "nextRunUnavailableReason"])
+      assert.equal(savedScheduleSchema.safeParse({ ...saved, [missing]: undefined }).success, false);
+    assert.equal(savedScheduleSchema.safeParse({ ...saved, lastRunAt: -1 }).success, false);
+    assert.equal(savedScheduleSchema.safeParse({ ...saved, nextRunUnavailableReason: "private error" }).success, false);
   });
 });
