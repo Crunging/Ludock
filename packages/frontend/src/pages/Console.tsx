@@ -145,13 +145,14 @@ function ConsoleSession({ containerId, user }: {
 
   useEffect(() => {
     if (!termRef.current) return;
+    const colors = getComputedStyle(document.documentElement);
     const terminal = new Terminal({
       theme: {
         background: "#0d1117",
         foreground: "#c9d1d9",
-        cursor: "#58a6ff",
+        cursor: colors.getPropertyValue("--accent").trim() || "#e68a3a",
         cursorAccent: "#0d1117",
-        selectionBackground: "rgba(56, 189, 248, 0.25)",
+        selectionBackground: colors.getPropertyValue("--accent-selection").trim() || "rgba(230, 138, 58, 0.25)",
         black: "#0d1117",
         red: "#f87171",
         green: "#34d399",

@@ -23,3 +23,12 @@ flat, upright, and the same color.
 Keep the canvas padding when placing the mark beside the Ludock name. Do not add
 outlines, shadows, bevels, or extra game pieces. The small solid favicon and the
 larger four-tile mark share the same L silhouette.
+
+Use the shared orange `--accent` for primary actions, links, keyboard focus,
+selected tabs, and native checkbox/radio controls. Primary buttons use dark
+`--on-accent` text and the lighter `--accent-hover` shade on hover. Secondary
+actions stay neutral unless explicitly accented. Terminal cursor and selection
+colors use the same accent tokens; ANSI output retains its own palette.
+
+Keep informational blue, success green, warning yellow, and danger red distinct
+from the interaction accent. Do not add page-specific blue control styles.
