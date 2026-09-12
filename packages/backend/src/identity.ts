@@ -13,7 +13,8 @@ export interface ServerObservation {
   displayName: string;
   gameType: string;
   compose?: { project: string; service: string; containerNumber: string };
-  projectRegistrationId?: string | null;
+  /** Internal source hints only; never included in public server DTOs. */
+  composeSourceLabels?: Record<string, string>;
   mounts: Array<{
     type: string;
     source: string;
@@ -147,7 +148,8 @@ export function bindingFingerprint(observation: ServerObservation): string {
   const digest = new Bun.CryptoHasher("sha256")
     .update(
       JSON.stringify({
-        projectRegistrationId: observation.projectRegistrationId ?? null,
+        // Preserve the historical fingerprint encoding for existing bindings.
+        projectRegistrationId: null,
         gameType: observation.gameType,
         mounts,
         configuration,

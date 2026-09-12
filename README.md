@@ -2,7 +2,7 @@
 
 Ludock is a self-hosted control panel for existing Docker game servers. It
 starts and stops servers, provides game consoles and file access, and handles
-backups, schedules, availability alerts, and updates through registered Compose
+backups, schedules, availability alerts, and updates through existing Compose
 projects.
 
 Recognized game images appear automatically unless explicitly opted out.
@@ -92,7 +92,7 @@ the backup volume mount with a host-directory mount as shown in
 Backups stop the server throughout copying and restore its previous running
 state afterward. Live backups are not included.
 
-Updates require a registered, accessible Compose project inside
+Updates discover Compose projects automatically; source files must be accessible inside
 `LUDOCK_COMPOSE_ROOTS`. Ludock pulls the selected service's configured image and
 recreates that service without rebuilding it or recreating dependencies.
 **Recreate anyway** also replaces a service whose image is unchanged. A stopped

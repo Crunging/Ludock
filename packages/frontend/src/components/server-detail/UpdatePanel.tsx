@@ -44,14 +44,14 @@ export default function UpdatePanel(props: Props) {
         <>
           <p className="section-note">
             {capability?.unavailableReason ||
-              "Updates require a registered Compose project. You can also update this server through its owning manager."}
+              "Ludock discovers Compose source files automatically. Check source access in Settings if updates are unavailable."}
           </p>
           <div className="inline-actions">
             <button className="secondary-btn" onClick={onRecheck} disabled={busy}>
               Check again
             </button>
             <NavLink className="text-link" to="/settings">
-              Open update settings
+              Check source access
             </NavLink>
           </div>
         </>

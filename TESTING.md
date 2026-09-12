@@ -296,13 +296,16 @@ absolute paths on the Docker host and inside Ludock.
 
 ### Compose updates and owning managers
 
-- Register ordered Compose files and explicit environment inputs inside approved
-  roots. Reject outside-root paths, symlink traversal/races, transitive unsafe
-  reads, malformed names, unsupported source features, and secret-bearing errors.
-- Re-register after source changes. Verify selected project/service identity,
-  registered source fingerprint, configured image, and current binding at execution.
+- Discover ordered Compose files and environment inputs automatically inside approved
+  roots, including the default `.env` when no CLI environment files are recorded.
+  Reject outside-root paths, symlink traversal/races, transitive unsafe reads,
+  malformed names, unsupported source features, and secret-bearing errors.
+- Pick up source edits without registration. Verify selected project/service identity,
+  confirmed source fingerprint, configured image, and current binding at execution.
+  Abort on source changes after confirmation or during execution. Repeat updates
+  after recreation and restart to verify original source paths survive snapshot cleanup.
 - Recognized images show **Update server**; unknown images show **Update image**.
-  Inaccessible/unregistered/standalone projects explain use of the owning manager.
+  Inaccessible/missing-source/standalone projects explain use of the owning manager.
 - A running service returns running/healthy; a stopped service remains stopped.
 - Current images report **Configured image is current** without asserting the
   game version is fresh. **Recreate anyway** requires fresh confirmation and the
@@ -314,7 +317,7 @@ absolute paths on the Docker host and inside Ludock.
 - Dependencies are not recreated, builds/additional pulls/volume renewal are
   disabled, and image+build services use the pullable configured image.
 - Confirm Portainer/Dockge/external Compose recreation rediscovery, retained
-  declared named volumes/binds, and denial of unregistered manager-owned updates.
+  declared named volumes/binds, and automatic updates without project registration.
 
 ### Frontend and operational visibility
 

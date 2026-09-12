@@ -191,7 +191,7 @@ describe("server detail navigation", () => {
     await userEvent.type(grace, "240");
     await userEvent.click(screen.getByRole("tab", { name: "Update", exact: true }));
     expect(screen.getByText("Wait for the active operation to finish before updating")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open update settings" }).getAttribute("href"))
+    expect(screen.getByRole("link", { name: "Check source access" }).getAttribute("href"))
       .toBe("/settings");
     available = true;
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));

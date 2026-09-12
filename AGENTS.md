@@ -49,7 +49,7 @@ shared boundaries when working in parallel.
   state, and restore it safely. Parent update/restore operations own state
   restoration for nested backups. Live backups are not supported.
 - **Updates:** forced recreation and updates are administrator-only and require
-  explicitly registered Compose projects. Validate transitive reads within
+  automatically discovered Compose sources. Validate transitive reads within
   approved roots, invoke argument arrays without a shell, and preserve initially
   stopped state.
 - **Contracts and adapters:** change shared schemas with their producers and

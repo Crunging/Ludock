@@ -78,7 +78,7 @@ above:
 | Game-image platforms | Unverified | Check the chosen upstream image's manifest; Ludock's AMD64/ARM64 targets do not establish game-image architecture support |
 | Backup consistency | Unverified per game | The generic backup requires stopped containers and rejects known shared writers; validate graceful shutdown and world integrity against each actual image |
 | Readiness | Conditional | Docker health or running state; no game-specific player-connectivity probes are registered |
-| Update / same-image recreation | Conditional | Requires a supported, registered Compose project; the image's startup game-update behavior is not verified by image recognition |
+| Update / same-image recreation | Conditional | Requires supported, accessible Compose source files (automatically discovered); the image's startup game-update behavior is not verified by image recognition |
 
 The generic backup/restore mechanisms have separate tests. They do not prove
 that every game flushed its world cleanly before stopping. Live backups are

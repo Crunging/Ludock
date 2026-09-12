@@ -21,6 +21,7 @@ await Bun.write(compose, `services:
     image: alpine:3
     command: ["sleep", "infinity"]
     environment:
+      WORLD: "\${FIXTURE_WORLD}"
       LITERAL: "cash$$value"
       BRACED: "$\u0024{literal}"
     labels:
@@ -31,6 +32,8 @@ await Bun.write(compose, `services:
     image: alpine:3
     command: ["sleep", "infinity"]
 `);
+
+await Bun.write(path.join(root, ".env"), "FIXTURE_WORLD=automatic-source\n");
 
 function docker(...args) {
   const result = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
@@ -86,7 +89,6 @@ try {
   }
   assert.ok(ready, "Fixture API must become healthy");
   serverId = (await request("/servers")).servers.find((server) => server.displayName === "Compose Smoke").id;
-  await request("/compose-projects", { projectName: project, projectDirectory: root, composeFiles: ["compose.yaml"], envFiles: [] });
   const { capability } = await request(`/servers/${serverId}/update-capability`);
   assert.equal(capability.available, true, capability.unavailableReason);
   const unchanged = await update(false);
@@ -98,9 +100,19 @@ try {
   assert.notEqual(after, before);
   assert.equal(cli("ps", "-q", "dependency"), dependency);
   const environment = inspect(after).Config.Env;
+  assert.ok(environment.includes("WORLD=automatic-source"));
   assert.ok(environment.includes("LITERAL=cash$value"));
   assert.ok(environment.includes("BRACED=${literal}"));
   assert.ok(environment.every((entry) => !entry.includes("must-not-be-inherited") && !entry.includes(token)));
+  // Discovery must survive both snapshot cleanup and an application restart.
+  docker("restart", app);
+  base = `http://127.0.0.1:${inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort}`;
+  let restarted = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { await request("/health"); restarted = true; break; }
+    catch { await Bun.sleep(200); }
+  }
+  assert.ok(restarted, "Fixture API must recover after restart");
   await request(`/servers/${serverId}/stop`, {}, "POST");
   const stopped = await update(true);
   assert.equal(stopped.status, "succeeded");
@@ -123,11 +135,14 @@ try {
     await Bun.sleep(100);
   }
   assert.ok(propagated, "Changed Compose source must reach the fixture mount");
-  assert.equal((await request(`/servers/${serverId}/update-capability`)).capability.available, false);
+  assert.equal((await request(`/servers/${serverId}/update-capability`)).capability.available, true);
+  const edited = await update(true);
+  assert.equal(edited.status, "succeeded");
+  assert.equal(inspect(cli("ps", "-a", "-q", "game")).State.Running, false);
   console.log(JSON.stringify({
     result: "pass", logicalIdentitySurvived: true, alreadyCurrent: unchanged.status,
     forcedRunning: forced.status, forcedStopped: stopped.status, dependencyUntouched: true,
-    literalDollarPreserved: true, sourceChangeRejected: true,
+    literalDollarPreserved: true, defaultEnvPreserved: true, applicationRestartSurvived: true, sourceChangeAccepted: true, registrationRequired: false,
   }));
 } finally {
   Bun.spawnSync(["docker", "rm", "-fv", app], { stdout: "ignore", stderr: "ignore" });

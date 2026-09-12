@@ -594,7 +594,6 @@ describe("HTTP application", () => {
       );
     }
     for (const feature of [
-      "compose-projects",
       "settings/backups",
       "settings/deployment",
       "notifications",
@@ -620,7 +619,6 @@ describe("HTTP application", () => {
     const sessionCookie = await setupAdministrator();
     const expected = [
       ["/settings/backups", "settings"],
-      ["/compose-projects", "projects"],
       ["/notifications", "configured"],
       ["/integrations", "integrations"],
       [`/servers/${managedServerId}/operations`, "operations"],
@@ -640,7 +638,7 @@ describe("HTTP application", () => {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
-    assert.equal(invalidProject.status, 400);
+    assert.equal(invalidProject.status, 404);
     const created = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/schedules`,
       {

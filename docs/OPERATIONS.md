@@ -18,7 +18,7 @@ The supported schema starts at version 2; older development schemas have no
 conversion path. To replace an unsupported development installation, stop its
 Ludock instance, retain its application volume, and mount a new empty volume at
 `/data` for the new image. Create the administrator
-and configure access, backup storage, and Compose registrations again. Keep all
+and configure access and backup storage again. Keep all
 existing game-container and game-data mounts unchanged. To return to the earlier
 build, stop the new instance and pair the old image with its original application
 volume; never run both backends against the same Docker host at once.
@@ -284,7 +284,7 @@ tab changes. If they hide active work, **Show active work** clears them; filteri
 does not unlock server controls. A schedule's **View activity** opens its selected
 operation independently of these filters.
 
-## Register Compose projects
+## Compose updates
 
 Compose access requires Ludock's Linux container runtime, the bundled Docker
 CLI/Compose plugin, and explicitly mounted trusted source directories. Preserve
@@ -301,12 +301,24 @@ services:
       - /srv/game-stacks:/srv/game-stacks:ro
 ```
 
-Register the existing Compose project name, absolute project directory, Compose
-files in merge order, and CLI environment files in order under **Settings**.
-All inputs must exist, be regular files within approved roots, and avoid symlink
-traversal. Each source file has a 2 MiB limit. Implicit `.env` loading is disabled;
-register needed interpolation files explicitly. Do not enter secret contents in
-project names or file-path fields.
+Open a server’s **Update** tab to update it. No project registration is needed.
+Ludock discovers the existing project directory, ordered Compose files, and CLI
+environment files from Docker’s Compose labels. When no CLI environment files
+are recorded, it loads the project directory’s `.env` if present. All reads,
+including `.env` and service `env_file` inputs, stay inside approved roots and
+reject symlinks. Sources are validated automatically for each update.
+
+If updates are unavailable, the Update tab explains the missing prerequisite.
+Mount source folders at their original absolute host paths and configure
+`LUDOCK_COMPOSE_ROOTS`; **Settings → Compose updates** shows deployment guidance.
+If the original manager used paths that do not exist on the Docker host, or
+Docker has no usable source metadata, update through that manager. Ludock cannot
+recover shell-only interpolation variables from the original deployment.
+
+Ludock preserves original source paths in an internal container label when
+it recreates a service, since Compose’s own labels then refer to the temporary
+snapshot. The label records source locations, never file contents, and grants no file
+access. Source files remain unchanged. Each source file has a 2 MiB limit.
 
 Supported source input is deliberately constrained:
 
@@ -320,7 +332,9 @@ Supported source input is deliberately constrained:
 - Updates require exactly one existing/configured replica of the selected
   service. Service namespace dependencies such as `network_mode: service:...`
   must be updated through the owning manager.
-- Source changes require validating and registering the project again.
+- Source edits are picked up automatically on the next update. Changes after
+  confirmation or during execution abort that operation; retry the update with
+  the current source.
 
 Ludock executes argument arrays with a restricted environment and does not log
 raw resolved configuration or CLI errors containing secrets. Private registry
@@ -337,7 +351,7 @@ not the game version downloaded by an image's startup scripts.
 
 Compose definitions remain authoritative. Redeployment can replace direct
 runtime changes not saved in that source. Pull failure leaves the existing
-container unchanged. If recreation fails, use the registered project in the
+container unchanged. If recreation fails, use the existing project in the
 owning manager to inspect and recover the actual service state. A data backup
 does not roll back the image or Compose definition. Ludock does not clone old
 container configurations or silently switch image digests.

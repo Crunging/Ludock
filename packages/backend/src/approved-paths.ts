@@ -54,6 +54,23 @@ export async function readApprovedFile(
   roots: readonly string[],
   maxBytes = 2 * 1024 * 1024,
 ): Promise<Buffer> {
+  return (await readConfigurationFile(candidate, roots, maxBytes, false))!;
+}
+
+/** Only a missing final file is optional; unsafe or inaccessible parents fail. */
+export async function readOptionalApprovedFile(
+  candidate: string,
+  roots: readonly string[],
+): Promise<Buffer | undefined> {
+  return readConfigurationFile(candidate, roots, 2 * 1024 * 1024, true);
+}
+
+async function readConfigurationFile(
+  candidate: string,
+  roots: readonly string[],
+  maxBytes: number,
+  optional: boolean,
+): Promise<Buffer | undefined> {
   const resolved = approvedPath(candidate, roots);
   if (process.platform !== "linux")
     throw new AppError(
@@ -79,7 +96,11 @@ export async function readApprovedFile(
     const file = await open(
       `/proc/self/fd/${directory.fd}/${components.at(-1)}`,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    ).catch((error: NodeJS.ErrnoException) => {
+      if (optional && error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!file) return undefined;
     try {
       const stat = await file.stat();
       if (!stat.isFile() || stat.size > maxBytes)

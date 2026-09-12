@@ -67,7 +67,6 @@ describe("administration recovery", () => {
     apiJsonMock.mockImplementation(async (path) => {
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: { destination: "/saved", retentionCount: 4, maxBytes: 1024 ** 3, reserveBytes: 0 } };
-      if (path === "/compose-projects") return { projects: [] };
       if (unavailable) throw new Error("Notifications unavailable");
       return { configured: true, enabled: true };
     });
@@ -87,7 +86,6 @@ describe("administration recovery", () => {
       if (init?.method === "PUT") return pending.promise;
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
-      if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
     });
     render(<Settings />);
@@ -116,7 +114,6 @@ describe("administration recovery", () => {
         destination: "/backups", retentionCount: 10,
         maxBytes: 100 * 1024 ** 3, reserveBytes: 5 * 1024 ** 3,
       } };
-      if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
     });
     render(<Settings />);
@@ -167,7 +164,6 @@ describe("administration recovery", () => {
       if (init?.method === "PUT") return { settings: JSON.parse(String(init.body)) };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings };
-      if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
     });
     render(<Settings />);
@@ -192,7 +188,6 @@ describe("administration recovery", () => {
       }
       if (init?.method === "PUT") throw new Error("Destination is not mounted");
       if (path === "/settings/backups") return { settings: null };
-      if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
     });
     render(<Settings />);
@@ -239,35 +234,17 @@ describe("administration recovery", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Server access", exact: true }));
   });
 
-  it("uses the registered project response without wiping a newer project draft", async () => {
-    const pending = deferred<unknown>();
-    apiJsonMock.mockImplementation(async (path, _schema, init) => {
-      if (init?.method === "POST") return pending.promise;
+  it("explains automatic Compose updates without loading or offering project registration", async () => {
+    apiJsonMock.mockImplementation(async (path) => {
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
-      if (path === "/compose-projects") return { projects: [] };
       return { configured: false, enabled: false };
     });
     render(<Settings />);
-    const name = await screen.findByLabelText("Compose project name");
-    fireEvent.change(name, { target: { value: "games" } });
-    fireEvent.change(screen.getByLabelText("Project directory"), { target: { value: "/compose/games" } });
-    fireEvent.change(screen.getByLabelText(/Compose files/), { target: { value: "/compose/games/compose.yaml" } });
-    const submit = screen.getByRole("button", { name: "Validate and register" });
-    act(() => {
-      fireEvent.submit(submit.closest("form")!);
-      fireEvent.submit(submit.closest("form")!);
-    });
-    fireEvent.change(name, { target: { value: "next-project" } });
-    await act(async () => pending.resolve({ project: {
-      id: "games-id", projectName: "games", projectDirectory: "/compose/games",
-      composeFiles: ["/compose/games/compose.yaml"], envFiles: [], disabled: false,
-    } }));
-    await screen.findByText("Compose project registered.");
-    expect((name as HTMLInputElement).value).toBe("next-project");
-    expect(screen.getByRole("cell", { name: "games/compose/games" })).toBeTruthy();
-    expect(apiJsonMock.mock.calls.filter(([path, , init]) => path === "/compose-projects" && init?.method === "POST")).toHaveLength(1);
-    expect(apiJsonMock.mock.calls.filter(([path, , init]) => path === "/compose-projects" && !init?.method)).toHaveLength(1);
+    await screen.findByRole("heading", { name: "Compose updates" });
+    expect(screen.getByText(/No project registration is needed/)).toBeTruthy();
+    expect(screen.queryByLabelText("Compose project name")).toBeNull();
+    expect(apiJsonMock.mock.calls.some(([path]) => path === "/compose-projects")).toBe(false);
   });
 
   it("serializes user access writes and uses the returned role for the next change", async () => {

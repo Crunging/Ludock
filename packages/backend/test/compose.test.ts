@@ -16,6 +16,7 @@ import {
   approvedPath,
   configuredRoots,
   readApprovedFile,
+  readOptionalApprovedFile,
 } from "../src/approved-paths.js";
 import {
   composeEnvironment,
@@ -23,10 +24,12 @@ import {
   createComposeSnapshot,
   runCompose,
   validateUpdateService,
-  registerComposeProject,
-  listComposeProjects,
+  validatedProject,
 } from "../src/compose.js";
-import { closeDatabase, getDatabase } from "../src/database.js";
+import { COMPOSE_SOURCE_LABEL, COMPOSE_CONFIG_FILES_LABEL, COMPOSE_WORKING_DIR_LABEL } from "../src/compose-source.js";
+import { getDockerInstance } from "../src/docker.js";
+import type { ServerContext } from "../src/servers.js";
+import { closeDatabase } from "../src/database.js";
 import {
   updateRequestSchema,
   serverGrantsSchema,
@@ -59,7 +62,7 @@ else if(args.includes("hang")){setTimeout(()=>{},30000);}
 else if(args.includes("config")){
   const files = args.flatMap((arg,i)=>arg==="-f"?[args[i+1]]:[]);
   const models=files.map(file=>JSON.parse(fs.readFileSync(file,"utf8")));
-  const model={services:Object.assign({},...models.map(model=>model.services)),fixtureFiles:files,fixtureEnv:process.env};
+  const model={services:Object.assign({},...models.map(model=>model.services)),fixtureFiles:files,fixtureEnv:process.env,fixtureEnvFiles:args.flatMap((arg,i)=>arg==="--env-file"?[fs.readFileSync(args[i+1],"utf8")]:[])};
   process.stdout.write(JSON.stringify(model));
 }else process.stdout.write(JSON.stringify({args,env:process.env}));
 `,
@@ -114,16 +117,64 @@ describe("Compose execution boundary", () => {
     }
   });
 
-  it.skipIf(process.platform !== "linux")("rechecks registration access after validating the source snapshot", async () => {
-    closeDatabase();
-    const filename = path.join(directory, "registration.yaml");
+  it.skipIf(process.platform !== "linux")("updates discovered sources repeatedly and accepts edits without registration", async () => {
+    const filename = path.join(directory, "automatic.yaml");
     await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n");
-    let checked = false;
-    await assert.rejects(registerComposeProject({
-      projectName: "registration-fixture", projectDirectory: directory, composeFiles: [filename], envFiles: [],
-    }, () => { checked = true; throw new Error("Access revoked"); }), /Access revoked/);
-    assert.equal(checked, true);
-    assert.deepEqual(listComposeProjects(), []);
+    const context = {
+      observation: { compose: { project: "automatic", service: "game", containerNumber: "1" },
+        composeSourceLabels: { [COMPOSE_WORKING_DIR_LABEL]: directory, [COMPOSE_CONFIG_FILES_LABEL]: filename } },
+      container: { id: "a".repeat(64) },
+    } as unknown as ServerContext;
+    spyOn(getDockerInstance(), "listContainers").mockResolvedValue([
+      { Id: context.container.id, Labels: {} },
+    ] as Awaited<ReturnType<ReturnType<typeof getDockerInstance>["listContainers"]>>);
+    const first = await validatedProject(context);
+    const model = JSON.parse(await readFile(first.snapshot.configPath, "utf8"));
+    const originalSource = model.services.game.labels[COMPOSE_SOURCE_LABEL].replaceAll("$$", "$");
+    const firstFingerprint = first.snapshot.fingerprint;
+    await first.snapshot.cleanup();
+    context.observation.composeSourceLabels = {
+      [COMPOSE_SOURCE_LABEL]: originalSource,
+      [COMPOSE_CONFIG_FILES_LABEL]: first.snapshot.configPath,
+    };
+    await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n# edited by owning manager\n");
+    const next = await validatedProject(context);
+    try {
+      assert.equal(next.service, "game");
+      assert.equal(next.image, "alpine:latest");
+      assert.notEqual(next.snapshot.fingerprint, firstFingerprint);
+    } finally { await next.snapshot.cleanup(); }
+    // A discovered source is still subject to supported-service and path checks.
+    await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n    scale: 2\n");
+    await assert.rejects(validatedProject(context), /one configured replica/);
+    context.observation.composeSourceLabels = {
+      [COMPOSE_WORKING_DIR_LABEL]: directory, [COMPOSE_CONFIG_FILES_LABEL]: "/outside/compose.yaml",
+    };
+    await assert.rejects(validatedProject(context), /cannot read this server/);
+  });
+
+  it.skipIf(process.platform !== "linux")("snapshots default .env safely and never falls back from a missing explicit env file", async () => {
+    const folder = path.join(directory, "default-env");
+    await mkdir(folder);
+    const filename = path.join(folder, "compose.yaml");
+    const env = path.join(folder, ".env");
+    await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n");
+    const input = { projectName: "env", projectDirectory: folder, composeFiles: [filename], envFiles: [] };
+    const missing = await createComposeSnapshot(input, true);
+    await missing.cleanup();
+    await writeFile(env, "WORLD=fixture\n");
+    const loaded = await createComposeSnapshot(input, true);
+    try {
+      assert.deepEqual(loaded.model.fixtureEnvFiles, ["WORLD=fixture\n"]);
+      assert.notEqual(loaded.fingerprint, missing.fingerprint);
+      assert.doesNotMatch(JSON.stringify((loaded.model.services as Record<string, { labels: unknown }>).game.labels), /WORLD|fixture/);
+    } finally { await loaded.cleanup(); }
+    await assert.rejects(createComposeSnapshot({ ...input, envFiles: ["missing.env"] }, true), /missing/);
+    await rm(env);
+    await symlink(filename, env);
+    await assert.rejects(createComposeSnapshot(input, true), /symbolic link/);
+    await assert.rejects(readOptionalApprovedFile(path.join(folder, "missing-parent/.env"), [directory]), /missing/);
+    await assert.rejects(readOptionalApprovedFile("/outside/.env", [directory]), /outside/);
   });
 
   it("uses the configured daemon with no inherited secrets or Compose overrides", async () => {
@@ -411,16 +462,6 @@ describe("Compose execution boundary", () => {
         } finally {
           await repeated.cleanup();
         }
-        await registerComposeProject(input);
-        const stored = getDatabase()
-          .prepare("SELECT source_fingerprint,registration_json FROM compose_projects WHERE project_name=?")
-          .get(input.projectName) as {
-            source_fingerprint: string;
-            registration_json: string;
-          };
-        assert.equal(stored.source_fingerprint, first.fingerprint);
-        assert.equal(JSON.stringify(stored).includes("small-secret"), false);
-
         closeDatabase();
         const reopened = await createComposeSnapshot(input);
         try {

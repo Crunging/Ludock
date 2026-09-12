@@ -13,8 +13,7 @@ import {
   uploadFileQuerySchema,
   availabilitySchema,
   availabilityResponseSchema,
-  composeProjectResponseSchema,
-  composeRegistrationSchema,
+  composeSourceProjectSchema,
   dockerContainerIdSchema,
   integrationsResponseSchema,
   logicalServerIdSchema,
@@ -48,7 +47,7 @@ test("game capability response projects the actual integration registry without 
   );
 });
 
-test("request defaults do not hide missing persisted schedule, availability, or Compose response fields", () => {
+test("request defaults and required persisted response fields remain distinct", () => {
   const input = {
     action: "start",
     time: "08:00",
@@ -90,21 +89,12 @@ test("request defaults do not hide missing persisted schedule, availability, or 
       state,
     }).success,
   );
-  const project = {
-    ...composeRegistrationSchema.parse({
-      projectName: "games",
-      projectDirectory: "/compose/games",
-      composeFiles: ["/compose/games/compose.yaml"],
-    }),
-    id: serverId,
-    disabled: false,
-  };
-  assert(composeProjectResponseSchema.safeParse({ project }).success);
-  assert(
-    !composeProjectResponseSchema.safeParse({
-      project: { ...project, envFiles: undefined },
-    }).success,
-  );
+  const project = composeSourceProjectSchema.parse({
+    projectName: "games", projectDirectory: "/compose/games",
+    composeFiles: ["/compose/games/compose.yaml"],
+  });
+  assert.deepEqual(project.envFiles, []);
+  assert(!composeSourceProjectSchema.safeParse({ ...project, composeFiles: [] }).success);
 });
 
 test("persisted operation response rejects unknown states and Docker references in the logical server field", () => {

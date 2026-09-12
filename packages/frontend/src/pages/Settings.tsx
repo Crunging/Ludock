@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   type BackupSettings,
-  type ComposeProject,
   type DeploymentSettings,
   backupSettingsSchema,
   backupSettingsResponseSchema,
-  composeProjectsResponseSchema,
-  composeProjectResponseSchema,
   notificationSettingsResponseSchema,
-  okResponseSchema,
   deploymentSettingsResponseSchema,
 } from "@ludock/shared";
 import { apiJson, jsonBody } from "../api";
@@ -17,7 +13,7 @@ import DeploymentGuidance from "../components/DeploymentGuidance";
 import "../styles/admin-setup.css";
 
 const gib = 1024 ** 3;
-type SettingsSection = "backups" | "projects" | "registration" | "notifications";
+type SettingsSection = "backups" | "notifications";
 
 interface BackupDraft {
   destination: string;
@@ -46,11 +42,6 @@ export default function Settings() {
     }),
   );
   const [backupConfigured, setBackupConfigured] = useState(false);
-  const [projects, setProjects] = useState<ComposeProject[]>([]);
-  const [projectName, setProjectName] = useState("");
-  const [projectDirectory, setProjectDirectory] = useState("");
-  const [composeFiles, setComposeFiles] = useState("");
-  const [envFiles, setEnvFiles] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [notificationConfigured, setNotificationConfigured] = useState(false);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
@@ -98,20 +89,16 @@ export default function Settings() {
       apiJson("/settings/backups", backupSettingsResponseSchema, {
         signal: controller.signal,
       }),
-      apiJson("/compose-projects", composeProjectsResponseSchema, {
-        signal: controller.signal,
-      }),
       apiJson("/notifications", notificationSettingsResponseSchema, {
         signal: controller.signal,
       }),
     ])
-      .then(([backupResponse, projectResponse, notificationResponse]) => {
+      .then(([backupResponse, notificationResponse]) => {
         if (controller.signal.aborted) return;
         if (backupResponse.settings) {
           setBackup(backupDraft(backupResponse.settings));
           setBackupConfigured(true);
         }
-        setProjects(projectResponse.projects);
         setNotificationConfigured(notificationResponse.configured);
         setNotificationEnabled(notificationResponse.enabled);
         setLoaded(true);
@@ -206,35 +193,6 @@ export default function Settings() {
       },
     );
   }
-  async function registerProject(event: FormEvent) {
-    event.preventDefault();
-    const lines = (value: string) =>
-      value.split("\n").map((line) => line.trim()).filter(Boolean);
-    await save(
-      "registration",
-      () => apiJson(
-        "/compose-projects",
-        composeProjectResponseSchema,
-        jsonBody("POST", {
-          projectName,
-          projectDirectory,
-          composeFiles: lines(composeFiles),
-          envFiles: lines(envFiles),
-        }),
-      ),
-      "Compose project registered.",
-      ({ project }) => {
-        setProjects((current) => [
-          ...current.filter((item) => item.id !== project.id),
-          project,
-        ]);
-        setProjectName((current) => current === projectName ? "" : current);
-        setProjectDirectory((current) => current === projectDirectory ? "" : current);
-        setComposeFiles((current) => current === composeFiles ? "" : current);
-        setEnvFiles((current) => current === envFiles ? "" : current);
-      },
-    );
-  }
   async function saveNotifications(event: FormEvent) {
     event.preventDefault();
     await save(
@@ -266,7 +224,6 @@ export default function Settings() {
           <div className="alert alert--success admin-settings-feedback" role="status">
             <p>{notice}</p>
             {section === "backups" && <NavLink to="/">Choose a server and open Backups to create a backup.</NavLink>}
-            {section === "registration" && <NavLink to="/">Choose a server and open Update to use this registration.</NavLink>}
           </div>
         )}
       </>
@@ -277,7 +234,7 @@ export default function Settings() {
       <div className="page__header">
         <h1 className="page__title">Settings</h1>
         <p className="page__subtitle">
-          Storage, trusted Compose projects, and notification delivery.
+          Storage, Compose source access, and notification delivery.
         </p>
       </div>
       {feedbackFor(null)}
@@ -423,148 +380,16 @@ export default function Settings() {
             className="settings-section settings-section--divided"
             aria-labelledby="compose-settings-title"
           >
-            <h2 id="compose-settings-title">Trusted Compose projects</h2>
+            <h2 id="compose-settings-title">Compose updates</h2>
             <p className="section-note">
-              Register existing read-only source files to enable service
-              updates. Ludock never edits the source. Projects that are
-              inaccessible here remain managed through Portainer, Dockge, or
-              their owning manager.
+              Update servers directly from their Update tab. Ludock discovers
+              each project’s source files from Docker and checks them automatically.
+              No project registration is needed. Source files remain owned by your
+              existing manager and are never edited by Ludock.
             </p>
             {deployment && !deploymentLoading && !deploymentError && (
               <DeploymentGuidance section="compose" deployment={deployment} />
             )}
-            {feedbackFor("projects")}
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Source files in order</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="muted">
-                        No registered projects.
-                      </td>
-                    </tr>
-                  )}
-                  {projects.map((project) => (
-                    <tr key={project.id}>
-                      <td>
-                        {project.projectName}
-                        <small className="table-detail">
-                          {project.projectDirectory}
-                        </small>
-                        {project.disabled && (
-                          <small className="table-detail">Disabled</small>
-                        )}
-                      </td>
-                      <td>
-                        {project.composeFiles.map((file) => (
-                          <code className="table-detail" key={file}>
-                            {file}
-                          </code>
-                        ))}
-                      </td>
-                      <td>
-                        <button
-                          className="secondary-btn secondary-btn--danger"
-                          disabled={busy}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Unregister ${project.projectName}? This disables Ludock updates for its services; it does not stop or delete containers.`,
-                              )
-                            )
-                              void save("projects", () => apiJson(
-                                `/compose-projects/${encodeURIComponent(project.id)}`,
-                                okResponseSchema,
-                                { method: "DELETE" },
-                              ), "Project unregistered.", () => {
-                                setProjects((current) => current.filter((value) => value.id !== project.id));
-                              });
-                          }}
-                        >
-                          Unregister
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <form
-              className="stack-form settings-section"
-              onSubmit={registerProject}
-            >
-              <h3>Register project</h3>
-              <p className="muted">Use the project that already runs your servers. Find its exact project name with <code>docker compose ls</code> on the Docker host or in its owning manager.</p>
-              <div className="form-columns">
-                <label>
-                  Compose project name
-                  <input
-                    value={projectName}
-                    onChange={(event) => setProjectName(event.target.value)}
-                    pattern={"[a-z0-9][a-z0-9_\\-]*"}
-                    maxLength={128}
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    title="Use lowercase letters, numbers, hyphens, or underscores, starting with a letter or number."
-                    required
-                  />
-                </label>
-                <label>
-                  Project directory
-                  <input
-                    value={projectDirectory}
-                    onChange={(event) =>
-                      setProjectDirectory(event.target.value)
-                    }
-                    placeholder="/compose/my-project"
-                    aria-describedby="compose-directory-help"
-                    required
-                  />
-                </label>
-              </div>
-              <p className="muted" id="compose-directory-help">The project directory is its existing folder on the Docker host. Mount that folder into Ludock read-only at the same absolute path.</p>
-              <label>
-                Compose files — one path per line, in merge order
-                <textarea
-                  value={composeFiles}
-                  onChange={(event) => setComposeFiles(event.target.value)}
-                  placeholder={
-                    "/compose/my-project/compose.yaml\n/compose/my-project/compose.override.yaml"
-                  }
-                  rows={3}
-                  aria-describedby="compose-files-help"
-                  required
-                />
-              </label>
-              <p className="muted" id="compose-files-help">Usually this is one <code>compose.yaml</code> file. Add any override files after the base file, in the same order used to start the project.</p>
-              <label>
-                CLI environment files (optional) — one path per line, in order
-                <textarea
-                  value={envFiles}
-                  onChange={(event) => setEnvFiles(event.target.value)}
-                  rows={2}
-                  aria-describedby="compose-env-help"
-                />
-              </label>
-              <p className="muted" id="compose-env-help">List any <code>.env</code> or <code>--env-file</code> files this project needs. Ludock does not load <code>.env</code> automatically.</p>
-              <p className="muted">
-                All files and transitive reads must be within the deployment’s
-                approved Compose roots. Source validation can reject unsupported
-                Compose features. Enter file paths only; file contents and
-                credentials are never shown here.
-              </p>
-              {feedbackFor("registration")}
-              <button className="primary-btn" disabled={busy}>
-                Validate and register
-              </button>
-            </form>
           </section>
           <section
             className="settings-section settings-section--divided"

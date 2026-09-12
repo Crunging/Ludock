@@ -3,8 +3,8 @@ import os from "node:os";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { parse } from "yaml";
 import {
-  composeRegistrationSchema,
-  type ComposeProjectRegistration,
+  composeSourceProjectSchema,
+  type ComposeProjectSource,
   type UpdateCapability,
 } from "@ludock/shared";
 import {
@@ -15,30 +15,21 @@ import {
   approvedPath,
   configuredRoots,
   readApprovedFile,
+  readOptionalApprovedFile,
 } from "./approved-paths.js";
 import { AppError } from "./errors.js";
 import type { ServerContext } from "./servers.js";
 import { getDockerInstance } from "./docker.js";
 import { isServerBusy } from "./operation-locks.js";
+import { COMPOSE_SOURCE_LABEL, discoverComposeSource } from "./compose-source.js";
 
 type Model = Record<string, unknown>;
-export interface ComposeProject extends ComposeProjectRegistration {
-  id: string;
-  disabled: boolean;
-  sourceFingerprint: string;
-}
-interface ProjectRow {
-  id: string;
-  registration_json: string;
-  source_fingerprint: string;
-  disabled: number;
-}
 export interface ComposeSnapshot {
   directory: string;
   configPath: string;
   model: Model;
   fingerprint: string;
-  project: ComposeProjectRegistration;
+  project: ComposeProjectSource;
   cleanup: () => Promise<void>;
 }
 const serviceNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
@@ -194,20 +185,21 @@ function inputPath(value: unknown, base: string): string {
   return path.isAbsolute(value) ? value : path.resolve(base, value);
 }
 /** Materialize only vetted inputs. Compose reads a private snapshot, never
- * reparses mutable registered sources between config/pull/up. Source files are
- * never edited; relative service volume paths retain the registered base. */
+ * reparses mutable sources between config/pull/up. Source files are
+ * never edited; relative service volume paths retain the original base. */
 export async function createComposeSnapshot(
-  input: ComposeProjectRegistration,
+  input: ComposeProjectSource,
+  loadDefaultEnv = false,
 ): Promise<ComposeSnapshot> {
-  const registration = composeRegistrationSchema.parse(input);
+  const project = composeSourceProjectSchema.parse(input);
   // Fail before reading source files or invoking Compose if the installation
   // key needed to protect their digest is unavailable.
   getDatabase();
   const roots = configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS);
-  const base = approvedPath(registration.projectDirectory, roots);
+  const base = approvedPath(project.projectDirectory, roots);
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-compose-"));
   const cleanup = () => rm(directory, { recursive: true, force: true });
-  const hash = new Bun.CryptoHasher("sha256").update(JSON.stringify(registration));
+  const hash = new Bun.CryptoHasher("sha256").update(JSON.stringify({ project, loadDefaultEnv }));
   let inputCount = 0;
   const snapshotFile = async (original: string) => {
     const data = await readApprovedFile(original, roots);
@@ -221,16 +213,23 @@ export async function createComposeSnapshot(
     await writeFile(emptyEnv, "", { mode: 0o600 });
     const flags = [
       "--project-name",
-      registration.projectName,
+      project.projectName,
       "--project-directory",
       base,
     ];
-    for (const filename of registration.envFiles)
+    for (const filename of project.envFiles)
       flags.push("--env-file", await snapshotFile(inputPath(filename, base)));
-    // Explicit empty env-file also avoids Compose's implicit .env search when
-    // the CLI version ignores COMPOSE_DISABLE_ENV_FILE.
-    if (!registration.envFiles.length) flags.push("--env-file", emptyEnv);
-    for (const original of registration.composeFiles) {
+    if (!project.envFiles.length) {
+      const filename = path.join(base, ".env");
+      const data = loadDefaultEnv ? await readOptionalApprovedFile(filename, roots) : undefined;
+      if (data !== undefined) {
+        hash.update(filename).update("\0").update(data);
+        const copy = path.join(directory, "default.env");
+        await writeFile(copy, data, { mode: 0o600 });
+        flags.push("--env-file", copy);
+      } else flags.push("--env-file", emptyEnv);
+    }
+    for (const original of project.composeFiles) {
       const filename = inputPath(original, base);
       const bytes = await readApprovedFile(filename, roots);
       hash.update(filename).update("\0").update(bytes);
@@ -329,62 +328,30 @@ export async function createComposeSnapshot(
     }
     const configPath = path.join(directory, "resolved.json"); // Compose serializes literal dollars as $$ in its reusable config output.
     // Preserve that representation; a second escaping pass changes user values.
-    await writeFile(configPath, output, { mode: 0o600 });
+    // Keep original paths on replacements: Compose's own labels will point at
+    // this disposable snapshot. Do not expose environment contents in labels.
+    const source = JSON.stringify({ project: {
+      ...project,
+      composeFiles: project.composeFiles.map((file) => inputPath(file, base)),
+      envFiles: project.envFiles.map((file) => inputPath(file, base)),
+    }, loadDefaultEnv }).replaceAll("$", "$$");
+    for (const value of Object.values(object(model.services))) {
+      const service = object(value);
+      service.labels = { ...(service.labels ? object(service.labels) : {}), [COMPOSE_SOURCE_LABEL]: source };
+    }
+    await writeFile(configPath, JSON.stringify(model), { mode: 0o600 });
     return {
       directory,
       configPath,
       model,
       fingerprint: keyedComposeSourceFingerprint(hash.digest("hex")),
-      project: registration,
+      project,
       cleanup,
     };
   } catch (error) {
     await cleanup();
     throw error;
   }
-}
-export function listComposeProjects(): ComposeProject[] {
-  return (
-    getDatabase()
-      .prepare("SELECT * FROM compose_projects ORDER BY project_name")
-      .all() as unknown as ProjectRow[]
-  ).map((row) => ({
-    ...composeRegistrationSchema.parse(JSON.parse(row.registration_json)),
-    id: row.id,
-    sourceFingerprint: row.source_fingerprint,
-    disabled: Boolean(row.disabled),
-  }));
-}
-export async function registerComposeProject(
-  input: unknown,
-  assertAccess?: () => void,
-): Promise<ComposeProject> {
-  const registration = composeRegistrationSchema.parse(input);
-  const snapshot = await createComposeSnapshot(registration);
-  try {
-    assertAccess?.();
-    const existing = listComposeProjects().find(
-      (project) => project.projectName === registration.projectName,
-    );
-    const id = existing?.id ?? crypto.randomUUID();
-    getDatabase()
-      .prepare(
-        `INSERT INTO compose_projects(id,project_name,registration_json,source_fingerprint,created_at) VALUES(?,?,?,?,?) ON CONFLICT(project_name) DO UPDATE SET registration_json=excluded.registration_json,source_fingerprint=excluded.source_fingerprint,disabled=0`,
-      )
-      .run(
-        id,
-        registration.projectName,
-        JSON.stringify(registration),
-        snapshot.fingerprint,
-        Date.now(),
-      );
-    return listComposeProjects().find((project) => project.id === id)!;
-  } finally {
-    await snapshot.cleanup();
-  }
-}
-export function deleteComposeProject(id: string): void {
-  getDatabase().prepare("DELETE FROM compose_projects WHERE id=?").run(id);
 }
 export async function validatedProject(
   context: ServerContext,
@@ -396,34 +363,27 @@ export async function validatedProject(
       409,
       "Update this server through its original container manager",
     );
-  const registration = listComposeProjects().find(
-    (project) => project.projectName === compose.project && !project.disabled,
+  const roots = configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS);
+  if (!roots.length) throw new AppError(
+    "COMPOSE_SOURCES_NOT_MOUNTED", 409,
+    "Mount your Compose folder read-only into Ludock at the same absolute host path and set LUDOCK_COMPOSE_ROOTS to that folder. Then check again.",
   );
-  if (!registration)
-    throw new AppError(
-      "UNREGISTERED_PROJECT",
-      409,
-      "An administrator must register this Compose project before updating",
-    );
-  const { projectName, projectDirectory, composeFiles, envFiles } =
-    registration;
-  const snapshot = await createComposeSnapshot({
-    projectName,
-    projectDirectory,
-    composeFiles,
-    envFiles,
-  });
+  const source = discoverComposeSource(compose.project, context.observation.composeSourceLabels ?? {});
+  let snapshot: ComposeSnapshot;
   try {
-    if (snapshot.fingerprint !== registration.sourceFingerprint)
-      throw new AppError(
-        "COMPOSE_SOURCE_CHANGED",
-        409,
-        "Compose source changed. Validate and register the project again before updating.",
-      );
+    snapshot = await createComposeSnapshot(source.project, source.loadDefaultEnv);
+  } catch (error) {
+    if (error instanceof AppError && ["UNAPPROVED_PATH", "UNSAFE_CONFIG_PATH"].includes(error.code)) {
+      throw new AppError(error.code, 409,
+        "Ludock cannot read this server’s Compose files. Mount the source folder read-only at its original absolute host path, include it in LUDOCK_COMPOSE_ROOTS, and check that all referenced files exist without symlinks.");
+    }
+    throw error;
+  }
+  try {
     const services = object(snapshot.model.services);
     const service = object(
       services[compose.service],
-      "The selected service is absent from the registered project",
+      "The selected service is absent from the Compose project",
     );
     validateUpdateService(service);
     await assertSingleServiceContainer(context);
@@ -497,7 +457,7 @@ export async function updateCapability(
       unavailableReason:
         error instanceof AppError
           ? error.message
-          : "The registered Compose configuration could not be validated",
+          : "The Compose source is inaccessible or invalid. Check its read-only mount and LUDOCK_COMPOSE_ROOTS in Settings.",
     };
   }
 }

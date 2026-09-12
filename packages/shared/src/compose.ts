@@ -9,7 +9,7 @@ export const updateRequestSchema = z
   .strict();
 export type CreateServerUpdateRequest = z.input<typeof updateRequestSchema>;
 
-export const composeRegistrationSchema = z
+export const composeSourceProjectSchema = z
   .object({
     projectName: z
       .string()
@@ -20,22 +20,10 @@ export const composeRegistrationSchema = z
     envFiles: z.array(z.string().min(1).max(1024)).max(16).default([]),
   })
   .strict();
-export type ComposeProjectRegistration = z.infer<
-  typeof composeRegistrationSchema
+export type ComposeProjectSource = z.infer<
+  typeof composeSourceProjectSchema
 >;
 
-export const composeProjectSchema = composeRegistrationSchema.extend({
-  envFiles: composeRegistrationSchema.shape.envFiles.removeDefault(),
-  id: z.string().uuid(),
-  disabled: z.boolean(),
-});
-export type ComposeProject = z.infer<typeof composeProjectSchema>;
-export const composeProjectsResponseSchema = z.object({
-  projects: z.array(composeProjectSchema),
-});
-export const composeProjectResponseSchema = z.object({
-  project: composeProjectSchema,
-});
 export const updateCapabilitySchema = z.object({
   available: z.boolean(),
   actionLabel: z.enum(["Update server", "Update image"]),

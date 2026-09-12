@@ -46,7 +46,7 @@ test("checking update availability preserves monitoring drafts and confirmation"
   await page.getByRole("tab", { name: "Availability", exact: true }).click();
   await page.getByRole("spinbutton", { name: "Failure grace period (seconds)", exact: true }).fill("240");
   await page.getByRole("tab", { name: "Update", exact: true }).click();
-  await expect(page.getByRole("link", { name: "Open update settings", exact: true })).toHaveAttribute("href", "/settings");
+  await expect(page.getByRole("link", { name: "Check source access", exact: true })).toHaveAttribute("href", "/settings");
   await page.screenshot({ path: test.info().outputPath("update-unavailable.png"), fullPage: true });
   await page.getByRole("button", { name: "Check again", exact: true }).click();
   await expect(page.getByRole("button", { name: "Update server", exact: true })).toBeDisabled();
@@ -90,4 +90,20 @@ test("a stopped console links to the permitted Start control", async ({ app, pag
   expect(app.requests.filter((request) => request.method !== "GET").map((request) => request.path))
     .toEqual([`/servers/${RUNNING_ID}/start`]);
   expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
+});
+
+test("Settings explains automatic updates without a project registration form", async ({ app, page }) => {
+  await page.route("**/api/v1/settings/deployment", (route) => route.fulfill({
+    json: { backupRoots: ["/backups"], composeRoots: ["/srv/games"], composeAvailable: true },
+  }));
+  await page.route("**/api/v1/settings/backups", (route) => route.fulfill({ json: { settings: null } }));
+  await page.route("**/api/v1/notifications", (route) => route.fulfill({ json: { configured: false, enabled: false } }));
+  await app.open("/settings");
+  const heading = page.getByRole("heading", { name: "Compose updates", exact: true });
+  await heading.scrollIntoViewIfNeeded();
+  await expect(heading).toBeVisible();
+  await expect(page.getByText(/No project registration is needed/)).toBeVisible();
+  await expect(page.getByLabel("Compose project name")).toHaveCount(0);
+  expect(app.requests.some((request) => request.path === "/compose-projects")).toBe(false);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

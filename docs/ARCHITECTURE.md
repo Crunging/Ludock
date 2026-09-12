@@ -117,10 +117,18 @@ a typed request context and return native `Response` objects:
 | `files.ts` | File browsing, transfers, and mutations |
 | `access.ts` | Per-user grants and reviewed server bindings |
 | `backups.ts` | Backup settings, metadata/downloads, creation, and restore requests |
-| `compose.ts` | Registered projects, update capability, and update requests |
+| `compose.ts` | Automatic source discovery, update capability, and update requests |
 | `schedules.ts` | Schedule creation, editing, pause/resume, next-run previews, and removal |
 | `status.ts` | Operation progress and availability configuration |
 | `settings.ts` | Notification settings and administrator diagnostics/integrations |
+
+Compose updates resolve source paths from internal Docker observations and validate
+an immutable snapshot for each confirmed operation. Original paths survive
+recreation in `ludock.compose.source`; this label never expands approved roots
+or enters public server DTOs. There is no registration API or project approval
+state. The historical `compose_projects` table remains unused for database schema
+compatibility, and the reserved null field in binding fingerprints preserves
+existing server identities.
 
 `websocket-server.ts` owns native Bun upgrades, connection and payload limits,
 session revalidation, and shutdown. Console and log handlers use a socket channel

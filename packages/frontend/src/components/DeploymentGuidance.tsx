@@ -43,7 +43,7 @@ export default function DeploymentGuidance({ section, deployment, onUseBackupRoo
         <>
           <p>Configured Compose source roots:</p>
           <ul className="admin-root-list">{deployment.composeRoots.map((root) => <li key={root}><code>{root}</code></li>)}</ul>
-          <p>Register files inside these roots. Registration checks the source files and their references before enabling updates.</p>
+          <p>Ludock discovers project files inside these roots automatically and validates them when you update a server.</p>
         </>
       ) : (
         <>
@@ -51,7 +51,7 @@ export default function DeploymentGuidance({ section, deployment, onUseBackupRoo
           <ol>
             <li>Mount the project folder read-only into Ludock at the same absolute path as on the Docker host, for example <code>/srv/game-stacks:/srv/game-stacks:ro</code>.</li>
             <li>Set <code>LUDOCK_COMPOSE_ROOTS=/srv/game-stacks</code> in Ludock’s <code>.env</code>, then recreate Ludock.</li>
-            <li>Register the existing project and its files below. Its current manager remains the owner of those files.</li>
+            <li>Open the server’s Update tab and click Check again. Project registration is not needed.</li>
           </ol>
         </>
       )}

@@ -278,7 +278,7 @@ export function getGameCapabilities(gameType: string): GameCapabilities {
     update: {
       status: "conditional",
       description:
-        "Requires an explicitly registered, accessible Compose project. Same-image recreation is available, but startup game-update behavior is unverified for this image.",
+        "Automatically discovers Compose source files; they must be accessible inside approved source roots. Same-image recreation is available, but startup game-update behavior is unverified for this image.",
       evidence: [],
     },
   };

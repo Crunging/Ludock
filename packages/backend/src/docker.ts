@@ -1,4 +1,5 @@
 import Docker from "dockerode";
+import { composeSourceLabels } from "./compose-source.js";
 import { docker } from "./docker-client.js";
 import {
   getGameConsoleAdapterSummary,
@@ -232,7 +233,7 @@ function toServerObservation(
     name: server.name,
     displayName: server.displayName,
     gameType: server.gameType,
-    ...(compose ? { compose } : {}),
+    ...(compose ? { compose, composeSourceLabels: composeSourceLabels(labels) } : {}),
     mounts: (info.Mounts || []).map((mount) => ({
       type: mount.Type,
       source: mount.Source,
