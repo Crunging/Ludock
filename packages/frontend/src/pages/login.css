@@ -12,7 +12,6 @@
 .login-card__visibility input {
   width: 18px;
   height: 18px;
-  accent-color: var(--blue);
 }
 
 .login-card__account-help {

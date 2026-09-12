@@ -14,7 +14,11 @@
   --text-faint: #8b98a8;
 
   --brand: #e68a3a;
-  --blue: #82b8f7;
+  --accent: var(--brand);
+  --accent-hover: #f2a15c;
+  --accent-subtle: rgba(230, 138, 58, 0.035);
+  --accent-selection: rgba(230, 138, 58, 0.25);
+  --info: #82b8f7;
   --on-accent: #121a24;
   --green: #74cd91;
   --red: #ff979e;
@@ -62,6 +66,16 @@ button {
   background: none;
   color: inherit;
   font-size: inherit;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+::selection {
+  color: var(--text);
+  background: var(--accent-selection);
 }
 
 /* Layout */
@@ -213,7 +227,7 @@ button {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   color: var(--on-accent);
-  background: var(--blue);
+  background: var(--accent);
 }
 
 .skip-link:focus {
@@ -342,7 +356,7 @@ button {
 }
 
 .application-log__component {
-  color: var(--blue);
+  color: var(--info);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -493,10 +507,15 @@ button {
   white-space: nowrap;
 }
 
-.console-mode-tabs button:hover,
-.console-mode-tabs .console-mode-tab--active {
+.console-mode-tabs button:hover {
   color: var(--text);
   background: var(--bg-card);
+}
+
+.console-mode-tabs button.console-mode-tab--active {
+  color: var(--accent);
+  background: var(--bg-card);
+  box-shadow: inset 0 -2px var(--accent);
 }
 
 .console-pause {
@@ -562,15 +581,15 @@ button {
 }
 
 .console-input__field:focus {
-  border-color: var(--border-light);
+  border-color: var(--accent);
 }
 
 .console-input__send {
   flex-shrink: 0;
   padding: 7px 14px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--on-accent);
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 500;
@@ -586,9 +605,9 @@ button {
   display: none;
 }
 
-.console-input__send:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.console-input__send:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 /* Empty / Error States */
@@ -716,7 +735,7 @@ button {
 }
 
 .login-card__input:focus {
-  border-color: var(--blue);
+  border-color: var(--accent);
 }
 
 .login-card__input + .login-card__label {
@@ -744,7 +763,7 @@ button {
   margin-top: 16px;
   padding: 10px 14px;
   border-radius: var(--radius-sm);
-  background: var(--blue);
+  background: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
 }
@@ -817,7 +836,7 @@ button {
 .form-grid select:focus,
 .user-row input:focus,
 .user-row select:focus {
-  border-color: var(--blue);
+  border-color: var(--accent);
 }
 
 .primary-btn,
@@ -831,7 +850,7 @@ button {
 
 .primary-btn {
   color: var(--on-accent);
-  background: var(--blue);
+  background: var(--accent);
 }
 
 .secondary-btn {
@@ -938,7 +957,7 @@ button {
 }
 
 .file-breadcrumbs button {
-  color: var(--blue);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -960,7 +979,7 @@ button {
   justify-content: center;
   gap: 18px;
   color: var(--text-dim);
-  background: rgba(88, 166, 255, 0.035);
+  background: var(--accent-subtle);
   border: 1px dashed var(--border-light);
   border-radius: var(--radius);
   transition: border-color 0.15s, background 0.15s;
@@ -968,8 +987,8 @@ button {
 
 .file-dropzone--active {
   color: var(--text);
-  background: rgba(88, 166, 255, 0.12);
-  border-color: var(--blue);
+  background: var(--accent-selection);
+  border-color: var(--accent);
 }
 
 .file-list {
@@ -1030,7 +1049,7 @@ button {
 }
 
 .file-row__name > button {
-  color: var(--blue);
+  color: var(--accent);
 }
 
 .file-row__name > button:hover {
@@ -1395,15 +1414,15 @@ button {
 }
 
 /* Compact management surfaces */
-:is(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+:is(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .muted { color: var(--text-dim); }
-.text-link { color: var(--blue); text-align: left; }
+.text-link { color: var(--accent); text-align: left; }
 .text-link:hover { text-decoration: underline; }
 .page__header--actions { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.help-panel { padding: 16px; border-left: 3px solid var(--blue); background: var(--bg-card); margin-bottom: 20px; max-width: 850px; }
+.help-panel { padding: 16px; border-left: 3px solid var(--info); background: var(--bg-card); margin-bottom: 20px; max-width: 850px; }
 .help-panel h2 { font-size: 15px; margin-bottom: 8px; }
 .help-panel p + p, .help-panel pre { margin-top: 10px; }
 .help-panel pre { padding: 12px; background: var(--bg-body); margin-bottom: 10px; }
@@ -1415,7 +1434,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .grants-server legend { padding: 0 6px; font-weight: 600; }
 .grants-capabilities { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 .grants-capabilities label, .check-label { display: flex !important; align-items: center; gap: 8px; font-weight: normal !important; color: var(--text) !important; }
-.grants-capabilities input, .check-label input { width: 16px !important; min-height: 16px !important; accent-color: var(--blue); }
+.grants-capabilities input, .check-label input { width: 16px !important; min-height: 16px !important; }
 .grants-presets { display: flex; gap: 14px; margin-bottom: 12px; }
 .user-row { flex-wrap: wrap; }
 @media (max-width: 700px) { .page__header--actions { align-items: flex-start; flex-direction: column; } .grants-capabilities { display: grid; grid-template-columns: 1fr; } }
@@ -1423,7 +1442,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .detail-actions { margin: -8px 0 24px; }
 .section-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); margin: 24px 0; overflow-x: auto; }
 .section-tabs button { padding: 10px 0; border-bottom: 2px solid transparent; color: var(--text-dim); white-space: nowrap; }
-.section-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
+.section-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .server-detail h2, .settings-page h2 { font-size: 18px; font-weight: 600; }
 .server-detail h3, .settings-page h3 { font-size: 15px; font-weight: 600; }
@@ -1462,12 +1481,17 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 .primary-btn:hover:not(:disabled),
 .login-card__submit:hover:not(:disabled) {
-  background: #9bc8fc;
+  background: var(--accent-hover);
 }
 
 .secondary-btn--accent {
-  color: var(--blue);
-  border-color: #476381;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.secondary-btn--accent:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .lifecycle-confirmation .secondary-btn--danger {
