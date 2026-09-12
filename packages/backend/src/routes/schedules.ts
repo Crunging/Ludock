@@ -1,5 +1,11 @@
 import { okResponseSchema, scheduleResponseSchema, schedulesResponseSchema, } from "@ludock/shared";
-import { createSchedule, deleteSchedule, listSchedules } from "../schedules.js";
+import {
+  createSchedule,
+  deleteSchedule,
+  listSchedules,
+  setScheduleEnabled,
+  updateSchedule,
+} from "../schedules.js";
 import { id, requestUser, respond, type ApiRoutes } from "./request.js";
 
 export const schedulesRoutes: ApiRoutes = {
@@ -12,6 +18,16 @@ export const schedulesRoutes: ApiRoutes = {
     }, 201)
   },
   "/api/v1/servers/:id/schedules/:scheduleId": {
+    PUT: (ctx) => respond(scheduleResponseSchema, {
+      schedule: updateSchedule(
+        requestUser(ctx), id(ctx.params.id), id(ctx.params.scheduleId), ctx.body,
+      ),
+    }),
+    PATCH: (ctx) => respond(scheduleResponseSchema, {
+      schedule: setScheduleEnabled(
+        requestUser(ctx), id(ctx.params.id), id(ctx.params.scheduleId), ctx.body,
+      ),
+    }),
     DELETE: (ctx) => {
       deleteSchedule(requestUser(ctx), id(ctx.params.id), id(ctx.params.scheduleId));
       return respond(okResponseSchema, { ok: true });

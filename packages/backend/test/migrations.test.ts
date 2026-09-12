@@ -315,6 +315,40 @@ describe("application database ownership and schema migrations", () => {
     );
   });
 
+  it("adds schedule revisions while preserving existing schedules and queued work", () => {
+    const db = new Database(":memory:");
+    try {
+      applyMigrations(db, DATABASE_MIGRATIONS.slice(0, 1));
+      const settings = JSON.stringify({ action: "start", enabled: true, time: "08:00", days: [1], timezone: "UTC" });
+      db.exec("INSERT INTO users VALUES ('u','player','hash','operator',0,1,1)");
+      db.exec("INSERT INTO docker_hosts VALUES ('host','local',1)");
+      db.exec(`INSERT INTO logical_servers (
+        id,host_id,external_identity,container_id,display_name,game_type,status,
+        binding_revision,binding_fingerprint,first_seen_at,last_seen_at
+      ) VALUES ('server','host','world','container','World','minecraft','active',1,'fingerprint',1,1)`);
+      db.prepare(`INSERT INTO schedules (
+        id,server_id,owner_id,input_json,binding_revision,last_slot,last_result,created_at
+      ) VALUES ('schedule','server','u',?,1,'consumed slot','previous result',1)`)
+        .run(settings);
+      db.exec(`INSERT INTO operations (
+        id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at
+      ) VALUES ('operation','server','u','start','queued','queued','{"scheduleId":"schedule"}',1,1,1)`);
+      applyMigrations(db);
+      const schedule = db.prepare("SELECT * FROM schedules WHERE id='schedule'").get();
+      assert.equal(schedule?.revision, 1);
+      assert.equal(schedule?.input_json, settings);
+      assert.equal(schedule?.owner_id, "u");
+      assert.equal(schedule?.binding_revision, 1);
+      assert.equal(schedule?.last_slot, "consumed slot");
+      assert.equal(schedule?.last_result, "previous result");
+      assert.equal(db.prepare("SELECT input_json FROM operations WHERE id='operation'").get()?.input_json,
+        '{"scheduleId":"schedule"}');
+      assert.throws(() => db.exec("UPDATE schedules SET revision=0"), /CHECK/);
+    } finally {
+      db.close(true);
+    }
+  });
+
   it("applies a future schema addition without replacing existing records", () => {
     const db = new Database(":memory:");
     try {

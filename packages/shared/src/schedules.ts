@@ -22,12 +22,32 @@ export const scheduleSchema = z
   .strict();
 export type ScheduleInput = z.infer<typeof scheduleSchema>;
 
+export const updateScheduleRequestSchema = scheduleSchema
+  .extend({
+    enabled: scheduleSchema.shape.enabled.removeDefault(),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export type UpdateScheduleRequest = z.infer<typeof updateScheduleRequestSchema>;
+
+export const scheduleEnabledRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export type ScheduleEnabledRequest = z.infer<typeof scheduleEnabledRequestSchema>;
+
 export const savedScheduleSchema = scheduleSchema.extend({
   enabled: scheduleSchema.shape.enabled.removeDefault(),
   id: z.string().uuid(),
   serverId: z.string().uuid(),
   ownerId: z.string().uuid(),
   lastResult: z.string().nullable(),
+  // Execution slot for preview deduplication, not user-facing display text.
+  lastSlot: z.string().nullable(),
+  revision: z.number().int().positive(),
+  nextRunAt: z.number().int().nonnegative().nullable(),
 });
 export type Schedule = z.infer<typeof savedScheduleSchema>;
 export const schedulesResponseSchema = z.object({

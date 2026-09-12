@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "bun:test";
-import { mountsOverlap, stopForDataOperation } from "../src/backups.js";
+import { mountsOverlap, recoverBackup, stopForDataOperation } from "../src/backups.js";
 import type { ServerObservation } from "../src/identity.js";
 import { listLogicalServers } from "../src/identity.js";
 import { setServerGrant } from "../src/authorization.js";
@@ -12,6 +12,7 @@ import {
 } from "../src/database.js";
 import { getDockerInstance } from "../src/docker.js";
 import type { JobContext } from "../src/operations.js";
+import { createSchedule, setScheduleEnabled } from "../src/schedules.js";
 import {
   refreshServers,
   resolveAuthorizedServer,
@@ -99,6 +100,7 @@ describe("backup execution authority", () => {
         };
       },
       stop: async () => { stopped++; running = false; },
+      start: async () => { running = true; },
     })) as unknown as typeof docker.getContainer;
     await refreshServers();
     const serverId = listLogicalServers()[0].id;
@@ -140,5 +142,38 @@ describe("backup execution authority", () => {
     await stopForDataOperation(context, job);
     assert.equal(stopped, 1);
     assert.equal(job.job.recovery.initialRunning, true);
+  });
+
+  function scheduledBackup(): string {
+    setServerGrant(operator.id, context.logical.id, [
+      "server.view", "backups.create", "schedules.manage",
+    ], admin);
+    const schedule = createSchedule(operator, context.logical.id, {
+      action: "backup", enabled: true, time: "08:00", days: [1], timezone: "UTC",
+    });
+    job.job.input = { scheduleId: schedule.id, scheduleRevision: schedule.revision };
+    return schedule.id;
+  }
+
+  it("rechecks a paused and resumed backup schedule after inspection before stopping", async () => {
+    const scheduleId = scheduledBackup();
+    onInspect = () => {
+      onInspect = () => {};
+      setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: false, revision: 1 });
+      setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: true, revision: 2 });
+    };
+    await assert.rejects(stopForDataOperation(context, job), /deleted, disabled, or changed/);
+    assert.equal(stopped, 0);
+    assert.deepEqual(job.job.recovery, {});
+  });
+
+  it("restores a stopped backup server during recovery even after its schedule is paused", async () => {
+    const scheduleId = scheduledBackup();
+    await stopForDataOperation(context, job);
+    assert.equal(running, false);
+    setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: false, revision: 1 });
+    await recoverBackup(job);
+    assert.equal(running, true);
+    assert.equal(job.job.recovery.stateRestored, true);
   });
 });

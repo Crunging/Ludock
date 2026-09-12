@@ -136,6 +136,10 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     `,
     upgrade: initializeFingerprintKey,
   },
+  {
+    version: 3,
+    sql: "ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0);",
+  },
 ];
 
 function schemaVersion(db: Database): number {

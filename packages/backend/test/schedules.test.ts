@@ -19,6 +19,8 @@ import {
   listSchedules,
   runSchedules,
   scheduleSlot,
+  setScheduleEnabled,
+  updateSchedule,
 } from "../src/schedules.js";
 import { AppError } from "../src/errors.js";
 import { setServerGrant } from "../src/authorization.js";
@@ -272,6 +274,183 @@ describe("schedule authority", () => {
       listSchedules(admin, serverId)[0].lastResult!,
       /server configuration changed/,
     );
+  });
+});
+
+describe("schedule editing and suspension", () => {
+  it("edits in place while preserving owner, binding baseline, history, and consumed slots", () => {
+    const created = createSchedule(friend, serverId, input);
+    runSchedules(due);
+    const before = getDatabase().prepare("SELECT * FROM schedules WHERE id=?")
+      .get(created.id) as Record<string, unknown>;
+    const edited = updateSchedule(admin, serverId, created.id, {
+      ...input, time: "09:00", revision: created.revision,
+    });
+    assert.equal(edited.id, created.id);
+    assert.equal(edited.ownerId, friend.id);
+    assert.equal(edited.revision, 2);
+    assert.equal(edited.time, "09:00");
+    const after = getDatabase().prepare("SELECT * FROM schedules WHERE id=?")
+      .get(created.id) as Record<string, unknown>;
+    for (const key of ["owner_id", "binding_revision", "last_slot", "last_result", "created_at"])
+      assert.equal(after[key], before[key]);
+    updateSchedule(friend, serverId, created.id, { ...input, revision: 2 });
+    getDatabase().prepare("UPDATE operations SET status='succeeded'").run();
+    runSchedules(due + 30_000);
+    assert.equal(listOperations(serverId).length, 1);
+  });
+
+  it("rejects stale edits and toggles without losing newer input", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    for (const mutate of [
+      () => updateSchedule(friend, serverId, schedule.id, { ...input, time: "09:00", revision: 1 }),
+      () => setScheduleEnabled(friend, serverId, schedule.id, { enabled: true, revision: 1 }),
+    ]) assert.throws(mutate, (error: unknown) =>
+      error instanceof AppError && error.code === "SCHEDULE_CHANGED" && error.statusCode === 409);
+    const current = listSchedules(friend, serverId)[0];
+    assert.equal(current.revision, 2);
+    assert.equal(current.enabled, false);
+    assert.equal(current.time, input.time);
+  });
+
+  it("does not change revision or audit repeated identical updates", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    const edited = updateSchedule(friend, serverId, schedule.id, {
+      ...input, days: [...input.days].reverse(), revision: 1,
+    });
+    assert.equal(edited.revision, 1);
+    assert.equal(setScheduleEnabled(friend, serverId, schedule.id, {
+      enabled: true, revision: 1,
+    }).revision, 1);
+    assert.equal(getDatabase().prepare(
+      "SELECT COUNT(*) AS count FROM audit_log WHERE action IN ('schedule.updated','schedule.resumed')",
+    ).get()?.count, 0);
+  });
+
+  it("recognizes newly selected weekdays even when older input repeats a day", () => {
+    const schedule = createSchedule(friend, serverId, { ...input, days: [1, 1] });
+    const edited = updateSchedule(friend, serverId, schedule.id, {
+      ...input, days: [1, 2], revision: 1,
+    });
+    assert.equal(edited.revision, 2);
+    assert.deepEqual(edited.days, [1, 2]);
+  });
+
+  it("uses current ownership authority for editing and toggling", () => {
+    const schedule = createSchedule(admin, serverId, input);
+    const staleAdministrator = { ...friend, role: "admin" as const };
+    assert.throws(() => updateSchedule(staleAdministrator, serverId, schedule.id, {
+      ...input, time: "09:00", revision: 1,
+    }), /not found/);
+    assert.throws(() => setScheduleEnabled(staleAdministrator, serverId, schedule.id, {
+      enabled: false, revision: 1,
+    }), /not found/);
+  });
+
+  it("requires action grants for both requester and original owner", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    assert.throws(() => updateSchedule(friend, serverId, schedule.id, {
+      ...input, action: "backup", revision: 1,
+    }), /permission/);
+    assert.throws(() => updateSchedule(admin, serverId, schedule.id, {
+      ...input, action: "backup", revision: 1,
+    }), /required access/);
+    assert.equal(listSchedules(admin, serverId)[0].revision, 1);
+  });
+
+  it("allows pausing after action revocation but prevents edits and resume under either actor", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    setServerGrant(friend.id, serverId, ["server.view", "schedules.manage"], admin);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunAt, null);
+    const paused = setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    assert.equal(paused.enabled, false);
+    assert.equal(paused.nextRunAt, null);
+    for (const actor of [friend, admin]) {
+      assert.throws(() => updateSchedule(actor, serverId, schedule.id, {
+        ...input, enabled: false, time: "09:00", revision: 2,
+      }), /permission|required access/);
+      assert.throws(() => setScheduleEnabled(actor, serverId, schedule.id, {
+        enabled: true, revision: 2,
+      }), /permission|required access/);
+    }
+    assert.equal(listSchedules(admin, serverId)[0].revision, 2);
+  });
+
+  it("permits administrators to pause disabled owners without transferring their schedules", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    updateUserAccess(friend.id, "operator", true);
+    const paused = setScheduleEnabled(admin, serverId, schedule.id, { enabled: false, revision: 1 });
+    assert.equal(paused.ownerId, friend.id);
+    assert.throws(() => setScheduleEnabled(admin, serverId, schedule.id, {
+      enabled: true, revision: 2,
+    }), /required access/);
+  });
+
+  it("keeps materially changed bindings suspended after pause, edit, or resume attempts", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    const pending = reconcileServers([{ ...observation, gameType: "factorio" }])[0];
+    reviewServerBinding(serverId, pending.pendingFingerprint!);
+    assert.equal(listSchedules(admin, serverId)[0].nextRunAt, null);
+    const paused = setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    assert.equal(paused.enabled, false);
+    assert.throws(() => updateSchedule(admin, serverId, schedule.id, {
+      ...input, time: "09:00", revision: 2,
+    }), /server configuration changed/);
+    assert.throws(() => setScheduleEnabled(admin, serverId, schedule.id, {
+      enabled: true, revision: 2,
+    }), /server configuration changed/);
+    assert.equal(getDatabase().prepare("SELECT binding_revision FROM schedules WHERE id=?")
+      .get(schedule.id)?.binding_revision, 1);
+  });
+
+  it("previews enabled authorized schedules and does not consume slots while paused", () => {
+    spyOn(Date, "now").mockReturnValue(due - 60_000);
+    const schedule = createSchedule(friend, serverId, input);
+    assert.equal(schedule.nextRunAt, due);
+    setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    runSchedules(due);
+    assert.equal(listOperations(serverId).length, 0);
+    const resumed = setScheduleEnabled(friend, serverId, schedule.id, { enabled: true, revision: 2 });
+    assert.equal(resumed.nextRunAt, due);
+    assert.equal(resumed.revision, 3);
+    runSchedules(due);
+    assert.equal(getOperation(listOperations(serverId)[0].id)?.input.scheduleRevision, 3);
+    assert.equal(listSchedules(friend, serverId)[0].nextRunAt, due + 86_400_000);
+  });
+
+  for (const action of ["schedule.updated", "schedule.paused", "schedule.resumed"])
+    it(`rolls back ${action} together with a failed audit`, () => {
+      const enabled = action !== "schedule.resumed";
+      const schedule = createSchedule(friend, serverId, { ...input, enabled });
+      const db = getDatabase();
+      db.exec(`CREATE TRIGGER fail_schedule_mutation_audit BEFORE INSERT ON audit_log
+        WHEN NEW.action='${action}'
+        BEGIN SELECT RAISE(ABORT, 'fixture audit failed'); END`);
+      assert.throws(() => action === "schedule.updated"
+        ? updateSchedule(friend, serverId, schedule.id, { ...input, time: "09:00", revision: 1 })
+        : setScheduleEnabled(friend, serverId, schedule.id, { enabled: !enabled, revision: 1 }),
+      /fixture audit failed/);
+      const current = listSchedules(friend, serverId)[0];
+      assert.equal(current.revision, 1);
+      assert.equal(current.enabled, enabled);
+      assert.equal(current.time, input.time);
+      assert.equal(db.inTransaction, false);
+    });
+
+  it("commits mutation before retention cleanup and hides cleanup failures", () => {
+    const schedule = createSchedule(friend, serverId, input);
+    const db = getDatabase();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const cleanup = spyOn(database, "pruneAuditLogIfNeeded").mockImplementation(() => {
+      assert.equal(db.inTransaction, false);
+      throw new Error("fixture-private-cleanup-error");
+    });
+    assert.equal(setScheduleEnabled(friend, serverId, schedule.id, {
+      enabled: false, revision: 1,
+    }).revision, 2);
+    assert.equal(cleanup.mock.calls.length, 1);
+    assert.doesNotMatch(JSON.stringify(warn.mock.calls), /fixture-private-cleanup-error/);
   });
 });
 

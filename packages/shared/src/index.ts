@@ -9,6 +9,7 @@ export * from "./operations.js";
 export * from "./backups.js";
 export * from "./compose.js";
 export * from "./schedules.js";
+export * from "./schedule-time.js";
 export * from "./monitoring.js";
 export * from "./diagnostics.js";
 export * from "./deployment.js";

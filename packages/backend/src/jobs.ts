@@ -54,10 +54,10 @@ export function jobActor(context: JobContext): SessionUser {
   if (typeof context.job.input.scheduleId === "string") {
     const schedule = getDatabase()
       .prepare(
-        "SELECT owner_id,input_json FROM schedules WHERE id=? AND server_id=?",
+        "SELECT owner_id,input_json,revision FROM schedules WHERE id=? AND server_id=?",
       )
       .get(context.job.input.scheduleId, context.job.serverId) as
-      | { owner_id: string; input_json: string }
+      | { owner_id: string; input_json: string; revision: number }
       | undefined;
     const settings = schedule
       ? scheduleSchema.parse(JSON.parse(schedule.input_json))
@@ -65,6 +65,11 @@ export function jobActor(context: JobContext): SessionUser {
     if (
       !schedule ||
       schedule.owner_id !== id ||
+      // Pre-migration jobs have no revision. They remain valid only while the
+      // migrated schedule has never been edited, paused, or resumed.
+      (context.job.input.scheduleRevision === undefined
+        ? schedule.revision !== 1
+        : context.job.input.scheduleRevision !== schedule.revision) ||
       !settings?.enabled ||
       settings.action !== context.job.kind
     )

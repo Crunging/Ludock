@@ -338,12 +338,31 @@ rediscovered under the same Ludock UUID.
 ## Schedules, availability, and Discord
 
 Schedules support start, stop, restart, and backup at a selected local time on
-selected weekdays. Time zones are explicit. Missed times and spring-forward
-gaps are skipped; a repeated fall-back time runs once. Ludock does not schedule
-updates or arbitrary shell commands. Review a failed/suspended schedule's
-reported result and recreate it after fixing its permissions or data binding.
+selected weekdays. Open a server's **Schedules** tab to add a schedule, edit its
+action or timing, or pause and resume it. The form previews the next matching
+time before saving; saved schedules show their next run in their selected time
+zone, separately from their last result. A next-run preview describes the timing;
+Ludock must still be running and the server must pass access, identity, and
+operation checks when that time arrives.
+
+Missed times and spring-forward gaps are skipped; a repeated fall-back time runs
+once. Resuming does not replay missed runs. Pausing or editing prevents queued
+work from proceeding under the previous settings, but does not undo an action
+already dispatched. Existing operation cleanup and recovery still apply.
+Schedule edits retain their owner and history. If another session changes the
+schedule, review its latest settings before saving again.
+
+Operators can manage their own schedules; administrators can manage all schedules
+on an eligible server. Editing or resuming requires the scheduled action's grant
+as well as schedule management, and the owner must still have the required access.
+A user with schedule management can pause a schedule even after losing its action
+grant. Restore missing access before resuming. Material server configuration
+changes still require reviewing the server and recreating the schedule; editing
+its time does not approve a new data binding. Ludock does not schedule updates or
+arbitrary shell commands.
+
 An installation supports at most 100 schedules per server and 1,000 in total,
-including disabled schedules. Delete unused schedules before adding more when
+including paused schedules. Delete unused schedules before adding more when
 either limit is reached. Invalid saved schedule configurations are suspended
 without preventing other schedules from running. Application logs identify the
 affected schedule and warn if restored data exceeds the global limit; schedules

@@ -61,6 +61,9 @@ test("request defaults do not hide missing persisted schedule, availability, or 
     serverId,
     ownerId,
     lastResult: null,
+    lastSlot: null,
+    revision: 1,
+    nextRunAt: null,
   };
   assert(savedScheduleSchema.safeParse(saved).success);
   assert(

@@ -358,6 +358,11 @@ absolute paths on the Docker host and inside Ludock.
 - Failed settings or grant reads disable saving until a successful retry. A
   pending save cannot erase a newer draft. Changed roles, bindings, and operations
   invalidate obsolete action confirmations.
+- Schedule edits preserve drafts across tabs and refreshes. Pause/resume changes
+  only the enabled state, and the schedule's state remains separate from its last
+  result. Next-run previews use the chosen timezone, skip daylight-saving gaps,
+  and do not repeat consumed fall-back slots. A stale edit requires reviewing the
+  latest revision; queued work from an edited or paused revision cannot dispatch.
 - Backup storage fields allow clearing and typing decimal GiB values without
   changing them mid-edit. Saving untouched settings preserves exact stored sizes;
   a zero free-space reserve remains valid. File and backup sizes use consistent

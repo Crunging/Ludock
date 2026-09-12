@@ -7,6 +7,7 @@ import {
   operationResponseSchema,
   operationsResponseSchema,
   scheduleResponseSchema,
+  scheduleSchema,
   schedulesResponseSchema,
   serverResponseSchema,
   updateCapabilityResponseSchema,
@@ -30,7 +31,7 @@ import ActivityPanel from "../components/server-detail/ActivityPanel";
 import BackupsPanel, {
   type RestoreSelection,
 } from "../components/server-detail/BackupsPanel";
-import SchedulesPanel from "../components/server-detail/SchedulesPanel";
+import SchedulesPanel, { type ScheduleEdit } from "../components/server-detail/SchedulesPanel";
 import UpdatePanel, {
   type UpdateOptions,
 } from "../components/server-detail/UpdatePanel";
@@ -46,6 +47,13 @@ const defaultSchedule: ScheduleInput = {
   days: [0, 1, 2, 3, 4, 5, 6],
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 };
+
+function scheduleInput(item: Schedule): ScheduleInput {
+  return {
+    action: item.action, enabled: item.enabled, time: item.time,
+    days: [...item.days], timezone: item.timezone,
+  };
+}
 
 export default function ServerDetail({ serverId }: { serverId: string }) {
   const { user } = useAuth();
@@ -110,6 +118,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   >(null);
   // Keep drafts above the panels so changing tabs never discards a selection.
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
+  const [scheduleEdit, setScheduleEdit] = useState<ScheduleEdit | null>(null);
+  const scheduleFocusTarget = useRef<string | null>(null);
   const [update, setUpdate] = useState<UpdateOptions>({
     createBackup: true,
     forceRecreate: false,
@@ -125,6 +135,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const blocked = server?.bindingStatus !== "active";
   const startable = Boolean(server && lifecycleActionForState(server.state) === "start");
   const activeOperation = operations.find(operationActive);
+
+  useEffect(() => {
+    if (scheduleEdit || busy || !snapshotReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
+    document.getElementById(`schedule-edit-${scheduleFocusTarget.current}`)?.focus();
+    scheduleFocusTarget.current = null;
+  }, [scheduleEdit, busy, snapshotReady, tab]);
 
   useEffect(() => {
     if (capabilityState === "loading" || !capabilityFocusPending.current) return;
@@ -235,7 +251,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     return () => window.clearInterval(interval);
   }, [hasActiveOperation, refresh]);
 
-  async function perform(action: () => Promise<unknown>, success: string) {
+  async function perform(
+    action: () => Promise<unknown>,
+    success: string,
+    onFailure?: (reason: unknown) => Promise<void>,
+  ) {
     if (
       mutationPending.current ||
       refreshRequest.current ||
@@ -254,6 +274,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       // The action succeeded even if reading its updated state failed.
       return pageActive.current;
     } catch (reason) {
+      if (pageActive.current) await onFailure?.(reason);
       if (pageActive.current)
         setError(reason instanceof Error ? reason.message : "Request failed.");
       return false;
@@ -261,6 +282,55 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       mutationPending.current = false;
       if (pageActive.current) setBusy(false);
     }
+  }
+
+  async function reconcileScheduleFailure(reason: unknown) {
+    if (reason instanceof ApiRequestError && [403, 404, 409].includes(reason.status)) {
+      await refresh(true, true);
+    }
+  }
+
+  function cancelScheduleEdit() {
+    if (busy || !scheduleEdit) return;
+    scheduleFocusTarget.current = scheduleEdit.id;
+    setScheduleEdit(null);
+  }
+
+  async function saveSchedule() {
+    const draft = scheduleEdit?.draft ?? schedule;
+    const current = scheduleEdit ? schedules.find((item) => item.id === scheduleEdit.id) : undefined;
+    if (
+      blocked || !can(user, server, "schedules.manage") ||
+      !can(user, server, draft.action === "backup" ? "backups.create" : `server.${draft.action}`) ||
+      !scheduleSchema.safeParse(draft).success ||
+      (scheduleEdit && (!current || current.revision !== scheduleEdit.revision))
+    ) return;
+    if (await perform(
+      () => apiJson(
+        `${path}/schedules${scheduleEdit ? `/${encodeURIComponent(scheduleEdit.id)}` : ""}`,
+        scheduleResponseSchema,
+        jsonBody(scheduleEdit ? "PUT" : "POST", scheduleEdit ? { ...draft, revision: scheduleEdit.revision } : draft),
+      ),
+      scheduleEdit ? "Schedule saved." : "Schedule created.",
+      reconcileScheduleFailure,
+    ) && scheduleEdit) {
+      scheduleFocusTarget.current = scheduleEdit.id;
+      setScheduleEdit(null);
+    }
+  }
+
+  async function toggleSchedule(item: Schedule) {
+    const current = schedules.find((candidate) => candidate.id === item.id);
+    if (
+      scheduleEdit || !can(user, server, "schedules.manage") || !current || current.revision !== item.revision ||
+      (!item.enabled && (blocked || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`)))
+    ) return;
+    await perform(
+      () => apiJson(`${path}/schedules/${encodeURIComponent(item.id)}`, scheduleResponseSchema,
+        jsonBody("PATCH", { enabled: !item.enabled, revision: item.revision })),
+      item.enabled ? "Schedule paused." : "Schedule resumed.",
+      reconcileScheduleFailure,
+    );
   }
   async function requestBackup() {
     if (
@@ -648,28 +718,34 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         {activeTab === "schedules" && canManageSchedules && (
           <SchedulesPanel
             schedules={schedules}
-            draft={schedule}
-            onDraftChange={setSchedule}
+            draft={scheduleEdit?.draft ?? schedule}
+            editing={scheduleEdit}
+            conflict={Boolean(scheduleEdit && schedules.some((item) => item.id === scheduleEdit.id && item.revision !== scheduleEdit.revision))}
+            onDraftChange={(draft) => {
+              if (scheduleEdit) setScheduleEdit((current) => current ? { ...current, draft } : current);
+              else setSchedule(draft);
+            }}
             scheduleActions={scheduleActions}
             busy={busy || !snapshotReady}
+            saving={busy}
             blocked={blocked}
-            onCreate={() => {
-              if (
-                blocked ||
-                !canManageSchedules ||
-                !schedule.days.length ||
-                !scheduleActions.includes(schedule.action)
-              ) return;
-              void perform(
-                () =>
-                  apiJson(
-                    `${path}/schedules`,
-                    scheduleResponseSchema,
-                    jsonBody("POST", schedule),
-                  ),
-                "Schedule created.",
-              );
+            onSave={() => void saveSchedule()}
+            onEdit={(item) => {
+              if (busy || !snapshotReady || blocked || scheduleEdit || scheduleActions.length === 0) return;
+              setScheduleEdit({ id: item.id, revision: item.revision, draft: scheduleInput(item) });
             }}
+            onCancelEdit={cancelScheduleEdit}
+            onResolveConflict={(useSaved) => {
+              const latest = schedules.find((item) => item.id === scheduleEdit?.id);
+              if (!scheduleEdit || !latest || busy || !snapshotReady) return;
+              setScheduleEdit({
+                id: latest.id,
+                revision: latest.revision,
+                draft: useSaved ? scheduleInput(latest) : { ...scheduleEdit.draft, enabled: latest.enabled },
+              });
+              setError(null);
+            }}
+            onToggle={(item) => void toggleSchedule(item)}
             onDelete={(item) => {
               if (
                 !canManageSchedules ||

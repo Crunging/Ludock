@@ -158,3 +158,76 @@
     gap: 8px;
   }
 }
+
+.schedules-table {
+  min-width: 790px;
+}
+
+.schedules-table-scroll:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.schedule-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 118px;
+}
+
+.schedule-next-run {
+  min-width: 180px;
+}
+
+.schedule-result {
+  max-width: 220px;
+  overflow-wrap: anywhere;
+}
+
+.schedule-form {
+  margin-top: 24px;
+}
+
+.schedule-form > h3:focus {
+  outline: none;
+}
+
+.schedule-form-note,
+.schedule-preview {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-preview strong {
+  color: var(--text);
+}
+
+.schedule-conflict {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.schedule-conflict p + p {
+  margin-top: 10px;
+}
+
+.schedule-form-actions {
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .schedule-form .form-columns > label:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .schedules-table .secondary-btn,
+  .schedule-form button,
+  .schedule-form .check-label {
+    min-height: 44px;
+  }
+}
