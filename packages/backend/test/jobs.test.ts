@@ -12,6 +12,8 @@ import {
   createSchedule,
   deleteSchedule,
   runSchedules,
+  setScheduleEnabled,
+  updateSchedule,
 } from "../src/schedules.js";
 import {
   getOperation,
@@ -136,6 +138,31 @@ describe("queued operation authority", () => {
       .run(JSON.stringify({ ...input, action: "stop" }), scheduleId);
     assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
   });
+  it("rejects queued work after editing the schedule time without changing its action", () => {
+    const { context, scheduleId } = scheduled();
+    updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
+    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+  });
+  it("does not revive old queued work after pausing and resuming a schedule", () => {
+    const { context, scheduleId } = scheduled();
+    setScheduleEnabled(friend, serverId, scheduleId, { enabled: false, revision: 1 });
+    setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
+    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+  });
+  it("only accepts legacy jobs without a revision while the schedule remains untouched", () => {
+    const { context, scheduleId } = scheduled();
+    delete context.job.input.scheduleRevision;
+    assert.equal(jobActor(context).id, friend.id);
+    updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
+    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+  });
+  it("rejects invalid or future schedule generations", () => {
+    const { context } = scheduled();
+    for (const revision of [null, "1", 0, 2]) {
+      context.job.input.scheduleRevision = revision;
+      assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    }
+  });
   it("rechecks action grants before a scheduled job touches Docker", async () => {
     const { context } = scheduled();
     setServerGrant(
@@ -153,9 +180,9 @@ describe("queued operation authority", () => {
     assert.equal(getOperation(context.job.id)?.status, "failed");
     assert.equal(mutations, 0);
   });
-  for (const change of ["grant revocation", "container rename"] as const)
+  for (const change of ["grant revocation", "container rename", "schedule pause and resume"] as const)
   it(`rechecks a scheduled action after ${change} during the final lifecycle inspection`, async () => {
-    const { context } = scheduled();
+    const { context, scheduleId } = scheduled();
     const getContainer = docker.getContainer;
     let dispatchInspected = false;
     docker.getContainer = ((id: string) => {
@@ -169,7 +196,11 @@ describe("queued operation authority", () => {
             setServerGrant(
               friend.id, serverId, ["server.view", "schedules.manage"], admin,
             );
-          else info.Name = "/different-server";
+          else if (change === "container rename") info.Name = "/different-server";
+          else {
+            setScheduleEnabled(friend, serverId, scheduleId, { enabled: false, revision: 1 });
+            setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
+          }
         }
         return info;
       }) as typeof container.inspect;

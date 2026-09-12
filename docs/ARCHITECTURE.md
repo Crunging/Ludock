@@ -118,7 +118,7 @@ a typed request context and return native `Response` objects:
 | `access.ts` | Per-user grants and reviewed server bindings |
 | `backups.ts` | Backup settings, metadata/downloads, creation, and restore requests |
 | `compose.ts` | Registered projects, update capability, and update requests |
-| `schedules.ts` | Schedule creation, listing, and removal |
+| `schedules.ts` | Schedule creation, editing, pause/resume, next-run previews, and removal |
 | `status.ts` | Operation progress and availability configuration |
 | `settings.ts` | Notification settings and administrator diagnostics/integrations |
 
@@ -173,6 +173,21 @@ schedules, monitoring, and Compose validation remain in their domain modules.
 Job dispatch rechecks the owner's current authority after preparation. Recovery
 cleanup and restoration of initial running state remain possible after authority
 is revoked; denying new work must not strand partially restored data.
+
+Schedule edits and pause/resume use an expected revision to reject stale writes.
+Each actual change advances that revision; queued scheduled operations carry the
+revision they were created under and recheck it before dispatch. The last consumed
+local-time slot is retained across edits and pauses so the same occurrence is not
+replayed. Shared timezone helpers calculate both due slots and next-run previews,
+including skipped spring-forward times and once-only repeated fall-back times.
+Saved previews also check the owner's current authority and original binding.
+Their public reason codes distinguish disabled owners, missing access, and binding
+changes without returning private diagnostics. Each attempted slot records its
+time and, when queued, its operation association. Enqueueing and associating that
+operation are atomic. Schedule responses project the associated operation's
+current persisted result, so normal completion and interruption recovery share
+one source of truth. A later skipped attempt clears the association; an older
+operation finishing cannot replace the latest schedule result.
 
 `identity.ts` and `servers.ts` separate logical history from live Docker
 observations. `authorization.ts` owns capability and role ceilings. File helpers

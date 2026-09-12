@@ -415,7 +415,7 @@ describe("server management panels", () => {
     await userEvent.selectOptions(action, "stop");
     await userEvent.clear(screen.getByLabelText("Time zone"));
     await userEvent.type(screen.getByLabelText("Time zone"), "Etc/UTC");
-    for (const checkbox of screen.getAllByRole("checkbox"))
+    for (const checkbox of within(screen.getByRole("group", { name: "Days" })).getAllByRole("checkbox"))
       await userEvent.click(checkbox);
     expect(
       (

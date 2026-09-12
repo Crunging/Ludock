@@ -97,6 +97,18 @@ export function listUserServerGrants(userId: string): ServerGrant[] {
   }));
 }
 
+/** Read the assigned grant without treating binding availability as revocation. */
+export function getUserServerGrant(userId: string, serverId: string): ServerGrant | null {
+  const row = getDatabase().prepare(
+    "SELECT capabilities_json,updated_at FROM server_grants WHERE user_id=? AND server_id=?",
+  ).get(userId, serverId) as { capabilities_json: string; updated_at: number } | null;
+  return row ? {
+    serverId,
+    capabilities: parseCapabilities(row.capabilities_json),
+    updatedAt: row.updated_at,
+  } : null;
+}
+
 function parseCapabilities(json: string): ServerCapability[] {
   try {
     const value: unknown = JSON.parse(json);

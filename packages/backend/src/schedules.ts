@@ -1,4 +1,14 @@
-import { scheduleSchema, type ScheduleInput } from "@ludock/shared";
+import {
+  nextScheduleRun,
+  operationSchema,
+  scheduleEnabledRequestSchema,
+  scheduleSchema,
+  scheduleSlot,
+  updateScheduleRequestSchema,
+  type NextRunUnavailableReason,
+  type Operation,
+  type ScheduleInput,
+} from "@ludock/shared";
 import {
   getDatabase,
   findUserById,
@@ -10,15 +20,17 @@ import {
   assertServerCapability,
   currentActor,
   hasServerCapability,
+  getUserServerGrant,
 } from "./authorization.js";
-import { resolveServerBinding } from "./identity.js";
-import { enqueueOperation } from "./operations.js";
+import { getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
+import { enqueueOperation, getOperation, publicOperation } from "./operations.js";
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { createLogger } from "./logger.js";
 import type { ServerCapability } from "@ludock/shared";
 
 const logger = createLogger("schedules");
+export { scheduleSlot } from "@ludock/shared";
 
 interface ScheduleRow {
   id: string;
@@ -26,8 +38,11 @@ interface ScheduleRow {
   owner_id: string;
   input_json: string;
   binding_revision: number;
+  revision: number;
   last_slot: string | null;
   last_result: string | null;
+  last_operation_id: string | null;
+  last_run_at: number | null;
   created_at: number;
 }
 
@@ -37,13 +52,138 @@ export const MAX_SCHEDULES_TOTAL = 1_000;
 
 const actionCapability = (action: ScheduleInput["action"]): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
-function publicSchedule(row: ScheduleRow) {
+
+const unavailableMessages = {
+  owner_missing: "Suspended: the schedule owner no longer exists",
+  owner_disabled: "Suspended: the schedule owner's account is disabled",
+  owner_access_removed: "Suspended: required access to manage schedules has been removed",
+  action_access_removed: "Suspended: required access for this scheduled action has been removed",
+  binding_changed: "Suspended: server configuration changed; recreate this schedule after reviewing the server",
+  binding_unavailable: "Suspended: the server binding is unavailable or requires administrator review",
+  unavailable: "Suspended: this schedule cannot currently run; review the server and schedule",
+} satisfies Record<NextRunUnavailableReason, string>;
+
+class ScheduleUnavailableError extends AppError {
+  constructor(readonly reason: NextRunUnavailableReason) {
+    const binding = reason === "binding_changed" || reason === "binding_unavailable";
+    super(
+      reason === "binding_changed" ? "SCHEDULE_BINDING_CHANGED"
+        : binding ? "SCHEDULE_BINDING_UNAVAILABLE" : "SCHEDULE_REVOKED",
+      binding ? 409 : 403,
+      unavailableMessages[reason],
+    );
+  }
+}
+
+function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
+  const user = findUserById(row.owner_id);
+  if (!user) throw new ScheduleUnavailableError("owner_missing");
+  if (user.disabled) throw new ScheduleUnavailableError("owner_disabled");
+  // Inspect assigned grants before binding availability so a suspended binding
+  // is not misreported as a removed grant by the effective-capability mask.
+  if (user.role !== "admin") {
+    const grant = getUserServerGrant(user.id, row.server_id);
+    if (user.role !== "operator" ||
+      !grant?.capabilities.includes("server.view") ||
+      !grant.capabilities.includes("schedules.manage"))
+      throw new ScheduleUnavailableError("owner_access_removed");
+    if (!grant.capabilities.includes(actionCapability(data.action)))
+      throw new ScheduleUnavailableError("action_access_removed");
+  }
+  const logical = getLogicalServer(row.server_id);
+  if (!logical) throw new ScheduleUnavailableError("binding_unavailable");
+  const original = getDatabase()
+    .prepare(
+      "SELECT binding_fingerprint FROM server_bindings WHERE server_id=? AND binding_revision=? AND accepted=1 ORDER BY id DESC LIMIT 1",
+    )
+    .get(row.server_id, row.binding_revision) as
+    | { binding_fingerprint: string }
+    | undefined;
+  if (!original || original.binding_fingerprint !== logical.bindingFingerprint)
+    throw new ScheduleUnavailableError("binding_changed");
+  let binding: ReturnType<typeof resolveServerBinding>;
+  try {
+    binding = resolveServerBinding(row.server_id);
+  } catch (error) {
+    if (error instanceof ServerBindingError)
+      throw new ScheduleUnavailableError("binding_unavailable");
+    throw error;
+  }
+  // Keep the normal current role, grant, and binding authority as the final gate.
+  if (!hasServerCapability(user, row.server_id, "schedules.manage"))
+    throw new ScheduleUnavailableError("owner_access_removed");
+  if (!hasServerCapability(user, row.server_id, actionCapability(data.action)))
+    throw new ScheduleUnavailableError("action_access_removed");
+  return { user, binding };
+}
+
+type PreviewAuthority = (row: ScheduleRow, data: ScheduleInput) => void;
+
+function createPreviewAuthority(): PreviewAuthority {
+  // Reuse only complete outcomes within one synchronous list serialization.
+  // Execution and mutation paths always call scheduleAuthority afresh.
+  const outcomes = new Map<string, { error: unknown } | null>();
+  return (row, data) => {
+    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, data.action]);
+    const cached = outcomes.get(key);
+    if (cached !== undefined) {
+      if (cached !== null) throw cached.error;
+      return;
+    }
+    try {
+      scheduleAuthority(row, data);
+      outcomes.set(key, null);
+    } catch (error) {
+      outcomes.set(key, { error });
+      throw error;
+    }
+  };
+}
+
+function latestOperation(row: ScheduleRow): Operation | null {
+  if (!row.last_operation_id) return null;
+  try {
+    const job = getOperation(row.last_operation_id);
+    if (!job || job.serverId !== row.server_id || job.actorId !== row.owner_id ||
+      job.input.scheduleId !== row.id) return null;
+    const result = operationSchema.safeParse(publicOperation(job));
+    return result.success ? result.data : null;
+  } catch {
+    // Corrupt or unrelated history never exposes an operation's private state.
+    return null;
+  }
+}
+
+function publicSchedule(
+  row: ScheduleRow,
+  now = Date.now(),
+  checkAuthority: PreviewAuthority = scheduleAuthority,
+) {
+  const data = scheduleSchema.parse(JSON.parse(row.input_json));
+  let nextRunAt: number | null = null;
+  let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
+  if (data.enabled) {
+    try {
+      checkAuthority(row, data);
+      nextRunAt = nextScheduleRun(data, now, row.last_slot);
+      if (nextRunAt === null) nextRunUnavailableReason = "unavailable";
+    } catch (error) {
+      nextRunUnavailableReason = error instanceof ScheduleUnavailableError
+        ? error.reason : "unavailable";
+    }
+  }
   return {
-    ...scheduleSchema.parse(JSON.parse(row.input_json)),
+    ...data,
     id: row.id,
     serverId: row.server_id,
     ownerId: row.owner_id,
     lastResult: row.last_result,
+    lastOperation: latestOperation(row),
+    lastRunAt: row.last_run_at,
+    lastSlot: row.last_slot,
+    revision: row.revision,
+    nextRunAt,
+    nextRunUnavailableReason,
   };
 }
 export function listSchedules(actor: SessionUser, serverId: string) {
@@ -57,13 +197,11 @@ export function listSchedules(actor: SessionUser, serverId: string) {
     : getDatabase()
         .prepare(query)
         .all(serverId, current.id, MAX_SCHEDULES_PER_SERVER);
-  return (rows as unknown as ScheduleRow[]).map(publicSchedule);
+  const now = Date.now();
+  const checkAuthority = createPreviewAuthority();
+  return (rows as unknown as ScheduleRow[]).map((row) => publicSchedule(row, now, checkAuthority));
 }
-export function createSchedule(
-  actor: SessionUser,
-  serverId: string,
-  input: unknown,
-) {
+function assertPayloadSize(input: unknown): void {
   const inputBytes = new TextEncoder().encode(JSON.stringify(input) ?? "").byteLength;
   if (inputBytes > MAX_SCHEDULE_PAYLOAD_BYTES)
     throw new AppError(
@@ -71,6 +209,13 @@ export function createSchedule(
       413,
       `Schedule payloads cannot exceed ${MAX_SCHEDULE_PAYLOAD_BYTES} bytes`,
     );
+}
+export function createSchedule(
+  actor: SessionUser,
+  serverId: string,
+  input: unknown,
+) {
+  assertPayloadSize(input);
   const data = scheduleSchema.parse(input);
   assertServerCapability(actor, serverId, "schedules.manage");
   assertServerCapability(actor, serverId, actionCapability(data.action));
@@ -164,30 +309,105 @@ export function deleteSchedule(
     details: { scheduleId: id },
   });
 }
-export function scheduleSlot(input: ScheduleInput, now: number): string | null {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: input.timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const part = (type: string) =>
-    parts.find((p) => p.type === type)?.value ?? "";
-  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
-    part("weekday"),
-  );
-  if (
-    !input.days.includes(day) ||
-    `${part("hour")}:${part("minute")}` !== input.time
-  )
-    return null;
-  // No offset in the slot: repeated fall-back clock time runs once. Spring-forward
-  // gaps and missed slots are skipped; destructive actions are never caught up.
-  return `${part("year")}-${part("month")}-${part("day")}T${input.time}:${input.timezone}`;
+
+function mutateSchedule(
+  actor: SessionUser,
+  serverId: string,
+  id: string,
+  expectedRevision: number,
+  update: ScheduleInput | boolean,
+) {
+  assertServerCapability(actor, serverId, "schedules.manage");
+  const current = currentActor(actor)!;
+  const db = getDatabase();
+  let result: ScheduleRow;
+  let changed: boolean;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db
+      .prepare("SELECT * FROM schedules WHERE id=? AND server_id=?")
+      .get(id, serverId) as ScheduleRow | null;
+    if (!row || (current.role !== "admin" && row.owner_id !== current.id))
+      throw new AppError("NOT_FOUND", 404, "Schedule not found");
+    if (row.revision !== expectedRevision)
+      throw new AppError(
+        "SCHEDULE_CHANGED",
+        409,
+        "This schedule changed. Reload it before trying again.",
+      );
+    const previous = scheduleSchema.parse(JSON.parse(row.input_json));
+    const data = typeof update === "boolean"
+      ? { ...previous, enabled: update }
+      : update;
+    // Pausing must remain possible after the action grant or original binding
+    // has been revoked. Editing/resuming requires both requester and owner access.
+    if (update !== false) {
+      assertServerCapability(actor, serverId, actionCapability(data.action));
+      scheduleAuthority(row, data);
+    }
+    changed = previous.action !== data.action ||
+      previous.enabled !== data.enabled ||
+      previous.time !== data.time ||
+      previous.timezone !== data.timezone ||
+      previous.days.some((day) => !data.days.includes(day)) ||
+      data.days.some((day) => !previous.days.includes(day));
+    result = row;
+    if (changed) {
+      const inputJson = JSON.stringify(data);
+      // Keep the original binding baseline, consumed clock slot, and history.
+      // Every mutation invalidates work queued from an earlier configuration.
+      db.prepare("UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?")
+        .run(inputJson, id);
+      result = { ...row, input_json: inputJson, revision: row.revision + 1 };
+      writeAuditLog({
+        userId: current.id === "api-token" ? undefined : current.id,
+        action: typeof update === "boolean"
+          ? update ? "schedule.resumed" : "schedule.paused"
+          : "schedule.updated",
+        targetType: "server",
+        targetId: serverId,
+        details: { scheduleId: id, action: data.action, revision: result.revision },
+      }, { prune: false });
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Keep the original failure if SQLite has already rolled back.
+    }
+    throw error;
+  }
+  if (changed) {
+    try {
+      pruneAuditLogIfNeeded();
+    } catch {
+      logger.warn("Audit retention cleanup failed after schedule update; it will be retried");
+    }
+  }
+  return publicSchedule(result);
+}
+
+export function updateSchedule(
+  actor: SessionUser,
+  serverId: string,
+  id: string,
+  input: unknown,
+) {
+  assertPayloadSize(input);
+  const { revision, ...data } = updateScheduleRequestSchema.parse(input);
+  return mutateSchedule(actor, serverId, id, revision, data);
+}
+
+export function setScheduleEnabled(
+  actor: SessionUser,
+  serverId: string,
+  id: string,
+  input: unknown,
+) {
+  assertPayloadSize(input);
+  const { revision, enabled } = scheduleEnabledRequestSchema.parse(input);
+  return mutateSchedule(actor, serverId, id, revision, enabled);
 }
 export function runSchedules(now = Date.now()): void {
   const rows = getDatabase()
@@ -206,61 +426,53 @@ export function runSchedules(now = Date.now()): void {
       slot = scheduleSlot(data, now);
       configurationValid = true;
       if (!slot || slot === row.last_slot) continue;
-      getDatabase()
-        .prepare("UPDATE schedules SET last_slot=? WHERE id=?")
-        .run(slot, row.id);
-      const user = findUserById(row.owner_id);
-      if (
-        !user ||
-        user.disabled ||
-        !hasServerCapability(user, row.server_id, "schedules.manage") ||
-        !hasServerCapability(user, row.server_id, actionCapability(data.action))
-      )
-        throw new AppError(
-          "SCHEDULE_REVOKED",
-          403,
-          "Suspended: required access has been removed",
-        );
-      const binding = resolveServerBinding(row.server_id);
-      const original = getDatabase()
-        .prepare(
-          "SELECT binding_fingerprint FROM server_bindings WHERE server_id=? AND binding_revision=? AND accepted=1 ORDER BY id DESC LIMIT 1",
-        )
-        .get(row.server_id, row.binding_revision) as
-        | { binding_fingerprint: string }
-        | undefined;
-      if (
-        !original ||
-        original.binding_fingerprint !== binding.bindingFingerprint
-      )
-        throw new AppError(
-          "SCHEDULE_BINDING_CHANGED",
-          409,
-          "Suspended: server configuration changed; recreate this schedule after reviewing the server",
-        );
-      const op = enqueueOperation({
-        serverId: row.server_id,
-        actorId: user.id,
-        kind: data.action,
-        bindingRevision: binding.bindingRevision,
-        input: { scheduleId: row.id },
-        idempotencyKey: `schedule:${row.id}:${slot}`,
-      });
-      getDatabase()
-        .prepare("UPDATE schedules SET last_result=? WHERE id=?")
-        .run(`Queued operation ${op.id}`, row.id);
+      const db = getDatabase();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const { user, binding } = scheduleAuthority(row, data);
+        const op = enqueueOperation({
+          serverId: row.server_id,
+          actorId: user.id,
+          kind: data.action,
+          bindingRevision: binding.bindingRevision,
+          input: { scheduleId: row.id, scheduleRevision: row.revision },
+          idempotencyKey: `schedule:${row.id}:${slot}`,
+          deferAuditPrune: true,
+        });
+        // Queue and associate the same attempt atomically. Completing an older
+        // operation never changes this association or a newer attempt's result.
+        db.prepare(
+          "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=?",
+        ).run(slot, now, op.id, `Queued operation ${op.id}`, row.id);
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // Preserve the cause if SQLite already rolled the transaction back.
+        }
+        throw error;
+      }
+      try {
+        pruneAuditLogIfNeeded();
+      } catch {
+        logger.warn("Audit retention cleanup failed after scheduling; it will be retried");
+      }
     } catch (error) {
       const reason = !configurationValid
         ? "Suspended: saved schedule configuration is invalid; recreate this schedule"
-        : error instanceof AppError &&
-        (error.code === "SCHEDULE_REVOKED" ||
-          error.code === "SCHEDULE_BINDING_CHANGED")
+        : error instanceof ScheduleUnavailableError
           ? error.message
           : "Skipped: server state or a conflicting operation prevented this run";
       try {
-        getDatabase()
-          .prepare("UPDATE schedules SET last_result=? WHERE id=?")
-          .run(reason, row.id);
+        if (slot) {
+          getDatabase().prepare(
+            "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=?",
+          ).run(slot, now, reason, row.id);
+        } else {
+          getDatabase().prepare("UPDATE schedules SET last_result=? WHERE id=?")
+            .run(reason, row.id);
+        }
         if (!configurationValid && row.last_result !== reason)
           logger.warn("Saved schedule configuration is invalid; recreate the schedule", {
             scheduleId: row.id,

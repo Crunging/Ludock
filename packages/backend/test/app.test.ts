@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { serve, type Server } from "bun";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn } from "bun:test";
 import path from "node:path";
-import type { ServerGrantInput } from "@ludock/shared";
+import { scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
@@ -10,7 +10,7 @@ process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
 process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase }, { SetupWindow }, compose] =
+const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }] =
   await Promise.all([
     import("../src/app.js"),
     import("../src/docker.js"),
@@ -18,6 +18,7 @@ const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase }
     import("../src/database.js"),
     import("../src/auth.js"),
     import("../src/compose.js"),
+    import("../src/schedules.js"),
   ]);
 
 const docker = getDockerInstance();
@@ -666,6 +667,202 @@ describe("HTTP application", () => {
     );
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { ok: true });
+  });
+
+  it("edits and pauses schedules with revision checks and next-run responses", async () => {
+    const cookie = await setupAdministrator();
+    const collection = `/api/v1/servers/${managedServerId}/schedules`;
+    const input = {
+      action: "stop", enabled: true, time: "12:00", days: [1], timezone: "UTC",
+    };
+    const request = (url: string, method: string, body: unknown) => fetch(`${baseUrl}${url}`, {
+      method,
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const created = await request(collection, "POST", input);
+    assert.equal(created.status, 201);
+    const original = scheduleResponseSchema.parse(await created.json()).schedule;
+    assert.equal(original.revision, 1);
+    assert.equal(typeof original.nextRunAt, "number");
+    const resource = `${collection}/${original.id}`;
+
+    const edited = await request(resource, "PUT", {
+      ...input, time: "18:30", days: [2, 4], timezone: "America/Los_Angeles",
+      revision: original.revision,
+    });
+    assert.equal(edited.status, 200);
+    const updated = scheduleResponseSchema.parse(await edited.json()).schedule;
+    assert.equal(updated.id, original.id);
+    assert.equal(updated.ownerId, original.ownerId);
+    assert.equal(updated.time, "18:30");
+    assert.deepEqual(updated.days, [2, 4]);
+    assert.equal(updated.timezone, "America/Los_Angeles");
+    assert.equal(updated.revision, original.revision + 1);
+    assert.equal(typeof updated.nextRunAt, "number");
+
+    const stale = await request(resource, "PATCH", { enabled: false, revision: original.revision });
+    assert.equal(stale.status, 409);
+    const pausedResponse = await request(resource, "PATCH", { enabled: false, revision: updated.revision });
+    assert.equal(pausedResponse.status, 200);
+    const paused = scheduleResponseSchema.parse(await pausedResponse.json()).schedule;
+    assert.equal(paused.enabled, false);
+    assert.equal(paused.nextRunAt, null);
+    assert.equal(paused.revision, updated.revision + 1);
+    assert.equal(paused.time, updated.time);
+
+    const resumedResponse = await request(resource, "PATCH", { enabled: true, revision: paused.revision });
+    assert.equal(resumedResponse.status, 200);
+    const resumed = scheduleResponseSchema.parse(await resumedResponse.json()).schedule;
+    assert.equal(resumed.enabled, true);
+    assert.equal(resumed.revision, paused.revision + 1);
+    assert.equal(typeof resumed.nextRunAt, "number");
+    const listed = await authorizedFetch(collection);
+    assert.equal(listed.status, 200);
+    const schedules = schedulesResponseSchema.parse(await listed.json()).schedules;
+    assert.equal(schedules.length, 1);
+    assert.equal(schedules[0].revision, resumed.revision);
+    await assertAuditEntry(cookie, "schedule.updated", managedServerId);
+    await assertAuditEntry(cookie, "schedule.paused", managedServerId);
+    await assertAuditEntry(cookie, "schedule.resumed", managedServerId);
+    assert.equal(managedStartCalled, false);
+    assert.equal(managedStopCalled, false);
+  });
+
+  it("rejects unauthenticated and invalid schedule edits without changing the schedule", async () => {
+    const cookie = await setupAdministrator();
+    const collection = `/api/v1/servers/${managedServerId}/schedules`;
+    const input = {
+      action: "start", enabled: true, time: "12:00", days: [1], timezone: "UTC",
+    };
+    const headers = { Cookie: cookie, "Content-Type": "application/json" };
+    const created = await fetch(`${baseUrl}${collection}`, {
+      method: "POST", headers, body: JSON.stringify(input),
+    });
+    assert.equal(created.status, 201);
+    const original = scheduleResponseSchema.parse(await created.json()).schedule;
+    const url = `${baseUrl}${collection}/${original.id}`;
+    for (const [method, body] of [
+      ["PUT", { ...input, revision: 1 }],
+      ["PATCH", { enabled: false, revision: 1 }],
+    ] as const) {
+      const response = await fetch(url, {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 401);
+    }
+    for (const [method, body] of [
+      ["PUT", input],
+      ["PUT", { ...input, enabled: undefined, revision: 1 }],
+      ["PUT", { ...input, timezone: "Invalid/Timezone", revision: 1 }],
+      ["PUT", { ...input, ownerId: crypto.randomUUID(), revision: 1 }],
+      ["PATCH", { enabled: false }],
+      ["PATCH", { enabled: false, action: "stop", revision: 1 }],
+      ["PATCH", { enabled: "false", revision: 1 }],
+    ] as const) {
+      const response = await fetch(url, { method, headers, body: JSON.stringify(body) });
+      assert.equal(response.status, 400);
+    }
+    const oversized = await fetch(url, {
+      method: "PUT", headers,
+      body: JSON.stringify({ ...input, revision: 1, padding: "x".repeat(4096) }),
+    });
+    assert.equal(oversized.status, 413);
+    const listed = schedulesResponseSchema.parse(await (await authorizedFetch(collection)).json());
+    assert.equal(listed.schedules[0].revision, 1);
+    assert.equal(listed.schedules[0].enabled, true);
+    assert.equal(listed.schedules[0].action, "start");
+  });
+
+  it("creates paused schedules and serves the latest persisted run outcome", async () => {
+    const cookie = await setupAdministrator();
+    const collection = `/api/v1/servers/${managedServerId}/schedules`;
+    const headers = { Cookie: cookie, "Content-Type": "application/json" };
+    const due = Date.parse("2026-09-11T12:00:00Z");
+    const response = await fetch(`${baseUrl}${collection}`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        action: "start", enabled: false, time: "12:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
+      }),
+    });
+    assert.equal(response.status, 201);
+    const original = scheduleResponseSchema.parse(await response.json()).schedule;
+    assert.equal(original.nextRunAt, null);
+    assert.equal(original.nextRunUnavailableReason, null);
+    assert.equal(original.lastOperation, null);
+    assert.equal(original.lastRunAt, null);
+    const readSchedule = async () => {
+      const listed = await authorizedFetch(collection);
+      assert.equal(listed.status, 200);
+      return schedulesResponseSchema.parse(await listed.json()).schedules[0];
+    };
+    runSchedules(due);
+    assert.equal((await readSchedule()).lastOperation, null);
+    assert.equal(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count, 0);
+
+    const resumed = await fetch(`${baseUrl}${collection}/${original.id}`, {
+      method: "PATCH", headers,
+      body: JSON.stringify({ enabled: true, revision: original.revision }),
+    });
+    assert.equal(resumed.status, 200);
+    runSchedules(due);
+    const queued = await readSchedule();
+    assert.equal(queued.lastRunAt, due);
+    assert.equal(queued.lastOperation?.status, "queued");
+    assert.equal(queued.lastOperation?.serverId, managedServerId);
+    assert.ok(queued.lastOperation);
+    for (const key of ["actorId", "input", "recovery", "bindingRevision"])
+      assert.equal(key in queued.lastOperation, false);
+    for (const status of ["running", "succeeded", "failed", "interrupted"] as const) {
+      getDatabase().prepare("UPDATE operations SET status=?,phase=?,error=? WHERE id=?")
+        .run(status, status, status === "failed" ? "Fixture action failed" : null, queued.lastOperation.id);
+      const current = await readSchedule();
+      assert.equal(current.lastOperation?.status, status);
+      assert.equal(current.lastOperation?.id, queued.lastOperation.id);
+      assert.equal(current.lastRunAt, due);
+    }
+    getDatabase().prepare("UPDATE operations SET status='running' WHERE id=?").run(queued.lastOperation.id);
+    runSchedules(due + 86_400_000);
+    const skipped = await readSchedule();
+    assert.equal(skipped.lastOperation, null);
+    assert.equal(skipped.lastRunAt, due + 86_400_000);
+    assert.match(skipped.lastResult!, /^Skipped:/);
+    assert.equal(managedStartCalled, false);
+    assert.equal(managedStopCalled, false);
+  });
+
+  it("explains unavailable schedule previews while preserving schedule access boundaries", async () => {
+    const { id: ownerId, cookie } = await createViewerSession(await setupAdministrator());
+    const changeOwner = (disabled: boolean) => authorizedFetch(`/api/v1/users/${ownerId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "operator", disabled }),
+    });
+    assert.equal((await changeOwner(false)).status, 200);
+    await setServerGrants(ownerId, [{
+      serverId: managedServerId, capabilities: ["server.view", "schedules.manage", "server.start"],
+    }]);
+    const collection = `/api/v1/servers/${managedServerId}/schedules`;
+    const created = await fetch(`${baseUrl}${collection}`, {
+      method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start", enabled: true, time: "12:00", days: [1], timezone: "UTC" }),
+    });
+    assert.equal(created.status, 201);
+    assert.equal(scheduleResponseSchema.parse(await created.json()).schedule.nextRunUnavailableReason, null);
+    const readReason = async () => {
+      const response = await authorizedFetch(collection);
+      assert.equal(response.status, 200);
+      const [schedule] = schedulesResponseSchema.parse(await response.json()).schedules;
+      assert.equal(schedule.nextRunAt, null);
+      return schedule.nextRunUnavailableReason;
+    };
+    await setServerGrants(ownerId, [{ serverId: managedServerId, capabilities: ["server.view", "schedules.manage"] }]);
+    assert.equal(await readReason(), "action_access_removed");
+    await setServerGrants(ownerId, [{ serverId: managedServerId, capabilities: ["server.view"] }]);
+    assert.equal(await readReason(), "owner_access_removed");
+    assert.equal((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status, 403);
+    assert.equal((await changeOwner(true)).status, 200);
+    assert.equal(await readReason(), "owner_disabled");
+    assert.equal((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status, 401);
   });
 
   it("shows deployment root choices only to administrators without exposing other environment settings", async () => {

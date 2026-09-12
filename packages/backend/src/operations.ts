@@ -125,6 +125,8 @@ export function enqueueOperation(options: {
   bindingRevision: number;
   input?: Record<string, unknown>;
   idempotencyKey?: string;
+  /** The caller owns a transaction and prunes only after committing it. */
+  deferAuditPrune?: boolean;
 }): Operation {
   const input = JSON.stringify(options.input ?? {});
   const key = options.idempotencyKey
@@ -184,7 +186,7 @@ export function enqueueOperation(options: {
     targetType: "server",
     targetId: options.serverId,
     details: { operationId: id },
-  });
+  }, { prune: !options.deferAuditPrune });
   schedule();
   return publicOperation(getOperation(id)!);
 }
