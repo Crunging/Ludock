@@ -224,12 +224,6 @@
   .schedule-form .form-columns > label:last-child {
     grid-column: 1 / -1;
   }
-
-  .schedules-table .secondary-btn,
-  .schedule-form button,
-  .schedule-form .check-label {
-    min-height: 44px;
-  }
 }
 
 .schedule-activity-link {
@@ -245,6 +239,9 @@
 }
 
 @media (max-width: 520px), (pointer: coarse) {
+  .schedules-table .secondary-btn,
+  .schedule-form button,
+  .schedule-form .check-label,
   .schedule-activity-link {
     min-height: 44px;
   }

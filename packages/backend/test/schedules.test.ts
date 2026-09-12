@@ -230,6 +230,7 @@ describe("schedule authority", () => {
   });
   it("blocks revoked actions and records an actionable suspension", () => {
     createSchedule(friend, serverId, input);
+    assert.ok(listSchedules(friend, serverId)[0].nextRunAt);
     setServerGrant(
       friend.id,
       serverId,
@@ -245,6 +246,7 @@ describe("schedule authority", () => {
   });
   it("blocks disabled owners and removes schedules with deleted owners", () => {
     createSchedule(friend, serverId, input);
+    assert.ok(listSchedules(friend, serverId)[0].nextRunAt);
     updateUserAccess(friend.id, "operator", true);
     runSchedules(due);
     assert.equal(listOperations(serverId).length, 0);
@@ -267,6 +269,7 @@ describe("schedule authority", () => {
   });
   it("keeps schedules suspended after material data changes until explicitly recreated", () => {
     createSchedule(friend, serverId, input);
+    assert.ok(listSchedules(friend, serverId)[0].nextRunAt);
     const pending = reconcileServers([
       { ...observation, gameType: "factorio" },
     ])[0];
@@ -643,6 +646,57 @@ describe("schedule outcomes", () => {
 });
 
 describe("schedule preview availability reasons", () => {
+  it("bounds repeated authority reads to distinct owners, actions, and binding baselines", () => {
+    insertScheduleRows(1);
+    const owners = spyOn(database, "findUserById");
+    const bindings = spyOn(identity, "resolveServerBinding");
+    assert.ok(listSchedules(admin, serverId)[0].nextRunAt);
+    const singleOwnerReads = owners.mock.calls.filter(([id]) => id === friend.id).length;
+    const singleBindingReads = bindings.mock.calls.length;
+    assert.ok(singleOwnerReads > 0);
+    assert.ok(singleBindingReads > 0);
+
+    insertScheduleRows(MAX_SCHEDULES_PER_SERVER - 1);
+    owners.mockClear();
+    bindings.mockClear();
+    const schedules = listSchedules(admin, serverId);
+    assert.equal(schedules.length, MAX_SCHEDULES_PER_SERVER);
+    assert.ok(schedules.every((schedule) => schedule.nextRunAt !== null));
+    assert.equal(owners.mock.calls.filter(([id]) => id === friend.id).length, singleOwnerReads);
+    assert.equal(bindings.mock.calls.length, singleBindingReads);
+  });
+
+  it("keeps different owners, actions, and binding baselines independent within a list", () => {
+    const [available] = insertScheduleRows(1);
+    const [revokedOwner] = insertScheduleRows(1, { ownerId: other.id });
+    const [revokedAction] = insertScheduleRows(1, { data: { ...input, action: "stop" } });
+    const [changedBinding] = insertScheduleRows(1);
+    setServerGrant(other.id, serverId, ["server.view", "schedules.manage"], admin);
+    getDatabase().prepare("UPDATE schedules SET binding_revision=999 WHERE id=?").run(changedBinding);
+
+    const schedules = new Map(listSchedules(admin, serverId).map((schedule) => [schedule.id, schedule]));
+    assert.ok(schedules.get(available)!.nextRunAt);
+    assert.equal(schedules.get(available)!.nextRunUnavailableReason, null);
+    assert.equal(schedules.get(revokedOwner)!.nextRunUnavailableReason, "action_access_removed");
+    assert.equal(schedules.get(revokedAction)!.nextRunUnavailableReason, "action_access_removed");
+    assert.equal(schedules.get(changedBinding)!.nextRunUnavailableReason, "binding_changed");
+  });
+
+  it("reuses unavailable outcomes only within the current list request", () => {
+    insertScheduleRows(MAX_SCHEDULES_PER_SERVER);
+    updateUserAccess(friend.id, "operator", true);
+    const owners = spyOn(database, "findUserById");
+    assert.ok(listSchedules(admin, serverId)
+      .every((schedule) => schedule.nextRunUnavailableReason === "owner_disabled"));
+    assert.equal(owners.mock.calls.filter(([id]) => id === friend.id).length, 1);
+
+    updateUserAccess(friend.id, "operator", false);
+    assert.ok(listSchedules(admin, serverId).every((schedule) => schedule.nextRunAt !== null));
+    setServerGrant(friend.id, serverId, ["server.view", "schedules.manage"], admin);
+    assert.ok(listSchedules(admin, serverId)
+      .every((schedule) => schedule.nextRunUnavailableReason === "action_access_removed"));
+  });
+
   it("distinguishes missing schedule-management grants, action grants, and disabled owners", () => {
     createSchedule(friend, serverId, input);
     setServerGrant(friend.id, serverId, ["server.view", "schedules.manage"], admin);

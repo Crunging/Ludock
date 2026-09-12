@@ -53,7 +53,7 @@ async function mockSchedules(page: Page, enabled = true, options: {
     nextRunAt: enabled && !options.nextRunUnavailableReason ? NEXT_RUN : null,
     nextRunUnavailableReason: options.nextRunUnavailableReason ?? null,
   });
-  const writes: { method: string; body: unknown }[] = [];
+  const writes: { method: string; body: unknown; expectedRevision?: number }[] = [];
   const operationReads: string[] = [];
   let rejectNextEdit = false;
   await page.clock.setFixedTime(NOW);
@@ -90,7 +90,7 @@ async function mockSchedules(page: Page, enabled = true, options: {
     }
     if (pathname.endsWith(`/schedules/${SCHEDULE_ID}`) && ["PUT", "PATCH"].includes(method)) {
       const body = request.postDataJSON() as Record<string, unknown>;
-      writes.push({ method, body });
+      writes.push({ method, body, expectedRevision: schedule.revision });
       if (rejectNextEdit && method === "PUT") {
         rejectNextEdit = false;
         await route.fulfill({
@@ -99,7 +99,6 @@ async function mockSchedules(page: Page, enabled = true, options: {
         });
         return;
       }
-      expect(body.revision).toBe(schedule.revision);
       if (method === "PUT") {
         const input = updateScheduleRequestSchema.parse(body);
         schedule = savedScheduleSchema.parse({
@@ -155,6 +154,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   await expect(page.getByRole("heading", { name: "Add schedule", exact: true })).toBeVisible();
   expect(fixture.writes).toEqual([{
     method: "PUT",
+    expectedRevision: 1,
     body: {
       action: "restart", enabled: true, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6],
       timezone: "UTC", revision: 1,
@@ -166,7 +166,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   await expect(row.getByRole("cell").nth(2)).toHaveText("Paused");
   await expect(row.getByRole("cell").nth(4)).toContainText("Failed");
   await expect(row.getByRole("cell").nth(3)).not.toContainText("UTC");
-  expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: false, revision: 2 } });
+  expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: false, revision: 2 }, expectedRevision: 2 });
 
   const resume = row.getByRole("button", { name: "Resume", exact: true });
   await expect(resume).toBeEnabled();
@@ -174,7 +174,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   await page.keyboard.press("Enter");
   await expect(row.getByRole("cell", { name: "Enabled", exact: true })).toBeVisible();
   await expect(row.getByRole("cell").nth(3)).toContainText("UTC");
-  expect(fixture.writes[2]).toEqual({ method: "PATCH", body: { enabled: true, revision: 3 } });
+  expect(fixture.writes[2]).toEqual({ method: "PATCH", body: { enabled: true, revision: 3 }, expectedRevision: 3 });
 });
 
 for (const width of [320, 390]) {
@@ -230,6 +230,7 @@ test("invalid and rejected schedule edits preserve the draft for correction", as
   await expect(page.getByLabel("Time", { exact: true })).toHaveValue("14:45");
   await expect(timezone).toHaveValue("UTC");
   expect(fixture.writes).toHaveLength(1);
+  expect(fixture.writes[0]).toMatchObject({ body: { revision: 1 }, expectedRevision: 1 });
 });
 
 test("a new schedule can be created paused and only starts running after explicit resume", async ({ app, page }, testInfo) => {
@@ -260,7 +261,24 @@ test("a new schedule can be created paused and only starts running after explici
   await row.getByRole("button", { name: "Resume", exact: true }).click();
   await expect(row.getByRole("cell").nth(2)).toHaveText("Enabled");
   await expect(row.getByRole("cell").nth(3)).toContainText("14:45");
-  expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: true, revision: 1 } });
+  expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: true, revision: 1 }, expectedRevision: 1 });
+});
+
+test.describe("schedule controls on touch screens", () => {
+  test.use({ hasTouch: true, viewport: { width: 820, height: 1180 } });
+
+  test("row and form actions retain usable touch targets on wider screens", async ({ app, page }) => {
+    await mockSchedules(page);
+    await app.open(`/servers/${RUNNING_ID}`);
+    await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    const controls = page.locator(".schedules-table .secondary-btn, .schedule-activity-link, .schedule-form button, .schedule-form .check-label");
+    await expect(controls.first()).toBeVisible();
+    const heights = await controls.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+    expect(heights.length).toBeGreaterThan(0);
+    for (const height of heights) expect(height).toBeGreaterThanOrEqual(44);
+  });
 });
 
 test("a scheduled result opens and focuses its operation even when it is absent from recent activity", async ({ app, page }, testInfo) => {

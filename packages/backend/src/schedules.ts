@@ -117,6 +117,29 @@ function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
   return { user, binding };
 }
 
+type PreviewAuthority = (row: ScheduleRow, data: ScheduleInput) => void;
+
+function createPreviewAuthority(): PreviewAuthority {
+  // Reuse only complete outcomes within one synchronous list serialization.
+  // Execution and mutation paths always call scheduleAuthority afresh.
+  const outcomes = new Map<string, { error: unknown } | null>();
+  return (row, data) => {
+    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, data.action]);
+    const cached = outcomes.get(key);
+    if (cached !== undefined) {
+      if (cached !== null) throw cached.error;
+      return;
+    }
+    try {
+      scheduleAuthority(row, data);
+      outcomes.set(key, null);
+    } catch (error) {
+      outcomes.set(key, { error });
+      throw error;
+    }
+  };
+}
+
 function latestOperation(row: ScheduleRow): Operation | null {
   if (!row.last_operation_id) return null;
   try {
@@ -131,13 +154,17 @@ function latestOperation(row: ScheduleRow): Operation | null {
   }
 }
 
-function publicSchedule(row: ScheduleRow, now = Date.now()) {
+function publicSchedule(
+  row: ScheduleRow,
+  now = Date.now(),
+  checkAuthority: PreviewAuthority = scheduleAuthority,
+) {
   const data = scheduleSchema.parse(JSON.parse(row.input_json));
   let nextRunAt: number | null = null;
   let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
   if (data.enabled) {
     try {
-      scheduleAuthority(row, data);
+      checkAuthority(row, data);
       nextRunAt = nextScheduleRun(data, now, row.last_slot);
       if (nextRunAt === null) nextRunUnavailableReason = "unavailable";
     } catch (error) {
@@ -171,7 +198,8 @@ export function listSchedules(actor: SessionUser, serverId: string) {
         .prepare(query)
         .all(serverId, current.id, MAX_SCHEDULES_PER_SERVER);
   const now = Date.now();
-  return (rows as unknown as ScheduleRow[]).map((row) => publicSchedule(row, now));
+  const checkAuthority = createPreviewAuthority();
+  return (rows as unknown as ScheduleRow[]).map((row) => publicSchedule(row, now, checkAuthority));
 }
 function assertPayloadSize(input: unknown): void {
   const inputBytes = new TextEncoder().encode(JSON.stringify(input) ?? "").byteLength;
