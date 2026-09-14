@@ -35,15 +35,9 @@ of 32–128 characters before the first start, for example with
 `openssl rand -hex 32`. A configured code is not printed. Remove the
 setting after the administrator exists; setup codes cannot reopen or replace a
 completed installation. Do not place a setup code in a URL, Compose label, or
-support message. Twenty incorrect or missing codes block that source for the
-remaining setup window. Restarting opens a new window without carrying over
-the previous source limit.
-
-Sign-in attempts are limited by source and account/source pair. Repeated failures
-against one account from different sources also introduce a short progressive
-cooldown, beginning after 20 failures and capped at five seconds. Rejected retries
-do not extend it, and a successful sign-in clears it. These limits do not replace
-a strong password or network access restrictions.
+support message. Repeated setup failures block that source for the remaining
+setup window; restart Ludock to reopen it. Sign-in failures are also throttled;
+wait before retrying.
 
 Use HTTPS for remote access. A reverse proxy must preserve the public host,
 forward the external protocol, and support WebSocket upgrades. Browser API
@@ -147,13 +141,10 @@ refreshes; opening another folder or root clears the search and keeps the sort.
 Use **Clear filter** when a filter hides the entry you need. Searching does not
 scan subfolders.
 
-Every file operation uses a temporary digest-pinned Bun 1 Alpine helper, whether the
-game is running or stopped. It mounts only approved data, has no network, uses a
-read-only root filesystem and `no-new-privileges`, drops capabilities, and adds
-only required data-access capabilities. Helpers run as UID 0 to access game
-files; this does not remove the Docker-host trust requirement. File requests
-revalidate their paths and mount bindings. Stop a game before manually replacing
-an active world or related configuration files.
+File access works while games are running or stopped through temporary helpers
+that mount only approved data. Helpers have no network and run as UID 0 to access
+game files; use only trusted helper images. Stop a game before manually replacing
+an active world or its configuration.
 
 Approved nested data mounts remain accessible through their parent file root.
 Excluded nested mounts are hidden and cannot be traversed. Downloading, deleting,
@@ -173,9 +164,7 @@ Ordinary file commands have a 55-second limit. Temporary file helpers are remove
 after use and automatically expire after 35 minutes if Ludock is interrupted.
 Their non-job mount validators also expire and remove themselves.
 
-Bind mounts also require a private, read-only host validator. It checks only
-source-directory metadata and holds the verified directory open while the scoped
-helper runs; file endpoints cannot access the validator. Symlinked source paths,
+Bind mounts require source validation on the Docker host. Symlinked source paths,
 Docker Desktop host aliases, and hosts without recursive read-only bind support
 can make bind access unavailable. Named volumes must use the local driver without
 host-remapping options.
@@ -185,11 +174,12 @@ Ludock release. Ludock pulls that exact image when missing and can reuse its
 local cache. Updating Ludock adopts any newly reviewed helper digest; pulling a
 floating tag alone does not change the helper selected by an existing release.
 
-A custom `FILE_HELPER_IMAGE` must include its trusted `@sha256:` manifest digest,
-be available for the Docker host's architecture, and supply Bun 1 (minimum 1.4.2),
-`/bin/sh`, and `sleep`, and run with Linux `/proc/self/fd` support; a plain Alpine
-image is insufficient. Validate overrides on both architectures before
-distributing them.
+A custom `FILE_HELPER_IMAGE` must include its trusted `@sha256:` manifest digest
+and support the Docker host's architecture. It needs Bun on the major and minimum
+version specified by [`.bun-version`](../.bun-version) and
+[`package.json`](../package.json), `/bin/sh`, `sleep`, and Linux `/proc/self/fd`;
+a plain Alpine image is insufficient. Validate overrides on both architectures
+before distributing them.
 
 ## Configure backups
 
@@ -221,22 +211,16 @@ are entered in GiB and accept decimals. Ludock verifies that the destination
 is actually mounted into its container and does not overlap game data. Set
 `LUDOCK_SELF_CONTAINER` if a custom hostname prevents self-inspection.
 
-A backup:
+Backups stop the server throughout copying and restore its previous running state
+after success or recoverable failure. Initially stopped servers remain stopped.
+The archive and checksum are validated before completion; retention then removes
+older backups, preserving any backup selected for a restore.
 
-1. Locks the server, project, shared data roots, and backup storage.
-2. Records whether the server was running, stops it, and verifies stopped state.
-3. Rejects known running containers that can write the same roots, and checks for
-   external starts or replacements during the copy.
-4. Copies selected directory roots to a temporary tar archive, validates entries
-   and SHA-256, then finalizes the archive and metadata.
-5. Prunes older backups after a successful new backup. The backup currently
-   selected for a restore is retained.
-6. Restores the previous running state after success or recoverable failure.
-   Initially stopped servers remain stopped.
-
-There is no live-backup option. A stop that required forced termination (exit 137 or OOM termination) rejects
-the backup; check shutdown behavior for each game.
-Ludock cannot lock Watchtower, external Compose invocations, or other writers.
+There is no live-backup option. Forced termination (exit 137 or OOM termination)
+rejects the backup; check each game's shutdown behavior. Known running shared
+writers prevent copying, and external starts or replacements invalidate the
+backup. Ludock coordinates conflicting work within the panel but cannot lock
+Watchtower, external Compose invocations, or other writers.
 
 Space is required for the new archive *before* retention removes old archives.
 A full global limit can therefore require manual archive deletion or a higher
@@ -253,9 +237,9 @@ to suitable data directories when necessary.
 
 Archives preserve ordinary permission bits, UID/GID ownership, and modification
 times. ACLs, extended attributes, and sparse-file layout are not preserved.
-Backup archives and Ludock's database should
-be protected together: the database holds the binding, root, and checksum
-metadata used for restoration. There is no arbitrary archive-import feature.
+Backup archives and Ludock's database should be protected together: the database
+holds the binding, root, and checksum metadata used for restoration. There is no
+arbitrary archive-import feature.
 
 ## Restore and interrupted operations
 
@@ -315,10 +299,8 @@ If the original manager used paths that do not exist on the Docker host, or
 Docker has no usable source metadata, update through that manager. Ludock cannot
 recover shell-only interpolation variables from the original deployment.
 
-Ludock preserves original source paths in an internal container label when
-it recreates a service, since Compose’s own labels then refer to the temporary
-snapshot. The label records source locations, never file contents, and grants no file
-access. Source files remain unchanged. Each source file has a 2 MiB limit.
+Original source paths survive Ludock recreations, and source files remain
+unchanged. Each source file has a 2 MiB limit.
 
 Supported source input is deliberately constrained:
 
@@ -336,10 +318,9 @@ Supported source input is deliberately constrained:
   confirmation or during execution abort that operation; retry the update with
   the current source.
 
-Ludock executes argument arrays with a restricted environment and does not log
-raw resolved configuration or CLI errors containing secrets. Private registry
-access may use a dedicated read-only `LUDOCK_DOCKER_CONFIG` mount; do not expose
-that directory as a game file root.
+For private registries, use a dedicated read-only `LUDOCK_DOCKER_CONFIG` mount;
+do not expose that directory as a game file root. Resolved configuration and
+secret-bearing CLI errors are not returned to the browser or application logs.
 
 **Update server** pulls the configured image, optionally takes a stopped-server
 backup, and recreates the selected service with dependency recreation, builds,
@@ -377,8 +358,6 @@ access, identity, and operation checks when that time arrives.
 including queued, running, succeeded, failed, and interrupted work. Choose
 **View activity** to inspect that operation's progress or error. A skipped or
 suspended attempt shows its reason instead of an older operation's outcome.
-Existing records retain their available history; a missing historical run time
-is not reconstructed from the current clock.
 
 An unavailable next run explains whether the owner is disabled, required access
 is missing, or the server binding needs attention. Follow the displayed next step:
@@ -408,6 +387,8 @@ without preventing other schedules from running. Application logs identify the
 affected schedule and warn if restored data exceeds the global limit; schedules
 beyond that limit are not evaluated.
 
+### Availability alerts
+
 Availability is disabled by default. When enabled, the server is expected to
 be available 24/7, with a default two-minute failure grace period. Current
 integrations use Docker health when supplied or running state; this does not
@@ -415,6 +396,8 @@ prove that players can connect. Maintenance pauses monitoring. Ludock-initiated
 stops and active operations suppress alerts. An intentionally stopped server
 stays suppressed until observed running again. Loss of Docker connectivity is
 reported as an inability to verify availability, without replacing identities.
+
+### Discord notifications
 
 Configure Discord under Settings, then enable monitoring per server. Discord
 webhooks are write-only; blank replacement input preserves the saved URL.
@@ -425,6 +408,8 @@ attempts. A process interruption after delivery but before acknowledgement can
 still result in a repeated message. There is no image-update-available watcher.
 
 ## Application backup, logs, and account recovery
+
+### Back up application data
 
 Stop Ludock before copying its application database and associated files. Include
 the entire `.identity-key` directory beside the database (normally
@@ -442,6 +427,8 @@ docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data.back
 docker compose start ludock
 ```
 
+### Inspect logs
+
 Use **Diagnostics**, **Audit log**, and **Ludock logs** for administrator-only
 inspection. `docker compose logs --follow --tail 200 ludock` also shows backend
 logs. Use `LOG_LEVEL=debug` temporarily; credentials and command contents should
@@ -453,6 +440,8 @@ context; the count shows matches out of the current buffer. **Clear filters**
 restores the full view. Turn off **Follow latest** to read older output without
 scrolling to new entries. **Pause** stops fetching new entries; **Refresh** still
 fetches on demand. Turning **Follow latest** back on scrolls to the latest match.
+
+### Recover an administrator account
 
 To recover an existing administrator password, securely set and export
 `LUDOCK_RECOVERY_PASSWORD` in the shell without putting the value in command
@@ -476,6 +465,9 @@ UUIDs. The optional administrator API token uses `Authorization: Bearer …`; do
 not place credentials in URLs. Browser clients use their session cookie.
 
 Core resources include servers, per-server files/backups/restores/schedules/
-availability/operations/updates, Compose projects, notifications, diagnostics,
-and administrator-managed `/users/:userId/server-grants`. Long-running mutations
-return an operation; poll its authorized resource for the actual outcome.
+availability/updates, notifications, diagnostics, and administrator-managed
+`/users/:userId/server-grants`. Compose update capability is exposed through
+`/servers/:id/update-capability`; updates use `/servers/:id/updates`. There is no
+Compose project registration API. Long-running mutations return an operation;
+poll `/operations/:id` for its authorized outcome or `/servers/:id/operations`
+for the server's operation history.

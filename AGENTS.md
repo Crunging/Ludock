@@ -58,8 +58,8 @@ shared boundaries when working in parallel.
 ## Local development and fixtures
 
 - Use the latest stable Bun 1 release; `.bun-version` selects the major and
-  `package.json` declares the minimum. Install with `bun install --frozen-lockfile`
-  and start with `bun run dev`. Use the printed URLs and state path.
+  `package.json` declares the minimum. Follow [development setup](./docs/TESTING.md#development)
+  and use the runner's printed URLs and state path.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.
@@ -67,8 +67,6 @@ shared boundaries when working in parallel.
   only resources you created. Do not put real credentials in fixtures.
 - Stop your own instance with Ctrl+C or its captured PID. Do not kill by broad
   process-name matching or delete data to resolve locks.
-
-See [docs/TESTING.md](./docs/TESTING.md#development) for setup, overrides, and lock recovery.
 
 ## Dependencies and pins
 
@@ -82,13 +80,8 @@ Update `bun.lock` with dependency changes. Pin GitHub Actions to full upstream
 commit SHAs and runtime images to verified multi-platform manifest digests, with
 readable version tags/comments. Keep the Bun image reference identical in
 `Dockerfile` and `packages/backend/src/runtime-images.ts`, on the major in
-`.bun-version`. Inspect updates with `bun outdated --recursive`; use
-`bun update --recursive` for compatible updates and review upstream migration
-notes for major upgrades. Run the affected checks after updating the lockfile.
-Resolve annotated action tags to their peeled commit (`^{}`). Verify image
-indexes with `docker buildx imagetools inspect` for both `linux/amd64` and
-`linux/arm64`, and update the Compose fixture's expected Alpine digest together
-with the build pin. `docker build --pull` checks pinned artifacts, not newer tags.
+`.bun-version`. Follow the [dependency and image update procedure](./docs/TESTING.md#dependency-and-image-updates)
+for registry checks, migration review, pin verification, and validation.
 
 `tar-stream` stays on 3.2.0 because 3.2.1 has incompatible header and stream types;
 remove the constraint when the archive integration type-checks against a
@@ -96,23 +89,17 @@ compatible release.
 
 ## Verification
 
-- Check affected entry points, permissions, and failure paths, including
-  scheduled work that shares the behavior.
-- Run focused tests, lint, and type checks for affected code. Test meaningful
-  behavior rather than implementation details. Do not rerun successful checks
-  unless something relevant changed.
+- Run focused tests, lint, and type checks for affected code, covering entry
+  points, permissions, failure paths, and scheduled work that shares the behavior.
+  Test meaningful behavior; rerun successful checks only after relevant changes.
 - Documentation-only edits need content, link, and diff checks, not application
   tests or container builds.
-- Use `bun run check` for broad changes or integration concerns.
-- Run relevant browser checks after building the frontend for interaction changes.
-- Build the image when an image/runtime change needs local validation. Validate
-  Compose configuration changes with `docker compose config`. Check affected
-  runtime/helper behavior on both `linux/amd64` and `linux/arm64` when architecture
-  matters; CI and release validation cover the full matrix.
-- Report what ran and any material gaps. [docs/TESTING.md](./docs/TESTING.md#checks) has check
-  commands; [docs/TESTING.md](./docs/TESTING.md) covers feature-specific failure,
-  recovery, permission, and platform scenarios. Consult the relevant sections
-  when changing those features.
+- Use `bun run check` for broad changes or integration concerns; run browser
+  checks after building for interaction changes. Build and check changed runtime
+  images, validate both supported architectures when relevant, and check Compose
+  edits with `docker compose config`.
+- Consult the affected [testing scenarios](./docs/TESTING.md) and report what ran
+  and any material gaps. CI and release validation cover the full platform matrix.
 
 ## Commits and work artifacts
 
@@ -157,7 +144,6 @@ Favor readable tables, compact actions, clear status, and obvious next steps.
 Distinguish dangerous actions from ordinary controls. Avoid promotional copy,
 ornamental gradients, decorative metrics, excessive cards, and redundant badges.
 
-Use the existing four-tile Ludock mark and shared accent tokens. The inline mark
-is `LudockMark.tsx`; `public/ludock-app.svg` is the source for the Apple touch
-icon, and `public/ludock-mark.svg` is the standalone vector. Keep the solid
-favicon variant legible at 16px and status colors distinct from action colors.
+Use the existing four-tile Ludock mark and shared accent tokens. Follow
+[docs/BRAND.md](./docs/BRAND.md) for artwork sources, favicon legibility, and
+the distinction between action and status colors.

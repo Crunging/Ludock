@@ -73,6 +73,24 @@ runtime/helper behavior on both `linux/amd64` and `linux/arm64`. Mocked tests do
 not establish live-game compatibility. Use `docker compose config` for Compose
 edits; documentation-only edits need link and diff checks.
 
+## Dependency and image updates
+
+Follow the scope and pin policy in [AGENTS.md](../AGENTS.md#dependencies-and-pins).
+Inspect available versions with `bun outdated --recursive`; use
+`bun update --recursive` for compatible updates. Review upstream migration notes
+before major upgrades, retain the documented `tar-stream` constraint, and run
+affected checks after updating `bun.lock`. Use `bun audit` for known dependency
+vulnerabilities.
+
+Resolve GitHub Actions tags to full upstream commits, peeling annotated tags
+with `^{}`. Verify runtime image indexes with `docker buildx imagetools inspect`
+for both `linux/amd64` and `linux/arm64`. Keep the Bun image reference identical
+in `Dockerfile` and `packages/backend/src/runtime-images.ts`, and update the
+Compose fixture's expected Alpine digest with the build pin. Readable tags or
+comments should identify pinned versions. `docker build --pull` validates the
+pinned artifacts; it does not check for newer tags. Validate changed images using
+the platform checks below.
+
 ## Docker and architecture validation
 
 Validate both `linux/amd64` and `linux/arm64` on their corresponding CI runners
@@ -219,6 +237,10 @@ absolute paths on the Docker host and inside Ludock.
   materially changed data bindings suspend them until recreated after review.
 - Verify explicit time zones, weekday selection, repeated fall-back time running
   once, and skipped spring-forward/missed times. No catch-up destructive runs.
+- Editing or pausing invalidates queued work under the old revision; stale edits
+  require reviewing current settings. Pause/resume changes only the enabled state.
+  Creating a paused schedule never queues a due run. The last result follows its
+  operation through completion/recovery; a later skipped attempt supersedes it.
 - Monitoring is off by default. After enabling it, emit one outage after grace
   and one recovery. Docker health `starting` is not ready.
 - Ludock stops, backup/restore/update operations, post-operation grace, and
@@ -255,86 +277,61 @@ absolute paths on the Docker host and inside Ludock.
 
 ### Frontend and operational visibility
 
-- Server lists use readable rows, compact controls, useful empty/error states,
-  and keyboard-accessible actions; no permission is inferred from role alone.
-- State and port columns align with their headings across running and stopped
-  rows. Check widths around the content-width breakpoint, including wrapped
-  actions and names; narrow layouts retain labeled ports without page overflow.
-- Search and exact-state filters combine, report the visible count, and provide
-  a clear-filters action when no servers match. A refresh does not reset filters.
-- Returning from Files or Console restores the selected detail tab; returning to
-  Servers restores the list filters. Sign-out clears these in-memory choices.
-  A late operation response from a page that was left cannot change the new
-  page's tab.
-- Back/forward navigation preserves those same choices. Sign-in at a direct
-  server link opens the requested page. Unknown or malformed routes return to
-  Servers, and restricted accounts never mount or fetch administrator-only pages.
-- A failed deferred page download shows recovery controls while navigation and
-  remembered filters remain available. Reloading the document retries the failed
-  download; the fallback does not expose raw errors or module paths.
+Component regressions live in [frontend tests](../packages/frontend/test);
+[desktop/mobile fixtures](../packages/frontend/e2e) cover browser interactions.
+For affected flows, check the following together with their feature scenarios above:
+
+- At 320px and 390px, navigation, forms, tables, file controls, and console input
+  remain usable without page overflow. Server state/port columns align at desktop
+  breakpoints; narrow rows retain labels. Touch targets are at least 44px and text
+  inputs avoid zoom. Check the favicon at 16px and contrast on permitted/restricted views.
+- Server search and state filters combine, show matching counts, and survive
+  refresh. Empty results offer clear-filters recovery. Returning from Files or
+  Console and using back/forward preserves detail tabs and list filters; sign-out
+  clears them. Late responses cannot change a newly selected tab.
+- Sign-in at a direct server link continues to that page. Unknown or malformed
+  client routes return to Servers; restricted users never mount or fetch admin
+  pages. A failed page download preserves navigation and filters, offers explicit
+  reload, and hides raw module errors.
 - Disconnected lists label retained data as stale and disable lifecycle actions.
-  Every live connection refreshes the authorized snapshot before controls resume;
-  denied access hides cached rows and requires revalidation.
-- More actions support Tab, Escape, and outside dismissal. Stop and Restart name
-  the server in a modal confirmation; Cancel has initial focus, Tab cannot enter
-  the page behind the dialog, and dismissal restores focus. No request occurs before confirmation.
-  A restart-only grant remains usable without a stop grant.
-- Detail tabs have one tab stop, support Arrow keys/Home/End, and reference their
-  panels. Switching tabs preserves drafts; action-driven changes move focus into
-  the new panel when the triggering control disappears.
-- Console modes support keyboard navigation and preserve separate command drafts
-  through connection interruptions. Sending requires fresh access; failed sends
-  keep their draft, and reconnecting never resends a command automatically.
-- Changing a file root or folder hides old entries and ignores obsolete reads.
-  Filename filtering applies only to the loaded folder, retains its query on
-  refresh, and clears it on folder/root navigation while preserving sort order.
-  Folders remain first for every sort direction; missing metadata has stable
-  placement and matching counts never describe stale entries.
-  File dialogs name the server and folder, retain drafts after ordinary errors,
-  and require a new confirmation after reconciling an uncertain write result.
-  Partial upload failures remain visible after refresh; canceling stops the
-  remaining batch and explains that data already written is not rolled back.
-- Ludock log search combines with exact severity and component filters over the
-  current buffer. Selected components survive buffer rollover and restarts;
-  denied access clears cached entries and component names. Disabling Follow
-  latest preserves scroll position while polling continues, and Pause stops
-  polling independently. Resuming never replaces newer filter input.
-- Activity filters survive refreshes and tab changes without altering operation
-  locks. A notice keeps hidden active work visible and reachable, View progress
-  reveals it, and schedule-linked operation details remain outside the filters.
-- At 320px and 390px widths, navigation can scroll, server actions wrap, forms
-  fit, and data tables remain usable. Console input and file controls do not
-  overflow. Touch actions remain at least 44px tall and text inputs avoid zoom.
-- The four-tile Ludock mark appears in navigation and authentication screens.
-  Check the solid favicon at 16px on light and dark browser chrome. Primary
-  controls, placeholder text, focus rings, and permission-limited views stay clear.
-- Grant presets show the actual selected capabilities. Backup downtime, restore
-  data replacement, force recreation, and the meaning of image-current results
-  are explicit in the relevant flow.
-- Failed settings or grant reads disable saving until a successful retry. A
-  pending save cannot erase a newer draft. Changed roles, bindings, and operations
-  invalidate obsolete action confirmations.
-- Schedule edits preserve drafts across tabs and refreshes. Pause/resume changes
-  only the enabled state, and the schedule's state remains separate from its last
-  result. Next-run previews use the chosen timezone, skip daylight-saving gaps,
-  and do not repeat consumed fall-back slots. A stale edit requires reviewing the
-  latest revision; queued work from an edited or paused revision cannot dispatch.
-- Creating a paused schedule never queues a due run. Last-run status follows the
-  persisted operation through completion or interruption, while a later skipped
-  attempt supersedes an older result. View activity opens the selected operation
-  even outside the recent list, with scoped access and obsolete-response guards.
-  Unavailable previews explain disabled owners, missing grants, and changed
-  bindings without exposing internal diagnostics.
-- Backup storage fields allow clearing and typing decimal GiB values without
-  changing them mid-edit. Saving untouched settings preserves exact stored sizes;
-  a zero free-space reserve remains valid. File and backup sizes use consistent
-  units.
+  Every connection refreshes authority before controls resume. Denied access
+  hides cached data and requires revalidation.
+- More actions support Tab, Escape, and outside dismissal. Stop/Restart dialogs
+  name the server, initially focus Cancel, trap focus, restore the trigger, and
+  send no request before confirmation. A restart-only grant remains usable.
+- Detail tabs support a single tab stop, Arrow keys, Home/End, and linked panels.
+  Drafts survive tab switches; action-driven changes focus the new panel when
+  their trigger disappears. Console modes support keyboard switching and preserve
+  separate drafts through interruptions; failed sends retain input and reconnect
+  never resends commands.
+- Changing file roots/folders hides old entries and ignores obsolete reads.
+  Filename filters persist on refresh and clear on navigation; sorting persists,
+  keeps folders first, and handles missing metadata consistently. Dialogs name
+  the server/folder, preserve drafts after ordinary failures, and require fresh
+  confirmation after uncertain writes. Cancelling uploads stops the remaining
+  batch; already completed files and partial failures remain visible.
+- Log text, severity, and component filters apply to the current buffer, with
+  selections surviving rollover/restart. Revocation clears entries and component
+  names. Follow controls scrolling independently of Pause; resuming preserves
+  newer input. Audit/log views remain administrator-only and redacted, preserving
+  actor and server attribution.
+- Activity filters survive refresh/tab changes without unlocking controls.
+  Hidden active work stays reachable, and schedule-linked details can open
+  outside recent-history filters. Display persisted phases and outcomes.
+- Grant presets show actual capabilities. Backup downtime, restore replacement,
+  force recreation, and image-current results are explicit. Failed settings/grant
+  reads block saving; successful saves clear only submitted drafts. Changed roles,
+  bindings, or operations invalidate obsolete confirmations.
+- Schedule drafts survive tabs/refreshes. Paused previews explain when the schedule
+  would run; unavailable previews explain the owner, grant, or binding problem.
+  Last result stays separate from current schedule state, and View activity opens
+  the selected operation with scoped access and obsolete-response protection.
+- Backup fields accept clearing and decimal GiB input without mid-edit rewriting.
+  Untouched settings preserve exact stored sizes; zero reserve remains valid.
+  File and backup sizes use consistent units.
 - Late session reads cannot restore a signed-out account. Failed sign-out shows
-  an unconfirmed session state. Password-change success remains visible if the
-  subsequent session refresh fails; failed history/diagnostic reads never claim
-  an empty or healthy result.
-- Activity reports actual persisted phases/outcomes. Audit and structured logs
-  are administrator-only, redacted, and preserve actor/server attribution.
+  unconfirmed state. Password-change success survives a failed session refresh;
+  failed audit/diagnostics reads never claim an empty or healthy result.
 
 ## Product boundaries
 
