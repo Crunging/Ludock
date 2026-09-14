@@ -9,6 +9,7 @@ test("backup storage uses saved limits, refreshes after save and recovers from u
     backupRoots: ["/backups"], composeRoots: [], composeAvailable: false,
   } }));
   await page.route("**/api/v1/notifications", (route) => route.fulfill({ json: { configured: false, enabled: false } }));
+  await page.route("**/api/v1/notifications/deliveries", (route) => route.fulfill({ json: { deliveries: [] } }));
   await page.route("**/api/v1/settings/backups", async (route) => {
     if (route.request().method() === "PUT") settings = backupSettingsSchema.parse(route.request().postDataJSON());
     await route.fulfill({ json: backupSettingsResponseSchema.parse({ settings }) });
