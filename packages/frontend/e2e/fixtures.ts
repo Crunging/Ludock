@@ -4,6 +4,7 @@ import {
   apiErrorSchema,
   authStatusSchema,
   authUserResponseSchema,
+  attentionResponseSchema,
   availabilityResponseSchema,
   backupsResponseSchema,
   backupStorageResponseSchema,
@@ -192,6 +193,10 @@ export const test = base.extend<{ app: AppFixture }>({
           configured: false, archiveBytes: 0, maxBytes: null, reserveBytes: null, availableBytes: null,
           issues: [{ code: "not_configured", message: "Save a backup destination in Settings." }],
         } });
+        return;
+      }
+      if (path === "/attention" && method === "GET") {
+        await respond(route, attentionResponseSchema, { items: [], discoveryUnavailable: false });
         return;
       }
       const match = path.match(/^\/servers\/([^/]+)(\/.*)?$/);

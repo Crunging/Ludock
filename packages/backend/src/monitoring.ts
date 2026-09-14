@@ -1,5 +1,6 @@
 import type { ManagedContainer } from "./docker.js";
 import { availabilitySchema } from "@ludock/shared";
+import type { AvailabilityPolicy } from "@ludock/shared";
 import { getDatabase } from "./database.js";
 import { listLogicalServers } from "./identity.js";
 import { refreshServers } from "./servers.js";
@@ -64,6 +65,32 @@ export function suppressMonitoring(serverId: string): void {
     )
     .run(Date.now() + policy.graceSeconds * 1000, serverId);
 }
+
+function monitoringSuppressed(
+  serverId: string,
+  policy: AvailabilityPolicy,
+  suppressedUntil: number,
+  now: number,
+): boolean {
+  return !policy.enabled || policy.maintenance || suppressedUntil > now ||
+    isServerBusy(serverId) || Boolean(getDatabase()
+      .prepare("SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running') LIMIT 1")
+      .get(serverId));
+}
+
+/** Read the monitor's persisted outage without triggering checks or notifications.
+ * Policy and operation suppression are current even between monitor ticks. */
+export function getAvailabilityProblem(serverId: string, now = Date.now()) {
+  const { policy, state } = getAvailability(serverId);
+  if (monitoringSuppressed(serverId, policy, state.suppressedUntil, now) ||
+    state.intentionallyStopped || state.outageStartedAt === null ||
+    now - state.outageStartedAt < policy.graceSeconds * 1000) return null;
+  return {
+    state: state.lastState ?? "unavailable",
+    outageStartedAt: state.outageStartedAt,
+  };
+}
+
 export async function checkAvailability(now = Date.now()): Promise<void> {
   // A daemon outage is not evidence that containers vanished. Preserve their
   // bindings, but report that monitored availability cannot be verified.
@@ -76,19 +103,7 @@ export async function checkAvailability(now = Date.now()): Promise<void> {
     const row = rowFor(server.id);
     if (!row) continue;
     const policy = availabilitySchema.parse(JSON.parse(row.policy_json));
-    const activeOperation = getDatabase()
-      .prepare(
-        "SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running')",
-      )
-      .get(server.id);
-    if (
-      !policy.enabled ||
-      policy.maintenance ||
-      activeOperation ||
-      isServerBusy(server.id) ||
-      row.suppressed_until > now
-    )
-      continue;
+    if (monitoringSuppressed(server.id, policy, row.suppressed_until, now)) continue;
     const container = current.get(server.containerId ?? "");
     const healthy =
       server.status === "active" &&

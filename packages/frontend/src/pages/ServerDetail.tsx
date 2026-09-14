@@ -12,6 +12,7 @@ import {
   serverResponseSchema,
   updateCapabilityResponseSchema,
   type AvailabilityPolicy,
+  type AvailabilityState,
   type Backup,
   type Operation,
   type Schedule,
@@ -22,6 +23,7 @@ import {
 import { ApiRequestError, apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
 import { NavLink } from "../navigation";
+import { useLocation, useNavigate } from "../navigation-context";
 import { can } from "../permissions";
 import { operationActive } from "../operations";
 import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
@@ -68,6 +70,12 @@ export default function ServerDetail({ serverId }: { serverId: string }) {
 
 function ServerDetailSession({ serverId }: { serverId: string }) {
   const { user } = useAuth();
+  const { search } = useLocation();
+  const navigate = useNavigate();
+  const parameters = new URLSearchParams(search);
+  const requestedTab = parameters.get("tab");
+  const requestedOperation = requestedTab === "activity" ? parameters.get("operation") : null;
+  const requestedSchedule = requestedTab === "schedules" ? parameters.get("schedule") : null;
   const admin = user?.role === "admin";
   const [server, setServer] = useState<Server | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -79,9 +87,17 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     maintenance: false,
     graceSeconds: 120,
   });
+  const [availabilitySnapshot, setAvailabilitySnapshot] = useState<{
+    policy: AvailabilityPolicy;
+    state: AvailabilityState;
+  } | null>(null);
+  const availabilityRequest = useRef<AbortController | null>(null);
+  const availabilityLoaded = useRef(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [snapshotReady, setSnapshotReady] = useState(false);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [discoveryUnavailable, setDiscoveryUnavailable] = useState(false);
   const [settingsState, setSettingsState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -105,11 +121,14 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       refreshRequest.current?.abort();
     };
   }, []);
-  const tab = serverTabs[serverId] || "activity";
-  const setTab = (next: string) => {
+  const tab = requestedTab || serverTabs[serverId] || "activity";
+  const setTab = (next: string, selection?: { operation: string }) => {
     // Remembered tabs outlive this page. A completed request from a previous
     // visit must not change the tab chosen during a later visit.
-    if (pageActive.current) rememberServerTab(serverId, next);
+    if (!pageActive.current) return;
+    rememberServerTab(serverId, next);
+    const query = new URLSearchParams({ tab: next, ...selection });
+    navigate(`/servers/${encodeURIComponent(serverId)}?${query}`, { replace: true });
   };
   const [lifecycleAction, setLifecycleAction] = useState<
     "start" | "stop" | "restart" | null
@@ -122,7 +141,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
   const [scheduleEdit, setScheduleEdit] = useState<ScheduleEdit | null>(null);
   const scheduleFocusTarget = useRef<string | null>(null);
-  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const activityFocusTarget = useRef<"scheduled-operation-title" | "recent-operations-title" | null>(null);
   const [update, setUpdate] = useState<UpdateOptions>({
     createBackup: true,
@@ -144,6 +162,37 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     tab === "backups" && can(user, server, "backups.create") && !blocked && !activeOperation,
     `${server?.shortId}:${server?.state}:${server?.bindingStatus}`,
   );
+  const canReadAvailability = admin || can(user, server, "server.view");
+  const canCreateBackup = can(user, server, "backups.create");
+  const canManageSchedules = can(user, server, "schedules.manage");
+  const tabs = [
+    { id: "activity", label: "Activity" },
+    ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
+    ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
+    ...(admin ? [{ id: "update", label: "Update" }] : []),
+    { id: "availability", label: "Availability" },
+  ];
+  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
+
+  useEffect(() => {
+    if (server && requestedTab) rememberServerTab(serverId, activeTab);
+  }, [server, requestedTab, activeTab, serverId, rememberServerTab]);
+
+  useEffect(() => {
+    if (requestedOperation) activityFocusTarget.current = "scheduled-operation-title";
+  }, [search, requestedOperation]);
+
+  const focusedSchedule = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestedSchedule) focusedSchedule.current = null;
+    if (!requestedSchedule || tab !== "schedules" || !historyReady || !can(user, server, "schedules.manage")) return;
+    if (focusedSchedule.current === search) return;
+    const row = document.getElementById(`schedule-${requestedSchedule}`);
+    if (row) {
+      row.focus();
+      focusedSchedule.current = search;
+    }
+  }, [requestedSchedule, tab, historyReady, server, user, search]);
 
   useEffect(() => {
     if (scheduleEdit || busy || !snapshotReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
@@ -153,9 +202,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
 
   useEffect(() => {
     if (tab !== "activity" || !activityFocusTarget.current) return;
-    document.getElementById(activityFocusTarget.current)?.focus();
-    activityFocusTarget.current = null;
-  }, [selectedOperationId, tab]);
+    const target = document.getElementById(activityFocusTarget.current);
+    if (target) {
+      target.focus();
+      activityFocusTarget.current = null;
+    }
+  }, [requestedOperation, tab, server]);
 
   useEffect(() => {
     if (capabilityState === "loading" || !capabilityFocusPending.current) return;
@@ -174,15 +226,17 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const controller = new AbortController();
     refreshRequest.current = controller;
     setSnapshotReady(false);
+    setHistoryReady(false);
     const ownsRequest = () =>
       pageActive.current &&
       refreshRequest.current === controller &&
       !controller.signal.aborted;
     const init = { signal: controller.signal };
     try {
-      const { server: next } = await apiJson(path, serverResponseSchema, init);
+      const { server: next, discoveryUnavailable: unavailable } = await apiJson(path, serverResponseSchema, init);
       if (!ownsRequest()) return;
       setServer(next);
+      setDiscoveryUnavailable(unavailable);
       const [activity, backupResponse, scheduleResponse] = await Promise.all([
         apiJson(`${path}/operations`, operationsResponseSchema, init),
         admin && can(user, next, "backups.read")
@@ -196,7 +250,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       setOperations(activity.operations);
       setBackups(backupResponse.backups);
       setSchedules(scheduleResponse.schedules);
-      setSnapshotReady(true);
+      setSnapshotReady(!unavailable);
+      setHistoryReady(true);
       setError(null);
     } catch (reason) {
       if (!ownsRequest()) return;
@@ -241,22 +296,47 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     return () => controller.abort();
   }, [admin, path, capabilityAttempt]);
   useEffect(() => {
-    if (!admin) return;
+    if (!canReadAvailability) return;
     const controller = new AbortController();
+    availabilityRequest.current = controller;
     setSettingsState("loading");
     apiJson(`${path}/availability`, availabilityResponseSchema, {
       signal: controller.signal,
     })
       .then((monitor) => {
         if (controller.signal.aborted) return;
-        setAvailability(monitor.policy);
+        if (!availabilityLoaded.current) setAvailability(monitor.policy);
+        availabilityLoaded.current = true;
+        setAvailabilitySnapshot(monitor);
         setSettingsState("ready");
       })
       .catch(() => {
         if (!controller.signal.aborted) setSettingsState("error");
       });
     return () => controller.abort();
-  }, [admin, path, settingsAttempt]);
+  }, [canReadAvailability, path, settingsAttempt]);
+  useEffect(() => {
+    if (tab !== "availability" || !canReadAvailability || settingsState !== "ready") return;
+    let pending = false;
+    const interval = window.setInterval(() => {
+      if (pending || mutationPending.current) return;
+      pending = true;
+      const controller = new AbortController();
+      availabilityRequest.current = controller;
+      void apiJson(`${path}/availability`, availabilityResponseSchema, { signal: controller.signal })
+        .then((monitor) => {
+          if (!controller.signal.aborted) setAvailabilitySnapshot(monitor);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setSettingsState("error");
+        })
+        .finally(() => { pending = false; });
+    }, 10000);
+    return () => {
+      window.clearInterval(interval);
+      availabilityRequest.current?.abort();
+    };
+  }, [tab, canReadAvailability, settingsState, path]);
   const hasActiveOperation = Boolean(activeOperation);
   useEffect(() => {
     const interval = window.setInterval(
@@ -483,20 +563,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         </button>
       </div>
     );
-  const canCreateBackup = can(user, server, "backups.create");
-  const canManageSchedules = can(user, server, "schedules.manage");
-  const tabs = [
-    { id: "activity", label: "Activity" },
-    ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
-    ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
-    ...(admin
-      ? [
-          { id: "update", label: "Update" },
-          { id: "availability", label: "Availability" },
-        ]
-      : []),
-  ];
-  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
   const activeSettingsState = activeTab === "update" ? capabilityState : settingsState;
   const stateGuidance = lifecycleStateGuidance(server.state);
   const consoleAvailable =
@@ -607,6 +673,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
           </div>
         )}
       </header>
+      {discoveryUnavailable && (
+        <div className="alert alert--error" role="alert">
+          Live server status could not be verified. Saved history and monitoring remain accessible; server controls are paused until live status can be verified.
+          {admin && <> <NavLink className="text-link" to="/diagnostics">Check Docker connectivity</NavLink></>}
+        </div>
+      )}
       {!blocked && stateGuidance && (
         <p className="section-note" role="status">
           {stateGuidance}
@@ -689,10 +761,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             serverId={serverId}
             filters={activityFilters}
             onFiltersChange={setActivityFilters}
-            selectedOperationId={selectedOperationId}
+            selectedOperationId={requestedOperation}
             onCloseOperation={() => {
               activityFocusTarget.current = "recent-operations-title";
-              setSelectedOperationId(null);
+              setTab("activity");
             }}
             operations={operations}
             admin={admin}
@@ -750,6 +822,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         {activeTab === "schedules" && canManageSchedules && (
           <SchedulesPanel
             schedules={schedules}
+            selectedScheduleId={requestedSchedule}
+            snapshotReady={historyReady}
             draft={scheduleEdit?.draft ?? schedule}
             editing={scheduleEdit}
             conflict={Boolean(scheduleEdit && schedules.some((item) => item.id === scheduleEdit.id && item.revision !== scheduleEdit.revision))}
@@ -781,8 +855,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             onViewActivity={(item) => {
               if (!item.lastOperation || !can(user, server, "server.view")) return;
               activityFocusTarget.current = "scheduled-operation-title";
-              setSelectedOperationId(item.lastOperation.id);
-              setTab("activity");
+              setTab("activity", { operation: item.lastOperation.id });
             }}
             onDelete={(item) => {
               if (
@@ -801,8 +874,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
           />
         )}
-        {admin &&
-          (activeTab === "update" || activeTab === "availability") &&
+        {((admin && activeTab === "update") || activeTab === "availability") &&
           activeSettingsState !== "ready" && (
             activeSettingsState === "loading" ? (
               <p role="status">Loading server settings…</p>
@@ -843,15 +915,21 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             onSubmit={() => void requestUpdate()}
           />
         )}
-        {activeTab === "availability" && admin && settingsState === "ready" && (
+        {activeTab === "availability" && settingsState === "ready" && availabilitySnapshot && (
           <AvailabilityPanel
+            admin={admin}
+            policy={availabilitySnapshot.policy}
+            state={availabilitySnapshot.state}
+            monitoringPaused={Boolean(activeOperation)}
             value={availability}
             onChange={setAvailability}
             busy={busy || !snapshotReady}
-            onSave={() =>
+            onSave={() => {
+              if (!admin) return;
               void perform(
-                () =>
-                  apiJson(
+                async () => {
+                  availabilityRequest.current?.abort();
+                  const monitor = await apiJson(
                     `${path}/availability`,
                     availabilityResponseSchema,
                     jsonBody("PUT", {
@@ -859,10 +937,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                       maintenance: availability.maintenance,
                       graceSeconds: availability.graceSeconds,
                     }),
-                  ),
+                  );
+                  if (pageActive.current) setAvailabilitySnapshot(monitor);
+                },
                 "Availability settings saved.",
-              )
-            }
+              );
+            }}
           />
         )}
       </SectionTabs>

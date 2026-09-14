@@ -57,7 +57,7 @@ for (const role of ["operator", "viewer"] as const) {
         await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
         await expect(page.getByRole("article", { name: RUNNING_NAME })).toBeVisible();
         expect(app.requests.slice(requestCount).filter((request) =>
-          request.method !== "GET" || !["/auth/status", "/servers"].includes(request.path),
+          request.method !== "GET" || !["/auth/status", "/servers", "/attention"].includes(request.path),
         )).toEqual([]);
       });
     }
@@ -73,7 +73,7 @@ test("unknown direct links return safely to servers", async ({ app, page }) => {
       await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
       await expect(page.getByRole("article")).toHaveCount(2);
       expect(app.requests.slice(requestCount).filter((request) =>
-        request.method !== "GET" || !["/auth/status", "/servers"].includes(request.path),
+        request.method !== "GET" || !["/auth/status", "/servers", "/attention"].includes(request.path),
       )).toEqual([]);
     });
   }
@@ -95,7 +95,7 @@ test("malformed encoded server history entries return safely to servers", async 
       await expect(page.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
       await expect(page.getByRole("article")).toHaveCount(2);
       expect(app.requests.slice(requestCount).filter((request) =>
-        request.method !== "GET" || request.path !== "/servers",
+        request.method !== "GET" || !["/servers", "/attention"].includes(request.path),
       )).toEqual([]);
     });
   }

@@ -25,6 +25,7 @@ import { schedulesRoutes } from "./routes/schedules.js";
 import { serversRoutes } from "./routes/servers.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { statusRoutes } from "./routes/status.js";
+import { attentionRoutes } from "./routes/attention.js";
 import { getMaxUploadBytes } from "./upload-limit.js";
 
 const logger = createLogger("api");
@@ -260,7 +261,7 @@ export function createApp(options: CreateAppOptions = {}): {
     ...accountRoutes(options.setupWindow || defaultSetupWindow),
     "/api/v1/health": { GET: health },
     ...accessRoutes, ...backupsRoutes, ...composeRoutes, ...filesRoutes,
-    ...schedulesRoutes, ...serversRoutes, ...settingsRoutes, ...statusRoutes,
+    ...schedulesRoutes, ...serversRoutes, ...settingsRoutes, ...statusRoutes, ...attentionRoutes,
     ...options.routes,
   };
   const routes: Record<string, Partial<Record<HttpMethod, RoutedHandler>>> = {};

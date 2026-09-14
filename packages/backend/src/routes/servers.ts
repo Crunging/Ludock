@@ -1,13 +1,13 @@
-import { okResponseSchema, serverResponseSchema, serversResponseSchema, serverStatsSchema, } from "@ludock/shared";
+import { okResponseSchema, serverResponseSchema, serversResponseSchema, } from "@ludock/shared";
 import { AuthError } from "../auth.js";
 import { AuthorizationError } from "../authorization.js";
 import { writeAuditLog } from "../database.js";
-import { getContainerStats, restartContainer, startContainer, stopContainer, } from "../docker.js";
+import { restartContainer, startContainer, stopContainer, } from "../docker.js";
 import { AppError } from "../errors.js";
 import { ServerBindingError } from "../identity.js";
 import { createLogger, errorMessage } from "../logger.js";
 import { setIntentionalStop, suppressMonitoring } from "../monitoring.js";
-import { getServer, listServers, resolveAuthorizedServer } from "../servers.js";
+import { getServerSnapshot, listServers } from "../servers.js";
 import { requestUser, respond, type ApiRoutes, type RequestContext } from "./request.js";
 import { serverAction } from "./server-action.js";
 const logger = createLogger("api");
@@ -55,22 +55,8 @@ export const serversRoutes: ApiRoutes = {
     }
   },
   "/api/v1/servers/:id": {
-    GET: async (ctx) => {
-      const actor = requestUser(ctx);
-      const id = ctx.params.id;
-      const server = await getServer(actor, id);
-      let stats = null;
-      if (server.bindingStatus === "active") {
-        try {
-          const context = await resolveAuthorizedServer(actor, id, "server.view");
-          stats = serverStatsSchema.parse(await getContainerStats(context.container.id));
-        }
-        catch {
-          // A server remains inspectable when live statistics are unavailable.
-        }
-      }
-      return respond(serverResponseSchema, { server, stats });
-    }
+    GET: async (ctx) => respond(serverResponseSchema,
+      await getServerSnapshot(requestUser(ctx), ctx.params.id)),
   },
   "/api/v1/servers/:id/start": {
     POST: serverAction("server.start", async (ctx, context) => {

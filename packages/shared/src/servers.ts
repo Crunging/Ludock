@@ -60,6 +60,8 @@ export const serversResponseSchema = z.object({
 export const serverResponseSchema = z.object({
   server: serverSchema,
   stats: serverStatsSchema.nullable(),
+  // Saved metadata only: discovery failed or the observed binding changed.
+  discoveryUnavailable: z.boolean().default(false),
 });
 export const bindingReviewResponseSchema = z.object({ server: serverSchema });
 export const SERVER_STATE_ACTIONS = [
