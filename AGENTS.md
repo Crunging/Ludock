@@ -78,14 +78,17 @@ decisions or unresolved blockers. Avoid dependency churn on unrelated small task
 
 Update `bun.lock` with dependency changes. Pin GitHub Actions to full upstream
 commit SHAs and runtime images to verified multi-platform manifest digests, with
-readable version tags/comments. Keep the Bun image reference identical in
-`Dockerfile` and `packages/backend/src/runtime-images.ts`, on the major in
-`.bun-version`. Follow the [dependency and image update procedure](./docs/TESTING.md#dependency-and-image-updates)
+readable version tags/comments. Build and helper images must meet the Bun major
+and minimum version requirements; they may use different validated images when
+upstream packaging or security fixes require it. Prefer suitable official images
+over maintaining derivative images. Validate production runtime requirements;
+do not turn test-fixture conveniences into runtime dependencies. Follow the
+[dependency and image update procedure](./docs/TESTING.md#dependency-and-image-updates)
 for registry checks, migration review, pin verification, and validation.
 
-`tar-stream` stays on 3.2.0 because 3.2.1 has incompatible header and stream types;
-remove the constraint when the archive integration type-checks against a
-compatible release.
+Do not preserve historical dependency restrictions without rechecking them.
+Keep TypeScript within the supported range of `typescript-eslint`; use Node LTS
+types compatible with Bun rather than automatically selecting the newest Node major.
 
 ## Verification
 

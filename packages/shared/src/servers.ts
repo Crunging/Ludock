@@ -36,7 +36,7 @@ export const serverSchema = z.object({
     z.object({ private: z.number(), public: z.number(), type: z.string() }),
   ),
   created: z.number(),
-  labels: z.record(z.string()),
+  labels: z.record(z.string(), z.string()),
   permissions: z.array(serverCapabilitySchema),
   bindingStatus: bindingStatusSchema,
 });

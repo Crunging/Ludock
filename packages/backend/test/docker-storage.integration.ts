@@ -53,6 +53,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
         cleanup.push(() => volume.remove());
         const game = await docker.createContainer({
           Image: image,
+          Entrypoint: [],
           Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
           Labels: { "ludock.enable": "true" },
           HostConfig: {
@@ -114,6 +115,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
         const mountpoint = (await volume.inspect()).Mountpoint;
         const setup = await docker.createContainer({
           Image: image,
+          Entrypoint: [],
           Cmd: [
             "bun",
             "-e",
@@ -138,6 +140,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
         const fixture = (source: string) =>
           docker.createContainer({
             Image: image,
+            Entrypoint: [],
             Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
             HostConfig: {
               Mounts: [{ Type: "bind", Source: source, Target: "/data" }],

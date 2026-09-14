@@ -18,7 +18,7 @@ export const operationSchema = z.object({
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
   error: z.string().nullable(),
-  result: z.record(z.unknown()).nullable(),
+  result: z.record(z.string(), z.unknown()).nullable(),
 });
 export type Operation = z.infer<typeof operationSchema>;
 export const operationsResponseSchema = z.object({

@@ -247,8 +247,10 @@ export async function archiveReadStream(
   }
 }
 
-type ExtendedHeader = tar.Headers & { pax?: Record<string, string> | null };
-export function archiveEntryMetadata(header: tar.Headers): {
+// Accept the partial headers used when constructing an archive, as well as decoded headers.
+export type ArchiveHeader = Parameters<tar.Pack["entry"]>[0];
+type ExtendedHeader = ArchiveHeader & { pax?: Record<string, string> | null };
+export function archiveEntryMetadata(header: ArchiveHeader): {
   uid: number;
   gid: number;
   mtime: number;
@@ -274,7 +276,7 @@ export function archiveEntryMetadata(header: tar.Headers): {
   return { uid, gid, mtime };
 }
 export function mappedArchiveHeader(
-  header: tar.Headers,
+  header: ArchiveHeader,
   name: string,
 ): ExtendedHeader {
   const { uid, gid, mtime } = archiveEntryMetadata(header);
@@ -293,7 +295,7 @@ export function mappedArchiveHeader(
 }
 
 export function validateArchiveEntry(
-  header: tar.Headers,
+  header: ArchiveHeader,
   roots: readonly BackupRoot[],
 ): void {
   const name = header.name.replace(/\/$/, "");
@@ -392,7 +394,7 @@ export function archiveValidator(
             : undefined,
         );
       });
-      extract.end();
+      extract.end(undefined);
     },
     destroy(error, callback) {
       extract.destroy(error || undefined);
@@ -846,7 +848,7 @@ export async function writeSnapshot(
         }
         // Rebuild only ordinary metadata: source PAX path fields must never
         // override the root mapping when tar-stream writes a fresh header.
-        let mapped: tar.Headers;
+        let mapped: ArchiveHeader;
         try {
           mapped = mappedArchiveHeader(
             header,

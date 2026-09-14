@@ -1,5 +1,5 @@
-// Keep the helper on the same Bun major as the application runtime in Dockerfile.
-export const DEFAULT_HELPER_IMAGE = "oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f";
+// Official Bun 1.4.2 distroless helper; production helpers execute Bun directly.
+export const DEFAULT_HELPER_IMAGE = "oven/bun:1-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec";
 
 // Docker's reference grammar and familiar-name rules:
 // https://github.com/distribution/reference/tree/v0.6.0

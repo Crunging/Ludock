@@ -88,10 +88,10 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         volumes.push(volume);
         const source = await docker.createContainer({
           Image: DEFAULT_HELPER_IMAGE,
+          Entrypoint: [],
           name: `ludock-backup-test-${randomUUID()}`,
           Labels: { "ludock.enable": "true", "ludock.name": "Backup fixture" },
-          Entrypoint: ["/bin/sh", "-c"],
-          Cmd: ["trap 'exit 0' TERM; while :; do sleep 1; done"],
+          Cmd: ["bun", "-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 3600000)"],
           HostConfig: {
             Mounts: [{ Type: "volume", Source: volume.name, Target: "/data" }],
           },
@@ -99,14 +99,15 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         containers.push(source);
         await source.start();
         await helperExec(source, [
-          "/bin/sh",
-          "-c",
-          "printf 'original-world' > /data/world.txt; mkdir /data/settings; printf 'original-config' > /data/settings/server.cfg",
+          "bun",
+          "-e",
+          "const fs = require('node:fs'); fs.writeFileSync('/data/world.txt', 'original-world'); fs.mkdirSync('/data/settings'); fs.writeFileSync('/data/settings/server.cfg', 'original-config');",
         ]);
         const self = !oldSelf
           ? await docker.createContainer({
               Image: DEFAULT_HELPER_IMAGE,
-              Cmd: ["true"],
+              Entrypoint: [],
+              Cmd: ["bun", "-e", ""],
               HostConfig: {
                 Mounts: [
                   { Type: "bind", Source: directory, Target: directory },
@@ -148,7 +149,8 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
 
         const aliased = await docker.createContainer({
           Image: DEFAULT_HELPER_IMAGE,
-          Cmd: ["true"],
+          Entrypoint: [],
+          Cmd: ["bun", "-e", ""],
           Labels: {
             "ludock.enable": "true",
             "ludock.name": "Aliased backup fixture",
@@ -251,9 +253,9 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
         await writeFile(archivePath, originalArchive);
         await helperExec(source, [
-          "/bin/sh",
-          "-c",
-          "printf 'changed-world' > /data/world.txt; printf 'new-file' > /data/new.txt",
+          "bun",
+          "-e",
+          "const fs = require('node:fs'); fs.writeFileSync('/data/world.txt', 'changed-world'); fs.writeFileSync('/data/new.txt', 'new-file');",
         ]);
         state = await resolveAuthorizedServer(
           admin,
@@ -269,7 +271,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         assert.equal(restored.restoredBackupId, backup.id);
         assert.equal((await source.inspect()).State.Running, true);
         assert.equal(
-          await helperExec(source, ["cat", "/data/world.txt"]),
+          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
           "original-world",
         );
         assert.equal(
@@ -282,9 +284,9 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
         assert.equal(
           await helperExec(source, [
-            "/bin/sh",
-            "-c",
-            "test ! -e /data/new.txt && printf ok",
+            "bun",
+            "-e",
+            "if (require('node:fs').existsSync('/data/new.txt')) process.exit(1); process.stdout.write('ok');",
           ]),
           "ok",
         );
@@ -299,10 +301,9 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
 
         await helperExec(source, [
-          "ln",
-          "-s",
-          "/etc/passwd",
-          "/data/unsafe-link",
+          "bun",
+          "-e",
+          "require('node:fs').symlinkSync('/etc/passwd', '/data/unsafe-link')",
         ]);
         state = await resolveAuthorizedServer(
           admin,
@@ -322,11 +323,12 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           "copy failure restores initial running state",
         );
         assert.equal(listBackups(server.id).length, beforeFailure);
-        await helperExec(source, ["rm", "/data/unsafe-link"]);
+        await helperExec(source, ["bun", "-e", "require('node:fs').unlinkSync('/data/unsafe-link')"]);
 
         const writer = await docker.createContainer({
           Image: DEFAULT_HELPER_IMAGE,
-          Cmd: ["sleep", "3600"],
+          Entrypoint: [],
+          Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
           HostConfig: {
             Mounts: [
               { Type: "volume", Source: volume.name, Target: "/shared" },
@@ -399,9 +401,9 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         await helperExec(
           helper.container,
           [
-            "/bin/sh",
-            "-c",
-            'mkdir "$ROOT/$STAGE" "$ROOT/$STAGE/new" "$ROOT/$STAGE/old"; mv "$ROOT/settings" "$ROOT/$STAGE/old/"',
+            "bun",
+            "-e",
+            "const fs = require('node:fs'); const root = process.env.ROOT; const stage = root + '/' + process.env.STAGE; fs.mkdirSync(stage); fs.mkdirSync(stage + '/new'); fs.mkdirSync(stage + '/old'); fs.renameSync(root + '/settings', stage + '/old/settings');",
           ],
           { ROOT: rootPath, STAGE: stage },
         );
@@ -415,18 +417,18 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         await recoverRestore(interrupted);
         assert.equal((await source.inspect()).State.Running, true);
         assert.equal(
-          await helperExec(source, ["cat", "/data/world.txt"]),
+          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
           "original-world",
         );
         assert.equal(
-          await helperExec(source, ["cat", "/data/settings/server.cfg"]),
+          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/settings/server.cfg'))"]),
           "original-config",
         );
         assert.equal(interrupted.job.recovery.dataSafe, true);
         assert.equal(
           await helperExec(
             source,
-            ["/bin/sh", "-c", 'test ! -e "$STAGE" && printf clean'],
+            ["bun", "-e", "if (require('node:fs').existsSync(process.env.STAGE)) process.exit(1); process.stdout.write('clean');"],
             { STAGE: `/data/${stage}` },
           ),
           "clean",
@@ -452,7 +454,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         await recoverRestore(cleaned);
         assert.equal((await source.inspect()).State.Running, true);
         assert.equal(
-          await helperExec(source, ["cat", "/data/world.txt"]),
+          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
           "original-world",
         );
         assert.deepEqual(cleaned.job.recovery.restoreRoots, []);
