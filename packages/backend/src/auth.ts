@@ -3,6 +3,7 @@ import { Cookie } from "bun";
 import {
   SETUP_CODE_MAX_LENGTH,
   SETUP_CODE_MIN_LENGTH,
+  type HistoryActor,
 } from "@ludock/shared";
 import {
   countUsers,
@@ -354,7 +355,15 @@ export function isCurrentApiTokenOperationActor(actorId: string): boolean {
 }
 
 export function publicOperationActorId(actorId: string): string {
-  return isApiTokenOperationActor(actorId) ? "api-token" : actorId;
+  return actorId === "api-token" || actorId.startsWith(API_TOKEN_OPERATION_ACTOR_PREFIX)
+    ? "api-token"
+    : actorId;
+}
+
+export function publicHistoryActor(id: string | null, name: string | null): HistoryActor | null {
+  if (!id && !name) return null;
+  const safeId = id === null ? null : publicOperationActorId(id);
+  return { id: safeId, name: safeId === "api-token" ? "API token" : name };
 }
 
 export function authenticateRequest(

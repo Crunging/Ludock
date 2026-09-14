@@ -3,6 +3,7 @@ import { useRef } from "react";
 import OperationList from "../OperationList";
 import ScheduledOperationPanel from "./ScheduledOperationPanel";
 import { operationActive, operationStatusLabels } from "../../operations";
+import { NavLink } from "../../navigation";
 
 export interface ActivityFilters {
   status: OperationStatus | "all";
@@ -49,9 +50,10 @@ export default function ActivityPanel(props: Props) {
       )}
       <div className="section-heading">
         <h2 id="recent-operations-title" tabIndex={-1}>Recent operations</h2>
-        <button className="secondary-btn" onClick={onRefresh}>
-          Refresh
-        </button>
+        <div className="inline-actions">
+          <NavLink className="text-link" to={`/operations?serverId=${encodeURIComponent(serverId)}`}>Search operation history</NavLink>
+          <button className="secondary-btn" onClick={onRefresh}>Refresh</button>
+        </div>
       </div>
       <div className="activity-filters stack-form" role="group" aria-label="Filter recent operations">
         <label>

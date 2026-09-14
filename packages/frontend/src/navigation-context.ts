@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 
 export interface NavigationContextValue {
   pathname: string;
+  search?: string;
   navigate: (to: string, options?: { replace?: boolean }) => void;
 }
 
@@ -9,7 +10,8 @@ export const NavigationContext =
   createContext<NavigationContextValue | null>(null);
 
 export function useLocation() {
-  return { pathname: useNavigation().pathname };
+  const { pathname, search = "" } = useNavigation();
+  return { pathname, search };
 }
 
 export function useNavigate() {

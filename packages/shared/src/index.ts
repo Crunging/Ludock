@@ -14,3 +14,4 @@ export * from "./monitoring.js";
 export * from "./diagnostics.js";
 export * from "./deployment.js";
 export * from "./logging.js";
+export * from "./history.js";

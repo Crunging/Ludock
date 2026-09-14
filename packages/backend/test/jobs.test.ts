@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
+import { listOperationHistory } from "../src/history.js";
 import {
   closeDatabase,
   createUser,
@@ -17,7 +18,6 @@ import {
 } from "../src/schedules.js";
 import {
   getOperation,
-  listOperations,
   startOperationRunner,
   stopOperationRunner,
   type JobContext,
@@ -105,7 +105,7 @@ afterEach(async () => {
 function scheduled(): { context: JobContext; scheduleId: string } {
   const schedule = createSchedule(friend, serverId, input);
   runSchedules(Date.parse("2026-09-09T08:00:00Z"));
-  const job = getOperation(listOperations(serverId)[0].id)!;
+  const job = getOperation(listOperationHistory(admin, { serverId, limit: 50 }).operations[0].id)!;
   return { context: { job, progress: () => {} }, scheduleId: schedule.id };
 }
 describe("queued operation authority", () => {

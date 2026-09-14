@@ -17,6 +17,8 @@ const ServerDetail = lazy(() => import("./pages/ServerDetail"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Files = lazy(() => import("./pages/Files"));
 const ApplicationLogs = lazy(() => import("./pages/ApplicationLogs"));
+const Operations = lazy(() => import("./pages/Operations"));
+const OperationDetail = lazy(() => import("./pages/OperationDetail"));
 
 function PageFallback() {
   return (
@@ -32,6 +34,7 @@ function PageFallback() {
 const pages = [
   { path: "/", element: <Dashboard /> },
   { path: "/account", element: <Account /> },
+  { path: "/operations", element: <Operations /> },
   { path: "/users", element: <Users />, adminOnly: true },
   { path: "/audit", element: <Audit />, adminOnly: true },
   { path: "/logs", element: <ApplicationLogs />, adminOnly: true },
@@ -39,25 +42,26 @@ const pages = [
   { path: "/settings", element: <Settings />, adminOnly: true },
 ];
 
-const serverPages = [
-  { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} /> },
-  { prefix: "files", render: (id: string) => <Files containerId={id} /> },
+const detailPages = [
+  { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} />, serverTools: true },
+  { prefix: "files", render: (id: string) => <Files containerId={id} />, serverTools: true },
   { prefix: "console", render: (id: string) => <Console containerId={id} />, console: true },
+  { prefix: "operations", render: (id: string) => <OperationDetail key={id} operationId={id} /> },
 ];
 
 function resolvePage(pathname: string) {
   const page = pages.find((candidate) => candidate.path === pathname);
   if (page) return { ...page, serverTools: false, console: false };
   const match = pathname.match(/^\/([^/]+)\/([^/]+)$/);
-  const serverPage = serverPages.find((candidate) => candidate.prefix === match?.[1]);
-  if (!match || !serverPage) return null;
+  const detailPage = detailPages.find((candidate) => candidate.prefix === match?.[1]);
+  if (!match || !detailPage) return null;
   try {
     const id = decodeURIComponent(match[2]);
     return {
-      element: serverPage.render(id),
+      element: detailPage.render(id),
       adminOnly: false,
-      serverTools: !serverPage.console,
-      console: Boolean(serverPage.console),
+      serverTools: Boolean(detailPage.serverTools),
+      console: Boolean(detailPage.console),
     };
   } catch {
     return null;
@@ -137,6 +141,7 @@ function App() {
             >
               Servers
             </NavLink>
+            <NavLink to="/operations" className="nav-link">Operations</NavLink>
             {user?.role === "admin" && (
               <>
                 <div className="sidebar__group" role="group" aria-labelledby="administration-label">
@@ -183,6 +188,7 @@ function App() {
             Servers
           </NavLink>
           <NavLink to="/account">Account</NavLink>
+          <NavLink to="/operations">Operations</NavLink>
           {user?.role === "admin" && <NavLink to="/settings">Settings</NavLink>}
           {user?.role === "admin" && (
             <NavLink to="/diagnostics">Diagnostics</NavLink>

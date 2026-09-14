@@ -288,6 +288,28 @@ tab changes. If they hide active work, **Show active work** clears them; filteri
 does not unlock server controls. A schedule's **View activity** opens its selected
 operation independently of these filters.
 
+### Search operation and audit history
+
+Open **Operations** to search persisted work across the servers you can access,
+or open the full history from a server's **Activity** tab. Filter by server,
+recorded actor, action, status, and date, then move through older results. History
+filters do not change active work or unlock server controls.
+
+Open an operation to inspect its saved progress, outcome, and any recovery
+guidance. Its URL can be bookmarked or shared; the recipient must still have
+permission to view that server. Administrators can follow the related audit
+events from the operation details, or open an operation from an audit event
+that records its identifier.
+
+The administrator **Audit log** searches retained events. Actor information is
+shown where it was recorded, using the account's current name when available.
+Deleted accounts may show only their recorded identifier; historical events may
+lack attribution. Audit retention still applies, so an operation can outlive its
+audit events.
+An audit status describes the event's recorded outcome; for example, an earlier
+queued event stays queued even after its operation succeeds. Events without a
+recorded status have no status to filter on.
+
 ## Compose updates
 
 Compose access requires Ludock's Linux container runtime, the bundled Docker
@@ -511,3 +533,13 @@ availability/updates, notifications, diagnostics, and administrator-managed
 Compose project registration API. Long-running mutations return an operation;
 poll `/operations/:id` for its authorized outcome or `/servers/:id/operations`
 for the server's operation history.
+
+`GET /operations` searches operation history across accessible servers;
+`GET /audit` searches audit history for administrators. Both support `limit`
+(up to 250), `cursor`, `serverId`, `actor`, `action`, `status`, `from`, and `to`.
+`actor` matches a current account name or a safe recorded actor identifier;
+`action` searches the audit action or operation kind. Dates are inclusive Unix
+timestamps in milliseconds. Audit additionally accepts `operationId` to find
+related events.
+Responses include `nextCursor`; pass it with the same filters to continue, and
+stop when it is null. Operation details and later pages enforce current access.

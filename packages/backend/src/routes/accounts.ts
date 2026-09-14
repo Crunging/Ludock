@@ -2,6 +2,7 @@ import {
   PASSWORD_MIN_LENGTH,
   applicationLogsResponseSchema,
   auditResponseSchema,
+  auditHistoryQuerySchema,
   authStatusSchema,
   authUserResponseSchema,
   changePasswordRequestSchema,
@@ -28,12 +29,13 @@ import {
   clearLoginThrottle,
   countEnabledAdmins,
   createUser, deleteUser, deleteUserSessionById,
-  findUserById, getLoginThrottle, listAuditLog, listUserSessions, listUsers, recordLoginFailure,
+  findUserById, getLoginThrottle, listUserSessions, listUsers, recordLoginFailure,
   updateUserAccess, updateUserPassword, writeAuditLog,
   type UserRecord
 } from "../database.js";
 import { developmentInstance } from "../development-instance.js";
 import { AppError } from "../errors.js";
+import { listAuditHistory } from "../history.js";
 import {
   PasswordWorkBusyError,
   withPasswordWork,
@@ -586,11 +588,9 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
     },
     "/api/v1/audit": {
       GET: administrator((ctx) => {
-        const requested = Number(ctx.url.searchParams.get("limit") || 100);
-        const limit = Number.isFinite(requested)
-          ? Math.max(1, Math.min(250, Math.trunc(requested)))
-          : 100;
-        return respond(auditResponseSchema, { entries: listAuditLog(limit) });
+        return respond(auditResponseSchema, listAuditHistory(
+          auditHistoryQuerySchema.parse(Object.fromEntries(ctx.url.searchParams)),
+        ));
       })
     },
     "/api/v1/application-logs": {

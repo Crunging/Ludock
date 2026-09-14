@@ -62,14 +62,17 @@ describe("account and history recovery", () => {
 
   it("shows audit loading and failure without claiming there is no activity", async () => {
     const pending = deferred<Response>();
-    const request = spyOn(globalThis, "fetch").mockReturnValueOnce(pending.promise);
-    render(<Audit />);
+    let failed = true;
+    spyOn(globalThis, "fetch").mockImplementation(async (url) => String(url).endsWith("/servers")
+      ? Response.json({ servers: [] })
+      : failed ? pending.promise : Response.json({ entries: [] }));
+    render(<NavigationProvider><Audit /></NavigationProvider>);
     expect(screen.getByRole("status").textContent).toContain("Loading audit log");
     expect(screen.queryByText("No audit activity yet")).toBeNull();
     await act(async () => { pending.reject(new Error("Audit unavailable")); });
     expect((await screen.findByRole("alert")).textContent).toContain("Audit unavailable");
     expect(screen.queryByText("No audit activity yet")).toBeNull();
-    request.mockResolvedValueOnce(Response.json({ entries: [] }));
+    failed = false;
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("No audit activity yet");
     expect(screen.queryByRole("alert")).toBeNull();

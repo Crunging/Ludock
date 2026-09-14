@@ -1,20 +1,26 @@
 import type { Operation } from "@ludock/shared";
 
-import { operationActive, operationLabel } from "../operations";
+import { historyActorLabel, operationActive, operationLabel } from "../operations";
+import { NavLink } from "../navigation";
 
 export default function OperationList({
   operations,
   emptyMessage = "No operations yet.",
+  showContext = false,
+  serverNames = new Map<string, string>(),
 }: {
   operations: Operation[];
   emptyMessage?: string;
+  showContext?: boolean;
+  serverNames?: ReadonlyMap<string, string>;
 }) {
   return (
     <div className="table-scroll">
-      <table className="data-table" aria-label="Recent operations">
+      <table className="data-table" aria-label={showContext ? "Operation history" : "Recent operations"}>
         <thead>
           <tr>
             <th>Operation</th>
+            {showContext && <th>Server / actor</th>}
             <th>Started</th>
             <th>Progress / result</th>
           </tr>
@@ -22,7 +28,7 @@ export default function OperationList({
         <tbody>
           {operations.length === 0 && (
             <tr>
-              <td colSpan={3} className="muted">
+              <td colSpan={showContext ? 4 : 3} className="muted">
                 {emptyMessage}
               </td>
             </tr>
@@ -30,8 +36,16 @@ export default function OperationList({
           {operations.map((operation) => (
             <tr key={operation.id}>
               <td className="capitalize">
-                {operation.kind.replaceAll("_", " ")}
+                <NavLink className="text-link" to={`/operations/${encodeURIComponent(operation.id)}`}>
+                  {operation.kind.replaceAll("_", " ")}
+                </NavLink>
               </td>
+              {showContext && <td className="operation-server">
+                <NavLink className="text-link" to={`/servers/${encodeURIComponent(operation.serverId)}`}>
+                  {serverNames.get(operation.serverId) ?? operation.serverId}
+                </NavLink>
+                <p className="muted">{historyActorLabel(operation.actor)}</p>
+              </td>}
               <td>{new Date(operation.createdAt).toLocaleString()}</td>
               <td>
                 <span role={operationActive(operation) ? "status" : undefined}>

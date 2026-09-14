@@ -130,6 +130,15 @@ disk space is read from the approved pinned destination and can be unknown.
 Latest-success metadata is scoped to backup access and contains only the date
 and size of a retained complete archive.
 
+History queries filter in SQLite and use cursors to continue through older
+records. Both histories order by creation time and use identifiers to break
+ties. Operation reads resolve current server-view authority before pagination,
+including for missing or suspended bindings, so
+inaccessible work cannot contribute rows or pagination metadata. Audit remains
+administrator-only. Public actors omit API-token fingerprints, and links between
+audit events and operations use recorded identifiers. An audit status describes
+the recorded action's outcome, independently of the operation's current status.
+
 Compose updates derive sources from Docker observations and validate an immutable
 snapshot for each confirmed operation. `ludock.compose.source` preserves original
 paths across recreation; it never expands approved roots or enters public server
@@ -176,6 +185,10 @@ Asynchronous reads abort or discard obsolete work. Audit and Diagnostics use
 loading or failure. Diagnostics publishes system and integration responses
 together. Live server snapshots and file reads retain their feature-specific
 freshness, path, and authorization policies.
+
+Audit and operation history keep applied filters and pagination in the URL.
+Operation detail routes read their selected record independently of the recent
+server snapshot; browsing historical work cannot change current operation locks.
 
 Account changes and session expiry invalidate pending authentication reads.
 Cookie-changing requests and form mutations are serialized. Successful mutations

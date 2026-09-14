@@ -492,6 +492,34 @@ describe("application database ownership and schema migrations", () => {
     }
   });
 
+  it("indexes existing history without rewriting events or rejecting legacy malformed details", () => {
+    const db = legacyScheduleDatabase();
+    try {
+      applyMigrations(db, DATABASE_MIGRATIONS.filter(({ version }) => version <= 5));
+      db.exec(`INSERT INTO notification_deliveries
+        (id,event_key,payload_json,attempts,next_attempt_at,state,created_at,kind,retry_attempts,last_attempt_at,failure_code)
+        VALUES ('delivery','event','{}',7,30,'failed',10,'test',5,20,'network_error')`);
+      db.exec(`INSERT INTO operations (
+        id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at
+      ) VALUES ('operation','server','owner','backup','running','copying','{"scheduleId":"schedule"}','{"initiallyRunning":true}',1,10,20)`);
+      const insert = db.prepare("INSERT INTO audit_log (user_id,action,target_type,target_id,details_json,created_at) VALUES ('owner','server.backup.queued','server','server',?,10)");
+      for (const details of ['{"operationId":"operation"}', '{"operationId":', 'null', '["operation"]', '{"operationId":42}'])
+        insert.run(details);
+      const events = db.prepare("SELECT * FROM audit_log ORDER BY id").all();
+      const operations = db.prepare("SELECT * FROM operations").all();
+      const deliveries = db.prepare("SELECT * FROM notification_deliveries").all();
+
+      assert.doesNotThrow(() => applyMigrations(db));
+
+      assert.deepEqual(db.prepare("SELECT * FROM audit_log ORDER BY id").all(), events);
+      assert.deepEqual(db.prepare("SELECT * FROM operations").all(), operations);
+      assert.deepEqual(db.prepare("SELECT * FROM notification_deliveries").all(), deliveries);
+      assert.doesNotThrow(() => insert.run('{"operationId":'));
+    } finally {
+      db.close(true);
+    }
+  });
+
   it("applies a future schema addition without replacing existing records", () => {
     const db = new Database(":memory:");
     try {

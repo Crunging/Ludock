@@ -1,0 +1,35 @@
+.history-search.stack-form {
+  max-width: none;
+  margin-bottom: 24px;
+}
+
+.history-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 14px;
+}
+
+.history-filters > label { min-width: 0; }
+.history-filters input,
+.history-filters select { width: 100%; min-width: 0; }
+.history-search .section-note { margin: 0; }
+.history-pagination { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-top: 20px; }
+.history-pagination .section-note { text-align: center; }
+.history-entry-links { display: flex; gap: 16px; flex-wrap: wrap; }
+.history-entry-links a,
+.history-page .audit-entry { overflow-wrap: anywhere; }
+.history-page .data-table { min-width: 650px; }
+.history-page .data-table th,
+.history-page .data-table td { vertical-align: top; }
+.history-page .operation-server { min-width: 140px; max-width: 210px; overflow-wrap: anywhere; }
+.operation-detail-actions { margin-top: 24px; }
+.operation-detail-summary { margin-top: 24px; }
+
+@media (max-width: 700px) {
+  .history-search input,
+  .history-search select,
+  .history-page button { min-height: 44px; }
+  .history-pagination { gap: 8px; }
+  .history-pagination .section-note { font-size: 12px; }
+  .history-entry-links a { display: inline-flex; align-items: center; min-height: 44px; }
+}

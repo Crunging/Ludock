@@ -1,9 +1,22 @@
 import { z } from "zod";
+import { historyActorSchema, historyQueryShape, validHistoryRange } from "./history.js";
+import { operationStatusSchema } from "./operations.js";
+
+export const auditHistoryQuerySchema = z.object({
+  ...historyQueryShape,
+  operationId: z.string().uuid().optional(),
+  status: operationStatusSchema.optional(),
+}).refine(validHistoryRange, { message: "From must be before or equal to to", path: ["to"] });
+export type AuditHistoryQuery = z.infer<typeof auditHistoryQuerySchema>;
 
 export const auditEntrySchema = z.object({
   id: z.number().int().positive(),
   username: z.string().nullable(),
+  actor: historyActorSchema.nullable().optional(),
   action: z.string(),
+  // The event's recorded action suffix, independent of an operation's current status.
+  status: operationStatusSchema.nullable().optional(),
+  operationId: z.string().uuid().nullable().optional(),
   targetType: z.string().nullable(),
   targetId: z.string().nullable(),
   details: z.unknown(),
@@ -13,6 +26,7 @@ export const auditEntrySchema = z.object({
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 export const auditResponseSchema = z.object({
   entries: z.array(auditEntrySchema),
+  nextCursor: z.string().nullable().default(null),
 });
 export const applicationLogLevelSchema = z.enum([
   "debug",
