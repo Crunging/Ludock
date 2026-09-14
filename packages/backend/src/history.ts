@@ -4,12 +4,11 @@ import {
   operationStatusSchema,
   type AuditEntry,
   type AuditHistoryQuery,
-  type HistoryActor,
   type Operation,
   type OperationHistoryQuery,
 } from "@ludock/shared";
 import { hasServerCapability } from "./authorization.js";
-import { publicOperationActorId } from "./auth.js";
+import { publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { getDatabase, type SessionUser } from "./database.js";
 import { AppError } from "./errors.js";
 import { listLogicalServers } from "./identity.js";
@@ -63,12 +62,6 @@ function nextCursor<T extends { id: string | number; createdAt: number }>(rows: 
     : null;
 }
 
-export function historyActor(id: string | null, name: string | null): HistoryActor | null {
-  if (!id && !name) return null;
-  const safeId = id === null ? null : publicOperationActorId(id);
-  return { id: safeId, name: safeId === "api-token" ? "API token" : name };
-}
-
 // Only the safe public token label participates in search or appears in output.
 const safeActorSql = (value: string) =>
   `CASE WHEN ${value} = 'api-token' OR ${value} GLOB 'api-token:*' THEN 'api-token' ELSE ${value} END`;
@@ -96,10 +89,9 @@ export function listOperationHistory(actor: SessionUser, query: OperationHistory
   if (serverIds.length === 0) return { operations: [], nextCursor: null };
   conditions.push(`o.server_id IN (${serverIds.map(() => "?").join(",")})`);
   values.push(...serverIds);
-  const kind = query.action ?? query.kind;
-  if (kind) {
+  if (query.action) {
     conditions.push("instr(lower(o.kind), lower(?)) > 0");
-    values.push(kind);
+    values.push(query.action);
   }
   if (query.status) {
     conditions.push("o.status = ?");
@@ -119,7 +111,7 @@ export function listOperationHistory(actor: SessionUser, query: OperationHistory
   const operations = rows.map((row): Operation => ({
     id: row.id,
     serverId: row.server_id,
-    actor: historyActor(row.actor_id, row.username),
+    actor: publicHistoryActor(row.actor_id, row.username),
     kind: row.kind,
     status: row.status,
     phase: row.phase,
@@ -196,7 +188,7 @@ export function listAuditHistory(query: AuditHistoryQuery): { entries: AuditEntr
     return {
       id: row.id,
       username: row.username,
-      actor: historyActor(row.actor_id, row.actor_name),
+      actor: publicHistoryActor(row.actor_id, row.actor_name),
       action: row.action,
       status: row.status ?? null,
       operationId: operationId.success ? operationId.data : null,

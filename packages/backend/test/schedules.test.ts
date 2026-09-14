@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { listOperationHistory } from "../src/history.js";
 import type { ScheduleInput } from "@ludock/shared";
 import * as database from "../src/database.js";
 import * as identity from "../src/identity.js";
@@ -27,7 +28,6 @@ import { AppError } from "../src/errors.js";
 import { setServerGrant } from "../src/authorization.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
-  listOperations,
   getOperation,
   registerJobHandler,
   startOperationRunner,
@@ -58,6 +58,7 @@ const input: ScheduleInput = {
 };
 const due = Date.parse("2026-09-09T15:00:00Z");
 let serverId: string;
+const serverOperations = () => listOperationHistory(admin, { serverId, limit: 50 }).operations;
 
 function insertScheduleRows(
   count: number,
@@ -223,10 +224,10 @@ describe("schedule authority", () => {
     createSchedule(friend, serverId, input);
     runSchedules(due);
     runSchedules(due + 30_000);
-    assert.equal(listOperations(serverId).length, 1);
+    assert.equal(serverOperations().length, 1);
     getDatabase().prepare("UPDATE operations SET status='succeeded'").run();
     runSchedules(due + 86400_000 + 60_000);
-    assert.equal(listOperations(serverId).length, 1);
+    assert.equal(serverOperations().length, 1);
   });
   it("blocks revoked actions and records an actionable suspension", () => {
     createSchedule(friend, serverId, input);
@@ -238,7 +239,7 @@ describe("schedule authority", () => {
       admin,
     );
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.match(
       listSchedules(admin, serverId)[0].lastResult!,
       /Suspended: required access/,
@@ -249,7 +250,7 @@ describe("schedule authority", () => {
     assert.ok(listSchedules(friend, serverId)[0].nextRunAt);
     updateUserAccess(friend.id, "operator", true);
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.match(listSchedules(admin, serverId)[0].lastResult!, /Suspended/);
     deleteUser(friend.id);
     assert.equal(listSchedules(admin, serverId).length, 0);
@@ -260,7 +261,7 @@ describe("schedule authority", () => {
       { ...observation, containerId: "replacement" },
     ])[0];
     runSchedules(due);
-    const operations = listOperations(serverId);
+    const operations = serverOperations();
     assert.equal(operations.length, 1);
     assert.equal(
       getOperation(operations[0].id)?.bindingRevision,
@@ -275,7 +276,7 @@ describe("schedule authority", () => {
     ])[0];
     reviewServerBinding(serverId, pending.pendingFingerprint!);
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.match(
       listSchedules(admin, serverId)[0].lastResult!,
       /server configuration changed/,
@@ -303,7 +304,7 @@ describe("schedule editing and suspension", () => {
     updateSchedule(friend, serverId, created.id, { ...input, revision: 2 });
     getDatabase().prepare("UPDATE operations SET status='succeeded'").run();
     runSchedules(due + 30_000);
-    assert.equal(listOperations(serverId).length, 1);
+    assert.equal(serverOperations().length, 1);
   });
 
   it("rejects stale edits and toggles without losing newer input", () => {
@@ -416,12 +417,12 @@ describe("schedule editing and suspension", () => {
     assert.equal(schedule.nextRunAt, due);
     setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     const resumed = setScheduleEnabled(friend, serverId, schedule.id, { enabled: true, revision: 2 });
     assert.equal(resumed.nextRunAt, due);
     assert.equal(resumed.revision, 3);
     runSchedules(due);
-    assert.equal(getOperation(listOperations(serverId)[0].id)?.input.scheduleRevision, 3);
+    assert.equal(getOperation(serverOperations()[0].id)?.input.scheduleRevision, 3);
     assert.equal(listSchedules(friend, serverId)[0].nextRunAt, due + 86_400_000);
   });
 
@@ -464,7 +465,7 @@ describe("schedule outcomes", () => {
   it("creates paused schedules without consuming a slot or fabricating a run", () => {
     const schedule = createSchedule(friend, serverId, { ...input, enabled: false });
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.deepEqual(listSchedules(friend, serverId)[0], schedule);
     assert.equal(schedule.lastOperation, null);
     assert.equal(schedule.lastRunAt, null);
@@ -616,7 +617,7 @@ describe("schedule outcomes", () => {
       WHEN NEW.last_operation_id IS NOT NULL
       BEGIN SELECT RAISE(ABORT, 'fixture association failed'); END`);
     runSchedules(due);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action='server.start.queued'").get()?.count, 0);
     const skipped = listSchedules(friend, serverId)[0];
     assert.equal(skipped.id, schedule.id);
@@ -625,7 +626,7 @@ describe("schedule outcomes", () => {
     assert.match(skipped.lastResult!, /Skipped/);
     db.exec("DROP TRIGGER fail_operation_link");
     runSchedules(due + 30_000);
-    assert.equal(listOperations(serverId).length, 0);
+    assert.equal(serverOperations().length, 0);
     assert.equal(db.inTransaction, false);
   });
 
@@ -756,7 +757,7 @@ describe("schedule failure isolation", () => {
 
       assert.doesNotThrow(() => runSchedules(due));
 
-      const operations = listOperations(serverId);
+      const operations = serverOperations();
       assert.equal(operations.length, 1);
       assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
       const invalid = getDatabase().prepare(
@@ -769,7 +770,7 @@ describe("schedule failure isolation", () => {
       assert.doesNotMatch(invalid.last_result!, /fixture-schedule-private-detail/);
 
       runSchedules(due + 30_000);
-      assert.equal(listOperations(serverId).length, 1);
+      assert.equal(serverOperations().length, 1);
       assert.equal(warn.mock.calls.length, 1, "unchanged invalid rows must not repeat diagnostics");
     });
   }
@@ -781,7 +782,7 @@ describe("schedule failure isolation", () => {
 
     runSchedules(due);
 
-    const operations = listOperations(serverId);
+    const operations = serverOperations();
     assert.equal(operations.length, 1);
     assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
     const state = getDatabase().prepare(
@@ -802,7 +803,7 @@ describe("schedule failure isolation", () => {
 
     assert.doesNotThrow(() => runSchedules(due));
 
-    const operations = listOperations(serverId);
+    const operations = serverOperations();
     assert.equal(operations.length, 1);
     assert.equal(getOperation(operations[0].id)?.input.scheduleId, valid.id);
     assert.equal(warn.mock.calls.length, 1);

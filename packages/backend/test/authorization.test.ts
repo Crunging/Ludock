@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterAll as after, beforeEach, describe, it } from "bun:test";
+import { listAuditHistory } from "../src/history.js";
 import {
   closeDatabase,
   createUser,
   getDatabase,
-  listAuditLog,
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
@@ -109,7 +109,7 @@ describe("server assignments and independent capabilities", () => {
       { statusCode: 404 },
     );
     assert.ok(
-      listAuditLog(50).some((event) => event.action === "authorization.denied"),
+      listAuditHistory({ limit: 50 }).entries.some((event) => event.action === "authorization.denied"),
     );
   });
 

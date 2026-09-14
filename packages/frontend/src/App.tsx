@@ -42,33 +42,26 @@ const pages = [
   { path: "/settings", element: <Settings />, adminOnly: true },
 ];
 
-const serverPages = [
-  { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} /> },
-  { prefix: "files", render: (id: string) => <Files containerId={id} /> },
+const detailPages = [
+  { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} />, serverTools: true },
+  { prefix: "files", render: (id: string) => <Files containerId={id} />, serverTools: true },
   { prefix: "console", render: (id: string) => <Console containerId={id} />, console: true },
+  { prefix: "operations", render: (id: string) => <OperationDetail key={id} operationId={id} /> },
 ];
 
 function resolvePage(pathname: string) {
   const page = pages.find((candidate) => candidate.path === pathname);
   if (page) return { ...page, serverTools: false, console: false };
   const match = pathname.match(/^\/([^/]+)\/([^/]+)$/);
-  if (match?.[1] === "operations") {
-    try {
-      const id = decodeURIComponent(match[2]);
-      return { element: <OperationDetail key={id} operationId={id} />, adminOnly: false, serverTools: false, console: false };
-    } catch {
-      return null;
-    }
-  }
-  const serverPage = serverPages.find((candidate) => candidate.prefix === match?.[1]);
-  if (!match || !serverPage) return null;
+  const detailPage = detailPages.find((candidate) => candidate.prefix === match?.[1]);
+  if (!match || !detailPage) return null;
   try {
     const id = decodeURIComponent(match[2]);
     return {
-      element: serverPage.render(id),
+      element: detailPage.render(id),
       adminOnly: false,
-      serverTools: !serverPage.console,
-      console: Boolean(serverPage.console),
+      serverTools: Boolean(detailPage.serverTools),
+      console: Boolean(detailPage.console),
     };
   } catch {
     return null;

@@ -6,7 +6,8 @@ import {
 } from "@ludock/shared";
 import { createApp } from "../src/app.js";
 import { createSession } from "../src/auth.js";
-import { closeDatabase, createUser, getDatabase, listAuditLog } from "../src/database.js";
+import { closeDatabase, createUser, getDatabase } from "../src/database.js";
+import { listAuditHistory } from "../src/history.js";
 import {
   configureNotifications,
   deliverNotifications,
@@ -82,7 +83,7 @@ describe("notification troubleshooting routes", () => {
     }
     const stored = getDatabase().prepare("SELECT state,attempts FROM notification_deliveries").all();
     assert.deepEqual(stored, [{ state: "failed", attempts: 5 }]);
-    assert.deepEqual(listAuditLog(10), []);
+    assert.deepEqual(listAuditHistory({ limit: 10 }).entries, []);
   });
 
   it("queues distinct test notifications and audits only their delivery IDs", async () => {
@@ -103,7 +104,7 @@ describe("notification troubleshooting routes", () => {
       ids.add(delivery.id);
     }
     assert.equal(ids.size, 2);
-    const audit = listAuditLog(10);
+    const audit = listAuditHistory({ limit: 10 }).entries;
     assert.equal(audit.length, 2);
     for (const entry of audit) {
       assert.equal(entry.action, "notifications.test_queued");
@@ -162,7 +163,7 @@ describe("notification troubleshooting routes", () => {
     const delivered = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
     assert.equal(delivered.status, 409);
     await delivered.body?.cancel();
-    assert.deepEqual(listAuditLog(10), []);
+    assert.deepEqual(listAuditHistory({ limit: 10 }).entries, []);
   });
 
   it("requires saved enabled settings for tests and retries", async () => {
@@ -181,7 +182,7 @@ describe("notification troubleshooting routes", () => {
       assert.equal(response.status, 400);
       assert.doesNotMatch(await response.text(), /route-fixture-secret/);
     }
-    assert.deepEqual(listAuditLog(10), []);
+    assert.deepEqual(listAuditHistory({ limit: 10 }).entries, []);
   });
 
   it("requeues a failed delivery after configuration is fixed and prevents duplicate retries", async () => {
@@ -205,7 +206,7 @@ describe("notification troubleshooting routes", () => {
     const repeated = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
     assert.equal(repeated.status, 409);
     await repeated.body?.cancel();
-    const entries = listAuditLog(10).filter((entry) => entry.action === "notifications.retry_queued");
+    const entries = listAuditHistory({ limit: 10 }).entries.filter((entry) => entry.action === "notifications.retry_queued");
     assert.equal(entries.length, 1);
     assert.equal(entries[0].targetId, null);
     assert.deepEqual(entries[0].details, { deliveryId: delivery.id });

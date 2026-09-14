@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, it } from "bun:test";
 process.env.LUDOCK_DB_PATH = ":memory:";
 
 const { operationActorId } = await import("../src/auth.js");
-const { closeDatabase, getDatabase, listAuditLog } = await import("../src/database.js");
+const { closeDatabase, getDatabase } = await import("../src/database.js");
+const { listAuditHistory } = await import("../src/history.js");
 const { reconcileServers } = await import("../src/identity.js");
 const {
   enqueueOperation,
@@ -103,11 +104,11 @@ describe("API token operation actors", () => {
     registerJobHandler("api-token-operation", { run: async () => ({ ok: true }) });
     await startOperationRunner();
     assert.equal((await finished(currentOperation.id)).status, "succeeded");
-    const audit = JSON.stringify(listAuditLog(20));
+    const audit = JSON.stringify(listAuditHistory({ limit: 20 }).entries);
     assert.equal(audit.includes(firstActorId), false);
     assert.equal(audit.includes(currentActorId), false);
     assert.ok(
-      listAuditLog(20).some((entry) =>
+      listAuditHistory({ limit: 20 }).entries.some((entry) =>
         entry.action === "server.api-token-operation.succeeded" &&
         (entry.details as { actorId?: string } | null)?.actorId === "api-token",
       ),

@@ -132,8 +132,8 @@ and size of a retained complete archive.
 
 History queries filter in SQLite and use cursors to continue through older
 records. Both histories order by creation time and use identifiers to break
-ties. Operation reads resolve current server-view
-authority before pagination, including for missing or suspended bindings, so
+ties. Operation reads resolve current server-view authority before pagination,
+including for missing or suspended bindings, so
 inaccessible work cannot contribute rows or pagination metadata. Audit remains
 administrator-only. Public actors omit API-token fingerprints, and links between
 audit events and operations use recorded identifiers. An audit status describes

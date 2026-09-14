@@ -12,7 +12,6 @@ export const operationStatusSchema = z.enum([
 export type OperationStatus = z.infer<typeof operationStatusSchema>;
 export const operationHistoryQuerySchema = z.object({
   ...historyQueryShape,
-  kind: z.string().trim().min(1).max(200).optional(),
   status: operationStatusSchema.optional(),
 }).refine(validHistoryRange, { message: "From must be before or equal to to", path: ["to"] });
 export type OperationHistoryQuery = z.infer<typeof operationHistoryQuerySchema>;

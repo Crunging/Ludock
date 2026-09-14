@@ -19,11 +19,9 @@ import type {
   AuthUser,
   UserSummary,
   SessionSummary,
-  AuditEntry,
 } from "@ludock/shared";
 export type { UserSummary, SessionSummary } from "@ludock/shared";
 export type SessionUser = AuthUser;
-export type AuditRecord = AuditEntry;
 
 export interface UserRecord extends UserSummary {
   passwordHash: string;
@@ -544,42 +542,6 @@ export function writeAuditLog(input: {
 
   auditWritesSincePrune += 1;
   if (options.prune !== false) pruneAuditLogIfNeeded();
-}
-
-export function listAuditLog(limit: number): AuditRecord[] {
-  const rows = getDatabase()
-    .prepare(
-      `SELECT audit_log.id, users.username, audit_log.action,
-              audit_log.target_type, audit_log.target_id,
-              audit_log.details_json, audit_log.ip_address,
-              audit_log.created_at
-       FROM audit_log
-       LEFT JOIN users ON users.id = audit_log.user_id
-       ORDER BY audit_log.id DESC
-       LIMIT ?`,
-    )
-    .all(limit) as Array<{
-    id: number;
-    username: string | null;
-    action: string;
-    target_type: string | null;
-    target_id: string | null;
-    details_json: string | null;
-    ip_address: string | null;
-    created_at: number;
-  }>;
-  return rows.map((row) => ({
-    id: row.id,
-    username: row.username,
-    action: row.action,
-    targetType: row.target_type,
-    targetId: row.target_id,
-    details: row.details_json
-      ? (JSON.parse(row.details_json) as unknown)
-      : null,
-    ipAddress: row.ip_address,
-    createdAt: row.created_at,
-  }));
 }
 
 export function closeDatabase(): void {

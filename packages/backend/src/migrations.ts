@@ -204,6 +204,8 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END,
         created_at DESC, id DESC
       );
+      DROP INDEX operations_server_idx;
+      DROP INDEX audit_log_created_at_idx;
     `,
   },
 ];

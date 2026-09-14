@@ -304,8 +304,8 @@ that records its identifier.
 The administrator **Audit log** searches retained events. Actor information is
 shown where it was recorded, using the account's current name when available.
 Deleted accounts may show only their recorded identifier; historical events may
-lack attribution. Audit
-retention still applies, so an operation can outlive its audit events.
+lack attribution. Audit retention still applies, so an operation can outlive its
+audit events.
 An audit status describes the event's recorded outcome; for example, an earlier
 queued event stays queued even after its operation succeeds. Events without a
 recorded status have no status to filter on.
@@ -539,6 +539,7 @@ for the server's operation history.
 (up to 250), `cursor`, `serverId`, `actor`, `action`, `status`, `from`, and `to`.
 `actor` matches a current account name or a safe recorded actor identifier;
 `action` searches the audit action or operation kind. Dates are inclusive Unix
-timestamps in milliseconds. Audit additionally accepts `operationId` to find related events.
+timestamps in milliseconds. Audit additionally accepts `operationId` to find
+related events.
 Responses include `nextCursor`; pass it with the same filters to continue, and
 stop when it is null. Operation details and later pages enforce current access.

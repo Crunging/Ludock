@@ -1,8 +1,7 @@
 import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
-import { isApiTokenOperationActor, publicOperationActorId } from "./auth.js";
+import { isApiTokenOperationActor, publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
-import { historyActor } from "./history.js";
 
 interface OperationRow {
   id: string;
@@ -19,10 +18,6 @@ interface OperationRow {
   error: string | null;
   result_json: string | null;
 }
-type PublicOperationRow = Omit<
-  OperationRow,
-  "actor_id" | "input_json" | "recovery_json" | "binding_revision"
->;
 export interface Job extends Operation {
   actorId: string;
   input: Record<string, unknown>;
@@ -54,7 +49,7 @@ function parseObject(json: string): Record<string, unknown> {
     );
   return value as Record<string, unknown>;
 }
-function toOperation(row: PublicOperationRow): Operation {
+function toJob(row: OperationRow): Job {
   return {
     id: row.id,
     serverId: row.server_id,
@@ -65,11 +60,6 @@ function toOperation(row: PublicOperationRow): Operation {
     updatedAt: row.updated_at,
     error: row.error,
     result: row.result_json ? parseObject(row.result_json) : null,
-  };
-}
-function toJob(row: OperationRow): Job {
-  return {
-    ...toOperation(row),
     actorId: row.actor_id,
     bindingRevision: row.binding_revision,
     input: parseObject(row.input_json),
@@ -92,7 +82,7 @@ export function publicOperation(job: Job): Operation {
     id,
     serverId,
     kind,
-    actor: historyActor(job.actorId, findUserById(job.actorId)?.username ?? null),
+    actor: publicHistoryActor(job.actorId, findUserById(job.actorId)?.username ?? null),
     status,
     phase,
     createdAt,
@@ -106,16 +96,6 @@ export function getOperation(id: string): Job | null {
     .prepare("SELECT * FROM operations WHERE id = ?")
     .get(id) as OperationRow | null;
   return row ? toJob(row) : null;
-}
-export function listOperations(serverId: string): Operation[] {
-  return (
-    getDatabase()
-      .prepare(
-        `SELECT id, server_id, kind, status, phase, created_at, updated_at, error, result_json
-         FROM operations WHERE server_id = ? ORDER BY created_at DESC LIMIT 100`,
-      )
-      .all(serverId) as PublicOperationRow[]
-  ).map(toOperation);
 }
 export function registerJobHandler(kind: string, handler: JobHandler): void {
   handlers.set(kind, handler);

@@ -8,13 +8,13 @@ const {
   closeDatabase,
   getDatabase,
   getLoginThrottle,
-  listAuditLog,
   pruneAuditLog,
   pruneAuditLogIfNeeded,
   pruneLoginAttempts,
   recordLoginFailure,
   writeAuditLog,
 } = await import("../src/database.js");
+const { listAuditHistory } = await import("../src/history.js");
 
 afterEach(() => closeDatabase());
 
@@ -52,10 +52,8 @@ describe("audit log retention", () => {
     pruneAuditLog();
     assert.equal(auditCount(), 1000);
 
-    assert.equal(listAuditLog(1)[0]?.action, "auth.login.failed.1199");
-    const actions = new Set(listAuditLog(1000).map((entry) => entry.action));
-    assert.equal(actions.has("auth.login.failed.1199"), true);
-    assert.equal(actions.has("auth.login.failed.0"), false);
+    assert.equal(listAuditHistory({ limit: 1 }).entries[0]?.action, "auth.login.failed.1199");
+    assert.deepEqual(listAuditHistory({ limit: 1, action: "auth.login.failed.0" }).entries, []);
   });
 
   it("defers pruning until the owning transaction has committed", () => {
@@ -77,7 +75,7 @@ describe("audit log retention", () => {
 
     pruneAuditLogIfNeeded();
     assert.equal(auditCount(), 1000);
-    assert.equal(listAuditLog(1)[0]?.action, "fixture.transaction");
+    assert.equal(listAuditHistory({ limit: 1 }).entries[0]?.action, "fixture.transaction");
   });
 
   it("keeps failed deferred pruning eligible for retry", () => {

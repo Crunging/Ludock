@@ -126,7 +126,7 @@ describe("searchable operation history", () => {
     assert.deepEqual(second.operations.map((row) => row.id), [operationId(1)]);
     assert.equal(second.nextCursor, null);
     assert.equal(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: admin.id })).operations.length, 6);
-    assert.equal(listOperationHistory(admin, operationHistoryQuerySchema.parse({ kind: "REST" })).operations[0].kind, "restore");
+    assert.equal(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "REST" })).operations[0].kind, "restore");
     assert.deepEqual(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: "%' OR 1=1 --" })).operations, []);
     insertOperation(8, { kind: "literal_%_action" });
     assert.deepEqual(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "_%_" })).operations.map((row) => row.id), [operationId(8)]);

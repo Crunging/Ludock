@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
+import { listAuditHistory, listOperationHistory } from "../src/history.js";
 import {
   closeDatabase,
   createUser,
   deleteUser,
   getDatabase,
-  listAuditLog,
+  type SessionUser,
 } from "../src/database.js";
 import { reconcileServers } from "../src/identity.js";
 import {
   enqueueOperation,
   getOperation,
-  listOperations,
   registerJobHandler,
   startOperationRunner,
   stopOperationRunner,
@@ -24,14 +24,13 @@ import {
 import { serverLockKeys } from "../src/servers.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
+const owner: SessionUser = { id: "owner", username: "owner", role: "admin" };
 let serverId: string;
 beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
   createUser({
-    id: "owner",
-    username: "owner",
-    role: "admin",
+    ...owner,
     passwordHash: "fake",
     disabled: false,
     createdAt: 0,
@@ -73,55 +72,6 @@ async function finished(id: string) {
 }
 
 describe("durable operations", () => {
-  it("lists the newest 100 public operations for only the requested server", () => {
-    const otherServerId = reconcileServers([
-      {
-        containerId: "other",
-        name: "other",
-        displayName: "Other",
-        gameType: "minecraft",
-        mounts: [],
-      },
-    ]).find((server) => server.containerId === "other")!.id;
-    const insert = getDatabase().prepare(
-      `INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at,error,result_json)
-       VALUES (?,?,'owner','restore','failed','failed',?,?,1,?,?,?,?)`,
-    );
-    for (let index = 0; index < 105; index++) {
-      insert.run(
-        `history-${index}`,
-        serverId,
-        JSON.stringify({ privateInput: "/private/input" }),
-        JSON.stringify({ privatePath: "/private/recovery" }),
-        index,
-        index + 1,
-        "Restore needs review",
-        index === 104 ? JSON.stringify({ restored: false }) : null,
-      );
-    }
-    insert.run("other-history", otherServerId, "{}", "{}", 200, 201, null, null);
-
-    const history = listOperations(serverId);
-    assert.equal(history.length, 100);
-    assert.deepEqual(history[0], {
-      id: "history-104",
-      serverId,
-      kind: "restore",
-      status: "failed",
-      phase: "failed",
-      createdAt: 104,
-      updatedAt: 105,
-      error: "Restore needs review",
-      result: { restored: false },
-    });
-    assert.equal(history[1].result, null);
-    assert.equal(history.at(-1)?.id, "history-5");
-    assert.ok(history.every((operation) => operation.serverId === serverId));
-    assert.equal(JSON.stringify(history).includes("/private/"), false);
-    assert.deepEqual(getOperation("history-104")?.recovery, {
-      privatePath: "/private/recovery",
-    });
-  });
   it("deduplicates retries while rejecting a reused key with different settings", () => {
     const first = enqueue("idempotency", "same", { createBackup: true });
     const retry = enqueue("idempotency", "same", { createBackup: true });
@@ -134,7 +84,7 @@ describe("durable operations", () => {
       () => enqueue("idempotency", "other"),
       /already queued or running/,
     );
-    assert.equal(listOperations(serverId).length, 1);
+    assert.equal(listOperationHistory(owner, { serverId, limit: 50 }).operations.length, 1);
   });
   it("persists recovery data before the handler continues, without exposing it publicly", async () => {
     registerJobHandler("progress", {
@@ -147,7 +97,7 @@ describe("durable operations", () => {
         assert.equal(saved.phase, "copying");
         assert.equal(saved.recovery.initiallyRunning, true);
         assert.equal(
-          JSON.stringify(listOperations(serverId)).includes("/private/secret"),
+          JSON.stringify(listOperationHistory(owner, { serverId, limit: 50 }).operations).includes("/private/secret"),
           false,
         );
         return { copied: true };
@@ -156,7 +106,7 @@ describe("durable operations", () => {
     const operation = enqueue("progress");
     await startOperationRunner();
     assert.equal((await finished(operation.id)).status, "succeeded");
-    const audit = listAuditLog(20).find(
+    const audit = listAuditHistory({ limit: 20 }).entries.find(
       (event) => event.action === "server.progress.succeeded",
     );
     assert.equal(audit?.username, "owner");
@@ -203,7 +153,7 @@ describe("durable operations", () => {
     await startOperationRunner();
     assert.match(getOperation(operation.id)!.error!, /administrator attention/);
     assert.equal(
-      JSON.stringify(listAuditLog(10)).includes("token=secret"),
+      JSON.stringify(listAuditHistory({ limit: 10 }).entries).includes("token=secret"),
       false,
     );
   });
@@ -257,7 +207,7 @@ describe("durable operations", () => {
     await startOperationRunner();
     assert.equal((await finished(operation.id)).status, "failed");
     assert.ok(
-      listAuditLog(20).some(
+      listAuditHistory({ limit: 20 }).entries.some(
         (event) => event.action === "server.deleted-owner.failed",
       ),
     );
