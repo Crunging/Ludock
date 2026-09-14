@@ -204,6 +204,12 @@ behavior. Feature routes should call these policies rather than duplicate them.
 
 ## Frontend ownership
 
+`App.tsx` keeps page selection and administrator-only requirements in the same
+route definitions. Server-tool routes also select the console layout or the
+Servers navigation state. Unknown and malformed routes return to the dashboard;
+backend authorization remains authoritative. The small history-based navigation
+provider keeps routing independent of request and form state.
+
 `ServerDetail.tsx` coordinates server loading, polling, permissions, notices,
 and form drafts. Panels in `components/server-detail` render activity, backups,
 schedules, updates, availability, and binding review through explicit props and
@@ -211,6 +217,12 @@ callbacks. Drafts remain above the panels so switching tabs does not discard
 confirmation text or selections.
 
 Asynchronous page reads own an abort controller and discard obsolete responses.
+Audit and Diagnostics share `usePageRead` for one current read and explicit
+refresh. It clears the previous snapshot while loading or after failure, and
+aborts outstanding work when replaced, finished, or unmounted. Diagnostics
+publishes its system and integration responses together. Live server snapshots,
+file browsing, and mutation-driven refreshes retain their feature-specific
+authorization and ordering policies.
 Account changes and session expiry invalidate pending authentication reads.
 Cookie-changing authentication requests and form mutations are serialized;
 successful mutations clear only the draft values they submitted. Settings and

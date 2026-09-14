@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { apiJson } from "../api";
+import { usePageRead } from "../hooks/usePageRead";
 import { NavLink } from "../navigation";
 import "./diagnostics.css";
 
 import {
   diagnosticsResponseSchema,
   integrationsResponseSchema,
-  type DiscoveryDiagnostic,
-  type GameIntegration,
 } from "@ludock/shared";
 
 const columns = [
@@ -19,50 +18,18 @@ const columns = [
   { id: "platforms", title: "Image platforms" },
 ] as const;
 
+async function readDiagnostics(signal: AbortSignal) {
+  const [system, games] = await Promise.all([
+    apiJson("/diagnostics", diagnosticsResponseSchema, { signal }),
+    apiJson("/integrations", integrationsResponseSchema, { signal }),
+  ]);
+  return { ...system, ...games };
+}
+
 export default function Diagnostics() {
-  const [diagnostics, setDiagnostics] = useState<DiscoveryDiagnostic[]>([]);
-  const [integrations, setIntegrations] = useState<GameIntegration[]>([]);
-  const [dockerConnected, setDockerConnected] = useState(false);
-  const [composeAvailable, setComposeAvailable] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error, refresh } = usePageRead(readDiagnostics, "Unable to load diagnostics.");
   const [selected, setSelected] = useState("");
-  const request = useRef<AbortController | null>(null);
-  const refresh = useCallback(async () => {
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    setLoading(true);
-    setError(null);
-    try {
-      const [system, games] = await Promise.all([
-        apiJson("/diagnostics", diagnosticsResponseSchema, { signal: controller.signal }),
-        apiJson("/integrations", integrationsResponseSchema, { signal: controller.signal }),
-      ]);
-      if (controller.signal.aborted || request.current !== controller) return;
-      setDiagnostics(system.diagnostics);
-      setDockerConnected(system.dockerConnected);
-      setComposeAvailable(system.composeAvailable);
-      setIntegrations(games.integrations);
-    } catch (reason) {
-      if (controller.signal.aborted || request.current !== controller) return;
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Unable to load diagnostics.",
-      );
-    } finally {
-      if (request.current === controller && !controller.signal.aborted) {
-        request.current = null;
-        setLoading(false);
-      }
-    }
-  }, []);
-  useEffect(() => {
-    void refresh();
-    return () => request.current?.abort();
-  }, [refresh]);
-  const integration = integrations.find((item) => item.gameType === selected);
+  const integration = data?.integrations.find((item) => item.gameType === selected);
   return (
     <div className="page">
       <div className="page__header page__header--actions">
@@ -89,15 +56,15 @@ export default function Diagnostics() {
         <p className="muted" role="status">
           Loading diagnostics…
         </p>
-      ) : !error && (
+      ) : data && !error && (
         <>
           <dl className="metadata-list">
             <dt>Docker Engine</dt>
-            <dd>{dockerConnected ? "Connected" : "Unavailable"}</dd>
+            <dd>{data.dockerConnected ? "Connected" : "Unavailable"}</dd>
             <dt>Compose updates</dt>
-            <dd>{composeAvailable ? "Available" : "Not enabled"}</dd>
+            <dd>{data.composeAvailable ? "Available" : "Not enabled"}</dd>
           </dl>
-          {!dockerConnected && (
+          {!data.dockerConnected && (
             <section className="help-panel diagnostics-help" aria-labelledby="docker-help-title">
               <h2 id="docker-help-title">Connect Ludock to Docker</h2>
               <p>
@@ -113,7 +80,7 @@ export default function Diagnostics() {
               <NavLink className="text-link" to="/logs">View Ludock logs</NavLink>
             </section>
           )}
-          {!composeAvailable && (
+          {!data.composeAvailable && (
             <section className="help-panel diagnostics-help" aria-labelledby="compose-help-title">
               <h2 id="compose-help-title">Enable Compose updates when you need them</h2>
               <p>
@@ -137,16 +104,16 @@ export default function Diagnostics() {
                   </tr>
                 </thead>
                 <tbody>
-                  {diagnostics.length === 0 && (
+                  {data.diagnostics.length === 0 && (
                     <tr>
                       <td colSpan={3} className="muted">
-                        {dockerConnected
+                        {data.dockerConnected
                           ? "No discovery issues reported."
                           : "Discovery cannot be checked until Docker is connected."}
                       </td>
                     </tr>
                   )}
-                  {diagnostics.map((diagnostic, index) => (
+                  {data.diagnostics.map((diagnostic, index) => (
                     <tr
                       key={`${diagnostic.containerId}-${diagnostic.code}-${index}`}
                     >
@@ -176,7 +143,7 @@ export default function Diagnostics() {
                   </tr>
                 </thead>
                 <tbody>
-                  {integrations.map((game) => (
+                  {data.integrations.map((game) => (
                     <tr key={game.gameType}>
                       <td>
                         <button

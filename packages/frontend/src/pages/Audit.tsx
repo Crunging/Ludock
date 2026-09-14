@@ -1,38 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { apiJson } from "../api";
+import { usePageRead } from "../hooks/usePageRead";
 
-import { type AuditEntry, auditResponseSchema } from "@ludock/shared";
+import { auditResponseSchema } from "@ludock/shared";
+
+const readAudit = (signal: AbortSignal) => apiJson("/audit", auditResponseSchema, { signal });
 
 export default function Audit() {
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const request = useRef<AbortController | null>(null);
-
-  const refresh = useCallback(async () => {
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    setLoading(true);
-    setError(null);
-    setEntries([]);
-    try {
-      const body = await apiJson("/audit", auditResponseSchema, { signal: controller.signal });
-      if (!controller.signal.aborted && request.current === controller) setEntries(body.entries);
-    } catch (reason) {
-      if (!controller.signal.aborted && request.current === controller)
-        setError(reason instanceof Error ? reason.message : "Failed to load audit log");
-    } finally {
-      if (!controller.signal.aborted && request.current === controller) {
-        request.current = null;
-        setLoading(false);
-      }
-    }
-  }, []);
-  useEffect(() => {
-    void refresh();
-    return () => request.current?.abort();
-  }, [refresh]);
+  const { data, error, loading, refresh } = usePageRead(readAudit, "Failed to load audit log");
+  const entries = data?.entries ?? [];
 
   return (
     <div className="page">

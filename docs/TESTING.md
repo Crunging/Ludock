@@ -266,6 +266,9 @@ absolute paths on the Docker host and inside Ludock.
   Servers restores the list filters. Sign-out clears these in-memory choices.
   A late operation response from a page that was left cannot change the new
   page's tab.
+- Back/forward navigation preserves those same choices. Sign-in at a direct
+  server link opens the requested page. Unknown or malformed routes return to
+  Servers, and restricted accounts never mount or fetch administrator-only pages.
 - A failed deferred page download shows recovery controls while navigation and
   remembered filters remain available. Reloading the document retries the failed
   download; the fallback does not expose raw errors or module paths.

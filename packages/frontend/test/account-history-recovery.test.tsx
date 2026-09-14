@@ -5,6 +5,7 @@ import Account from "../src/pages/Account";
 import Audit from "../src/pages/Audit";
 import ApplicationLogs from "../src/pages/ApplicationLogs";
 import Diagnostics from "../src/pages/Diagnostics";
+import { AUTH_REQUIRED_EVENT } from "../src/api";
 import { NavigationProvider } from "../src/navigation";
 
 function deferred<T>() {
@@ -91,6 +92,55 @@ describe("account and history recovery", () => {
     expect(screen.queryByText("No discovery issues reported.")).toBeNull();
     expect(screen.queryByText("Connected")).toBeNull();
     expect(screen.queryByText("Unavailable")).toBeNull();
+  });
+
+  it("shows diagnostics only after both system and integration reads succeed", async () => {
+    const integrations = deferred<Response>();
+    const request = spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      String(url).endsWith("/integrations")
+        ? integrations.promise
+        : Response.json({ diagnostics: [], dockerConnected: true, composeAvailable: true }),
+    );
+    render(<NavigationProvider><Diagnostics /></NavigationProvider>);
+    await act(async () => {});
+    expect(screen.getByRole("status").textContent).toContain("Loading diagnostics");
+    expect(screen.queryByText("Connected")).toBeNull();
+    expect(screen.queryByText("No discovery issues reported.")).toBeNull();
+
+    await act(async () => { integrations.reject(new Error("Integrations unavailable")); });
+    expect((await screen.findByRole("alert")).textContent).toContain("Integrations unavailable");
+    expect(screen.queryByText("Connected")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Game capabilities" })).toBeNull();
+
+    request.mockImplementation(async (url) =>
+      String(url).endsWith("/integrations")
+        ? Response.json({ integrations: [] })
+        : Response.json({ diagnostics: [], dockerConnected: true, composeAvailable: true }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Connected");
+    expect(screen.getByRole("heading", { name: "Game capabilities" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("cancels remaining diagnostics reads after failure and ignores their late authorization response", async () => {
+    const system = deferred<Response>();
+    const events = spyOn(window, "dispatchEvent");
+    const request = spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      String(url).endsWith("/integrations")
+        ? Response.json({ error: "Integrations unavailable" }, { status: 503 })
+        : system.promise,
+    );
+    render(<NavigationProvider><Diagnostics /></NavigationProvider>);
+    expect((await screen.findByRole("alert")).textContent).toContain("Integrations unavailable");
+    const systemSignal = request.mock.calls.find(([url]) => String(url).endsWith("/diagnostics"))?.[1]?.signal;
+    expect(systemSignal?.aborted).toBe(true);
+    await act(async () => {
+      system.resolve(Response.json({ error: "Obsolete authentication rejection" }, { status: 401 }));
+    });
+    expect(events.mock.calls.some(([event]) => event.type === AUTH_REQUIRED_EVENT)).toBe(false);
+    expect(screen.getByRole("alert").textContent).toContain("Integrations unavailable");
+    expect(screen.queryByRole("heading", { name: "Game capabilities" })).toBeNull();
   });
 
   it("offers connection recovery without claiming discovery succeeded while Docker is unavailable", async () => {

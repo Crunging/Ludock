@@ -27,10 +27,38 @@ function PageFallback() {
   );
 }
 
-function routeParameter(match: RegExpMatchArray | null): string | null {
-  if (!match?.[1]) return null;
+// Keep page selection and its access requirement together so a new page cannot
+// accidentally bypass the redirect policy or be omitted from known routes.
+const pages = [
+  { path: "/", element: <Dashboard /> },
+  { path: "/account", element: <Account /> },
+  { path: "/users", element: <Users />, adminOnly: true },
+  { path: "/audit", element: <Audit />, adminOnly: true },
+  { path: "/logs", element: <ApplicationLogs />, adminOnly: true },
+  { path: "/diagnostics", element: <Diagnostics />, adminOnly: true },
+  { path: "/settings", element: <Settings />, adminOnly: true },
+];
+
+const serverPages = [
+  { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} /> },
+  { prefix: "files", render: (id: string) => <Files containerId={id} /> },
+  { prefix: "console", render: (id: string) => <Console containerId={id} />, console: true },
+];
+
+function resolvePage(pathname: string) {
+  const page = pages.find((candidate) => candidate.path === pathname);
+  if (page) return { ...page, serverTools: false, console: false };
+  const match = pathname.match(/^\/([^/]+)\/([^/]+)$/);
+  const serverPage = serverPages.find((candidate) => candidate.prefix === match?.[1]);
+  if (!match || !serverPage) return null;
   try {
-    return decodeURIComponent(match[1]);
+    const id = decodeURIComponent(match[2]);
+    return {
+      element: serverPage.render(id),
+      adminOnly: false,
+      serverTools: !serverPage.console,
+      console: Boolean(serverPage.console),
+    };
   } catch {
     return null;
   }
@@ -41,39 +69,15 @@ function App() {
     useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const serverMatch = location.pathname.match(/^\/servers\/([^/]+)$/);
-  const serverId = routeParameter(serverMatch);
-  const consoleMatch = location.pathname.match(/^\/console\/([^/]+)$/);
-  const filesMatch = location.pathname.match(/^\/files\/([^/]+)$/);
-  const consoleId = routeParameter(consoleMatch);
-  const filesId = routeParameter(filesMatch);
-  const isConsolePage = consoleId !== null;
-  const knownPath =
-    location.pathname === "/" ||
-    location.pathname === "/account" ||
-    location.pathname === "/users" ||
-    location.pathname === "/audit" ||
-    location.pathname === "/logs" ||
-    location.pathname === "/settings" ||
-    location.pathname === "/diagnostics" ||
-    serverId !== null ||
-    filesId !== null ||
-    isConsolePage;
+  const route = resolvePage(location.pathname);
+  const allowed = route !== null && (!route.adminOnly || user?.role === "admin");
+  const isConsolePage = Boolean(route?.console);
 
   useEffect(() => {
-    if (
-      authenticated &&
-      (!knownPath ||
-        ((location.pathname === "/users" ||
-          location.pathname === "/audit" ||
-          location.pathname === "/logs" ||
-          location.pathname === "/settings" ||
-          location.pathname === "/diagnostics") &&
-          user?.role !== "admin"))
-    ) {
+    if (authenticated && !allowed) {
       navigate("/", { replace: true });
     }
-  }, [authenticated, knownPath, location.pathname, navigate, user?.role]);
+  }, [authenticated, allowed, location.pathname, navigate]);
 
   if (loading) {
     return <PageFallback />;
@@ -110,26 +114,7 @@ function App() {
     return <Login />;
   }
 
-  let page = <Dashboard />;
-  if (location.pathname === "/account") {
-    page = <Account />;
-  } else if (location.pathname === "/users" && user?.role === "admin") {
-    page = <Users />;
-  } else if (location.pathname === "/audit" && user?.role === "admin") {
-    page = <Audit />;
-  } else if (location.pathname === "/logs" && user?.role === "admin") {
-    page = <ApplicationLogs />;
-  } else if (location.pathname === "/diagnostics" && user?.role === "admin") {
-    page = <Diagnostics />;
-  } else if (location.pathname === "/settings" && user?.role === "admin") {
-    page = <Settings />;
-  } else if (serverId) {
-    page = <ServerDetail key={serverId} serverId={serverId} />;
-  } else if (consoleId) {
-    page = <Console containerId={consoleId} />;
-  } else if (filesId) {
-    page = <Files containerId={filesId} />;
-  }
+  const page = allowed ? route.element : <Dashboard />;
 
   return (
     <ViewPreferencesProvider key={user?.id}>
@@ -147,8 +132,8 @@ function App() {
             <NavLink
               to="/"
               end
-              className={`nav-link ${serverId || filesId ? "nav-link--active" : ""}`}
-              aria-current={serverId || filesId ? "location" : undefined}
+              className={`nav-link ${route?.serverTools ? "nav-link--active" : ""}`}
+              aria-current={route?.serverTools ? "location" : undefined}
             >
               Servers
             </NavLink>
@@ -194,7 +179,7 @@ function App() {
       )}
       {!isConsolePage && (
         <nav className="mobile-nav" aria-label="Primary navigation">
-          <NavLink to="/" end className={serverId || filesId ? "nav-link--active" : undefined} aria-current={serverId || filesId ? "location" : undefined}>
+          <NavLink to="/" end className={route?.serverTools ? "nav-link--active" : undefined} aria-current={route?.serverTools ? "location" : undefined}>
             Servers
           </NavLink>
           <NavLink to="/account">Account</NavLink>
