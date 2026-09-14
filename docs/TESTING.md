@@ -1,99 +1,10 @@
-# Testing Ludock
+# Testing reference
 
-Tests describe expected behavior. Their presence is not evidence that a
-particular image, Docker architecture, or live-game integration has passed them.
-Record the image digest, platform, fixture, and result during validation.
-
-## Automated checks
-
-Choose local checks for the behavior and risks affected by the change.
-Documentation-only edits need content, link, and diff checks. CI runs the full
-source, browser, and container suites for code changes; the commands below are
-available for broader local validation, not required before every commit.
-
-Use the latest stable Bun 1 release (minimum 1.4.2), as selected by
-[`.bun-version`](./.bun-version). Update a local standalone installation with
-`bun upgrade`, or use its package manager, keeping it on the Bun 1 release line.
-The release-workflow fixtures also use Git, Bash, and `jq`.
-For a full source check and local image build:
-
-```bash
-bun install --frozen-lockfile
-bun run check
-docker build --pull -t ludock:test .
-```
-
-`--pull` fetches or checks the pinned Bun and Alpine image digests; it does not
-upgrade them. Frozen installs use the dependency versions in `bun.lock`. See
-[Contributing](./CONTRIBUTING.md#updating-tools-and-dependencies) to update Bun,
-dependencies, or image pins before validation.
-
-`bun run check` builds shared runtime contracts once, checks types and lint, runs
-development-runner, backend unit/HTTP, frontend component, and frontend serving
-tests with Bun, then bundles the checked code. Compile-only checks cover
-logical versus Docker identity boundaries and required route capabilities/response
-contracts.
-For focused work:
-
-```bash
-bun run --filter @ludock/frontend test
-bun run --filter @ludock/backend test
-```
-
-Backend suites use `bun:test` with a separate module environment per file.
-Frontend component tests preload jsdom and use React Testing Library with the
-same test runner. Backend coverage includes discovery, identity, grants,
-database schema handling, protocol adapters, filesystem boundaries,
-archive/restore validation, operation locks and recovery, schedule authority/DST
-handling, monitoring, and notification retries.
-Frontend tests cover independent action grants, role ceilings, runtime response
-validation, confirmation/draft state, polling, and obsolete responses during
-overlapping requests.
-Development tests cover isolated state/cookies, shared database locks, port
-collisions, backend instance checks, streaming HTTP proxy behavior, and
-WebSocket forwarding. Fixture tests do not replace real Docker, Compose, or
-game-world validation.
-
-## Browser regression checks
-
-The browser suite uses Bun's preview server for a production frontend build and
-intercepts API and WebSocket requests with per-test fixtures validated by the
-shared contracts. It does not start a backend, connect to Docker, or read
-application storage. The preview server has no backend proxy, and unexpected API
-or external requests fail the test.
-
-```bash
-bun run --filter @ludock/shared build
-bun run --filter @ludock/frontend build
-(cd packages/frontend && bun x --bun playwright install chromium)
-bun run --filter @ludock/frontend test:e2e
-```
-
-The separate **Browser** CI job installs Chromium with its Linux dependencies
-and runs both desktop and touch-mobile projects. Checks cover 320px/390px
-layouts, state/port column alignment, touch targets, filters, independent grants,
-native dialog focus and confirmation, More actions, detail-tab keyboard use,
-and navigation continuity. File cases cover contextual create/delete dialogs,
-rename failure recovery, cancellation of obsolete listings, and upload
-cancellation. Live-state and console cases cover stale controls, denied access,
-fresh snapshots on reconnect, manual retry after repeated disconnects, separate
-command drafts, and commands never being resent automatically.
-Browsing checks cover current-folder filename filtering and sorting, combined
-log filters with independent fetching and scrolling controls, and activity
-filters that keep active work reachable. Filters retain their selections across
-refreshes and distinguish no matches from empty data.
-These browser fixtures verify frontend behavior;
-backend authorization and actual Docker mutations remain covered separately.
-
-For focused work, append a spec name or `--project=desktop` to `test:e2e`.
-`LUDOCK_E2E_PORT` changes the isolated preview port (default `4179`). An occupied
-port fails instead of reusing another process. Set
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an installed Chrome/Chromium executable
-when the Playwright browser download is unavailable; CI uses Playwright's bundled
-Chromium. Failed checks save screenshots and traces in
-`packages/frontend/test-results/`, with an HTML report in
-`packages/frontend/playwright-report/`. CI retains these fixture-only artifacts
-for seven days.
+Use this reference when changing the corresponding feature. Choose scenarios
+that exercise the affected behavior; this is not a checklist to complete for
+every change. Commands and local setup are in [README.md](../README.md#checks).
+These scenarios describe expectations, not recorded proof of passing tests.
+Record the image digest, platform, fixture, and result for integration validation.
 
 ## Docker and architecture validation
 
@@ -118,50 +29,6 @@ For each platform:
 Docker Desktop, rootless Docker, custom socket paths, and external managers
 need separate documented acceptance results. The image starting does not prove
 that a given host's Compose bind paths and mount permissions work.
-
-## Docker integration harnesses
-
-After installing the latest stable Bun 1 and building `ludock:test`, run:
-
-```bash
-docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
-bun scripts/test-linux.mjs
-bun scripts/test-compose.mjs
-bun scripts/test-files.mjs
-bun scripts/test-backups.mjs
-```
-
-All harnesses use Bun.
-The Linux suite first starts the image's default command without source mounts.
-It checks the bundled Bun, Docker, and Compose commands, health, the frontend
-document and script, and graceful shutdown. It then mounts backend source and
-tests read-only and runs the TypeScript suites with the production image's Bun
-runtime and production dependencies, including descriptor-based path tests
-skipped on macOS. These fixtures have no Docker socket or external network.
-All scripts use `LUDOCK_TEST_IMAGE` when set; otherwise they run the
-local `ludock:test` image. They create uniquely named fixture containers and
-volumes and remove their fixtures afterward. The Compose harness checks current
-images, forced recreation of running/stopped services, retained logical identity,
-untouched dependencies, source drift, and literal environment values. The backup
-harness executes archive/data-operation tests inside the Linux runtime against
-disposable volumes and a separate mounted backup destination. The file harness
-checks scoped helper CRUD, mount-source verification, and directory replacement
-races against disposable data.
-
-The file and backup harnesses run only Docker integration cases. Pure filesystem,
-archive, and restore-helper tests run in the Linux suite above, once per image
-architecture, without repeating them in the socket-enabled harnesses.
-
-These harnesses require a reachable Docker daemon, a usable socket mount, and
-host bind paths visible at their declared absolute locations. The fixture game
-containers require the default helper image to be present; a Buildx build does
-not necessarily leave its base image tagged in the daemon's image store. The
-scripts mount `/var/run/docker.sock`; custom socket and remote-daemon setups
-require adapting those fixture mounts. Docker Desktop can
-canonicalize `/Users` and temporary paths through VM-specific aliases. Strict
-mount/symlink validation may reject those layouts; use verified native Linux
-paths and named game-data volumes for full data-operation acceptance. Do not
-weaken root validation to make an unsupported layout pass.
 
 ## Disposable-server acceptance
 

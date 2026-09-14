@@ -75,7 +75,7 @@ Docker verifies image content against the requested digest when pulling. The
 validator's host-root mount remains a privileged trust boundary even with a
 read-only mount and disabled networking, so only trusted helper images may be
 selected. Updating tools, pins, and locked dependencies follows the maintenance
-policy in [Contributing](../CONTRIBUTING.md#updating-tools-and-dependencies).
+policy in [AGENTS.md](../AGENTS.md#dependencies-and-pins).
 
 ## Shared contracts
 
@@ -251,5 +251,5 @@ pair. The runner stops its children together and removes its own locks on exit.
 Development has no Docker connection by default. Set `DOCKER_SOCKET` for a
 dedicated development daemon when testing Docker features. Separate databases,
 ports, and cookies do not isolate Docker: run only one backend against a given
-Docker host. See [CONTRIBUTING.md](../CONTRIBUTING.md) for overrides and recovery
-from an interrupted development run, and [TESTING.md](../TESTING.md) for checks.
+Docker host. See [local development](../README.md#development) for overrides and recovery
+from an interrupted development run, and [README.md](../README.md#checks) for checks.

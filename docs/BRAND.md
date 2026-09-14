@@ -16,7 +16,7 @@ flat, upright, and the same color.
   at 16 pixels. A charcoal `#20211f` tile keeps the orange legible on both light
   and dark browser chrome.
 - **Application artwork:** `packages/frontend/public/ludock-app.svg` is the source
-  for `ludock-192.png`, `ludock-512.png`, and `apple-touch-icon.png` (180 pixels).
+  for `apple-touch-icon.png` (180 pixels).
   These use the four-tile mark on an opaque charcoal background. The square
   artwork allows a launcher to apply its own corner mask.
 

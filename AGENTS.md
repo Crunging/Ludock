@@ -68,7 +68,7 @@ shared boundaries when working in parallel.
 - Stop your own instance with Ctrl+C or its captured PID. Do not kill by broad
   process-name matching or delete data to resolve locks.
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, overrides, and lock recovery.
+See [README.md](./README.md#development) for setup, overrides, and lock recovery.
 
 ## Dependencies and pins
 
@@ -82,8 +82,17 @@ Update `bun.lock` with dependency changes. Pin GitHub Actions to full upstream
 commit SHAs and runtime images to verified multi-platform manifest digests, with
 readable version tags/comments. Keep the Bun image reference identical in
 `Dockerfile` and `packages/backend/src/runtime-images.ts`, on the major in
-`.bun-version`. See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-tools-and-dependencies)
-for update commands and pin verification.
+`.bun-version`. Inspect updates with `bun outdated --recursive`; use
+`bun update --recursive` for compatible updates and review upstream migration
+notes for major upgrades. Run the affected checks after updating the lockfile.
+Resolve annotated action tags to their peeled commit (`^{}`). Verify image
+indexes with `docker buildx imagetools inspect` for both `linux/amd64` and
+`linux/arm64`, and update the Compose fixture's expected Alpine digest together
+with the build pin. `docker build --pull` checks pinned artifacts, not newer tags.
+
+`tar-stream` stays on 3.2.0 because 3.2.1 has incompatible header and stream types;
+remove the constraint when the archive integration type-checks against a
+compatible release.
 
 ## Verification
 
@@ -100,8 +109,10 @@ for update commands and pin verification.
   Compose configuration changes with `docker compose config`. Check affected
   runtime/helper behavior on both `linux/amd64` and `linux/arm64` when architecture
   matters; CI and release validation cover the full matrix.
-- Report what ran and any material gaps. [TESTING.md](./TESTING.md) has commands
-  and acceptance criteria.
+- Report what ran and any material gaps. [README.md](./README.md#checks) has check
+  commands; [docs/TESTING.md](./docs/TESTING.md) covers feature-specific failure,
+  recovery, permission, and platform scenarios. Consult the relevant sections
+  when changing those features.
 
 ## Commits and work artifacts
 
@@ -110,8 +121,12 @@ Commits for coherent changes. Pull requests should explain the problem, resultin
 behavior, and validation.
 
 Leave release versions to release-please. Do not advance the root package version
-or release manifest in ordinary feature or fix PRs; see
-[CONTRIBUTING.md](./CONTRIBUTING.md#release-versions).
+or release manifest in ordinary feature or fix PRs. The final squash commit type
+controls release classification: `fix`, `perf`, `refactor`, and `revert` produce
+patches; `feat` produces a minor release. Other non-breaking types do not trigger
+releases. Merge dependency/pin updates before the generated release PR. A root
+package version change on `main` triggers stable publication; other code pushes
+publish nightly. Preserve already published versions and tags.
 
 Keep private notes, temporary plans, and scratch outside the repo; do not add
 gitignore entries for them. Commit reusable scripts, fixtures, and design docs
@@ -128,6 +143,8 @@ complete tasks; architecture docs should explain durable decisions and constrain
 - `packages/backend/test`, `packages/frontend/test`, `packages/frontend/e2e`, and
   `scripts/test`: backend, component, browser, and development-runner checks.
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md): current implementation boundaries.
+- [docs/TESTING.md](./docs/TESTING.md): integration and regression scenarios.
+- [docs/BRAND.md](./docs/BRAND.md): artwork sources and interface color conventions.
 - [README.md](./README.md), [docs/OPERATIONS.md](./docs/OPERATIONS.md), and
   [docs/GAME-SERVERS.md](./docs/GAME-SERVERS.md): setup and user guidance.
 
@@ -139,3 +156,8 @@ states. Obsolete responses must not overwrite newer input.
 Favor readable tables, compact actions, clear status, and obvious next steps.
 Distinguish dangerous actions from ordinary controls. Avoid promotional copy,
 ornamental gradients, decorative metrics, excessive cards, and redundant badges.
+
+Use the existing four-tile Ludock mark and shared accent tokens. The inline mark
+is `LudockMark.tsx`; `public/ludock-app.svg` is the source for the Apple touch
+icon, and `public/ludock-mark.svg` is the standalone vector. Keep the solid
+favicon variant legible at 16px and status colors distinct from action colors.
