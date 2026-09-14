@@ -1,10 +1,77 @@
-# Testing reference
+# Development and testing reference
 
 Use this reference when changing the corresponding feature. Choose scenarios
 that exercise the affected behavior; this is not a checklist to complete for
-every change. Commands and local setup are in [README.md](../README.md#checks).
+every change. Start with the setup and check commands below.
 These scenarios describe expectations, not recorded proof of passing tests.
 Record the image digest, platform, fixture, and result for integration validation.
+
+## Development
+
+Use the latest stable Bun 1 release (`package.json` declares the minimum):
+
+```bash
+bun install --frozen-lockfile
+bun run dev
+```
+
+The runner prints the frontend/API URLs and database path. Each checkout gets
+separate ports, cookies, and persistent state under `~/.local/state/ludock/dev`.
+Both servers bind to loopback, and Docker is disconnected by default. Set
+`DOCKER_SOCKET` only for a dedicated test daemon; run one backend per Docker host
+and use disposable game data.
+
+Use `bun run dev --print-config` to inspect settings without starting services.
+Overrides: `LUDOCK_DEV_HOME` (state directory), `LUDOCK_DEV_PORT` (frontend),
+`LUDOCK_DEV_API_PORT` (backend; `PORT` also works), and `LUDOCK_DB_PATH` (database,
+including `:memory:`). Never point development at production or unrelated data.
+
+Stop with Ctrl+C; active operations may need time to finish. After a crash,
+inspect the PID in `dev.lock` in the printed state directory or
+`<database>.dev.lock` beside an overridden database. Remove a stale lock only
+after verifying that its runner and backend have ended. Keep the database intact.
+
+## Checks
+
+```bash
+bun run check                              # Types, lint, tests, and build
+bun run --filter @ludock/backend test      # Focused backend suite
+bun run --filter @ludock/frontend test     # Focused frontend suite
+```
+
+For browser changes, build and run the desktop/mobile fixtures:
+
+```bash
+bun run --filter @ludock/shared build
+bun run --filter @ludock/frontend build
+(cd packages/frontend && bun x --bun playwright install chromium)
+bun run --filter @ludock/frontend test:e2e
+```
+
+Browser tests use mocked APIs and no Docker connection. Append a spec name or
+`--project=desktop` for focused checks. `LUDOCK_E2E_PORT` overrides port 4179;
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an existing browser. Failure traces
+and reports are under `packages/frontend/test-results` and `playwright-report`.
+Release-workflow tests also require Git, Bash, and `jq`.
+
+For runtime or Docker integration changes, use a dedicated test daemon:
+
+```bash
+docker build --pull -t ludock:test .
+docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
+bun scripts/test-linux.mjs
+bun scripts/test-compose.mjs
+bun scripts/test-files.mjs
+bun scripts/test-backups.mjs
+```
+
+The harnesses create and clean up their own fixtures. `LUDOCK_TEST_IMAGE`
+overrides `ludock:test`. Socket-enabled harnesses mount `/var/run/docker.sock`
+and require host bind paths visible at identical absolute paths; Docker Desktop
+aliases and remote daemons may need a native Linux test host. Validate affected
+runtime/helper behavior on both `linux/amd64` and `linux/arm64`. Mocked tests do
+not establish live-game compatibility. Use `docker compose config` for Compose
+edits; documentation-only edits need link and diff checks.
 
 ## Docker and architecture validation
 

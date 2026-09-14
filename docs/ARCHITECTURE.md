@@ -251,5 +251,5 @@ pair. The runner stops its children together and removes its own locks on exit.
 Development has no Docker connection by default. Set `DOCKER_SOCKET` for a
 dedicated development daemon when testing Docker features. Separate databases,
 ports, and cookies do not isolate Docker: run only one backend against a given
-Docker host. See [local development](../README.md#development) for overrides and recovery
-from an interrupted development run, and [README.md](../README.md#checks) for checks.
+Docker host. See [local development](./TESTING.md#development) for overrides and recovery
+from an interrupted development run, and [the testing reference](./TESTING.md#checks) for checks.

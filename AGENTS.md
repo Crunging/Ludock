@@ -68,7 +68,7 @@ shared boundaries when working in parallel.
 - Stop your own instance with Ctrl+C or its captured PID. Do not kill by broad
   process-name matching or delete data to resolve locks.
 
-See [README.md](./README.md#development) for setup, overrides, and lock recovery.
+See [docs/TESTING.md](./docs/TESTING.md#development) for setup, overrides, and lock recovery.
 
 ## Dependencies and pins
 
@@ -109,7 +109,7 @@ compatible release.
   Compose configuration changes with `docker compose config`. Check affected
   runtime/helper behavior on both `linux/amd64` and `linux/arm64` when architecture
   matters; CI and release validation cover the full matrix.
-- Report what ran and any material gaps. [README.md](./README.md#checks) has check
+- Report what ran and any material gaps. [docs/TESTING.md](./docs/TESTING.md#checks) has check
   commands; [docs/TESTING.md](./docs/TESTING.md) covers feature-specific failure,
   recovery, permission, and platform scenarios. Consult the relevant sections
   when changing those features.
@@ -143,7 +143,7 @@ complete tasks; architecture docs should explain durable decisions and constrain
 - `packages/backend/test`, `packages/frontend/test`, `packages/frontend/e2e`, and
   `scripts/test`: backend, component, browser, and development-runner checks.
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md): current implementation boundaries.
-- [docs/TESTING.md](./docs/TESTING.md): integration and regression scenarios.
+- [docs/TESTING.md](./docs/TESTING.md): development setup, check commands, and regression scenarios.
 - [docs/BRAND.md](./docs/BRAND.md): artwork sources and interface color conventions.
 - [README.md](./README.md), [docs/OPERATIONS.md](./docs/OPERATIONS.md), and
   [docs/GAME-SERVERS.md](./docs/GAME-SERVERS.md): setup and user guidance.
