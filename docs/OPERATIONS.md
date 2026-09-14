@@ -212,6 +212,25 @@ are entered in GiB and accept decimals. Ludock verifies that the destination
 is actually mounted into its container and does not overlap game data. Set
 `LUDOCK_SELF_CONTAINER` if a custom hostname prevents self-inspection.
 
+The storage summary shows recorded archive usage across all servers, the saved
+total limit, available space on the destination disk, and the free-space reserve
+together. Unsaved form edits do not change those values. Refresh the summary
+after other disk activity; unavailable disk readings are shown as unknown.
+
+The server list and **Backups** tab show the latest successful retained backup
+for administrators and users allowed to create backups. Failed attempts do not
+replace that timestamp; deleting the newest archive reveals the previous one.
+This summary does not verify that an archive is still present or readable.
+
+Open a server's **Backups** tab to check readiness before creating a backup.
+Preflight reports destination, selected-root, capacity, server-state, and shared
+writer problems without stopping the server or copying data. Resolve the listed
+problems and choose **Check again**. Creating a backup repeats preflight before
+the downtime confirmation. A passed preflight is advisory: data contents,
+helper access, and space can still fail validation when the operation runs.
+Scheduled backups and backups used by updates/restores keep the same execution
+checks; a previous preflight never bypasses them.
+
 Backups stop the server throughout copying and restore its previous running state
 after success or recoverable failure. Initially stopped servers remain stopped.
 The archive and checksum are validated before completion; retention then removes

@@ -231,6 +231,16 @@ absolute paths on the Docker host and inside Ludock.
   while still allowing rollback, helper cleanup, and safe state restoration.
 - Exercise capacity/reserve failure, temporary output cleanup, checksum failure,
   retention, and protected restore-target retention using disposable data.
+- Storage visibility shows recorded archive usage, saved capacity, disk free
+  space, and reserve together. Failed disk reads remain unknown, and refreshing
+  status preserves unsaved settings. The newest complete retained archive drives
+  latest-success metadata; failed attempts and unauthorized servers do not leak it.
+- Preflight requires backup-create access and rechecks it after asynchronous
+  reads. Missing/unapproved destinations, unsafe roots, overlapping data, shared
+  writers, and exhausted capacity explain recovery without stopping a server,
+  creating a helper, or writing archives. A fresh check precedes confirmation;
+  obsolete responses cannot re-enable controls after a binding/access change.
+  Passing preflight never bypasses execution or scheduled-backup validation.
 - A restore requires administrator authority and exact typed confirmation. It
   validates its binding and archive before changing game data, creates a safety
   backup, and stays stopped between backup and replacement.

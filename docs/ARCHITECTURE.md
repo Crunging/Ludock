@@ -121,6 +121,15 @@ helper cleanup, and safe restoration of initial running state. Parent update or
 restore operations own state restoration for their nested backups, keeping the
 server stopped between backup and mutation.
 
+Backup readiness is a read-only advisory snapshot. It shares destination,
+capacity, and static root validation with execution, without creating helpers,
+stopping containers, or reserving capacity. Execution still rechecks authority,
+bindings, roots, writers, and space under operation locks. Storage totals use
+the same recorded-archive accounting as the global execution limit; available
+disk space is read from the approved pinned destination and can be unknown.
+Latest-success metadata is scoped to backup access and contains only the date
+and size of a retained complete archive.
+
 Compose updates derive sources from Docker observations and validate an immutable
 snapshot for each confirmed operation. `ludock.compose.source` preserves original
 paths across recreation; it never expands approved roots or enters public server

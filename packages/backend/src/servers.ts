@@ -5,7 +5,7 @@ import {
   type ServerCapability,
   type DockerContainerId,
 } from "@ludock/shared";
-import type { SessionUser } from "./database.js";
+import { getDatabase, type SessionUser } from "./database.js";
 import {
   listManagedContainerObservations,
   getManagedContainerObservation,
@@ -21,6 +21,7 @@ import {
 } from "./identity.js";
 import {
   assertServerCapability,
+  currentActor,
   getEffectiveCapabilities,
 } from "./authorization.js";
 
@@ -38,6 +39,7 @@ export async function refreshServers(): Promise<Map<string, ManagedContainer>> {
   return refreshing;
 }
 function toPublicServer(
+  actor: SessionUser,
   logical: LogicalServer,
   permissions: ServerCapability[],
   container?: ManagedContainer,
@@ -60,6 +62,18 @@ function toPublicServer(
     id: logical.id,
     bindingStatus: logical.status,
     permissions,
+    // Administrators retain durable backup history when a container binding is
+    // unavailable. A create grant exposes only this summary, never archive data.
+    latestBackup:
+      currentActor(actor)?.role === "admin" ||
+      permissions.includes("backups.read") ||
+      permissions.includes("backups.create")
+        ? (getDatabase().prepare(
+            `SELECT created_at AS createdAt,size FROM backups
+             WHERE server_id=? AND state='complete'
+             ORDER BY created_at DESC,id LIMIT 1`,
+          ).get(logical.id) ?? null)
+        : null,
     fileRoots: permissions.includes("files.read")
       ? (container?.fileRoots ?? [])
       : [],
@@ -73,7 +87,7 @@ export async function listServers(actor: SessionUser): Promise<Server[]> {
   return listLogicalServers().flatMap((server) => {
     const permissions = getEffectiveCapabilities(actor, server);
     return permissions.includes("server.view")
-      ? [toPublicServer(server, permissions, current.get(server.containerId ?? ""))]
+      ? [toPublicServer(actor, server, permissions, current.get(server.containerId ?? ""))]
       : [];
   });
 }
@@ -84,6 +98,7 @@ export async function getServer(
   const current = await refreshServers();
   const server = assertServerCapability(actor, id, "server.view");
   return toPublicServer(
+    actor,
     server,
     getEffectiveCapabilities(actor, server),
     current.get(server.containerId ?? ""),

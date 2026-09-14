@@ -1,4 +1,4 @@
-import { type Backup, formatByteSize } from "@ludock/shared";
+import { type Backup, type BackupPreflight, type Server, formatByteSize } from "@ludock/shared";
 import { NavLink } from "../../navigation";
 
 export interface RestoreSelection {
@@ -10,6 +10,11 @@ interface Props {
   serverName: string;
   path: string;
   backups: Backup[];
+  latestBackup: Server["latestBackup"];
+  preflight: BackupPreflight | null;
+  checking: boolean;
+  preflightError: string | null;
+  onCheck: () => void;
   restore: RestoreSelection;
   onRestoreChange: (value: RestoreSelection) => void;
   admin: boolean;
@@ -30,6 +35,11 @@ export default function BackupsPanel(props: Props) {
     serverName,
     path,
     backups,
+    latestBackup,
+    preflight,
+    checking,
+    preflightError,
+    onCheck,
     restore,
     onRestoreChange,
     admin,
@@ -53,7 +63,7 @@ export default function BackupsPanel(props: Props) {
           <button
             className="primary-btn"
             onClick={() => onCreate()}
-            disabled={busy || blocked || hasActiveOperation}
+            disabled={busy || blocked || hasActiveOperation || checking || !preflight?.ready}
           >
             Create backup
           </button>
@@ -69,6 +79,42 @@ export default function BackupsPanel(props: Props) {
           </>
         )}
       </p>
+      {(admin || canRead || canCreate) && (
+        <p className="section-note">
+          <strong>Latest successful backup: </strong>
+          {latestBackup ? <>
+            <time dateTime={new Date(latestBackup.createdAt).toISOString()}>
+              {new Date(latestBackup.createdAt).toLocaleString()}
+            </time>{" · "}{formatByteSize(latestBackup.size)}
+          </> : "No successful backup retained."}
+        </p>
+      )}
+      {canCreate && !blocked && !hasActiveOperation && (
+        <section className="backup-readiness" aria-labelledby="backup-readiness-title">
+          <div className="section-heading">
+            <h3 id="backup-readiness-title">Backup readiness</h3>
+            <button className="secondary-btn" disabled={checking || busy} onClick={onCheck}>
+              Check again
+            </button>
+          </div>
+          {checking && <p role="status">Checking backup destination and data roots…</p>}
+          {preflightError && <p className="alert alert--error" role="alert">{preflightError}</p>}
+          {preflight && <>
+            <p><strong>{preflight.ready ? "Preflight checks passed." : "Resolve these problems before creating a backup:"}</strong></p>
+            {preflight.issues.length > 0 && <ul>
+              {preflight.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}
+            </ul>}
+            {!preflight.ready && <p className="section-note">
+              {admin ? "Review backup settings and this server’s mounted data roots, then check again." : "Ask an administrator to resolve these problems, then check again."}
+            </p>}
+          </>}
+          <p className="section-note">
+            This check does not copy data or stop the server. Available space and
+            data can change; Ludock validates them again when the backup runs.
+            The full data check happens during copying.
+          </p>
+        </section>
+      )}
       {admin && canRead ? (
         <div className="table-scroll">
           <table className="data-table">

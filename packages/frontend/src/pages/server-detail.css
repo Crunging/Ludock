@@ -238,6 +238,21 @@
   border-bottom: 1px solid var(--border);
 }
 
+.backup-readiness {
+  margin-bottom: 24px;
+  padding-block: 16px;
+  border-block: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.backup-readiness ul {
+  padding-left: 24px;
+}
+
+.backup-readiness li + li {
+  margin-top: 8px;
+}
+
 .activity-filters.stack-form {
   display: flex;
   flex-wrap: wrap;
@@ -270,6 +285,7 @@
 }
 
 @media (max-width: 520px), (pointer: coarse) {
+  .backup-readiness button,
   .schedules-table .secondary-btn,
   .schedule-form button,
   .schedule-form .check-label,

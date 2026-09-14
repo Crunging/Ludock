@@ -39,6 +39,7 @@ import AvailabilityPanel from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
+import { useBackupPreflight } from "../hooks/useBackupPreflight";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
@@ -138,6 +139,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const blocked = server?.bindingStatus !== "active";
   const startable = Boolean(server && lifecycleActionForState(server.state) === "start");
   const activeOperation = operations.find(operationActive);
+  const backupReadiness = useBackupPreflight(
+    path,
+    tab === "backups" && can(user, server, "backups.create") && !blocked && !activeOperation,
+    `${server?.shortId}:${server?.state}:${server?.bindingStatus}`,
+  );
 
   useEffect(() => {
     if (scheduleEdit || busy || !snapshotReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
@@ -276,7 +282,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     setError(null);
     setNotice(null);
     try {
-      await action();
+      const result = await action();
+      if (result === false) return false;
       if (!pageActive.current) return false;
       setNotice(success);
       await refresh(true, true);
@@ -350,19 +357,19 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       !snapshotReady
     ) return;
     if (
-      !window.confirm(
-        `Create a backup of ${server?.displayName}? The server stops for the entire copy and returns to its previous running state afterward.`,
-      )
-    )
-      return;
-    if (
       await perform(
-        () =>
-          apiJson(
+        async () => {
+          const preflight = await backupReadiness.check();
+          if (!pageActive.current || !preflight?.ready) return false;
+          if (!window.confirm(
+            `Create a backup of ${server?.displayName}? The server stops for the entire copy and returns to its previous running state afterward.`,
+          )) return false;
+          return apiJson(
             `${path}/backups`,
             operationResponseSchema,
             jsonBody("POST", {}),
-          ),
+          );
+        },
         "Backup queued. Follow its progress in Activity.",
       )
     )
@@ -705,6 +712,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             serverName={server.displayName}
             path={path}
             backups={backups}
+            latestBackup={server.latestBackup}
+            preflight={backupReadiness.preflight}
+            checking={backupReadiness.checking}
+            preflightError={backupReadiness.error}
+            onCheck={() => void backupReadiness.check()}
             restore={restore}
             onRestoreChange={setRestore}
             admin={admin}

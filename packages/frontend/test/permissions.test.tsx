@@ -30,6 +30,7 @@ const server: Server = {
   fileRoots: [{ id: "data", name: "Data", path: "/data" }],
   ports: [],
   labels: {},
+  latestBackup: null,
   bindingStatus: "active",
   permissions: ["server.view", "server.start", "server.stop"],
 };

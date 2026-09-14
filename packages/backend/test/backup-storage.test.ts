@@ -8,6 +8,7 @@ import {
   writeFile,
   readFile,
   realpath,
+  readdir,
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ import {
   validateArchive,
   validateArchiveEntry,
   removeArchive,
+  availableBackupDestinationBytes,
 } from "../src/backup-storage.js";
 import { getDockerInstance } from "../src/docker.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
@@ -75,6 +77,20 @@ async function archive(
 }
 
 describe("backup storage boundaries", () => {
+  it.skipIf(process.platform !== "linux")("measures free space through an approved destination without creating files", async () => {
+    const available = await availableBackupDestinationBytes(directory);
+    assert.equal(Number.isSafeInteger(available), true);
+    assert.equal(available >= 0, true);
+    assert.deepEqual(await readdir(directory), []);
+    const linked = `${directory}-linked`;
+    await symlink(directory, linked);
+    try {
+      await assert.rejects(availableBackupDestinationBytes(linked), /inside|symbolic|symlink/);
+    } finally {
+      await rm(linked, { force: true });
+    }
+  });
+
   it.skipIf(process.platform !== "linux")("rejects FIFO archives without waiting for a writer", async () => {
     const id = randomUUID();
     const filename = await backupFilePath(directory, id);

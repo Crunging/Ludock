@@ -23,6 +23,7 @@ export function serverFixture(overrides: Partial<Server> = {}): Server {
     ports: [],
     created: 0,
     labels: {},
+    latestBackup: null,
     permissions: ["server.view"],
     bindingStatus: "active",
     ...overrides,
@@ -80,6 +81,7 @@ export function serverDetailResponse(path: string, server: Server, data: ServerD
     case base: return { server, stats: null };
     case `${base}/operations`: return { operations: data.operations ?? [] };
     case `${base}/backups`: return { backups: data.backups ?? [] };
+    case `${base}/backups/preflight`: return { preflight: { ready: true, checkedAt: Date.now(), issues: [] } };
     case `${base}/schedules`: return { schedules: data.schedules ?? [] };
     case `${base}/update-capability`: return {
       capability: {

@@ -31,6 +31,7 @@ const server: Server = {
   fileRoots: [{ id: "data", name: "Data", path: "/data" }],
   ports: [{ private: 25565, public: 25565, type: "tcp" }],
   labels: {},
+  latestBackup: null,
   bindingStatus: "active",
   permissions: ["server.view", "server.stop", "server.restart", "console.execute", "files.read"],
 };
@@ -75,6 +76,51 @@ beforeEach(() => {
 });
 
 describe("server list actions", () => {
+  it("shows the latest successful backup to a backup creator without archive actions", () => {
+    const createdAt = Date.UTC(2026, 8, 14, 10, 30);
+    const { container } = card({
+      ...server,
+      latestBackup: { createdAt, size: 1024 },
+      permissions: ["server.view", "backups.create"],
+    });
+    const time = container.querySelector("time");
+    expect(time?.dateTime).toBe(new Date(createdAt).toISOString());
+    expect(time?.textContent).toBe(new Date(createdAt).toLocaleString());
+    expect(screen.getByText(/Latest successful backup:/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Restore/ })).toBeNull();
+  });
+
+  it("distinguishes no successful backup from unavailable backup permission", () => {
+    const { update } = card({ ...server, permissions: ["server.view", "backups.create"] });
+    expect(screen.getByText("No successful backup retained")).toBeTruthy();
+    update({ ...server, latestBackup: { createdAt: 100, size: 12 } });
+    expect(screen.queryByText("No successful backup retained")).toBeNull();
+    expect(screen.queryByText(/Latest successful backup:/)).toBeNull();
+  });
+
+  it("keeps backup history visible to administrators when a binding is missing", () => {
+    card({
+      ...server,
+      state: "missing",
+      bindingStatus: "missing",
+      permissions: ["server.view"],
+      latestBackup: { createdAt: 100, size: 12 },
+    }, "admin");
+    expect(screen.getByText(/Latest successful backup:/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start", exact: true })).toBeNull();
+  });
+
+  it("hides backup metadata from viewers even with stale backup grants", () => {
+    card({
+      ...server,
+      permissions: ["server.view", "backups.create", "backups.read"],
+      latestBackup: { createdAt: 100, size: 12 },
+    }, "viewer");
+    expect(screen.queryByText(/Latest successful backup:/)).toBeNull();
+    expect(screen.queryByText("No successful backup retained")).toBeNull();
+  });
+
   it("uses a real server link and keeps secondary actions behind More", async () => {
     const { navigate } = card();
     const identity = screen.getByRole("link", { name: server.displayName });
