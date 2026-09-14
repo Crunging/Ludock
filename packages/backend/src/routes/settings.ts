@@ -1,12 +1,12 @@
-import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic, type GameCapability, type GameIntegration, } from "@ludock/shared";
+import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic, type GameCapability, type GameIntegration, } from "@ludock/shared";
 import path from "node:path";
 import { assertRequestUser, } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
 import { isComposeAvailable } from "../compose.js";
 import { getDiscoveryDiagnostics } from "../docker.js";
-import { configureNotifications, notificationConfiguration, } from "../notifications.js";
+import { configureNotifications, listNotificationDeliveries, notificationConfiguration, queueTestNotification, retryNotificationDelivery, } from "../notifications.js";
 import { getGameCapabilityMatrix, type GameCapability as RegistryCapability, } from "../server-presets.js";
-import { administrator, audit, requestUser, respond, type ApiRoutes } from "./request.js";
+import { administrator, audit, id, requestUser, respond, type ApiRoutes } from "./request.js";
 function publicCapability(capability: RegistryCapability): GameCapability {
   return { ...capability, evidence: [...capability.evidence] };
 }
@@ -47,6 +47,25 @@ export const settingsRoutes: ApiRoutes = {
       audit(requestUser(ctx), "notifications.configured");
       return respond(notificationSettingsResponseSchema, notificationConfiguration());
     })
+  },
+  "/api/v1/notifications/deliveries": {
+    GET: administrator(() => respond(notificationDeliveriesResponseSchema, {
+      deliveries: listNotificationDeliveries(),
+    })),
+  },
+  "/api/v1/notifications/test": {
+    POST: administrator((ctx) => {
+      const delivery = queueTestNotification();
+      audit(requestUser(ctx), "notifications.test_queued", undefined, { deliveryId: delivery.id });
+      return respond(notificationDeliveryResponseSchema, { delivery }, 202);
+    }),
+  },
+  "/api/v1/notifications/deliveries/:id/retry": {
+    POST: administrator((ctx) => {
+      const delivery = retryNotificationDelivery(id(ctx.params.id));
+      audit(requestUser(ctx), "notifications.retry_queued", undefined, { deliveryId: delivery.id });
+      return respond(notificationDeliveryResponseSchema, { delivery }, 202);
+    }),
   },
   "/api/v1/diagnostics": {
     GET: administrator(async (ctx) => {

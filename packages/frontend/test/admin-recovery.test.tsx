@@ -65,6 +65,7 @@ describe("administration recovery", () => {
   it("does not expose settings defaults when one of the initial reads fails", async () => {
     let unavailable = true;
     apiJsonMock.mockImplementation(async (path) => {
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: { destination: "/saved", retentionCount: 4, maxBytes: 1024 ** 3, reserveBytes: 0 } };
       if (unavailable) throw new Error("Notifications unavailable");
@@ -84,6 +85,7 @@ describe("administration recovery", () => {
     const pending = deferred<unknown>();
     apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return pending.promise;
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
       return { configured: false, enabled: false };
@@ -109,6 +111,7 @@ describe("administration recovery", () => {
         if (++saveCount > 1) return { settings: submitted };
         return pending.promise;
       }
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: {
         destination: "/backups", retentionCount: 10,
@@ -162,6 +165,7 @@ describe("administration recovery", () => {
     };
     apiJsonMock.mockImplementation(async (path, _schema, init) => {
       if (init?.method === "PUT") return { settings: JSON.parse(String(init.body)) };
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings };
       return { configured: false, enabled: false };
@@ -182,6 +186,7 @@ describe("administration recovery", () => {
     const pending = deferred<unknown>();
     let unavailable = true;
     apiJsonMock.mockImplementation(async (path, _schema, init) => {
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") {
         if (unavailable) throw new Error("Deployment unavailable");
         return pending.promise;
@@ -236,6 +241,7 @@ describe("administration recovery", () => {
 
   it("explains automatic Compose updates without loading or offering project registration", async () => {
     apiJsonMock.mockImplementation(async (path) => {
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/deployment") return deployment;
       if (path === "/settings/backups") return { settings: null };
       return { configured: false, enabled: false };

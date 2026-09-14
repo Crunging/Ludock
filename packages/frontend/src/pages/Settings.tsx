@@ -11,6 +11,7 @@ import { apiJson, jsonBody } from "../api";
 import { NavLink } from "../navigation";
 import DeploymentGuidance from "../components/DeploymentGuidance";
 import BackupStorageSummary from "../components/BackupStorageSummary";
+import NotificationDeliveries from "../components/NotificationDeliveries";
 import "../styles/admin-setup.css";
 
 const gib = 1024 ** 3;
@@ -47,6 +48,7 @@ export default function Settings() {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [notificationConfigured, setNotificationConfigured] = useState(false);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const [savedNotificationEnabled, setSavedNotificationEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -103,6 +105,7 @@ export default function Settings() {
         }
         setNotificationConfigured(notificationResponse.configured);
         setNotificationEnabled(notificationResponse.enabled);
+        setSavedNotificationEnabled(notificationResponse.enabled);
         setLoaded(true);
       })
       .catch((reason) => {
@@ -211,6 +214,7 @@ export default function Settings() {
       "Notification settings saved.",
       (response) => {
         setNotificationConfigured(response.configured);
+        setSavedNotificationEnabled(response.enabled);
         setNotificationEnabled((current) =>
           current === notificationEnabled ? response.enabled : current,
         );
@@ -447,6 +451,12 @@ export default function Settings() {
                 Save notifications
               </button>
             </form>
+            <NotificationDeliveries
+              configured={notificationConfigured}
+              enabled={savedNotificationEnabled}
+              unsavedChanges={Boolean(webhookUrl.trim()) || notificationEnabled !== savedNotificationEnabled}
+              saving={busy}
+            />
           </section>
         </>
       )}

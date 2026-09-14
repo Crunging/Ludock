@@ -419,12 +419,32 @@ reported as an inability to verify availability, without replacing identities.
 
 ### Discord notifications
 
-Configure Discord under Settings, then enable monitoring per server. Discord
-webhooks are write-only; blank replacement input preserves the saved URL.
+Administrators configure Discord under Settings, then enable monitoring per
+server. Discord webhooks are write-only; blank replacement input preserves the
+saved URL. Save the enabled configuration, then choose **Send test notification**
+to check delivery without triggering a server event. The test enters the normal
+delivery queue, which the worker checks every 15 seconds.
+
+**Recent deliveries** shows the latest 50 tests and event notifications, including
+delivery state, total attempts, last attempt, next automatic retry, and sanitized
+failure reasons. While delivery is enabled, queued notifications refresh every
+five seconds; **Refresh deliveries** checks the history at any time. Queued
+notifications with a prior failure show their next retry time; failed notifications have
+exhausted their automatic attempts. Ludock does not display notification message
+contents, webhook credentials, or raw Discord error responses in this history.
+
+After correcting and saving the configuration, choose **Retry** beside a failed
+delivery or one waiting for an automatic retry. Retry uses the current saved
+webhook and allows up to five new automatic attempts while preserving the total
+attempt count. An already queued test, a retry awaiting its first attempt, a
+delivery in progress, or a delivered notification cannot be retried. Disabling
+Discord pauses queued deliveries and prevents tests and explicit retries.
+
 Notifications cover outages/recoveries, backup and schedule failures, restore
 results, and update outcomes. Delivery deduplicates recorded events, disables
-Discord mentions, retries failures with bounded backoff, and stops after five
-attempts. A process interruption after delivery but before acknowledgement can
+Discord mentions, and retries failures with bounded backoff, stopping after five
+attempts unless an administrator explicitly retries. Delivery state survives
+restarts. A process interruption after delivery but before acknowledgement can
 still result in a repeated message. There is no image-update-available watcher.
 
 ## Application backup, logs, and account recovery

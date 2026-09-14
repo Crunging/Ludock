@@ -460,6 +460,38 @@ describe("application database ownership and schema migrations", () => {
     }
   });
 
+  it("upgrades notification history without changing deliveries, counters, or event deduplication", () => {
+    const db = new Database(":memory:");
+    try {
+      applyMigrations(db, DATABASE_MIGRATIONS.filter(({ version }) => version <= 4));
+      const insert = db.prepare(`INSERT INTO notification_deliveries
+        (id,event_key,payload_json,attempts,next_attempt_at,state,created_at)
+        VALUES (?,?,?,?,?,?,?)`);
+      insert.run("queued", "event-queued", '{"content":"queued message"}', 2, 900, "queued", 100);
+      insert.run("delivered", "event-delivered", '{"content":"delivered message"}', 1, 800, "delivered", 200);
+      insert.run("failed", "event-failed", '{"content":"failed message"}', 5, 700, "failed", 300);
+      const original = db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all();
+
+      applyMigrations(db);
+
+      const migrated = db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all();
+      assert.deepEqual(migrated, original.map((delivery) => ({
+        ...delivery,
+        kind: "event",
+        retry_attempts: delivery.attempts,
+        last_attempt_at: null,
+        delivered_at: null,
+        failure_code: null,
+      })));
+      applyMigrations(db);
+      assert.deepEqual(db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all(), migrated);
+      assert.throws(() => insert.run("duplicate", "event-queued", "{}", 0, 1000, "queued", 400), /UNIQUE/);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries").get()?.count, 3);
+    } finally {
+      db.close(true);
+    }
+  });
+
   it("applies a future schema addition without replacing existing records", () => {
     const db = new Database(":memory:");
     try {

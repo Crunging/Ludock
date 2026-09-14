@@ -147,6 +147,17 @@ state. A later skipped attempt clears the association so older work cannot
 replace the latest result. Saved previews recheck owner authority and binding,
 returning public reason codes without private diagnostics.
 
+`notifications.ts` owns the persisted Discord delivery queue and its public
+history projection. Administrator routes enqueue fixed test messages and retry
+existing deliveries; the worker handles all outbound sends using the current
+saved enabled configuration. Delivery requests use [Discord's `wait=true` option](https://docs.discord.com/developers/resources/webhook#execute-webhook)
+to wait for confirmation that the message was saved. Public history contains
+status and timing metadata plus fixed failure messages derived from safe codes,
+excluding webhook URLs, payloads, event keys, response bodies, and exception text. Explicit retries retain
+lifetime attempt counts and reset a separate five-attempt automatic retry budget.
+In-flight tracking and the persisted retry count reject duplicate retry requests.
+Audits identify test/retry delivery IDs without copying notification contents.
+
 ## Frontend ownership
 
 `App.tsx` keeps page selection and administrator-only requirements together.

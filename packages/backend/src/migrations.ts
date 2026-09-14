@@ -180,6 +180,19 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       }
     },
   },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE notification_deliveries ADD COLUMN kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test'));
+      ALTER TABLE notification_deliveries ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0);
+      ALTER TABLE notification_deliveries ADD COLUMN last_attempt_at INTEGER CHECK (last_attempt_at >= 0);
+      ALTER TABLE notification_deliveries ADD COLUMN delivered_at INTEGER CHECK (delivered_at >= 0);
+      ALTER TABLE notification_deliveries ADD COLUMN failure_code TEXT;
+      UPDATE notification_deliveries SET retry_attempts = attempts;
+      CREATE INDEX notification_deliveries_recent_idx ON notification_deliveries(created_at DESC, id DESC);
+      CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
+    `,
+  },
 ];
 
 function schemaVersion(db: Database): number {
