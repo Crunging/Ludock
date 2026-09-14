@@ -68,7 +68,7 @@ docker compose up -d --force-recreate ludock
 | `LUDOCK_DOCKER_CONFIG` | Optional read-only Docker client configuration directory for private-registry credentials; otherwise `/nonexistent` |
 | `LUDOCK_SELF_CONTAINER` | Ludock's container ID or name if its hostname cannot identify it for backup mount verification |
 | `LUDOCK_SENSITIVE_PATHS` | Additional protected filesystem paths; `FILE_SENSITIVE_PATHS` is an alias |
-| `FILE_HELPER_IMAGE` | Trusted file and backup helper image, with an immutable `@sha256:` digest; defaults to Ludock's patched Bun 1 Alpine helper |
+| `FILE_HELPER_IMAGE` | Trusted file and backup helper image, with an immutable `@sha256:` digest; defaults to the official Bun 1 distroless digest shipped with Ludock |
 | `MAX_UPLOAD_SIZE` | Maximum size of each uploaded file; `2 GiB` by default. Examples: `500 MB`, `1.5 GiB` |
 | `MAX_UPLOAD_BYTES` | Byte-only upload setting, used when `MAX_UPLOAD_SIZE` is unset or blank |
 | `AUDIT_LOG_MAX_ROWS` | Retained audit entries; 100,000 by default |
@@ -177,8 +177,9 @@ floating tag alone does not change the helper selected by an existing release.
 A custom `FILE_HELPER_IMAGE` must include its trusted `@sha256:` manifest digest
 and support the Docker host's architecture. It needs Bun on the major and minimum
 version specified by [`.bun-version`](../.bun-version) and
-[`package.json`](../package.json), `/bin/sh`, `sleep`, and Linux `/proc/self/fd`;
-a plain Alpine image is insufficient. Validate overrides on both architectures
+[`package.json`](../package.json) and Linux `/proc/self/fd`. Helpers execute Bun
+directly; no shell or system archive tools are required. A plain Alpine image is
+insufficient. Validate overrides on both architectures
 before distributing them.
 
 ## Configure backups

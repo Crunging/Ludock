@@ -80,8 +80,9 @@ Update `bun.lock` with dependency changes. Pin GitHub Actions to full upstream
 commit SHAs and runtime images to verified multi-platform manifest digests, with
 readable version tags/comments. Build and helper images must meet the Bun major
 and minimum version requirements; they may use different validated images when
-upstream packaging or security fixes require it. Prefer the patched helper from
-`helper/Dockerfile` while upstream images lag security updates. Follow the
+upstream packaging or security fixes require it. Prefer suitable official images
+over maintaining derivative images. Validate production runtime requirements;
+do not turn test-fixture conveniences into runtime dependencies. Follow the
 [dependency and image update procedure](./docs/TESTING.md#dependency-and-image-updates)
 for registry checks, migration review, pin verification, and validation.
 

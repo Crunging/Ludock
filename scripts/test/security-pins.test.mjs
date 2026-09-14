@@ -14,8 +14,6 @@ describe("security dependency pins", () => {
     for (const image of [bun, DEFAULT_HELPER_IMAGE]) {
       assert.match(image, /^[^\s@]+@sha256:[a-f0-9]{64}$/);
     }
-    const helper = await read("helper/Dockerfile");
-    assert.match(helper, /^FROM oven\/bun:1-alpine@sha256:[a-f0-9]{64}$/m);
     assert.match(alpine, /^alpine:3@sha256:[a-f0-9]{64}$/);
     const fixtures = await read("scripts/test-compose.mjs");
     assert.equal(fixtures.match(/^const expectedFixtureImage = "(.+)";$/m)?.[1], alpine);

@@ -1,6 +1,5 @@
-// Bun 1.4.2 with Alpine security updates; built from helper/Dockerfile.
-// Use a patched helper while upstream images lag; application builds use upstream Bun.
-export const DEFAULT_HELPER_IMAGE = "ghcr.io/crunging/ludock:helper-07c464a850e7ec8f208ccc4dc200757e74126476-34902902038-1@sha256:924ad567e985da9cc738a03f88926a0788018c6579ea3486dc15fcb854bf71fb";
+// Official Bun 1.4.2 distroless helper; production helpers execute Bun directly.
+export const DEFAULT_HELPER_IMAGE = "oven/bun:1-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec";
 
 // Docker's reference grammar and familiar-name rules:
 // https://github.com/distribution/reference/tree/v0.6.0

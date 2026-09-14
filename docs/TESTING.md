@@ -91,18 +91,13 @@ comments should identify pinned versions. `docker build --pull` validates the
 pinned artifacts; it does not check for newer tags. Validate changed images using
 the platform checks below.
 
-The default helper is built from `helper/Dockerfile`, which applies Alpine
-security updates even when Bun has not rebuilt its upstream image. **Publish
-helper** builds and scans both native architectures when that recipe or its
-workflow changes on a branch, or when manually dispatched. It publishes unique
-candidate tags containing the commit, run ID, and attempt; it never changes the
-application's release tags or automatically changes a deployed helper.
-After a successful run, inspect the multi-platform digest printed in its summary,
-pin the reviewed candidate in `packages/backend/src/runtime-images.ts`, then run
-storage and backup acceptance on both platforms. Preserve candidate tags
-referenced by shipped releases. Application builds use upstream Bun independently;
-their final Alpine image applies its own package updates. Return the helper to
-an upstream digest when it passes the same security and storage checks.
+The default helper uses Bun's official distroless image, pinned in
+`packages/backend/src/runtime-images.ts`. Helpers execute Bun directly and do
+not require a shell, coreutils, or a package manager. Keep integration fixtures
+compatible with that runtime instead of adding tools solely for tests. Verify
+both architectures' security scans and storage/backup acceptance before changing
+the digest. Application builds use upstream Bun Alpine independently; their final
+Alpine image applies its own package updates.
 
 Pull-request checks scan both the application and default helper. The daily
 **Dependency security** workflow audits the lockfile and scans the published
