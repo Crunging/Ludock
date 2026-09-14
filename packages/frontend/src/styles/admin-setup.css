@@ -72,8 +72,105 @@
   flex-wrap: wrap;
 }
 
+.notification-deliveries {
+  margin-top: 20px;
+}
+
+.notification-deliveries__test {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+  max-width: 850px;
+  font-size: 13px;
+}
+
+.notification-deliveries__test > button {
+  justify-self: start;
+}
+
+.notification-deliveries__heading {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.notification-deliveries__help {
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.notification-deliveries-table td:first-child {
+  width: 30%;
+}
+
+.notification-deliveries-table td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.notification-delivery-status {
+  font-weight: 500;
+}
+
+.notification-delivery-status--delivered {
+  color: var(--green);
+}
+
+.notification-delivery-status--queued {
+  color: var(--yellow);
+}
+
+.notification-delivery-status--failed,
+.notification-delivery-failure {
+  color: var(--red);
+}
+
+.notification-delivery-failure {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 700px) {
   .grants-editor .grants-presets button {
+    min-height: 44px;
+  }
+
+  .notification-deliveries-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .notification-deliveries-table tbody {
+    display: block;
+  }
+
+  .notification-deliveries-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    border-bottom: 1px solid var(--border);
+    padding: 12px 0;
+  }
+
+  .notification-deliveries-table td {
+    display: block;
+    border: 0;
+    padding: 4px 0;
+  }
+
+  .notification-deliveries-table td:first-child {
+    grid-column: 1 / -1;
+    width: auto;
+    padding-bottom: 8px;
+  }
+
+  .notification-deliveries-table td:last-child {
+    width: auto;
+    padding-left: 12px;
+  }
+
+  .notification-deliveries button {
     min-height: 44px;
   }
 }

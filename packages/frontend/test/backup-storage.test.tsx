@@ -99,6 +99,7 @@ describe("backup storage visibility", () => {
     let savedMaxBytes = settings.maxBytes;
     let statusReads = 0;
     apiJsonMock.mockImplementation(async (path, _schema, init) => {
+      if (path === "/notifications/deliveries") return { deliveries: [] };
       if (path === "/settings/backups/status") {
         statusReads++;
         return { storage: { ...storage, maxBytes: savedMaxBytes } };

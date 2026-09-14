@@ -274,6 +274,22 @@ absolute paths on the Docker host and inside Ludock.
 - Mock Discord delivery for routine tests. Validate write-only settings, no
   mentions, deduplication, bounded backoff/five-attempt cutoff, and secret-free
   errors. Use a dedicated test webhook only with its owner's authorization.
+- Notification settings, history, test sends, and explicit retries require an
+  administrator. Tests and retries require a saved enabled webhook and enqueue
+  work without performing outbound delivery in the request. Verify history
+  distinguishes test/event, queued/delivered/failed, attempts, and next retry.
+  Neither history nor audits may expose payloads, event keys, webhook secrets,
+  or provider response bodies and exceptions.
+- Replace a webhook after a failed attempt, then explicitly retry both a waiting
+  delivery and one past the automatic cutoff. The next attempt uses the saved
+  replacement; lifetime attempts remain intact and the new automatic cycle stops
+  after five failures. Reject duplicate retry clicks, in-flight deliveries,
+  delivered rows, invalid/missing IDs, and attempts while Discord is disabled.
+- Build before browser checks. In Settings, verify test sends and retries update
+  Recent deliveries, pending retry times and sanitized failures are readable on
+  desktop/mobile, and refreshes preserve unsaved webhook and enabled drafts.
+  Non-administrators must not see these controls. Verify history failures remain
+  visible and stale reads cannot overwrite newer action results.
 
 ### Compose updates and owning managers
 

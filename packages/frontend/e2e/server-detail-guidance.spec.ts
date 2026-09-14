@@ -98,6 +98,7 @@ test("Settings explains automatic updates without a project registration form", 
   }));
   await page.route("**/api/v1/settings/backups", (route) => route.fulfill({ json: { settings: null } }));
   await page.route("**/api/v1/notifications", (route) => route.fulfill({ json: { configured: false, enabled: false } }));
+  await page.route("**/api/v1/notifications/deliveries", (route) => route.fulfill({ json: { deliveries: [] } }));
   await app.open("/settings");
   const heading = page.getByRole("heading", { name: "Compose updates", exact: true });
   await heading.scrollIntoViewIfNeeded();
