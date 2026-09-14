@@ -2,6 +2,7 @@ import { okResponseSchema } from "@ludock/shared";
 import { useCallback, useState } from "react";
 import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
+import NeedsAttention from "../components/NeedsAttention";
 import { apiJson } from "../api";
 import { useAuth } from "../auth-context";
 import { useViewPreferences } from "../view-preferences-context";
@@ -20,6 +21,7 @@ export default function Dashboard() {
   const setSearch = (search: string) => setDashboardFilters((current) => ({ ...current, search }));
   const setStateFilter = (stateFilter: string) => setDashboardFilters((current) => ({ ...current, stateFilter }));
   const [showHelp, setShowHelp] = useState(false);
+  const [attentionRefresh, setAttentionRefresh] = useState(0);
   const handleAction = useCallback(
     async (id: string, action: "start" | "stop" | "restart") => {
       if (stale || loading) return;
@@ -70,7 +72,7 @@ export default function Dashboard() {
         <div className="inline-actions">
           <button
             className="secondary-btn"
-            onClick={() => refresh()}
+            onClick={() => { setAttentionRefresh((current) => current + 1); void refresh(); }}
             disabled={loading}
           >
             {loading ? "Refreshing…" : "Refresh"}
@@ -153,6 +155,9 @@ export default function Dashboard() {
             <button className="secondary-btn" onClick={() => window.location.reload()}>Reload page</button>
           )}
         </div>
+      )}
+      {!accessDenied && user && (
+        <NeedsAttention key={`${user.id}:${user.role}`} refreshKey={`${lastUpdated}:${attentionRefresh}`} />
       )}
       {servers.length > 0 && (
         <div className="list-toolbar">

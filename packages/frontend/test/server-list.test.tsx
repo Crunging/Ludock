@@ -1,6 +1,6 @@
 import type { Server } from "@ludock/shared";
 import ViewPreferencesProvider from "../src/ViewPreferences";
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
@@ -60,6 +60,7 @@ const fixtures = [
 ];
 
 beforeEach(() => {
+  spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ items: [], discoveryUnavailable: false }));
   useServersMock.mockReturnValue({
     servers: fixtures,
     loading: false,
@@ -300,22 +301,24 @@ describe("server filters", () => {
     expect(screen.queryByRole("heading", { name: "Find your game servers" })).toBeNull();
   });
 
-  it("identifies an unassigned account without showing administrator discovery controls", () => {
+  it("identifies an unassigned account without showing administrator discovery controls", async () => {
     useServersMock.mockReturnValue({
       ...useServersMock(), servers: [],
     });
     dashboard("viewer");
+    await screen.findByText("No issues need attention in the servers and schedules you can access.");
     expect(screen.getByRole("heading", { name: "No servers assigned" })).toBeTruthy();
     expect(screen.getByText(/signed in as friend/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Game not shown?" })).toBeNull();
     expect(screen.queryByRole("link", { name: /Docker|diagnostics|Users/ })).toBeNull();
   });
 
-  it("routes administrators with a discovery failure to diagnostics instead of an empty result", () => {
+  it("routes administrators with a discovery failure to diagnostics instead of an empty result", async () => {
     useServersMock.mockReturnValue({
       ...useServersMock(), servers: [], error: "Docker unavailable", stale: true,
     });
     dashboard("admin");
+    await screen.findByText("No issues need attention in the servers and schedules you can access.");
     expect(screen.getByRole("alert").textContent).toContain("Docker unavailable");
     expect(screen.getByRole("link", { name: "Open diagnostics" }).getAttribute("href")).toBe("/diagnostics");
     expect(screen.queryByRole("heading", { name: "No game servers found" })).toBeNull();

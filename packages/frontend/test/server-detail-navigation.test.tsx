@@ -123,7 +123,7 @@ describe("server detail navigation", () => {
     expect(navigate).toHaveBeenLastCalledWith("/");
     expect(
       apiJsonMock.mock.calls.some(([path]) =>
-        /\/(backups|schedules|availability|update-capability)$/.test(path),
+        /\/(backups|schedules|update-capability)$/.test(path),
       ),
     ).toBe(false);
   });
@@ -236,7 +236,7 @@ describe("server detail navigation", () => {
     expect(screen.queryByRole("link", { name: "Console" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Files" })).toBeNull();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Activity",
+      "Activity", "Availability",
     ]);
   });
 

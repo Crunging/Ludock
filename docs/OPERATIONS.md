@@ -127,6 +127,24 @@ work runs with its owner's current rights; disabled accounts, revoked rights,
 and deleted schedules prevent queued actions. Operators cannot edit or delete
 another owner's schedules. Revocation also closes affected live streams.
 
+On **Servers**, the **Needs attention** list brings together failed or interrupted
+operations, enabled schedules that cannot run, server binding problems, and
+monitored outages past their grace period. Select an item's link to open its
+activity details, schedule, binding review, or availability status. The first
+ten items are shown; **Show all** expands the list. Server search and state
+filters do not hide attention items.
+
+The list uses your current server access. Operators see suspended schedules they
+own while they retain schedule management access; administrators resolve binding
+problems before suspended server access resumes. Paused schedules and intentionally
+stopped, maintained, or operation-suppressed servers do not generate outage items.
+Failures come from each server's most recent 100 operations and remain historical
+failures after a later successful run. Refresh the page's data to check again;
+attention also refreshes every 30 seconds. If Docker cannot be reached, the list
+labels its saved state and does not claim that the servers are healthy.
+Server details remain available for inspecting saved history and monitoring
+during a Docker outage; controls stay disabled until live state can be verified.
+
 ## File access
 
 Safe writable bind mounts and named volumes become file roots automatically.
@@ -438,6 +456,8 @@ prove that players can connect. Maintenance pauses monitoring. Ludock-initiated
 stops and active operations suppress alerts. An intentionally stopped server
 stays suppressed until observed running again. Loss of Docker connectivity is
 reported as an inability to verify availability, without replacing identities.
+Anyone with server view access can inspect **Server → Availability**. Only an
+administrator can change the monitoring policy.
 
 ### Discord notifications
 
@@ -543,3 +563,6 @@ timestamps in milliseconds. Audit additionally accepts `operationId` to find
 related events.
 Responses include `nextCursor`; pass it with the same filters to continue, and
 stop when it is null. Operation details and later pages enforce current access.
+
+`GET /attention` returns permission-filtered dashboard summaries and a
+`discoveryUnavailable` flag when current Docker state could not be checked.

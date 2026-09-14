@@ -295,8 +295,8 @@ test("a scheduled result opens and focuses its operation even when it is absent 
   expect(fixture.operationReads).toEqual([]);
   await result.getByRole("button", { name: "View activity", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Activity", selected: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Scheduled operation", exact: true })).toBeFocused();
-  const selected = page.getByRole("region", { name: "Scheduled operation", exact: true });
+  await expect(page.getByRole("heading", { name: "Operation details", exact: true })).toBeFocused();
+  const selected = page.getByRole("region", { name: "Operation details", exact: true });
   await expect(selected).toContainText("Failed");
   await expect(selected).toContainText("Container stopped unexpectedly during restart.");
   await expect(page.getByText("No operations yet.", { exact: true })).toBeVisible();

@@ -349,10 +349,10 @@ describe("schedule results and paused creation", () => {
     await openSchedules();
     draftTimezone("Europe/London");
     await userEvent.click(screen.getByRole("button", { name: "View activity" }));
-    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    const region = await screen.findByRole("region", { name: "Operation details" });
     await within(region).findByText("Failed");
     expect(within(region).getByText(fresh.error)).toBeTruthy();
-    expect(document.activeElement).toBe(within(region).getByRole("heading", { name: "Scheduled operation" }));
+    expect(document.activeElement).toBe(within(region).getByRole("heading", { name: "Operation details" }));
     expect(screen.getByText("No operations yet.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(screen.getByRole("button", { name: "Close operation" }));
@@ -368,7 +368,7 @@ describe("schedule results and paused creation", () => {
       path === `/operations/${operation.id}` ? { operation } : undefined });
     await openSchedules();
     await userEvent.click(screen.getByRole("button", { name: "View activity" }));
-    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    const region = await screen.findByRole("region", { name: "Operation details" });
     await within(region).findByText("Running");
     expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(false);
     operation = { ...operation, status: "succeeded", phase: "finished" };
@@ -389,7 +389,7 @@ describe("schedule results and paused creation", () => {
     } });
     await openSchedules();
     await userEvent.click(screen.getByRole("button", { name: "View activity" }));
-    const region = await screen.findByRole("region", { name: "Scheduled operation" });
+    const region = await screen.findByRole("region", { name: "Operation details" });
     await within(region).findByText("Succeeded");
     denied = true;
     const poll = intervals.mock.calls.filter(([, delay]) => delay === 10000).at(-1)![0] as () => void;
@@ -408,11 +408,11 @@ describe("schedule results and paused creation", () => {
     detail({ onRequest: (path) => path === `/operations/${operation.id}` ? pending : undefined });
     await openSchedules();
     await userEvent.click(screen.getByRole("button", { name: "View activity" }));
-    await screen.findByRole("region", { name: "Scheduled operation" });
+    await screen.findByRole("region", { name: "Operation details" });
     await openSchedules();
     draftTimezone("Europe/London");
     await act(async () => finish());
-    expect(screen.queryByRole("region", { name: "Scheduled operation" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Operation details" })).toBeNull();
     expect(screen.queryByText("Old operation failed")).toBeNull();
     expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe("Europe/London");
   });

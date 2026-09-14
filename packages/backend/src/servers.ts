@@ -104,6 +104,46 @@ export async function getServer(
     current.get(server.containerId ?? ""),
   );
 }
+
+/** Saved history remains inspectable during a daemon outage. A saved logical
+ * binding does not establish the current container's identity or live state. */
+export async function getServerSnapshot(
+  actor: SessionUser,
+  id: string,
+): Promise<ServerSnapshot & { revalidate: () => ServerSnapshot }> {
+  const current = await refreshServers().catch(() => null);
+  const original = assertServerCapability(actor, id, "server.view");
+  // Statistics involve additional asynchronous reads. Recheck access and the
+  // observed binding before responding, without starting another Docker read.
+  const revalidate = (): ServerSnapshot => {
+    const logical = assertServerCapability(actor, id, "server.view");
+    const discoveryUnavailable = current === null ||
+      logical.containerId !== original.containerId ||
+      logical.bindingRevision !== original.bindingRevision ||
+      logical.bindingFingerprint !== original.bindingFingerprint ||
+      logical.status !== original.status || logical.reviewRequired !== original.reviewRequired;
+    const server = toPublicServer(
+      logical,
+      getEffectiveCapabilities(actor, logical),
+      discoveryUnavailable ? undefined : current.get(logical.containerId ?? ""),
+    );
+    return {
+      server: discoveryUnavailable ? {
+        ...server,
+        state: "unknown",
+        status: "Live status unavailable",
+      } : server,
+      discoveryUnavailable,
+    };
+  };
+  return { ...revalidate(), revalidate };
+}
+
+interface ServerSnapshot {
+  server: Server;
+  discoveryUnavailable: boolean;
+}
+
 export interface ServerContext {
   logical: LogicalServer & { containerId: DockerContainerId };
   container: ManagedContainer;

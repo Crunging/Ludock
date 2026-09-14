@@ -81,11 +81,22 @@ Handlers in `packages/backend/src/routes` receive typed request contexts:
 | `compose.ts` | Update capability and update requests |
 | `schedules.ts` | Schedule management and next-run previews |
 | `status.ts` | Operation progress and availability configuration |
+| `attention.ts` | Permission-filtered dashboard attention summaries |
 | `settings.ts` | Deployment guidance, notifications, diagnostics, and integrations |
 
 `identity.ts` and `servers.ts` reconcile logical history with Docker observations;
 `authorization.ts` owns capability and role ceilings. Routes call these policies
 instead of duplicating them.
+
+`attention.ts` refreshes discovery, then aggregates persisted binding, schedule,
+operation, and availability summaries under current capabilities. Schedule lists
+retain their owner scope. Failed discovery preserves logical identity and returns
+an explicit unavailable flag; it never turns an outage into a healthy empty list.
+The monitor and attention summaries share policy, lock, and operation suppression.
+Server detail reads can also return an authorized saved snapshot with unknown
+live state. The response marks discovery unavailable, and the frontend keeps
+history readable while disabling mutation controls. Mutation paths still require
+fresh discovery and binding validation.
 
 Direct lifecycle and file handlers use `serverAction(capability, handler)`.
 It resolves the authorized binding and retains resource locks until both the
@@ -174,6 +185,9 @@ Server routes select the console layout or Servers navigation state. Unknown and
 malformed client routes return to the dashboard; backend authorization remains
 authoritative. The history-based navigation provider is independent of request
 and form state.
+Server detail query parameters select an allowed tab and, when supplied, a
+specific operation or schedule. These links survive direct loads and browser
+history without bypassing the destination's permission checks.
 
 `ServerDetail.tsx` owns loading, polling, permissions, notices, and drafts.
 Panels in `components/server-detail` receive explicit props and callbacks, so
@@ -185,6 +199,9 @@ Asynchronous reads abort or discard obsolete work. Audit and Diagnostics use
 loading or failure. Diagnostics publishes system and integration responses
 together. Live server snapshots and file reads retain their feature-specific
 freshness, path, and authorization policies.
+Dashboard attention uses `useAttention`, refreshes with server snapshots and
+every 30 seconds, and preserves focused links during routine reads. Failed reads,
+account changes, and an access-denied stream discard its data.
 
 Audit and operation history keep applied filters and pagination in the URL.
 Operation detail routes read their selected record independently of the recent

@@ -33,7 +33,8 @@ test("viewer role caps stale mutation grants while retaining independently grant
   await expect(row.getByRole("button", { name: /More actions/ })).toHaveCount(0);
   await row.getByRole("link", { name: RUNNING_NAME }).click();
   await expect(page.getByRole("tab", { name: "Activity", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(page.getByRole("tab", { name: "Availability", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("button", { name: /^(Start|Stop|Restart)$/ })).toHaveCount(0);
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });

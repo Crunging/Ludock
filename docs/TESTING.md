@@ -337,6 +337,15 @@ For affected flows, check the following together with their feature scenarios ab
 - Disconnected lists label retained data as stale and disable lifecycle actions.
   Every connection refreshes authority before controls resume. Denied access
   hides cached data and requires revalidation.
+- Dashboard **Needs attention** shows accessible failed/interrupted operations,
+  suspended enabled schedules owned by an authorized operator, administrator
+  binding problems, and monitored outages after grace. Pauses, maintenance,
+  intentional stops, and operation suppression do not create outage items.
+  Each link opens its permitted resolution panel, including specific operations
+  outside current activity filters. Check direct links, back/forward, expansion,
+  320px/390px layouts, refreshed outcomes, revoked access, and late reads. Failed
+  reads or Docker outages must not claim a healthy empty list or reveal another
+  user's server or schedules.
 - More actions support Tab, Escape, and outside dismissal. Stop/Restart dialogs
   name the server, initially focus Cancel, trap focus, restore the trigger, and
   send no request before confirmation. A restart-only grant remains usable.

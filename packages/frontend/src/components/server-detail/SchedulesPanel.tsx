@@ -13,6 +13,8 @@ export interface ScheduleEdit {
 
 interface Props {
   schedules: Schedule[];
+  selectedScheduleId?: string | null;
+  snapshotReady?: boolean;
   draft: ScheduleInput;
   editing: ScheduleEdit | null;
   conflict: boolean;
@@ -90,6 +92,9 @@ export default function SchedulesPanel(props: Props) {
         Missed times and daylight-saving gaps are skipped; repeated times run once.
         Pausing prevents future runs and does not undo work already started.
       </p>
+      {props.selectedScheduleId && props.snapshotReady && !schedules.some((item) => item.id === props.selectedScheduleId) && (
+        <p role="status" className="section-note">This schedule is no longer available or you no longer have access.</p>
+      )}
       <div className="table-scroll schedules-table-scroll" tabIndex={0} role="region" aria-label="Schedule list">
         <table className="data-table schedules-table" aria-label="Schedules">
           <thead>
@@ -107,7 +112,7 @@ export default function SchedulesPanel(props: Props) {
               <tr><td colSpan={6} className="muted">No schedules.</td></tr>
             )}
             {schedules.map((item) => (
-              <tr key={item.id} aria-current={editing?.id === item.id ? "true" : undefined}>
+              <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
                 <td className="capitalize">{item.action}</td>
                 <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
                 <td>{item.enabled ? "Enabled" : "Paused"}</td>

@@ -10,10 +10,16 @@ import {
 import { NavigationContext, useNavigation } from "./navigation-context";
 
 export function NavigationProvider({ children }: { children: ReactNode }) {
-  const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
+  const [location, setLocation] = useState(() => ({
+    pathname: window.location.pathname,
+    search: window.location.search,
+  }));
 
   useEffect(() => {
-    const handlePopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search });
+    const handlePopState = () => setLocation({
+      pathname: window.location.pathname,
+      search: window.location.search,
+    });
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
@@ -21,9 +27,11 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   const navigate = useCallback(
     (to: string, options: { replace?: boolean } = {}) => {
       if (to === `${window.location.pathname}${window.location.search}${window.location.hash}`) return;
+      const previousPathname = window.location.pathname;
       window.history[options.replace ? "replaceState" : "pushState"]({}, "", to);
       setLocation({ pathname: window.location.pathname, search: window.location.search });
-      window.scrollTo({ top: 0, behavior: "auto" });
+      if (window.location.pathname !== previousPathname)
+        window.scrollTo({ top: 0, behavior: "auto" });
     },
     []
   );

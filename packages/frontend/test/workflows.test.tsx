@@ -46,6 +46,8 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const response = await options.onRequest?.(path, init);
     if (response !== undefined) return response;
+    if (path.endsWith("/availability") && init?.method === "PUT")
+      return { ...serverDetailResponse(path, currentServer), policy: JSON.parse(init.body as string) };
     if (init?.method && init.method !== "GET")
       return { operation: { ...completedUpdate, status: "queued" }, ok: true };
     return serverDetailResponse(path, currentServer, {
@@ -131,7 +133,7 @@ describe("update confirmation", () => {
   it("lifecycle-only friends receive no privileged management tabs", async () => {
     detail("operator");
     await screen.findByRole("heading", { name: server.displayName });
-    for (const name of ["Update", "Backups", "Schedules", "Availability"])
+    for (const name of ["Update", "Backups", "Schedules"])
       expect(screen.queryByRole("tab", { name, exact: true })).toBeNull();
   });
 });
