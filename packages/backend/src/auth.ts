@@ -354,7 +354,9 @@ export function isCurrentApiTokenOperationActor(actorId: string): boolean {
 }
 
 export function publicOperationActorId(actorId: string): string {
-  return isApiTokenOperationActor(actorId) ? "api-token" : actorId;
+  return actorId === "api-token" || actorId.startsWith(API_TOKEN_OPERATION_ACTOR_PREFIX)
+    ? "api-token"
+    : actorId;
 }
 
 export function authenticateRequest(

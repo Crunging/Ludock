@@ -10,25 +10,25 @@ import {
 import { NavigationContext, useNavigation } from "./navigation-context";
 
 export function NavigationProvider({ children }: { children: ReactNode }) {
-  const [pathname, setPathname] = useState(window.location.pathname);
+  const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
 
   useEffect(() => {
-    const handlePopState = () => setPathname(window.location.pathname);
+    const handlePopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search });
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   const navigate = useCallback(
     (to: string, options: { replace?: boolean } = {}) => {
-      if (to === window.location.pathname) return;
+      if (to === `${window.location.pathname}${window.location.search}${window.location.hash}`) return;
       window.history[options.replace ? "replaceState" : "pushState"]({}, "", to);
-      setPathname(window.location.pathname);
+      setLocation({ pathname: window.location.pathname, search: window.location.search });
       window.scrollTo({ top: 0, behavior: "auto" });
     },
     []
   );
 
-  const value = useMemo(() => ({ pathname, navigate }), [pathname, navigate]);
+  const value = useMemo(() => ({ ...location, navigate }), [location, navigate]);
   return (
     <NavigationContext.Provider value={value}>
       {children}

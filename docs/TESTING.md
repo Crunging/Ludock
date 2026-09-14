@@ -359,6 +359,18 @@ For affected flows, check the following together with their feature scenarios ab
 - Activity filters survive refresh/tab changes without unlocking controls.
   Hidden active work stays reachable, and schedule-linked details can open
   outside recent-history filters. Display persisted phases and outcomes.
+- Audit and operation history filter before pagination. Exercise older results
+  beyond the former recent-list limits, equal timestamps, combined server/actor/
+  action/status/date filters, invalid dates and cursors, and empty results.
+  New events do not duplicate rows when continuing through older pages.
+- History URLs preserve applied filters through reload and back/forward.
+  Direct operation links open after sign-in, including operations outside recent
+  activity. Linked audit events use recorded operation identifiers. Failed or
+  obsolete reads cannot display a previous query's rows as current results.
+- Operation history and details recheck server access, including on subsequent
+  pages after grant revocation. Inaccessible servers contribute no results or
+  pagination metadata. Audit remains administrator-only. API-token actor labels
+  never reveal token fingerprints, operation inputs, or recovery state.
 - Grant presets show actual capabilities. Backup downtime, restore replacement,
   force recreation, and image-current results are explicit. Failed settings/grant
   reads block saving; successful saves clear only submitted drafts. Changed roles,

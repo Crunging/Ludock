@@ -2,6 +2,7 @@ import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
 import { isApiTokenOperationActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
+import { historyActor } from "./history.js";
 
 interface OperationRow {
   id: string;
@@ -91,6 +92,7 @@ export function publicOperation(job: Job): Operation {
     id,
     serverId,
     kind,
+    actor: historyActor(job.actorId, findUserById(job.actorId)?.username ?? null),
     status,
     phase,
     createdAt,

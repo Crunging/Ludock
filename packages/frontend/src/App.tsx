@@ -17,6 +17,8 @@ const ServerDetail = lazy(() => import("./pages/ServerDetail"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Files = lazy(() => import("./pages/Files"));
 const ApplicationLogs = lazy(() => import("./pages/ApplicationLogs"));
+const Operations = lazy(() => import("./pages/Operations"));
+const OperationDetail = lazy(() => import("./pages/OperationDetail"));
 
 function PageFallback() {
   return (
@@ -32,6 +34,7 @@ function PageFallback() {
 const pages = [
   { path: "/", element: <Dashboard /> },
   { path: "/account", element: <Account /> },
+  { path: "/operations", element: <Operations /> },
   { path: "/users", element: <Users />, adminOnly: true },
   { path: "/audit", element: <Audit />, adminOnly: true },
   { path: "/logs", element: <ApplicationLogs />, adminOnly: true },
@@ -49,6 +52,14 @@ function resolvePage(pathname: string) {
   const page = pages.find((candidate) => candidate.path === pathname);
   if (page) return { ...page, serverTools: false, console: false };
   const match = pathname.match(/^\/([^/]+)\/([^/]+)$/);
+  if (match?.[1] === "operations") {
+    try {
+      const id = decodeURIComponent(match[2]);
+      return { element: <OperationDetail key={id} operationId={id} />, adminOnly: false, serverTools: false, console: false };
+    } catch {
+      return null;
+    }
+  }
   const serverPage = serverPages.find((candidate) => candidate.prefix === match?.[1]);
   if (!match || !serverPage) return null;
   try {
@@ -137,6 +148,7 @@ function App() {
             >
               Servers
             </NavLink>
+            <NavLink to="/operations" className="nav-link">Operations</NavLink>
             {user?.role === "admin" && (
               <>
                 <div className="sidebar__group" role="group" aria-labelledby="administration-label">
@@ -183,6 +195,7 @@ function App() {
             Servers
           </NavLink>
           <NavLink to="/account">Account</NavLink>
+          <NavLink to="/operations">Operations</NavLink>
           {user?.role === "admin" && <NavLink to="/settings">Settings</NavLink>}
           {user?.role === "admin" && (
             <NavLink to="/diagnostics">Diagnostics</NavLink>

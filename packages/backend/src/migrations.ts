@@ -193,6 +193,19 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
     `,
   },
+  {
+    version: 6,
+    sql: `
+      CREATE INDEX operations_history_idx ON operations(created_at DESC, id DESC);
+      CREATE INDEX operations_server_history_idx ON operations(server_id, created_at DESC, id DESC);
+      CREATE INDEX audit_log_history_idx ON audit_log(created_at DESC, id DESC);
+      CREATE INDEX audit_log_server_history_idx ON audit_log(target_type, target_id, created_at DESC, id DESC);
+      CREATE INDEX audit_log_operation_history_idx ON audit_log(
+        CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END,
+        created_at DESC, id DESC
+      );
+    `,
+  },
 ];
 
 function schemaVersion(db: Database): number {

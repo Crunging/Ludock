@@ -1,18 +1,25 @@
-import { availabilityResponseSchema, operationResponseSchema, operationsResponseSchema, } from "@ludock/shared";
+import { availabilityResponseSchema, operationHistoryQuerySchema, operationResponseSchema, operationsResponseSchema, } from "@ludock/shared";
 import { assertServerCapability } from "../authorization.js";
 import { AppError } from "../errors.js";
 import { configureAvailability, getAvailability } from "../monitoring.js";
-import { getOperation, listOperations, publicOperation, } from "../operations.js";
+import { getOperation, publicOperation, } from "../operations.js";
+import { listOperationHistory } from "../history.js";
 import { administrator, audit, id, requestUser, respond, type ApiRoutes } from "./request.js";
 
 export const statusRoutes: ApiRoutes = {
+  "/api/v1/operations": {
+    GET: (ctx) => respond(operationsResponseSchema, listOperationHistory(
+      requestUser(ctx), operationHistoryQuerySchema.parse(Object.fromEntries(ctx.url.searchParams)),
+    )),
+  },
   "/api/v1/servers/:id/operations": {
     GET: (ctx) => {
       const serverId = id(ctx.params.id);
       assertServerCapability(requestUser(ctx), serverId, "server.view");
-      return respond(operationsResponseSchema, {
-        operations: listOperations(serverId),
-      });
+      const query = operationHistoryQuerySchema.parse(Object.fromEntries(ctx.url.searchParams));
+      if (query.serverId && query.serverId !== serverId)
+        throw new AppError("INVALID_HISTORY_FILTER", 400, "The server filter must match this server");
+      return respond(operationsResponseSchema, listOperationHistory(requestUser(ctx), { ...query, serverId }));
     }
   },
   "/api/v1/operations/:id": {
