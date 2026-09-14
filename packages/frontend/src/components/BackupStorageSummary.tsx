@@ -1,38 +1,20 @@
-import { useEffect, useState } from "react";
-import { backupStorageResponseSchema, formatByteSize, type BackupStorageStatus } from "@ludock/shared";
+import { backupStorageResponseSchema, formatByteSize } from "@ludock/shared";
 import { apiJson } from "../api";
+import { usePageRead } from "../hooks/usePageRead";
 import "../styles/backup-storage.css";
 
-export default function BackupStorageSummary({ revision }: { revision: number }) {
-  const [storage, setStorage] = useState<BackupStorageStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
+const readStorage = (signal: AbortSignal) =>
+  apiJson("/settings/backups/status", backupStorageResponseSchema, { signal });
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setStorage(null);
-    setLoading(true);
-    setError(null);
-    apiJson("/settings/backups/status", backupStorageResponseSchema, { signal: controller.signal })
-      .then((response) => {
-        if (!controller.signal.aborted) setStorage(response.storage);
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted)
-          setError(reason instanceof Error ? reason.message : "Unable to load backup storage.");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [revision, attempt]);
+export default function BackupStorageSummary() {
+  const { data, loading, error, refresh } = usePageRead(readStorage, "Unable to load backup storage.");
+  const storage = data?.storage;
 
   return (
     <section className="backup-storage" aria-labelledby="backup-storage-summary-title">
       <div className="backup-storage__header">
         <h3 id="backup-storage-summary-title">Current storage</h3>
-        <button type="button" className="secondary-btn" disabled={loading} onClick={() => setAttempt((value) => value + 1)}>
+        <button type="button" className="secondary-btn" disabled={loading} onClick={() => void refresh()}>
           Refresh storage
         </button>
       </div>

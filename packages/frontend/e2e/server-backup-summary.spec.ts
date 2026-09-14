@@ -7,7 +7,7 @@ test("server backup summaries remain readable and refresh after a successful bac
   const running = page.getByRole("article", { name: RUNNING_NAME });
   await expect(running.getByText(/Latest successful backup:/)).toBeVisible();
   await expect(running.locator("time")).toHaveAttribute("datetime", new Date(createdAt).toISOString());
-  await expect(page.getByRole("article", { name: "Factorio weekend" }).getByText("No successful backup")).toBeVisible();
+  await expect(page.getByRole("article", { name: "Factorio weekend" }).getByText("No successful backup retained", { exact: true })).toBeVisible();
 
   for (const width of testInfo.project.name === "mobile" ? [390, 320] : [1360, 900]) {
     await page.setViewportSize({ width, height: 900 });

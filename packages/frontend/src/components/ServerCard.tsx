@@ -91,7 +91,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
                   {new Date(server.latestBackup.createdAt).toLocaleString()}
                 </time>
               </>
-            ) : "No successful backup"}
+            ) : "No successful backup retained"}
           </p>
         )}
         {stateGuidance && <p className="muted">{stateGuidance}</p>}

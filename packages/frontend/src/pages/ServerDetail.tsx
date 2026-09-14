@@ -39,7 +39,7 @@ import AvailabilityPanel from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
-import { useBackupPreflight } from "../use-backup-preflight";
+import { useBackupPreflight } from "../hooks/useBackupPreflight";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",

@@ -93,9 +93,9 @@ describe("server list actions", () => {
 
   it("distinguishes no successful backup from unavailable backup permission", () => {
     const { update } = card({ ...server, permissions: ["server.view", "backups.create"] });
-    expect(screen.getByText("No successful backup")).toBeTruthy();
+    expect(screen.getByText("No successful backup retained")).toBeTruthy();
     update({ ...server, latestBackup: { createdAt: 100, size: 12 } });
-    expect(screen.queryByText("No successful backup")).toBeNull();
+    expect(screen.queryByText("No successful backup retained")).toBeNull();
     expect(screen.queryByText(/Latest successful backup:/)).toBeNull();
   });
 
@@ -118,7 +118,7 @@ describe("server list actions", () => {
       latestBackup: { createdAt: 100, size: 12 },
     }, "viewer");
     expect(screen.queryByText(/Latest successful backup:/)).toBeNull();
-    expect(screen.queryByText("No successful backup")).toBeNull();
+    expect(screen.queryByText("No successful backup retained")).toBeNull();
   });
 
   it("uses a real server link and keeps secondary actions behind More", async () => {

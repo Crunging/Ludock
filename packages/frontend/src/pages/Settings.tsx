@@ -273,7 +273,7 @@ export default function Settings() {
                   : "Backups are disabled until an approved mounted destination and limits are saved."}{" "}
                 Every backup stops its server for the entire copy.
               </p>
-              <BackupStorageSummary revision={backupStorageRevision} />
+              <BackupStorageSummary key={backupStorageRevision} />
               {deployment && !deploymentLoading && !deploymentError && (
                 <DeploymentGuidance
                   section="backups"

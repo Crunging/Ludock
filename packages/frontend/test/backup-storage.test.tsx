@@ -33,7 +33,7 @@ function metric(label: string) {
 describe("backup storage visibility", () => {
   it("shows measured archive usage, saved limits, free disk space and reserve together", async () => {
     apiJsonMock.mockImplementation(async () => ({ storage }));
-    render(<BackupStorageSummary revision={0} />);
+    render(<BackupStorageSummary />);
     await screen.findByText("2.5 GiB");
     expect(metric("Archive usage")).toBe("2.5 GiB");
     expect(metric("Configured limit")).toBe("100 GiB");
@@ -47,7 +47,7 @@ describe("backup storage visibility", () => {
       if (unavailable) throw new Error("Storage check failed");
       return { storage };
     });
-    render(<BackupStorageSummary revision={0} />);
+    render(<BackupStorageSummary />);
     await screen.findByText("24 GiB");
     unavailable = true;
     fireEvent.click(screen.getByRole("button", { name: "Refresh storage" }));
@@ -68,7 +68,7 @@ describe("backup storage visibility", () => {
       availableBytes: null,
       issues: [{ code: "not_configured", message: "Save a backup destination in Settings." }],
     } }));
-    render(<BackupStorageSummary revision={0} />);
+    render(<BackupStorageSummary />);
     await screen.findByText("Save a backup destination in Settings.");
     expect(metric("Available disk space")).toBe("Unavailable");
     expect(metric("Configured limit")).toBe("Not configured");
@@ -86,8 +86,8 @@ describe("backup storage visibility", () => {
       }
       return { storage: { ...storage, availableBytes: 12 * gib } };
     });
-    const view = render(<BackupStorageSummary revision={0} />);
-    view.rerender(<BackupStorageSummary revision={1} />);
+    const view = render(<BackupStorageSummary key={0} />);
+    view.rerender(<BackupStorageSummary key={1} />);
     await screen.findByText("12 GiB");
     expect(firstSignal?.aborted).toBe(true);
     await act(async () => first.resolve({ storage }));

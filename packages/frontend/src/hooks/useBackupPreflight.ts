@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backupPreflightResponseSchema, type BackupPreflight } from "@ludock/shared";
-import { apiJson } from "./api";
+import { apiJson } from "../api";
 
 export function useBackupPreflight(path: string, enabled: boolean, identity: string) {
   const [preflight, setPreflight] = useState<BackupPreflight | null>(null);
