@@ -139,6 +139,12 @@ jobs:
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
 
+      - name: Select default helper
+        id: helper
+        run: |
+          image="$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
       - name: Check scoped file helpers with disposable data
         run: |
           docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
@@ -154,10 +160,22 @@ jobs:
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0
           scan-type: image
           image-ref: ludock:ci
           scanners: vuln
           severity: HIGH,CRITICAL
           # Block vulnerabilities only when an upstream fix is available.
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan default helper for vulnerabilities
+        if: ${{ !cancelled() && steps.helper.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ${{ steps.helper.outputs.image }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"

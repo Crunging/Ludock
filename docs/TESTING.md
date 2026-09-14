@@ -78,18 +78,37 @@ edits; documentation-only edits need link and diff checks.
 Follow the scope and pin policy in [AGENTS.md](../AGENTS.md#dependencies-and-pins).
 Inspect available versions with `bun outdated --recursive`; use
 `bun update --recursive` for compatible updates. Review upstream migration notes
-before major upgrades, retain the documented `tar-stream` constraint, and run
+before major upgrades, check toolchain peer dependencies, and run
 affected checks after updating `bun.lock`. Use `bun audit` for known dependency
 vulnerabilities.
 
 Resolve GitHub Actions tags to full upstream commits, peeling annotated tags
 with `^{}`. Verify runtime image indexes with `docker buildx imagetools inspect`
-for both `linux/amd64` and `linux/arm64`. Keep the Bun image reference identical
-in `Dockerfile` and `packages/backend/src/runtime-images.ts`, and update the
+for both `linux/amd64` and `linux/arm64`. Build and helper images must provide a
+compatible Bun version, but need not have identical distributions or digests.
+Update the
 Compose fixture's expected Alpine digest with the build pin. Readable tags or
 comments should identify pinned versions. `docker build --pull` validates the
 pinned artifacts; it does not check for newer tags. Validate changed images using
 the platform checks below.
+
+The default helper is built from `helper/Dockerfile`, which applies Alpine
+security updates even when Bun has not rebuilt its upstream image. **Publish
+helper** builds and scans both native architectures when that recipe or its
+workflow changes on a branch, or when manually dispatched. It publishes unique
+candidate tags containing the commit, run ID, and attempt; it never changes the
+application's release tags or automatically changes a deployed helper.
+After a successful run, inspect the multi-platform digest printed in its summary,
+pin the reviewed candidate in `packages/backend/src/runtime-images.ts` (and
+`Dockerfile` if using it for builds), then run storage and backup acceptance on
+both platforms. Preserve candidate tags referenced by shipped releases.
+
+Pull-request checks scan both the application and default helper. The daily
+**Dependency security** workflow audits the lockfile and scans the published
+`latest` application plus the helper selected by `main`. A finding must be fixed
+in the affected package or image; do not disable scans or ignore an advisory to
+make the run green. Existing installations adopt a new default helper when they
+upgrade Ludock; an explicit `FILE_HELPER_IMAGE` override remains unchanged.
 
 ## Docker and architecture validation
 
@@ -104,7 +123,7 @@ For each platform:
 - Check `/api/v1/health`, the setup page, and static assets. Without a socket,
   health reports degraded; with the test daemon it reports healthy.
 - Run the bundled `bun --version`, `docker --version`, and `docker compose version`.
-- Resolve and run the digest-pinned `oven/bun:1-alpine` helper on that platform;
+- Resolve and run the digest-pinned default helper on that platform;
   verify file access, stopped-server backup, and restore against disposable volumes.
 - Exercise Compose source validation inside the Linux Ludock runtime. Host
   macOS/Windows unit execution cannot establish descriptor-path compatibility.

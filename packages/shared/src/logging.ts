@@ -22,6 +22,7 @@ export const applicationLogLevelSchema = z.enum([
 ]);
 export type ApplicationLogLevel = z.infer<typeof applicationLogLevelSchema>;
 export const applicationLogContextSchema = z.record(
+  z.string(),
   z.union([z.string(), z.number(), z.boolean(), z.null()]),
 );
 export type ApplicationLogContext = z.infer<typeof applicationLogContextSchema>;

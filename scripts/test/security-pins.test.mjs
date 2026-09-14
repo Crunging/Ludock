@@ -7,12 +7,15 @@ const root = new URL("../../", import.meta.url);
 const read = (name) => readFile(new URL(name, root), "utf8");
 
 describe("security dependency pins", () => {
-  it("keeps the build and privileged helpers on the same immutable Bun image", async () => {
+  it("pins build, helper, and fixture images to immutable manifests", async () => {
     const dockerfile = await read("Dockerfile");
     const bun = dockerfile.match(/^ARG BUN_IMAGE=(.+)$/m)?.[1];
     const alpine = dockerfile.match(/^ARG ALPINE_IMAGE=(.+)$/m)?.[1];
-    assert.equal(bun, DEFAULT_HELPER_IMAGE);
-    assert.match(bun, /^oven\/bun:1-alpine@sha256:[a-f0-9]{64}$/);
+    for (const image of [bun, DEFAULT_HELPER_IMAGE]) {
+      assert.match(image, /^[^\s@]+@sha256:[a-f0-9]{64}$/);
+    }
+    const helper = await read("helper/Dockerfile");
+    assert.match(helper, /^FROM oven\/bun:1-alpine@sha256:[a-f0-9]{64}$/m);
     assert.match(alpine, /^alpine:3@sha256:[a-f0-9]{64}$/);
     const fixtures = await read("scripts/test-compose.mjs");
     assert.equal(fixtures.match(/^const expectedFixtureImage = "(.+)";$/m)?.[1], alpine);

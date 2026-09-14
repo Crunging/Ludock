@@ -1,5 +1,5 @@
 ARG ALPINE_IMAGE=alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-ARG BUN_IMAGE=oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f
+ARG BUN_IMAGE=ghcr.io/crunging/ludock:helper-07c464a850e7ec8f208ccc4dc200757e74126476-34902902038-1@sha256:924ad567e985da9cc738a03f88926a0788018c6579ea3486dc15fcb854bf71fb
 
 # Build JavaScript artifacts on the native build platform.
 FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS deps

@@ -1,3 +1,4 @@
+import type { ArchiveHeader } from "../src/backup-storage.js";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -54,7 +55,7 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 async function archive(
-  entries: Array<{ header: tar.Headers; body?: string }>,
+  entries: Array<{ header: ArchiveHeader; body?: string }>,
 ): Promise<Buffer> {
   const pack = tar.pack(),
     chunks: Buffer[] = [];
@@ -295,11 +296,11 @@ describe("backup storage boundaries", () => {
       { name: "snapshot/root-0/data", type: "character-device" },
       { name: "snapshot/root-0/.ludock-restore-secret/data", type: "file" },
       { name: "snapshot/root-unknown/data", type: "file" },
-    ] as tar.Headers[])
+    ] as ArchiveHeader[])
       assert.throws(() => validateArchiveEntry(header, roots));
   });
   it("validates recorded roots and rejects duplicate paths and oversized archives", async () => {
-    const base: Array<{ header: tar.Headers; body?: string }> = [
+    const base: Array<{ header: ArchiveHeader; body?: string }> = [
       { header: { name: "snapshot", type: "directory" } },
       { header: { name: "snapshot/root-0", type: "directory" } },
     ];
