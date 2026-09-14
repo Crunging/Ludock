@@ -139,6 +139,34 @@ describe("notification delivery troubleshooting", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
+  it("lets a slow history poll finish before starting another one", async () => {
+    let poll: (() => void) | undefined;
+    spyOn(window, "setInterval").mockImplementation((handler) => {
+      poll = handler as () => void;
+      return 123;
+    });
+    const pending = deferred<unknown>();
+    let readSignal: AbortSignal | undefined;
+    let reads = 0;
+    apiJsonMock.mockImplementation(async (_path, _schema, init) => {
+      if (++reads === 1) return { deliveries: [testDelivery] };
+      readSignal = init?.signal as AbortSignal;
+      return pending.promise;
+    });
+    renderDeliveries();
+    await screen.findByText("Queued", { exact: true, selector: "strong" });
+    await act(async () => { poll?.(); });
+    const firstPoll = readSignal!;
+    await act(async () => { poll?.(); });
+    expect(reads).toBe(2);
+    expect(firstPoll.aborted).toBe(false);
+    await act(async () => pending.resolve({ deliveries: [{
+      ...testDelivery, state: "delivered", attempts: 1,
+      deliveredAt: CREATED_AT + 30_000, nextAttemptAt: null,
+    }] }));
+    expect(table().getByText("Delivered", { exact: true, selector: "strong" })).toBeTruthy();
+  });
+
   it("pauses queued delivery polling while disabled and refreshes retry availability after enabling", async () => {
     const interval = spyOn(window, "setInterval");
     let enabled = false;

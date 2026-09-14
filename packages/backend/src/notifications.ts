@@ -74,6 +74,7 @@ const failureMessages = {
 type FailureCode = keyof typeof failureMessages;
 interface DeliveryRow {
   id: string;
+  payload_json: string;
   kind: NotificationDelivery["kind"];
   state: NotificationDelivery["state"];
   attempts: number;
@@ -84,11 +85,9 @@ interface DeliveryRow {
   next_attempt_at: number;
   failure_code: string | null;
 }
-const deliveryColumns = `id,kind,state,attempts,retry_attempts,created_at,
-  last_attempt_at,delivered_at,next_attempt_at,failure_code`;
-const inFlight = new Set<string>();
+let activeDeliveryId: string | null = null;
 
-function publicDelivery(row: DeliveryRow): NotificationDelivery {
+function publicDelivery(row: DeliveryRow, enabled: boolean): NotificationDelivery {
   const lastFailure = row.failure_code && Object.hasOwn(failureMessages, row.failure_code)
     ? failureMessages[row.failure_code as FailureCode]
     : row.state !== "delivered" && row.attempts > 0
@@ -104,22 +103,23 @@ function publicDelivery(row: DeliveryRow): NotificationDelivery {
     deliveredAt: row.delivered_at,
     nextAttemptAt: row.state === "queued" ? row.next_attempt_at : null,
     lastFailure,
-    retryable: notificationConfiguration().enabled && !inFlight.has(row.id) &&
+    retryable: enabled && activeDeliveryId !== row.id &&
       (row.state === "failed" || (row.state === "queued" && row.retry_attempts > 0)),
   };
 }
 
 function deliveryRow(id: string): DeliveryRow {
-  const row = getDatabase().prepare(`SELECT ${deliveryColumns} FROM notification_deliveries WHERE id=?`)
+  const row = getDatabase().prepare("SELECT * FROM notification_deliveries WHERE id=?")
     .get(id) as DeliveryRow | null;
   if (!row) throw new AppError("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found");
   return row;
 }
 
 export function listNotificationDeliveries(): NotificationDelivery[] {
-  const rows = getDatabase().prepare(`SELECT ${deliveryColumns} FROM notification_deliveries
+  const rows = getDatabase().prepare(`SELECT * FROM notification_deliveries
     ORDER BY created_at DESC, id DESC LIMIT 50`).all() as DeliveryRow[];
-  return rows.map(publicDelivery);
+  const { enabled } = notificationConfiguration();
+  return rows.map((row) => publicDelivery(row, enabled));
 }
 
 function assertDeliveryEnabled(): void {
@@ -146,19 +146,19 @@ export function queueTestNotification(): NotificationDelivery {
   assertDeliveryEnabled();
   const id = enqueueNotification(`test:${crypto.randomUUID()}`,
     "Ludock test notification: Discord delivery is working.", "test");
-  return publicDelivery(deliveryRow(id));
+  return publicDelivery(deliveryRow(id), true);
 }
 
 export function retryNotificationDelivery(id: string): NotificationDelivery {
   assertDeliveryEnabled();
   const row = deliveryRow(id);
-  if (!publicDelivery(row).retryable)
+  if (!publicDelivery(row, true).retryable)
     throw new AppError("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered");
   // Preserve lifetime attempts and the previous failure while granting a fresh
   // bounded retry cycle. Clearing its cycle count also rejects duplicate clicks.
   getDatabase().prepare(`UPDATE notification_deliveries
     SET state='queued',retry_attempts=0,next_attempt_at=? WHERE id=?`).run(Date.now(), id);
-  return publicDelivery(deliveryRow(id));
+  return publicDelivery(deliveryRow(id), true);
 }
 
 function responseFailure(status: number): FailureCode {
@@ -187,9 +187,7 @@ export async function deliverNotifications(
       // Read its current counters immediately before sending, not from the batch.
       const row = deliveryRow(id);
       if (row.state !== "queued" || row.next_attempt_at > Date.now()) continue;
-      const payload = getDatabase().prepare("SELECT payload_json FROM notification_deliveries WHERE id=?")
-        .get(id) as { payload_json: string };
-      inFlight.add(id);
+      activeDeliveryId = id;
       try {
         const startedAt = Date.now();
         getDatabase().prepare("UPDATE notification_deliveries SET last_attempt_at=? WHERE id=?")
@@ -202,7 +200,7 @@ export async function deliverNotifications(
           const response = await fetcher(`${config.webhookUrl}?wait=true`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: payload.payload_json,
+            body: row.payload_json,
             redirect: "error",
             signal,
           });
@@ -222,7 +220,7 @@ export async function deliverNotifications(
             finishedAt + Math.min(3600_000, 30_000 * 2 ** retryAttempts),
             failure === null ? finishedAt : null, failure, id);
       } finally {
-        inFlight.delete(id);
+        activeDeliveryId = null;
       }
     }
     // Newly delivered older retries get the same retention as fresh deliveries.

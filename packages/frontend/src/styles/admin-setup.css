@@ -142,8 +142,7 @@
     clip-path: inset(50%);
   }
 
-  .notification-deliveries-table tbody,
-  .notification-deliveries-table tr {
+  .notification-deliveries-table tbody {
     display: block;
   }
 

@@ -34,17 +34,16 @@ export default function NotificationDeliveries({
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const active = useRef(false);
   const readRequest = useRef<AbortController | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
   const canSend = configured && enabled && !unsavedChanges && !saving;
 
   const refresh = useCallback(async () => {
-    if (!active.current || actionRequest.current) return;
+    if (actionRequest.current) return;
     readRequest.current?.abort();
     const controller = new AbortController();
     readRequest.current = controller;
-    const ownsRequest = () => active.current && readRequest.current === controller && !controller.signal.aborted;
+    const ownsRequest = () => readRequest.current === controller && !controller.signal.aborted;
     setRefreshing(true);
     setLoadError(null);
     try {
@@ -60,16 +59,12 @@ export default function NotificationDeliveries({
     }
   }, []);
 
-  useEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-      readRequest.current?.abort();
-      readRequest.current = null;
-      actionRequest.current?.abort();
-      actionRequest.current = null;
-    };
-  }, [refresh]);
+  useEffect(() => () => {
+    readRequest.current?.abort();
+    readRequest.current = null;
+    actionRequest.current?.abort();
+    actionRequest.current = null;
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -78,7 +73,9 @@ export default function NotificationDeliveries({
   const hasQueued = deliveries?.some((delivery) => delivery.state === "queued") ?? false;
   useEffect(() => {
     if (!hasQueued || !enabled || !configured) return;
-    const timer = window.setInterval(() => { void refresh(); }, 5_000);
+    const timer = window.setInterval(() => {
+      if (!readRequest.current) void refresh();
+    }, 5_000);
     return () => window.clearInterval(timer);
   }, [hasQueued, enabled, configured, refresh]);
 
@@ -99,7 +96,7 @@ export default function NotificationDeliveries({
         notificationDeliveryResponseSchema,
         { method: "POST", signal: controller.signal },
       );
-      if (!active.current || controller.signal.aborted) return;
+      if (controller.signal.aborted) return;
       setDeliveries((current) => [
         response.delivery,
         ...(current ?? []).filter((item) => item.id !== response.delivery.id),
@@ -108,12 +105,12 @@ export default function NotificationDeliveries({
         ? "Notification queued for retry. Delivery status will update below."
         : "Test notification queued. Delivery status will update below.");
     } catch (reason) {
-      if (active.current && !controller.signal.aborted)
+      if (!controller.signal.aborted)
         setActionError(reason instanceof Error ? reason.message : "Unable to queue notification.");
     } finally {
       if (actionRequest.current === controller) {
         actionRequest.current = null;
-        if (active.current) setPendingAction(null);
+        setPendingAction(null);
       }
     }
   }
@@ -160,6 +157,7 @@ export default function NotificationDeliveries({
         refreshing && <p className="muted" role="status">Loading notification deliveries…</p>
       ) : (
         <div className="table-scroll">
+          {/* Keep table semantics when the mobile layout changes display. */}
           <table className="data-table notification-deliveries-table" aria-label="Recent notification deliveries" role="table">
             <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Notification</th><th scope="col" role="columnheader">Delivery</th><th scope="col" role="columnheader">Action</th></tr></thead>
             <tbody role="rowgroup">
