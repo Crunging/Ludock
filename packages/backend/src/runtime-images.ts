@@ -1,5 +1,5 @@
 // Bun 1.4.2 with Alpine security updates; built from helper/Dockerfile.
-// Keep this verified multi-platform candidate aligned with Dockerfile.
+// Use a patched helper while upstream images lag; application builds use upstream Bun.
 export const DEFAULT_HELPER_IMAGE = "ghcr.io/crunging/ludock:helper-07c464a850e7ec8f208ccc4dc200757e74126476-34902902038-1@sha256:924ad567e985da9cc738a03f88926a0788018c6579ea3486dc15fcb854bf71fb";
 
 // Docker's reference grammar and familiar-name rules:

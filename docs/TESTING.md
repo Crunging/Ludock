@@ -86,8 +86,7 @@ Resolve GitHub Actions tags to full upstream commits, peeling annotated tags
 with `^{}`. Verify runtime image indexes with `docker buildx imagetools inspect`
 for both `linux/amd64` and `linux/arm64`. Build and helper images must provide a
 compatible Bun version, but need not have identical distributions or digests.
-Update the
-Compose fixture's expected Alpine digest with the build pin. Readable tags or
+Update the Compose fixture's expected Alpine digest with the build pin. Readable tags or
 comments should identify pinned versions. `docker build --pull` validates the
 pinned artifacts; it does not check for newer tags. Validate changed images using
 the platform checks below.
@@ -99,9 +98,11 @@ workflow changes on a branch, or when manually dispatched. It publishes unique
 candidate tags containing the commit, run ID, and attempt; it never changes the
 application's release tags or automatically changes a deployed helper.
 After a successful run, inspect the multi-platform digest printed in its summary,
-pin the reviewed candidate in `packages/backend/src/runtime-images.ts` (and
-`Dockerfile` if using it for builds), then run storage and backup acceptance on
-both platforms. Preserve candidate tags referenced by shipped releases.
+pin the reviewed candidate in `packages/backend/src/runtime-images.ts`, then run
+storage and backup acceptance on both platforms. Preserve candidate tags
+referenced by shipped releases. Application builds use upstream Bun independently;
+their final Alpine image applies its own package updates. Return the helper to
+an upstream digest when it passes the same security and storage checks.
 
 Pull-request checks scan both the application and default helper. The daily
 **Dependency security** workflow audits the lockfile and scans the published
