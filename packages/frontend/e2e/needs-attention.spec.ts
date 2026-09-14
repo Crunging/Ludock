@@ -85,6 +85,10 @@ test("dashboard attention links open the failed operation, suspended schedule, b
   await expect(row).toHaveAttribute("aria-current", "true");
   await expect(row).toBeFocused();
   await expect(row).toContainText("disabled");
+  await page.getByRole("link", { name: "Files", exact: true }).click();
+  await expect(page.getByText("server.properties", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Back to server", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Schedules", selected: true })).toBeVisible();
 
   await app.open();
   await attention.getByRole("link", { name: /^Review server:/ }).click();

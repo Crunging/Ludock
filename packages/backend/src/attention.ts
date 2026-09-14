@@ -1,9 +1,9 @@
 import type { AttentionItem, AttentionResponse } from "@ludock/shared";
 import { currentActor, getEffectiveCapabilities } from "./authorization.js";
 import type { SessionUser } from "./database.js";
+import { listOperationHistory } from "./history.js";
 import { listLogicalServers } from "./identity.js";
 import { getAvailabilityProblem } from "./monitoring.js";
-import { listOperations } from "./operations.js";
 import { listSchedules } from "./schedules.js";
 import { refreshServers } from "./servers.js";
 
@@ -60,9 +60,9 @@ export async function listAttention(
         });
       }
     }
-    // Match the operation history screen's most recent 100 operations. Only
+    // Limit attention to each server's most recent 100 operations. Only
     // summary fields are copied: inputs, results and errors stay on that screen.
-    for (const operation of listOperations(server.id)) {
+    for (const operation of listOperationHistory(actor, { serverId: server.id, limit: 100 }).operations) {
       if (operation.status !== "failed" && operation.status !== "interrupted") continue;
       items.push({
         ...base,

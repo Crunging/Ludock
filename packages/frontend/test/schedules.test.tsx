@@ -5,6 +5,7 @@ import { SERVER_CAPABILITIES, nextScheduleRun, scheduleSlot, type Operation, typ
 import { ApiRequestError, apiJson } from "../src/api";
 import type { AuthUser } from "../src/auth-context";
 import ServerDetail from "../src/pages/ServerDetail";
+import { NavigationProvider } from "../src/navigation";
 import TestProviders from "./TestProviders";
 import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 
@@ -28,6 +29,7 @@ function detail({
   activeOperation?: boolean;
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
 } = {}) {
+  window.history.replaceState({}, "", base);
   let schedule = initial;
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const custom = await onRequest?.(path, init);
@@ -55,7 +57,9 @@ function detail({
   });
   const content = (visible: boolean) => (
     <TestProviders user={{ id: initial.ownerId, username: "friend", role }} pathname={base} navigate={mock()}>
-      {visible ? <ServerDetail serverId={server.id} /> : <p>Other page</p>}
+      <NavigationProvider>
+        {visible ? <ServerDetail serverId={server.id} /> : <p>Other page</p>}
+      </NavigationProvider>
     </TestProviders>
   );
   const view = render(content(true));

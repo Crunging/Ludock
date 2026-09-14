@@ -141,7 +141,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [schedule, setSchedule] = useState<ScheduleInput>(defaultSchedule);
   const [scheduleEdit, setScheduleEdit] = useState<ScheduleEdit | null>(null);
   const scheduleFocusTarget = useRef<string | null>(null);
-  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const activityFocusTarget = useRef<"scheduled-operation-title" | "recent-operations-title" | null>(null);
   const [update, setUpdate] = useState<UpdateOptions>({
     createBackup: true,
@@ -164,9 +163,22 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     `${server?.shortId}:${server?.state}:${server?.bindingStatus}`,
   );
   const canReadAvailability = admin || can(user, server, "server.view");
+  const canCreateBackup = can(user, server, "backups.create");
+  const canManageSchedules = can(user, server, "schedules.manage");
+  const tabs = [
+    { id: "activity", label: "Activity" },
+    ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
+    ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
+    ...(admin ? [{ id: "update", label: "Update" }] : []),
+    { id: "availability", label: "Availability" },
+  ];
+  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
 
   useEffect(() => {
-    setSelectedOperationId(requestedOperation);
+    if (server && requestedTab) rememberServerTab(serverId, activeTab);
+  }, [server, requestedTab, activeTab, serverId, rememberServerTab]);
+
+  useEffect(() => {
     if (requestedOperation) activityFocusTarget.current = "scheduled-operation-title";
   }, [search, requestedOperation]);
 
@@ -190,13 +202,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
 
   useEffect(() => {
     if (tab !== "activity" || !activityFocusTarget.current) return;
-    if (requestedOperation && selectedOperationId !== requestedOperation) return;
     const target = document.getElementById(activityFocusTarget.current);
     if (target) {
       target.focus();
       activityFocusTarget.current = null;
     }
-  }, [selectedOperationId, requestedOperation, tab, server]);
+  }, [requestedOperation, tab, server]);
 
   useEffect(() => {
     if (capabilityState === "loading" || !capabilityFocusPending.current) return;
@@ -552,16 +563,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         </button>
       </div>
     );
-  const canCreateBackup = can(user, server, "backups.create");
-  const canManageSchedules = can(user, server, "schedules.manage");
-  const tabs = [
-    { id: "activity", label: "Activity" },
-    ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
-    ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
-    ...(admin ? [{ id: "update", label: "Update" }] : []),
-    { id: "availability", label: "Availability" },
-  ];
-  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
   const activeSettingsState = activeTab === "update" ? capabilityState : settingsState;
   const stateGuidance = lifecycleStateGuidance(server.state);
   const consoleAvailable =
@@ -760,10 +761,9 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             serverId={serverId}
             filters={activityFilters}
             onFiltersChange={setActivityFilters}
-            selectedOperationId={selectedOperationId}
+            selectedOperationId={requestedOperation}
             onCloseOperation={() => {
               activityFocusTarget.current = "recent-operations-title";
-              setSelectedOperationId(null);
               setTab("activity");
             }}
             operations={operations}
@@ -855,7 +855,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             onViewActivity={(item) => {
               if (!item.lastOperation || !can(user, server, "server.view")) return;
               activityFocusTarget.current = "scheduled-operation-title";
-              setSelectedOperationId(item.lastOperation.id);
               setTab("activity", { operation: item.lastOperation.id });
             }}
             onDelete={(item) => {

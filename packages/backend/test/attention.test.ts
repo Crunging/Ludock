@@ -344,10 +344,10 @@ describe("dashboard attention", () => {
     assert.equal((await listAttention(viewer, now)).items[0].kind, "availability");
   });
 
-  it("uses the same recent operation window as the resolution screen and sorts failures by latest update", async () => {
+  it("limits failures to the most recent 100 operations and sorts them by latest update", async () => {
     const expiredFailure = addOperation(worldId, "failed", 0);
-    for (let index = 1; index <= 98; index += 1) addOperation(worldId, "succeeded", index);
-    const older = addOperation(worldId, "failed", 99);
+    const older = addOperation(worldId, "failed", 1);
+    for (let index = 2; index <= 99; index += 1) addOperation(worldId, "succeeded", index);
     const newer = addOperation(worldId, "interrupted", 100);
     getDatabase().prepare("UPDATE operations SET updated_at=101 WHERE id=?").run(older);
 
@@ -358,6 +358,29 @@ describe("dashboard attention", () => {
 });
 
 describe("server detail and attention resolution", () => {
+  it("keeps saved backup summaries permission-filtered during a Docker outage", async () => {
+    getDatabase().prepare(
+      `INSERT INTO backups
+        (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
+        VALUES(?,?,?,?,?,?,?,?,?)`,
+    ).run(crypto.randomUUID(), worldId, "fixture-fingerprint", "/private-backup-destination", "[]", 24, "private-checksum", 200, "complete");
+    setServerGrant(operator.id, worldId, ["server.view", "backups.create"], admin);
+    unavailable = true;
+
+    for (const actor of [admin, operator, viewer]) {
+      const response = await requestAs(actor, `/api/v1/servers/${worldId}`);
+      assert.equal(response.status, 200);
+      const detail = serverResponseSchema.parse(await response.json());
+      assert.equal(detail.discoveryUnavailable, true);
+      assert.deepEqual(detail.server.latestBackup, actor.role === "viewer" ? null : { createdAt: 200, size: 24 });
+      assert.doesNotMatch(JSON.stringify(detail), /private-backup-destination|private-checksum|fixture-fingerprint/);
+    }
+
+    setServerGrant(operator.id, worldId, ["server.view"], admin);
+    const response = await requestAs(operator, `/api/v1/servers/${worldId}`);
+    assert.equal(serverResponseSchema.parse(await response.json()).server.latestBackup, null);
+  });
+
   it("keeps permitted detail, operation history, and schedule history available without live Docker metadata", async () => {
     const operationId = addOperation();
     const schedule = createSchedule(operator, worldId, scheduleInput);
