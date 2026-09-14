@@ -10,6 +10,7 @@ import {
 import { apiJson, jsonBody } from "../api";
 import { NavLink } from "../navigation";
 import DeploymentGuidance from "../components/DeploymentGuidance";
+import BackupStorageSummary from "../components/BackupStorageSummary";
 import "../styles/admin-setup.css";
 
 const gib = 1024 ** 3;
@@ -42,6 +43,7 @@ export default function Settings() {
     }),
   );
   const [backupConfigured, setBackupConfigured] = useState(false);
+  const [backupStorageRevision, setBackupStorageRevision] = useState(0);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [notificationConfigured, setNotificationConfigured] = useState(false);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
@@ -180,6 +182,7 @@ export default function Settings() {
       ),
       "Backup settings saved.",
       ({ settings }) => {
+        setBackupStorageRevision((value) => value + 1);
         setBackupConfigured(Boolean(settings));
         if (!settings) return;
         const savedDraft = backupDraft(settings);
@@ -270,6 +273,7 @@ export default function Settings() {
                   : "Backups are disabled until an approved mounted destination and limits are saved."}{" "}
                 Every backup stops its server for the entire copy.
               </p>
+              <BackupStorageSummary revision={backupStorageRevision} />
               {deployment && !deploymentLoading && !deploymentError && (
                 <DeploymentGuidance
                   section="backups"

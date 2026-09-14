@@ -1,6 +1,13 @@
 import path from "node:path";
 import type { Readable } from "node:stream";
-import type { Backup, BackupSettings } from "@ludock/shared";
+import {
+  backupSettingsSchema,
+  type Backup,
+  type BackupPreflight,
+  type BackupReadinessIssue,
+  type BackupSettings,
+  type BackupStorageStatus,
+} from "@ludock/shared";
 import { getDatabase } from "./database.js";
 import { getSetting } from "./settings.js";
 import { getDockerInstance, getManagedContainerObservation } from "./docker.js";
@@ -21,8 +28,10 @@ import type { JobContext } from "./operations.js";
 import { suppressMonitoring } from "./monitoring.js";
 import { notifyEvent } from "./notifications.js";
 import { RESTORE_HELPER_SCRIPT } from "./restore-helper-script.js";
+import { AppError } from "./errors.js";
 import {
   approvedBackupDirectory,
+  availableBackupDestinationBytes,
   archiveReadStream,
   assertDestinationSpace,
   createDataHelper,
@@ -31,6 +40,7 @@ import {
   helperExec,
   helperRoot,
   newBackupId,
+  planBackupRoots,
   removeArchive,
   removePartialArchive,
   validateArchive,
@@ -119,6 +129,123 @@ async function settingsForBackup(): Promise<BackupSettings> {
       "An administrator must configure a backup destination, retention, and capacity before creating backups.",
     );
   return validateBackupSettings(settings);
+}
+
+function archiveUsageBytes(): number {
+  return (
+    getDatabase()
+      .prepare("SELECT COALESCE(SUM(size),0) AS size FROM backups WHERE state='complete'")
+      .get() as { size: number }
+  ).size;
+}
+
+function remainingArchiveBytes(settings: BackupSettings, used: number): number {
+  const available = settings.maxBytes - used;
+  if (available <= 0)
+    throw failBackup(
+      "BACKUP_CAPACITY",
+      "The global backup byte limit is reached. Remove backups or increase the limit.",
+    );
+  return available;
+}
+
+function readinessIssue(error: unknown, fallback: BackupReadinessIssue): BackupReadinessIssue {
+  // Docker and filesystem exceptions can contain host paths or connection
+  // credentials. Only our explicit application diagnostics are public.
+  return error instanceof AppError
+    ? { code: error.code, message: error.message }
+    : fallback;
+}
+
+async function inspectBackupStorage(): Promise<{
+  storage: BackupStorageStatus;
+  settings: BackupSettings | null;
+}> {
+  const configured = getSetting<unknown>("backups");
+  const parsed = backupSettingsSchema.safeParse(configured);
+  const settings = parsed.success ? parsed.data : null;
+  const storage: BackupStorageStatus = {
+    configured: configured !== null,
+    archiveBytes: archiveUsageBytes(),
+    maxBytes: settings?.maxBytes ?? null,
+    reserveBytes: settings?.reserveBytes ?? null,
+    availableBytes: null,
+    issues: [],
+  };
+  if (!settings) {
+    storage.issues.push({
+      code: configured === null ? "BACKUPS_NOT_CONFIGURED" : "BACKUP_SETTINGS_INVALID",
+      message: "An administrator must configure a valid backup destination, retention, and capacity before creating backups.",
+    });
+    return { storage, settings: null };
+  }
+  try {
+    remainingArchiveBytes(settings, storage.archiveBytes);
+  } catch (error) {
+    storage.issues.push(readinessIssue(error, {
+      code: "BACKUP_CAPACITY",
+      message: "The backup archive limit could not be checked.",
+    }));
+  }
+  try {
+    await validateBackupSettings(settings);
+  } catch (error) {
+    storage.issues.push(readinessIssue(error, {
+      code: "BACKUP_DESTINATION",
+      message: "The backup destination is missing or inaccessible. Ask an administrator to check its mount and LUDOCK_BACKUP_ROOTS.",
+    }));
+    return { storage, settings: null };
+  }
+  try {
+    storage.availableBytes = await availableBackupDestinationBytes(settings.destination);
+    if (storage.availableBytes <= settings.reserveBytes)
+      storage.issues.push({
+        code: "BACKUP_CAPACITY",
+        message: "The backup destination does not have free space above its configured reserve.",
+      });
+  } catch (error) {
+    storage.issues.push(readinessIssue(error, {
+      code: "BACKUP_DISK_UNAVAILABLE",
+      message: "Available disk space could not be checked. Ask an administrator to check that the backup destination is accessible and writable.",
+    }));
+  }
+  return { storage, settings };
+}
+
+export async function getBackupStorageStatus(): Promise<BackupStorageStatus> {
+  return (await inspectBackupStorage()).storage;
+}
+
+/** Advisory only: no helper containers, locks, stops, archive writes, or data
+ * scans. Execution repeats its authoritative checks after acquiring locks. */
+export async function getBackupPreflight(context: ServerContext): Promise<BackupPreflight> {
+  const { storage, settings } = await inspectBackupStorage();
+  const issues = [...storage.issues];
+  const check = async (validate: () => void | Promise<void>, fallback: BackupReadinessIssue) => {
+    try { await validate(); }
+    catch (error) { issues.push(readinessIssue(error, fallback)); }
+  };
+  await check(() => { planBackupRoots(context, true); }, {
+    code: "BACKUP_ROOT_UNAVAILABLE",
+    message: "The selected data roots could not be verified. Ask an administrator to review the server's mounted data roots.",
+  });
+  if (settings)
+    await check(() => assertSeparateDestination(context, settings), {
+      code: "BACKUP_MOUNT_UNVERIFIED",
+      message: "Ludock could not verify that its backup destination is separate from game data. Ask an administrator to check the backup mount.",
+    });
+  await check(async () => {
+    const info = await getDockerInstance().getContainer(context.container.id).inspect();
+    assertDataOperationState(info.State.Status);
+  }, {
+    code: "SERVER_STATE_UNAVAILABLE",
+    message: "The server's current state could not be checked. Check its Docker connection and try again.",
+  });
+  await check(() => assertNoOtherWriters(context), {
+    code: "BACKUP_WRITERS_UNVERIFIED",
+    message: "Ludock could not check for other containers writing to this server's data. Check its Docker connection and try again.",
+  });
+  return { ready: issues.length === 0, checkedAt: Date.now(), issues };
 }
 const overlaps = (left: string, right: string) =>
   left === "/" ||
@@ -230,17 +357,21 @@ async function assertSeparateDestination(
     );
 }
 
+function assertDataOperationState(state: string): void {
+  if (["paused", "restarting", "removing", "dead"].includes(state))
+    throw failBackup(
+      "SERVER_STATE",
+      "Unpause or repair this server before a data operation.",
+    );
+}
+
 export async function stopForDataOperation(
   context: ServerContext,
   job: JobContext,
 ): Promise<void> {
   const target = getDockerInstance().getContainer(context.container.id);
   const info = await target.inspect();
-  if (["paused", "restarting", "removing", "dead"].includes(info.State.Status))
-    throw failBackup(
-      "SERVER_STATE",
-      "Unpause or repair this server before a data operation.",
-    );
+  assertDataOperationState(info.State.Status);
   assertDataOperationAuthority(context, job);
   if (job.job.recovery.initialRunning === undefined)
     job.progress("stopping", {
@@ -352,19 +483,7 @@ export async function createStoppedBackup(
   await assertSeparateDestination(context, settings);
   await assertDataOperationStopped(context, job);
   await assertDestinationSpace(settings.destination, settings.reserveBytes);
-  const used = (
-    getDatabase()
-      .prepare(
-        "SELECT COALESCE(SUM(size),0) AS size FROM backups WHERE state='complete'",
-      )
-      .get() as { size: number }
-  ).size;
-  const available = settings.maxBytes - used;
-  if (available <= 0)
-    throw failBackup(
-      "BACKUP_CAPACITY",
-      "The global backup byte limit is reached. Remove backups or increase the limit.",
-    );
+  const available = remainingArchiveBytes(settings, archiveUsageBytes());
   const id = newBackupId();
   job.progress("backing_up", {
     backupId: id,

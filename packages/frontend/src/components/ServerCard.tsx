@@ -49,6 +49,10 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
     can(user, server, "console.shell");
   const canOpenConsole =
     consoleAvailable || can(user, server, "logs.read");
+  const canReadBackupSummary =
+    user?.role === "admin" ||
+    can(user, server, "backups.read") ||
+    can(user, server, "backups.create");
   const secondaryActions = [
     ...(can(user, server, "files.read") && server.fileRoots.length > 0
       ? [{ label: "Files", onSelect: () => navigate(`/files/${server.id}`) }]
@@ -78,6 +82,18 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
           <span className="server-row__game">{server.gameType}</span>
           <span className="server-row__image">{server.image}</span>
         </span>
+        {canReadBackupSummary && (
+          <p className="server-row__backup">
+            {server.latestBackup ? (
+              <>
+                Latest successful backup:{" "}
+                <time dateTime={new Date(server.latestBackup.createdAt).toISOString()}>
+                  {new Date(server.latestBackup.createdAt).toLocaleString()}
+                </time>
+              </>
+            ) : "No successful backup"}
+          </p>
+        )}
         {stateGuidance && <p className="muted">{stateGuidance}</p>}
         {bindingBlocked && (
           <span className="server-row__warning">

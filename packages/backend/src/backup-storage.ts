@@ -1,5 +1,6 @@
 import { constants, createWriteStream } from "node:fs";
 import {
+  access,
   lstat,
   realpath,
   statfs,
@@ -203,6 +204,27 @@ async function destinationBudget(
       "The backup destination does not have enough free space above its configured reserve.",
     );
   return available;
+}
+
+/** Inspect the approved destination through the same pinned directory used by
+ * archive writes. This does not create a probe file or reserve any space. */
+export async function availableBackupDestinationBytes(
+  directory: string,
+): Promise<number> {
+  const pinned = await pinBackupDirectory(directory);
+  try {
+    await access(pinned.path, constants.W_OK | constants.X_OK);
+    const info = await statfs(pinned.path, { bigint: true });
+    const available = info.bavail * info.bsize;
+    if (available < 0n || available > BigInt(Number.MAX_SAFE_INTEGER))
+      throw failBackup(
+        "BACKUP_DISK_UNAVAILABLE",
+        "Available disk space could not be measured for the backup destination.",
+      );
+    return Number(available);
+  } finally {
+    await pinned.descriptor.close();
+  }
 }
 export async function assertDestinationSpace(
   directory: string,
@@ -437,12 +459,12 @@ export async function validateArchive(
     );
 }
 
-export async function createDataHelper(
+/** Shared, read-only planning. Runtime helpers still prove host mount identity
+ * and inspect root directories without following links before copying data. */
+export function planBackupRoots(
   context: ServerContext,
   readOnly: boolean,
-  operationId: string,
-): Promise<DataHelper> {
-  const docker = getDockerInstance();
+) {
   const roots = context.container.fileRoots.map(({ id, path: rootPath }) => ({
     id,
     path: rootPath,
@@ -523,6 +545,16 @@ export async function createDataHelper(
   }));
   if (checkedMounts.some((mount) => !isSafeWritableDataMount(mount)))
     throw failBackup("UNSAFE_BACKUP_ROOT", "A selected data mount is unsafe.");
+  return { roots, mounts, aliases, checkedMounts };
+}
+
+export async function createDataHelper(
+  context: ServerContext,
+  readOnly: boolean,
+  operationId: string,
+): Promise<DataHelper> {
+  const docker = getDockerInstance();
+  const { roots, mounts, aliases, checkedMounts } = planBackupRoots(context, readOnly);
   const proof = await createMountProof(checkedMounts, operationId);
   const image = getHelperImage();
   const options: Docker.ContainerCreateOptions = {

@@ -1,8 +1,8 @@
-import { backupSettingsResponseSchema, backupSettingsSchema, backupsResponseSchema, okResponseSchema, operationResponseSchema, restoreRequestSchema, type BackupSettings, } from "@ludock/shared";
+import { backupPreflightResponseSchema, backupSettingsResponseSchema, backupSettingsSchema, backupStorageResponseSchema, backupsResponseSchema, okResponseSchema, operationResponseSchema, restoreRequestSchema, type BackupSettings, } from "@ludock/shared";
 import { Readable } from "node:stream";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
-import { deleteBackup, getBackup, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
+import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
 import { AppError } from "../errors.js";
 import { enqueueOperation } from "../operations.js";
 import { refreshServers, resolveAuthorizedServer } from "../servers.js";
@@ -10,6 +10,13 @@ import { getSetting, setSetting } from "../settings.js";
 import { administrator, audit, id, requestKey, requestUser, respond, trackResponse, type ApiRoutes } from "./request.js";
 
 export const backupsRoutes: ApiRoutes = {
+  "/api/v1/settings/backups/status": {
+    GET: administrator(async (ctx) => {
+      const storage = await getBackupStorageStatus();
+      assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
+      return respond(backupStorageResponseSchema, { storage });
+    }),
+  },
   "/api/v1/settings/backups": {
     GET: administrator(() => respond(backupSettingsResponseSchema, {
       settings: getSetting<BackupSettings>("backups"),
@@ -46,6 +53,17 @@ export const backupsRoutes: ApiRoutes = {
         }),
       }, 202);
     }
+  },
+  "/api/v1/servers/:id/backups/preflight": {
+    GET: async (ctx) => {
+      const serverId = id(ctx.params.id);
+      const user = requestUser(ctx);
+      const context = await resolveAuthorizedServer(user, serverId, "backups.create");
+      assertServerCapability(assertRequestUser(ctx.request, user), serverId, "backups.create");
+      const preflight = await getBackupPreflight(context);
+      assertServerCapability(assertRequestUser(ctx.request, user), serverId, "backups.create");
+      return respond(backupPreflightResponseSchema, { preflight });
+    },
   },
   "/api/v1/servers/:id/backups/:backupId/download": {
     GET: administrator(async (ctx) => {

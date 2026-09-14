@@ -172,7 +172,7 @@ describe("administration recovery", () => {
     await user.type(destination, "/new-backups");
     await user.click(screen.getByRole("button", { name: "Save backup settings" }));
     await screen.findByText("Backup settings saved.");
-    expect(apiJson).toHaveBeenLastCalledWith("/settings/backups", expect.anything(), expect.objectContaining({
+    expect(apiJson).toHaveBeenCalledWith("/settings/backups", expect.anything(), expect.objectContaining({
       method: "PUT", body: JSON.stringify({ ...settings, destination: "/new-backups" }),
     }));
   });

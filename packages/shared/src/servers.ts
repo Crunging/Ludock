@@ -37,6 +37,12 @@ export const serverSchema = z.object({
   ),
   created: z.number(),
   labels: z.record(z.string(), z.string()),
+  latestBackup: z
+    .object({
+      createdAt: z.number().int().nonnegative(),
+      size: z.number().int().nonnegative().safe(),
+    })
+    .nullable(),
   permissions: z.array(serverCapabilitySchema),
   bindingStatus: bindingStatusSchema,
 });

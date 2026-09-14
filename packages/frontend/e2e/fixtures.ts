@@ -6,6 +6,8 @@ import {
   authUserResponseSchema,
   availabilityResponseSchema,
   backupsResponseSchema,
+  backupStorageResponseSchema,
+  backupPreflightResponseSchema,
   createDirectoryRequestSchema,
   credentialsRequestSchema,
   fileListingSchema,
@@ -56,6 +58,7 @@ export function makeServers(): Server[] {
     ports: [{ private: 25565, public: 25565, type: "tcp" }],
     created: CREATED_AT,
     labels: {},
+    latestBackup: null,
     bindingStatus: "active",
     permissions: [...SERVER_CAPABILITIES],
   });
@@ -184,6 +187,13 @@ export const test = base.extend<{ app: AppFixture }>({
         await respond(route, serversResponseSchema, { servers: state.servers });
         return;
       }
+      if (path === "/settings/backups/status" && method === "GET") {
+        await respond(route, backupStorageResponseSchema, { storage: {
+          configured: false, archiveBytes: 0, maxBytes: null, reserveBytes: null, availableBytes: null,
+          issues: [{ code: "not_configured", message: "Save a backup destination in Settings." }],
+        } });
+        return;
+      }
       const match = path.match(/^\/servers\/([^/]+)(\/.*)?$/);
       const server = state.servers.find((item) => item.id === match?.[1]);
       const resource = match?.[2] || "";
@@ -202,6 +212,12 @@ export const test = base.extend<{ app: AppFixture }>({
         }
         if (resource === "/backups") {
           await respond(route, backupsResponseSchema, { backups: [] });
+          return;
+        }
+        if (resource === "/backups/preflight") {
+          await respond(route, backupPreflightResponseSchema, {
+            preflight: { ready: true, checkedAt: Date.now(), issues: [] },
+          });
           return;
         }
         if (resource === "/schedules") {
