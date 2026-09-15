@@ -18,6 +18,7 @@ type RunOptions = {
   root?: string;
   stage?: string;
   prelude?: string;
+  preludeData?: Record<string, string>;
   okay?: boolean;
 };
 type Fixture = RestoreFixture & {
@@ -34,6 +35,7 @@ function restoreTest(name: string, body: (fixture: Fixture) => Promise<void>) {
         (options.prelude || "") + RESTORE_HELPER_SCRIPT,
         { operation, root: options.root || fixture.root, stage: options.stage || stage },
         {
+          preludeData: options.preludeData,
           rejection: options.okay === false
             ? "Restore data changed, is unsafe, or cannot be accessed. Keep the server stopped and review recovery."
             : undefined,
@@ -148,8 +150,22 @@ describe.skipIf(process.platform !== "linux")(
       await writeFile(path.join(root, "world"), "old-world");
       await run("stage");
       const moved = path.join(directory, "detached-root");
-      const prelude = `const testFs = require("node:fs/promises"); const originalOpen = testFs.open; let replaced = false; testFs.open = async function(filename, flags) { const handle = await originalOpen.call(this, filename, flags); if (!replaced && String(filename).endsWith("/${stage}")) { replaced=true; await testFs.rename(${JSON.stringify(root)}, ${JSON.stringify(moved)}); await testFs.symlink(${JSON.stringify(outside)}, ${JSON.stringify(root)}); } return handle; };`;
-      await run("moveOld", { prelude });
+      const prelude = `
+        const testFs = require("node:fs/promises");
+        const testPaths = JSON.parse(process.env.LUDOCK_RESTORE_TEST_DATA);
+        const originalOpen = testFs.open;
+        let replaced = false;
+        testFs.open = async function(filename, flags) {
+          const handle = await originalOpen.call(this, filename, flags);
+          if (!replaced && String(filename).endsWith("/" + testPaths.stage)) {
+            replaced = true;
+            await testFs.rename(testPaths.root, testPaths.moved);
+            await testFs.symlink(testPaths.outside, testPaths.root);
+          }
+          return handle;
+        };
+      `;
+      await run("moveOld", { prelude, preludeData: { root, moved, outside, stage } });
       await sentinel();
       assert.equal(
         await readFile(path.join(moved, stage, "old", "world"), "utf8"),
@@ -163,8 +179,22 @@ describe.skipIf(process.platform !== "linux")(
       await mkdir(victim);
       await writeFile(path.join(victim, "inside"), "inside");
       const moved = path.join(root, stage, "old", "detached");
-      const prelude = `const testFs = require("node:fs/promises"); const originalRead = testFs.readdir; let replaced = false; testFs.readdir = async function(filename, ...args) { const entries = await originalRead.call(this, filename, ...args); if (!replaced && entries.includes("inside")) { replaced=true; await testFs.rename(${JSON.stringify(victim)}, ${JSON.stringify(moved)}); await testFs.symlink(${JSON.stringify(outside)}, ${JSON.stringify(victim)}); } return entries; };`;
-      await run("cleanup", { prelude, okay: false });
+      const prelude = `
+        const testFs = require("node:fs/promises");
+        const testPaths = JSON.parse(process.env.LUDOCK_RESTORE_TEST_DATA);
+        const originalRead = testFs.readdir;
+        let replaced = false;
+        testFs.readdir = async function(filename, ...args) {
+          const entries = await originalRead.call(this, filename, ...args);
+          if (!replaced && entries.includes("inside")) {
+            replaced = true;
+            await testFs.rename(testPaths.victim, testPaths.moved);
+            await testFs.symlink(testPaths.outside, testPaths.victim);
+          }
+          return entries;
+        };
+      `;
+      await run("cleanup", { prelude, preludeData: { victim, moved, outside }, okay: false });
       await sentinel();
       assert.equal(
         await readFile(path.join(outside, "sentinel"), "utf8"),

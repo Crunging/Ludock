@@ -10,7 +10,11 @@ export type RestoreFixture = {
   runScript: (
     script: string,
     request: Record<string, unknown>,
-    options?: { input?: Buffer; rejection?: string },
+    options?: {
+      input?: Buffer;
+      rejection?: string;
+      preludeData?: Record<string, string>;
+    },
   ) => Promise<string>;
   sentinel: () => Promise<void>;
 };
@@ -29,6 +33,11 @@ export function withRestoreFixture(body: (fixture: RestoreFixture) => Promise<vo
       const child = Bun.spawn(
         [process.execPath, "-e", script, JSON.stringify(request)],
         {
+          // Race hooks are static programs; fixture paths travel as data.
+          env: {
+            ...process.env,
+            LUDOCK_RESTORE_TEST_DATA: JSON.stringify(options.preludeData ?? {}),
+          },
           stdin: options.input ?? "ignore",
           stdout: "pipe",
           stderr: "pipe",
