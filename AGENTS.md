@@ -92,8 +92,11 @@ over maintaining derivative images. Validate production runtime requirements;
 do not turn test-fixture conveniences into runtime dependencies.
 
 Do not preserve historical dependency restrictions without rechecking them.
-Keep TypeScript within the supported range of `typescript-eslint`; use Node LTS
-types compatible with Bun rather than automatically selecting the newest Node major.
+Use TypeScript 7's native `tsc` for type checks. The `@typescript/native` alias
+selects that compiler; the `typescript` alias uses Microsoft's TypeScript 6
+compatibility package for `typescript-eslint` until it supports the native API.
+Keep the linter's TypeScript API within its supported range. Use Node LTS types
+compatible with Bun rather than automatically selecting the newest Node major.
 
 Use `bun outdated --recursive`, `bun update --recursive`, and `bun audit`; review
 upstream migration notes before major upgrades. Resolve Action tags to commits,
@@ -128,6 +131,10 @@ spec name or `--project=desktop` to narrow them. Install Chromium with
 `LUDOCK_E2E_PORT` overrides port 4179; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects
 an existing browser. Traces/reports are under `packages/frontend/test-results`
 and `playwright-report`. Release-workflow tests require Git, Bash, and `jq`.
+
+After building the frontend, regenerate README screenshots with
+`bun run --filter @ludock/frontend screenshots`. This uses isolated demo fixtures
+and writes `docs/screenshots`; inspect the images before committing them.
 
 For runtime/Docker changes, build `ludock:test` and run the affected harnesses:
 `bun scripts/test-linux.mjs`, `test-compose.mjs`, `test-files.mjs`, and

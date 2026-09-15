@@ -24,9 +24,9 @@ deadline.unref();
 /** @type {Set<FileHandle>} */
 const opened = new Set();
 /** @param {string} message @returns {never} */
-const fail = (message) => {
+function fail(message) {
   throw new Error(message);
-};
+}
 /** @param {string} name @param {number} flags @param {number} [mode] */
 const pin = async (name, flags, mode) => {
   const file = await fsp.open(name, flags, mode);
