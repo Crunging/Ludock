@@ -104,6 +104,23 @@ const preview = () => document.querySelector(".schedule-preview")!;
 const save = () => screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
 
 describe("schedule management", () => {
+  it("uses day presets and the browser time zone without saving until requested", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "Weekends", exact: true }));
+    for (const day of ["Sun", "Sat"]) expect((screen.getByRole("checkbox", { name: day }) as HTMLInputElement).checked).toBe(true);
+    for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri"]) expect((screen.getByRole("checkbox", { name: day }) as HTMLInputElement).checked).toBe(false);
+    draftTimezone("Invalid/Timezone");
+    await userEvent.click(screen.getByRole("button", { name: /Use my time zone/ }));
+    expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const timezone = screen.getByLabelText("Time zone") as HTMLInputElement;
+    expect(timezone.list?.querySelector('option[value="America/Los_Angeles"]')).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await openSchedules();
+    expect(screen.getByRole("button", { name: "Weekends", exact: true }).getAttribute("aria-pressed")).toBe("true");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("pauses and resumes with fresh revisions while keeping state separate from the last result", async () => {
     detail();
     await openSchedules();

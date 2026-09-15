@@ -19,9 +19,18 @@ export default function Settings() {
       <div className="page__header">
         <h1 className="page__title">Settings</h1>
         <p className="page__subtitle">
-          Storage, Compose source access, and notification delivery.
+          Optional backups, server updates, and Discord notifications.
         </p>
       </div>
+      <p className="section-note">
+        Existing server controls need no setup here. Browser settings take effect
+        when saved; deployment changes use the commands below.
+      </p>
+      <nav className="settings-jump-links" aria-label="Settings sections">
+        <a className="text-link" href="#backup-settings-title">Backup storage</a>
+        <a className="text-link" href="#compose-settings-title">Compose updates</a>
+        <a className="text-link" href="#notification-settings-title">Discord notifications</a>
+      </nav>
       {deployment.loading && (
         <p className="muted" role="status">
           Loading setup guidance…
@@ -46,7 +55,7 @@ export default function Settings() {
         className="settings-section settings-section--divided"
         aria-labelledby="compose-settings-title"
       >
-        <h2 id="compose-settings-title">Compose updates</h2>
+        <h2 id="compose-settings-title" tabIndex={-1}>Compose updates</h2>
         <p className="section-note">
           Update servers from their Update tab. Ludock discovers and validates
           source files from Docker. Your existing manager continues to own and

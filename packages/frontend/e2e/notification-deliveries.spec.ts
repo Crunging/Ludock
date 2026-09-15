@@ -94,6 +94,24 @@ async function mockNotifications(
   return fixture;
 }
 
+test("Discord setup explains the webhook and focuses missing configuration before saving", async ({ app, page }) => {
+  const fixture = await mockNotifications(page, [], { configured: false, enabled: false });
+  await app.open("/settings");
+  const section = page.getByRole("region", { name: "Discord notifications", exact: true });
+  await expect(section.getByRole("link", { name: "Discord webhook guide" })).toBeVisible();
+  await section.getByRole("checkbox", { name: "Enable Discord delivery" }).check();
+  await section.getByRole("button", { name: "Save notifications" }).click();
+  const webhook = section.getByLabel("Webhook URL", { exact: true });
+  await expect(webhook).toBeFocused();
+  expect(fixture.mutations).toEqual([]);
+  await webhook.fill("https://discord.com/api/webhooks/disposable/fixture-only");
+  await section.getByRole("button", { name: "Save notifications" }).click();
+  await expect(section.getByText("Notification settings saved.")).toBeVisible();
+  await expect(section.getByLabel("Replace webhook URL", { exact: true })).toHaveValue("");
+  await expect(section.getByRole("button", { name: "Send test notification" })).toBeEnabled();
+  expect(fixture.mutations).toEqual(["/notifications"]);
+});
+
 test("recent Discord deliveries show outcomes, retry timing, and safe failure guidance on desktop and mobile", async ({ app, page }, testInfo) => {
   const fixture = await mockNotifications(page, [
     delivery(DELIVERED_ID, {

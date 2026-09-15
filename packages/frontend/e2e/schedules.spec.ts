@@ -124,6 +124,32 @@ async function mockSchedules(page: Page, enabled = true, options: {
   return { writes, operationReads, rejectNextEdit: () => { rejectNextEdit = true; } };
 }
 
+test("day presets and the local time zone produce a reviewable paused schedule", async ({ app, page }) => {
+  const fixture = await mockSchedules(page, true, { empty: true });
+  await app.open(`/servers/${RUNNING_ID}`);
+  await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+  await page.getByRole("button", { name: "Weekdays", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Sun", exact: true })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Mon", exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "Weekends", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Sun", exact: true })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Mon", exact: true })).not.toBeChecked();
+  await page.getByLabel("Time zone", { exact: true }).fill("Invalid/Timezone");
+  await page.getByRole("button", { name: /Use my time zone/ }).click();
+  await expect(page.getByLabel("Time zone", { exact: true })).toHaveValue("UTC");
+  await page.getByRole("combobox", { name: "Action", exact: true }).selectOption("stop");
+  await expect(page.getByText(/Stops the server at the selected time/)).toBeVisible();
+  await page.getByRole("checkbox", { name: "Create paused", exact: true }).check();
+  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Schedules", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Weekends", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(fixture.writes).toEqual([]);
+  await page.getByRole("button", { name: "Add schedule", exact: true }).click();
+  expect(fixture.writes).toEqual([{ method: "POST", body: {
+    action: "stop", time: "08:00", days: [0, 6], timezone: "UTC", enabled: false,
+  } }]);
+});
+
 test("schedules can be edited, paused, and resumed with the latest saved revision", async ({ app, page }, testInfo) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);

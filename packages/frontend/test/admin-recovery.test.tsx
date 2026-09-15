@@ -34,6 +34,33 @@ function renderUsers() {
 }
 
 describe("administration recovery", () => {
+  for (const roots of [[], ["/backups"], ["/backups", "/archive"]]) {
+    it(`suggests a destination only with one configured backup root (${roots.length} roots)`, async () => {
+      apiJsonMock.mockImplementation(async (path, _schema, init) => {
+        if (path === "/settings/deployment") return { ...deployment, backupRoots: roots };
+        if (path === "/settings/backups") return { settings: init?.method === "PUT" ? JSON.parse(String(init.body)) : null };
+        if (path === "/notifications/deliveries") return { deliveries: [] };
+        return { configured: false, enabled: false };
+      });
+      render(<Settings />);
+      const destination = await screen.findByLabelText("Mounted destination path") as HTMLInputElement;
+      expect(destination.value).toBe(roots.length === 1 ? roots[0] : "");
+      expect(screen.queryByRole("region", { name: "Current storage" })).toBeNull();
+      expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+      if (roots.length !== 1) return;
+      await userEvent.clear(destination);
+      expect(destination.value).toBe("");
+      await userEvent.click(screen.getByRole("button", { name: "Save backup settings" }));
+      expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+      await userEvent.click(screen.getByRole("button", { name: "Use /backups" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save backup settings" }));
+      await screen.findByText("Backup settings saved.");
+      expect(apiJson).toHaveBeenCalledWith("/settings/backups", expect.anything(), expect.objectContaining({
+        method: "PUT", body: JSON.stringify({ destination: "/backups", retentionCount: 10, maxBytes: 100 * 1024 ** 3, reserveBytes: 5 * 1024 ** 3 }),
+      }));
+    });
+  }
+
   it("does not resubmit hidden operator grants after a user becomes a viewer", async () => {
     apiJsonMock.mockImplementation(async (path) => path === "/servers"
       ? { servers: [{ id: "world", displayName: "World" }] }
@@ -97,7 +124,7 @@ describe("administration recovery", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save backup settings" }));
     await userEvent.click(screen.getByRole("button", { name: "Save notifications" }));
     await screen.findByText("Notification settings saved.");
-    expect((screen.getByRole("button", { name: "Save backup settings" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Saving backup settings…" }) as HTMLButtonElement).disabled).toBe(true);
     expect(apiJsonMock.mock.calls.filter(([, , init]) => init?.method === "PUT").map(([path]) => path)).toEqual(["/settings/backups", "/notifications"]);
     await act(async () => pending.resolve({ settings }));
     await screen.findByText("Backup settings saved.");

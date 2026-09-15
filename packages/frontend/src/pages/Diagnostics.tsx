@@ -73,9 +73,15 @@ export default function Diagnostics() {
               </p>
               <pre><code>/var/run/docker.sock:/var/run/docker.sock:ro</code></pre>
               <p>
-                If you use a different socket, its mount must match the
-                <code> DOCKER_SOCKET</code> setting inside Ludock. Recreate Ludock
-                after changing the mount, then refresh this page.
+                With the example Compose file, set <code>LUDOCK_DOCKER_SOCKET</code> in
+                Ludock’s <code>.env</code> to the socket path on the Docker host.
+                For rootless Docker, this is usually <code>/run/user/1000/docker.sock</code>;
+                replace <code>1000</code> with the Docker user’s ID.
+              </p>
+              <p>
+                Run <code>docker compose up -d --force-recreate ludock</code> from
+                Ludock’s Compose folder, then refresh this page. Custom deployments
+                must match the mount’s container path to <code>DOCKER_SOCKET</code>.
               </p>
               <NavLink className="text-link" to="/logs">View Ludock logs</NavLink>
             </section>

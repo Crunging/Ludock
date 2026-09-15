@@ -72,13 +72,13 @@ describe("server resolution links", () => {
     detail(scheduleSearch);
     await screen.findByRole("tabpanel", { name: "Schedules" });
     await waitFor(() => expect(document.activeElement?.id).toBe(`schedule-${schedule.id}`));
-    fireEvent.change(screen.getByRole("textbox", { name: "Time zone" }), { target: { value: "Europe/London" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Time zone" }), { target: { value: "Europe/London" } });
     await userEvent.click(screen.getByRole("link", { name: "Open failed operation" }));
     await screen.findByText("Backup storage is unavailable.");
     expect(window.scrollTo).not.toHaveBeenCalled();
     await act(async () => { window.history.back(); });
     await screen.findByRole("tabpanel", { name: "Schedules" });
-    expect((screen.getByRole("textbox", { name: "Time zone" }) as HTMLInputElement).value).toBe("Europe/London");
+    expect((screen.getByRole("combobox", { name: "Time zone" }) as HTMLInputElement).value).toBe("Europe/London");
     await waitFor(() => expect(document.activeElement?.id).toBe(`schedule-${schedule.id}`));
     await act(async () => { window.history.forward(); });
     await screen.findByRole("region", { name: "Operation details" });

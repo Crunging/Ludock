@@ -1,6 +1,28 @@
 import { authStatusSchema, authUserResponseSchema, setupRequestSchema } from "@ludock/shared";
 import { test, expect, ADMIN } from "./fixtures";
 
+test("expired setup shows the commands to recover and fits a narrow screen", async ({ app, page }) => {
+  app.user = null;
+  let locked = true;
+  await page.route("**/api/v1/auth/status", (route) => route.fulfill({ json: authStatusSchema.parse({
+    setupRequired: true, setupLocked: locked,
+    setupExpiresAt: Date.now() + (locked ? -1 : 300_000),
+    setupRemainingMs: locked ? 0 : 300_000,
+    authenticated: false, user: null,
+  }) }));
+  await app.open("/");
+  await expect(page.getByRole("heading", { name: "Setup window expired" })).toBeVisible();
+  await expect(page.getByText(/docker compose restart ludock/)).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("expired-setup.png"), fullPage: true });
+  locked = false;
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(page.getByRole("heading", { name: "Set up Ludock" })).toBeVisible();
+  await expect(page.getByLabel("Setup code", { exact: true })).toBeFocused();
+  expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
+});
+
 test("setup keeps rejected drafts and sends its code only in the request body", async ({ app, page }) => {
   app.user = null;
   await page.route("**/api/v1/auth/status", async (route) => {

@@ -140,10 +140,10 @@ test("detail tabs support arrow keys, Home and End without losing drafts", async
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("tabpanel", { name: "Schedules", exact: true })).toBeFocused();
-  await page.getByRole("textbox", { name: "Time zone", exact: true }).fill("America/New_York");
+  await page.getByRole("combobox", { name: "Time zone", exact: true }).fill("America/New_York");
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Time zone", exact: true })).toHaveValue("America/New_York");
+  await expect(page.getByRole("combobox", { name: "Time zone", exact: true })).toHaveValue("America/New_York");
   await expectNoPageOverflow(page);
 });
 

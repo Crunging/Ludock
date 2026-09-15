@@ -32,7 +32,8 @@ export const settingsRoutes: ApiRoutes = {
       const composeAvailable = await isComposeAvailable();
       assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       return respond(deploymentSettingsResponseSchema, {
-        backupRoots: [...new Set((process.env.LUDOCK_BACKUP_ROOTS || "").split(path.delimiter).filter(Boolean))],
+        backupRoots: [...new Set((process.env.LUDOCK_BACKUP_ROOTS || "")
+          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
         composeRoots: [...new Set((process.env.LUDOCK_COMPOSE_ROOTS || "")
           .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
         composeAvailable,

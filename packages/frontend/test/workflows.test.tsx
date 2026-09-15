@@ -67,6 +67,25 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
 }
 
 describe("independent server panels", () => {
+  it("preserves an empty monitoring limit through tab changes and saves a corrected whole number", async () => {
+    detail();
+    await userEvent.click(await screen.findByRole("tab", { name: "Availability" }));
+    const grace = await screen.findByLabelText("Failure grace period (seconds)") as HTMLInputElement;
+    await userEvent.clear(grace);
+    expect(grace.value).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
+    expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Availability" }));
+    const restored = screen.getByLabelText("Failure grace period (seconds)") as HTMLInputElement;
+    expect(restored.value).toBe("");
+    await userEvent.type(restored, "300");
+    await userEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
+    await screen.findByText("Availability settings saved.");
+    expect(apiJsonMock.mock.calls.filter(([, , init]) => init?.method === "PUT").map(([, , init]) => JSON.parse(String(init?.body))))
+      .toEqual([{ enabled: false, maintenance: false, graceSeconds: 300 }]);
+  });
+
   for (const panel of ["backups", "schedules"] as const) {
     it(`loads ${panel} on demand and keeps lifecycle controls after its read fails`, async () => {
       detail("admin", {

@@ -4,10 +4,17 @@ services:
     ports:
       - "${LUDOCK_PORT:-3000}:3000"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Set LUDOCK_DOCKER_SOCKET in .env for a different host socket.
+      # A missing socket must fail instead of creating an empty host directory.
+      - type: bind
+        source: ${LUDOCK_DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+        read_only: true
+        bind:
+          create_host_path: false
       # Persistent application data.
       - ludock-data:/data
-      # Separate backup storage, ready to select in Settings after first sign-in.
+      # Separate backup storage, suggested in Settings after first sign-in.
       - ludock-backups:/backups
       # To keep backups on another disk, replace the backup volume above with
       # a host-directory mount (create the directory first), for example:

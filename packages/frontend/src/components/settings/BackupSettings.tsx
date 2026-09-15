@@ -25,7 +25,7 @@ export default function BackupSettingsSection({
       className="settings-section settings-section--divided"
       aria-labelledby="backup-settings-title"
     >
-      <h2 id="backup-settings-title">Backup storage</h2>
+      <h2 id="backup-settings-title" tabIndex={-1}>Backup storage</h2>
       {page.loading && (
         <p className="muted" role="status">
           Loading backup settings…
@@ -52,7 +52,8 @@ export default function BackupSettingsSection({
 const gib = 1024 ** 3;
 
 interface BackupDraft {
-  destination: string;
+  // null uses the single suggested root; an explicitly cleared field stays empty.
+  destination: string | null;
   retentionCount: string;
   maxGiB: string;
   reserveGiB: string;
@@ -76,15 +77,18 @@ function BackupSettingsForm({
   deployment: DeploymentSettings | null;
 }) {
   const [backup, setBackup] = useState(() =>
-    backupDraft(
-      settings ?? {
+    ({
+      ...backupDraft(settings ?? {
         destination: "",
         retentionCount: 10,
         maxBytes: 100 * gib,
         reserveBytes: 5 * gib,
-      },
-    ),
+      }),
+      destination: settings?.destination ?? null,
+    }),
   );
+  const destination = backup.destination ??
+    (deployment?.backupRoots.length === 1 ? deployment.backupRoots[0] : "");
   const [backupConfigured, setBackupConfigured] = useState(Boolean(settings));
   const [backupStorageRevision, setBackupStorageRevision] = useState(0);
   const backupDestination = useRef<HTMLInputElement>(null);
@@ -107,7 +111,7 @@ function BackupSettingsForm({
       return;
     }
     const parsed = backupSettingsSchema.safeParse({
-      destination: backup.destination,
+      destination,
       retentionCount: Number(backup.retentionCount),
       maxBytes: Math.round(Number(backup.maxGiB) * gib),
       reserveBytes: Math.round(Number(backup.reserveGiB) * gib),
@@ -145,7 +149,10 @@ function BackupSettingsForm({
       if (settings.reserveBytes === parsed.data.reserveBytes)
         savedDraft.reserveGiB = submittedDraft.reserveGiB;
       setBackup((current) =>
-        current === submittedDraft ? savedDraft : current,
+        current === submittedDraft ? savedDraft : {
+          ...current,
+          destination: current.destination ?? savedDraft.destination,
+        },
       );
     } catch (reason) {
       if (!controller.signal.aborted)
@@ -164,10 +171,10 @@ function BackupSettingsForm({
       <p>
         {backupConfigured
           ? "Backups use the configured destination and limits."
-          : "Backups are disabled until an approved mounted destination and limits are saved."}{" "}
+          : "Review the destination and limits, then save to enable backups."}{" "}
         Every backup stops its server for the entire copy.
       </p>
-      <BackupStorageSummary key={backupStorageRevision} />
+      {backupConfigured && <BackupStorageSummary key={backupStorageRevision} />}
       {deployment && (
         <DeploymentGuidance
           section="backups"
@@ -182,14 +189,20 @@ function BackupSettingsForm({
         Mounted destination path
         <input
           ref={backupDestination}
-          value={backup.destination}
+          value={destination}
           onChange={(event) =>
             setBackup({ ...backup, destination: event.target.value })
           }
           placeholder="/backups"
+          autoCapitalize="none"
+          spellCheck={false}
+          aria-describedby="backup-destination-help"
           required
         />
       </label>
+      <p className="muted" id="backup-destination-help">
+        An existing folder inside Ludock, separate from game data.
+      </p>
       <div className="form-columns">
         <div>
           <label>
@@ -264,9 +277,7 @@ function BackupSettingsForm({
         </div>
       </div>
       <p className="muted">
-        The destination must be inside an approved backup root and separate from
-        game data. Space is also required for temporary archives and restore
-        staging.
+        Allow extra disk space for temporary files during backups and restores.
       </p>
       {error && (
         <div className="alert alert--error" role="alert">
@@ -285,7 +296,7 @@ function BackupSettingsForm({
         </div>
       )}
       <button className="primary-btn" disabled={busy}>
-        Save backup settings
+        {busy ? "Saving backup settings…" : "Save backup settings"}
       </button>
     </form>
   );

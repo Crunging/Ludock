@@ -1,6 +1,50 @@
 import { backupSettingsResponseSchema, backupSettingsSchema, backupStorageResponseSchema } from "@ludock/shared";
 import { test, expect } from "./fixtures";
 
+test("a fresh installation suggests its backup destination and saves only on request", async ({ app, page }) => {
+  const writes: unknown[] = [];
+  await page.route("**/api/v1/settings/deployment", (route) => route.fulfill({ json: {
+    backupRoots: ["/backups"], composeRoots: [], composeAvailable: false,
+  } }));
+  await page.route("**/api/v1/notifications", (route) => route.fulfill({ json: { configured: false, enabled: false } }));
+  await page.route("**/api/v1/notifications/deliveries", (route) => route.fulfill({ json: { deliveries: [] } }));
+  await page.route("**/api/v1/settings/backups", async (route) => {
+    const settings = route.request().method() === "PUT" ? backupSettingsSchema.parse(route.request().postDataJSON()) : null;
+    if (settings) writes.push(settings);
+    await route.fulfill({ json: backupSettingsResponseSchema.parse({ settings }) });
+  });
+  await app.open("/settings");
+  const destination = page.getByLabel("Mounted destination path");
+  await expect(destination).toHaveValue("/backups");
+  await expect(page.getByRole("region", { name: "Current storage" })).toHaveCount(0);
+  const links = page.getByRole("navigation", { name: "Settings sections" });
+  const notificationHeading = page.getByRole("heading", { name: "Discord notifications", exact: true });
+  for (const width of [720, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await links.getByRole("link", { name: "Discord notifications" }).click();
+    await expect(notificationHeading).toBeFocused();
+    await expect(notificationHeading).toBeInViewport();
+    expect((await notificationHeading.boundingBox())!.y).toBeGreaterThanOrEqual(101);
+  }
+  const emptyCell = page.getByRole("table", { name: "Recent notification deliveries" }).getByRole("cell");
+  expect(await emptyCell.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await links.getByRole("link", { name: "Backup storage" }).click();
+  await expect(destination).toHaveValue("/backups");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: test.info().outputPath("first-backup-settings.png"), fullPage: true });
+  expect(writes).toEqual([]);
+  await destination.clear();
+  await page.getByRole("button", { name: "Save backup settings" }).click();
+  await expect(destination).toHaveValue("");
+  await expect(destination).toBeFocused();
+  expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Use /backups" }).click();
+  await page.getByRole("button", { name: "Save backup settings" }).click();
+  await expect(page.getByText("Backup settings saved.")).toBeVisible();
+  expect(writes).toEqual([{ destination: "/backups", retentionCount: 10, maxBytes: 100 * 1024 ** 3, reserveBytes: 5 * 1024 ** 3 }]);
+});
+
 test("backup storage uses saved limits, refreshes after save and recovers from unreadable disk space", async ({ app, page }) => {
   const gib = 1024 ** 3;
   let settings = { destination: "/backups", retentionCount: 10, maxBytes: 100 * gib, reserveBytes: 5 * gib };

@@ -36,7 +36,7 @@ import SchedulesPanel, { type ScheduleEdit } from "../components/server-detail/S
 import UpdatePanel, {
   type UpdateOptions,
 } from "../components/server-detail/UpdatePanel";
-import AvailabilityPanel from "../components/server-detail/AvailabilityPanel";
+import AvailabilityPanel, { type AvailabilityDraft } from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
@@ -80,10 +80,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [server, setServer] = useState<Server | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [capability, setCapability] = useState<UpdateCapability | null>(null);
-  const [availability, setAvailability] = useState<AvailabilityPolicy>({
+  const [availability, setAvailability] = useState<AvailabilityDraft>({
     enabled: false,
     maintenance: false,
-    graceSeconds: 120,
+    graceSeconds: "120",
   });
   const [availabilitySnapshot, setAvailabilitySnapshot] = useState<{
     policy: AvailabilityPolicy;
@@ -302,7 +302,9 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     })
       .then((monitor) => {
         if (controller.signal.aborted) return;
-        if (!availabilityLoaded.current) setAvailability(monitor.policy);
+        if (!availabilityLoaded.current) setAvailability({
+          ...monitor.policy, graceSeconds: String(monitor.policy.graceSeconds),
+        });
         availabilityLoaded.current = true;
         setAvailabilitySnapshot(monitor);
         setSettingsState("ready");
@@ -953,7 +955,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                     jsonBody("PUT", {
                       enabled: availability.enabled,
                       maintenance: availability.maintenance,
-                      graceSeconds: availability.graceSeconds,
+                      graceSeconds: Number(availability.graceSeconds),
                     }),
                   );
                   if (pageActive.current) setAvailabilitySnapshot(monitor);

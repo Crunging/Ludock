@@ -2,13 +2,17 @@ import { useEffect, useState } from "react";
 import type { AvailabilityPolicy, AvailabilityState } from "@ludock/shared";
 import { NavLink } from "../../navigation";
 
+export interface AvailabilityDraft extends Omit<AvailabilityPolicy, "graceSeconds"> {
+  graceSeconds: string;
+}
+
 interface Props {
   policy: AvailabilityPolicy;
   state: AvailabilityState | null;
   admin: boolean;
   monitoringPaused?: boolean;
-  value: AvailabilityPolicy;
-  onChange: (value: AvailabilityPolicy) => void;
+  value: AvailabilityDraft;
+  onChange: (value: AvailabilityDraft) => void;
   busy: boolean;
   onSave: () => void;
 }
@@ -90,16 +94,22 @@ export default function AvailabilityPanel(props: Props) {
             disabled={busy}
             min={10}
             max={86400}
+            inputMode="numeric"
+            aria-describedby="monitoring-grace-help"
             required
             value={availability.graceSeconds}
             onChange={(event) =>
               onChange({
                 ...availability,
-                graceSeconds: Number(event.target.value),
+                graceSeconds: event.target.value,
               })
             }
           />
         </label>
+        <p className="muted" id="monitoring-grace-help">
+          Wait this long before reporting an outage. The default is 120 seconds
+          (2 minutes), allowing brief restarts to finish. Use 10–86,400 seconds.
+        </p>
         <label className="check-label">
           <input
             type="checkbox"
@@ -115,8 +125,12 @@ export default function AvailabilityPanel(props: Props) {
           Maintenance mode — pause monitoring
         </label>
         <p className="muted">
-          One notification is sent for an outage and one for recovery. Configure
-          Discord delivery in Settings.
+          Maintenance pauses alerts until you turn it off and save again; it
+          does not stop the server or its schedules.
+        </p>
+        <p className="muted">
+          To receive one notification for an outage and one for recovery,{" "}
+          <NavLink className="text-link" to="/settings">configure Discord delivery in Settings</NavLink>.
         </p>
         <button className="primary-btn" disabled={busy}>
           Save monitoring
