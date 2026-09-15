@@ -4,6 +4,7 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { backendSourceMounts } from "./test-source-mounts.mjs";
 
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const folder = await realpath(
@@ -22,8 +23,7 @@ try {
       "-e", "LUDOCK_SELF_CONTAINER=" + name,
       "-e", "LUDOCK_TEST_BACKUP_DIRECTORY=/backup-fixtures",
       "-v", "/var/run/docker.sock:/var/run/docker.sock",
-      "-v", repository + "/packages/backend/src:/app/packages/backend/src:ro",
-      "-v", repository + "/packages/backend/test:/app/packages/backend/test:ro",
+      ...backendSourceMounts(repository),
       "-v", backups + ":/backup-fixtures",
       process.env.LUDOCK_TEST_IMAGE || "ludock:test",
       "bun", "test", "--isolate",

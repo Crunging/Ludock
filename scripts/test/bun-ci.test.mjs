@@ -1,8 +1,8 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { imageTags, buildArguments, BUILDKIT_IMAGE, TRIVY_IMAGE } from "../ci/containers.mjs";
+import { imageTags, buildArguments, scanImage, BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE } from "../ci/containers.mjs";
 import { exportBuildRuntime, integrationEnvironment, integrations } from "../ci/integration.mjs";
 import { DEFAULT_HELPER_IMAGE } from "../../packages/backend/src/runtime-images.ts";
 
@@ -31,7 +31,7 @@ describe("Bun-only CI", () => {
       }
     }
     for (const integration of Object.values(integrations)) expect(integration.revision).toMatch(/^[a-f0-9]{40}$/);
-    for (const image of [BUILDKIT_IMAGE, TRIVY_IMAGE]) expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
+    for (const image of [BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE]) expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
     expect(await read(".github/actions/setup-bun/action.yaml")).toContain(DEFAULT_HELPER_IMAGE);
     expect(Bun.TOML.parse(await read("bunfig.toml")).run.bun).toBe(true);
   });
@@ -82,7 +82,7 @@ describe("Bun-only CI", () => {
     expect(check).toContain("--load");
     expect(check).not.toContain("--push");
     const publish = buildArguments("publish", { IMAGE_NAME: "ghcr.io/fixture/ludock", GITHUB_SHA: "a".repeat(40), GITHUB_REPOSITORY: "fixture/ludock", GITHUB_SERVER_URL: "https://github.com" });
-    for (const arg of ["--push", "--provenance=mode=max", "--sbom=true", "linux/amd64,linux/arm64"]) expect(publish).toContain(arg);
+    for (const arg of ["--push", "--provenance=mode=max", `--attest=type=sbom,generator=${SBOM_IMAGE}`, "linux/amd64,linux/arm64"]) expect(publish).toContain(arg);
     expect(publish).not.toContain("--load");
     expect(publish).toContain("type=gha,version=2,scope=ci-ARM64");
     expect(() => buildArguments("check", { LUDOCK_PLATFORM: "--push" })).toThrow();
@@ -97,6 +97,40 @@ describe("Bun-only CI", () => {
     expect(artifact["INPUT_RETENTION-DAYS"]).toBe("3");
     expect(artifact.INPUT_ARCHIVE).toBe("true");
     expect(() => integrationEnvironment("unknown", {})).toThrow();
+  });
+
+  it("scans exported images offline without giving the scanner Docker access, and cleans up failures", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ludock-scanner-test-"));
+    let missing = false;
+    let failScan = false;
+    const spawn = spyOn(Bun, "spawnSync").mockImplementation((args) => ({
+      exitCode: (missing && args.includes("inspect")) || (failScan && args.includes("--input")) ? 1 : 0,
+    }));
+    try {
+      for (const scenario of ["local", "remote", "failed"]) {
+        missing = scenario === "remote";
+        failScan = scenario === "failed";
+        spawn.mockClear();
+        const operation = scanImage("ludock:fixture", { RUNNER_TEMP: directory });
+        if (failScan) await expect(operation).rejects.toThrow("Docker run failed");
+        else await operation;
+        const calls = spawn.mock.calls.map(([args]) => args);
+        expect(calls.some((args) => args[1] === "pull")).toBe(missing);
+        const scannerCalls = calls.filter((args) => args.includes(TRIVY_IMAGE));
+        expect(scannerCalls).toHaveLength(2);
+        for (const args of scannerCalls) expect(args.join(" ")).not.toContain("docker.sock");
+        const [download, scan] = scannerCalls;
+        expect(download).toContain("--download-db-only");
+        expect(download.join(" ")).not.toContain(":/scan");
+        expect(scan[scan.indexOf("--network") + 1]).toBe("none");
+        expect(scan).toContain("--offline-scan");
+        expect(scan.some((argument) => argument.endsWith(":/scan:ro"))).toBe(true);
+        expect(await readdir(directory)).toStrictEqual([]);
+      }
+    } finally {
+      spawn.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("masks cache credentials and rejects newline injection before exporting any environment", async () => {

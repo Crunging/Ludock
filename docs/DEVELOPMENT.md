@@ -36,6 +36,20 @@ The restore helper still confines every filesystem operation through pinned
 directories. `Bun.Archive` is useful for smaller in-memory archives, but its file
 API does not provide the streaming metadata contract these backups require.
 
+## Production bundles
+
+`bun run --filter @ludock/backend build` bundles the server, account recovery
+command, shared contracts, and their dependencies. Keep every file in
+`packages/backend/dist` together: the entry points share generated chunks and
+linked source maps. The production image runs these bundles without installed
+`node_modules` or workspace sources. Development continues to run source files.
+
+The build writes `dependencies.cdx.json`, a CycloneDX inventory of packages that
+contributed code, and `THIRD-PARTY-NOTICES.txt` with their license notices. Trivy
+discovers the inventory inside the image, so bundled dependencies remain visible
+to image vulnerability scans. Published attestations also include the backend
+build stage's installed inputs. Source CI audits the complete Bun lockfile.
+
 ## Checks
 
 ```sh
@@ -49,6 +63,9 @@ Docker acceptance uses the `ludock:test` image and `scripts/test-linux.mjs`,
 Run them sequentially against a dedicated daemon. Validate on Linux AMD64 and
 ARM64, and report when an architecture was emulated. The Linux harness verifies
 that the production image contains no Node, npm, or npx executable on PATH.
+It checks frontend assets, administrator setup, account recovery, and session
+revocation before mounting source files and dependencies for the Linux suites.
+The source mounts are test fixtures and are never included in the production image.
 
 ## CI and release tools
 
@@ -57,6 +74,10 @@ credentials are not saved in the checkout. Bun is copied from a pinned official
 image and checked against the release range in `.bun-version` and the minimum
 version in `package.json`. Buildx and Trivy run as native tools with pinned
 container images.
+
+Image scans export a local image and analyze that archive offline in Trivy.
+Advisory downloads run separately without access to the image. The scanner never
+receives the Docker socket, and temporary exports are removed after each scan.
 
 Release Please and artifact uploads use their maintained upstream bundles under
 Bun in the [local container action](../.github/actions/bun-action/action.yaml).

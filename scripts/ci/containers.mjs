@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+
 export const BUILDKIT_IMAGE = "moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8";
 export const TRIVY_IMAGE = "aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969";
+export const SBOM_IMAGE = "docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9";
 
 export function imageTags(environment) {
   const image = environment.IMAGE_NAME?.toLowerCase();
@@ -25,7 +29,7 @@ export function buildArguments(mode, environment) {
       "--cache-from", `type=gha,version=2,scope=ci-${environment.RUNNER_ARCH}`,
       "--cache-to", `type=gha,version=2,mode=max,scope=ci-${environment.RUNNER_ARCH}`);
   } else if (mode === "publish") {
-    args.push("--platform", "linux/amd64,linux/arm64", "--push", "--provenance=mode=max", "--sbom=true");
+    args.push("--platform", "linux/amd64,linux/arm64", "--push", "--provenance=mode=max", `--attest=type=sbom,generator=${SBOM_IMAGE}`);
     for (const tag of imageTags(environment)) args.push("--tag", tag);
     const labels = {
       "org.opencontainers.image.source": `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}`,
@@ -47,17 +51,35 @@ function run(args) {
   if (result.exitCode !== 0) throw new Error(`Docker ${args[0]} failed (${result.exitCode})`);
 }
 
+export async function scanImage(value, environment = process.env) {
+  if (!value || value.startsWith("-")) throw new Error("An image reference is required");
+  if (!environment.RUNNER_TEMP?.startsWith("/")) throw new Error("The CI scanner requires RUNNER_TEMP");
+  const directory = await mkdtemp(join(environment.RUNNER_TEMP, "ludock-scan-"));
+  const cache = `${environment.RUNNER_TEMP}/ludock-trivy-cache:/root/.cache/trivy`;
+  try {
+    const local = Bun.spawnSync(["docker", "image", "inspect", value], { stdout: "ignore", stderr: "ignore" });
+    if (local.exitCode !== 0) run(["pull", value]);
+    run(["image", "save", "--output", join(directory, "image.tar"), value]);
+    // Download advisory data without access to the image or Docker daemon.
+    run(["run", "--rm", "--volume", cache, TRIVY_IMAGE,
+      "image", "--download-db-only", "--no-progress"]);
+    // Analyze an immutable export offline; the scanner never gets the socket.
+    run(["run", "--rm", "--network", "none", "--volume", cache,
+      "--volume", `${directory}:/scan:ro`, TRIVY_IMAGE,
+      "image", "--input", "/scan/image.tar", "--skip-db-update", "--offline-scan",
+      "--scanners", "vuln", "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
+      "--exit-code", "1", "--timeout", "8m"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.main) {
   const [operation, value] = process.argv.slice(2);
   if (operation === "setup") {
     run(["buildx", "create", "--name", "ludock", "--driver", "docker-container", "--driver-opt", `image=${BUILDKIT_IMAGE}`, "--use"]);
     run(["buildx", "inspect", "--bootstrap"]);
   } else if (operation === "build") run(buildArguments(value, process.env));
-  else if (operation === "scan") {
-    if (!value || value.startsWith("-")) throw new Error("An image reference is required");
-    if (!process.env.RUNNER_TEMP?.startsWith("/")) throw new Error("The CI scanner requires RUNNER_TEMP");
-    run(["run", "--rm", "--volume", "/var/run/docker.sock:/var/run/docker.sock",
-      "--volume", `${process.env.RUNNER_TEMP}/ludock-trivy-cache:/root/.cache/trivy`, TRIVY_IMAGE,
-      "image", "--scanners", "vuln", "--severity", "HIGH,CRITICAL", "--ignore-unfixed", "--exit-code", "1", "--timeout", "8m", value]);
-  } else throw new Error("Unknown CI container operation");
+  else if (operation === "scan") await scanImage(value);
+  else throw new Error("Unknown CI container operation");
 }

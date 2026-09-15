@@ -45,6 +45,10 @@ describe("Linux production harness", () => {
     expect(smoke[smoke.indexOf("--network") + 1]).toBe("none");
     expect(commands.map((command) => command[0])).toStrictEqual(["run", "exec", "stop", "inspect", "run", "rm"]);
     expect(commands[4].includes("test")).toBeTruthy();
+    const mounts = commands[4].filter((argument, index, args) => args[index - 1] === "-v");
+    for (const directory of ["node_modules", "packages/backend/node_modules", "packages/shared/node_modules", "packages/shared/src"]) {
+      expect(mounts.some((mount) => mount.endsWith(`:/app/${directory}:ro`))).toBe(true);
+    }
     expect(commands.at(-1).slice(0, 2)).toStrictEqual(["rm", "-fv"]);
     expect(commands.at(-1)[2]).toBe(smoke[smoke.indexOf("--name") + 1]);
   });
