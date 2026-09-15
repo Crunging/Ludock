@@ -5,7 +5,9 @@ import { operationStatusLabels } from "../../operations";
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const minuteStart = () => Math.floor(Date.now() / 60_000) * 60_000;
 const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const timezones = [...new Set([localTimezone, "UTC", ...Intl.supportedValuesOf("timeZone")])].sort();
+const timezoneOptions = [...new Set([localTimezone, "UTC", ...Intl.supportedValuesOf("timeZone")])]
+  .sort()
+  .map((timezone) => <option key={timezone} value={timezone} />);
 const dayPresets = [
   { label: "Every day", days: [0, 1, 2, 3, 4, 5, 6] },
   { label: "Weekdays", days: [1, 2, 3, 4, 5] },
@@ -199,9 +201,7 @@ export default function SchedulesPanel(props: Props) {
             </label>
             <label>Time zone
               <input required list={timezoneId} aria-describedby={`${timezoneId}-help`} autoCapitalize="none" spellCheck={false} value={schedule.timezone} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, timezone: event.target.value })} />
-              <datalist id={timezoneId}>
-                {timezones.map((timezone) => <option key={timezone} value={timezone} />)}
-              </datalist>
+              <datalist id={timezoneId}>{timezoneOptions}</datalist>
             </label>
           </div>
           <div className="inline-actions">

@@ -76,16 +76,13 @@ function BackupSettingsForm({
   settings: BackupSettings | null;
   deployment: DeploymentSettings | null;
 }) {
-  const [backup, setBackup] = useState(() =>
-    ({
-      ...backupDraft(settings ?? {
-        destination: "",
-        retentionCount: 10,
-        maxBytes: 100 * gib,
-        reserveBytes: 5 * gib,
-      }),
-      destination: settings?.destination ?? null,
-    }),
+  const [backup, setBackup] = useState<BackupDraft>(() =>
+    settings ? backupDraft(settings) : {
+      destination: null,
+      retentionCount: "10",
+      maxGiB: "100",
+      reserveGiB: "5",
+    },
   );
   const destination = backup.destination ??
     (deployment?.backupRoots.length === 1 ? deployment.backupRoots[0] : "");

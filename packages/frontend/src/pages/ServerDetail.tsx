@@ -36,7 +36,9 @@ import SchedulesPanel, { type ScheduleEdit } from "../components/server-detail/S
 import UpdatePanel, {
   type UpdateOptions,
 } from "../components/server-detail/UpdatePanel";
-import AvailabilityPanel, { type AvailabilityDraft } from "../components/server-detail/AvailabilityPanel";
+import AvailabilityPanel, {
+  type AvailabilityDraft,
+} from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
@@ -302,9 +304,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     })
       .then((monitor) => {
         if (controller.signal.aborted) return;
-        if (!availabilityLoaded.current) setAvailability({
-          ...monitor.policy, graceSeconds: String(monitor.policy.graceSeconds),
-        });
+        if (!availabilityLoaded.current)
+          setAvailability({
+            ...monitor.policy,
+            graceSeconds: String(monitor.policy.graceSeconds),
+          });
         availabilityLoaded.current = true;
         setAvailabilitySnapshot(monitor);
         setSettingsState("ready");

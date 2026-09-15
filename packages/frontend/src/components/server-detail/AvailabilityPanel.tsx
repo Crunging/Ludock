@@ -125,12 +125,14 @@ export default function AvailabilityPanel(props: Props) {
           Maintenance mode — pause monitoring
         </label>
         <p className="muted">
-          Maintenance pauses alerts until you turn it off and save again; it
+          Maintenance pauses outage alerts until you turn it off and save again; it
           does not stop the server or its schedules.
         </p>
         <p className="muted">
           To receive one notification for an outage and one for recovery,{" "}
-          <NavLink className="text-link" to="/settings">configure Discord delivery in Settings</NavLink>.
+          <NavLink className="text-link" to="/settings">
+            configure Discord delivery in Settings
+          </NavLink>.
         </p>
         <button className="primary-btn" disabled={busy}>
           Save monitoring
