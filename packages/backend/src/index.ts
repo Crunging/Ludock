@@ -28,6 +28,7 @@ export function startServer(options: {
   const app = createApp({ frontendDist: options.frontendDist });
   const sockets = createWebSocketGateway();
   let backgroundTask: Promise<void> | undefined;
+  let notificationTask: Promise<void> | undefined;
   let shuttingDown = false;
   let shutdownTask: Promise<void> | undefined;
   let backgroundTimer: ReturnType<typeof setInterval> | undefined;
@@ -47,13 +48,18 @@ export function startServer(options: {
       } catch {
         logger.warn("Availability checks are temporarily unavailable");
       }
-      try {
-        await deliverNotifications();
-      } catch {
-        logger.warn("Notification delivery is temporarily unavailable");
-      }
     })().finally(() => { backgroundTask = undefined; });
     return backgroundTask;
+  }
+
+  function tick(): void {
+    if (shuttingDown) return;
+    void backgroundTick();
+    // A delivery batch can take longer than a scheduled minute. Keep it from
+    // delaying discovery, schedules, and monitoring, but retain its shutdown lifetime.
+    notificationTask ??= deliverNotifications()
+      .catch(() => logger.warn("Notification delivery is temporarily unavailable"))
+      .finally(() => { notificationTask = undefined; });
   }
 
   const server = serve({
@@ -87,8 +93,8 @@ export function startServer(options: {
   logSetupInstructions();
   void startOperationRunner().then(() => {
     if (shuttingDown) return;
-    void backgroundTick();
-    backgroundTimer = setInterval(() => void backgroundTick(), 15_000);
+    tick();
+    backgroundTimer = setInterval(tick, 15_000);
     backgroundTimer.unref();
   }).catch(() => logger.error("Operation recovery requires administrator attention"));
 
@@ -105,7 +111,7 @@ export function startServer(options: {
     const operationsStopped = stopOperationRunner();
     shutdownTask = (async () => {
       const results = await Promise.allSettled([
-        backgroundTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
+        backgroundTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
       ]);
       // A console command or streamed file request can outlive its connection.
       // Its lock and cleanup must settle before the shared database is closed.

@@ -144,7 +144,7 @@ describe("authentication request ownership", () => {
       .mockResolvedValueOnce(Response.json({ ok: true }));
     const auth = renderAuth();
     await act(() => auth.result.current.logout());
-    expect((fetch.mock.calls[0][1]?.signal as AbortSignal).aborted).toBe(true);
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
     await act(async () => { oldStatus.resolve(status(true)); });
     expect(auth.result.current.authenticated).toBe(false);
     expect(auth.result.current.loading).toBe(false);
@@ -252,7 +252,7 @@ describe("authentication request ownership", () => {
     await waitFor(() => expect(auth.result.current.loading).toBe(false));
     const request = auth.result.current.login("admin", "valid password for tests");
     auth.unmount();
-    expect((fetch.mock.calls[1][1]?.signal as AbortSignal).aborted).toBe(true);
+    expect(fetch.mock.calls[1][1]?.signal?.aborted).toBe(true);
     signingIn.resolve(Response.json({ user }));
     expect(await request).toContain("session changed");
   });

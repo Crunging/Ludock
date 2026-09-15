@@ -17,7 +17,12 @@ type ExtractionFixture = RestoreFixture & {
   destination: string;
   run: (
     input: Buffer,
-    options?: { prelude?: string; maxBytes?: number; okay?: boolean },
+    options?: {
+      prelude?: string;
+      preludeData?: Record<string, string>;
+      maxBytes?: number;
+      okay?: boolean;
+    },
   ) => Promise<string>;
 };
 
@@ -30,6 +35,7 @@ function extractionTest(body: (fixture: ExtractionFixture) => Promise<void>) {
       { root: fixture.root, stage, maxBytes: options.maxBytes ?? 1_000_000 },
       {
         input,
+        preludeData: options.preludeData,
         rejection: options.okay === false
           ? "Restore extraction failed: the archive or destination changed or is unsafe."
           : undefined,
@@ -133,8 +139,25 @@ describe.skipIf(process.platform !== "linux")(
       const victim = path.join(destination, "nested"),
         detached = path.join(destination, "detached");
       await mkdir(victim);
-      const prelude = `const testFs=require("node:fs/promises");const originalOpen=testFs.open;let replaced=false;testFs.open=async function(filename,flags){const handle=await originalOpen.call(this,filename,flags);if(!replaced&&String(filename).endsWith("/nested")){replaced=true;await testFs.rename(${JSON.stringify(victim)},${JSON.stringify(detached)});await testFs.symlink(${JSON.stringify(outside)},${JSON.stringify(victim)});}return handle;};`;
-      await run(record("nested/sentinel", "staged-data"), { prelude });
+      const prelude = `
+        const testFs = require("node:fs/promises");
+        const testPaths = JSON.parse(process.env.LUDOCK_RESTORE_TEST_DATA);
+        const originalOpen = testFs.open;
+        let replaced = false;
+        testFs.open = async function(filename, flags) {
+          const handle = await originalOpen.call(this, filename, flags);
+          if (!replaced && String(filename).endsWith("/nested")) {
+            replaced = true;
+            await testFs.rename(testPaths.victim, testPaths.detached);
+            await testFs.symlink(testPaths.outside, testPaths.victim);
+          }
+          return handle;
+        };
+      `;
+      await run(record("nested/sentinel", "staged-data"), {
+        prelude,
+        preludeData: { victim, detached, outside },
+      });
       assert.equal(
         await readFile(path.join(detached, "sentinel"), "utf8"),
         "staged-data",

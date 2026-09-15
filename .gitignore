@@ -7,7 +7,6 @@ dist/
 packages/frontend/.dist-*/
 coverage/
 *.tsbuildinfo
-.eslintcache
 packages/frontend/test-results/
 packages/frontend/playwright-report/
 

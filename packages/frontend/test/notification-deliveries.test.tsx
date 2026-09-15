@@ -114,7 +114,8 @@ describe("notification delivery troubleshooting", () => {
     apiJsonMock.mockImplementation(async () => ({ deliveries: [current] }));
     renderDeliveries();
     await screen.findByText("Queued", { exact: true, selector: "strong" });
-    expect(interval).toHaveBeenCalledWith(expect.any(Function), 5_000);
+    // The row can render before React runs the effect that starts polling.
+    await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 5_000));
     current = { ...testDelivery, state: "delivered", attempts: 1, deliveredAt: CREATED_AT + 30_000, nextAttemptAt: null };
     await act(async () => { poll?.(); });
     expect(table().getByText("Delivered", { exact: true, selector: "strong" })).toBeTruthy();
@@ -183,7 +184,7 @@ describe("notification delivery troubleshooting", () => {
     expect(await screen.findByRole("button", { name: /^Retry notification/ })).toBeTruthy();
     expect(table().getByText("Queued", { exact: true, selector: "strong" })).toBeTruthy();
     expect(apiJsonMock).toHaveBeenCalledTimes(2);
-    expect(interval).toHaveBeenCalledWith(expect.any(Function), 5_000);
+    await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 5_000));
   });
 
   it("does not replace a failed retry with optimistic success and allows another attempt", async () => {

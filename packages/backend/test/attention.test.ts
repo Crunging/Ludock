@@ -50,6 +50,7 @@ const originals = { listContainers: docker.listContainers, getContainer: docker.
 let containers: ContainerFixture[];
 let unavailable: boolean;
 let beforeList: (() => Promise<void> | void) | undefined;
+let beforeInspect: (() => Promise<void> | void) | undefined;
 let beforeStats: (() => Promise<void> | void) | undefined;
 let worldId: string;
 let privateId: string;
@@ -95,6 +96,7 @@ beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
   beforeList = undefined;
+  beforeInspect = undefined;
   beforeStats = undefined;
   unavailable = false;
   inspectCalls = 0;
@@ -123,6 +125,7 @@ beforeEach(async () => {
   docker.getContainer = ((id: string) => ({
     inspect: async () => {
       inspectCalls += 1;
+      await beforeInspect?.();
       const container = containers.find((entry) => entry.id === id)!;
       return {
         Id: id,
@@ -434,6 +437,9 @@ describe("server detail and attention resolution", () => {
   });
 
   it("preserves normal live detail and statistics when discovery succeeds", async () => {
+    let lists = 0;
+    beforeList = () => { lists += 1; };
+    inspectCalls = 0;
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
     assert.equal(response.status, 200);
     const detail = serverResponseSchema.parse(await response.json());
@@ -443,6 +449,8 @@ describe("server detail and attention resolution", () => {
     assert.equal(detail.server.image, "itzg/minecraft-server");
     assert.deepEqual(detail.stats, { cpuPercent: 0, memUsageMB: 2, memLimitMB: 4 });
     assert.equal(statsCalls, 1);
+    assert.equal(lists, 1, "A detail read should discover the fleet only once");
+    assert.equal(inspectCalls, containers.length + 1, "Only the selected container needs a second inspection");
   });
 
   it("rejects unassigned, revoked, and disabled accounts after failed discovery", async () => {
@@ -476,17 +484,16 @@ describe("server detail and attention resolution", () => {
     assert.equal(getLogicalServer(worldId)!.status, "active");
   });
 
-  it("rechecks view access when the statistics binding refresh revokes a grant", async () => {
-    let lists = 0;
-    beforeList = () => {
-      lists += 1;
-      if (lists === 2) setServerGrant(viewer.id, worldId, [], admin);
+  it("rechecks view access when the selected binding inspection revokes a grant", async () => {
+    inspectCalls = 0;
+    beforeInspect = () => {
+      if (inspectCalls > containers.length) setServerGrant(viewer.id, worldId, [], admin);
     };
 
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
 
     assert.equal(response.status, 404);
-    assert.equal(lists, 2);
+    assert.ok(inspectCalls > containers.length);
     assert.equal(statsCalls, 0);
     assert.doesNotMatch(await response.text(), /world-container|itzg\/minecraft/);
   });
@@ -499,6 +506,34 @@ describe("server detail and attention resolution", () => {
     assert.equal(response.status, 404);
     assert.equal(statsCalls, 1);
     assert.doesNotMatch(await response.text(), /world-container|itzg\/minecraft/);
+  });
+
+  it("discards live fields when the selected container changes before statistics", async () => {
+    inspectCalls = 0;
+    beforeInspect = () => {
+      if (inspectCalls > containers.length) containers[0].mounts = [
+        { Type: "bind", Source: "/fixture/changed-data", Destination: "/data", RW: true },
+      ];
+    };
+    const response = await requestAs(admin, `/api/v1/servers/${worldId}`);
+    const detail = serverResponseSchema.parse(await response.json());
+    assert.equal(response.status, 200);
+    assert.equal(detail.discoveryUnavailable, true);
+    assert.equal(detail.server.state, "unknown");
+    assert.equal(detail.server.image, "");
+    assert.deepEqual(detail.server.fileRoots, []);
+    assert.equal(detail.stats, null);
+    assert.equal(statsCalls, 0);
+  });
+
+  it("retains the verified server snapshot if only its statistics read fails", async () => {
+    beforeStats = () => { throw new Error("private statistics failure"); };
+    const response = await requestAs(admin, `/api/v1/servers/${worldId}`);
+    const detail = serverResponseSchema.parse(await response.json());
+    assert.equal(response.status, 200);
+    assert.equal(detail.discoveryUnavailable, false);
+    assert.equal(detail.server.state, "exited");
+    assert.equal(detail.stats, null);
   });
 
   it("scrubs file roots and permissions revoked while statistics are pending", async () => {

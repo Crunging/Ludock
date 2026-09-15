@@ -1,5 +1,9 @@
 # Ludock
 
+> **Beta:** Ludock is currently in beta. Expect bugs and changes as it develops.
+> Keep independent backups of important game data, and
+> [report issues](https://github.com/Crunging/Ludock/issues).
+
 Ludock is a self-hosted control panel for existing Docker game servers. It
 starts and stops servers, provides game consoles and file access, and handles
 backups, schedules, availability alerts, and updates through existing Compose
@@ -9,6 +13,27 @@ Recognized game images appear automatically unless explicitly opted out.
 Unrecognized images require `ludock.enable: "true"`. Docker Compose, Portainer,
 Dockge, or the Docker CLI remains the configuration owner: Ludock does not
 provision servers or edit their definitions.
+
+## Screenshots
+
+The current interface, shown with demo servers and data.
+
+**Servers** — status, ports, recent backups, and everyday controls.
+
+![Ludock server list with Minecraft, Factorio, and Valheim demo servers](./docs/screenshots/servers.png)
+
+<details>
+<summary>Backups and file access</summary>
+
+**Backups** — readiness checks and retained archives for a server.
+
+![Ludock server backup page showing readiness checks and three retained backups](./docs/screenshots/backups.png)
+
+**Files** — browse and manage files inside approved server data roots.
+
+![Ludock file browser showing the demo Minecraft server's folders and configuration files](./docs/screenshots/files.png)
+
+</details>
 
 ## Run with Docker
 

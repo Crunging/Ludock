@@ -247,8 +247,10 @@ function toServerObservation(
 
 export async function getContainerStats(
   id: DockerContainerId,
+  assertAccess: (observation: ServerObservation) => void,
 ): Promise<{ cpuPercent: number; memUsageMB: number; memLimitMB: number }> {
-  const { container } = await getManagedDockerContainer(id);
+  const { container, info } = await getManagedDockerContainer(id);
+  assertAccess(toServerObservation(info, toInspectedManagedContainer(info)));
   const stats = await container.stats({ stream: false });
 
   const cpuDelta =

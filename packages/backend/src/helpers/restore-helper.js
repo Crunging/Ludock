@@ -9,9 +9,9 @@ const request = /** @type {import("./contracts.js").RestoreRequest} */ (
   JSON.parse(process.argv[1])
 );
 /**  @returns {never} */
-const fail = () => {
+function fail() {
   throw new Error("Unsafe restore path or changed data");
-};
+}
 const directoryFlags = C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW;
 /** @param {FileHandle} directory */
 const link = (directory, name = "") =>

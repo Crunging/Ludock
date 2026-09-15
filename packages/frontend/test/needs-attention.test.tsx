@@ -12,7 +12,7 @@ const useServersMock = mock<typeof useServers>();
 mock.module("../src/hooks/useServers", () => ({ useServers: useServersMock }));
 
 const server = serverFixture();
-const admin: AuthUser = { id: "11111111-1111-4111-8111-111111111111", username: "alex", role: "admin" };
+const admin: AuthUser = { id: "11111111-1111-4111-8111-111111111111", username: "Crunging", role: "admin" };
 const operationId = "22222222-2222-4222-8222-222222222222";
 const scheduleId = "77777777-7777-4777-8777-777777777777";
 const base = { serverId: server.id, serverName: server.displayName };

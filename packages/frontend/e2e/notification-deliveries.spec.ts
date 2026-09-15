@@ -260,9 +260,13 @@ test("disabled Discord delivery pauses polling until saved settings enable deliv
   const pausedReads = fixture.reads;
   await page.clock.runFor(15_000);
   expect(fixture.reads).toBe(pausedReads);
+  fixture.deliveries = fixture.deliveries.map((item) => ({ ...item, attempts: 2 }));
   await section.getByRole("checkbox", { name: "Enable Discord delivery", exact: true }).check();
   await section.getByRole("button", { name: "Save notifications", exact: true }).click();
   await expect.poll(() => fixture.reads).toBeGreaterThan(pausedReads);
+  // A started read can still block polling; wait for its fresh rows and completion.
+  await expect(section.getByRole("table", { name: "Recent notification deliveries", exact: true })).toContainText("2 attempts");
+  await expect(section.getByRole("button", { name: "Refresh deliveries", exact: true })).toBeEnabled();
   const enabledReads = fixture.reads;
   await page.clock.runFor(5_100);
   await expect.poll(() => fixture.reads).toBeGreaterThan(enabledReads);
