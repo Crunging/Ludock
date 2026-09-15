@@ -1,230 +1,170 @@
 # Architecture and feature boundaries
 
 Ludock is a TypeScript modular monolith: a Bun backend, a React frontend,
-and shared Zod contracts. Ordinary functions and explicit dependencies connect
-feature modules. Docker, SQLite, filesystem helpers, and Compose are the external
-boundaries.
+and shared Zod contracts. Feature modules use ordinary functions and explicit
+dependencies. Docker, SQLite, filesystem helpers, and Compose are the external
+boundaries. Setup and recovery procedures live in [Operations](./OPERATIONS.md);
+check commands and acceptance scenarios live in [Testing](./TESTING.md).
 
 ## Runtime and persistence
 
-Bun supplies the runtime, package installation, builds, and tests. `.bun-version`
-selects the major; `package.json` declares the minimum and `bun.lock` records
-resolved dependencies. Shared contracts are compiled for both applications.
-The backend bundles `index.ts` and the account-recovery entry point for Bun;
-the frontend bundles browser assets from `index.html`.
+Bun installs dependencies, builds both applications, and runs tests.
+`packages/shared` exports its TypeScript source directly to Bun and TypeScript;
+it has no separate build or watcher. The backend bundles the server and account
+recovery entry points with production dependencies external. The frontend bundles
+browser assets from `index.html`.
 
 The production image includes Bun, Docker CLI, Compose, and production
-dependencies on Alpine. Builds keep build-platform tools separate from target
-runtime artifacts and publish one image index for AMD64 and ARM64. Helper
-containers use the immutable Bun Alpine image in
-[`runtime-images.ts`](../packages/backend/src/runtime-images.ts). A validator's
-host-root mount remains privileged even when read-only and network-disabled;
-helper overrides must be trusted and digest-pinned.
+dependencies on Alpine. Build tools run on the build platform; the Bun executable
+matches the target platform. Images support AMD64 and ARM64. Data helpers use
+Bun's official **distroless** image, pinned in
+[`runtime-images.ts`](../packages/backend/src/runtime-images.ts), and execute
+Bun directly without shell utilities. A validator's host-root mount remains
+privileged even when read-only and network-disabled; overrides must be trusted
+and digest-pinned.
 
-`database.ts` uses `bun:sqlite`. It inspects nonempty databases read-only before
-enabling WAL or applying supported migrations, rejecting unrelated or unsupported
-storage without writes. The supported schema starts at version 2.
+`database.ts` inspects nonempty SQLite databases read-only before enabling WAL
+or applying supported migrations. It rejects unrelated storage and unsupported
+schemas without writes. The supported schema starts at version 2.
 
 Identity and Compose-source fingerprints use domain-separated HMACs with an
-installation key outside SQLite. A database-only disclosure therefore cannot
-verify guesses of low-entropy game credentials or environment values. The
-mode-0600 key is published in a mode-0700 `.identity-key` directory beside the
-canonical database path. The key and directory are synced before dependent
-schema changes commit.
-Missing, unsafe, or mismatched keys fail closed. Database backups must include
-that directory; see [application backup](./OPERATIONS.md#application-backup-logs-and-account-recovery).
+installation key outside SQLite. This prevents a database-only disclosure from
+verifying guesses of game credentials or environment values. The mode-0600 key
+lives in a mode-0700 `.identity-key` directory beside the canonical database path.
+The key and directory are synced before dependent schema changes commit. Missing,
+unsafe, or mismatched keys fail closed; database backups must include that directory.
 
-New passwords use Argon2id. Bounded legacy scrypt verification upgrades a hash
-only after rechecking the enabled account and unchanged password. Queued API-token
-work stores a separate HMAC of the credential generation, so rotation rejects
-previously queued privileged steps while still allowing recovery cleanup.
+Passwords use Argon2id. Bounded legacy scrypt verification upgrades a hash only
+after rechecking the enabled account and unchanged password. Queued API-token work
+stores an HMAC of the credential generation, so rotation rejects old privileged
+steps while still allowing recovery cleanup.
+
+At the storage boundary, `yaml` rejects duplicate keys and bounds Compose alias
+expansion; `tar-stream` exposes archive entries for path, type, ownership, mode,
+and byte-limit validation with backpressure. Preserve these controls during
+[dependency updates](./TESTING.md#dependency-and-image-updates).
+
+## Contracts and errors
+
+`packages/shared/src` owns public schemas and inferred types. Routes validate
+inputs and pass explicit public projections to `respond`, which checks response
+types and validates values before serialization. Frontend `apiJson`, `apiResponse`,
+and WebSocket consumers validate incoming data. Validation does not replace
+credential redaction or permission filtering.
+
+`LogicalServerId` and `DockerContainerId` are distinct branded types. Public routes
+use logical UUIDs; Docker wrappers require inspected or revalidated physical
+bindings. Compile-only tests protect these boundaries and route-policy signatures.
+
+Expected failures extend `AppError` and share one HTTP renderer. Their message and
+code are deliberately public; arbitrary exceptions stay generic and go to internal
+diagnostics. Persisted operation failures use the same safe-error boundary.
+
+## Backend ownership
+
+| Boundary | Modules and responsibility |
+| --- | --- |
+| Application | `index.ts` owns listener/shutdown; `app.ts` composes routing, authentication, request limits, and security headers |
+| Policy | `identity.ts` reconciles Docker observations; `authorization.ts` owns capabilities and role ceilings; `servers.ts` resolves authorized bindings and lock keys |
+| HTTP | `routes/` translates requests into domain calls and public projections |
+| Direct work | `routes/server-action.ts` retains authorization, resource locks, and cleanup through direct lifecycle and file requests |
+| Queued work | `operations.ts` owns persisted execution/recovery; `jobs.ts` supplies handlers; backups and Compose modules own their recovery protocols |
+| Data access | `file-storage.ts`, `backup-storage.ts`, and `mount-proof.ts` configure helper mounts and validate storage boundaries |
+| Helpers | `helpers/` contains checked JavaScript programs embedded as text; `docker-helpers.ts` owns create/pull/remove behavior |
+| Read models | `history.ts` filters/paginates in SQLite; `attention.ts` reads only the summaries needed for authorized dashboard items |
+| Background work | `schedules.ts`, `monitoring.ts`, and `notifications.ts` own scheduling, availability, and delivery state |
+
+### Direct requests
+
+`serverAction(capability, handler)` resolves the binding and holds server,
+project, and shared-root locks until the response **and cleanup** finish, including
+cancelled transfers. Its `assertAccess` callback rechecks sessions, grants, and
+bindings after asynchronous preparation and immediately before dispatch.
+Lifecycle actions also recheck the final inspected observation.
 
 Filesystem confinement uses pinned descriptors and Linux `/proc/self/fd` checks.
-Dependencies at these boundaries supply specific controls:
+Uploads write an exclusive temporary sibling; replacement requires the exact
+payload and a completion token after authorized input ends. Cleanup must remain
+possible after cancellation or revocation and preserve ordinary ownership/mode.
 
-- `yaml` rejects duplicate keys and bounds alias expansion in Compose inputs.
-- `tar-stream` exposes archive-entry streams for validating paths, types,
-  ownership, modes, and byte limits with backpressure.
-- Dockerode handles Docker exec/attach upgrades and multiplexed streams.
+`websocket-server.ts` owns upgrades, revalidation, and shutdown; adapters own
+protocol behavior. Channels bound buffering and keep locks through cancellation.
+Minecraft commands are literal Docker-exec arguments with an in-container watchdog.
+A lost `exec.start` response does not prove Docker rejected a mutation, so an HTTP
+timeout cannot release its lock. Limits live in
+[`game-console-runtime.ts`](../packages/backend/src/game-console-runtime.ts).
 
-These controls must survive dependency or runtime changes. See the
-[maintenance procedure](./TESTING.md#dependency-and-image-updates).
+### Queued work and recovery
 
-## Shared contracts
+Enqueueing grants no lasting authority. Workers recheck the saved actor, binding,
+and schedule revision under resource locks. Revocation blocks new privileged steps
+while preserving rollback, helper cleanup, and safe restoration of initial running
+state. Invalid persisted job data becomes a failed operation without wedging the queue.
 
-`packages/shared/src` groups Zod schemas and inferred types by feature. Backend
-routes validate inputs and pass explicit public projections to `respond`, which
-checks response types and validates values before serialization. Malformed
-producer responses become generic server errors. Schema validation does not
-replace credential redaction or permission filtering.
+Backups keep the server stopped throughout copying. Parent update/restore jobs own
+state restoration for nested backups. Restore journals record each root's progress;
+recovery validates their shape and exact roots before acting. Uncertain recovery
+keeps the server stopped. Read-only backup preflight shares planning checks with
+execution but reserves no capacity and confers no authority.
 
-Frontend `apiJson` and `apiResponse` validate responses without displaying raw
-unexpected values. Event and console WebSocket messages are validated too.
-`LogicalServerId` and `DockerContainerId` are distinct branded types: public server
-routes use logical UUIDs, and Docker wrappers require inspected or revalidated
-physical bindings. Compile-only tests protect those boundaries and route-policy
-signatures.
+Compose updates validate an immutable snapshot, including transitive source reads,
+and invoke argument arrays with a restricted environment. `ludock.compose.source`
+preserves owner paths across recreation without expanding approved roots or entering
+public DTOs. The unused `compose_projects` table and reserved null fingerprint field
+remain for storage/identity compatibility; there is no registration API.
 
-## Backend routes and domain logic
+Schedules persist consumed timezone slots and expected revisions. Enqueueing and
+linking an operation are atomic; last results reference persisted operation state.
+Monitoring shares operation suppression and locks. Notifications use a persisted
+queue and the current saved configuration; public history contains safe status/timing
+metadata, never webhook URLs, payloads, event keys, or raw response bodies.
 
-`index.ts` owns the Bun listener and coordinated shutdown. `app.ts` composes
-routes, authentication, request limits, security headers, and static assets.
-Handlers in `packages/backend/src/routes` receive typed request contexts:
+### Reads and outages
 
-| Module | HTTP responsibility |
-| --- | --- |
-| `accounts.ts` | Setup, sessions, passwords, and account administration |
-| `servers.ts` | Server lists/details and direct lifecycle actions |
-| `files.ts` | Browsing, transfers, and file mutations |
-| `access.ts` | Grants and binding review |
-| `backups.ts` | Backup settings, archives, creation, and restore requests |
-| `compose.ts` | Update capability and update requests |
-| `schedules.ts` | Schedule management and next-run previews |
-| `status.ts` | Operation progress and availability configuration |
-| `attention.ts` | Permission-filtered dashboard attention summaries |
-| `settings.ts` | Deployment guidance, notifications, diagnostics, and integrations |
+History queries filter in SQLite before pagination, order by creation time with ID
+tie-breakers, and resolve current access before returning rows or cursor metadata.
+Attention checks the most recent 100 operations per server through a narrow SQL
+projection, without loading full operation histories or decoding unused results.
 
-`identity.ts` and `servers.ts` reconcile logical history with Docker observations;
-`authorization.ts` owns capability and role ceilings. Routes call these policies
-instead of duplicating them.
-
-`attention.ts` refreshes discovery, then aggregates persisted binding, schedule,
-operation, and availability summaries under current capabilities. Schedule lists
-retain their owner scope. Failed discovery preserves logical identity and returns
-an explicit unavailable flag; it never turns an outage into a healthy empty list.
-The monitor and attention summaries share policy, lock, and operation suppression.
-Server detail reads can also return an authorized saved snapshot with unknown
-live state. The response marks discovery unavailable, and the frontend keeps
-history readable while disabling mutation controls. Mutation paths still require
-fresh discovery and binding validation.
-
-Direct lifecycle and file handlers use `serverAction(capability, handler)`.
-It resolves the authorized binding and retains resource locks until both the
-response and cleanup finish, including cancelled transfers. Its `assertAccess`
-callback rechecks sessions, grants, and bindings after asynchronous preparation,
-immediately before dispatch. Lifecycle actions also check the final inspected
-observation. Console transports apply the same rule before sending credentials
-or commands.
-
-`websocket-server.ts` owns upgrades, session revalidation, and shutdown. Socket
-channels bound buffering and preserve cleanup lifetimes; adapters own protocol
-behavior. RCON and Telnet handle deadlines and partial writes, closing late
-connections after cancellation. The CLI exits only after application work and
-SQLite drain; the imported server's `shutdown()` does not exit the process.
-
-Minecraft Docker-exec commands remain literal argument-array values. An
-in-container watchdog bounds execution, output is capped, and revocation or
-disconnection requests cancellation while retaining the lock through cleanup.
-A lost `exec.start` response cannot prove Docker rejected the mutation, so an
-HTTP timeout alone cannot safely release its lock. Exact transport limits live
-in [`game-console-runtime.ts`](../packages/backend/src/game-console-runtime.ts).
-
-Uploads use an exclusive temporary sibling under a pinned destination directory.
-Replacement requires the exact payload and a completion token after authorized
-input ends; ordinary ownership and mode are preserved. Temporary-file cleanup
-remains possible after cancellation or revocation.
-
-`operations.ts` and `jobs.ts` persist execution and interruption recovery.
-Workers recheck the saved actor and binding revision and acquire server,
-project, and shared-root locks. Enqueueing does not confer authority over the
-eventual job. Revocation blocks new privileged steps while preserving rollback,
-helper cleanup, and safe restoration of initial running state. Parent update or
-restore operations own state restoration for their nested backups, keeping the
-server stopped between backup and mutation.
-
-Backup readiness is a read-only advisory snapshot. It shares destination,
-capacity, and static root validation with execution, without creating helpers,
-stopping containers, or reserving capacity. Execution still rechecks authority,
-bindings, roots, writers, and space under operation locks. Storage totals use
-the same recorded-archive accounting as the global execution limit; available
-disk space is read from the approved pinned destination and can be unknown.
-Latest-success metadata is scoped to backup access and contains only the date
-and size of a retained complete archive.
-
-History queries filter in SQLite and use cursors to continue through older
-records. Both histories order by creation time and use identifiers to break
-ties. Operation reads resolve current server-view authority before pagination,
-including for missing or suspended bindings, so
-inaccessible work cannot contribute rows or pagination metadata. Audit remains
-administrator-only. Public actors omit API-token fingerprints, and links between
-audit events and operations use recorded identifiers. An audit status describes
-the recorded action's outcome, independently of the operation's current status.
-
-Compose updates derive sources from Docker observations and validate an immutable
-snapshot for each confirmed operation. `ludock.compose.source` preserves original
-paths across recreation; it never expands approved roots or enters public server
-DTOs. There is no registration API or project approval state. The unused
-`compose_projects` table and reserved null fingerprint field remain for storage
-and identity compatibility. Validation includes transitive source reads; Compose
-runs argument arrays with a restricted environment.
-
-Schedules use expected revisions to reject stale edits and invalidate queued
-work after editing or pausing. Due-slot evaluation and previews share timezone
-logic: missed/spring-forward slots are skipped and repeated fall-back slots run
-once. The consumed slot survives edits and pauses. Enqueueing and associating an
-operation are atomic; last-result responses project that operation's persisted
-state. A later skipped attempt clears the association so older work cannot
-replace the latest result. Saved previews recheck owner authority and binding,
-returning public reason codes without private diagnostics.
-
-`notifications.ts` owns the persisted Discord delivery queue and its public
-history projection. Administrator routes enqueue fixed test messages and retry
-existing deliveries; the worker handles all outbound sends using the current
-saved enabled configuration. Delivery requests use [Discord's `wait=true` option](https://docs.discord.com/developers/resources/webhook#execute-webhook)
-to wait for confirmation that the message was saved. Public history contains
-status and timing metadata plus fixed failure messages derived from safe codes,
-excluding webhook URLs, payloads, event keys, response bodies, and exception text. Explicit retries retain
-lifetime attempt counts and reset a separate five-attempt automatic retry budget.
-In-flight tracking and the persisted retry count reject duplicate retry requests.
-Audits identify test/retry delivery IDs without copying notification contents.
+Failed discovery preserves logical identity and returns an explicit unavailable
+flag. Authorized saved server snapshots remain readable with unknown live state;
+mutations still require fresh discovery and binding validation.
 
 ## Frontend ownership
 
-`App.tsx` keeps page selection and administrator-only requirements together.
-Server routes select the console layout or Servers navigation state. Unknown and
-malformed client routes return to the dashboard; backend authorization remains
-authoritative. The history-based navigation provider is independent of request
-and form state.
-Server detail query parameters select an allowed tab and, when supplied, a
-specific operation or schedule. These links survive direct loads and browser
-history without bypassing the destination's permission checks.
+`App.tsx` owns page selection and administrator-only requirements. The history-based
+navigation provider is independent of requests and form state. Detail query
+parameters select allowed tabs and specific operations/schedules; destination
+permission checks still apply.
 
-`ServerDetail.tsx` owns loading, polling, permissions, notices, and drafts.
-Panels in `components/server-detail` receive explicit props and callbacks, so
-tab changes preserve confirmation text and selections. List, file, and activity
-filters operate on their displayed data without changing operation locks.
+`ServerDetail.tsx` owns the live server/operation snapshot, permissions, and drafts.
+Backup and schedule histories load only for their active permitted panel and report
+failures locally. Their mutations require fresh panel state; a history failure does
+not disable unrelated lifecycle controls. Drafts live above panels so tab changes
+preserve selections and confirmation text.
 
-Asynchronous reads abort or discard obsolete work. Audit and Diagnostics use
-`usePageRead` for one current read and explicit refresh, hiding prior data during
-loading or failure. Diagnostics publishes system and integration responses
-together. Live server snapshots and file reads retain their feature-specific
-freshness, path, and authorization policies.
-Dashboard attention uses `useAttention`, refreshes with server snapshots and
-every 30 seconds, and preserves focused links during routine reads. Failed reads,
-account changes, and an access-denied stream discard its data.
+`usePageRead` owns cancellable reads, explicit refresh, and obsolete-response
+rejection. Settings sections and Account reuse it. A null reader disables a panel;
+polling panels may retain data while refreshing but clear it on failure. Core live
+server and file reads retain their specialized freshness/authorization policies.
+Backup and notification settings own separate reads, drafts, and save lifetimes.
 
-Audit and operation history keep applied filters and pagination in the URL.
-Operation detail routes read their selected record independently of the recent
-server snapshot; browsing historical work cannot change current operation locks.
+Cookie-changing requests and form mutations are serialized within their owner.
+Successful saves clear only submitted drafts. Read failures block the affected
+editor; late work cannot update a later session. Historical operation detail has
+its own reader and never determines current server locks.
 
-Account changes and session expiry invalidate pending authentication reads.
-Cookie-changing requests and form mutations are serialized. Successful mutations
-clear only submitted drafts; settings and grant editors require a successful
-initial read before saving. File-dialog errors stay with their dialog, and
-uncertain writes retain only a name draft until a fresh confirmation follows
-reconciliation. Cancelled work cannot update a later session.
+## Development and preview
 
-## Development instances
+`scripts/dev.mjs` assigns checkout-specific ports, state, and cookies.
+`watch-backend.mjs` watches backend and shared source and drains the old backend
+before replacement. The frontend starts only after verifying the backend's checkout
+identity; proxy requests carry that identity and its session cookie.
 
-`scripts/dev.mjs` gives each canonical checkout separate ports, state, and cookies.
-It watches shared contracts and uses `watch-backend.mjs` to drain the old backend
-before replacement, preserving operation locks and helper cleanup across reloads.
-The frontend starts only after the backend identifies the expected checkout;
-proxy requests carry that identity and its session cookie. The asset-only preview
-server has no backend proxy, so browser fixtures cannot reach development data.
+Production and the asset-only browser preview use the same `static-files.ts`
+handler. Missing assets and API/WebSocket paths never fall back to the SPA document.
+Preview has no backend proxy, keeping browser fixtures away from development data.
 
-Checkout and database locks prevent overlapping runs, including directory aliases.
-Docker itself is not isolated by checkout state: development has no Docker
-connection by default, and only one backend may manage a Docker host. See
-[development setup and lock recovery](./TESTING.md#development) and
-[verification commands](./TESTING.md#checks).
+Checkout/database locks prevent overlapping runs, including directory aliases.
+Docker itself is not isolated: development defaults to no connection, and one backend
+may manage a Docker host. See [development setup](./TESTING.md#development).
