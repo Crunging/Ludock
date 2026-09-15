@@ -104,7 +104,7 @@ export const filesRoutes: ApiRoutes = {
           : "application/octet-stream");
         fileAudit(ctx, "downloaded", id, parsed.data);
         context.waitForCleanup(download.completed);
-        return new Response(Readable.toWeb(download.stream as Readable) as ReadableStream<Uint8Array>);
+        return new Response(Readable.toWeb(download.stream) as ReadableStream<Uint8Array>);
       }
       catch (error) {
         return sendFileError(error);

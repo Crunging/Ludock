@@ -60,6 +60,11 @@ shared boundaries when working in parallel.
 - Use the latest stable Bun 1 release; `.bun-version` selects the major and
   `package.json` declares the minimum. Run `bun install --frozen-lockfile`, then
   `bun run dev`. Use the runner's printed URLs and state path.
+- Bun is the JavaScript runtime for development, builds, tests, and production;
+  a separate Node.js installation is not required. Keep `[run].bun = true` in
+  `bunfig.toml` so dependency CLIs also run with Bun. Launch JavaScript test
+  subprocesses with `process.execPath` rather than relying on a Node shebang.
+  Imports from `node:*` use Bun's built-in compatibility APIs.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.
@@ -95,8 +100,10 @@ Do not preserve historical dependency restrictions without rechecking them.
 Use TypeScript 7's native `tsc` for type checks and Oxlint for linting. Backend
 type-aware rules use `oxlint-tsgolint`; keep its TypeScript version aligned with
 the compiler. Share language rules in `oxlint.base.json`, with backend and React
-rules in each package's `.oxlintrc.json`. Use Node LTS types
-compatible with Bun rather than automatically selecting the newest Node major.
+rules in each package's `.oxlintrc.json`. Use `@types/bun` for runtime types;
+its transitive `@types/node` dependency describes Bun's compatibility APIs and
+does not install Node.js. Keep those declarations compatible with Bun rather
+than treating the Node type package as a separate runtime upgrade.
 
 Use `bun outdated --recursive`, `bun update --recursive`, and `bun audit`; review
 upstream migration notes before major upgrades. Resolve Action tags to commits,

@@ -15,6 +15,14 @@ async function lintFixture(workspace, files) {
     const cwd = path.join(directory, "packages", workspace);
     const installed = path.join(root, "packages", workspace, "node_modules");
     await mkdir(cwd, { recursive: true });
+    // This fixture runs outside the checkout's bunfig/PATH shim. A Node
+    // shebang must not silently use a separately installed Node runtime.
+    const bin = path.join(directory, "bin");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "node"), "#!/bin/sh\necho 'Node is unavailable in this fixture' >&2\nexit 127\n", { mode: 0o755 });
+    await writeFile(path.join(cwd, "package.json"), JSON.stringify({
+      private: true, scripts: { lint: "oxlint --format=json ." },
+    }));
     await copyFile(path.join(root, "oxlint.base.json"), path.join(directory, "oxlint.base.json"));
     await copyFile(path.join(root, "packages", workspace, ".oxlintrc.json"), path.join(cwd, ".oxlintrc.json"));
     await symlink(installed, path.join(cwd, "node_modules"), "dir");
@@ -31,12 +39,18 @@ async function lintFixture(workspace, files) {
       await writeFile(destination, code);
     }
     const result = Bun.spawnSync([
-      path.join(installed, "oxlint", "bin", "oxlint"), "--format=json", ".",
-    ], { cwd, stdout: "pipe", stderr: "pipe" });
+      process.execPath, "run", "--bun", "lint",
+    ], {
+      cwd,
+      env: { ...process.env, PATH: [bin, process.env.PATH].join(path.delimiter) },
+      stdout: "pipe", stderr: "pipe",
+    });
     const output = result.stdout.toString();
     assert.notEqual(result.exitCode, null, result.stderr.toString());
     assert.ok(output, result.stderr.toString());
-    return { exitCode: result.exitCode, report: JSON.parse(output), output };
+    let report;
+    assert.doesNotThrow(() => { report = JSON.parse(output); }, output + result.stderr.toString());
+    return { exitCode: result.exitCode, report, output };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
