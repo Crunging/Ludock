@@ -23,11 +23,26 @@ export async function createHelperContainer(
 export async function removeHelperContainer(
   container: Docker.Container,
 ): Promise<void> {
+  async function remove(): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await container.remove({ force: true });
+        return;
+      } catch (error) {
+        const status = (error as { statusCode?: number }).statusCode;
+        if (status === 404) return;
+        // AutoRemove can race our explicit cleanup. A conflict is not proof
+        // of removal: keep the caller's locks until Docker confirms it is gone.
+        if (status !== 409 || attempt >= 20) throw error;
+        await Bun.sleep(100);
+      }
+    }
+  }
   try {
-    await container.remove({ force: true });
+    await remove();
     return;
-  } catch (error) {
-    if ((error as { statusCode?: number }).statusCode === 404) return;
+  } catch {
+    // Try stopping a writer before the final removal attempt below.
   }
   // A failed removal must not silently leave a writer running. Try stopping it
   // before removal again, and surface any remaining cleanup failure safely.
@@ -35,11 +50,7 @@ export async function removeHelperContainer(
     await container.stop({ t: 0 }).catch((error: { statusCode?: number }) => {
       if (error.statusCode !== 304 && error.statusCode !== 404) throw error;
     });
-    await container
-      .remove({ force: true })
-      .catch((error: { statusCode?: number }) => {
-        if (error.statusCode !== 404) throw error;
-      });
+    await remove();
   } catch {
     throw new AppError(
       "HELPER_CLEANUP_FAILED",

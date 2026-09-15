@@ -7,6 +7,7 @@ import { createHelperContainer, removeHelperContainer } from "../src/docker-help
 const options = { Image: "fixture@sha256:" + "a".repeat(64), Labels: { "ludock.enable": "false" } };
 const missing = Object.assign(new Error("missing"), { statusCode: 404 });
 const unavailable = Object.assign(new Error("private Docker detail"), { statusCode: 503 });
+const removing = Object.assign(new Error("private removal conflict"), { statusCode: 409 });
 afterEach(() => mock.restore());
 
 describe("Docker helper lifetime", () => {
@@ -48,6 +49,41 @@ describe("Docker helper lifetime", () => {
     const stop = mock(async () => { calls.push("stop"); });
     await removeHelperContainer({ remove, stop } as unknown as Docker.Container);
     expect(calls).toEqual(["remove", "stop", "remove"]);
+    expect(stop).toHaveBeenCalledWith({ t: 0 });
+  });
+
+  it("waits for concurrent auto-removal instead of reporting cleanup failure", async () => {
+    let resume!: () => void;
+    const waiting = new Promise<void>((resolve) => { resume = resolve; });
+    spyOn(Bun, "sleep").mockImplementation(async () => { await waiting; });
+    const remove = mock().mockRejectedValueOnce(removing).mockRejectedValue(missing);
+    const stop = mock().mockRejectedValue(removing);
+    let finished = false;
+    const cleanup = removeHelperContainer({ remove, stop } as unknown as Docker.Container)
+      .then(() => { finished = true; });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      resume();
+      await cleanup;
+      expect(remove).toHaveBeenCalledTimes(2);
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      resume();
+      await cleanup.catch(() => {});
+    }
+  });
+
+  it("bounds removal conflicts and still reports a helper that cannot be removed", async () => {
+    spyOn(Bun, "sleep").mockImplementation(async () => {});
+    const remove = mock().mockRejectedValue(removing);
+    const stop = mock().mockRejectedValue(removing);
+    await expect(removeHelperContainer({ remove, stop } as unknown as Docker.Container)).rejects.toMatchObject({
+      code: "HELPER_CLEANUP_FAILED", statusCode: 409,
+    });
+    expect(remove.mock.calls.length).toBeGreaterThan(1);
+    expect(remove.mock.calls.length).toBeLessThanOrEqual(21);
     expect(stop).toHaveBeenCalledWith({ t: 0 });
   });
 

@@ -117,18 +117,28 @@ export async function getServerSnapshot(
   const current = await refreshServers().catch(() => null);
   const original = assertServerCapability(actor, id, "server.view");
   let stats: ServerStats | null = null;
+  let liveUnavailable = current === null;
   if (current && original.status === "active") {
+    let bindingVerified = false;
     try {
-      const context = await resolveAuthorizedServer(actor, id, "server.view");
-      stats = serverStatsSchema.parse(await getContainerStats(context.container.id));
+      // Discovery above already refreshed the fleet. Revalidate only this
+      // container before reading statistics, retaining the original binding.
+      const binding = resolveServerBinding(id, original.bindingRevision);
+      stats = serverStatsSchema.parse(await getContainerStats(binding.containerId, (observation) => {
+        assertServerCapability(actor, id, "server.view");
+        assertObservedServerBinding(id, observation, binding.bindingRevision);
+        bindingVerified = true;
+      }));
     } catch {
       // Saved history remains inspectable when live statistics are unavailable.
+      // A failed identity check also invalidates the earlier live snapshot.
+      if (!bindingVerified) liveUnavailable = true;
     }
   }
   // Statistics involve additional asynchronous reads. Recheck access and the
   // observed binding before responding, without starting another Docker read.
   const logical = assertServerCapability(actor, id, "server.view");
-  const discoveryUnavailable = current === null ||
+  const discoveryUnavailable = liveUnavailable || current === null ||
     logical.containerId !== original.containerId ||
     logical.bindingRevision !== original.bindingRevision ||
     logical.bindingFingerprint !== original.bindingFingerprint ||
