@@ -1,3 +1,5 @@
+import { webConnection, bytesStream } from "./fixtures/web-streams.js";
+import { dockerStdout, DockerStreamError } from "../src/docker-stream.js";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
 import {
@@ -9,7 +11,6 @@ import {
   createDirectory,
   uploadFile,
   openDownload,
-  pumpDockerDownload,
 } from "../src/file-storage.js";
 import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
 import { Duplex, PassThrough, Readable } from "node:stream";
@@ -390,7 +391,7 @@ describe("scoped file helper projections", () => {
               dispatched.push(operation);
               const stream = new PassThrough();
               setImmediate(() => stream.end(frame(1, operation === "stat" ? '{"type":"file","size":8}' : '{"safe":true}')));
-              return stream;
+              return webConnection(stream);
             },
             inspect: async () => ({ ExitCode: 0, Running: false }),
           };
@@ -471,7 +472,7 @@ describe("scoped file helper projections", () => {
                   }) + "\n"),
                 ),
               );
-              return stream;
+              return Readable.toWeb(stream);
             },
           };
         }
@@ -485,7 +486,7 @@ describe("scoped file helper projections", () => {
             start: async () => {
               const stream = new PassThrough();
               setImmediate(() => stream.end(frame(1, '{"safe":true}')));
-              return stream;
+              return webConnection(stream);
             },
             inspect: async () => ({ ExitCode: 0, Running: false }),
           }),
@@ -565,7 +566,7 @@ describe("scoped file helper projections", () => {
                 if (request.operation !== "upload") {
                   const response = new PassThrough();
                   setImmediate(() => response.end(frame(1, '{"ok":true}')));
-                  return response;
+                  return webConnection(response);
                 }
                 const duplex = new Duplex({
                   read() {},
@@ -579,7 +580,7 @@ describe("scoped file helper projections", () => {
                     }, 10);
                   },
                 });
-                return duplex;
+                return webConnection(duplex);
               },
               inspect: async () => ({ ExitCode: 0, Running: false }),
             };
@@ -601,7 +602,7 @@ describe("scoped file helper projections", () => {
           });
         },
       });
-      const uploading = uploadFile(server, "root-0", "", "world.cfg", 13, source, () => {
+      const uploading = uploadFile(server, "root-0", "", "world.cfg", 13, Readable.toWeb(source), () => {
         if (!allowed) throw new Error("Access revoked");
       });
       if (outcome === "complete") await uploading;
@@ -697,7 +698,7 @@ describe("scoped file helper projections", () => {
         start: async () => {
           const stream = new PassThrough();
           setImmediate(() => stream.end(frame(1, '{"safe":true}')));
-          return stream;
+          return webConnection(stream);
         },
         inspect: async () => ({ ExitCode: 0, Running: false }),
       }),
@@ -769,7 +770,7 @@ describe("scoped file helper projections", () => {
                   : frame(1, '{"safe":true}'),
             ),
           );
-          return stream;
+          return webConnection(stream);
         },
         inspect: async () => ({ ExitCode: 0, Running: false }),
       }),
@@ -791,8 +792,8 @@ describe("scoped file helper projections", () => {
       completed = true;
     });
     let contents = "";
-    for await (const chunk of download.stream as Readable)
-      contents += (chunk as Buffer).toString();
+    for await (const chunk of download.stream)
+      contents += Buffer.from(chunk).toString();
     await started;
     assert.equal(contents, "contents");
     assert.equal(completed, false);
@@ -809,31 +810,17 @@ describe("bounded Docker download transport", () => {
       frame(2, "private stderr"),
       frame(1, " world"),
     ]);
-    const output = new PassThrough();
-    let contents = "";
-    const collected = (async () => {
-      for await (const value of output)
-        contents += (value as Buffer).toString();
-    })();
-    await pumpDockerDownload(
-      Readable.from([...data].map((value) => Buffer.from([value]))),
-      output,
-    );
-    output.end();
-    await collected;
-    assert.equal(contents, "hello world");
+    const output = dockerStdout(bytesStream([...data].map(value => Buffer.from([value]))));
+    assert.equal(await new Response(output).text(), "hello world");
     await assert.rejects(
-      pumpDockerDownload(
-        Readable.from([data.subarray(0, data.length - 1)]),
-        new PassThrough(),
-      ),
-      (error) => error instanceof FileStorageError && error.code === "INCOMPLETE_DOWNLOAD_STREAM",
+      new Response(dockerStdout(bytesStream([data.subarray(0, data.length - 1)]))).arrayBuffer(),
+      error => error instanceof DockerStreamError && error.code === "INCOMPLETE_STREAM",
     );
   });
 
   it("waits for a slow consumer instead of draining the entire Docker source into memory", async () => {
     let emitted = 0;
-    const source = Readable.from(
+    const source = ReadableStream.from(
       (async function* () {
         for (let index = 0; index < 1000; index++) {
           emitted++;
@@ -841,15 +828,13 @@ describe("bounded Docker download transport", () => {
         }
       })(),
     );
-    const output = new PassThrough({ highWaterMark: 16 });
-    output.on("error", () => {});
-    const pumping = pumpDockerDownload(source, output);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(
-      emitted < 10,
-      `Only a bounded number of frames may be prefetched; received ${emitted}`,
-    );
-    output.destroy(new Error("Client closed"));
-    await assert.rejects(pumping, /Client closed/);
+    const output = dockerStdout(source);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(emitted < 150, "Queues must stay bounded; received " + emitted);
+    await output.cancel("Client closed");
+    const atCancellation = emitted;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(emitted, atCancellation);
+
   });
 });

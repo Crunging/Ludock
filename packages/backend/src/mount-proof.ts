@@ -1,6 +1,5 @@
-import { demuxDockerStream } from "./docker-stream.js";
+import { demuxDockerStream, dockerStdout } from "./docker-stream.js";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
@@ -115,52 +114,30 @@ export async function createMountProof(
       stderr: false,
       tail: 10,
     });
-    const output = new PassThrough();
-    const ignored = new PassThrough();
-    ignored.resume();
-    const identities = await new Promise<Record<string, MountIdentity>>(
-      (resolve, reject) => {
-        let buffer = "";
-        let finished = false;
-        const timeout = setTimeout(() => finish(), 10_000);
-        const finish = (result?: Record<string, MountIdentity>) => {
-          if (finished) return;
-          finished = true;
-          clearTimeout(timeout);
-          (stream as NodeJS.ReadableStream & { destroy(): void }).destroy();
-          if (result) resolve(result);
-          else reject(proofError());
-        };
-        output.on("data", (chunk: Buffer) => {
-          buffer += chunk.toString("utf8");
-          if (buffer.length > 16_384) {
-            finish();
-            return;
-          }
-          if (!buffer.includes("\n")) return;
-          try {
-            const parsed = JSON.parse(
-              buffer.slice(0, buffer.indexOf("\n")),
-            ) as { identities?: Record<string, MountIdentity> };
-            const result = parsed.identities;
-            if (
-              !result ||
-              sources.some(
-                (source) =>
-                  !result[source.destination] ||
-                  !/^\d+$/.test(result[source.destination].dev) ||
-                  !/^\d+$/.test(result[source.destination].ino),
-              )
-            )
-              finish();
-            else finish(result);
-          } catch {
-            finish();
-          }
-        });
-        void demuxDockerStream(stream, output, ignored).then(() => finish(), () => finish());
-      },
-    );
+    const reader = dockerStdout(stream).getReader();
+    const timeout = setTimeout(() => { void reader.cancel().catch(() => {}); }, 10_000);
+    let identities: Record<string, MountIdentity>;
+    try {
+      let buffer = "";
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) throw proofError();
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > 16_384) throw proofError();
+        if (!buffer.includes("\n")) continue;
+        const result = (JSON.parse(buffer.slice(0, buffer.indexOf("\n"))) as { identities?: Record<string, MountIdentity> }).identities;
+        if (!result || sources.some(source => !result[source.destination] ||
+            !/^\d+$/.test(result[source.destination].dev) || !/^\d+$/.test(result[source.destination].ino)))
+          throw proofError();
+        identities = result;
+        break;
+      }
+    } finally {
+      clearTimeout(timeout);
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
     return { identities, cleanup };
   } catch {
     await cleanup();
@@ -181,20 +158,8 @@ export async function assertMountIdentities(
     AttachStderr: true,
   });
   const stream = await execution.start();
-  stream.resume();
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      stream.destroy();
-      reject(proofError());
-    }, 10_000);
-    stream.once("end", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    stream.once("error", () => {
-      clearTimeout(timeout);
-      reject(proofError());
-    });
-  });
+  const timeout = setTimeout(() => stream.abort(proofError()), 10_000);
+  try { await demuxDockerStream(stream.readable); }
+  finally { clearTimeout(timeout); stream.abort(); }
   if ((await execution.inspect()).ExitCode !== 0) throw proofError();
 }

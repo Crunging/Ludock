@@ -1,3 +1,4 @@
+import { webConnection } from "./fixtures/web-streams.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
@@ -482,7 +483,7 @@ describe("Container stdin transport", () => {
     stream.on("data", (chunk: Buffer) => { received += chunk.toString(); });
     const container = {
       inspect: async () => ({ Config: { OpenStdin: true, StdinOnce: false } }),
-      attach: async () => { allowed = false; return stream; },
+      attach: async () => { allowed = false; return webConnection(stream); },
     } as unknown as Docker.Container;
     await assert.rejects(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", {
       stdout: () => {}, stderr: () => {}, system: () => {},
@@ -504,7 +505,7 @@ describe("Container stdin transport", () => {
       }),
       attach: async (options: Docker.ContainerAttachOptions) => {
         attachOptions = options;
-        return stream;
+        return webConnection(stream);
       },
     } as unknown as Docker.Container;
     const systemMessages: string[] = [];
@@ -540,7 +541,7 @@ describe("Container stdin transport", () => {
       }),
       attach: async () => {
         attached = true;
-        return new PassThrough();
+        return webConnection(new PassThrough());
       },
     } as unknown as Docker.Container;
 
@@ -611,7 +612,7 @@ describe("Docker exec console transport", () => {
     let creations = 0;
     const container = {
       exec: async () => ++creations === 1
-        ? { start: () => { starting(); return delayedStart; } }
+        ? { start: () => { starting(); return delayedStart.then(webConnection); } }
         : { start: async () => { cancellationStarted(); return endedStream(); } },
     } as unknown as Docker.Container;
     const pending = executeGameCommand(
@@ -701,7 +702,7 @@ describe("Docker exec console transport", () => {
         start: async () => {
           const stream = new PassThrough();
           setImmediate(() => stream.end());
-          return stream;
+          return webConnection(stream);
         },
         inspect: async () => ({ Running: false, ExitCode: 1 }),
       }),
@@ -735,7 +736,7 @@ describe("Docker exec console transport", () => {
         executionCount++;
         if (executionCount === 1) {
           return {
-            start: async () => mainStream,
+            start: async () => webConnection(mainStream),
             inspect: async () => ({ Running: true, ExitCode: null }),
           };
         }
@@ -796,7 +797,7 @@ describe("Docker exec console transport", () => {
           return {
             start: async () => {
               started();
-              return mainStream;
+              return webConnection(mainStream);
             },
             inspect: async () => ({ Running: false, ExitCode: 125 }),
           };
@@ -872,7 +873,7 @@ describe("Docker exec console transport", () => {
                   Buffer.alloc(MAX_DOCKER_EXEC_OUTPUT_BYTES / 2 + 1, 98),
                 ));
               });
-              return mainStream;
+              return webConnection(mainStream);
             },
             inspect: async () => ({ Running: false, ExitCode: 125 }),
           };
@@ -906,10 +907,10 @@ describe("Docker exec console transport", () => {
   });
 });
 
-function endedStream(): PassThrough {
+function endedStream(): Docker.DockerConnection {
   const stream = new PassThrough();
   setImmediate(() => stream.end());
-  return stream;
+  return webConnection(stream);
 }
 
 function dockerFrame(type: 1 | 2, value: string | Buffer): Buffer {

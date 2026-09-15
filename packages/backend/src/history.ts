@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   operationStatusSchema,
@@ -25,7 +24,7 @@ function cursorScope(kind: string, query: HistoryQuery): string {
   const filters = Object.fromEntries(Object.entries(query)
     .filter(([key]) => key !== "cursor" && key !== "limit")
     .sort(([left], [right]) => left.localeCompare(right)));
-  return createHash("sha256").update(JSON.stringify([kind, filters])).digest("hex");
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify([kind, filters])).digest("hex");
 }
 
 function pageConditions(kind: "audit" | "operations", query: HistoryQuery, alias: string) {

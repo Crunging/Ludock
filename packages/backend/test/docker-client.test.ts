@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { rm } from "node:fs/promises";
 import { once } from "node:events";
 import { createServer, type Socket } from "node:net";
-import { PassThrough, Readable, Writable } from "node:stream";
+import { bytesStream } from "./fixtures/web-streams.js";
 import { DockerClient } from "../src/docker-client.js";
 import { DockerTransport } from "../src/docker-transport.js";
 import { demuxDockerStream } from "../src/docker-stream.js";
@@ -197,7 +197,7 @@ describe("Bun Docker HTTP client", () => {
   }
 
   for (const kind of ["logs", "events"] as const) {
-    it(`cancels the native ${kind} request when its readable is destroyed`, async () => {
+    it(`cancels the native ${kind} request when its reader is cancelled`, async () => {
       const cancelled = Promise.withResolvers<void>();
       const client = httpFixture((request) => {
         if (isVersion(request)) return version();
@@ -207,9 +207,10 @@ describe("Bun Docker HTTP client", () => {
         }));
       });
       const stream = kind === "logs" ? await client.getContainer("fixture").logs({ follow: true, stdout: true }) : await client.getEvents();
-      const read = once(stream, "data");
-      expect((await read)[0].toString()).toBe("first chunk\n");
-      stream.destroy();
+      const reader = stream.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("first chunk\n");
+      await reader.cancel();
+      reader.releaseLock();
       await cancelled.promise;
     });
   }
@@ -258,11 +259,8 @@ describe("Bun Docker duplex transport", () => {
         setTimeout(() => socket.end(Buffer.concat([Buffer.from(header.slice(-1)), frame(1, "hello 🌍"), frame(2, "diagnostic")])), 5);
       });
       const stream = await transport.hijack("/v1.55/exec/fixture/start", { Detach: false, Tty: false });
-      const stdout = new PassThrough(), stderr = new PassThrough();
       let out = "", err = "";
-      stdout.on("data", (data: Buffer) => { out += data.toString(); });
-      stderr.on("data", (data: Buffer) => { err += data.toString(); });
-      await demuxDockerStream(stream, stdout, stderr);
+      await demuxDockerStream(stream.readable, data => { out += Buffer.from(data).toString(); }, data => { err += Buffer.from(data).toString(); });
       expect(out).toBe("hello 🌍");
       expect(err).toBe("diagnostic");
       expect(request).toStartWith("POST /v1.55/exec/fixture/start HTTP/1.1\r\n");
@@ -281,11 +279,12 @@ describe("Bun Docker duplex transport", () => {
       socket.on("end", () => { socket.end(frame(1, String(received))); });
     });
     const stream = await transport.hijack("/exec/fixture/start", {});
-    const stdout = new PassThrough();
     let output = "";
-    stdout.on("data", (data: Buffer) => { output += data.toString(); });
-    const completed = demuxDockerStream(stream, stdout);
-    stream.end(payload);
+    const completed = demuxDockerStream(stream.readable, data => { output += Buffer.from(data).toString(); });
+    const writer = stream.writable.getWriter();
+    await writer.write(payload);
+    await writer.close();
+    writer.releaseLock();
     await completed;
     expect(received).toBe(payload.length);
     expect(output).toBe(String(payload.length));
@@ -298,8 +297,62 @@ describe("Bun Docker duplex transport", () => {
       socket.on("end", () => { socket.end(); closed.resolve(); });
     });
     const stream = await transport.hijack("/containers/fixture/attach?stdin=true");
-    stream.destroy();
+    stream.abort();
     await closed.promise;
+  });
+
+  for (const direction of ["read", "connection"] as const) it(`rejects a blocked stdin write when ${direction} is cancelled`, async () => {
+    const transport = await upgradeFixture(socket => {
+      socket.write(upgrade);
+      socket.pause();
+    });
+    const stream = await transport.hijack("/exec/fixture/start", {});
+    const writer = stream.writable.getWriter();
+    void writer.closed.catch(() => {});
+    const writing = writer.write(Buffer.alloc(8 * 1024 * 1024, 97));
+    void writing.catch(() => {});
+    await Bun.sleep(10);
+    if (direction === "read") await stream.readable.cancel(new Error("Client disconnected"));
+    else stream.abort(new Error("Client disconnected"));
+    await expect(writing).rejects.toThrow("Client disconnected");
+    writer.releaseLock();
+  });
+
+  it("finishes the request before accepting stdin after an early upgrade response", async () => {
+    let handlers: Bun.SocketHandler<undefined>;
+    let written = "";
+    let release!: () => void;
+    let first = true;
+    const socket = {
+      write(data: Uint8Array, offset = 0, length = data.length) {
+        const count = first ? 2 : length;
+        first = false;
+        written += Buffer.from(data.subarray(offset, offset + count)).toString();
+        return count;
+      },
+      terminate() {}, resume() {}, pause() {}, shutdown() {},
+    } as unknown as Bun.Socket<undefined>;
+    spyOn(Bun, "connect").mockImplementation(options => {
+      handlers = options.socket;
+      queueMicrotask(() => {
+        handlers.open!(socket);
+        handlers.data!(socket, Buffer.from(upgrade));
+        release = () => handlers.drain!(socket);
+      });
+      return Promise.resolve(socket);
+    });
+    let delivered = false;
+    const opening = new DockerTransport("/fixture.sock").hijack("/exec/id/start", { Detach: false });
+    void opening.then(() => { delivered = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(delivered).toBe(false);
+    release();
+    const stream = await opening;
+    const writer = stream.writable.getWriter();
+    await writer.write(Buffer.from("stdin"));
+    expect(written).toEndWith('{"Detach":false}stdin');
+    writer.releaseLock();
+    stream.abort();
   });
 
   for (const reply of ["HTTP/1.1 403 Forbidden\r\n\r\nfixture-secret", "HTTP/1.1 101 UPGRADED\r\nUpgrade: websocket\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n", "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nTransfer-Encoding: chunked\r\n\r\n", "HTTP/1.1", "x".repeat(16_385)]) {
@@ -333,37 +386,40 @@ describe("Bun Docker duplex transport", () => {
     const stream = await new DockerTransport("/fixture.sock").hijack("/exec/id/start");
     short = true;
     written = Buffer.alloc(0);
-    await new Promise<void>((resolve, reject) => stream.write("abcdefghij", (error) => error ? reject(error) : resolve()));
+    const writer = stream.writable.getWriter();
+    await writer.write(Buffer.from("abcdefghij"));
+    writer.releaseLock();
     expect(written.toString()).toBe("abcdefghij");
-    stream.destroy();
+    stream.abort();
   });
 });
 
 describe("Docker output framing", () => {
   it("decodes bytewise headers and bodies, drops stdin, and rejects incomplete output", async () => {
     const bytes = Buffer.concat([frame(0, "ignored"), frame(1, "stdout"), frame(2, "stderr"), frame(1, "")]);
-    const out = new PassThrough(), err = new PassThrough();
     let stdout = "", stderr = "";
-    out.on("data", (data: Buffer) => { stdout += data.toString(); });
-    err.on("data", (data: Buffer) => { stderr += data.toString(); });
-    await demuxDockerStream(Readable.from([...bytes].map((value) => Buffer.from([value]))), out, err);
+    await demuxDockerStream(bytesStream([...bytes].map(value => Buffer.from([value]))),
+      data => { stdout += Buffer.from(data).toString(); },
+      data => { stderr += Buffer.from(data).toString(); });
     expect({ stdout, stderr }).toEqual({ stdout: "stdout", stderr: "stderr" });
     for (const data of [bytes.subarray(0, 3), frame(1, "lost").subarray(0, 10), frame(3, "invalid")])
-      await expect(demuxDockerStream(Readable.from([data]), out, err)).rejects.toThrow();
+      await expect(demuxDockerStream(bytesStream([data]))).rejects.toThrow();
   });
 
-  it("retains backpressure until the consumer accepts output and fails if the consumer closes", async () => {
-    let release!: () => void;
+  it("retains backpressure until the consumer accepts output and cancels on consumer failure", async () => {
+    const gate = Promise.withResolvers<void>();
     const blocked = Promise.withResolvers<void>();
-    const output = new Writable({ write(_data, _encoding, callback) { release = callback; blocked.resolve(); } });
-    const source = Readable.from([frame(1, "first"), frame(1, "second")]);
-    let finished = false;
-    const completed = demuxDockerStream(source, output).finally(() => { finished = true; });
+    let cancelled = false;
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(Buffer.concat([frame(1, "first"), frame(1, "second")])); },
+      cancel() { cancelled = true; },
+    });
+    let writes = 0;
+    const completed = demuxDockerStream(source, async () => { writes++; blocked.resolve(); await gate.promise; });
     await blocked.promise;
-    expect(finished).toBe(false);
-    output.destroy();
-    release();
-    await expect(completed).rejects.toThrow();
-    expect(source.destroyed).toBe(true);
+    expect(writes).toBe(1);
+    gate.reject(new Error("Consumer closed"));
+    await expect(completed).rejects.toThrow("Consumer closed");
+    expect(cancelled).toBe(true);
   });
 });

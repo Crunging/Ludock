@@ -1,4 +1,6 @@
-import type { Duplex, Readable } from "node:stream";
+import { JsonLineDecoder } from "./json-lines.js";
+import type { DockerConnection } from "./docker-transport.js";
+export type { DockerConnection } from "./docker-transport.js";
 import { dockerContainerIdSchema } from "@ludock/shared";
 import { DockerApiError, DockerTransport } from "./docker-transport.js";
 import type {
@@ -102,7 +104,7 @@ export class DockerClient {
     return this.getVolume(result.Name);
   }
 
-  async getEvents(options: { filters?: DockerFilters } = {}): Promise<Readable> {
+  async getEvents(options: { filters?: DockerFilters } = {}): Promise<ReadableStream<Uint8Array>> {
     return this.transport.stream(await this.path(query("/events", options)));
   }
 
@@ -114,33 +116,25 @@ export class DockerClient {
     );
     if (!response.body) throw new Error("Docker returned an empty pull response");
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
-    let pending = "";
     let records = 0;
-    const check = (line: string) => {
-      if (!line.trim()) return;
-      let record: unknown;
-      try { record = JSON.parse(line); }
-      catch { throw new Error("Docker returned invalid pull progress"); }
+    const decoder = new JsonLineDecoder(record => {
       if (!record || typeof record !== "object" || Array.isArray(record))
         throw new Error("Docker returned invalid pull progress");
       if ("error" in record || "errorDetail" in record) throw new DockerApiError(500);
       records++;
-    };
+    });
     try {
       while (true) {
         const { done, value } = await reader.read();
-        pending += done ? decoder.decode() : decoder.decode(value, { stream: true });
-        let newline: number;
-        while ((newline = pending.indexOf("\n")) !== -1) {
-          if (newline > 1_048_576) throw new Error("Docker pull progress exceeded its limit");
-          check(pending.slice(0, newline));
-          pending = pending.slice(newline + 1);
-        }
-        if (pending.length > 1_048_576) throw new Error("Docker pull progress exceeded its limit");
-        if (done) { check(pending); break; }
+        if (done) break;
+        decoder.push(value);
       }
+      decoder.end();
       if (!records) throw new Error("Docker returned an empty pull response");
+    } catch (error) {
+      if (error instanceof DockerApiError) throw error;
+      // oxlint-disable-next-line preserve-caught-error -- Parser diagnostics may include daemon data.
+      throw new Error("Docker returned invalid or oversized pull progress");
     } finally {
       await reader.cancel();
       reader.releaseLock();
@@ -187,7 +181,7 @@ export class Container {
     return this.client.transport.json(await this.client.path(`${this.endpoint}/wait`), "POST");
   }
 
-  async logs(options: ContainerLogsOptions): Promise<Readable> {
+  async logs(options: ContainerLogsOptions): Promise<ReadableStream<Uint8Array>> {
     return this.client.transport.stream(await this.client.path(query(`${this.endpoint}/logs`, options)));
   }
 
@@ -198,7 +192,7 @@ export class Container {
     return new Exec(this.client, result.Id);
   }
 
-  async attach(options: ContainerAttachOptions): Promise<Duplex> {
+  async attach(options: ContainerAttachOptions): Promise<DockerConnection> {
     return this.client.transport.hijack(await this.client.path(query(`${this.endpoint}/attach`, options)));
   }
 }
@@ -210,7 +204,7 @@ export class Exec {
     this.endpoint = `/exec/${resource(id)}`;
   }
 
-  async start(): Promise<Duplex> {
+  async start(): Promise<DockerConnection> {
     return this.client.transport.hijack(await this.client.path(`${this.endpoint}/start`), { Detach: false, Tty: false });
   }
 

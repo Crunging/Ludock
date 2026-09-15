@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
 import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import { ConsoleOutputRedactor } from "../src/console-redaction.js";
@@ -126,7 +126,7 @@ describe("Docker log WebSocket", () => {
       inspect: async () => managedInspect("managed-id", true),
       logs: async (options: Record<string, unknown>) => {
         logOptions = options;
-        return logStream;
+        return Readable.toWeb(logStream);
       },
     })) as unknown as typeof docker.getContainer;
 
@@ -160,6 +160,7 @@ describe("Docker log WebSocket", () => {
       timestamps: true,
     });
     logStream.write("2026-08-06T12:00:00Z game started\n");
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.ok(
       ws.sent.some(
         (message) =>
@@ -185,7 +186,7 @@ describe("Docker log WebSocket", () => {
       inspect: async () => managedInspect("unmanaged-id", false),
       logs: async () => {
         logsCalled = true;
-        return new PassThrough();
+        return new ReadableStream<Uint8Array>();
       },
     })) as unknown as typeof docker.getContainer;
 

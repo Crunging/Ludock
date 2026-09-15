@@ -1,6 +1,7 @@
+import { webConnection } from "./fixtures/web-streams.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
 import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import { getDockerInstance } from "../src/docker.js";
@@ -101,13 +102,13 @@ beforeEach(async () => {
     }),
     logs: async () => {
       logCalls += 1;
-      return logStream;
+      return Readable.toWeb(logStream);
     },
     attach: async () => {
       attachCalls += 1;
       const stream = new PassThrough();
       stream.resume();
-      return stream;
+      return webConnection(stream);
     },
   })) as unknown as typeof docker.getContainer;
   await refreshServers();
@@ -186,7 +187,7 @@ describe("WebSocket server capability boundaries", () => {
       logs: async () => {
         logCalls++;
         requestedLogs();
-        return pendingLogs;
+        return pendingLogs.then(stream => Readable.toWeb(stream));
       },
     })) as unknown as typeof docker.getContainer;
 
@@ -234,6 +235,7 @@ describe("WebSocket server capability boundaries", () => {
     );
     setUserServerGrants(operator.id, [], administrator);
     logStream.write("must not reach revoked user");
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(ws.closeCode, 1008);
     assert.equal(logStream.destroyed, true);
     assert.equal(
@@ -354,7 +356,7 @@ describe("WebSocket server capability boundaries", () => {
           return {
             start: async () => {
               started();
-              return mainStream;
+              return webConnection(mainStream);
             },
             inspect: async () => ({ Running: false, ExitCode: 125 }),
           };
@@ -364,7 +366,7 @@ describe("WebSocket server capability boundaries", () => {
             cancellationStarted();
             const stream = new PassThrough();
             setImmediate(() => stream.end());
-            return stream;
+            return webConnection(stream);
           },
         };
       },

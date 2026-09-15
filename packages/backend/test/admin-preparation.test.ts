@@ -96,7 +96,7 @@ describe("authorization after administrator request preparation", () => {
       VALUES(?,?,?,?,?,?,?,?,'complete')`).run(backupId, logical.id, logical.bindingFingerprint, "/backups", "[]", 15, "fixture", 1);
     const stream = Readable.from([Buffer.from("private archive")]);
     const hold = gate();
-    spyOn(backups, "openBackupDownload").mockImplementation(async () => { await hold.wait(); return stream; });
+    spyOn(backups, "openBackupDownload").mockImplementation(async () => { await hold.wait(); return Readable.toWeb(stream); });
     const response = request(`/api/v1/servers/${logical.id}/backups/${backupId}/download`, "GET");
     await hold.pending;
     database.deleteSessionRecord(sessionHash);

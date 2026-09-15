@@ -1,4 +1,9 @@
-import { Duplex, Readable } from "node:stream";
+export interface DockerConnection {
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+  /** Terminate both directions. Closing writable alone sends stdin EOF. */
+  abort(reason?: unknown): void;
+}
 
 /** Daemon diagnostics can contain credentials, commands, and host paths. Keep
  * only the HTTP status; existing callers use it for absence/conflict handling. */
@@ -42,60 +47,75 @@ export class DockerTransport {
     await response.body?.cancel();
   }
 
-  async stream(path: string): Promise<Readable> {
+  async stream(path: string): Promise<ReadableStream<Uint8Array>> {
     const response = await this.request(path);
     if (!response.body) throw new Error("Docker returned an empty stream");
-    // This adapter preserves the existing file/console stream boundaries.
-    // Destroy cancels the fetch body; reads retain backpressure to the socket.
-    return Readable.fromWeb(response.body);
+    return response.body;
   }
 
-  hijack(path: string, body?: unknown): Promise<Duplex> {
+  hijack(path: string, body?: unknown): Promise<DockerConnection> {
     return openDockerStream(this.socketPath, path, body);
   }
 }
 
-/** Bun owns the socket; Duplex supplies bounded buffers to the existing file
- * pipelines. In particular, end() must send FIN only on stdin and keep stdout
- * open until a helper reports its result and finishes cleanup. */
-function openDockerStream(socketPath: string, path: string, body?: unknown): Promise<Duplex> {
+/** Each direction has a byte-bounded queue. Stdin EOF preserves stdout until
+ * the helper reports its result and finishes cleanup. */
+function openDockerStream(socketPath: string, path: string, body?: unknown): Promise<DockerConnection> {
   return new Promise((resolve, reject) => {
     let socket: Bun.Socket | undefined;
     let headers = Buffer.alloc(0);
     let upgraded = false;
+    let requestSent = false;
+    let delivered = false;
     let ended = false;
-    let pending: { data: Buffer; offset: number; callback: (error?: Error | null) => void } | undefined;
-    const stream = new Duplex({
-      allowHalfOpen: true,
-      read() { socket?.resume(); },
-      write(data: Buffer, _encoding, callback) {
-        pending = { data, offset: 0, callback };
-        flush();
-      },
-      final(callback) {
+    let aborted = false;
+    let writeClosed = false;
+    let input!: ReadableStreamDefaultController<Uint8Array>;
+    let output!: WritableStreamDefaultController;
+    let pending: { data: Uint8Array; offset: number; resolve(): void; reject(error: unknown): void } | undefined;
+    const abort = (reason: unknown = new Error("Docker stream connection failed")) => {
+      if (aborted) return;
+      const error = reason instanceof Error ? reason : new Error("Docker stream cancelled");
+      aborted = true;
+      socket?.terminate();
+      input.error(error);
+      output.error(error);
+      pending?.reject(error);
+      pending = undefined;
+      if (!delivered) reject(error);
+    };
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) { input = controller; },
+      pull() { if (!ended && !aborted) socket?.resume(); },
+      cancel(reason) { abort(reason); },
+    }, new ByteLengthQueuingStrategy({ highWaterMark: 65_536 }));
+    const write = (data: Uint8Array): Promise<void> => new Promise((resolveWrite, rejectWrite) => {
+      if (aborted || ended || writeClosed) { rejectWrite(new Error("Docker stream closed")); return; }
+      pending = { data, offset: 0, resolve: resolveWrite, reject: rejectWrite };
+      flush();
+    });
+    const writable = new WritableStream<Uint8Array>({
+      start(controller) { output = controller; },
+      write,
+      close() {
         // Bun 1.4.2 shutdown() sends FIN on the write side; shutdown(true)
         // shuts down reads, and end() closes the socket. The upload socket
         // tests exercise the runtime behavior rather than relying on typings.
         // Bun uses the same call in src/js/node/net.ts's endNT implementation.
         socket?.shutdown();
-        callback();
+        writeClosed = true;
       },
-      destroy(error, callback) {
-        socket?.terminate();
-        const write = pending;
-        pending = undefined;
-        write?.callback(error || new Error("Docker stream closed"));
-        if (!upgraded) reject(error || new Error("Docker upgrade did not complete"));
-        callback(error);
-      },
-    });
-    // A failed handshake can precede delivery to the caller. Keep its error
-    // handled, including streams that finish before a consumer subscribes.
-    stream.on("error", () => {});
-    stream.once("end", () => stream.destroy());
-    const fail = (error = new Error("Docker stream connection failed")) => stream.destroy(error);
+      abort,
+    }, new ByteLengthQueuingStrategy({ highWaterMark: 65_536 }));
+    const deliver = () => {
+      if (!aborted && upgraded && requestSent && !delivered) {
+        delivered = true;
+        resolve({ readable, writable, abort });
+      }
+    };
+    const fail = (error = new Error("Docker stream connection failed")) => abort(error);
     const flush = () => {
-      if (!socket || !pending || stream.destroyed) return;
+      if (!socket || !pending || aborted) return;
       const write = pending;
       try {
         const count = socket.write(write.data, write.offset, write.data.length - write.offset);
@@ -103,10 +123,21 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
         write.offset += count;
         if (write.offset === write.data.length) {
           pending = undefined;
-          write.callback();
+          write.resolve();
         }
         // A short write is resumed from this exact offset by Bun's drain event.
       } catch { fail(); }
+    };
+    const finish = () => {
+      if (ended || aborted) return;
+      if (!upgraded) { fail(new Error("Docker closed before completing the upgrade")); return; }
+      ended = true;
+      input.close();
+      const error = new Error("Docker stream closed");
+      pending?.reject(error);
+      pending = undefined;
+      if (!writeClosed) output.error(error);
+      socket?.terminate();
     };
     const payload = body === undefined ? "" : JSON.stringify(body);
     const request = Buffer.from(
@@ -119,11 +150,11 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       socket: {
         open(connected) {
           socket = connected;
-          if (stream.destroyed) { connected.terminate(); return; }
-          stream.write(request);
+          if (aborted) { connected.terminate(); return; }
+          void write(request).then(() => { requestSent = true; deliver(); }, () => fail());
         },
         data(connected, data) {
-          if (stream.destroyed) return;
+          if (aborted || ended) return;
           let chunk = Buffer.from(data);
           if (!upgraded) {
             headers = Buffer.concat([headers, chunk]);
@@ -157,29 +188,26 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
             chunk = headers.subarray(boundary + 4);
             headers = Buffer.alloc(0);
             upgraded = true;
-            resolve(stream);
+            deliver();
           }
-          if (chunk.length && !stream.push(chunk)) connected.pause();
+          if (chunk.length) {
+            input.enqueue(chunk);
+            if ((input.desiredSize ?? 0) <= 0) connected.pause();
+          }
         },
         drain() { flush(); },
-        end(connected) {
-          ended = true;
-          if (!upgraded) fail(new Error("Docker closed before completing the upgrade"));
-          else stream.push(null);
-          connected.terminate();
-        },
+        end() { finish(); },
         close(_connected, error) {
-          if (ended || stream.destroyed) return;
+          if (ended || aborted) return;
           if (error || !upgraded) { fail(); return; }
           // After local shutdown Bun can deliver graceful EOF as close only.
-          ended = true;
-          stream.push(null);
+          finish();
         },
         error() { fail(); },
         connectError() { fail(); },
       },
     }).then((connected) => {
-      if (stream.destroyed) connected.terminate();
+      if (aborted) connected.terminate();
     }, () => { fail(); });
   });
 }

@@ -1,4 +1,5 @@
-import { demuxDockerStream } from "./docker-stream.js";
+import { managedReadable } from "./managed-readable.js";
+import { demuxDockerStream, dockerStdout } from "./docker-stream.js";
 import { constants, createWriteStream } from "node:fs";
 import {
   access,
@@ -11,7 +12,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
-import { PassThrough, Transform, Writable, type Readable } from "node:stream";
+import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type * as Docker from "./docker-client.js";
 import * as tar from "tar-stream";
@@ -270,7 +271,7 @@ export async function assertDestinationSpace(
 export async function archiveReadStream(
   directory: string,
   id: string,
-): Promise<Readable> {
+): Promise<ReadableStream<Uint8Array>> {
   if (!uuidPattern.test(id))
     throw failBackup("BACKUP_ID", "Invalid backup identifier.");
   const pinned = await pinBackupDirectory(directory);
@@ -286,11 +287,12 @@ export async function archiveReadStream(
         "The backup archive is not a regular file.",
       );
     }
-    const stream = handle.createReadStream();
-    stream.once("close", () => {
-      void pinned.descriptor.close();
-    });
-    return stream;
+    return managedReadable(Bun.file(handle.fd).stream(), {
+      async cleanup() {
+        try { await handle!.close(); }
+        finally { await pinned.descriptor.close(); }
+      },
+    }).stream;
   } catch (error) {
     await Promise.allSettled([handle?.close(), pinned.descriptor.close()]);
     throw error;
@@ -479,7 +481,7 @@ export async function validateArchive(
       callback(null, chunk);
     },
   });
-  await pipeline(input, meter, archiveValidator(roots, maxBytes));
+  await pipeline(Readable.fromWeb(input), meter, archiveValidator(roots, maxBytes));
   if (hash.digest("hex") !== checksum)
     throw failBackup(
       "BACKUP_CHECKSUM",
@@ -675,34 +677,18 @@ export async function helperExec(
   });
   assertAccess?.();
   const stream = await execution.start();
-  const output = new PassThrough(),
-    errors = new PassThrough();
-  const chunks: Buffer[] = [];
+  const chunks: Uint8Array[] = [];
   let size = 0;
-  output.on("data", (chunk: Buffer) => {
-    size += chunk.length;
-    if (size <= 4_194_304) chunks.push(chunk);
-    else
-      stream.destroy(
-        failBackup(
-          "HELPER_OUTPUT",
-          "A data operation produced too much output.",
-        ),
-      );
-  });
-  errors.resume();
-  const timeout = setTimeout(() => {
-    stream.destroy(
-      failBackup(
-        "BACKUP_TIMEOUT",
-        "A data operation timed out. Review the operation recovery state.",
-      ),
-    );
-  }, 120_000);
+  const timeout = setTimeout(() => stream.abort(failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")), 120_000);
   try {
-    await demuxDockerStream(stream, output, errors);
+    await demuxDockerStream(stream.readable, chunk => {
+      size += chunk.length;
+      if (size > 4_194_304) throw failBackup("HELPER_OUTPUT", "A data operation produced too much output.");
+      chunks.push(chunk);
+    });
   } finally {
     clearTimeout(timeout);
+    stream.abort();
   }
   if ((await execution.inspect()).ExitCode !== 0)
     throw failBackup(
@@ -716,7 +702,7 @@ async function helperArchive(
   container: Docker.Container,
   root: string,
   assertAccess?: () => void,
-): Promise<Readable> {
+): Promise<ReadableStream<Uint8Array>> {
   const execution = await container.exec({
     Cmd: [
       "bun",
@@ -729,46 +715,17 @@ async function helperArchive(
   });
   assertAccess?.();
   const stream = await execution.start();
-  const output = new PassThrough(),
-    errors = new PassThrough();
-  errors.resume();
-  const timeout = setTimeout(
-    () =>
-      output.destroy(
-        failBackup(
-          "BACKUP_TIMEOUT",
-          "The backup exceeded its 30 minute execution limit.",
-        ),
-      ),
-    30 * 60_000,
-  );
-  output.once("close", () => {
-    clearTimeout(timeout);
-    stream.destroy();
-  });
-  void demuxDockerStream(stream, output, errors).then(async () => {
-    await execution
-      .inspect()
-      .then((result) => {
-        if (result.ExitCode !== 0)
-          output.destroy(
-            failBackup(
-              "UNSAFE_ARCHIVE",
-              "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.",
-            ),
-          );
-        else output.end();
-      })
-      .catch(() =>
-        output.destroy(
-          failBackup(
-            "BACKUP_READ_FAILED",
-            "The data helper failed to read the selected root.",
-          ),
-        ),
-      );
-  }).catch((error: unknown) => output.destroy(error instanceof Error ? error : new Error("Docker archive stream failed")));
-  return output;
+  const deadline = new AbortController();
+  const timeout = setTimeout(() => deadline.abort(failBackup("BACKUP_TIMEOUT", "The backup exceeded its 30 minute execution limit.")), 30 * 60_000);
+  return managedReadable(dockerStdout(stream.readable), {
+    signal: deadline.signal,
+    async complete() {
+      const result = await execution.inspect();
+      if (result.ExitCode !== 0 || result.Running)
+        throw failBackup("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.");
+    },
+    cleanup() { clearTimeout(timeout); stream.abort(); },
+  }).stream;
 }
 
 /** Repack selected Docker archives to stable root IDs without following links. */
@@ -912,7 +869,7 @@ export async function writeSnapshot(
         }
         stream.once("error", (error) => extract.destroy(error));
       });
-      await pipeline(input, extract, { signal: copy.signal });
+      await pipeline(Readable.fromWeb(input), extract, { signal: copy.signal });
       await assertStopped();
     }
     pack.finalize();
@@ -964,11 +921,11 @@ export async function extractRootToStage(
   });
   assertAccess?.();
   const socket = await execution.start();
-  const ignored = new PassThrough();
-  ignored.resume();
+  const writer = socket.writable.getWriter();
+  void writer.closed.catch(() => {});
   const timeout = setTimeout(
     () =>
-      socket.destroy(
+      socket.abort(
         failBackup(
           "RESTORE_TIMEOUT",
           "Restore extraction exceeded its 30 minute execution limit.",
@@ -976,7 +933,7 @@ export async function extractRootToStage(
       ),
     30 * 60_000,
   );
-  const completed = demuxDockerStream(socket, ignored, ignored).then(async () => {
+  const completed = demuxDockerStream(socket.readable).then(async () => {
     if ((await execution.inspect()).ExitCode !== 0)
       throw failBackup(
         "RESTORE_EXTRACTION",
@@ -984,13 +941,10 @@ export async function extractRootToStage(
       );
   });
   void completed.catch(() => {});
-  const write = (value: Buffer) =>
-    new Promise<void>((resolve, reject) => {
-      assertAccess?.();
-      socket.write(value, (error?: Error | null) =>
-        error ? reject(error) : resolve(),
-      );
-    });
+  const write = (value: Uint8Array) => {
+    assertAccess?.();
+    return writer.write(value);
+  };
   const extract = tar.extract();
   const names = new Set<string>();
   const hash = new Bun.CryptoHasher("sha256");
@@ -1048,20 +1002,22 @@ export async function extractRootToStage(
     });
   });
   try {
-    await pipeline(await archiveReadStream(directory, id), meter, extract);
+    await pipeline(Readable.fromWeb(await archiveReadStream(directory, id)), meter, extract);
     if (hash.digest("hex") !== checksum)
       throw failBackup(
         "BACKUP_CHECKSUM",
         "The archive changed while it was being staged. No existing game data was replaced.",
       );
-    socket.end();
+    await writer.close();
     await completed;
   } catch (error) {
-    socket.destroy(error as Error);
+    socket.abort(error);
     await completed.catch(() => {});
     throw error;
   } finally {
     clearTimeout(timeout);
+    socket.abort();
+    writer.releaseLock();
   }
 }
 

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, it } from "bun:test";
 import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
 import {
@@ -89,7 +88,7 @@ beforeEach(async () => {
     });
   docker.getEvents = (async (options: unknown) => {
     assert.deepEqual(options, { filters: { type: ["container"] } });
-    return new PassThrough();
+    return new ReadableStream<Uint8Array>();
   }) as unknown as typeof docker.getEvents;
   docker.listContainers = (async () =>
     (removed ? ["second"] : ["first", "second"]).map((id) => ({

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { spawn } from "bun";
 import { afterEach, describe, it } from "bun:test";
 import { startServer } from "../src/index.js";
@@ -29,7 +28,7 @@ afterEach(async () => {
 describe("native server shutdown", () => {
   it("stops admission and WebSockets while retaining SQLite until active locks drain", async () => {
     docker.listContainers = (async () => []) as typeof docker.listContainers;
-    docker.getEvents = (async () => new PassThrough()) as typeof docker.getEvents;
+    docker.getEvents = (async () => new ReadableStream<Uint8Array>()) as typeof docker.getEvents;
     runtime = startServer({ port: 0, hostname: "127.0.0.1", frontendDist: false });
     const database = getDatabase();
     releaseLock = acquireLocks(["server:shutdown-fixture"]);

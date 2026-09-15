@@ -1,3 +1,4 @@
+import { webConnection } from "./fixtures/web-streams.js";
 import type { ArchiveHeader } from "../src/backup-storage.js";
 import assert from "node:assert/strict";
 import {
@@ -157,7 +158,7 @@ describe("backup storage boundaries", () => {
         start: async () => {},
         remove: async () => { removed = true; },
         exec: async () => ({
-          start: async () => Readable.from([]),
+          start: async () => webConnection(Readable.from([])),
           inspect: async () => ({ ExitCode: 0 }),
         }),
       } as unknown as Docker.Container;
@@ -242,7 +243,7 @@ describe("backup storage boundaries", () => {
       });
       const helper = {
         exec: async () => ({
-          start: async () => socket,
+          start: async () => webConnection(socket),
           inspect: async () => ({ ExitCode: 0 }),
         }),
       } as unknown as Docker.Container;

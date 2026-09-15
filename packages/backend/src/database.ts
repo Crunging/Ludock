@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { Database, constants as sqliteConstants } from "bun:sqlite";
 import {
@@ -119,7 +118,7 @@ export function keyedComposeSourceFingerprint(digest: string): string {
 /** Identify an API-token generation for durable work, not a password verifier. */
 export function keyedCredentialFingerprint(value: string): string {
   getDatabase();
-  return createHmac("sha256", fingerprintKey!)
+  return new Bun.CryptoHasher("sha256", fingerprintKey!)
     .update(`ludock:credential:v1:${value}`).digest("hex");
 }
 

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { Readable } from "node:stream";
 import { describe, it } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
 import { getDockerInstance, getManagedContainerObservation } from "../src/docker.js";
@@ -73,7 +72,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             state,
             "test.txt",
             13,
-            Readable.from("hello helper!"),
+            new Response("hello helper!").body!,
           );
           assert.equal(
             (await listFiles(server, root.id, state)).entries[0].name,
@@ -81,8 +80,8 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           );
           const file = await openDownload(server, root.id, `${state}/test.txt`);
           let content = "";
-          for await (const chunk of file.stream as Readable)
-            content += (chunk as Buffer).toString();
+          for await (const chunk of file.stream)
+            content += Buffer.from(chunk).toString();
           await file.completed;
           assert.equal(content, "hello helper!");
           await renameFileEntry(
@@ -93,7 +92,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           );
           const archive = await openDownload(server, root.id, state);
           let bytes = 0;
-          for await (const chunk of archive.stream as Readable)
+          for await (const chunk of archive.stream)
             bytes += (chunk as Buffer).length;
           await archive.completed;
           assert.ok(bytes >= 2048);

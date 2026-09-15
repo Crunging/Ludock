@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Cookie } from "bun";
 import { AppError } from "./errors.js";
 import {
@@ -101,7 +101,7 @@ export class SetupWindow {
         `LUDOCK_SETUP_CODE must be between ${SETUP_CODE_MIN_LENGTH} and ${SETUP_CODE_MAX_LENGTH} characters`,
       );
     }
-    this.authorizationHash = createHash("sha256").update(code).digest();
+    this.authorizationHash = new Bun.CryptoHasher("sha256").update(code).digest();
     this.pendingGeneratedCode = generated ? code : null;
   }
 
@@ -125,7 +125,7 @@ export class SetupWindow {
   assertAuthorized(candidate: unknown): void {
     this.assertOpen();
     const value = typeof candidate === "string" ? candidate : "";
-    const candidateHash = createHash("sha256").update(value).digest();
+    const candidateHash = new Bun.CryptoHasher("sha256").update(value).digest();
     const matches = timingSafeEqual(candidateHash, this.authorizationHash);
     if (
       !matches ||

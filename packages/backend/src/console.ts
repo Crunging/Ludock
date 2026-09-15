@@ -1,5 +1,5 @@
 import { demuxDockerStream } from "./docker-stream.js";
-import { PassThrough } from "node:stream";
+import type { ReadableStreamDefaultReader } from "node:stream/web";
 import type * as Docker from "./docker-client.js";
 import type { SocketChannel } from "./socket-channel.js";
 import { getContainer } from "./docker.js";
@@ -94,14 +94,13 @@ export async function handleConsoleConnection(
     ipAddress: remoteAddress,
   });
 
-  let logStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
-    null;
+  let logReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const pendingMessages: string[] = [];
   const commandLifetime = new AbortController();
   const cleanup = () => {
     commandLifetime.abort();
-    logStream?.destroy?.();
-    logStream = null;
+    void logReader?.cancel().catch(() => {});
+    logReader = undefined;
     pendingMessages.length = 0;
   };
   let processing = false;
@@ -251,25 +250,40 @@ export async function handleConsoleConnection(
       (type === "stdout" ? stdout : stderr).push(value),
     );
     try {
-      logStream = await getContainer(containerId).logs({
+      const stream = await getContainer(containerId).logs({
         follow: true,
         stdout: true,
         stderr: true,
         tail: 200,
         timestamps: false,
       });
+      const reader = stream.getReader();
+      logReader = reader;
       if (!access.allowed("logs.read")) {
         cleanup();
+        reader.releaseLock();
         return;
       }
-      logStream.on("data", (chunk: Buffer) => decoder.push(chunk));
-      logStream.on("error", () => send("error", "Docker log stream failed"));
-      logStream.on("end", () => {
-        decoder.end();
-        stdout.end();
-        stderr.end();
-        send("system", "Log stream ended");
-      });
+      void (async () => {
+        try {
+          while (logReader === reader) {
+            const { value, done } = await reader.read();
+            if (logReader !== reader) return;
+            if (done) break;
+            decoder.push(value);
+          }
+          decoder.end();
+          stdout.end();
+          stderr.end();
+          send("system", "Log stream ended");
+        } catch {
+          if (logReader === reader) send("error", "Docker log stream failed");
+        } finally {
+          if (logReader === reader) logReader = undefined;
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+      })();
     } catch {
       send("error", "Failed to open Docker logs");
     }
@@ -292,18 +306,17 @@ async function executeShell(
   });
   assertAccess();
   const stream = await exec.start();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  stdout.setEncoding("utf8");
-  stderr.setEncoding("utf8");
-  stdout.on("data", (chunk: string) => output.stdout(chunk));
-  stderr.on("data", (chunk: string) => output.stderr(chunk));
+  const stdout = new TextDecoder("utf-8", { ignoreBOM: true });
+  const stderr = new TextDecoder("utf-8", { ignoreBOM: true });
   try {
-    await demuxDockerStream(stream, stdout, stderr);
-  } finally {
-    stdout.end();
-    stderr.end();
-  }
+    await demuxDockerStream(stream.readable,
+      chunk => output.stdout(stdout.decode(chunk, { stream: true })),
+      chunk => output.stderr(stderr.decode(chunk, { stream: true })),
+    );
+    const out = stdout.decode(), err = stderr.decode();
+    if (out) output.stdout(out);
+    if (err) output.stderr(err);
+  } finally { stream.abort(); }
   const result = await exec.inspect();
   if (result.Running || result.ExitCode !== 0)
     throw new Error("Shell command failed or timed out");

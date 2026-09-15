@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { PassThrough } from "node:stream";
 import { serve } from "bun";
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { createSession } from "../src/auth.js";
@@ -35,7 +34,7 @@ function startFixture() {
 
 beforeEach(() => {
   closeDatabase();
-  docker.getEvents = (async () => new PassThrough()) as typeof docker.getEvents;
+  docker.getEvents = (async () => new ReadableStream<Uint8Array>()) as typeof docker.getEvents;
   createUser({ id: "viewer", username: "viewer", role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
   gateway = createWebSocketGateway();
   server = startFixture();

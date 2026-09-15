@@ -1,6 +1,4 @@
 import { demuxDockerStream } from "./docker-stream.js";
-import { PassThrough, type Readable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 import type * as Docker from "./docker-client.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
@@ -649,7 +647,7 @@ async function executeInContainer(
   const hardDeadline = setTimeout(() => {
     forcedDeadline = true;
     requestCancellation();
-    (stream as NodeJS.ReadWriteStream & { destroy(error?: Error): void }).destroy(
+    stream.abort(
       new Error("Game console command timed out"),
     );
   },
@@ -658,7 +656,7 @@ async function executeInContainer(
   hardDeadline.unref();
   let streamFailure: unknown;
   try {
-    await streamExecOutput(stream, guardedOutput, () => {
+    await streamExecOutput(stream.readable, guardedOutput, () => {
       outputLimited = true;
       requestCancellation();
     });
@@ -733,7 +731,9 @@ async function cancelDockerExec(
     ...(user ? { User: user } : {}),
   });
   const stream = await cancellation.start();
-  (stream as NodeJS.ReadableStream & { resume?: () => void }).resume?.();
+  const timeout = setTimeout(() => stream.abort(new Error("Console cancellation timed out")), 10_000);
+  try { await demuxDockerStream(stream.readable); }
+  finally { clearTimeout(timeout); stream.abort(); }
 }
 
 async function inspectDockerExec(exec: Docker.Exec): Promise<Docker.ExecInspectInfo> {
@@ -782,37 +782,29 @@ async function writeContainerStdin(
     assertAccess?.();
     await writeAttachedInput(stream, `${command}\n`);
   } finally {
-    (stream as NodeJS.ReadWriteStream & { destroy(): void }).destroy();
+    stream.abort();
   }
   output.system("Command sent to the server process");
 }
 
-async function writeAttachedInput(
-  stream: NodeJS.ReadWriteStream,
-  data: string
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    stream.write(data, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+async function writeAttachedInput(stream: Docker.DockerConnection, data: string): Promise<void> {
+  const writer = stream.writable.getWriter();
+  try { await writer.write(new TextEncoder().encode(data)); }
+  finally { writer.releaseLock(); }
 }
 
 async function streamExecOutput(
-  stream: Readable,
+  stream: ReadableStream<Uint8Array>,
   output: GameCommandOutput,
   onLimit: () => void,
 ): Promise<void> {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
   const decoders = {
-    stdout: new StringDecoder("utf8"),
-    stderr: new StringDecoder("utf8"),
+    stdout: new TextDecoder("utf-8", { ignoreBOM: true }),
+    stderr: new TextDecoder("utf-8", { ignoreBOM: true }),
   };
   let receivedBytes = 0;
   let limited = false;
-  const receive = (type: "stdout" | "stderr", chunk: Buffer) => {
+  const receive = (type: "stdout" | "stderr", chunk: Uint8Array) => {
     if (limited) return;
     receivedBytes += chunk.length;
     if (receivedBytes > MAX_DOCKER_EXEC_OUTPUT_BYTES) {
@@ -820,22 +812,15 @@ async function streamExecOutput(
       onLimit();
       return;
     }
-    const value = decoders[type].write(chunk);
+    const value = decoders[type].decode(chunk, { stream: true });
     if (value) output[type](value);
   };
-  stdout.on("data", (chunk: Buffer) => receive("stdout", chunk));
-  stderr.on("data", (chunk: Buffer) => receive("stderr", chunk));
-  try {
-    await demuxDockerStream(stream, stdout, stderr);
-    if (!limited) {
-      const finalStdout = decoders.stdout.end();
-      const finalStderr = decoders.stderr.end();
-      if (finalStdout) output.stdout(finalStdout);
-      if (finalStderr) output.stderr(finalStderr);
-    }
-  } finally {
-    stdout.end();
-    stderr.end();
+  await demuxDockerStream(stream, chunk => receive("stdout", chunk), chunk => receive("stderr", chunk));
+  if (!limited) {
+    const finalStdout = decoders.stdout.decode();
+    const finalStderr = decoders.stderr.decode();
+    if (finalStdout) output.stdout(finalStdout);
+    if (finalStderr) output.stderr(finalStderr);
   }
 }
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Database } from "bun:sqlite";
 
 const KEY_BYTES = 32;
@@ -176,7 +176,7 @@ function protectDigest(
 ): string {
   if (!/^[a-f0-9]{64}$/.test(digest))
     throw new Error("Invalid fingerprint digest");
-  return `hmac-sha256:${createHmac("sha256", key)
+  return `hmac-sha256:${new Bun.CryptoHasher("sha256", key)
     .update(`ludock:${domain}:${digest}`)
     .digest("hex")}`;
 }
@@ -196,7 +196,7 @@ export function protectComposeSourceFingerprint(
 }
 
 function keyCheck(key: Uint8Array): string {
-  return createHmac("sha256", key)
+  return new Bun.CryptoHasher("sha256", key)
     .update("ludock:identity-key:v2")
     .digest("hex");
 }

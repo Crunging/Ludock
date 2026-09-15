@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { PassThrough } from "node:stream";
+import type { ReadableStreamDefaultReader } from "node:stream/web";
 import { docker, type Container } from "../src/docker-client.js";
 import { demuxDockerStream } from "../src/docker-stream.js";
 import { dockerEventDecoder } from "../src/events.js";
@@ -8,7 +8,8 @@ import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client acceptance", () => {
   it("pulls a pinned image and preserves events, TTY logs, exec output, stdin, and lifecycle state", async () => {
     const containers: Container[] = [];
-    let events: Awaited<ReturnType<typeof docker.getEvents>> | undefined;
+    let events: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let eventWork: Promise<void> | undefined;
     try {
       await docker.ping();
       await docker.pull(DEFAULT_HELPER_IMAGE);
@@ -24,9 +25,16 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       });
       containers.push(container);
       const actions = new Set<string>();
-      events = await docker.getEvents({ filters: { type: ["container"], container: [container.id] } });
-      events.on("error", () => {});
-      events.on("data", dockerEventDecoder((event) => { if (event.Action) actions.add(event.Action); }));
+      events = (await docker.getEvents({ filters: { type: ["container"], container: [container.id] } })).getReader();
+      const decode = dockerEventDecoder(event => { if (event.Action) actions.add(event.Action); });
+      eventWork = (async () => {
+        while (true) {
+          const { value, done } = await events!.read();
+          if (done) return;
+          decode(value);
+        }
+      })();
+      void eventWork.catch(() => {});
       await container.start();
       await until(() => actions.has("start"));
       const info = await container.inspect();
@@ -39,12 +47,12 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
         AttachStdin: true, AttachStdout: true, AttachStderr: true,
       });
       const stream = await execution.start();
-      const stdout = new PassThrough(), stderr = new PassThrough();
       let out = "", err = "";
-      stdout.on("data", (data: Buffer) => { out += data.toString(); });
-      stderr.on("data", (data: Buffer) => { err += data.toString(); });
-      const completed = demuxDockerStream(stream, stdout, stderr);
-      stream.end(Buffer.alloc(2 * 1024 * 1024, 97));
+      const completed = demuxDockerStream(stream.readable, data => { out += Buffer.from(data).toString(); }, data => { err += Buffer.from(data).toString(); });
+      const writer = stream.writable.getWriter();
+      await writer.write(Buffer.alloc(2 * 1024 * 1024, 97));
+      await writer.close();
+      writer.releaseLock();
       await completed;
       expect(out.trim()).toBe("2097152");
       expect(err.trim()).toBe("stderr-marker");
@@ -52,13 +60,14 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
 
       const attached = await container.attach({ stream: true, stdin: true, stdout: false, stderr: false });
       try {
-        await new Promise<void>((resolve, reject) => attached.write("fixture-command\n", (error) => error ? reject(error) : resolve()));
-      } finally { attached.destroy(); }
+        const writer = attached.writable.getWriter();
+        await writer.write(Buffer.from("fixture-command\n"));
+        writer.releaseLock();
+      } finally { attached.abort(); }
       await until(async () => {
         const logs = await container.logs({ follow: false, stdout: true, stderr: true });
-        const output = new PassThrough();
         let content = "";
-        output.on("data", (data: Buffer) => { content += data.toString(); });
+        const output = (data: Uint8Array) => { content += Buffer.from(data).toString(); };
         await demuxDockerStream(logs, output, output);
         return content.includes("command:fixture-command");
       });
@@ -83,7 +92,9 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       for await (const data of logs) chunks.push(data as Buffer);
       expect(Buffer.concat(chunks).toString().trim()).toBe("tty-marker");
     } finally {
-      events?.destroy();
+      await events?.cancel().catch(() => {});
+      await eventWork?.catch(() => {});
+      events?.releaseLock();
       for (const container of containers.reverse()) await container.remove({ force: true });
     }
   }, 120_000);
