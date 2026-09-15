@@ -62,7 +62,7 @@ describe("administration recovery", () => {
     expect(apiJsonMock.mock.calls.some(([, , init]) => init?.method === "PUT")).toBe(false);
   });
 
-  it("does not expose settings defaults when one of the initial reads fails", async () => {
+  it("isolates failed settings reads and preserves the other form's draft during retry", async () => {
     let unavailable = true;
     apiJsonMock.mockImplementation(async (path) => {
       if (path === "/notifications/deliveries") return { deliveries: [] };
@@ -73,12 +73,34 @@ describe("administration recovery", () => {
     });
     render(<Settings />);
     await screen.findByRole("alert");
-    expect(screen.queryByRole("button", { name: "Save backup settings" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save backup settings" })).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Save notifications" })).toBeNull();
+    const destination = screen.getByLabelText("Mounted destination path");
+    await userEvent.clear(destination);
+    await userEvent.type(destination, "/newer-draft");
     unavailable = false;
-    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect((await screen.findByLabelText("Mounted destination path") as HTMLInputElement).value).toBe("/saved");
-    expect((screen.getByRole("checkbox", { name: "Enable Discord delivery" }) as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Retry notification settings" }));
+    expect((await screen.findByRole("checkbox", { name: "Enable Discord delivery" }) as HTMLInputElement).checked).toBe(true);
+    expect((destination as HTMLInputElement).value).toBe("/newer-draft");
+  });
+
+  it("saves notification settings while an unrelated backup save is pending", async () => {
+    const pending = deferred<unknown>();
+    const settings = { destination: "/backups", retentionCount: 4, maxBytes: 1024 ** 3, reserveBytes: 0 };
+    apiJsonMock.mockImplementation(async (path, _schema, init) => {
+      if (path === "/settings/backups") return init?.method === "PUT" ? pending.promise : { settings };
+      if (path === "/settings/deployment") return deployment;
+      if (path === "/notifications/deliveries") return { deliveries: [] };
+      return { configured: false, enabled: false };
+    });
+    render(<Settings />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save backup settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save notifications" }));
+    await screen.findByText("Notification settings saved.");
+    expect((screen.getByRole("button", { name: "Save backup settings" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(apiJsonMock.mock.calls.filter(([, , init]) => init?.method === "PUT").map(([path]) => path)).toEqual(["/settings/backups", "/notifications"]);
+    await act(async () => pending.resolve({ settings }));
+    await screen.findByText("Backup settings saved.");
   });
 
   it("keeps a newer webhook draft after an earlier settings save finishes", async () => {
@@ -248,7 +270,7 @@ describe("administration recovery", () => {
     });
     render(<Settings />);
     await screen.findByRole("heading", { name: "Compose updates" });
-    expect(screen.getByText(/No project registration is needed/)).toBeTruthy();
+    expect(screen.getByText(/discovers and validates source files from Docker/)).toBeTruthy();
     expect(screen.queryByLabelText("Compose project name")).toBeNull();
     expect(apiJsonMock.mock.calls.some(([path]) => path === "/compose-projects")).toBe(false);
   });

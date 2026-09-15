@@ -75,6 +75,18 @@ async function openSchedules() {
   await userEvent.click(await screen.findByRole("tab", { name: "Schedules", exact: true }));
 }
 
+// Exercise current timers only: tab changes can retire a panel's poller.
+function observePolling() {
+  const intervals = spyOn(window, "setInterval");
+  const cleared = spyOn(window, "clearInterval");
+  return async (delay: number) => {
+    const current = intervals.mock.calls.filter(([, interval], index) =>
+      interval === delay && !cleared.mock.calls.some(([id]) => id === intervals.mock.results[index].value));
+    expect(current.length).toBeGreaterThan(0);
+    await act(async () => { for (const [callback] of current) (callback as () => void)(); });
+  };
+}
+
 function writes(method?: string) {
   return apiJsonMock.mock.calls.filter(([, , init]) =>
     ["POST", "PUT", "PATCH", "DELETE"].includes(init?.method ?? "") && (!method || init?.method === method));
@@ -183,14 +195,13 @@ describe("schedule management", () => {
   });
 
   it("preserves a draft when polling finds a new revision and can explicitly load the saved settings", async () => {
-    const intervals = spyOn(window, "setInterval");
+    const poll = observePolling();
     const view = detail();
     await openSchedules();
     await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
     draftTime("14:45");
     view.replace({ ...view.schedule, time: "11:15", revision: 2 });
-    const poll = intervals.mock.calls.find(([, delay]) => delay === 10000)![0] as () => void;
-    await act(async () => poll());
+    await poll(10000);
     await screen.findByText(/This schedule changed elsewhere/);
     expect((screen.getByLabelText("Time", { exact: true }) as HTMLInputElement).value).toBe("14:45");
     expect(save().disabled).toBe(true);
@@ -366,7 +377,7 @@ describe("schedule results and paused creation", () => {
   });
 
   it("refreshes a running historical result without treating it as a current server operation", async () => {
-    const intervals = spyOn(window, "setInterval");
+    const poll = observePolling();
     let operation: Operation = operationFixture(server.id, { kind: "restart", status: "running" });
     detail({ initial: scheduleFixture(server.id, { lastOperation: operation }), onRequest: (path) =>
       path === `/operations/${operation.id}` ? { operation } : undefined });
@@ -376,13 +387,12 @@ describe("schedule results and paused creation", () => {
     await within(region).findByText("Running");
     expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(false);
     operation = { ...operation, status: "succeeded", phase: "finished" };
-    const poll = intervals.mock.calls.find(([, delay]) => delay === 2000)![0] as () => void;
-    await act(async () => poll());
+    await poll(2000);
     await within(region).findByText("Succeeded");
   });
 
   it("hides a previously visible operation after access is denied and supports a fresh retry", async () => {
-    const intervals = spyOn(window, "setInterval");
+    const poll = observePolling();
     const operation = operationFixture(server.id, { kind: "restart", status: "succeeded" });
     let denied = false;
     detail({ initial: scheduleFixture(server.id, { lastOperation: operation }), onRequest: (path) => {
@@ -396,8 +406,7 @@ describe("schedule results and paused creation", () => {
     const region = await screen.findByRole("region", { name: "Operation details" });
     await within(region).findByText("Succeeded");
     denied = true;
-    const poll = intervals.mock.calls.filter(([, delay]) => delay === 10000).at(-1)![0] as () => void;
-    await act(async () => poll());
+    await poll(10000);
     await within(region).findByRole("alert");
     expect(within(region).queryByText("Succeeded")).toBeNull();
     denied = false;

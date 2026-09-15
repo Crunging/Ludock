@@ -79,7 +79,7 @@ describe("server resolution links", () => {
     await act(async () => { window.history.back(); });
     await screen.findByRole("tabpanel", { name: "Schedules" });
     expect((screen.getByRole("textbox", { name: "Time zone" }) as HTMLInputElement).value).toBe("Europe/London");
-    expect(document.activeElement?.id).toBe(`schedule-${schedule.id}`);
+    await waitFor(() => expect(document.activeElement?.id).toBe(`schedule-${schedule.id}`));
     await act(async () => { window.history.forward(); });
     await screen.findByRole("region", { name: "Operation details" });
     expect(window.location.search).toBe(operationSearch);

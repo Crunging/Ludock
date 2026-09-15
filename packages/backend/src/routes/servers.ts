@@ -1,10 +1,7 @@
 import { okResponseSchema, serverResponseSchema, serversResponseSchema, } from "@ludock/shared";
-import { AuthError } from "../auth.js";
-import { AuthorizationError } from "../authorization.js";
 import { writeAuditLog } from "../database.js";
 import { restartContainer, startContainer, stopContainer, } from "../docker.js";
-import { AppError } from "../errors.js";
-import { ServerBindingError } from "../identity.js";
+import { AppError, errorResponse } from "../errors.js";
 import { createLogger, errorMessage } from "../logger.js";
 import { setIntentionalStop, suppressMonitoring } from "../monitoring.js";
 import { getServerSnapshot, listServers } from "../servers.js";
@@ -17,9 +14,7 @@ interface DockerRouteError extends Error {
 }
 function sendDockerError(caught: unknown, fallbackMessage: string): Response {
   const error = caught as DockerRouteError;
-  if (error instanceof AppError || error instanceof AuthError || error instanceof AuthorizationError || error instanceof ServerBindingError) {
-    return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
-  }
+  if (error instanceof AppError) return errorResponse(error);
   if (error.statusCode === 304) {
     return respond(okResponseSchema, { ok: true });
   }

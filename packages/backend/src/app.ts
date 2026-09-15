@@ -1,15 +1,12 @@
-import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
-  AuthError, authenticateRequest, defaultSetupWindow, type SetupWindow,
+  authenticateRequest, defaultSetupWindow, type SetupWindow,
 } from "./auth.js";
-import { AuthorizationError } from "./authorization.js";
 import { checkDatabase } from "./database.js";
 import { developmentInstance, matchesDevelopmentInstance } from "./development-instance.js";
 import { checkDockerConnection } from "./docker.js";
-import { AppError } from "./errors.js";
-import { ServerBindingError } from "./identity.js";
+import { AppError, errorResponse } from "./errors.js";
 import { createLogger, errorMessage } from "./logger.js";
 import { isExternalHttpsRequest, isSameOriginRequest } from "./request-security.js";
 import { accessRoutes } from "./routes/access.js";
@@ -27,6 +24,7 @@ import { settingsRoutes } from "./routes/settings.js";
 import { statusRoutes } from "./routes/status.js";
 import { attentionRoutes } from "./routes/attention.js";
 import { getMaxUploadBytes } from "./upload-limit.js";
+import { staticFiles } from "./static-files.js";
 
 const logger = createLogger("api");
 const JSON_LIMIT = 64 * 1024;
@@ -104,8 +102,7 @@ async function jsonBody(request: Request): Promise<unknown> {
 function requestError(error: unknown, context: RequestContext, requestId: string): Response {
   if (error instanceof z.ZodError)
     return Response.json({ error: "Invalid request", code: "INVALID_REQUEST" }, { status: 400 });
-  if (error instanceof AppError || error instanceof AuthError || error instanceof AuthorizationError || error instanceof ServerBindingError)
-    return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
+  if (error instanceof AppError) return errorResponse(error);
   logger.error("Unhandled request error", {
     requestId, method: context.request.method, path: context.url.pathname,
     error: errorMessage(error),
@@ -212,28 +209,6 @@ function matchingRoute(pathname: string, patterns: string[]): {
   return null;
 }
 
-async function staticResponse(context: RequestContext, directory: string | false): Promise<Response> {
-  if (!["GET", "HEAD"].includes(context.request.method) || directory === false)
-    return new Response("Not found", { status: 404 });
-  const root = await realpath(directory);
-  let pathname: string;
-  try { pathname = decodeURIComponent(context.url.pathname); }
-  catch { return new Response("Not found", { status: 404 }); }
-  if (pathname.includes("\0") || pathname.split("/").some((part) => part.startsWith(".")))
-    return new Response("Not found", { status: 404 });
-  const requested = path.resolve(root, `.${pathname}`);
-  if (requested !== root && !requested.startsWith(`${root}${path.sep}`))
-    return new Response("Not found", { status: 404 });
-  const physical = await realpath(requested).catch(() => null);
-  if (physical && physical !== root && !physical.startsWith(`${root}${path.sep}`))
-    return new Response("Not found", { status: 404 });
-  if (physical && (await stat(physical)).isFile())
-    return new Response(Bun.file(physical), { headers: { "Cache-Control": "no-cache" } });
-  const index = await realpath(path.join(root, "index.html"));
-  if (!index.startsWith(`${root}${path.sep}`)) return new Response("Not found", { status: 404 });
-  return new Response(Bun.file(index), { headers: { "Cache-Control": "no-cache" } });
-}
-
 export function createApp(options: CreateAppOptions = {}): {
   routes: NativeRoutes;
   fetch: NativeHandler;
@@ -280,10 +255,12 @@ export function createApp(options: CreateAppOptions = {}): {
   }
   const frontendDist = options.frontendDist === undefined
     ? path.resolve(import.meta.dir, "../../frontend/dist") : options.frontendDist;
+  const serveStatic = frontendDist === false
+    ? () => new Response("Not found", { status: 404 }) : staticFiles(frontendDist);
   const fallback: ApiHandler = async (context) => {
     if (/^\/(api|ws)(\/|$)/i.test(context.url.pathname))
       return Response.json({ error: "API endpoint not found" }, { status: 404 });
-    return staticResponse(context, frontendDist);
+    return serveStatic(context.request);
   };
   const publicFallback = requestHandler(fallback, true);
   const apiFallback = requestHandler(fallback);

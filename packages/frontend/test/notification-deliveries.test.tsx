@@ -155,6 +155,7 @@ describe("notification delivery troubleshooting", () => {
     });
     renderDeliveries();
     await screen.findByText("Queued", { exact: true, selector: "strong" });
+    await waitFor(() => expect(poll).toBeDefined());
     await act(async () => { poll?.(); });
     const firstPoll = readSignal!;
     await act(async () => { poll?.(); });

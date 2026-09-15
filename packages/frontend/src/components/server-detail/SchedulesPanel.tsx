@@ -13,6 +13,8 @@ export interface ScheduleEdit {
 
 interface Props {
   schedules: Schedule[];
+  historyLoading?: boolean;
+  historyUnavailable?: boolean;
   selectedScheduleId?: string | null;
   snapshotReady?: boolean;
   draft: ScheduleInput;
@@ -80,7 +82,7 @@ export default function SchedulesPanel(props: Props) {
     const parsed = scheduleSchema.safeParse(schedule);
     return parsed.success ? nextScheduleRun({ ...parsed.data, enabled: true }, now, saved?.lastSlot) : null;
   }, [schedule, now, saved?.lastSlot]);
-  const missing = Boolean(editing && !saved);
+  const missing = Boolean(editing && !saved && props.snapshotReady !== false);
   const canSave = !busy && !blocked && !conflict && !missing && preview !== null && scheduleActions.includes(schedule.action);
   const showForm = editing || scheduleActions.length > 0;
 
@@ -109,7 +111,8 @@ export default function SchedulesPanel(props: Props) {
           </thead>
           <tbody>
             {schedules.length === 0 && (
-              <tr><td colSpan={6} className="muted">No schedules.</td></tr>
+              <tr><td colSpan={6} className="muted">{props.historyLoading ? "Loading schedules…"
+                : props.historyUnavailable ? "Schedule history is unavailable." : "No schedules."}</td></tr>
             )}
             {schedules.map((item) => (
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "bun:test";
 
+import { releaseNotes } from "../release-notes.mjs";
+
 const workflow = Bun.YAML.parse(await readFile(new URL("../../.github/workflows/release.yaml", import.meta.url), "utf8"));
 const versionScript = workflow.jobs.validate.steps.find((step) => step.id === "version").run;
 const rankScript = workflow.jobs.release.steps.find((step) => step.id === "rank").run;
@@ -251,4 +253,22 @@ describe("release PR publication state", () => {
       assert.equal(result.calls.length, expectedCalls);
     });
   }
+});
+
+
+describe("release notes", () => {
+  const current = "## [1.2.3](https://example.invalid/compare/v1.2.2...v1.2.3) (2026-09-14)\n\n### Bug Fixes\n\n* Preserve the reviewed entry.\n";
+  const older = "## 1.2.2 (2026-09-01)\n\n* Earlier change.\n";
+  it("uses only the selected release-please section, including the first release", () => {
+    assert.equal(releaseNotes(`# Changelog\n\n${current}\n${older}`, "v1.2.3"), current);
+    assert.equal(releaseNotes(`# Changelog\n\n${current}`, "v1.2.3"), current);
+    assert.equal(releaseNotes(current + older, "v1.2.2"), older);
+  });
+  it("fails before publication for missing, duplicate, or empty entries", () => {
+    for (const changelog of [older, current + current, "## 1.2.3\n\n" + older])
+      assert.throws(() => releaseNotes(changelog, "v1.2.3"));
+    assert.throws(() => releaseNotes(current, "v1.2.3-beta.1"));
+    const steps = workflow.jobs.release.steps;
+    assert.ok(steps.findIndex((step) => step.name === "Generate release notes") < steps.findIndex((step) => step.name === "Create release tag"));
+  });
 });

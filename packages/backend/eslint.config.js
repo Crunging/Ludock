@@ -21,6 +21,13 @@ export default defineConfig([
     },
   },
   {
+    // TypeScript checks these programs through checkJs. The TS ESLint parser
+    // does not model JSDoc casts on JSON/stream boundaries in JavaScript.
+    files: ["src/helpers/*.js"],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ["test/**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {

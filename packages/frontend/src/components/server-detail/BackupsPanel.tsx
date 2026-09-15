@@ -10,6 +10,8 @@ interface Props {
   serverName: string;
   path: string;
   backups: Backup[];
+  historyLoading?: boolean;
+  historyUnavailable?: boolean;
   latestBackup: Server["latestBackup"];
   preflight: BackupPreflight | null;
   checking: boolean;
@@ -54,6 +56,7 @@ export default function BackupsPanel(props: Props) {
     onDelete,
     onRestore,
   } = props;
+  const historyReady = !props.historyLoading && !props.historyUnavailable;
   const { backup: restoreBackup, confirmation: restoreConfirmation } = restore;
   return (
     <>
@@ -130,8 +133,9 @@ export default function BackupsPanel(props: Props) {
               {backups.length === 0 && (
                 <tr>
                   <td colSpan={4} className="muted">
-                    No backups yet. Configure backup settings if needed, then
-                    create a backup to save this server’s game data.
+                    {props.historyLoading ? "Loading backups…" : props.historyUnavailable
+                      ? "Backup history is unavailable."
+                      : "No backups yet. Configure backup settings if needed, then create a backup to save this server’s game data."}
                   </td>
                 </tr>
               )}
@@ -154,7 +158,7 @@ export default function BackupsPanel(props: Props) {
                       <button
                         className="secondary-btn secondary-btn--danger"
                         disabled={
-                          !canRestore ||
+                          !canRestore || !historyReady ||
                           busy ||
                           blocked ||
                           hasActiveOperation ||
@@ -168,7 +172,7 @@ export default function BackupsPanel(props: Props) {
                       </button>
                       <button
                         className="secondary-btn secondary-btn--danger"
-                        disabled={!canDelete || busy || hasActiveOperation}
+                        disabled={!canDelete || !historyReady || busy || hasActiveOperation}
                         onClick={() => {
                           if (
                             window.confirm(
@@ -233,7 +237,7 @@ export default function BackupsPanel(props: Props) {
             <button
               className="secondary-btn secondary-btn--danger"
               disabled={
-                busy || blocked || hasActiveOperation ||
+                busy || !historyReady || blocked || hasActiveOperation ||
                 restoreConfirmation !== serverName ||
                 !backups.some((item) =>
                   item.id === restoreBackup.id && item.state === "complete",

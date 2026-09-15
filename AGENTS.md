@@ -58,8 +58,8 @@ shared boundaries when working in parallel.
 ## Local development and fixtures
 
 - Use the latest stable Bun 1 release; `.bun-version` selects the major and
-  `package.json` declares the minimum. Follow [development setup](./docs/TESTING.md#development)
-  and use the runner's printed URLs and state path.
+  `package.json` declares the minimum. Run `bun install --frozen-lockfile`, then
+  `bun run dev`. Use the runner's printed URLs and state path.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for
   Docker integration work and run one backend per Docker host.
@@ -67,6 +67,13 @@ shared boundaries when working in parallel.
   only resources you created. Do not put real credentials in fixtures.
 - Stop your own instance with Ctrl+C or its captured PID. Do not kill by broad
   process-name matching or delete data to resolve locks.
+
+The runner binds to loopback and stores checkout state in `~/.local/state/ludock/dev`.
+Use `bun run dev --print-config` to inspect settings without starting services.
+Overrides: `LUDOCK_DEV_HOME`, `LUDOCK_DEV_PORT`, `LUDOCK_DEV_API_PORT` (`PORT` also
+works), and `LUDOCK_DB_PATH` (including `:memory:`). After a crash, inspect the PID
+in the printed state's `dev.lock` or `<database>.dev.lock` for an overridden path.
+Remove a stale lock only after its runner and backend have ended.
 
 ## Dependencies and pins
 
@@ -82,13 +89,22 @@ readable version tags/comments. Build and helper images must meet the Bun major
 and minimum version requirements; they may use different validated images when
 upstream packaging or security fixes require it. Prefer suitable official images
 over maintaining derivative images. Validate production runtime requirements;
-do not turn test-fixture conveniences into runtime dependencies. Follow the
-[dependency and image update procedure](./docs/TESTING.md#dependency-and-image-updates)
-for registry checks, migration review, pin verification, and validation.
+do not turn test-fixture conveniences into runtime dependencies.
 
 Do not preserve historical dependency restrictions without rechecking them.
 Keep TypeScript within the supported range of `typescript-eslint`; use Node LTS
 types compatible with Bun rather than automatically selecting the newest Node major.
+
+Use `bun outdated --recursive`, `bun update --recursive`, and `bun audit`; review
+upstream migration notes before major upgrades. Resolve Action tags to commits,
+peeling annotated tags with `^{}`. Inspect both runtime platforms with
+`docker buildx imagetools inspect`. `docker build --pull` validates pinned artifacts,
+not whether newer tags exist. Update the Compose fixture's expected Alpine digest
+with the build pin. The helper pin lives in `packages/backend/src/runtime-images.ts`;
+helpers execute Bun directly in distroless Linux without shell tools.
+Validate changed images with the platform checks below. PR and daily dependency
+security workflows scan application/helper images and audit the lockfile; fix
+findings in the affected artifact rather than disabling checks or ignoring advisories.
 
 ## Verification
 
@@ -101,8 +117,32 @@ types compatible with Bun rather than automatically selecting the newest Node ma
   checks after building for interaction changes. Build and check changed runtime
   images, validate both supported architectures when relevant, and check Compose
   edits with `docker compose config`.
-- Consult the affected [testing scenarios](./docs/TESTING.md) and report what ran
-  and any material gaps. CI and release validation cover the full platform matrix.
+- Report what ran and any material gaps. CI and release validation cover the
+  full platform matrix.
+
+Focused suites use `bun run --filter @ludock/backend test` or
+`bun run --filter @ludock/frontend test`. Browser checks use
+`bun run --filter @ludock/frontend test:e2e` after the frontend build; append a
+spec name or `--project=desktop` to narrow them. Install Chromium with
+`bun x --bun playwright install chromium` from `packages/frontend` if needed.
+`LUDOCK_E2E_PORT` overrides port 4179; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects
+an existing browser. Traces/reports are under `packages/frontend/test-results`
+and `playwright-report`. Release-workflow tests require Git, Bash, and `jq`.
+
+For runtime/Docker changes, build `ludock:test` and run the affected harnesses:
+`bun scripts/test-linux.mjs`, `test-compose.mjs`, `test-files.mjs`, and
+`test-backups.mjs` (all under `scripts/`). Pull the digest-pinned helper first.
+`LUDOCK_TEST_IMAGE` overrides the application image. Socket-enabled harnesses
+mount `/var/run/docker.sock`; Compose source paths must match absolute host paths.
+Harnesses create and clean up their fixtures. Validate both `linux/amd64` and
+`linux/arm64`, including startup with fresh SQLite storage, health/setup/static
+assets, bundled Bun/Docker/Compose versions, and relevant storage/recovery behavior.
+For recovery changes, interrupt multi-root replacement and verify actual bytes
+after rollback/cleanup. Record image/helper digests, fixtures, and outcomes;
+identify emulation. Docker Desktop, rootless Docker, custom sockets, proxies, and
+external managers need separate acceptance results. Protocol fixtures do not prove
+live-game console, graceful shutdown, or restored-world compatibility. Use mock
+Discord endpoints unless a live test webhook is explicitly authorized.
 
 ## Commits and work artifacts
 
@@ -124,19 +164,24 @@ when they are part of the delivered change.
 
 ## Documentation and repository map
 
-Update affected guidance; prefer existing sections. User docs should help
-complete tasks; architecture docs should explain durable decisions and constraints.
+Keep user procedures in Operations and development instructions here. Prefer
+existing sections; do not duplicate feature descriptions or executable assertions.
 
 - `packages/backend/src`: API, Docker access, identity, adapters, and operations.
 - `packages/frontend/src`: pages, components, and server-detail feature panels.
 - `packages/shared/src`: authoritative schemas, types, and shared helpers.
 - `packages/backend/test`, `packages/frontend/test`, `packages/frontend/e2e`, and
   `scripts/test`: backend, component, browser, and development-runner checks.
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md): current implementation boundaries.
-- [docs/TESTING.md](./docs/TESTING.md): development setup, check commands, and regression scenarios.
-- [docs/BRAND.md](./docs/BRAND.md): artwork sources and interface color conventions.
-- [README.md](./README.md), [docs/OPERATIONS.md](./docs/OPERATIONS.md), and
-  [docs/GAME-SERVERS.md](./docs/GAME-SERVERS.md): setup and user guidance.
+- [README.md](./README.md) and [docs/OPERATIONS.md](./docs/OPERATIONS.md): setup and user guidance.
+
+Shared schemas export source directly to Bun without a separate build/watcher.
+`routes/server-action.ts` owns direct request authorization, locks, and cleanup;
+`operations.ts`/`jobs.ts` own persisted work, with recovery in feature modules.
+File/backup storage and mount proofs configure isolated helper programs in
+`packages/backend/src/helpers/`; descriptor confinement requires Linux `/proc/self/fd`.
+Deliberately public errors extend `AppError`; arbitrary exceptions stay private.
+Frontend pages retain permissions and drafts; panels own independent reads and
+feedback. Preserve specialized freshness rules for live server and file controls.
 
 ## Interface style
 
@@ -147,6 +192,9 @@ Favor readable tables, compact actions, clear status, and obvious next steps.
 Distinguish dangerous actions from ordinary controls. Avoid promotional copy,
 ornamental gradients, decorative metrics, excessive cards, and redundant badges.
 
-Use the existing four-tile Ludock mark and shared accent tokens. Follow
-[docs/BRAND.md](./docs/BRAND.md) for artwork sources, favicon legibility, and
-the distinction between action and status colors.
+Use `LudockMark.tsx` and authored SVGs in `packages/frontend/public`; keep the
+four tiles flat and upright. Label the component only without adjacent application
+text. `ludock-mark.svg` is for 24px or larger; the solid favicon preserves the L
+at small sizes. `ludock-app.svg` supplies the 180px Apple touch icon.
+Use shared orange `--accent`, `--accent-hover`, and `--on-accent` tokens for controls;
+keep blue/green/yellow/red status colors distinct.

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { z } from "zod";
 import {
   backupSettingsSchema,
   type Backup,
@@ -62,16 +63,11 @@ interface BackupRow {
   created_at: number;
   state: "complete" | "failed";
 }
-interface RestoreJournal {
-  root: BackupRoot;
-  phase:
-    | "staging"
-    | "moving_old"
-    | "old_moved"
-    | "replaced"
-    | "rolling_back"
-    | "rolled_back";
-}
+const restoreJournalsSchema = z.array(z.object({
+  root: z.object({ id: z.string(), path: z.string() }),
+  phase: z.enum(["staging", "moving_old", "old_moved", "replaced", "rolling_back", "rolled_back"]),
+})).max(8);
+type RestoreJournal = z.infer<typeof restoreJournalsSchema>[number];
 const toBackup = (row: BackupRow): Backup => ({
   id: row.id,
   serverId: row.server_id,
@@ -674,7 +670,13 @@ export async function recoverBackup(job: JobContext): Promise<void> {
 }
 
 function journals(job: JobContext): RestoreJournal[] {
-  return (job.job.recovery.restoreRoots || []) as RestoreJournal[];
+  const value = job.job.recovery.restoreRoots;
+  const parsed = restoreJournalsSchema.safeParse(value === undefined ? [] : value);
+  if (!parsed.success ||
+      new Set(parsed.data.map(({ root }) => root.id)).size !== parsed.data.length ||
+      (!parsed.data.length && (job.job.recovery.dataSafe === false || job.job.recovery.restoreCommitted === true)))
+    throw failBackup("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.");
+  return parsed.data;
 }
 function stageName(job: JobContext): string {
   return `.ludock-restore-${job.job.id}`;
@@ -903,8 +905,14 @@ export async function recoverRestore(job: JobContext): Promise<void> {
   const context = await recoveryContext(job);
   if (!context) return;
   await withLocks([...context.lockKeys, "backups:storage"], async () => {
+    const roots = journals(job);
+    // Recovery must use exactly the roots of the revalidated binding. A corrupt
+    // journal must never select a helper path or permit an unsafe restart.
+    if (roots.length && (roots.length !== context.container.fileRoots.length ||
+        roots.some(({ root }) => !context.container.fileRoots.some((current) => current.id === root.id && current.path === root.path))))
+      throw failBackup("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.");
     await removeUnpublishedBackup(job);
-    if (journals(job).length) {
+    if (roots.length) {
       await assertDataOperationStopped(context, job);
       const helper = await createDataHelper(context, false, job.job.id);
       job.progress("recovering", { dataHelperId: helper.container.id });

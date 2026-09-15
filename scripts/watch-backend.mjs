@@ -76,7 +76,7 @@ export async function watchBackend(directory = repository, env = process.env) {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
-    for (const folder of ["packages/backend/src", "packages/shared/dist"]) {
+    for (const folder of ["packages/backend/src", "packages/shared/src"]) {
       const watcher = watch(path.join(directory, folder), { recursive: true }, changed);
       watcher.on("error", fail);
       watchers.push(watcher);

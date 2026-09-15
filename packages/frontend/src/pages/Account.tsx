@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { apiJson, jsonBody } from "../api";
+import { usePageRead } from "../hooks/usePageRead";
 
 import {
   type SessionSummary,
@@ -9,47 +10,19 @@ import {
   okResponseSchema,
 } from "@ludock/shared";
 
+const readSessions = (signal: AbortSignal) => apiJson("/account/sessions", sessionsResponseSchema, { signal });
+
 export default function Account() {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const { data, loading: sessionsLoading, error: sessionsError, refresh: loadSessions } = usePageRead(readSessions, "Failed to load sessions");
+  const sessions = data?.sessions ?? [];
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
-  const request = useRef<AbortController | null>(null);
   const mutation = useRef<AbortController | null>(null);
-
-  const loadSessions = useCallback(async () => {
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    setSessionsLoading(true);
-    setSessionsError(null);
-    setSessions([]);
-    try {
-      const body = await apiJson("/account/sessions", sessionsResponseSchema, { signal: controller.signal });
-      if (!controller.signal.aborted && request.current === controller) setSessions(body.sessions);
-    } catch (reason) {
-      if (!controller.signal.aborted && request.current === controller)
-        setSessionsError(reason instanceof Error ? reason.message : "Failed to load sessions");
-    } finally {
-      if (!controller.signal.aborted && request.current === controller) {
-        request.current = null;
-        setSessionsLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadSessions();
-    return () => {
-      request.current?.abort();
-      mutation.current?.abort();
-    };
-  }, [loadSessions]);
+  useEffect(() => () => mutation.current?.abort(), []);
 
   const changePassword = async (event: FormEvent) => {
     event.preventDefault();

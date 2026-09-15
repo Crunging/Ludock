@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Cookie } from "bun";
+import { AppError } from "./errors.js";
 import {
   SETUP_CODE_MAX_LENGTH,
   SETUP_CODE_MIN_LENGTH,
@@ -442,13 +443,13 @@ export function authenticateWsRequest(
   };
 }
 
-export class AuthError extends Error {
+export class AuthError extends AppError {
   constructor(
-    public readonly code: string,
-    public readonly statusCode: number,
+    code: string,
+    statusCode: number,
     message = code,
   ) {
-    super(message);
+    super(code, statusCode, message);
   }
 }
 

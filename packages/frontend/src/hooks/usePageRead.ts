@@ -1,50 +1,88 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+type Reader<T> = ((signal: AbortSignal) => Promise<T>) | null;
 interface PageRead<T> {
+  source: Reader<T>;
   data: T | null;
   loading: boolean;
   error: string | null;
 }
 
-/** A page read with no retained snapshot while loading or after failure.
- * Keep read stable; a new reader replaces the current request. */
-export function usePageRead<T>(read: (signal: AbortSignal) => Promise<T>, fallbackError: string) {
-  const [result, setResult] = useState<PageRead<T>>({ data: null, loading: true, error: null });
+/** A null reader disables the read. Changing readers hides old data immediately.
+ * Polling panels may retain their last snapshot while refreshing; errors clear it. */
+export function usePageRead<T>(
+  read: Reader<T>,
+  fallbackError: string,
+  { retainWhileRefreshing = false }: { retainWhileRefreshing?: boolean } = {},
+) {
+  const [result, setResult] = useState<PageRead<T>>({
+    source: read,
+    data: null,
+    loading: Boolean(read),
+    error: null,
+  });
   const request = useRef<AbortController | null>(null);
-  const active = useRef(false);
+  const activeReader = useRef<Reader<T>>(null);
 
-  const refresh = useCallback(async () => {
-    if (!active.current) return;
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    const ownsRequest = () => active.current && request.current === controller && !controller.signal.aborted;
-    setResult({ data: null, loading: true, error: null });
-    try {
-      const data = await read(controller.signal);
-      if (ownsRequest()) setResult({ data, loading: false, error: null });
-    } catch (reason) {
-      if (ownsRequest()) setResult({
-        data: null,
-        loading: false,
-        error: reason instanceof Error ? reason.message : fallbackError,
-      });
-    } finally {
-      // A grouped read may fail while another request is still pending.
-      controller.abort();
-      if (request.current === controller) request.current = null;
-    }
-  }, [read, fallbackError]);
+  const refresh = useCallback(
+    async (replacePending = true) => {
+      if (activeReader.current !== read || !read || (!replacePending && request.current))
+        return;
+      request.current?.abort();
+      const controller = new AbortController();
+      request.current = controller;
+      const ownsRequest = () =>
+        activeReader.current === read &&
+        request.current === controller &&
+        !controller.signal.aborted;
+      setResult((previous) => ({
+        source: read,
+        data:
+          retainWhileRefreshing && previous.source === read
+            ? previous.data
+            : null,
+        loading: true,
+        error: null,
+      }));
+      try {
+        const data = await read(controller.signal);
+        if (ownsRequest())
+          setResult({ source: read, data, loading: false, error: null });
+      } catch (reason) {
+        if (ownsRequest())
+          setResult({
+            source: read,
+            data: null,
+            loading: false,
+            error: reason instanceof Error ? reason.message : fallbackError,
+          });
+      } finally {
+        controller.abort();
+        if (request.current === controller) request.current = null;
+      }
+    },
+    [read, fallbackError, retainWhileRefreshing],
+  );
 
   useEffect(() => {
-    active.current = true;
-    void refresh();
+    activeReader.current = read;
+    if (read) void refresh();
+    else setResult({ source: null, data: null, loading: false, error: null });
     return () => {
-      active.current = false;
+      activeReader.current = null;
       request.current?.abort();
       request.current = null;
     };
-  }, [refresh]);
+  }, [read, refresh]);
 
-  return { ...result, refresh };
+  const current =
+    result.source === read
+      ? result
+      : { data: null, loading: Boolean(read), error: null };
+  return {
+    data: current.data,
+    loading: current.loading,
+    error: current.error,
+    refresh,
+  };
 }

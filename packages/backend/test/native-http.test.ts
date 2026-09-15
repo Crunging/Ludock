@@ -9,6 +9,7 @@ import {
   updateUserAccess, type SessionUser,
 } from "../src/database.js";
 import type { HttpServer } from "../src/routes/request.js";
+import { createMountProof } from "../src/mount-proof.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 let admin: SessionUser;
@@ -25,6 +26,24 @@ beforeEach(() => {
 afterEach(() => closeDatabase());
 
 describe("native HTTP request lifetimes", () => {
+  it("returns a safe conflict for an unverifiable data mount", async () => {
+    const app = createApp({ frontendDist: false, routes: {
+      "/api/v1/mount-proof": {
+        GET: async () => {
+          await createMountProof([{ Type: "volume", Source: "/invalid/volume", Destination: "/data", RW: true }]);
+          assert.fail("An invalid named volume cannot produce a proof");
+        },
+      },
+    } });
+    const response = await app.fetch(new Request("http://localhost/api/v1/mount-proof", {
+      headers: { Cookie: cookie },
+    }), { requestIP: () => null, timeout: () => {} });
+    assert.equal(response.status, 409);
+    const body = await response.json() as { code: string; error: string };
+    assert.equal(body.code, "UNVERIFIED_DATA_MOUNT");
+    assert.match(body.error, /data mount could not be verified/);
+    assert.doesNotMatch(body.error, /invalid\/volume/);
+  });
   it("serves public case and trailing-slash variants without redirects or broader method access", async () => {
     const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
     try {

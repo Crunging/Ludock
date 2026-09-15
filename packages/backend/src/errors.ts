@@ -1,3 +1,4 @@
+/** Only errors with deliberately public messages cross the API boundary. */
 export class AppError extends Error {
   constructor(
     public readonly code: string,
@@ -6,6 +7,9 @@ export class AppError extends Error {
   ) {
     super(message);
   }
+}
+export function errorResponse(error: AppError): Response {
+  return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
 }
 export function publicError(error: unknown): { error: string; code: string } {
   if (error instanceof AppError)

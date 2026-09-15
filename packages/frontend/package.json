@@ -9,7 +9,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "bun scripts/preview.ts",
-    "test": "bun test --isolate --preload ./test/setup.ts ./test && bun test ./scripts/test",
+    "test": "bun test --isolate --preload ./test/setup.ts ./test",
     "test:e2e": "tsc --project e2e/tsconfig.json && playwright test"
   },
   "dependencies": {

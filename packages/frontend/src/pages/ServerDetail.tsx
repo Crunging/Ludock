@@ -13,7 +13,6 @@ import {
   updateCapabilityResponseSchema,
   type AvailabilityPolicy,
   type AvailabilityState,
-  type Backup,
   type Operation,
   type Schedule,
   type ScheduleInput,
@@ -42,6 +41,7 @@ import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
 import { useBackupPreflight } from "../hooks/useBackupPreflight";
+import { usePageRead } from "../hooks/usePageRead";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
@@ -79,8 +79,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const admin = user?.role === "admin";
   const [server, setServer] = useState<Server | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
-  const [backups, setBackups] = useState<Backup[]>([]);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [capability, setCapability] = useState<UpdateCapability | null>(null);
   const [availability, setAvailability] = useState<AvailabilityPolicy>({
     enabled: false,
@@ -96,7 +94,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [snapshotReady, setSnapshotReady] = useState(false);
-  const [historyReady, setHistoryReady] = useState(false);
   const [discoveryUnavailable, setDiscoveryUnavailable] = useState(false);
   const [settingsState, setSettingsState] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -173,6 +170,20 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     { id: "availability", label: "Availability" },
   ];
   const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
+  const readBackups = useCallback((signal: AbortSignal) => apiJson(`${path}/backups`, backupsResponseSchema, { signal }), [path]);
+  const readSchedules = useCallback((signal: AbortSignal) => apiJson(`${path}/schedules`, schedulesResponseSchema, { signal }), [path]);
+  const backupHistory = usePageRead(
+    activeTab === "backups" && admin && can(user, server, "backups.read") ? readBackups : null,
+    "Unable to load backups.", { retainWhileRefreshing: true },
+  );
+  const scheduleHistory = usePageRead(
+    activeTab === "schedules" && canManageSchedules ? readSchedules : null,
+    "Unable to load schedules.", { retainWhileRefreshing: true },
+  );
+  const backups = backupHistory.data?.backups ?? [];
+  const schedules = scheduleHistory.data?.schedules ?? [];
+  const backupsReady = Boolean(backupHistory.data && !backupHistory.loading && !backupHistory.error);
+  const schedulesReady = Boolean(scheduleHistory.data && !scheduleHistory.loading && !scheduleHistory.error);
 
   useEffect(() => {
     if (server && requestedTab) rememberServerTab(serverId, activeTab);
@@ -185,20 +196,20 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const focusedSchedule = useRef<string | null>(null);
   useEffect(() => {
     if (!requestedSchedule) focusedSchedule.current = null;
-    if (!requestedSchedule || tab !== "schedules" || !historyReady || !can(user, server, "schedules.manage")) return;
+    if (!requestedSchedule || tab !== "schedules" || !schedulesReady || !can(user, server, "schedules.manage")) return;
     if (focusedSchedule.current === search) return;
     const row = document.getElementById(`schedule-${requestedSchedule}`);
     if (row) {
       row.focus();
       focusedSchedule.current = search;
     }
-  }, [requestedSchedule, tab, historyReady, server, user, search]);
+  }, [requestedSchedule, tab, schedulesReady, server, user, search]);
 
   useEffect(() => {
-    if (scheduleEdit || busy || !snapshotReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
+    if (scheduleEdit || busy || !snapshotReady || !schedulesReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
     document.getElementById(`schedule-edit-${scheduleFocusTarget.current}`)?.focus();
     scheduleFocusTarget.current = null;
-  }, [scheduleEdit, busy, snapshotReady, tab]);
+  }, [scheduleEdit, busy, snapshotReady, schedulesReady, tab]);
 
   useEffect(() => {
     if (tab !== "activity" || !activityFocusTarget.current) return;
@@ -226,7 +237,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const controller = new AbortController();
     refreshRequest.current = controller;
     setSnapshotReady(false);
-    setHistoryReady(false);
     const ownsRequest = () =>
       pageActive.current &&
       refreshRequest.current === controller &&
@@ -237,21 +247,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       if (!ownsRequest()) return;
       setServer(next);
       setDiscoveryUnavailable(unavailable);
-      const [activity, backupResponse, scheduleResponse] = await Promise.all([
-        apiJson(`${path}/operations`, operationsResponseSchema, init),
-        admin && can(user, next, "backups.read")
-          ? apiJson(`${path}/backups`, backupsResponseSchema, init)
-          : Promise.resolve({ backups: [] }),
-        can(user, next, "schedules.manage")
-          ? apiJson(`${path}/schedules`, schedulesResponseSchema, init)
-          : Promise.resolve({ schedules: [] }),
-      ]);
+      const activity = await apiJson(`${path}/operations`, operationsResponseSchema, init);
       if (!ownsRequest()) return;
       setOperations(activity.operations);
-      setBackups(backupResponse.backups);
-      setSchedules(scheduleResponse.schedules);
       setSnapshotReady(!unavailable);
-      setHistoryReady(true);
       setError(null);
     } catch (reason) {
       if (!ownsRequest()) return;
@@ -262,8 +261,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       ) {
         setServer(null);
         setOperations([]);
-        setBackups([]);
-        setSchedules([]);
       }
       setError(
         reason instanceof Error ? reason.message : "Unable to refresh server.",
@@ -274,7 +271,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         setLoading(false);
       }
     }
-  }, [admin, path, user]);
+  }, [path]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -338,13 +335,21 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     };
   }, [tab, canReadAvailability, settingsState, path]);
   const hasActiveOperation = Boolean(activeOperation);
+  const refreshBackups = backupHistory.refresh;
+  const refreshSchedules = scheduleHistory.refresh;
   useEffect(() => {
     const interval = window.setInterval(
-      () => { void refresh(false); },
+      () => {
+        void refresh(false);
+        if (!mutationPending.current) {
+          void refreshBackups(false);
+          void refreshSchedules(false);
+        }
+      },
       hasActiveOperation ? 2000 : 10000,
     );
     return () => window.clearInterval(interval);
-  }, [hasActiveOperation, refresh]);
+  }, [hasActiveOperation, refresh, refreshBackups, refreshSchedules]);
 
   async function perform(
     action: () => Promise<unknown>,
@@ -367,6 +372,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       if (!pageActive.current) return false;
       setNotice(success);
       await refresh(true, true);
+      void backupHistory.refresh();
+      void scheduleHistory.refresh();
       // The action succeeded even if reading its updated state failed.
       return pageActive.current;
     } catch (reason) {
@@ -383,6 +390,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   async function reconcileScheduleFailure(reason: unknown) {
     if (reason instanceof ApiRequestError && [403, 404, 409].includes(reason.status)) {
       await refresh(true, true);
+      await scheduleHistory.refresh();
     }
   }
 
@@ -396,7 +404,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const draft = scheduleEdit?.draft ?? schedule;
     const current = scheduleEdit ? schedules.find((item) => item.id === scheduleEdit.id) : undefined;
     if (
-      blocked || !can(user, server, "schedules.manage") ||
+      !schedulesReady || blocked || !can(user, server, "schedules.manage") ||
       !can(user, server, draft.action === "backup" ? "backups.create" : `server.${draft.action}`) ||
       !scheduleSchema.safeParse(draft).success ||
       (scheduleEdit && (!current || current.revision !== scheduleEdit.revision))
@@ -418,7 +426,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   async function toggleSchedule(item: Schedule) {
     const current = schedules.find((candidate) => candidate.id === item.id);
     if (
-      scheduleEdit || !can(user, server, "schedules.manage") || !current || current.revision !== item.revision ||
+      !schedulesReady || scheduleEdit || !can(user, server, "schedules.manage") || !current || current.revision !== item.revision ||
       (!item.enabled && (blocked || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`)))
     ) return;
     await perform(
@@ -513,7 +521,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   }
   async function requestRestore() {
     if (
-      !admin ||
+      !admin || !backupsReady ||
       !can(user, server, "backups.restore") ||
       blocked ||
       activeOperation ||
@@ -779,11 +787,16 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
           />
         )}
-        {activeTab === "backups" && (admin || canCreateBackup) && (
+        {activeTab === "backups" && (admin || canCreateBackup) && <>
+          {backupHistory.error && <div className="alert alert--error" role="alert">
+            <p>{backupHistory.error}</p><button className="secondary-btn" onClick={() => void backupHistory.refresh()}>Reload backups</button>
+          </div>}
           <BackupsPanel
             serverName={server.displayName}
             path={path}
             backups={backups}
+            historyLoading={backupHistory.loading}
+            historyUnavailable={Boolean(backupHistory.error)}
             latestBackup={server.latestBackup}
             preflight={backupReadiness.preflight}
             checking={backupReadiness.checking}
@@ -803,7 +816,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             onRestore={() => void requestRestore()}
             onDelete={(backup) => {
               if (
-                !can(user, server, "backups.delete") ||
+                !backupsReady || !can(user, server, "backups.delete") ||
                 activeOperation ||
                 !backups.some((item) => item.id === backup.id)
               ) return;
@@ -818,12 +831,17 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               );
             }}
           />
-        )}
-        {activeTab === "schedules" && canManageSchedules && (
+        </>}
+        {activeTab === "schedules" && canManageSchedules && <>
+          {scheduleHistory.error && <div className="alert alert--error" role="alert">
+            <p>{scheduleHistory.error}</p><button className="secondary-btn" onClick={() => void scheduleHistory.refresh()}>Reload schedules</button>
+          </div>}
           <SchedulesPanel
             schedules={schedules}
+            historyLoading={scheduleHistory.loading}
+            historyUnavailable={Boolean(scheduleHistory.error)}
             selectedScheduleId={requestedSchedule}
-            snapshotReady={historyReady}
+            snapshotReady={schedulesReady}
             draft={scheduleEdit?.draft ?? schedule}
             editing={scheduleEdit}
             conflict={Boolean(scheduleEdit && schedules.some((item) => item.id === scheduleEdit.id && item.revision !== scheduleEdit.revision))}
@@ -832,18 +850,18 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               else setSchedule(draft);
             }}
             scheduleActions={scheduleActions}
-            busy={busy || !snapshotReady}
+            busy={busy || !snapshotReady || !schedulesReady}
             saving={busy}
             blocked={blocked}
             onSave={() => void saveSchedule()}
             onEdit={(item) => {
-              if (busy || !snapshotReady || blocked || scheduleEdit || scheduleActions.length === 0) return;
+              if (busy || !snapshotReady || !schedulesReady || blocked || scheduleEdit || scheduleActions.length === 0) return;
               setScheduleEdit({ id: item.id, revision: item.revision, draft: scheduleInput(item) });
             }}
             onCancelEdit={cancelScheduleEdit}
             onResolveConflict={(useSaved) => {
               const latest = schedules.find((item) => item.id === scheduleEdit?.id);
-              if (!scheduleEdit || !latest || busy || !snapshotReady) return;
+              if (!scheduleEdit || !latest || busy || !snapshotReady || !schedulesReady) return;
               setScheduleEdit({
                 id: latest.id,
                 revision: latest.revision,
@@ -859,7 +877,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
             onDelete={(item) => {
               if (
-                !canManageSchedules ||
+                !schedulesReady || !canManageSchedules ||
                 !schedules.some((current) => current.id === item.id)
               ) return;
               void perform(
@@ -873,7 +891,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               );
             }}
           />
-        )}
+        </>}
         {((admin && activeTab === "update") || activeTab === "availability") &&
           activeSettingsState !== "ready" && (
             activeSettingsState === "loading" ? (
