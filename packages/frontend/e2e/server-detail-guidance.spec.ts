@@ -103,7 +103,7 @@ test("Settings explains automatic updates without a project registration form", 
   const heading = page.getByRole("heading", { name: "Compose updates", exact: true });
   await heading.scrollIntoViewIfNeeded();
   await expect(heading).toBeVisible();
-  await expect(page.getByText(/No project registration is needed/)).toBeVisible();
+  await expect(page.getByText(/discovers and validates source files from Docker/)).toBeVisible();
   await expect(page.getByLabel("Compose project name")).toHaveCount(0);
   expect(app.requests.some((request) => request.path === "/compose-projects")).toBe(false);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

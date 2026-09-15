@@ -10,6 +10,26 @@ function deferred<T>() {
 }
 
 describe("page reads", () => {
+  it("retains a polling snapshot only for the same enabled reader", async () => {
+    const pending = deferred<string>();
+    const read = mock<(signal: AbortSignal) => Promise<string>>()
+      .mockResolvedValueOnce("Saved snapshot").mockReturnValueOnce(pending.promise);
+    const view = renderHook(({ enabled }) => usePageRead(enabled ? read : null, "Read failed", { retainWhileRefreshing: true }), {
+      initialProps: { enabled: true },
+    });
+    await waitFor(() => expect(view.result.current.data).toBe("Saved snapshot"));
+    act(() => { void view.result.current.refresh(false); });
+    expect(view.result.current.data).toBe("Saved snapshot");
+    expect(view.result.current.loading).toBe(true);
+    await act(async () => { await view.result.current.refresh(false); });
+    expect(read).toHaveBeenCalledTimes(2);
+    view.rerender({ enabled: false });
+    expect(read.mock.calls[1][0].aborted).toBe(true);
+    expect(view.result.current.data).toBeNull();
+    await act(async () => { pending.resolve("Obsolete snapshot"); });
+    expect(view.result.current.data).toBeNull();
+    expect(view.result.current.loading).toBe(false);
+  });
   it.each(["success", "failure"] as const)("ignores a superseded read's late %s", async (outcome) => {
     const obsolete = deferred<string>();
     const read = mock<(signal: AbortSignal) => Promise<string>>()
@@ -61,7 +81,11 @@ describe("page reads", () => {
     const view = renderHook(({ read }) => usePageRead(read, "Read failed"), {
       initialProps: { read: firstRead },
     });
+    const retiredRefresh = view.result.current.refresh;
     view.rerender({ read: secondRead });
+    await act(async () => { await retiredRefresh(); });
+    expect(firstRead).toHaveBeenCalledTimes(1);
+    expect(secondRead.mock.calls[0][0].aborted).toBe(false);
     expect(firstRead.mock.calls[0][0].aborted).toBe(true);
     await act(async () => { first.resolve("Previous page result"); });
     expect(view.result.current.data).toBeNull();

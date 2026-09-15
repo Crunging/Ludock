@@ -66,6 +66,28 @@ function detail(role: AuthUser["role"] = "admin", options: DetailOptions = {}) {
   );
 }
 
+describe("independent server panels", () => {
+  for (const panel of ["backups", "schedules"] as const) {
+    it(`loads ${panel} on demand and keeps lifecycle controls after its read fails`, async () => {
+      detail("admin", {
+        operations: [],
+        onRequest: (path) => {
+          if (path.endsWith(`/${panel}`)) throw new originalApi.ApiRequestError(`${panel} unavailable`, 403);
+        },
+      });
+      const stop = await screen.findByRole("button", { name: "Stop", exact: true });
+      await waitFor(() => expect((stop as HTMLButtonElement).disabled).toBe(false));
+      expect(apiJsonMock.mock.calls.some(([path]) => path.endsWith(`/${panel}`))).toBe(false);
+      await userEvent.click(screen.getByRole("tab", { name: panel === "backups" ? "Backups" : "Schedules" }));
+      await screen.findByText(`${panel} unavailable`);
+      expect(screen.getByRole("heading", { name: server.displayName })).not.toBeNull();
+      expect((stop as HTMLButtonElement).disabled).toBe(false);
+      await userEvent.click(stop);
+      expect(await screen.findByRole("dialog")).not.toBeNull();
+    });
+  }
+});
+
 describe("update confirmation", () => {
   it("same-image recreation requires fresh confirmation and preserves the backup choice", async () => {
     detail();
