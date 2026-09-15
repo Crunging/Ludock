@@ -174,6 +174,12 @@ releases. Merge dependency/pin updates before the generated release PR. A root
 package version change on `main` triggers stable publication; other code pushes
 publish nightly. Preserve already published versions and tags.
 
+Release Please uses `GITHUB_TOKEN`, so its PR updates leave CI awaiting
+approval. After the preparation changes merge and the release PR refreshes,
+review the generated diff, approve its latest workflow run, and wait for all
+checks before merging the release PR. Earlier checks do not validate the
+refreshed release commit.
+
 Keep private notes, temporary plans, and scratch outside the repo; do not add
 gitignore entries for them. Commit reusable scripts, fixtures, and design docs
 when they are part of the delivered change.
