@@ -110,7 +110,7 @@ export function hasInvalidComposeIdentity(
       (value) =>
         value.length > 0 &&
         value.length <= 512 &&
-        // eslint-disable-next-line no-control-regex
+        // oxlint-disable-next-line no-control-regex
         !/[\u0000-\u001f\u007f]/.test(value),
     ) || !/^[1-9][0-9]*$/.test(compose.containerNumber)
   );

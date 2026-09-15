@@ -809,7 +809,7 @@ function validateName(name: string): void {
     name.trim() !== name ||
     // Rejecting control characters is the point of this check: they are
     // illegal in paths and can forge terminal output in logs.
-    // eslint-disable-next-line no-control-regex
+    // oxlint-disable-next-line no-control-regex
     /[\x00-\x1f\x7f]/.test(name)
   ) {
     throw new FileStorageError("INVALID_NAME", 400);

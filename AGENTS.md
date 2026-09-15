@@ -92,10 +92,10 @@ over maintaining derivative images. Validate production runtime requirements;
 do not turn test-fixture conveniences into runtime dependencies.
 
 Do not preserve historical dependency restrictions without rechecking them.
-Use TypeScript 7's native `tsc` for type checks. The `@typescript/native` alias
-selects that compiler; the `typescript` alias uses Microsoft's TypeScript 6
-compatibility package for `typescript-eslint` until it supports the native API.
-Keep the linter's TypeScript API within its supported range. Use Node LTS types
+Use TypeScript 7's native `tsc` for type checks and Oxlint for linting. Backend
+type-aware rules use `oxlint-tsgolint`; keep its TypeScript version aligned with
+the compiler. Share language rules in `oxlint.base.json`, with backend and React
+rules in each package's `.oxlintrc.json`. Use Node LTS types
 compatible with Bun rather than automatically selecting the newest Node major.
 
 Use `bun outdated --recursive`, `bun update --recursive`, and `bun audit`; review
