@@ -18,6 +18,14 @@ paths inside Ludock. Recreate the service after changing environment or mounts:
 docker compose up -d --force-recreate ludock
 ```
 
+For a custom or rootless Docker socket, set `LUDOCK_DOCKER_SOCKET` to its
+**host** path in `.env`; the example mounts it at `/var/run/docker.sock` inside
+Ludock. Leave `DOCKER_SOCKET` at its default unless you also change the mount
+target. A missing host socket fails at startup instead of creating a directory.
+[Rootless Docker](https://docs.docker.com/engine/security/rootless/tips/)
+typically uses `/run/user/<uid>/docker.sock`. Run Compose on the game servers’
+Docker host, using the same Docker context as those containers.
+
 Docker socket access grants host-level power even with a read-only mount.
 Use HTTPS for remote access; the proxy must preserve the public host, forward
 the external protocol, and support WebSocket upgrades. API requests and
@@ -144,8 +152,12 @@ Custom images must meet the requirements in [`.env.example`](../.env.example).
 
 ## Configure backups
 
-With the example deployment, open **Settings → Backup storage**, choose
-**Use /backups**, set retention/capacity limits, and save. For another disk,
+With the example deployment, open **Settings → Backup storage**. The single
+configured root, `/backups`, is suggested automatically; review the defaults
+(10 backups per server, 100 GiB combined limit, 5 GiB minimum free space) and
+save to enable backups. Adjust these for your disk and world sizes. If multiple
+roots are configured, choose one explicitly. Selecting a path never enables
+backups until you save. For another disk,
 replace the existing `/backups` volume mount with a host directory:
 
 ```yaml
@@ -262,14 +274,27 @@ activity** for the actual operation outcome. Limits are 100 schedules per server
 and 1,000 per installation, including paused schedules. Invalid configurations are
 suspended; logs identify affected schedules.
 
+New schedules start with the browser’s time zone. Search the time-zone field
+by city or choose **Use my time zone**; the next-run preview shows the selected
+zone. **Every day**, **Weekdays**, and **Weekends** select days together, and
+individual days remain editable. Review the action’s effect, then **Add schedule**
+or **Save changes**. **Create paused** saves a schedule without enabling runs.
+
 Availability monitoring is disabled by default. An administrator can enable it per
 server for a 24/7 expectation, with a default two-minute failure grace period.
 It checks Docker health or running state, not player connectivity. Maintenance and
 Ludock operations suppress alerts; intentionally stopped servers stay suppressed
 until observed running again. Docker outages report unknown availability.
+The grace period is the wait before reporting an outage; 120 seconds means two
+minutes. **Maintenance mode** pauses monitoring until you turn it off and save;
+it does not stop the server or pause its schedules.
 
-Administrators configure Discord in Settings. The webhook is write-only; blank
-replacement input preserves it. Save an enabled configuration, then **Send test
+Administrators configure Discord in Settings. In Discord’s **Server Settings →
+Integrations**, create a webhook for the channel that should receive alerts and
+copy its URL. Paste it in Ludock, enable delivery, and save. The
+[Discord webhook guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
+shows the Discord steps. Ludock never displays the saved URL; blank replacement
+input preserves it. Choose **Send test
 notification**. The queue checks every 15 seconds and persists across restarts.
 Events cover outages/recoveries, backup/schedule failures, and restore/update results.
 

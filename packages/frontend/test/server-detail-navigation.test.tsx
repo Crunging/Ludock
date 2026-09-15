@@ -74,7 +74,7 @@ describe("server detail navigation", () => {
     view.leaveDetail();
     view.returnToDetail();
     await userEvent.click(await screen.findByRole("tab", { name: "Schedules" }));
-    const timezone = screen.getByRole("textbox", { name: "Time zone" });
+    const timezone = screen.getByRole("combobox", { name: "Time zone" });
     await userEvent.clear(timezone);
     await userEvent.type(timezone, "Europe/London");
     const requestsBeforeCompletion = apiJsonMock.mock.calls.length;
@@ -88,14 +88,14 @@ describe("server detail navigation", () => {
   it("preserves a schedule draft when switching management panels", async () => {
     detail();
     await userEvent.click(await screen.findByRole("tab", { name: "Schedules" }));
-    const timezone = screen.getByRole("textbox", { name: "Time zone" });
+    const timezone = screen.getByRole("combobox", { name: "Time zone" });
     await userEvent.clear(timezone);
     await userEvent.type(timezone, "Europe/London");
 
     await userEvent.click(screen.getByRole("tab", { name: "Availability" }));
     await userEvent.click(screen.getByRole("tab", { name: "Schedules" }));
     expect(
-      (screen.getByRole("textbox", { name: "Time zone" }) as HTMLInputElement).value,
+      (screen.getByRole("combobox", { name: "Time zone" }) as HTMLInputElement).value,
     ).toBe("Europe/London");
     expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
   });

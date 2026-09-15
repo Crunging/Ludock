@@ -17,7 +17,7 @@ function panel(overrides: Partial<Parameters<typeof AvailabilityPanel>[0]> = {})
   return <NavigationContext.Provider value={{ pathname: "/servers/test", navigate: mock() }}><AvailabilityPanel
     policy={policy}
     state={state}
-    value={policy}
+    value={{ ...policy, graceSeconds: String(policy.graceSeconds) }}
     admin={false}
     busy={false}
     onChange={mock()}
@@ -51,7 +51,7 @@ describe("availability status", () => {
     render(panel({
       admin: true,
       busy: true,
-      value: { ...policy, enabled: false, maintenance: true },
+      value: { ...policy, graceSeconds: "120", enabled: false, maintenance: true },
       state: { ...state, outageStartedAt: Date.now() - 180_000 },
     }));
     expect(screen.getByRole("status").textContent).toBe("Availability problem detected.");

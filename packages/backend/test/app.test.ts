@@ -876,7 +876,7 @@ describe("HTTP application", () => {
         backupRoots: [], composeRoots: [], composeAvailable: false,
       });
 
-      process.env.LUDOCK_BACKUP_ROOTS = ["/backups", "/archive", "/backups"].join(path.delimiter);
+      process.env.LUDOCK_BACKUP_ROOTS = [" /backups ", "/archive", "/backups", " "].join(path.delimiter);
       process.env.LUDOCK_COMPOSE_ROOTS = ["/srv/games", "/srv/games"].join(path.delimiter);
       composeAvailability.mockResolvedValue(true);
       const response = await authorizedFetch("/api/v1/settings/deployment");

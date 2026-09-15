@@ -25,6 +25,14 @@
   min-height: 44px;
 }
 
+.login-card__commands {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 @media (max-width: 600px) {
   .login-page {
     padding: 20px 16px;

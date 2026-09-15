@@ -1,3 +1,20 @@
+.settings-jump-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-bottom: 16px;
+}
+
+.settings-jump-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.settings-page .settings-section > h2 {
+  scroll-margin-top: 24px;
+}
+
 .admin-form-help {
   display: grid;
   gap: 8px;
@@ -129,6 +146,12 @@
   overflow-wrap: anywhere;
 }
 
+@media (max-width: 768px) {
+  .settings-page .settings-section > h2 {
+    scroll-margin-top: 124px;
+  }
+}
+
 @media (max-width: 700px) {
   .grants-editor .grants-presets button {
     min-height: 44px;
@@ -173,4 +196,11 @@
   .notification-deliveries button {
     min-height: 44px;
   }
+}
+
+.notification-deliveries-table td[colspan] {
+  grid-column: 1 / -1;
+  width: auto;
+  white-space: normal;
+  padding-left: 0;
 }

@@ -60,8 +60,12 @@ export default function Login() {
             Setup window expired
           </h1>
           <p className="login-card__description">
-            Restart the Ludock container, then return here within five
-            minutes to create the administrator account.
+            On the Docker host, run these commands from Ludock’s Compose folder:
+          </p>
+          <pre className="login-card__commands"><code>{"docker compose restart ludock\ndocker compose logs --tail 50 ludock"}</code></pre>
+          <p className="login-card__description">
+            Copy the new setup code, choose Check again, and finish within five
+            minutes. If you configured LUDOCK_SETUP_CODE, use that code instead.
           </p>
           <button
             className="login-card__submit"
@@ -107,6 +111,8 @@ export default function Login() {
               value={bootstrapCode}
               onChange={(event) => setBootstrapCode(event.target.value)}
               autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
               minLength={SETUP_CODE_MIN_LENGTH}
               maxLength={SETUP_CODE_MAX_LENGTH}
               aria-describedby="bootstrap-code-hint"
@@ -115,6 +121,7 @@ export default function Login() {
             />
             <p className="login-card__hint" id="bootstrap-code-hint">
               Use the most recent one-time code from <code>docker compose logs ludock</code> on the Docker host.
+              If you set <code>LUDOCK_SETUP_CODE</code> in <code>.env</code>, enter that value instead; it is not printed.
             </p>
           </>
         )}

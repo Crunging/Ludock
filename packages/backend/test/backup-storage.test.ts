@@ -35,6 +35,7 @@ import {
 import { getDockerInstance } from "../src/docker.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 import type { ServerContext } from "../src/servers.js";
+import { AppError } from "../src/errors.js";
 
 const roots = [{ id: "root-0", path: "/data" }];
 let directory: string;
@@ -77,6 +78,29 @@ async function archive(
 }
 
 describe("backup storage boundaries", () => {
+  it("accepts whitespace around configured roots and still confines the destination", async () => {
+    process.env.LUDOCK_BACKUP_ROOTS = `  ${directory}  ${path.delimiter} `;
+    assert.equal(await approvedBackupDirectory(directory), directory);
+    await assert.rejects(approvedBackupDirectory(path.dirname(directory)), /inside/);
+  });
+
+  it("explains missing roots and folders without exposing filesystem errors or creating directories", async () => {
+    for (const missingRoot of [false, true]) {
+      const missing = path.join(directory, "missing-private-fixture");
+      process.env.LUDOCK_BACKUP_ROOTS = missingRoot ? missing : directory;
+      await assert.rejects(approvedBackupDirectory(missingRoot ? directory : missing), (error) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "BACKUP_DESTINATION");
+        assert.match(error.message, /Create the folder and check its mount and permissions/);
+        assert.doesNotMatch(error.message, /ENOENT|missing-private-fixture/);
+        return true;
+      });
+      assert.deepEqual(await readdir(directory), []);
+    }
+    process.env.LUDOCK_BACKUP_ROOTS = "   ";
+    await assert.rejects(approvedBackupDirectory(directory), /Set LUDOCK_BACKUP_ROOTS/);
+  });
+
   it.skipIf(process.platform !== "linux")("measures free space through an approved destination without creating files", async () => {
     const available = await availableBackupDestinationBytes(directory);
     assert.equal(Number.isSafeInteger(available), true);

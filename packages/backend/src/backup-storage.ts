@@ -46,6 +46,14 @@ export async function validateBackupSettings(
 ): Promise<BackupSettings> {
   const settings = backupSettingsSchema.parse(value);
   const directory = await approvedBackupDirectory(settings.destination);
+  try {
+    await access(directory, constants.W_OK | constants.X_OK);
+  } catch {
+    throw failBackup(
+      "BACKUP_DESTINATION",
+      "Ludock cannot write to the backup folder. Check its mount and directory permissions, then save again.",
+    );
+  }
   const selfId = process.env.LUDOCK_SELF_CONTAINER || process.env.HOSTNAME;
   if (!selfId || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(selfId))
     throw failBackup(
@@ -81,6 +89,18 @@ export async function validateBackupSettings(
 export async function approvedBackupDirectory(
   directory: string,
 ): Promise<string> {
+  try {
+    return await resolveBackupDirectory(directory);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw failBackup(
+      "BACKUP_DESTINATION",
+      "The backup folder or an approved backup root is missing or unreadable. Create the folder and check its mount and permissions, then try again.",
+    );
+  }
+}
+
+async function resolveBackupDirectory(directory: string): Promise<string> {
   if (!path.isAbsolute(directory) || directory.includes("\0"))
     throw failBackup(
       "BACKUP_DESTINATION",
@@ -88,7 +108,13 @@ export async function approvedBackupDirectory(
     );
   const configured = (process.env.LUDOCK_BACKUP_ROOTS || "")
     .split(path.delimiter)
+    .map((root) => root.trim())
     .filter(Boolean);
+  if (configured.length === 0)
+    throw failBackup(
+      "BACKUP_DESTINATION",
+      "No backup roots are configured. Set LUDOCK_BACKUP_ROOTS to a mounted backup folder and recreate Ludock, then save again.",
+    );
   const roots: string[] = [];
   for (const value of configured) {
     if (

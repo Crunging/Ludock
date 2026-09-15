@@ -17,7 +17,7 @@ export default function NotificationSettingsSection() {
       className="settings-section settings-section--divided"
       aria-labelledby="notification-settings-title"
     >
-      <h2 id="notification-settings-title">Discord notifications</h2>
+      <h2 id="notification-settings-title" tabIndex={-1}>Discord notifications</h2>
       {page.loading && (
         <p className="muted" role="status">
           Loading notification settings…
@@ -103,8 +103,16 @@ function NotificationSettingsForm({
         <p>
           Receive outage and recovery alerts, backup or schedule failures, and
           restore and update results. Enable availability monitoring separately
-          for each server.
+          in each server’s Availability tab for outage alerts.
         </p>
+        {!notificationConfigured && (
+          <p className="muted" id="discord-webhook-setup">
+            In Discord, open your server’s Settings → Integrations, create a webhook,
+            choose the channel, and copy its URL here. Enable delivery and save,
+            then send a test notification below.{" "}
+            <a className="text-link" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord webhook guide</a>
+          </p>
+        )}
         <label className="check-label">
           <input
             type="checkbox"
@@ -120,6 +128,11 @@ function NotificationSettingsForm({
             value={webhookUrl}
             onChange={(event) => setWebhookUrl(event.target.value)}
             autoComplete="new-password"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={1024}
+            required={notificationEnabled && !notificationConfigured}
+            aria-describedby={notificationConfigured ? "discord-webhook-help" : "discord-webhook-setup discord-webhook-help"}
             placeholder={
               notificationConfigured
                 ? "Saved — leave blank to keep existing URL"
@@ -127,8 +140,9 @@ function NotificationSettingsForm({
             }
           />
         </label>
-        <p className="muted">
-          The saved webhook is write-only. It is never returned to the browser.
+        <p className="muted" id="discord-webhook-help">
+          Ludock keeps the saved URL private. Leave the replacement field blank to
+          keep it. Turning delivery off pauses notifications without deleting the URL.
         </p>
         {error && (
           <div className="alert alert--error" role="alert">
@@ -142,12 +156,7 @@ function NotificationSettingsForm({
         )}
         <button
           className="primary-btn"
-          disabled={
-            busy ||
-            (notificationEnabled &&
-              !notificationConfigured &&
-              !webhookUrl.trim())
-          }
+          disabled={busy}
         >
           Save notifications
         </button>
