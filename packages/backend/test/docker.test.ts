@@ -454,8 +454,7 @@ describe("managed container image inference", () => {
 
 describe("container identifier validation", () => {
   // URL decoding can turn %2f into "/", so an identifier can carry "../" and escape
-  // /containers/<id>/json. The daemon 301s to the cleaned path and docker-modem
-  // re-issues it over the network with a hostname taken from the identifier.
+  // /containers/<id>/json. Reject these before constructing any daemon request.
   const hostile = [
     "../../info",
     "..//attacker.example",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, it, spyOn } from "bun:test";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import { serve, type Socket, type SocketHandler } from "bun";
 import {
   executeGameCommand,
@@ -526,7 +526,6 @@ describe("Container stdin transport", () => {
       stdin: true,
       stdout: false,
       stderr: false,
-      hijack: true,
     });
     assert.equal(received, "help\n");
     assert.equal(stream.destroyed, true);

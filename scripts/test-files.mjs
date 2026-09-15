@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Explicit Docker acceptance. Build ludock:test first; all game data uses
+// Explicit Docker client and file acceptance. Build ludock:test first; all game data uses
 // disposable named volumes and the harness never discovers unrelated servers.
 import { realpath } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +18,7 @@ try {
       "-v", repository + "/packages/backend/test:/app/packages/backend/test:ro",
       process.env.LUDOCK_TEST_IMAGE || "ludock:test",
       "bun", "test", "--isolate",
+      "./packages/backend/test/docker-client.integration.ts",
       "./packages/backend/test/docker-storage.integration.ts",
     ],
     { stdin: "inherit", stdout: "inherit", stderr: "inherit" },

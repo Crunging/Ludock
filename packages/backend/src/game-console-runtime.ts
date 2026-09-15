@@ -1,7 +1,7 @@
-import { PassThrough } from "node:stream";
+import { demuxDockerStream } from "./docker-stream.js";
+import { PassThrough, type Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import type Docker from "dockerode";
-import { getDockerInstance } from "./docker.js";
+import type * as Docker from "./docker-client.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
   LABEL_CONSOLE_PORT,
@@ -608,7 +608,7 @@ async function executeInContainer(
   if (signal?.aborted) throw new Error("Console command cancelled");
   // Starting is a mutation: an HTTP timeout cannot prove Docker rejected it.
   // Keep the caller's lock until the outcome and subsequent cleanup are known.
-  const stream = await exec.start({ hijack: true, stdin: false });
+  const stream = await exec.start();
   let cancellationRequested = false;
   let cancelled = false;
   let outputLimited = false;
@@ -732,7 +732,7 @@ async function cancelDockerExec(
     Tty: false,
     ...(user ? { User: user } : {}),
   });
-  const stream = await cancellation.start({ hijack: true, stdin: false });
+  const stream = await cancellation.start();
   (stream as NodeJS.ReadableStream & { resume?: () => void }).resume?.();
 }
 
@@ -777,7 +777,6 @@ async function writeContainerStdin(
     stdin: true,
     stdout: false,
     stderr: false,
-    hijack: true,
   });
   try {
     assertAccess?.();
@@ -801,7 +800,7 @@ async function writeAttachedInput(
 }
 
 async function streamExecOutput(
-  stream: NodeJS.ReadWriteStream,
+  stream: Readable,
   output: GameCommandOutput,
   onLimit: () => void,
 ): Promise<void> {
@@ -827,12 +826,7 @@ async function streamExecOutput(
   stdout.on("data", (chunk: Buffer) => receive("stdout", chunk));
   stderr.on("data", (chunk: Buffer) => receive("stderr", chunk));
   try {
-    await new Promise<void>((resolve, reject) => {
-      stream.once("end", resolve);
-      stream.once("close", resolve);
-      stream.once("error", reject);
-      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-    });
+    await demuxDockerStream(stream, stdout, stderr);
     if (!limited) {
       const finalStdout = decoders.stdout.end();
       const finalStderr = decoders.stderr.end();

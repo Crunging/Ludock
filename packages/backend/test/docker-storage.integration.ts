@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { describe, it } from "bun:test";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import { getDockerInstance, getManagedContainerObservation } from "../src/docker.js";
 import {
   createDirectory,

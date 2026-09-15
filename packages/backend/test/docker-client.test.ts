@@ -1,0 +1,369 @@
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { rm } from "node:fs/promises";
+import { once } from "node:events";
+import { createServer, type Socket } from "node:net";
+import { PassThrough, Readable, Writable } from "node:stream";
+import { DockerClient } from "../src/docker-client.js";
+import { DockerTransport } from "../src/docker-transport.js";
+import { demuxDockerStream } from "../src/docker-stream.js";
+
+const cleanup: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
+  mock.restore();
+  for (const close of cleanup.splice(0).reverse()) await close();
+});
+
+function socketPath(): string {
+  const path = `/tmp/ludock-docker-${crypto.randomUUID()}.sock`;
+  cleanup.push(() => rm(path, { force: true }));
+  return path;
+}
+
+function httpFixture(handler: (request: Request) => Response | Promise<Response>) {
+  const path = socketPath();
+  const server = Bun.serve({ unix: path, idleTimeout: 0, fetch: handler });
+  cleanup.push(() => server.stop(true));
+  return new DockerClient({ socketPath: path });
+}
+
+const version = () => Response.json({ ApiVersion: "1.55", MinAPIVersion: "1.40" });
+const isVersion = (request: Request) => new URL(request.url).pathname === "/version";
+function frame(channel: number, value: string | Buffer): Buffer {
+  const payload = Buffer.from(value);
+  const header = Buffer.alloc(8);
+  header[0] = channel;
+  header.writeUInt32BE(payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
+
+describe("Bun Docker HTTP client", () => {
+  it("keeps daemon commands on the Unix socket when proxy environment variables are set", async () => {
+    const keys = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"];
+    const previous = keys.map((key) => process.env[key]);
+    let proxied = false;
+    const proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { proxied = true; return new Response(null, { status: 502 }); } });
+    const client = httpFixture((request) => isVersion(request) ? version() : new Response(null, { status: 204 }));
+    try {
+      for (const key of keys) process.env[key] = key.toLowerCase() === "no_proxy" ? "" : proxy.url.href;
+      await client.getContainer("fixture").start();
+      expect(proxied).toBe(false);
+    } finally {
+      keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+      await proxy.stop(true);
+    }
+  });
+
+  it("shares negotiation, encodes filters and image references, and uses the configured socket", async () => {
+    const requests: Array<{ path: string; method: string; body: string }> = [];
+    const client = httpFixture(async (request) => {
+      const url = new URL(request.url);
+      requests.push({ path: url.pathname + url.search, method: request.method, body: await request.text() });
+      if (isVersion(request)) { await Bun.sleep(5); return version(); }
+      if (url.pathname.endsWith("/containers/json")) return Response.json([]);
+      return Response.json({ Id: "sha256:fixture" });
+    });
+    const filters = { label: ["ludock.operation=a&b", "com.docker.compose.project=one"] };
+    await Promise.all([client.listContainers({ all: true, filters }), client.listContainers({ all: false })]);
+    expect(requests.filter((request) => request.path === "/version")).toHaveLength(1);
+    const list = new URL(requests[1].path, "http://localhost");
+    expect(list.pathname).toBe("/v1.55/containers/json");
+    expect(list.searchParams.get("all")).toBe("true");
+    expect(JSON.parse(list.searchParams.get("filters")!)).toEqual(filters);
+    const image = "registry.example:5000/games/server@sha256:" + "a".repeat(64);
+    expect(await client.getImage(image).inspect()).toEqual({ Id: "sha256:fixture" });
+    expect(requests.at(-1)?.path).toBe(`/v1.55/images/${encodeURIComponent(image)}/json`);
+  });
+
+  it("uses Engine endpoint methods and bodies for lifecycle, helpers, stats, and volumes", async () => {
+    const requests: Array<{ path: string; method: string; body: unknown }> = [];
+    const client = httpFixture(async (request) => {
+      if (isVersion(request)) return version();
+      const url = new URL(request.url), body = await request.text();
+      requests.push({ path: url.pathname + url.search, method: request.method, body: body ? JSON.parse(body) : null });
+      if (url.pathname === "/_ping") return new Response("OK");
+      if (url.pathname.endsWith("/containers/create")) return Response.json({ Id: "fixture-id" }, { status: 201 });
+      if (url.pathname.endsWith("/volumes/create")) return Response.json({ Name: "fixture-volume" }, { status: 201 });
+      if (url.pathname.endsWith("/exec")) return Response.json({ Id: "exec-id" }, { status: 201 });
+      if (url.pathname.endsWith("/wait")) return Response.json({ StatusCode: 0 });
+      if (request.method === "GET") return Response.json({ Id: "fixture-id" });
+      return new Response(null, { status: 204 });
+    });
+    await client.ping();
+    const options = { Image: "example/helper@sha256:" + "a".repeat(64), name: "helper-name", HostConfig: { ReadonlyRootfs: true } };
+    const container = await client.createContainer(options);
+    await container.inspect();
+    await container.start();
+    await container.stop({ t: 0 });
+    await container.restart();
+    await container.stats({ stream: false });
+    const execution = await container.exec({ Cmd: ["bun", "-e", "dummy command"], AttachStdin: true });
+    await execution.inspect();
+    expect(await container.wait()).toEqual({ StatusCode: 0 });
+    await container.remove({ force: true });
+    const volume = await client.createVolume({ Name: "fixture-volume" });
+    await volume.inspect();
+    await volume.remove();
+    expect(requests.map(({ path, method }) => `${method} ${path}`)).toEqual([
+      "GET /_ping", "POST /v1.55/containers/create?name=helper-name",
+      "GET /v1.55/containers/fixture-id/json", "POST /v1.55/containers/fixture-id/start",
+      "POST /v1.55/containers/fixture-id/stop?t=0", "POST /v1.55/containers/fixture-id/restart",
+      "GET /v1.55/containers/fixture-id/stats?stream=false", "POST /v1.55/containers/fixture-id/exec",
+      "GET /v1.55/exec/exec-id/json", "POST /v1.55/containers/fixture-id/wait",
+      "DELETE /v1.55/containers/fixture-id?force=true", "POST /v1.55/volumes/create",
+      "GET /v1.55/volumes/fixture-volume", "DELETE /v1.55/volumes/fixture-volume",
+    ]);
+    expect(requests[1].body).toEqual({ Image: options.Image, HostConfig: options.HostConfig });
+    expect(requests[7].body).toEqual({ Cmd: ["bun", "-e", "dummy command"], AttachStdin: true });
+  });
+
+  for (const [api, minimum, expected] of [["1.46", "1.24", "1.46"], ["1.99", "1.40", "1.55"], ["1.43", "1.24", null], ["1.56", "1.56", null], ["bad", "1.40", null]]) {
+    it(`negotiates API ${api} with minimum ${minimum} before mutation`, async () => {
+      const requests: string[] = [];
+      const client = httpFixture((request) => {
+        if (isVersion(request)) return Response.json({ ApiVersion: api, MinAPIVersion: minimum });
+        requests.push(new URL(request.url).pathname);
+        return new Response(null, { status: 204 });
+      });
+      const mutation = client.getContainer("fixture").start();
+      if (expected) { await mutation; expect(requests).toEqual([`/v${expected}/containers/fixture/start`]); }
+      else { await expect(mutation).rejects.toThrow(); expect(requests).toEqual([]); }
+    });
+  }
+
+  for (const status of [301, 304, 404, 409, 500, 503]) {
+    it(`preserves HTTP ${status} without disclosing daemon text, following redirects, or retrying`, async () => {
+      let count = 0;
+      const client = httpFixture((request) => {
+        if (isVersion(request)) return version();
+        count++;
+        return new Response(status === 304 ? null : '{"message":"fixture-secret"}', {
+          status, headers: { Location: "http://127.0.0.1:1/private" },
+        });
+      });
+      await expect(client.getContainer("fixture").start()).rejects.toMatchObject({
+        statusCode: status, message: `Docker API request failed (HTTP ${status})`,
+      });
+      expect(count).toBe(1);
+    });
+  }
+
+  it("retries failed negotiation on the next request and rejects identifiers before dispatch", async () => {
+    let calls = 0;
+    const client = httpFixture((request) => {
+      calls++;
+      if (calls === 1) return new Response(null, { status: 503 });
+      return isVersion(request) ? version() : Response.json([]);
+    });
+    for (const id of ["../info", "a/b", "a?force=1", "a#fragment", "a\r\nHeader", "%2f", ""]) {
+      expect(() => client.getContainer(id)).toThrow();
+      expect(() => client.getVolume(id)).toThrow();
+    }
+    expect(calls).toBe(0);
+    await expect(client.listContainers()).rejects.toMatchObject({ statusCode: 503 });
+    expect(await client.listContainers()).toEqual([]);
+    expect(calls).toBe(3);
+    expect(() => client.getVolume("volume-" + "a".repeat(200))).not.toThrow();
+  });
+
+  it("rejects malformed daemon JSON without including its contents", async () => {
+    const client = httpFixture((request) => isVersion(request) ? version() : new Response("fixture-secret, invalid JSON"));
+    await expect(client.listContainers()).rejects.toThrow("Docker returned invalid JSON");
+  });
+
+  it("checks fragmented pull progress through the final record and encodes the complete image reference", async () => {
+    const image = "registry.example:5000/bun:1@sha256:" + "a".repeat(64);
+    let requested = "";
+    const client = httpFixture((request) => {
+      if (isVersion(request)) return version();
+      requested = new URL(request.url).searchParams.get("fromImage")!;
+      return new Response(new ReadableStream({
+        start(controller) {
+          for (const part of ['{"status":"pull', 'ing 🌍"}\n{"status":"done"}']) controller.enqueue(Buffer.from(part));
+          controller.close();
+        },
+      }));
+    });
+    await client.pull(image);
+    expect(requested).toBe(image);
+  });
+
+  for (const progress of ['', '{"error":"fixture-secret"}\n', '{"status":"pulling"}\n{"errorDetail":{"message":"fixture-secret"}}', '{"status":', '[]', 'a'.repeat(1_048_577)]) {
+    it(`rejects failed, malformed, or oversized pull progress (${progress.length} bytes)`, async () => {
+      const client = httpFixture((request) => isVersion(request) ? version() : new Response(progress));
+      const error = await client.pull("fixture").catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("fixture-secret");
+    });
+  }
+
+  for (const kind of ["logs", "events"] as const) {
+    it(`cancels the native ${kind} request when its readable is destroyed`, async () => {
+      const cancelled = Promise.withResolvers<void>();
+      const client = httpFixture((request) => {
+        if (isVersion(request)) return version();
+        return new Response(new ReadableStream({
+          start(controller) { controller.enqueue(Buffer.from("first chunk\n")); },
+          cancel() { cancelled.resolve(); },
+        }));
+      });
+      const stream = kind === "logs" ? await client.getContainer("fixture").logs({ follow: true, stdout: true }) : await client.getEvents();
+      const read = once(stream, "data");
+      expect((await read)[0].toString()).toBe("first chunk\n");
+      stream.destroy();
+      await cancelled.promise;
+    });
+  }
+});
+
+/** The fixture uses an independent stream implementation to exercise Bun's
+ * actual Unix-socket writes, HTTP upgrade, FIN, and read backpressure. */
+async function upgradeFixture(reply: (socket: Socket, request: Buffer) => void): Promise<DockerTransport> {
+  const path = socketPath();
+  const sockets = new Set<Socket>();
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+    let request = Buffer.alloc(0);
+    const receive = (data: Buffer) => {
+      request = Buffer.concat([request, data]);
+      const boundary = request.indexOf("\r\n\r\n");
+      if (boundary === -1) return;
+      const size = Number(/Content-Length: (\d+)/i.exec(request.subarray(0, boundary).toString())?.[1] || 0);
+      if (request.length < boundary + 4 + size) return;
+      socket.off("data", receive);
+      reply(socket, request);
+    };
+    socket.on("data", receive);
+  });
+  server.listen(path);
+  await once(server, "listening");
+  cleanup.push(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  return new DockerTransport(path);
+}
+
+const upgrade = "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n";
+
+describe("Bun Docker duplex transport", () => {
+  for (const status of [101, 200]) {
+    it(`preserves fragmented ${status} headers and output sharing the final header chunk`, async () => {
+      let request = "";
+      const transport = await upgradeFixture((socket, received) => {
+        request = received.toString();
+        const header = status === 101 ? upgrade : "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n";
+        socket.write(header.slice(0, -1));
+        setTimeout(() => socket.end(Buffer.concat([Buffer.from(header.slice(-1)), frame(1, "hello 🌍"), frame(2, "diagnostic")])), 5);
+      });
+      const stream = await transport.hijack("/v1.55/exec/fixture/start", { Detach: false, Tty: false });
+      const stdout = new PassThrough(), stderr = new PassThrough();
+      let out = "", err = "";
+      stdout.on("data", (data: Buffer) => { out += data.toString(); });
+      stderr.on("data", (data: Buffer) => { err += data.toString(); });
+      await demuxDockerStream(stream, stdout, stderr);
+      expect(out).toBe("hello 🌍");
+      expect(err).toBe("diagnostic");
+      expect(request).toStartWith("POST /v1.55/exec/fixture/start HTTP/1.1\r\n");
+      expect(request.split("\r\n\r\n")[1]).toBe('{"Detach":false,"Tty":false}');
+    });
+  }
+
+  it("drains large stdin writes and receives a helper result after half-closing stdin", async () => {
+    const payload = Buffer.alloc(8 * 1024 * 1024, 97);
+    let received = 0;
+    const transport = await upgradeFixture((socket) => {
+      socket.write(upgrade);
+      socket.pause();
+      setTimeout(() => socket.resume(), 25);
+      socket.on("data", (data: Buffer) => { received += data.length; });
+      socket.on("end", () => { socket.end(frame(1, String(received))); });
+    });
+    const stream = await transport.hijack("/exec/fixture/start", {});
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (data: Buffer) => { output += data.toString(); });
+    const completed = demuxDockerStream(stream, stdout);
+    stream.end(payload);
+    await completed;
+    expect(received).toBe(payload.length);
+    expect(output).toBe(String(payload.length));
+  });
+
+  it("terminates the native connection when an attached stream is cancelled", async () => {
+    const closed = Promise.withResolvers<void>();
+    const transport = await upgradeFixture((socket) => {
+      socket.write(upgrade);
+      socket.on("end", () => { socket.end(); closed.resolve(); });
+    });
+    const stream = await transport.hijack("/containers/fixture/attach?stdin=true");
+    stream.destroy();
+    await closed.promise;
+  });
+
+  for (const reply of ["HTTP/1.1 403 Forbidden\r\n\r\nfixture-secret", "HTTP/1.1 101 UPGRADED\r\nUpgrade: websocket\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n", "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nTransfer-Encoding: chunked\r\n\r\n", "HTTP/1.1", "x".repeat(16_385)]) {
+    it(`rejects invalid, refused, or incomplete upgrades (${reply.length} bytes)`, async () => {
+      const transport = await upgradeFixture((socket) => socket.end(reply));
+      const error = await transport.hijack("/exec/fixture/start", {}).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("fixture-secret");
+      if (reply.includes("403")) expect(error).toHaveProperty("statusCode", 403);
+    });
+  }
+
+  it("resumes a partial native write at the exact byte offset before reporting completion", async () => {
+    let handlers: Bun.SocketHandler<undefined>;
+    let written = Buffer.alloc(0);
+    let short = false;
+    const socket = {
+      write(data: Buffer, offset = 0, length = data.length) {
+        const count = short ? Math.min(2, length) : length;
+        written = Buffer.concat([written, data.subarray(offset, offset + count)]);
+        if (count < length) queueMicrotask(() => handlers.drain!(socket));
+        return count;
+      },
+      terminate() {}, resume() {}, pause() {}, shutdown() {},
+    } as unknown as Bun.Socket<undefined>;
+    spyOn(Bun, "connect").mockImplementation((options) => {
+      handlers = options.socket;
+      queueMicrotask(() => { handlers.open!(socket); handlers.data!(socket, Buffer.from(upgrade)); });
+      return Promise.resolve(socket);
+    });
+    const stream = await new DockerTransport("/fixture.sock").hijack("/exec/id/start");
+    short = true;
+    written = Buffer.alloc(0);
+    await new Promise<void>((resolve, reject) => stream.write("abcdefghij", (error) => error ? reject(error) : resolve()));
+    expect(written.toString()).toBe("abcdefghij");
+    stream.destroy();
+  });
+});
+
+describe("Docker output framing", () => {
+  it("decodes bytewise headers and bodies, drops stdin, and rejects incomplete output", async () => {
+    const bytes = Buffer.concat([frame(0, "ignored"), frame(1, "stdout"), frame(2, "stderr"), frame(1, "")]);
+    const out = new PassThrough(), err = new PassThrough();
+    let stdout = "", stderr = "";
+    out.on("data", (data: Buffer) => { stdout += data.toString(); });
+    err.on("data", (data: Buffer) => { stderr += data.toString(); });
+    await demuxDockerStream(Readable.from([...bytes].map((value) => Buffer.from([value]))), out, err);
+    expect({ stdout, stderr }).toEqual({ stdout: "stdout", stderr: "stderr" });
+    for (const data of [bytes.subarray(0, 3), frame(1, "lost").subarray(0, 10), frame(3, "invalid")])
+      await expect(demuxDockerStream(Readable.from([data]), out, err)).rejects.toThrow();
+  });
+
+  it("retains backpressure until the consumer accepts output and fails if the consumer closes", async () => {
+    let release!: () => void;
+    const blocked = Promise.withResolvers<void>();
+    const output = new Writable({ write(_data, _encoding, callback) { release = callback; blocked.resolve(); } });
+    const source = Readable.from([frame(1, "first"), frame(1, "second")]);
+    let finished = false;
+    const completed = demuxDockerStream(source, output).finally(() => { finished = true; });
+    await blocked.promise;
+    expect(finished).toBe(false);
+    output.destroy();
+    release();
+    await expect(completed).rejects.toThrow();
+    expect(source.destroyed).toBe(true);
+  });
+});

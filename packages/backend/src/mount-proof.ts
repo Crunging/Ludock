@@ -1,6 +1,7 @@
+import { demuxDockerStream } from "./docker-stream.js";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
 import { getHelperImage } from "./runtime-images.js";
@@ -81,8 +82,6 @@ export async function createMountProof(
           ReadOnly: true,
           BindOptions: {
             ReadOnlyForceRecursive: true,
-          } as Docker.MountSettings["BindOptions"] & {
-            ReadOnlyForceRecursive: boolean;
           },
         },
       ],
@@ -159,9 +158,7 @@ export async function createMountProof(
             finish();
           }
         });
-        stream.once("error", () => finish());
-        stream.once("end", () => finish());
-        docker.modem.demuxStream(stream, output, ignored);
+        void demuxDockerStream(stream, output, ignored).then(() => finish(), () => finish());
       },
     );
     return { identities, cleanup };
@@ -183,7 +180,7 @@ export async function assertMountIdentities(
     AttachStdout: true,
     AttachStderr: true,
   });
-  const stream = await execution.start({ hijack: true, stdin: false });
+  const stream = await execution.start();
   stream.resume();
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {

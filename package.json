@@ -19,12 +19,5 @@
   },
   "engines": {
     "bun": ">=1.4.2"
-  },
-  "trustedDependencies": [
-    "protobufjs"
-  ],
-  "overrides": {
-    "@grpc/grpc-js": "^1.14.4",
-    "protobufjs": "^7.6.5"
   }
 }

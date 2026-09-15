@@ -1,4 +1,4 @@
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import { AppError } from "./errors.js";
 
@@ -11,12 +11,7 @@ export async function createHelperContainer(
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode !== 404) throw error;
   }
-  const stream = await docker.pull(options.Image);
-  await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(stream, (error) =>
-      error ? reject(error) : resolve(),
-    );
-  });
+  await docker.pull(options.Image);
   return docker.createContainer(options);
 }
 

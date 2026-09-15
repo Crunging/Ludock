@@ -1,3 +1,4 @@
+import { demuxDockerStream } from "./docker-stream.js";
 import { constants, createWriteStream } from "node:fs";
 import {
   access,
@@ -12,7 +13,7 @@ import {
 import path from "node:path";
 import { PassThrough, Transform, Writable, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import * as tar from "tar-stream";
 import { backupSettingsSchema, type BackupSettings } from "@ludock/shared";
 import { getDockerInstance } from "./docker.js";
@@ -673,7 +674,7 @@ export async function helperExec(
     AttachStderr: true,
   });
   assertAccess?.();
-  const stream = await execution.start({ hijack: true, stdin: false });
+  const stream = await execution.start();
   const output = new PassThrough(),
     errors = new PassThrough();
   const chunks: Buffer[] = [];
@@ -690,26 +691,19 @@ export async function helperExec(
       );
   });
   errors.resume();
-  getDockerInstance().modem.demuxStream(stream, output, errors);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      stream.destroy();
-      reject(
-        failBackup(
-          "BACKUP_TIMEOUT",
-          "A data operation timed out. Review the operation recovery state.",
-        ),
-      );
-    }, 120_000);
-    stream.once("end", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    stream.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  const timeout = setTimeout(() => {
+    stream.destroy(
+      failBackup(
+        "BACKUP_TIMEOUT",
+        "A data operation timed out. Review the operation recovery state.",
+      ),
+    );
+  }, 120_000);
+  try {
+    await demuxDockerStream(stream, output, errors);
+  } finally {
+    clearTimeout(timeout);
+  }
   if ((await execution.inspect()).ExitCode !== 0)
     throw failBackup(
       "DATA_OPERATION_FAILED",
@@ -734,7 +728,7 @@ async function helperArchive(
     AttachStderr: true,
   });
   assertAccess?.();
-  const stream = await execution.start({ hijack: true, stdin: false });
+  const stream = await execution.start();
   const output = new PassThrough(),
     errors = new PassThrough();
   errors.resume();
@@ -752,9 +746,8 @@ async function helperArchive(
     clearTimeout(timeout);
     stream.destroy();
   });
-  stream.once("error", (error) => output.destroy(error));
-  stream.once("end", () => {
-    void execution
+  void demuxDockerStream(stream, output, errors).then(async () => {
+    await execution
       .inspect()
       .then((result) => {
         if (result.ExitCode !== 0)
@@ -774,8 +767,7 @@ async function helperArchive(
           ),
         ),
       );
-  });
-  getDockerInstance().modem.demuxStream(stream, output, errors);
+  }).catch((error: unknown) => output.destroy(error instanceof Error ? error : new Error("Docker archive stream failed")));
   return output;
 }
 
@@ -971,10 +963,9 @@ export async function extractRootToStage(
     AttachStderr: true,
   });
   assertAccess?.();
-  const socket = await execution.start({ hijack: true, stdin: true });
+  const socket = await execution.start();
   const ignored = new PassThrough();
   ignored.resume();
-  getDockerInstance().modem.demuxStream(socket, ignored, ignored);
   const timeout = setTimeout(
     () =>
       socket.destroy(
@@ -985,24 +976,12 @@ export async function extractRootToStage(
       ),
     30 * 60_000,
   );
-  const completed = new Promise<void>((resolve, reject) => {
-    socket.once("end", () => {
-      void execution
-        .inspect()
-        .then(
-          (result) =>
-            result.ExitCode === 0
-              ? resolve()
-              : reject(
-                  failBackup(
-                    "RESTORE_EXTRACTION",
-                    "Restore extraction rejected a changed or unsafe data path.",
-                  ),
-                ),
-          reject,
-        );
-    });
-    socket.once("error", reject);
+  const completed = demuxDockerStream(socket, ignored, ignored).then(async () => {
+    if ((await execution.inspect()).ExitCode !== 0)
+      throw failBackup(
+        "RESTORE_EXTRACTION",
+        "Restore extraction rejected a changed or unsafe data path.",
+      );
   });
   void completed.catch(() => {});
   const write = (value: Buffer) =>

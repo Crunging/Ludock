@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { backupPreflightResponseSchema, backupStorageResponseSchema } from "@ludock/shared";
 import * as storage from "../src/backup-storage.js";

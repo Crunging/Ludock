@@ -1,7 +1,8 @@
+import { demuxDockerStream } from "./docker-stream.js";
 import { PassThrough } from "node:stream";
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import type { SocketChannel } from "./socket-channel.js";
-import { getContainer, getDockerInstance } from "./docker.js";
+import { getContainer } from "./docker.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
 import { rawDataToString } from "./ws-message.js";
 import {
@@ -290,7 +291,7 @@ async function executeShell(
     Tty: false,
   });
   assertAccess();
-  const stream = await exec.start({ hijack: true, stdin: false });
+  const stream = await exec.start();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   stdout.setEncoding("utf8");
@@ -298,12 +299,7 @@ async function executeShell(
   stdout.on("data", (chunk: string) => output.stdout(chunk));
   stderr.on("data", (chunk: string) => output.stderr(chunk));
   try {
-    await new Promise<void>((resolve, reject) => {
-      stream.once("end", resolve);
-      stream.once("close", resolve);
-      stream.once("error", () => reject(new Error("Shell stream failed")));
-      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-    });
+    await demuxDockerStream(stream, stdout, stderr);
   } finally {
     stdout.end();
     stderr.end();

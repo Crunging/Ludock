@@ -17,7 +17,7 @@ import { pipeline } from "node:stream/promises";
 import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import * as tar from "tar-stream";
 import { createHash, randomUUID } from "node:crypto";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import {
   archiveEntryMetadata,
   mappedArchiveHeader,

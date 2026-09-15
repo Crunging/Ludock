@@ -1,6 +1,7 @@
+import { demuxDockerStream, DockerStreamError } from "./docker-stream.js";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 import { createLogger } from "./logger.js";
@@ -360,7 +361,7 @@ export async function openDownload(
       }),
     );
     access.assertAccess?.();
-    const stream = await execution.start({ hijack: true, stdin: false });
+    const stream = await execution.start();
     const output = new PassThrough();
     output.once("error", () => {});
     let finishCleanup!: () => void;
@@ -415,64 +416,21 @@ export async function openDownload(
 }
 
 /** Honor the HTTP consumer's backpressure while decoding Docker's non-TTY
- * frames. docker-modem's event-based demux ignores writable backpressure. */
+ * frames. File bytes must never accumulate behind a slow HTTP reader. */
 export async function pumpDockerDownload(
   source: Readable,
   output: PassThrough,
 ): Promise<void> {
-  let header = Buffer.alloc(0);
-  let remaining = 0;
-  let channel = 0;
-  for await (const value of source) {
-    const chunk = value as Buffer;
-    let offset = 0;
-    while (offset < chunk.length) {
-      if (!remaining) {
-        const count = Math.min(8 - header.length, chunk.length - offset);
-        header = Buffer.concat([
-          header,
-          chunk.subarray(offset, offset + count),
-        ]);
-        offset += count;
-        if (header.length !== 8) continue;
-        channel = header[0];
-        remaining = header.readUInt32BE(4);
-        if (
-          ![0, 1, 2].includes(channel) ||
-          header[1] ||
-          header[2] ||
-          header[3] ||
-          remaining > 64 * 1024 * 1024
-        )
-          throw new FileStorageError("INVALID_DOWNLOAD_STREAM", 409);
-        header = Buffer.alloc(0);
-        if (!remaining) continue;
-      }
-      const count = Math.min(remaining, chunk.length - offset);
-      if (channel === 1 && count)
-        await new Promise<void>((resolve, reject) => {
-          const closed = () =>
-            finish(new FileStorageError("FILE_DOWNLOAD_CLOSED", 409));
-          const finish = (error?: Error | null) => {
-            output.off("error", finish);
-            output.off("close", closed);
-            if (error) reject(error);
-            else resolve();
-          };
-          if (output.destroyed) {
-            closed();
-            return;
-          }
-          output.once("error", finish);
-          output.once("close", closed);
-          output.write(chunk.subarray(offset, offset + count), finish);
-        });
-      offset += count;
-      remaining -= count;
-    }
+  try {
+    await demuxDockerStream(source, output);
+  } catch (error) {
+    if (error instanceof DockerStreamError)
+      throw new FileStorageError(
+        error.code === "INCOMPLETE_STREAM" ? "INCOMPLETE_DOWNLOAD_STREAM" : "INVALID_DOWNLOAD_STREAM",
+        409,
+      );
+    throw error;
   }
-  if (header.length || remaining)
-    throw new FileStorageError("INCOMPLETE_DOWNLOAD_STREAM", 409);
 }
 
 function helperOptions(request: FileRequest): Docker.ExecCreateOptions {
@@ -668,10 +626,7 @@ async function runExec(
     throw new FileStorageError("FILE_UPLOAD_FAILED", 400);
   const execution = await container.exec(options);
   assertAccess?.();
-  const stream = await execution.start({
-    hijack: true,
-    stdin: Boolean(input),
-  });
+  const stream = await execution.start();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const chunks: Buffer[] = [];
@@ -729,12 +684,10 @@ async function runExec(
     };
     const closeInput = () => { if (!inputEnded) failInput(); };
     const errorInput = () => failInput();
-    stream.once("end", () => finish());
-    stream.once("close", () => finish(new FileStorageError("FILE_OPERATION_FAILED", 409)));
-    stream.once("error", () =>
-      finish(new FileStorageError("FILE_OPERATION_FAILED", 409)),
+    void demuxDockerStream(stream, stdout, stderr).then(
+      () => finish(),
+      () => finish(new FileStorageError("FILE_OPERATION_FAILED", 409)),
     );
-    docker.modem.demuxStream(stream, stdout, stderr);
     if (input) {
       input.once("error", errorInput);
       input.once("end", endInput);

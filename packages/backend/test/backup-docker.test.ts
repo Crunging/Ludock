@@ -11,7 +11,7 @@ import {
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "bun:test";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import { getDockerInstance } from "../src/docker.js";
 import { closeDatabase, createUser } from "../src/database.js";
 import { setSetting } from "../src/settings.js";

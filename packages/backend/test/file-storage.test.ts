@@ -13,7 +13,7 @@ import {
 } from "../src/file-storage.js";
 import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
 import { Duplex, PassThrough, Readable } from "node:stream";
-import type Docker from "dockerode";
+import type * as Docker from "../src/docker-client.js";
 import { createMountProof } from "../src/mount-proof.js";
 import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 
@@ -309,14 +309,12 @@ describe("scoped file helper projections", () => {
     getContainer: docker.getContainer,
     getVolume: docker.getVolume,
     createContainer: docker.createContainer,
-    demux: docker.modem.demuxStream,
     helperImage: process.env.FILE_HELPER_IMAGE,
   };
   afterEach(() => {
     docker.getContainer = originals.getContainer;
     docker.getVolume = originals.getVolume;
     docker.createContainer = originals.createContainer;
-    docker.modem.demuxStream = originals.demux;
     if (originals.helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
     else process.env.FILE_HELPER_IMAGE = originals.helperImage;
   });
@@ -381,8 +379,6 @@ describe("scoped file helper projections", () => {
         }),
       })) as unknown as typeof docker.getContainer;
       docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
-      docker.modem.demuxStream = ((input, stdout) =>
-        input.on("data", (chunk: Buffer) => (stdout as PassThrough).write(chunk))) as typeof docker.modem.demuxStream;
       docker.createContainer = (async () => ({
         start: async () => { if (revokedAt === "startup") allowed = false; },
         remove: async () => { removed = true; },
@@ -393,7 +389,7 @@ describe("scoped file helper projections", () => {
             start: async () => {
               dispatched.push(operation);
               const stream = new PassThrough();
-              setImmediate(() => stream.end(operation === "stat" ? '{"type":"file","size":8}' : '{"safe":true}'));
+              setImmediate(() => stream.end(frame(1, operation === "stat" ? '{"type":"file","size":8}' : '{"safe":true}')));
               return stream;
             },
             inspect: async () => ({ ExitCode: 0, Running: false }),
@@ -458,11 +454,6 @@ describe("scoped file helper projections", () => {
       docker.getVolume = (() => ({
         inspect: async () => ({ Driver: "local", Options: {} }),
       })) as unknown as typeof docker.getVolume;
-      docker.modem.demuxStream = ((_input, stdout) => {
-        _input.on("data", (chunk: Buffer) =>
-          (stdout as PassThrough).write(chunk),
-        );
-      }) as typeof docker.modem.demuxStream;
       docker.createContainer = (async (
         options: Docker.ContainerCreateOptions,
       ) => {
@@ -475,9 +466,9 @@ describe("scoped file helper projections", () => {
               const stream = new PassThrough();
               setImmediate(() =>
                 stream.write(
-                  JSON.stringify({
+                  frame(1, JSON.stringify({
                     identities: { "/data": { dev: "1", ino: "2" } },
-                  }) + "\n",
+                  }) + "\n"),
                 ),
               );
               return stream;
@@ -493,7 +484,7 @@ describe("scoped file helper projections", () => {
           exec: async () => ({
             start: async () => {
               const stream = new PassThrough();
-              setImmediate(() => stream.end('{"safe":true}'));
+              setImmediate(() => stream.end(frame(1, '{"safe":true}')));
               return stream;
             },
             inspect: async () => ({ ExitCode: 0, Running: false }),
@@ -557,8 +548,6 @@ describe("scoped file helper projections", () => {
         }),
       })) as unknown as typeof docker.getContainer;
       docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
-      docker.modem.demuxStream = ((input, stdout) =>
-        input.on("data", (chunk: Buffer) => (stdout as PassThrough).write(chunk))) as typeof docker.modem.demuxStream;
       docker.createContainer = (async (options: Docker.ContainerCreateOptions) => {
         assert.deepEqual(options.HostConfig?.CapAdd, ["DAC_OVERRIDE", "CHOWN"]);
         return {
@@ -575,7 +564,7 @@ describe("scoped file helper projections", () => {
               start: async () => {
                 if (request.operation !== "upload") {
                   const response = new PassThrough();
-                  setImmediate(() => response.end('{"ok":true}'));
+                  setImmediate(() => response.end(frame(1, '{"ok":true}')));
                   return response;
                 }
                 const duplex = new Duplex({
@@ -585,7 +574,7 @@ describe("scoped file helper projections", () => {
                     callback();
                     setTimeout(() => {
                       helperEnded = true;
-                      duplex.push('{"ok":true}');
+                      duplex.push(frame(1, '{"ok":true}'));
                       duplex.push(null);
                     }, 10);
                   },
@@ -697,10 +686,6 @@ describe("scoped file helper projections", () => {
     docker.getVolume = (() => ({
       inspect: async () => ({ Driver: "local", Options: {} }),
     })) as unknown as typeof docker.getVolume;
-    docker.modem.demuxStream = ((input, stdout) =>
-      input.on("data", (chunk: Buffer) =>
-        (stdout as PassThrough).write(chunk),
-      )) as typeof docker.modem.demuxStream;
     docker.createContainer = (async () => ({
       start: async () => {
         started = true;
@@ -711,7 +696,7 @@ describe("scoped file helper projections", () => {
       exec: async () => ({
         start: async () => {
           const stream = new PassThrough();
-          setImmediate(() => stream.end('{"safe":true}'));
+          setImmediate(() => stream.end(frame(1, '{"safe":true}')));
           return stream;
         },
         inspect: async () => ({ ExitCode: 0, Running: false }),
@@ -763,10 +748,6 @@ describe("scoped file helper projections", () => {
     docker.getVolume = (() => ({
       inspect: async () => ({ Driver: "local", Options: {} }),
     })) as unknown as typeof docker.getVolume;
-    docker.modem.demuxStream = ((input, stdout) =>
-      input.on("data", (chunk: Buffer) =>
-        (stdout as PassThrough).write(chunk),
-      )) as typeof docker.modem.demuxStream;
     docker.createContainer = (async () => ({
       start: async () => {},
       remove: async () => {
@@ -784,8 +765,8 @@ describe("scoped file helper projections", () => {
               request.operation === "download"
                 ? frame(1, "contents")
                 : request.operation === "stat"
-                  ? '{"type":"file","size":8}'
-                  : '{"safe":true}',
+                  ? frame(1, '{"type":"file","size":8}')
+                  : frame(1, '{"safe":true}'),
             ),
           );
           return stream;
