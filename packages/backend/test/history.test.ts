@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { serve, type Server } from "bun";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   auditHistoryQuerySchema, auditResponseSchema, operationHistoryQuerySchema,
   operationResponseSchema, operationsResponseSchema, type OperationStatus,
@@ -14,8 +12,8 @@ import { listAuditHistory, listOperationHistory } from "../src/history.js";
 import { reconcileServers } from "../src/identity.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const admin: SessionUser = { id: randomUUID(), username: "History Admin", role: "admin" };
-const viewer: SessionUser = { id: randomUUID(), username: "History Viewer", role: "viewer" };
+const admin: SessionUser = { id: crypto.randomUUID(), username: "History Admin", role: "admin" };
+const viewer: SessionUser = { id: crypto.randomUUID(), username: "History Viewer", role: "viewer" };
 let serverId: string;
 let otherServerId: string;
 let http: Server<unknown>;
@@ -71,7 +69,7 @@ function request(path: string, actor: SessionUser | null = admin) {
 
 async function operationPage(path: string, actor: SessionUser = admin) {
   const response = await request(path, actor);
-  assert.equal(response.status, 200);
+  expect(response.status).toBe(200);
   return operationsResponseSchema.parse(await response.json());
 }
 
@@ -87,25 +85,25 @@ describe("searchable operation history", () => {
         pageSizes.push(page.operations.length);
         seen.push(...page.operations.map((row) => row.id));
         cursor = page.nextCursor;
-        assert.ok(pageSizes.length <= 3, "pagination must finish without repeating a page");
+        expect(pageSizes.length <= 3, "pagination must finish without repeating a page").toBeTruthy();
       } while (cursor);
-      assert.deepEqual(pageSizes, [50, 50, 30]);
-      assert.deepEqual(seen, Array.from({ length: 130 }, (_, index) => operationId(130 - index)));
+      expect(pageSizes).toStrictEqual([50, 50, 30]);
+      expect(seen).toStrictEqual(Array.from({ length: 130 }, (_, index) => operationId(130 - index)));
     }
   });
 
   it("pages tied timestamps deterministically without repeating newer insertions", async () => {
     for (let index = 1; index <= 5; index++) insertOperation(index, { createdAt: index === 1 ? 99 : 100 });
     const first = await operationPage("/api/v1/operations?limit=2");
-    assert.deepEqual(first.operations.map((row) => row.id), [operationId(5), operationId(4)]);
-    assert.ok(first.nextCursor);
+    expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(5), operationId(4)]);
+    expect(first.nextCursor).toBeTruthy();
     insertOperation(6, { createdAt: 101 });
     const second = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`);
-    assert.deepEqual(second.operations.map((row) => row.id), [operationId(3), operationId(2)]);
-    assert.ok(second.nextCursor);
+    expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(3), operationId(2)]);
+    expect(second.nextCursor).toBeTruthy();
     const final = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(second.nextCursor)}`);
-    assert.deepEqual(final.operations.map((row) => row.id), [operationId(1)]);
-    assert.equal(final.nextCursor, null);
+    expect(final.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
+    expect(final.nextCursor).toBe(null);
   });
 
   it("combines server, actor, action, status, and inclusive dates before limiting", () => {
@@ -120,16 +118,16 @@ describe("searchable operation history", () => {
       serverId, actor: "ADMIN", action: "ACK", status: "succeeded", from: 100, to: 200, limit: 1,
     });
     const first = listOperationHistory(admin, query);
-    assert.deepEqual(first.operations.map((row) => row.id), [operationId(2)]);
-    assert.ok(first.nextCursor);
+    expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(2)]);
+    expect(first.nextCursor).toBeTruthy();
     const second = listOperationHistory(admin, { ...query, cursor: first.nextCursor });
-    assert.deepEqual(second.operations.map((row) => row.id), [operationId(1)]);
-    assert.equal(second.nextCursor, null);
-    assert.equal(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: admin.id })).operations.length, 6);
-    assert.equal(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "REST" })).operations[0].kind, "restore");
-    assert.deepEqual(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: "%' OR 1=1 --" })).operations, []);
+    expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
+    expect(second.nextCursor).toBe(null);
+    expect(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: admin.id })).operations.length).toBe(6);
+    expect(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "REST" })).operations[0].kind).toBe("restore");
+    expect(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: "%' OR 1=1 --" })).operations).toStrictEqual([]);
     insertOperation(8, { kind: "literal_%_action" });
-    assert.deepEqual(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "_%_" })).operations.map((row) => row.id), [operationId(8)]);
+    expect(listOperationHistory(admin, operationHistoryQuerySchema.parse({ action: "_%_" })).operations.map((row) => row.id)).toStrictEqual([operationId(8)]);
   });
 
   it("applies current server grants before pagination and never builds cursors from hidden rows", async () => {
@@ -139,15 +137,15 @@ describe("searchable operation history", () => {
     insertOperation(3, { serverId: otherServerId });
     insertOperation(4, { serverId: otherServerId });
     const first = await operationPage("/api/v1/operations?limit=1", viewer);
-    assert.deepEqual(first.operations.map((row) => row.id), [operationId(2)]);
-    assert.ok(first.nextCursor);
+    expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(2)]);
+    expect(first.nextCursor).toBeTruthy();
     const second = await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`, viewer);
-    assert.deepEqual(second.operations.map((row) => row.id), [operationId(1)]);
-    assert.equal(second.nextCursor, null);
+    expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
+    expect(second.nextCursor).toBe(null);
     const hidden = await operationPage(`/api/v1/operations?serverId=${otherServerId}&limit=1`, viewer);
-    assert.deepEqual(hidden, { operations: [], nextCursor: null });
+    expect(hidden).toStrictEqual({ operations: [], nextCursor: null });
     setServerGrant(viewer.id, serverId, [], admin);
-    assert.deepEqual(await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`, viewer), {
+    expect(await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`, viewer)).toStrictEqual({
       operations: [], nextCursor: null,
     });
   });
@@ -156,10 +154,10 @@ describe("searchable operation history", () => {
     setServerGrant(viewer.id, serverId, ["server.view"], admin);
     insertOperation(1);
     reconcileServers([]);
-    assert.deepEqual(await operationPage("/api/v1/operations", viewer), { operations: [], nextCursor: null });
-    assert.equal((await operationPage("/api/v1/operations", admin)).operations.length, 1);
+    expect(await operationPage("/api/v1/operations", viewer)).toStrictEqual({ operations: [], nextCursor: null });
+    expect((await operationPage("/api/v1/operations", admin)).operations.length).toBe(1);
     updateUserAccess(admin.id, "viewer", false);
-    assert.deepEqual(await operationPage("/api/v1/operations", admin), { operations: [], nextCursor: null });
+    expect(await operationPage("/api/v1/operations", admin)).toStrictEqual({ operations: [], nextCursor: null });
   });
 
   it("keeps server-specific lists scoped and direct details authorized and public", async () => {
@@ -167,20 +165,20 @@ describe("searchable operation history", () => {
     const visibleId = insertOperation(1);
     const hiddenId = insertOperation(2, { serverId: otherServerId });
     const page = await operationPage(`/api/v1/servers/${serverId}/operations`, viewer);
-    assert.deepEqual(page.operations.map((row) => row.id), [visibleId]);
+    expect(page.operations.map((row) => row.id)).toStrictEqual([visibleId]);
     const detail = await request(`/api/v1/operations/${visibleId}`, viewer);
-    assert.equal(detail.status, 200);
+    expect(detail.status).toBe(200);
     const body = operationResponseSchema.parse(await detail.json());
-    assert.deepEqual(body.operation.actor, { id: admin.id, name: admin.username });
-    assert.equal(JSON.stringify(body).includes("/private/"), false);
-    assert.deepEqual(body.operation.result, { copied: true });
+    expect(body.operation.actor).toStrictEqual({ id: admin.id, name: admin.username });
+    expect(JSON.stringify(body).includes("/private/")).toBe(false);
+    expect(body.operation.result).toStrictEqual({ copied: true });
     for (const path of [`/api/v1/servers/${otherServerId}/operations`, `/api/v1/operations/${hiddenId}`]) {
       const denied = await request(path, viewer);
-      assert.equal(denied.status, 404);
-      assert.equal((await denied.text()).includes(hiddenId), false);
+      expect(denied.status).toBe(404);
+      expect((await denied.text()).includes(hiddenId)).toBe(false);
     }
-    assert.equal((await request(`/api/v1/servers/${serverId}/operations?serverId=${otherServerId}`)).status, 400);
-    assert.equal((await request(`/api/v1/operations/${randomUUID()}`)).status, 404);
+    expect((await request(`/api/v1/servers/${serverId}/operations?serverId=${otherServerId}`)).status).toBe(400);
+    expect((await request(`/api/v1/operations/${crypto.randomUUID()}`)).status).toBe(404);
   });
 
   it("does not disclose or search API token fingerprints", async () => {
@@ -188,15 +186,15 @@ describe("searchable operation history", () => {
     const id = insertOperation(1, { actorId: privateActor });
     for (const actor of ["api-token", "API token"]) {
       const page = await operationPage(`/api/v1/operations?actor=${encodeURIComponent(actor)}`);
-      assert.deepEqual(page.operations.map((row) => row.actor), [{ id: "api-token", name: "API token" }]);
-      assert.equal(JSON.stringify(page).includes("fixture-auth-fingerprint"), false);
+      expect(page.operations.map((row) => row.actor)).toStrictEqual([{ id: "api-token", name: "API token" }]);
+      expect(JSON.stringify(page).includes("fixture-auth-fingerprint")).toBe(false);
     }
-    assert.deepEqual((await operationPage(`/api/v1/operations?actor=${encodeURIComponent(privateActor)}`)).operations, []);
+    expect((await operationPage(`/api/v1/operations?actor=${encodeURIComponent(privateActor)}`)).operations).toStrictEqual([]);
     const detail = await request(`/api/v1/operations/${id}`);
-    assert.equal(detail.status, 200);
+    expect(detail.status).toBe(200);
     const body = await detail.text();
-    assert.equal(body.includes("fixture-auth-fingerprint"), false);
-    assert.equal(body.includes("/private/"), false);
+    expect(body.includes("fixture-auth-fingerprint")).toBe(false);
+    expect(body.includes("/private/")).toBe(false);
   });
 });
 
@@ -211,23 +209,23 @@ describe("searchable audit history", () => {
     insertAudit({ ...match, createdAt: 150, userId: viewer.id });
     insertAudit({ ...match, createdAt: 150, action: "server.backup.failed" });
     insertAudit({ ...match, createdAt: 150, action: "server.restore.succeeded" });
-    insertAudit({ ...match, createdAt: 150, details: { operationId: randomUUID() } });
+    insertAudit({ ...match, createdAt: 150, details: { operationId: crypto.randomUUID() } });
     const query = auditHistoryQuerySchema.parse({
       serverId, operationId: linkedOperation, actor: "ADMIN", action: "ACK", status: "succeeded", from: 100, to: 200, limit: 1,
     });
     const first = listAuditHistory(query);
-    assert.deepEqual(first.entries.map((row) => row.id), [newer]);
-    assert.equal(first.entries[0].status, "succeeded", "audit outcome does not track the operation's later status");
-    assert.ok(first.nextCursor);
+    expect(first.entries.map((row) => row.id)).toStrictEqual([newer]);
+    expect(first.entries[0].status, "audit outcome does not track the operation's later status").toBe("succeeded");
+    expect(first.nextCursor).toBeTruthy();
     insertAudit({ ...match, createdAt: 200 });
     const second = listAuditHistory({ ...query, cursor: first.nextCursor });
-    assert.deepEqual(second.entries.map((row) => row.id), [older]);
-    assert.equal(second.nextCursor, null);
+    expect(second.entries.map((row) => row.id)).toStrictEqual([older]);
+    expect(second.nextCursor).toBe(null);
     const tied = listAuditHistory(auditHistoryQuerySchema.parse({ from: 200, to: 200, limit: 1 }));
-    assert.ok(tied.nextCursor);
-    assert.deepEqual(listAuditHistory(auditHistoryQuerySchema.parse({
+    expect(tied.nextCursor).toBeTruthy();
+    expect(listAuditHistory(auditHistoryQuerySchema.parse({
       from: 200, to: 200, limit: 1, cursor: tied.nextCursor,
-    })).entries.map((row) => row.id), [newer]);
+    })).entries.map((row) => row.id)).toStrictEqual([newer]);
   });
 
   it("returns recorded actors and safe operation links while preserving incomplete older events", () => {
@@ -241,16 +239,16 @@ describe("searchable audit history", () => {
     const failedLogin = insertAudit({ action: "auth.login.failed" });
     const entries = listAuditHistory(auditHistoryQuerySchema.parse({})).entries;
     const byId = (id: number) => entries.find((entry) => entry.id === id)!;
-    assert.deepEqual(byId(direct).actor, { id: admin.id, name: admin.username });
-    assert.deepEqual(byId(fallback).actor, { id: viewer.id, name: viewer.username });
-    assert.deepEqual(byId(recorded).actor, { id: viewer.id, name: viewer.username });
-    assert.equal(byId(wrongServer).actor, null);
-    assert.equal(byId(fallback).operationId, linked);
-    assert.equal(byId(invalidLink).operationId, null);
-    assert.equal(byId(invalidDetails).details, null);
-    assert.equal(byId(invalidDetails).actor, null);
-    assert.equal(byId(failedLogin).status, "failed");
-    assert.deepEqual(listAuditHistory(auditHistoryQuerySchema.parse({ actor: "VIEWER" })).entries.map((row) => row.id), [recorded, fallback]);
+    expect(byId(direct).actor).toStrictEqual({ id: admin.id, name: admin.username });
+    expect(byId(fallback).actor).toStrictEqual({ id: viewer.id, name: viewer.username });
+    expect(byId(recorded).actor).toStrictEqual({ id: viewer.id, name: viewer.username });
+    expect(byId(wrongServer).actor).toBe(null);
+    expect(byId(fallback).operationId).toBe(linked);
+    expect(byId(invalidLink).operationId).toBe(null);
+    expect(byId(invalidDetails).details).toBe(null);
+    expect(byId(invalidDetails).actor).toBe(null);
+    expect(byId(failedLogin).status).toBe("failed");
+    expect(listAuditHistory(auditHistoryQuerySchema.parse({ actor: "VIEWER" })).entries.map((row) => row.id)).toStrictEqual([recorded, fallback]);
   });
 
   it("sanitizes token actors from both stored details and linked operations", () => {
@@ -259,10 +257,10 @@ describe("searchable audit history", () => {
     insertAudit({ details: { actorId: privateActor } });
     insertAudit({ details: { operationId: linked } });
     const page = listAuditHistory(auditHistoryQuerySchema.parse({ actor: "API token" }));
-    assert.equal(page.entries.length, 2);
-    assert.ok(page.entries.every((entry) => entry.actor?.id === "api-token" && entry.actor.name === "API token"));
-    assert.equal(JSON.stringify(page).includes("fixture-auth-fingerprint"), false);
-    assert.deepEqual(listAuditHistory(auditHistoryQuerySchema.parse({ actor: privateActor })).entries, []);
+    expect(page.entries.length).toBe(2);
+    expect(page.entries.every((entry) => entry.actor?.id === "api-token" && entry.actor.name === "API token")).toBeTruthy();
+    expect(JSON.stringify(page).includes("fixture-auth-fingerprint")).toBe(false);
+    expect(listAuditHistory(auditHistoryQuerySchema.parse({ actor: privateActor })).entries).toStrictEqual([]);
   });
 
   it("retains recorded actor identifiers after the account has been deleted", () => {
@@ -271,23 +269,23 @@ describe("searchable audit history", () => {
     const finished = insertAudit({ userId: viewer.id, details: { actorId: viewer.id } });
     deleteUser(viewer.id);
     const operations = listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: viewer.id }));
-    assert.deepEqual(operations.operations.map((row) => row.actor), [{ id: viewer.id, name: null }]);
+    expect(operations.operations.map((row) => row.actor)).toStrictEqual([{ id: viewer.id, name: null }]);
     const audit = listAuditHistory(auditHistoryQuerySchema.parse({ actor: viewer.id }));
-    assert.deepEqual(audit.entries.map((row) => row.id), [finished, queued]);
-    assert.ok(audit.entries.every((entry) => entry.actor?.id === viewer.id && entry.actor.name === null));
+    expect(audit.entries.map((row) => row.id)).toStrictEqual([finished, queued]);
+    expect(audit.entries.every((entry) => entry.actor?.id === viewer.id && entry.actor.name === null)).toBeTruthy();
   });
 
   it("requires administrator access and returns the paginated audit contract", async () => {
     insertAudit({ userId: admin.id });
     insertAudit({ userId: admin.id });
     const response = await request("/api/v1/audit?limit=1");
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const body = auditResponseSchema.parse(await response.json());
-    assert.equal(body.entries.length, 1);
-    assert.ok(body.nextCursor);
-    assert.equal((await request("/api/v1/audit", viewer)).status, 403);
+    expect(body.entries.length).toBe(1);
+    expect(body.nextCursor).toBeTruthy();
+    expect((await request("/api/v1/audit", viewer)).status).toBe(403);
     for (const path of ["/api/v1/audit", "/api/v1/operations"]) {
-      assert.equal((await request(path, null)).status, 401);
+      expect((await request(path, null)).status).toBe(401);
     }
   });
 });
@@ -298,23 +296,23 @@ describe("history query validation", () => {
       for (const query of ["limit=0", "limit=251", "limit=1.5", "from=-1", "to=tomorrow", "from=200&to=100",
         "status=unknown", "serverId=invalid", "actor=", "cursor=invalid", "cursor=e30"]) {
         const response = await request(`${path}?${query}`);
-        assert.equal(response.status, 400, `${path}?${query}`);
+        expect(response.status, `${path}?${query}`).toBe(400);
         await response.body?.cancel();
       }
     }
-    assert.equal((await request("/api/v1/audit?operationId=invalid")).status, 400);
+    expect((await request("/api/v1/audit?operationId=invalid")).status).toBe(400);
   });
 
   it("rejects cursors reused for different filters or history kinds", async () => {
     insertOperation(1);
     insertOperation(2);
     const first = await operationPage("/api/v1/operations?limit=1");
-    assert.ok(first.nextCursor);
+    expect(first.nextCursor).toBeTruthy();
     const cursor = encodeURIComponent(first.nextCursor);
     for (const path of [`/api/v1/operations?action=restore&cursor=${cursor}`, `/api/v1/audit?cursor=${cursor}`]) {
       const response = await request(path);
-      assert.equal(response.status, 400);
-      assert.equal((await response.json() as { code: string }).code, "INVALID_HISTORY_CURSOR");
+      expect(response.status).toBe(400);
+      expect((await response.json() as { code: string }).code).toBe("INVALID_HISTORY_CURSOR");
     }
   });
 
@@ -322,9 +320,9 @@ describe("history query validation", () => {
     insertOperation(1);
     insertOperation(2);
     const first = await operationPage(`/api/v1/servers/${serverId}/operations?limit=1&action=backup`);
-    assert.ok(first.nextCursor);
+    expect(first.nextCursor).toBeTruthy();
     const second = await operationPage(`/api/v1/servers/${serverId}/operations?serverId=${serverId}&action=backup&limit=1&cursor=${encodeURIComponent(first.nextCursor)}`);
-    assert.deepEqual(second.operations.map((operation) => operation.id), [operationId(1)]);
-    assert.equal(second.nextCursor, null);
+    expect(second.operations.map((operation) => operation.id)).toStrictEqual([operationId(1)]);
+    expect(second.nextCursor).toBe(null);
   });
 });

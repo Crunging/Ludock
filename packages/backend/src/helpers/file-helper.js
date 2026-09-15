@@ -1,3 +1,4 @@
+const encoder = new TextEncoder();
 /** @typedef {import("node:fs/promises").FileHandle} FileHandle */
 /** @typedef {import("node:fs").Stats} Stats */
 import fs from "node:fs";
@@ -120,19 +121,15 @@ async function uploadTarget(parent, name) {
 }
 /** @param {unknown} value */
 function json(value) {
-  process.stdout.write(JSON.stringify(value));
+  return Bun.write(Bun.stdout, JSON.stringify(value));
 }
 /** @param {string | Uint8Array} value @returns {Promise<void>} */
 async function write(value) {
-  await new Promise((resolve, reject) =>
-    process.stdout.write(value, (error) =>
-      error ? reject(error) : resolve(undefined),
-    ),
-  );
+  await Bun.write(Bun.stdout, value);
 }
 /** @param {FileHandle} file @param {number} size */
 async function streamFile(file, size) {
-  const buffer = Buffer.alloc(64 * 1024);
+  const buffer = new Uint8Array(64 * 1024);
   let remaining = size;
   let position = 0;
   while (remaining > 0) {
@@ -148,38 +145,38 @@ async function streamFile(file, size) {
     remaining -= result.bytesRead;
   }
 }
-/** @param {string} name @param {Pick<Stats, 'size' | 'uid' | 'gid' | 'mode' | 'mtimeMs'>} info @param {boolean} directory @returns {Buffer} */
+/** @param {string} name @param {Pick<Stats, 'size' | 'uid' | 'gid' | 'mode' | 'mtimeMs'>} info @param {boolean} directory @returns {Uint8Array} */
 function tarHeader(name, info, directory, type = directory ? 53 : 48) {
-  const header = Buffer.alloc(512);
-  if (Buffer.byteLength(name) > 4096) fail("An archive path is too long");
-  if (Buffer.byteLength(name) > 100) {
+  const header = new Uint8Array(512);
+  if (encoder.encode(name).byteLength > 4096) fail("An archive path is too long");
+  if (encoder.encode(name).byteLength > 100) {
     const slash = name.lastIndexOf(
       "/",
       name.endsWith("/") ? name.length - 2 : undefined,
     );
     if (
       slash < 1 ||
-      Buffer.byteLength(name.slice(0, slash)) > 155 ||
-      Buffer.byteLength(name.slice(slash + 1)) > 100
+      encoder.encode(name.slice(0, slash)).byteLength > 155 ||
+      encoder.encode(name.slice(slash + 1)).byteLength > 100
     ) {
       // A standard per-entry PAX path keeps long and Unicode names intact.
       const record = " path=" + name + "\n";
-      const bytes = Buffer.byteLength(record);
+      const bytes = encoder.encode(record).byteLength;
       let size = bytes + 1;
       while (String(size).length + bytes !== size)
         size = String(size).length + bytes;
-      const payload = Buffer.from(String(size) + record);
-      return Buffer.concat([
+      const payload = encoder.encode(String(size) + record);
+      return new Uint8Array(Bun.concatArrayBuffers([
         tarHeader("PaxHeader", { ...info, size: payload.length }, false, 120),
         payload,
-        Buffer.alloc((512 - (payload.length % 512)) % 512),
+        new Uint8Array((512 - (payload.length % 512)) % 512),
         tarHeader("entry", info, directory, type),
-      ]);
+      ]));
     }
-    header.write(name.slice(0, slash), 345, 155);
+    encoder.encodeInto(name.slice(0, slash), header.subarray(345, 345 + 155));
     name = name.slice(slash + 1);
   }
-  header.write(name, 0, 100);
+  encoder.encodeInto(name, header.subarray(0, 0 + 100));
   /** @param {number} value @param {number} offset @param {number} length */
   const octal = (value, offset, length) => {
     const number = Math.max(0, Math.floor(value));
@@ -196,7 +193,7 @@ function tarHeader(name, info, directory, type = directory ? 53 : 48) {
       if (remaining) fail("An archive value is too large");
       return;
     }
-    header.write(encoded.padStart(length - 1, "0") + "\0", offset, length);
+    encoder.encodeInto(encoded.padStart(length - 1, "0") + "\0", header.subarray(offset, offset + length));
   };
   octal(info.mode & 0o777, 100, 8);
   octal(request.operation === "backup" ? info.uid : 0, 108, 8);
@@ -205,10 +202,10 @@ function tarHeader(name, info, directory, type = directory ? 53 : 48) {
   octal(info.mtimeMs / 1000, 136, 12);
   header.fill(32, 148, 156);
   header[156] = type;
-  header.write("ustar\0", 257, 6);
-  header.write("00", 263, 2);
+  encoder.encodeInto("ustar\0", header.subarray(257, 257 + 6));
+  encoder.encodeInto("00", header.subarray(263, 263 + 2));
   const checksum = header.reduce((sum, value) => sum + value, 0);
-  header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, 8);
+  encoder.encodeInto(checksum.toString(8).padStart(6, "0") + "\0 ", header.subarray(148, 148 + 8));
   return header;
 }
 let archiveEntries = 0;
@@ -230,7 +227,7 @@ async function archiveEntry(parent, name, relative, depth = 0) {
       );
     await write(tarHeader(relative, info, false));
     await streamFile(file, info.size);
-    if (info.size % 512) await write(Buffer.alloc(512 - (info.size % 512)));
+    if (info.size % 512) await write(new Uint8Array(512 - (info.size % 512)));
   }
   await close(file);
 }
@@ -257,7 +254,7 @@ async function main() {
     await write(tarHeader("source/", info, true));
     for (const name of await fsp.readdir(link(root)))
       await archiveEntry(root, name, "source/" + name);
-    await write(Buffer.alloc(1024));
+    await write(new Uint8Array(1024));
     return;
   }
   if (request.operation === "list") {
@@ -318,8 +315,8 @@ async function main() {
       fail("Invalid upload size");
     const temporary = uploadName(request.uploadId || crypto.randomUUID());
     const trailer = request.uploadId
-      ? Buffer.from(request.uploadId)
-      : Buffer.alloc(0);
+      ? encoder.encode(request.uploadId)
+      : new Uint8Array(0);
     const original = await uploadTarget(parent, name);
     const file = await pin(
       link(parent, temporary),
@@ -331,7 +328,7 @@ async function main() {
     let received = 0;
     let committed = 0;
     try {
-      for await (const chunk of process.stdin) {
+      for await (const chunk of Bun.stdin.stream()) {
         idle.refresh();
         const payload = Math.min(chunk.length, request.size - received);
         let offset = 0;
@@ -344,7 +341,7 @@ async function main() {
         const tail = chunk.subarray(payload);
         if (
           committed + tail.length > trailer.length ||
-          !tail.equals(trailer.subarray(committed, committed + tail.length))
+          !crypto.timingSafeEqual(tail, trailer.subarray(committed, committed + tail.length))
         )
           fail("Upload exceeded its declared size or was interrupted");
         committed += tail.length;
@@ -424,16 +421,16 @@ async function main() {
     if (info.isDirectory()) {
       await close(file);
       await archiveEntry(parent, name, name);
-      await write(Buffer.alloc(1024));
+      await write(new Uint8Array(1024));
     } else await streamFile(file, info.size);
     return;
   }
   fail("Unknown file operation");
 }
 main()
-  .catch(() => {
+  .catch(async () => {
     // Paths and raw filesystem errors can contain private host information.
-    process.stderr.write(
+    await Bun.write(Bun.stderr,
       "The file operation failed: the path changed, is unsafe, or cannot be accessed.",
     );
     process.exitCode = 1;

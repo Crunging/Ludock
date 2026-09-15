@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { serve, type Server } from "bun";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn } from "bun:test";
+import { expect, afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn } from "bun:test";
 import path from "node:path";
 import { scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
 
@@ -132,9 +131,9 @@ async function setupAdministrator(): Promise<string> {
       bootstrapCode: "integration-setup-code-0123456789abcdef",
     }),
   });
-  assert.equal(response.status, 201);
+  expect(response.status).toBe(201);
   const cookie = (response.headers.get("set-cookie") || "").split(";")[0];
-  assert.match(cookie, /ludock_session=/);
+  expect(cookie).toMatch(/ludock_session=/);
   return cookie;
 }
 
@@ -148,16 +147,16 @@ async function createViewerSession(adminCookie: string) {
       role: "viewer",
     }),
   });
-  assert.equal(created.status, 201);
+  expect(created.status).toBe(201);
   const { user } = await created.json() as { user: { id: string } };
   const login = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: "viewer", password: "viewer-password" }),
   });
-  assert.equal(login.status, 200);
+  expect(login.status).toBe(200);
   const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
-  assert.match(cookie, /ludock_session=/);
+  expect(cookie).toMatch(/ludock_session=/);
   return { id: user.id, cookie };
 }
 
@@ -167,26 +166,26 @@ async function setServerGrants(userId: string, grants: ServerGrantInput[]) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ grants }),
   });
-  assert.equal(response.status, 200);
+  expect(response.status).toBe(200);
 }
 
 async function assertAuditEntry(cookie: string, action: string, targetId?: string) {
   const response = await fetch(`${baseUrl}/api/v1/audit`, {
     headers: { Cookie: cookie },
   });
-  assert.equal(response.status, 200);
+  expect(response.status).toBe(200);
   const { entries } = await response.json() as {
     entries: Array<{ action: string; targetId: string | null }>;
   };
-  assert.ok(entries.some((entry) =>
+  expect(entries.some((entry) =>
     entry.action === action && (targetId === undefined || entry.targetId === targetId),
-  ), `Missing ${action} audit entry`);
+  ), `Missing ${action} audit entry`).toBeTruthy();
 }
 
 describe("HTTP application", () => {
   it("serves public status and health endpoints", async () => {
     const authStatus = await fetch(`${baseUrl}/api/v1/auth/status`);
-    assert.equal(authStatus.status, 200);
+    expect(authStatus.status).toBe(200);
     const status = (await authStatus.json()) as {
       setupRequired: boolean;
       setupLocked: boolean;
@@ -195,60 +194,45 @@ describe("HTTP application", () => {
       authenticated: boolean;
       user: unknown;
     };
-    assert.deepEqual(
-      {
+    expect({
         ...status,
         setupExpiresAt: typeof status.setupExpiresAt,
         setupRemainingMs: typeof status.setupRemainingMs,
-      },
-      {
+      }).toStrictEqual({
         setupRequired: true,
         setupLocked: false,
         setupExpiresAt: "number",
         setupRemainingMs: "number",
         authenticated: false,
         user: null,
-      },
-    );
-    assert.equal(authStatus.headers.get("cache-control"), "no-store");
+      });
+    expect(authStatus.headers.get("cache-control")).toBe("no-store");
 
     const proxiedStatus = await fetch(`${baseUrl}/api/v1/auth/status`, {
       headers: {
         Cookie: "authelia_session=opaque%token; unrelated=value",
       },
     });
-    assert.equal(proxiedStatus.status, 200);
-    assert.equal(
-      ((await proxiedStatus.json()) as { setupRequired: boolean })
-        .setupRequired,
-      true,
-    );
+    expect(proxiedStatus.status).toBe(200);
+    expect(((await proxiedStatus.json()) as { setupRequired: boolean })
+        .setupRequired).toBe(true);
 
     const health = await fetch(`${baseUrl}/api/v1/health`);
-    assert.equal(health.status, 200);
-    assert.deepEqual(await health.json(), {
+    expect(health.status).toBe(200);
+    expect(await health.json()).toStrictEqual({
       status: "ok",
       docker: "connected",
       database: "connected",
     });
-    assert.equal(health.headers.get("x-content-type-options"), "nosniff");
-    assert.equal(health.headers.get("x-frame-options"), "DENY");
-    assert.equal(
-      health.headers.get("cross-origin-opener-policy"),
-      "same-origin",
-    );
-    assert.match(
-      health.headers.get("content-security-policy") || "",
-      /default-src 'self'/,
-    );
+    expect(health.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(health.headers.get("x-frame-options")).toBe("DENY");
+    expect(health.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+    expect(health.headers.get("content-security-policy") || "").toMatch(/default-src 'self'/);
 
     const proxiedHealth = await fetch(`${baseUrl}/api/v1/health`, {
       headers: { "X-Forwarded-Proto": "https" },
     });
-    assert.equal(
-      proxiedHealth.headers.get("strict-transport-security"),
-      "max-age=31536000; includeSubDomains",
-    );
+    expect(proxiedHealth.headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
   });
 
   it("completes initial setup without a token and establishes a session", async () => {
@@ -265,22 +249,19 @@ describe("HTTP application", () => {
         bootstrapCode: "integration-setup-code-0123456789abcdef",
       }),
     });
-    assert.equal(response.status, 201);
+    expect(response.status).toBe(201);
     const setCookie = response.headers.get("set-cookie") || "";
-    assert.match(setCookie, /ludock_session=/);
-    assert.match(setCookie, /HttpOnly/i);
-    assert.match(setCookie, /SameSite=Strict/i);
-    assert.match(setCookie, /Secure/i);
+    expect(setCookie).toMatch(/ludock_session=/);
+    expect(setCookie).toMatch(/HttpOnly/i);
+    expect(setCookie).toMatch(/SameSite=Strict/i);
+    expect(setCookie).toMatch(/Secure/i);
     const sessionCookie = setCookie.split(";")[0];
 
     const me = await fetch(`${baseUrl}/api/v1/auth/me`, {
       headers: { Cookie: sessionCookie },
     });
-    assert.equal(me.status, 200);
-    assert.equal(
-      ((await me.json()) as { user: { username: string } }).user.username,
-      "admin",
-    );
+    expect(me.status).toBe(200);
+    expect(((await me.json()) as { user: { username: string } }).user.username).toBe("admin");
   });
 
   it("supports password login without revealing which credential failed", async () => {
@@ -293,8 +274,8 @@ describe("HTTP application", () => {
         password: "incorrect-password",
       }),
     });
-    assert.equal(invalid.status, 401);
-    assert.deepEqual(await invalid.json(), {
+    expect(invalid.status).toBe(401);
+    expect(await invalid.json()).toStrictEqual({
       error: "Invalid username or password",
     });
 
@@ -306,24 +287,21 @@ describe("HTTP application", () => {
         password: "integration-password",
       }),
     });
-    assert.equal(valid.status, 200);
-    assert.match(valid.headers.get("set-cookie") || "", /HttpOnly/i);
+    expect(valid.status).toBe(200);
+    expect(valid.headers.get("set-cookie") || "").toMatch(/HttpOnly/i);
   });
 
   it("protects authenticated endpoints", async () => {
-    assert.equal((await fetch(`${baseUrl}/api/v1/auth/me`)).status, 401);
-    assert.equal(
-      (
+    expect((await fetch(`${baseUrl}/api/v1/auth/me`)).status).toBe(401);
+    expect((
         await fetch(`${baseUrl}/api/v1/auth/me`, {
           headers: { Authorization: "Bearer wrong" },
         })
-      ).status,
-      401,
-    );
-    assert.equal((await authorizedFetch("/api/v1/auth/me")).status, 200);
+      ).status).toBe(401);
+    expect((await authorizedFetch("/api/v1/auth/me")).status).toBe(200);
     const missing = await authorizedFetch("/api/v1/does-not-exist");
-    assert.equal(missing.status, 404);
-    assert.deepEqual(await missing.json(), { error: "API endpoint not found" });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toStrictEqual({ error: "API endpoint not found" });
   });
 
   it("rejects cross-origin state changes", async () => {
@@ -339,13 +317,13 @@ describe("HTTP application", () => {
         role: "admin",
       }),
     });
-    assert.equal(response.status, 403);
+    expect(response.status).toBe(403);
 
     const fetchMetadataResponse = await authorizedFetch("/api/v1/auth/logout", {
       method: "POST",
       headers: { "Sec-Fetch-Site": "cross-site" },
     });
-    assert.equal(fetchMetadataResponse.status, 403);
+    expect(fetchMetadataResponse.status).toBe(403);
   });
 
   it("requires an explicit binary media type for uploads", async () => {
@@ -357,7 +335,7 @@ describe("HTTP application", () => {
         body: "not accepted as an upload",
       },
     );
-    assert.equal(response.status, 415);
+    expect(response.status).toBe(415);
   });
 
   it("enforces the readable upload limit and reports it before accessing file storage", async () => {
@@ -371,16 +349,16 @@ describe("HTTP application", () => {
         },
       );
     const oversized = await upload(1537);
-    assert.equal(oversized.status, 413);
-    assert.deepEqual(await oversized.json(), {
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toStrictEqual({
       error: "File exceeds the upload size limit of 1.5 KiB",
     });
 
     // The exact limit passes the size gate and reaches this fixture's missing
     // file root, despite MAX_UPLOAD_BYTES being configured as only one byte.
     const boundary = await upload(1536);
-    assert.equal(boundary.status, 404);
-    assert.deepEqual(await boundary.json(), { error: "File root not found", code: "ROOT_NOT_FOUND" });
+    expect(boundary.status).toBe(404);
+    expect(await boundary.json()).toStrictEqual({ error: "File root not found", code: "ROOT_NOT_FOUND" });
   });
 
   it("manages users without exposing password hashes", async () => {
@@ -397,12 +375,12 @@ describe("HTTP application", () => {
         role: "viewer",
       }),
     });
-    assert.equal(created.status, 201);
+    expect(created.status).toBe(201);
     const createdBody = (await created.json()) as {
       user: { id: string; username: string; passwordHash?: string };
     };
-    assert.equal(createdBody.user.username, "viewer");
-    assert.equal(createdBody.user.passwordHash, undefined);
+    expect(createdBody.user.username).toBe("viewer");
+    expect(createdBody.user.passwordHash).toBe(undefined);
     await assertAuditEntry(sessionCookie, "user.created", createdBody.user.id);
 
     const duplicate = await fetch(`${baseUrl}/api/v1/users`, {
@@ -417,16 +395,13 @@ describe("HTTP application", () => {
         role: "viewer",
       }),
     });
-    assert.equal(duplicate.status, 409);
+    expect(duplicate.status).toBe(409);
 
     const list = await fetch(`${baseUrl}/api/v1/users`, {
       headers: { Cookie: sessionCookie },
     });
-    assert.equal(list.status, 200);
-    assert.doesNotMatch(
-      JSON.stringify(await list.json()),
-      /passwordHash|password_hash/,
-    );
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(await list.json())).not.toMatch(/passwordHash|password_hash/);
 
     const login = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
@@ -436,8 +411,8 @@ describe("HTTP application", () => {
         password: "viewer-password",
       }),
     });
-    assert.equal(login.status, 200);
-    assert.match(login.headers.get("set-cookie") || "", /ludock_session=/);
+    expect(login.status).toBe(200);
+    expect(login.headers.get("set-cookie") || "").toMatch(/ludock_session=/);
   });
 
   it("enforces role permissions and protects the final administrator", async () => {
@@ -446,22 +421,22 @@ describe("HTTP application", () => {
     const viewerList = await fetch(`${baseUrl}/api/v1/users`, {
       headers: { Cookie: viewerCookie },
     });
-    assert.equal(viewerList.status, 403);
+    expect(viewerList.status).toBe(403);
 
     const viewerLogs = await fetch(`${baseUrl}/api/v1/application-logs`, {
       headers: { Cookie: viewerCookie },
     });
-    assert.equal(viewerLogs.status, 403);
+    expect(viewerLogs.status).toBe(403);
 
     const unassigned = await fetch(`${baseUrl}/api/v1/servers`, {
       headers: { Cookie: viewerCookie },
     });
-    assert.deepEqual(await unassigned.json(), { servers: [] });
+    expect(await unassigned.json()).toStrictEqual({ servers: [] });
     const unassignedStop = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/stop`,
       { method: "POST", headers: { Cookie: viewerCookie } },
     );
-    assert.equal(unassignedStop.status, 404);
+    expect(unassignedStop.status).toBe(404);
     await setServerGrants(viewerId, [{
       serverId: managedServerId,
       capabilities: ["server.view", "logs.read", "files.read"],
@@ -470,7 +445,7 @@ describe("HTTP application", () => {
       `${baseUrl}/api/v1/servers/${managedServerId}/stop`,
       { method: "POST", headers: { Cookie: viewerCookie } },
     );
-    assert.equal(viewerStop.status, 403);
+    expect(viewerStop.status).toBe(403);
     const variantStop = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/STOP/`,
       {
@@ -478,7 +453,7 @@ describe("HTTP application", () => {
         headers: { Cookie: viewerCookie },
       },
     );
-    assert.equal(variantStop.status, 403);
+    expect(variantStop.status).toBe(403);
 
     const viewerUpload = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/files/upload?root=root-0&path=&name=blocked.jar`,
@@ -491,7 +466,7 @@ describe("HTTP application", () => {
         body: "blocked",
       },
     );
-    assert.equal(viewerUpload.status, 403);
+    expect(viewerUpload.status).toBe(403);
 
     const users = (await (
       await fetch(`${baseUrl}/api/v1/users`, {
@@ -499,7 +474,7 @@ describe("HTTP application", () => {
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
     const admin = users.users.find((user) => user.username === "admin");
-    assert.ok(admin);
+    expect(admin).toBeTruthy();
     const demote = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {
       method: "PATCH",
       headers: {
@@ -508,7 +483,7 @@ describe("HTTP application", () => {
       },
       body: JSON.stringify({ role: "viewer", disabled: false }),
     });
-    assert.equal(demote.status, 409);
+    expect(demote.status).toBe(409);
   });
 
   it("lets a friend start one server without granting command or file access", async () => {
@@ -523,7 +498,7 @@ describe("HTTP application", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, disabled: false }),
       });
-    assert.equal((await setRole("operator")).status, 200);
+    expect((await setRole("operator")).status).toBe(200);
     await setServerGrants(viewerId, [{
       serverId: managedServerId,
       capabilities: ["server.view", "server.start", "server.stop"],
@@ -537,61 +512,32 @@ describe("HTTP application", () => {
     const servers = (await listed.json()) as {
       servers: Array<{ permissions: string[]; fileRoots: unknown[] }>;
     };
-    assert.deepEqual(servers.servers[0].permissions, [
+    expect(servers.servers[0].permissions).toStrictEqual([
       "server.view",
       "server.start",
       "server.stop",
     ]);
-    assert.deepEqual(servers.servers[0].fileRoots, []);
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/start`, "POST")).status,
-      200,
-    );
-    assert.equal(managedStartCalled, true);
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/restart`, "POST")).status,
-      403,
-    );
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/ReStArT/`, "POST"))
-        .status,
-      403,
-    );
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/StArT/`, "POST")).status,
-      200,
-    );
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/files?root=root-0`))
-        .status,
-      403,
-    );
-    assert.equal(
-      (
+    expect(servers.servers[0].fileRoots).toStrictEqual([]);
+    expect((await friendFetch(`/servers/${managedServerId}/start`, "POST")).status).toBe(200);
+    expect(managedStartCalled).toBe(true);
+    expect((await friendFetch(`/servers/${managedServerId}/restart`, "POST")).status).toBe(403);
+    expect((await friendFetch(`/servers/${managedServerId}/ReStArT/`, "POST"))
+        .status).toBe(403);
+    expect((await friendFetch(`/servers/${managedServerId}/StArT/`, "POST")).status).toBe(200);
+    expect((await friendFetch(`/servers/${managedServerId}/files?root=root-0`))
+        .status).toBe(403);
+    expect((
         await friendFetch(
           `/servers/${managedServerId}/FILES/?root=root-0`,
           "HEAD",
         )
-      ).status,
-      403,
-    );
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/updates`, "POST")).status,
-      403,
-    );
+      ).status).toBe(403);
+    expect((await friendFetch(`/servers/${managedServerId}/updates`, "POST")).status).toBe(403);
     for (const feature of ["backups", "schedules", "update-capability"]) {
-      assert.equal(
-        (await friendFetch(`/servers/${managedServerId}/${feature}`)).status,
-        403,
-        feature,
-      );
+      expect((await friendFetch(`/servers/${managedServerId}/${feature}`)).status, feature).toBe(403);
     }
     for (const feature of ["operations", "availability"]) {
-      assert.equal(
-        (await friendFetch(`/servers/${managedServerId}/${feature}`)).status,
-        200,
-        feature,
-      );
+      expect((await friendFetch(`/servers/${managedServerId}/${feature}`)).status, feature).toBe(200);
     }
     for (const feature of [
       "settings/backups",
@@ -600,19 +546,16 @@ describe("HTTP application", () => {
       "diagnostics",
       "integrations",
     ]) {
-      assert.equal((await friendFetch(`/${feature}`)).status, 403, feature);
+      expect((await friendFetch(`/${feature}`)).status, feature).toBe(403);
     }
     const scheduleDenied = await friendFetch(
       `/servers/${managedServerId}/schedules/00000000-0000-4000-8000-000000000001`,
       "DELETE",
     );
-    assert.equal(scheduleDenied.status, 403);
+    expect(scheduleDenied.status).toBe(403);
     await setServerGrants(viewerId, []);
-    assert.equal(
-      (await friendFetch(`/servers/${managedServerId}/start`, "POST")).status,
-      404,
-    );
-    assert.equal((await setRole("viewer")).status, 200);
+    expect((await friendFetch(`/servers/${managedServerId}/start`, "POST")).status).toBe(404);
+    expect((await setRole("viewer")).status).toBe(200);
   });
 
   it("mounts feature routes with their response contracts and scoped schedules", async () => {
@@ -629,16 +572,16 @@ describe("HTTP application", () => {
     ];
     for (const [path, key] of expected) {
       const response = await authorizedFetch(`/api/v1${path}`);
-      assert.equal(response.status, 200, path);
+      expect(response.status, path).toBe(200);
       const body = (await response.json()) as Record<string, unknown>;
-      assert.ok(key in body, path);
+      expect(key in body, path).toBeTruthy();
     }
     const invalidProject = await authorizedFetch("/api/v1/compose-projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
-    assert.equal(invalidProject.status, 404);
+    expect(invalidProject.status).toBe(404);
     const created = await fetch(
       `${baseUrl}/api/v1/servers/${managedServerId}/schedules`,
       {
@@ -653,18 +596,18 @@ describe("HTTP application", () => {
         }),
       },
     );
-    assert.equal(created.status, 201);
+    expect(created.status).toBe(201);
     const { schedule } = (await created.json()) as {
       schedule: { id: string; serverId: string; ownerId: string };
     };
-    assert.equal(schedule.serverId, managedServerId);
-    assert.match(schedule.ownerId, /^[a-f0-9-]{36}$/);
+    expect(schedule.serverId).toBe(managedServerId);
+    expect(schedule.ownerId).toMatch(/^[a-f0-9-]{36}$/);
     const deleted = await authorizedFetch(
       `/api/v1/servers/${managedServerId}/schedules/${schedule.id}`,
       { method: "DELETE" },
     );
-    assert.equal(deleted.status, 200);
-    assert.deepEqual(await deleted.json(), { ok: true });
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toStrictEqual({ ok: true });
   });
 
   it("edits and pauses schedules with revision checks and next-run responses", async () => {
@@ -679,52 +622,52 @@ describe("HTTP application", () => {
       body: JSON.stringify(body),
     });
     const created = await request(collection, "POST", input);
-    assert.equal(created.status, 201);
+    expect(created.status).toBe(201);
     const original = scheduleResponseSchema.parse(await created.json()).schedule;
-    assert.equal(original.revision, 1);
-    assert.equal(typeof original.nextRunAt, "number");
+    expect(original.revision).toBe(1);
+    expect(typeof original.nextRunAt).toBe("number");
     const resource = `${collection}/${original.id}`;
 
     const edited = await request(resource, "PUT", {
       ...input, time: "18:30", days: [2, 4], timezone: "America/Los_Angeles",
       revision: original.revision,
     });
-    assert.equal(edited.status, 200);
+    expect(edited.status).toBe(200);
     const updated = scheduleResponseSchema.parse(await edited.json()).schedule;
-    assert.equal(updated.id, original.id);
-    assert.equal(updated.ownerId, original.ownerId);
-    assert.equal(updated.time, "18:30");
-    assert.deepEqual(updated.days, [2, 4]);
-    assert.equal(updated.timezone, "America/Los_Angeles");
-    assert.equal(updated.revision, original.revision + 1);
-    assert.equal(typeof updated.nextRunAt, "number");
+    expect(updated.id).toBe(original.id);
+    expect(updated.ownerId).toBe(original.ownerId);
+    expect(updated.time).toBe("18:30");
+    expect(updated.days).toStrictEqual([2, 4]);
+    expect(updated.timezone).toBe("America/Los_Angeles");
+    expect(updated.revision).toBe(original.revision + 1);
+    expect(typeof updated.nextRunAt).toBe("number");
 
     const stale = await request(resource, "PATCH", { enabled: false, revision: original.revision });
-    assert.equal(stale.status, 409);
+    expect(stale.status).toBe(409);
     const pausedResponse = await request(resource, "PATCH", { enabled: false, revision: updated.revision });
-    assert.equal(pausedResponse.status, 200);
+    expect(pausedResponse.status).toBe(200);
     const paused = scheduleResponseSchema.parse(await pausedResponse.json()).schedule;
-    assert.equal(paused.enabled, false);
-    assert.equal(paused.nextRunAt, null);
-    assert.equal(paused.revision, updated.revision + 1);
-    assert.equal(paused.time, updated.time);
+    expect(paused.enabled).toBe(false);
+    expect(paused.nextRunAt).toBe(null);
+    expect(paused.revision).toBe(updated.revision + 1);
+    expect(paused.time).toBe(updated.time);
 
     const resumedResponse = await request(resource, "PATCH", { enabled: true, revision: paused.revision });
-    assert.equal(resumedResponse.status, 200);
+    expect(resumedResponse.status).toBe(200);
     const resumed = scheduleResponseSchema.parse(await resumedResponse.json()).schedule;
-    assert.equal(resumed.enabled, true);
-    assert.equal(resumed.revision, paused.revision + 1);
-    assert.equal(typeof resumed.nextRunAt, "number");
+    expect(resumed.enabled).toBe(true);
+    expect(resumed.revision).toBe(paused.revision + 1);
+    expect(typeof resumed.nextRunAt).toBe("number");
     const listed = await authorizedFetch(collection);
-    assert.equal(listed.status, 200);
+    expect(listed.status).toBe(200);
     const schedules = schedulesResponseSchema.parse(await listed.json()).schedules;
-    assert.equal(schedules.length, 1);
-    assert.equal(schedules[0].revision, resumed.revision);
+    expect(schedules.length).toBe(1);
+    expect(schedules[0].revision).toBe(resumed.revision);
     await assertAuditEntry(cookie, "schedule.updated", managedServerId);
     await assertAuditEntry(cookie, "schedule.paused", managedServerId);
     await assertAuditEntry(cookie, "schedule.resumed", managedServerId);
-    assert.equal(managedStartCalled, false);
-    assert.equal(managedStopCalled, false);
+    expect(managedStartCalled).toBe(false);
+    expect(managedStopCalled).toBe(false);
   });
 
   it("rejects unauthenticated and invalid schedule edits without changing the schedule", async () => {
@@ -737,7 +680,7 @@ describe("HTTP application", () => {
     const created = await fetch(`${baseUrl}${collection}`, {
       method: "POST", headers, body: JSON.stringify(input),
     });
-    assert.equal(created.status, 201);
+    expect(created.status).toBe(201);
     const original = scheduleResponseSchema.parse(await created.json()).schedule;
     const url = `${baseUrl}${collection}/${original.id}`;
     for (const [method, body] of [
@@ -747,7 +690,7 @@ describe("HTTP application", () => {
       const response = await fetch(url, {
         method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      assert.equal(response.status, 401);
+      expect(response.status).toBe(401);
     }
     for (const [method, body] of [
       ["PUT", input],
@@ -759,17 +702,17 @@ describe("HTTP application", () => {
       ["PATCH", { enabled: "false", revision: 1 }],
     ] as const) {
       const response = await fetch(url, { method, headers, body: JSON.stringify(body) });
-      assert.equal(response.status, 400);
+      expect(response.status).toBe(400);
     }
     const oversized = await fetch(url, {
       method: "PUT", headers,
       body: JSON.stringify({ ...input, revision: 1, padding: "x".repeat(4096) }),
     });
-    assert.equal(oversized.status, 413);
+    expect(oversized.status).toBe(413);
     const listed = schedulesResponseSchema.parse(await (await authorizedFetch(collection)).json());
-    assert.equal(listed.schedules[0].revision, 1);
-    assert.equal(listed.schedules[0].enabled, true);
-    assert.equal(listed.schedules[0].action, "start");
+    expect(listed.schedules[0].revision).toBe(1);
+    expect(listed.schedules[0].enabled).toBe(true);
+    expect(listed.schedules[0].action).toBe("start");
   });
 
   it("creates paused schedules and serves the latest persisted run outcome", async () => {
@@ -783,50 +726,50 @@ describe("HTTP application", () => {
         action: "start", enabled: false, time: "12:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
       }),
     });
-    assert.equal(response.status, 201);
+    expect(response.status).toBe(201);
     const original = scheduleResponseSchema.parse(await response.json()).schedule;
-    assert.equal(original.nextRunAt, null);
-    assert.equal(original.nextRunUnavailableReason, null);
-    assert.equal(original.lastOperation, null);
-    assert.equal(original.lastRunAt, null);
+    expect(original.nextRunAt).toBe(null);
+    expect(original.nextRunUnavailableReason).toBe(null);
+    expect(original.lastOperation).toBe(null);
+    expect(original.lastRunAt).toBe(null);
     const readSchedule = async () => {
       const listed = await authorizedFetch(collection);
-      assert.equal(listed.status, 200);
+      expect(listed.status).toBe(200);
       return schedulesResponseSchema.parse(await listed.json()).schedules[0];
     };
     runSchedules(due);
-    assert.equal((await readSchedule()).lastOperation, null);
-    assert.equal(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count, 0);
+    expect((await readSchedule()).lastOperation).toBe(null);
+    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
 
     const resumed = await fetch(`${baseUrl}${collection}/${original.id}`, {
       method: "PATCH", headers,
       body: JSON.stringify({ enabled: true, revision: original.revision }),
     });
-    assert.equal(resumed.status, 200);
+    expect(resumed.status).toBe(200);
     runSchedules(due);
     const queued = await readSchedule();
-    assert.equal(queued.lastRunAt, due);
-    assert.equal(queued.lastOperation?.status, "queued");
-    assert.equal(queued.lastOperation?.serverId, managedServerId);
-    assert.ok(queued.lastOperation);
+    expect(queued.lastRunAt).toBe(due);
+    expect(queued.lastOperation?.status).toBe("queued");
+    expect(queued.lastOperation?.serverId).toBe(managedServerId);
+    expect(queued.lastOperation).toBeTruthy();
     for (const key of ["actorId", "input", "recovery", "bindingRevision"])
-      assert.equal(key in queued.lastOperation, false);
+      expect(key in queued.lastOperation).toBe(false);
     for (const status of ["running", "succeeded", "failed", "interrupted"] as const) {
       getDatabase().prepare("UPDATE operations SET status=?,phase=?,error=? WHERE id=?")
         .run(status, status, status === "failed" ? "Fixture action failed" : null, queued.lastOperation.id);
       const current = await readSchedule();
-      assert.equal(current.lastOperation?.status, status);
-      assert.equal(current.lastOperation?.id, queued.lastOperation.id);
-      assert.equal(current.lastRunAt, due);
+      expect(current.lastOperation?.status).toBe(status);
+      expect(current.lastOperation?.id).toBe(queued.lastOperation.id);
+      expect(current.lastRunAt).toBe(due);
     }
     getDatabase().prepare("UPDATE operations SET status='running' WHERE id=?").run(queued.lastOperation.id);
     runSchedules(due + 86_400_000);
     const skipped = await readSchedule();
-    assert.equal(skipped.lastOperation, null);
-    assert.equal(skipped.lastRunAt, due + 86_400_000);
-    assert.match(skipped.lastResult!, /^Skipped:/);
-    assert.equal(managedStartCalled, false);
-    assert.equal(managedStopCalled, false);
+    expect(skipped.lastOperation).toBe(null);
+    expect(skipped.lastRunAt).toBe(due + 86_400_000);
+    expect(skipped.lastResult!).toMatch(/^Skipped:/);
+    expect(managedStartCalled).toBe(false);
+    expect(managedStopCalled).toBe(false);
   });
 
   it("explains unavailable schedule previews while preserving schedule access boundaries", async () => {
@@ -835,7 +778,7 @@ describe("HTTP application", () => {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "operator", disabled }),
     });
-    assert.equal((await changeOwner(false)).status, 200);
+    expect((await changeOwner(false)).status).toBe(200);
     await setServerGrants(ownerId, [{
       serverId: managedServerId, capabilities: ["server.view", "schedules.manage", "server.start"],
     }]);
@@ -844,23 +787,23 @@ describe("HTTP application", () => {
       method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
       body: JSON.stringify({ action: "start", enabled: true, time: "12:00", days: [1], timezone: "UTC" }),
     });
-    assert.equal(created.status, 201);
-    assert.equal(scheduleResponseSchema.parse(await created.json()).schedule.nextRunUnavailableReason, null);
+    expect(created.status).toBe(201);
+    expect(scheduleResponseSchema.parse(await created.json()).schedule.nextRunUnavailableReason).toBe(null);
     const readReason = async () => {
       const response = await authorizedFetch(collection);
-      assert.equal(response.status, 200);
+      expect(response.status).toBe(200);
       const [schedule] = schedulesResponseSchema.parse(await response.json()).schedules;
-      assert.equal(schedule.nextRunAt, null);
+      expect(schedule.nextRunAt).toBe(null);
       return schedule.nextRunUnavailableReason;
     };
     await setServerGrants(ownerId, [{ serverId: managedServerId, capabilities: ["server.view", "schedules.manage"] }]);
-    assert.equal(await readReason(), "action_access_removed");
+    expect(await readReason()).toBe("action_access_removed");
     await setServerGrants(ownerId, [{ serverId: managedServerId, capabilities: ["server.view"] }]);
-    assert.equal(await readReason(), "owner_access_removed");
-    assert.equal((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status, 403);
-    assert.equal((await changeOwner(true)).status, 200);
-    assert.equal(await readReason(), "owner_disabled");
-    assert.equal((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status, 401);
+    expect(await readReason()).toBe("owner_access_removed");
+    expect((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status).toBe(403);
+    expect((await changeOwner(true)).status).toBe(200);
+    expect(await readReason()).toBe("owner_disabled");
+    expect((await fetch(`${baseUrl}${collection}`, { headers: { Cookie: cookie } })).status).toBe(401);
   });
 
   it("shows deployment root choices only to administrators without exposing other environment settings", async () => {
@@ -871,8 +814,8 @@ describe("HTTP application", () => {
       delete process.env.LUDOCK_BACKUP_ROOTS;
       delete process.env.LUDOCK_COMPOSE_ROOTS;
       const defaults = await authorizedFetch("/api/v1/settings/deployment");
-      assert.equal(defaults.status, 200);
-      assert.deepEqual(await defaults.json(), {
+      expect(defaults.status).toBe(200);
+      expect(await defaults.json()).toStrictEqual({
         backupRoots: [], composeRoots: [], composeAvailable: false,
       });
 
@@ -880,19 +823,19 @@ describe("HTTP application", () => {
       process.env.LUDOCK_COMPOSE_ROOTS = ["/srv/games", "/srv/games"].join(path.delimiter);
       composeAvailability.mockResolvedValue(true);
       const response = await authorizedFetch("/api/v1/settings/deployment");
-      assert.equal(response.status, 200);
+      expect(response.status).toBe(200);
       const body = await response.json() as Record<string, unknown>;
-      assert.deepEqual(body.backupRoots, ["/backups", "/archive"]);
-      assert.deepEqual(body.composeRoots, ["/srv/games"]);
-      assert.equal(body.composeAvailable, true);
-      assert.deepEqual(Object.keys(body).sort(), ["backupRoots", "composeAvailable", "composeRoots"]);
+      expect(body.backupRoots).toStrictEqual(["/backups", "/archive"]);
+      expect(body.composeRoots).toStrictEqual(["/srv/games"]);
+      expect(body.composeAvailable).toBe(true);
+      expect(Object.keys(body).sort()).toStrictEqual(["backupRoots", "composeAvailable", "composeRoots"]);
 
       for (const [headers, expected] of [
         [{}, 401], [{ Cookie: viewerCookie }, 403],
       ] as const) {
         const denied = await fetch(`${baseUrl}/api/v1/settings/deployment`, { headers });
-        assert.equal(denied.status, expected);
-        assert.doesNotMatch(JSON.stringify(await denied.json()), /\/backups|\/archive|\/srv\/games/);
+        expect(denied.status).toBe(expected);
+        expect(JSON.stringify(await denied.json())).not.toMatch(/\/backups|\/archive|\/srv\/games/);
       }
     } finally {
       if (originalBackupRoots === undefined) delete process.env.LUDOCK_BACKUP_ROOTS;
@@ -916,27 +859,24 @@ describe("HTTP application", () => {
     try {
       for (let i = 0; i < 100 && !managedStopCalled; i++)
         await new Promise((resolve) => setTimeout(resolve, 5));
-      assert.equal(managedStopCalled, true);
+      expect(managedStopCalled).toBe(true);
       controller.abort();
       await first;
       const conflict = await authorizedFetch(
         `/api/v1/servers/${managedServerId}/stop`,
         { method: "POST" },
       );
-      assert.equal(conflict.status, 409);
+      expect(conflict.status).toBe(409);
     } finally {
       finishStop();
       stopGate = undefined;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(
-      (
+    expect((
         await authorizedFetch(`/api/v1/servers/${managedServerId}/stop`, {
           method: "POST",
         })
-      ).status,
-      200,
-    );
+      ).status).toBe(200);
   });
 
   it("serves structured redacted Ludock logs to administrators", async () => {
@@ -951,7 +891,7 @@ describe("HTTP application", () => {
         headers: { Cookie: sessionCookie },
       },
     );
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as {
       generation: string;
       entries: Array<{
@@ -961,16 +901,16 @@ describe("HTTP application", () => {
         context?: Record<string, unknown>;
       }>;
     };
-    assert.ok(body.generation);
+    expect(body.generation).toBeTruthy();
     const marker = body.entries.find(
       (entry) =>
         entry.component === "http-test" && entry.message.includes("diagnostic"),
     );
-    assert.ok(marker);
-    assert.equal(marker.level, "warn");
-    assert.equal(marker.context?.apiToken, "[REDACTED]");
-    assert.doesNotMatch(JSON.stringify(marker), /must-not-reach-browser/);
-    assert.equal(marker.context?.requestId, "log-test-request");
+    expect(marker).toBeTruthy();
+    expect(marker.level).toBe("warn");
+    expect(marker.context?.apiToken).toBe("[REDACTED]");
+    expect(JSON.stringify(marker)).not.toMatch(/must-not-reach-browser/);
+    expect(marker.context?.requestId).toBe("log-test-request");
   });
 
   it("does not create debug log entries for log-viewer polling", async () => {
@@ -992,15 +932,12 @@ describe("HTTP application", () => {
           context?: Record<string, unknown>;
         }>;
       };
-      assert.equal(
-        body.entries.some(
+      expect(body.entries.some(
           (entry) =>
             entry.component === "api" &&
             entry.message === "HTTP request completed" &&
             entry.context?.path === "/api/v1/application-logs",
-        ),
-        false,
-      );
+        )).toBe(false);
     } finally {
       if (previousLevel === undefined) delete process.env.LOG_LEVEL;
       else process.env.LOG_LEVEL = previousLevel;
@@ -1013,27 +950,24 @@ describe("HTTP application", () => {
     const response = await fetch(`${baseUrl}/api/v1/account/sessions`, {
       headers: { Cookie: viewerCookie },
     });
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as {
       sessions: Array<{ id: string; current: boolean }>;
     };
-    assert.equal(body.sessions.length, 1);
-    assert.equal(body.sessions[0].current, true);
+    expect(body.sessions.length).toBe(1);
+    expect(body.sessions[0].current).toBe(true);
 
     const revoked = await fetch(
       `${baseUrl}/api/v1/account/sessions/${body.sessions[0].id}`,
       { method: "DELETE", headers: { Cookie: viewerCookie } },
     );
-    assert.equal(revoked.status, 200);
+    expect(revoked.status).toBe(200);
     await assertAuditEntry(sessionCookie, "auth.session.revoked", body.sessions[0].id);
-    assert.equal(
-      (
+    expect((
         await fetch(`${baseUrl}/api/v1/auth/me`, {
           headers: { Cookie: viewerCookie },
         })
-      ).status,
-      401,
-    );
+      ).status).toBe(401);
   });
 
   it("deletes other accounts but not the current account", async () => {
@@ -1045,19 +979,19 @@ describe("HTTP application", () => {
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
     const admin = users.users.find((user) => user.username === "admin");
-    assert.ok(admin);
+    expect(admin).toBeTruthy();
 
     const selfDelete = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {
       method: "DELETE",
       headers: { Cookie: sessionCookie },
     });
-    assert.equal(selfDelete.status, 409);
+    expect(selfDelete.status).toBe(409);
 
     const deleteViewer = await fetch(`${baseUrl}/api/v1/users/${viewerId}`, {
       method: "DELETE",
       headers: { Cookie: sessionCookie },
     });
-    assert.equal(deleteViewer.status, 200);
+    expect(deleteViewer.status).toBe(200);
     await assertAuditEntry(sessionCookie, "user.deleted", viewerId);
   });
 
@@ -1074,25 +1008,19 @@ describe("HTTP application", () => {
         newPassword: "replacement-password",
       }),
     });
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const replacementCookie = (response.headers.get("set-cookie") || "").split(
       ";",
     )[0];
-    assert.match(replacementCookie, /ludock_session=/);
-    assert.equal(
-      (
+    expect(replacementCookie).toMatch(/ludock_session=/);
+    expect((
         await fetch(`${baseUrl}/api/v1/auth/me`, {
           headers: { Cookie: sessionCookie },
         })
-      ).status,
-      401,
-    );
-    assert.equal(
-      (await fetch(`${baseUrl}/api/v1/auth/me`, {
+      ).status).toBe(401);
+    expect((await fetch(`${baseUrl}/api/v1/auth/me`, {
         headers: { Cookie: replacementCookie },
-      })).status,
-      200,
-    );
+      })).status).toBe(200);
 
     const oldLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
@@ -1102,7 +1030,7 @@ describe("HTTP application", () => {
         password: "integration-password",
       }),
     });
-    assert.equal(oldLogin.status, 401);
+    expect(oldLogin.status).toBe(401);
     const newLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1111,22 +1039,22 @@ describe("HTTP application", () => {
         password: "replacement-password",
       }),
     });
-    assert.equal(newLogin.status, 200);
+    expect(newLogin.status).toBe(200);
     await assertAuditEntry(replacementCookie, "auth.password.changed");
   });
 
   it("lists managed containers without unrelated labels", async () => {
     const response = await authorizedFetch("/api/v1/servers");
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as {
       servers: Array<{ id: string; labels: Record<string, string> }>;
     };
 
-    assert.equal(body.servers.length, 1);
-    assert.equal(body.servers[0].id, managedServerId);
-    assert.match(managedServerId, /^[0-9a-f-]{36}$/);
-    assert.notEqual(managedServerId, managedInfo.Id);
-    assert.deepEqual(body.servers[0].labels, {});
+    expect(body.servers.length).toBe(1);
+    expect(body.servers[0].id).toBe(managedServerId);
+    expect(managedServerId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(managedServerId).not.toBe(managedInfo.Id);
+    expect(body.servers[0].labels).toStrictEqual({});
   });
 
   it("allows managed lifecycle actions", async () => {
@@ -1134,8 +1062,8 @@ describe("HTTP application", () => {
       `/api/v1/servers/${managedServerId}/stop`,
       { method: "POST" },
     );
-    assert.equal(response.status, 200);
-    assert.equal(managedStopCalled, true);
+    expect(response.status).toBe(200);
+    expect(managedStopCalled).toBe(true);
   });
 
   it("rejects unmanaged lifecycle actions", async () => {
@@ -1143,8 +1071,8 @@ describe("HTTP application", () => {
       "/api/v1/servers/unmanaged-container-id/stop",
       { method: "POST" },
     );
-    assert.equal(response.status, 404);
-    assert.equal(unmanagedStopCalled, false);
+    expect(response.status).toBe(404);
+    expect(unmanagedStopCalled).toBe(false);
   });
 
   it("throttles repeated login failures", async () => {
@@ -1156,12 +1084,12 @@ describe("HTTP application", () => {
         body: JSON.stringify({ username: "admin", password }),
       });
 
-    assert.equal((await login("definitely-incorrect")).status, 401);
-    assert.equal((await login("integration-password")).status, 200);
+    expect((await login("definitely-incorrect")).status).toBe(401);
+    expect((await login("integration-password")).status).toBe(200);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      assert.equal((await login("definitely-incorrect")).status, 401);
+      expect((await login("definitely-incorrect")).status).toBe(401);
     }
-    assert.equal((await login("integration-password")).status, 429);
+    expect((await login("integration-password")).status).toBe(429);
   });
 
   it("throttles current-password guessing on password change", async () => {
@@ -1177,9 +1105,9 @@ describe("HTTP application", () => {
       });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      assert.equal((await guess()).status, 400);
+      expect((await guess()).status).toBe(400);
     }
-    assert.equal((await guess()).status, 429);
+    expect((await guess()).status).toBe(429);
 
     const correct = await fetch(`${baseUrl}/api/v1/account/change-password`, {
       method: "POST",
@@ -1189,6 +1117,6 @@ describe("HTTP application", () => {
         newPassword: "another-replacement-password",
       }),
     });
-    assert.equal(correct.status, 429);
+    expect(correct.status).toBe(429);
   });
 });

@@ -52,5 +52,8 @@
         "typescript/unbound-method": "error"
       }
     }
-  ]
+  ],
+  "globals": {
+    "Bun": "readonly"
+  }
 }

@@ -1,9 +1,8 @@
-import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "bun";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import { startServer } from "../src/index.js";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import { getDockerInstance } from "../src/docker.js";
@@ -45,15 +44,15 @@ describe("native server shutdown", () => {
       });
       let stopped = false;
       const shutdown = runtime.shutdown("test").then(() => { stopped = true; });
-      assert.equal(await closing, 1001);
-      assert.equal(stopped, false);
-      assert.equal(database.prepare("SELECT 1 AS value").get()?.value, 1);
-      await assert.rejects(fetch(new URL("/api/v1/health", runtime.server.url), { signal: AbortSignal.timeout(1000) }));
+      expect(await closing).toBe(1001);
+      expect(stopped).toBe(false);
+      expect(database.prepare("SELECT 1 AS value").get()?.value).toBe(1);
+      await expect(fetch(new URL("/api/v1/health", runtime.server.url), { signal: AbortSignal.timeout(1000) })).rejects.toThrow();
       releaseLock();
       releaseLock = undefined;
       await shutdown;
-      assert.equal(stopped, true);
-      assert.throws(() => database.prepare("SELECT 1").get(), /closed/i);
+      expect(stopped).toBe(true);
+      expect(() => database.prepare("SELECT 1").get()).toThrow(/closed/i);
     } finally {
       client.terminate();
     }
@@ -143,10 +142,10 @@ describe("native server shutdown", () => {
       await waitForOutput("Fixture SIGTERM observed 1");
       child.kill("SIGTERM");
       await waitForOutput("Fixture SIGTERM observed 2");
-      assert.equal(await child.exited, exitCode);
+      expect(await child.exited).toBe(exitCode);
       await readOutput;
-      assert.equal(output.match(/Shutting down/g)?.length, 1, output);
-      assert.equal(output.match(/Shutdown complete/g)?.length, 1, output);
+      expect(output.match(/Shutting down/g)?.length, output).toBe(1);
+      expect(output.match(/Shutdown complete/g)?.length, output).toBe(1);
       const markers = [
         "Fixture SIGTERM observed 1",
         "Fixture SIGTERM observed 2",
@@ -158,10 +157,10 @@ describe("native server shutdown", () => {
       let previous = -1;
       for (const marker of markers) {
         const index = output.indexOf(marker);
-        assert.ok(index > previous, `Expected '${marker}' in shutdown order: ${output}`);
+        expect(index > previous, `Expected '${marker}' in shutdown order: ${output}`).toBeTruthy();
         previous = index;
       }
-      assert.doesNotMatch(await errors, /error:|Unhandled|SyntaxError/);
+      expect(await errors).not.toMatch(/error:|Unhandled|SyntaxError/);
     } finally {
       clearTimeout(deadline);
       child.kill("SIGKILL");

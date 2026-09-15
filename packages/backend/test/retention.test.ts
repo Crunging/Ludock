@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.AUDIT_LOG_MAX_ROWS = "1000";
@@ -36,24 +35,21 @@ function attemptCount(): number {
 
 describe("audit log retention", () => {
   it("keeps a rolling window of the newest entries", () => {
-    assert.doesNotThrow(() => pruneAuditLog(), "empty table must be safe");
-    assert.equal(auditCount(), 0);
+    expect(() => pruneAuditLog(), "empty table must be safe").not.toThrow();
+    expect(auditCount()).toBe(0);
 
     for (let index = 0; index < 1200; index += 1) {
       writeAuditLog({ action: `auth.login.failed.${index}` });
     }
 
     // Periodic pruning can exceed the limit by at most one prune interval.
-    assert.ok(
-      auditCount() <= 1000 + 500,
-      `expected the table to stay bounded, found ${auditCount()}`
-    );
+    expect(auditCount() <= 1000 + 500, `expected the table to stay bounded, found ${auditCount()}`).toBeTruthy();
 
     pruneAuditLog();
-    assert.equal(auditCount(), 1000);
+    expect(auditCount()).toBe(1000);
 
-    assert.equal(listAuditHistory({ limit: 1 }).entries[0]?.action, "auth.login.failed.1199");
-    assert.deepEqual(listAuditHistory({ limit: 1, action: "auth.login.failed.0" }).entries, []);
+    expect(listAuditHistory({ limit: 1 }).entries[0]?.action).toBe("auth.login.failed.1199");
+    expect(listAuditHistory({ limit: 1, action: "auth.login.failed.0" }).entries).toStrictEqual([]);
   });
 
   it("defers pruning until the owning transaction has committed", () => {
@@ -66,7 +62,7 @@ describe("audit log retention", () => {
       for (let index = 0; index < 500; index += 1) {
         writeAuditLog({ action: "fixture.transaction" }, { prune: false });
       }
-      assert.equal(auditCount(), 1501, "retention must not run inside the transaction");
+      expect(auditCount(), "retention must not run inside the transaction").toBe(1501);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -74,8 +70,8 @@ describe("audit log retention", () => {
     }
 
     pruneAuditLogIfNeeded();
-    assert.equal(auditCount(), 1000);
-    assert.equal(listAuditHistory({ limit: 1 }).entries[0]?.action, "fixture.transaction");
+    expect(auditCount()).toBe(1000);
+    expect(listAuditHistory({ limit: 1 }).entries[0]?.action).toBe("fixture.transaction");
   });
 
   it("keeps failed deferred pruning eligible for retry", () => {
@@ -87,12 +83,12 @@ describe("audit log retention", () => {
     }
     db.exec(`CREATE TEMP TRIGGER fail_audit_pruning BEFORE DELETE ON audit_log
       BEGIN SELECT RAISE(FAIL, 'fixture pruning failure'); END`);
-    assert.throws(() => pruneAuditLogIfNeeded(), /fixture pruning failure/);
-    assert.equal(auditCount(), 1501);
+    expect(() => pruneAuditLogIfNeeded()).toThrow(/fixture pruning failure/);
+    expect(auditCount()).toBe(1501);
     db.exec("DROP TRIGGER fail_audit_pruning");
 
     pruneAuditLogIfNeeded();
-    assert.equal(auditCount(), 1000, "a failed maintenance pass must remain due");
+    expect(auditCount(), "a failed maintenance pass must remain due").toBe(1000);
   });
 });
 
@@ -102,13 +98,10 @@ describe("login throttle retention", () => {
     const now = 1_000_000_000;
     recordLoginFailure("progressive", now, windowMs, 1, 250);
     const afterCooldown = getLoginThrottle("progressive", now + 251, windowMs);
-    assert.equal(afterCooldown.failures, 1);
-    assert.equal(afterCooldown.blockedUntil, now + 250);
-    assert.equal(
-      recordLoginFailure("progressive", now + 251, windowMs, 1, 500).blockedUntil,
-      now + 751,
-    );
-    assert.deepEqual(getLoginThrottle("progressive", now + windowMs, windowMs), {
+    expect(afterCooldown.failures).toBe(1);
+    expect(afterCooldown.blockedUntil).toBe(now + 250);
+    expect(recordLoginFailure("progressive", now + 251, windowMs, 1, 500).blockedUntil).toBe(now + 751);
+    expect(getLoginThrottle("progressive", now + windowMs, windowMs)).toStrictEqual({
       failures: 0,
       blockedUntil: 0,
     });
@@ -122,21 +115,15 @@ describe("login throttle retention", () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       recordLoginFailure(blocking, now, windowMs, 5);
     }
-    assert.ok(getLoginThrottle(blocking, now, windowMs).blockedUntil > now);
+    expect(getLoginThrottle(blocking, now, windowMs).blockedUntil > now).toBeTruthy();
 
     recordLoginFailure("stale-key", now - windowMs * 4, windowMs, 5);
     const before = attemptCount();
-    assert.ok(before >= 2);
+    expect(before >= 2).toBeTruthy();
 
     pruneLoginAttempts(now, windowMs);
 
-    assert.ok(
-      attemptCount() < before,
-      "the stale row should have been removed"
-    );
-    assert.ok(
-      getLoginThrottle(blocking, now, windowMs).blockedUntil > now,
-      "an actively blocking row must survive pruning"
-    );
+    expect(attemptCount() < before, "the stale row should have been removed").toBeTruthy();
+    expect(getLoginThrottle(blocking, now, windowMs).blockedUntil > now, "an actively blocking row must survive pruning").toBeTruthy();
   });
 });

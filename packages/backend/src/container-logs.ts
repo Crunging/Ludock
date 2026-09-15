@@ -1,4 +1,4 @@
-import type { ReadableStreamDefaultReader } from "node:stream/web";
+import { concatBytes, byteView } from "./bytes.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
@@ -65,7 +65,7 @@ export async function handleContainerLogsConnection(
   });
   send("system", "Following Docker logs");
 
-  let logReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let logReader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
   const secrets = observationSecrets(access.context.observation);
   const stdout = new ConsoleOutputRedactor(secrets, (value) =>
     send("stdout", value),
@@ -141,7 +141,7 @@ export async function handleContainerLogsConnection(
 
 export class DockerLogDecoder {
   private mode: "unknown" | "raw" | "multiplexed" = "unknown";
-  private buffer = Buffer.alloc(0);
+  private buffer = new Uint8Array(0);
   private readonly text = {
     stdout: new TextDecoder("utf-8", { ignoreBOM: true }),
     stderr: new TextDecoder("utf-8", { ignoreBOM: true }),
@@ -158,7 +158,7 @@ export class DockerLogDecoder {
       return;
     }
 
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    this.buffer = concatBytes([this.buffer, chunk]);
     if (this.mode === "unknown") {
       const firstByte = this.buffer[0];
       if (firstByte !== 1 && firstByte !== 2) {
@@ -179,7 +179,7 @@ export class DockerLogDecoder {
 
     while (this.buffer.length >= 8) {
       const streamType = this.buffer[0];
-      const frameSize = this.buffer.readUInt32BE(4);
+      const frameSize = byteView(this.buffer).getUint32(4);
       if (
         (streamType !== 1 && streamType !== 2) ||
         this.buffer[1] !== 0 ||
@@ -217,7 +217,7 @@ export class DockerLogDecoder {
     this.mode = "raw";
     if (this.buffer.length > 0) {
       this.write("stdout", this.buffer);
-      this.buffer = Buffer.alloc(0);
+      this.buffer = new Uint8Array(0);
     }
   }
 }

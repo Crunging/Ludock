@@ -1,8 +1,9 @@
-import assert from "node:assert/strict";
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { concatBytes, decodeText, encodeText } from "../src/bytes.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { FILE_HELPER_SCRIPT } from "../src/file-helper-script.js";
 import { extract } from "tar-stream";
 
@@ -35,7 +36,7 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           new Response(child.stderr).text(),
           child.exited,
         ]);
-        return { exitCode, stdout: Buffer.from(stdout), stderr };
+        return { exitCode, stdout: fixtureBytes(stdout), stderr };
       } finally {
         if (child.exitCode === null) {
           child.kill("SIGKILL");
@@ -63,34 +64,25 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
             ...extra,
           }),
         ],
-        input === undefined ? undefined : Buffer.from(input),
+        input === undefined ? undefined : fixtureBytes(input),
       );
-      return { ...result, stdout: result.stdout.toString() };
+      return { ...result, stdout: decodeText(result.stdout) };
     }
 
     it("lists, reads, writes, renames, and deletes files without a shell or archive mutation", async () => {
-      assert.equal((await run("mkdir", "world")).exitCode, 0);
-      assert.equal(
-        (await run("upload", "world/config.txt", { size: 12 }, "hello world!")).exitCode,
-        0,
-      );
-      assert.equal((await run("download", "world/config.txt")).stdout, "hello world!");
+      expect((await run("mkdir", "world")).exitCode).toBe(0);
+      expect((await run("upload", "world/config.txt", { size: 12 }, "hello world!")).exitCode).toBe(0);
+      expect((await run("download", "world/config.txt")).stdout).toBe("hello world!");
       const listing = JSON.parse((await run("list", "world")).stdout) as Array<{
         name: string;
         type: string;
       }>;
-      assert.deepEqual(
-        listing.map(({ name, type }) => ({ name, type })),
-        [{ name: "config.txt", type: "file" }],
-      );
-      assert.equal(
-        (await run("rename", "world/config.txt", { destination: "world/renamed.txt" }))
-          .exitCode,
-        0,
-      );
-      assert.equal((await run("download", "world/config.txt")).exitCode, 1);
-      assert.equal((await run("delete", "world")).exitCode, 0);
-      assert.equal(fs.existsSync(path.join(root, "world")), false);
+      expect(listing.map(({ name, type }) => ({ name, type }))).toStrictEqual([{ name: "config.txt", type: "file" }]);
+      expect((await run("rename", "world/config.txt", { destination: "world/renamed.txt" }))
+          .exitCode).toBe(0);
+      expect((await run("download", "world/config.txt")).exitCode).toBe(1);
+      expect((await run("delete", "world")).exitCode).toBe(0);
+      expect(fs.existsSync(path.join(root, "world"))).toBe(false);
     });
 
     it("leaves existing files intact and new files absent after incomplete or invalid uploads", async () => {
@@ -104,10 +96,10 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           { size: 1.5, body: "x" },
         ]) {
           const result = await run("upload", relative, { size: input.size }, input.body);
-          assert.equal(result.exitCode, 1, `${relative}: ${JSON.stringify(input)}`);
-          assert.equal(fs.readFileSync(existing, "utf8"), "original-world-settings");
-          assert.equal(fs.existsSync(path.join(root, "new.cfg")), false);
-          assert.deepEqual(fs.readdirSync(root), ["world.cfg"], "Failed uploads must remove their temporary files");
+          expect(result.exitCode, `${relative}: ${JSON.stringify(input)}`).toBe(1);
+          expect(fs.readFileSync(existing, "utf8")).toBe("original-world-settings");
+          expect(fs.existsSync(path.join(root, "new.cfg"))).toBe(false);
+          expect(fs.readdirSync(root), "Failed uploads must remove their temporary files").toStrictEqual(["world.cfg"]);
         }
       }
     });
@@ -119,14 +111,14 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       fs.chmodSync(filename, 0o640);
       const original = fs.statSync(filename);
       for (const body of ["new\0settings\n", ""]) {
-        const result = await run("upload", "world.cfg", { size: Buffer.byteLength(body) }, body);
-        assert.equal(result.exitCode, 0, result.stderr);
-        assert.equal(fs.readFileSync(filename, "utf8"), body);
+        const result = await run("upload", "world.cfg", { size: encodeText(body).byteLength }, body);
+        expect(result.exitCode, result.stderr).toBe(0);
+        expect(fs.readFileSync(filename, "utf8")).toBe(body);
         const replaced = fs.statSync(filename);
-        assert.equal(replaced.mode & 0o777, 0o640);
-        assert.equal(replaced.uid, original.uid);
-        assert.equal(replaced.gid, original.gid);
-        assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+        expect(replaced.mode & 0o777).toBe(0o640);
+        expect(replaced.uid).toBe(original.uid);
+        expect(replaced.gid).toBe(original.gid);
+        expect(fs.readdirSync(root)).toStrictEqual(["world.cfg"]);
       }
     });
 
@@ -135,10 +127,10 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       const link = path.join(root, "world.cfg");
       fs.writeFileSync(outside, "outside-settings");
       fs.symlinkSync(outside, link);
-      assert.equal((await run("upload", "world.cfg", { size: 3 }, "new")).exitCode, 1);
-      assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
-      assert.equal(fs.readFileSync(outside, "utf8"), "outside-settings");
-      assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+      expect((await run("upload", "world.cfg", { size: 3 }, "new")).exitCode).toBe(1);
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(outside, "utf8")).toBe("outside-settings");
+      expect(fs.readdirSync(root)).toStrictEqual(["world.cfg"]);
     });
 
     it("commits a production upload only after its complete payload and matching completion token", async () => {
@@ -149,14 +141,14 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       fs.writeFileSync(filename, "old-settings");
       for (const input of [body, body + anotherId, body + uploadId + "extra"]) {
         const result = await run("upload", "world.cfg", { size: body.length, uploadId }, input);
-        assert.equal(result.exitCode, 1);
-        assert.equal(fs.readFileSync(filename, "utf8"), "old-settings");
-        assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+        expect(result.exitCode).toBe(1);
+        expect(fs.readFileSync(filename, "utf8")).toBe("old-settings");
+        expect(fs.readdirSync(root)).toStrictEqual(["world.cfg"]);
       }
       const committed = await run("upload", "world.cfg", { size: body.length, uploadId }, body + uploadId);
-      assert.equal(committed.exitCode, 0, committed.stderr);
-      assert.equal(fs.readFileSync(filename, "utf8"), body);
-      assert.deepEqual(fs.readdirSync(root), ["world.cfg"]);
+      expect(committed.exitCode, committed.stderr).toBe(0);
+      expect(fs.readFileSync(filename, "utf8")).toBe(body);
+      expect(fs.readdirSync(root)).toStrictEqual(["world.cfg"]);
     });
 
     it("cleans up only the selected upload's temporary sibling within its approved parent", async () => {
@@ -172,14 +164,14 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       fs.writeFileSync(path.join(root, "world", otherTemporary), "other-upload");
       fs.writeFileSync(path.join(outside, temporary), "outside-data");
       fs.symlinkSync(outside, path.join(root, "escape"));
-      assert.equal((await run("upload-cleanup", "world/settings.cfg", { uploadId: "../escape" })).exitCode, 1);
-      assert.equal((await run("upload-cleanup", "escape/settings.cfg", { uploadId })).exitCode, 1);
-      assert.equal(fs.readFileSync(path.join(outside, temporary), "utf8"), "outside-data");
+      expect((await run("upload-cleanup", "world/settings.cfg", { uploadId: "../escape" })).exitCode).toBe(1);
+      expect((await run("upload-cleanup", "escape/settings.cfg", { uploadId })).exitCode).toBe(1);
+      expect(fs.readFileSync(path.join(outside, temporary), "utf8")).toBe("outside-data");
       const result = await run("upload-cleanup", "world/settings.cfg", { uploadId });
-      assert.equal(result.exitCode, 0, result.stderr);
-      assert.equal(fs.existsSync(path.join(root, "world", temporary)), false);
-      assert.equal(fs.readFileSync(path.join(root, "world", otherTemporary), "utf8"), "other-upload");
-      assert.equal(fs.readFileSync(path.join(root, "world", "settings.cfg"), "utf8"), "original-settings");
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(fs.existsSync(path.join(root, "world", temporary))).toBe(false);
+      expect(fs.readFileSync(path.join(root, "world", otherTemporary), "utf8")).toBe("other-upload");
+      expect(fs.readFileSync(path.join(root, "world", "settings.cfg"), "utf8")).toBe("original-settings");
     });
 
     it("refuses uploads when their destination is created or replaced before commit", async () => {
@@ -196,17 +188,17 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           upload.stdin.write("new-");
           await upload.stdin.flush();
           for (let attempt = 0; attempt < 200 && !fs.existsSync(temporary); attempt++) {
-            assert.equal(upload.exitCode, null, "Upload exited before creating temporary storage");
+            expect(upload.exitCode, "Upload exited before creating temporary storage").toBe(null);
             await Bun.sleep(5);
           }
-          assert.equal(fs.existsSync(temporary), true, "Upload must prepare its temporary file before the target changes");
+          expect(fs.existsSync(temporary), "Upload must prepare its temporary file before the target changes").toBe(true);
           if (existing) fs.renameSync(filename, path.join(root, "previous.cfg"));
           fs.writeFileSync(filename, "external-replacement");
           upload.stdin.write("settings" + uploadId);
           upload.stdin.end();
-          assert.equal(await upload.exited, 1);
-          assert.equal(fs.readFileSync(filename, "utf8"), "external-replacement");
-          assert.equal(fs.existsSync(temporary), false);
+          expect(await upload.exited).toBe(1);
+          expect(fs.readFileSync(filename, "utf8")).toBe("external-replacement");
+          expect(fs.existsSync(temporary)).toBe(false);
         } finally {
           if (upload.exitCode === null) {
             upload.kill("SIGKILL");
@@ -215,7 +207,7 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
         }
         fs.unlinkSync(filename);
       }
-      assert.equal(fs.readFileSync(path.join(root, "previous.cfg"), "utf8"), "original-settings");
+      expect(fs.readFileSync(path.join(root, "previous.cfg"), "utf8")).toBe("original-settings");
     });
 
     it("rejects root and intermediate symbolic links for both reads and writes", async () => {
@@ -223,26 +215,13 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       fs.mkdirSync(outside);
       fs.writeFileSync(path.join(outside, "canary"), "outside-secret");
       fs.symlinkSync(outside, path.join(root, "escape"));
-      assert.equal((await run("download", "escape/canary")).exitCode, 1);
-      assert.equal(
-        (await run("upload", "escape/canary", { size: 7 }, "changed")).exitCode,
-        1,
-      );
-      assert.equal((await run("list", "escape")).exitCode, 1);
-      assert.equal(
-        (await run("check", "", { root: path.join(root, "escape") })).exitCode,
-        1,
-      );
-      assert.equal(
-        fs.readFileSync(path.join(outside, "canary"), "utf8"),
-        "outside-secret",
-      );
-      assert.equal(
-        (await run("delete", "escape")).exitCode,
-        0,
-        "deleting the link itself remains allowed",
-      );
-      assert.equal(fs.existsSync(path.join(outside, "canary")), true);
+      expect((await run("download", "escape/canary")).exitCode).toBe(1);
+      expect((await run("upload", "escape/canary", { size: 7 }, "changed")).exitCode).toBe(1);
+      expect((await run("list", "escape")).exitCode).toBe(1);
+      expect((await run("check", "", { root: path.join(root, "escape") })).exitCode).toBe(1);
+      expect(fs.readFileSync(path.join(outside, "canary"), "utf8")).toBe("outside-secret");
+      expect((await run("delete", "escape")).exitCode, "deleting the link itself remains allowed").toBe(0);
+      expect(fs.existsSync(path.join(outside, "canary"))).toBe(true);
     });
 
     it("rejects downloads of hard links, symlinks, and directories containing special files", async () => {
@@ -252,36 +231,24 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
         path.join(root, "world", "file"),
         path.join(root, "hardlink"),
       );
-      assert.equal((await run("download", "hardlink")).exitCode, 1);
-      assert.equal((await run("upload", "hardlink", { size: 1 }, "x")).exitCode, 1);
-      assert.equal(
-        fs.readFileSync(path.join(root, "world", "file"), "utf8"),
-        "contents",
-      );
+      expect((await run("download", "hardlink")).exitCode).toBe(1);
+      expect((await run("upload", "hardlink", { size: 1 }, "x")).exitCode).toBe(1);
+      expect(fs.readFileSync(path.join(root, "world", "file"), "utf8")).toBe("contents");
       fs.unlinkSync(path.join(root, "hardlink"));
-      assert.equal(
-        (await runProcess(["mkfifo", path.join(root, "world", "pipe")])).exitCode,
-        0,
-      );
-      assert.equal((await run("download", "world")).exitCode, 1);
+      expect((await runProcess(["mkfifo", path.join(root, "world", "pipe")])).exitCode).toBe(0);
+      expect((await run("download", "world")).exitCode).toBe(1);
     });
 
     it("never crosses a blocked nested mount, including ancestor archive and mutations", async () => {
       fs.mkdirSync(path.join(root, "world"));
       fs.mkdirSync(path.join(root, "world", "private"));
       const blocked = [path.join(root, "world", "private")];
-      assert.deepEqual(
-        JSON.parse((await run("list", "world", { blocked })).stdout),
-        [],
-      );
-      assert.equal((await run("list", "world/private", { blocked })).exitCode, 1);
-      assert.equal((await run("download", "world", { blocked })).exitCode, 1);
-      assert.equal((await run("delete", "world", { blocked })).exitCode, 1);
-      assert.equal(
-        (await run("rename", "world", { blocked, destination: "renamed" })).exitCode,
-        1,
-      );
-      assert.equal(fs.existsSync(path.join(root, "world", "private")), true);
+      expect(JSON.parse((await run("list", "world", { blocked })).stdout)).toStrictEqual([]);
+      expect((await run("list", "world/private", { blocked })).exitCode).toBe(1);
+      expect((await run("download", "world", { blocked })).exitCode).toBe(1);
+      expect((await run("delete", "world", { blocked })).exitCode).toBe(1);
+      expect((await run("rename", "world", { blocked, destination: "renamed" })).exitCode).toBe(1);
+      expect(fs.existsSync(path.join(root, "world", "private"))).toBe(true);
     });
 
     it("produces a standard tar archive from pinned regular files", async () => {
@@ -298,10 +265,10 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           blocked: [],
         }),
       ]);
-      assert.equal(archive.exitCode, 0);
+      expect(archive.exitCode).toBe(0);
       const contents = await runProcess(["tar", "-tf", "-"], archive.stdout);
-      assert.equal(contents.exitCode, 0);
-      assert.match(contents.stdout.toString(), /world\/config\.txt/);
+      expect(contents.exitCode).toBe(0);
+      expect(decodeText(contents.stdout)).toMatch(/world\/config\.txt/);
     });
 
     it("preserves long Unicode archive paths using standard PAX records", async () => {
@@ -319,10 +286,10 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           blocked: [],
         }),
       ]);
-      assert.equal(archive.exitCode, 0);
+      expect(archive.exitCode).toBe(0);
       const contents = await runProcess(["tar", "-xOf", "-", `world/${name}`], archive.stdout);
-      assert.equal(contents.exitCode, 0, contents.stderr);
-      assert.equal(contents.stdout.toString(), "long path contents");
+      expect(contents.exitCode, contents.stderr).toBe(0);
+      expect(decodeText(contents.stdout)).toBe("long path contents");
     });
 
     it("represents files larger than eight GiB without octal truncation", async () => {
@@ -345,13 +312,13 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
         ],
         { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
       );
-      let buffer = Buffer.alloc(0);
+      let buffer = new Uint8Array(0);
       const reader = archive.stdout.getReader();
       try {
         while (buffer.length < 1024) {
           const { done, value } = await reader.read();
-          assert.equal(done, false, "Archive ended before its PAX size header");
-          buffer = Buffer.concat([buffer, value!]);
+          expect(done, "Archive ended before its PAX size header").toBe(false);
+          buffer = concatBytes([buffer, value!]);
         }
         const parser = extract();
         const parsed = new Promise<number>((resolve, reject) => {
@@ -364,7 +331,7 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
         });
         parser.write(buffer.subarray(0, 1024));
         try {
-          assert.equal(await parsed, size);
+          expect(await parsed).toBe(size);
         } finally {
           parser.destroy();
         }
@@ -404,19 +371,16 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
       const reader = racer.stdout.getReader();
       try {
         const { done, value } = await reader.read();
-        assert.equal(done, false, "Symlink racer exited before becoming ready");
-        assert.equal(Buffer.from(value!).toString(), "ready");
+        expect(done, "Symlink racer exited before becoming ready").toBe(false);
+        expect(decodeText(fixtureBytes(value!))).toBe("ready");
         for (let attempt = 0; attempt < 24; attempt++) {
           const result =
             attempt % 2
               ? await run("upload", "folder/canary", { size: 6 }, "inside")
               : await run("download", "folder/canary");
-          assert.ok(result.exitCode === 0 || result.exitCode === 1);
-          assert.doesNotMatch(result.stdout, /outside-secret/);
-          assert.equal(
-            fs.readFileSync(path.join(outside, "canary"), "utf8"),
-            "outside-secret",
-          );
+          expect(result.exitCode === 0 || result.exitCode === 1).toBeTruthy();
+          expect(result.stdout).not.toMatch(/outside-secret/);
+          expect(fs.readFileSync(path.join(outside, "canary"), "utf8")).toBe("outside-secret");
         }
       } finally {
         racer.kill("SIGKILL");

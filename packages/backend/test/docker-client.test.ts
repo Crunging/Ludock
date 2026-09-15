@@ -1,7 +1,7 @@
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { byteView, concatBytes, decodeText, encodeText } from "../src/bytes.js";
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { rm } from "node:fs/promises";
-import { once } from "node:events";
-import { createServer, type Socket } from "node:net";
 import { bytesStream } from "./fixtures/web-streams.js";
 import { DockerClient } from "../src/docker-client.js";
 import { DockerTransport } from "../src/docker-transport.js";
@@ -28,12 +28,12 @@ function httpFixture(handler: (request: Request) => Response | Promise<Response>
 
 const version = () => Response.json({ ApiVersion: "1.55", MinAPIVersion: "1.40" });
 const isVersion = (request: Request) => new URL(request.url).pathname === "/version";
-function frame(channel: number, value: string | Buffer): Buffer {
-  const payload = Buffer.from(value);
-  const header = Buffer.alloc(8);
+function frame(channel: number, value: string | Uint8Array): Uint8Array {
+  const payload = fixtureBytes(value);
+  const header = new Uint8Array(8);
   header[0] = channel;
-  header.writeUInt32BE(payload.length, 4);
-  return Buffer.concat([header, payload]);
+  byteView(header).setUint32(4, payload.length);
+  return concatBytes([header, payload]);
 }
 
 describe("Bun Docker HTTP client", () => {
@@ -178,7 +178,7 @@ describe("Bun Docker HTTP client", () => {
       requested = new URL(request.url).searchParams.get("fromImage")!;
       return new Response(new ReadableStream({
         start(controller) {
-          for (const part of ['{"status":"pull', 'ing 🌍"}\n{"status":"done"}']) controller.enqueue(Buffer.from(part));
+          for (const part of ['{"status":"pull', 'ing 🌍"}\n{"status":"done"}']) controller.enqueue(fixtureBytes(part));
           controller.close();
         },
       }));
@@ -202,7 +202,7 @@ describe("Bun Docker HTTP client", () => {
       const client = httpFixture((request) => {
         if (isVersion(request)) return version();
         return new Response(new ReadableStream({
-          start(controller) { controller.enqueue(Buffer.from("first chunk\n")); },
+          start(controller) { controller.enqueue(fixtureBytes("first chunk\n")); },
           cancel() { cancelled.resolve(); },
         }));
       });
@@ -216,33 +216,71 @@ describe("Bun Docker HTTP client", () => {
   }
 });
 
-/** The fixture uses an independent stream implementation to exercise Bun's
- * actual Unix-socket writes, HTTP upgrade, FIN, and read backpressure. */
-async function upgradeFixture(reply: (socket: Socket, request: Buffer) => void): Promise<DockerTransport> {
+interface UpgradePeer {
+  write(data: string | Uint8Array): void;
+  end(data?: string | Uint8Array): void;
+  pause(): void;
+  resume(): void;
+  onData?: (data: Uint8Array) => void;
+  onEnd?: () => void;
+}
+
+/** A native Unix peer exercises the actual upgrade, half-close and backpressure. */
+async function upgradeFixture(reply: (peer: UpgradePeer, request: Uint8Array) => void): Promise<DockerTransport> {
   const path = socketPath();
-  const sockets = new Set<Socket>();
-  const server = createServer({ allowHalfOpen: true }, (socket) => {
-    sockets.add(socket);
-    socket.on("error", () => {});
-    socket.on("close", () => sockets.delete(socket));
-    let request = Buffer.alloc(0);
-    const receive = (data: Buffer) => {
-      request = Buffer.concat([request, data]);
-      const boundary = request.indexOf("\r\n\r\n");
-      if (boundary === -1) return;
-      const size = Number(/Content-Length: (\d+)/i.exec(request.subarray(0, boundary).toString())?.[1] || 0);
-      if (request.length < boundary + 4 + size) return;
-      socket.off("data", receive);
-      reply(socket, request);
-    };
-    socket.on("data", receive);
+  type State = { request: Uint8Array; upgraded: boolean; peer: UpgradePeer; flush(): void };
+  const listener = Bun.listen<State>({
+    unix: path,
+    allowHalfOpen: true,
+    socket: {
+      binaryType: "uint8array",
+      open(socket) {
+        const queued: Array<{ bytes: Uint8Array; offset: number }> = [];
+        let ending = false;
+        const flush = () => {
+          while (queued.length) {
+            const first = queued[0];
+            const count = socket.write(first.bytes, first.offset, first.bytes.length - first.offset);
+            if (count < 0) { socket.terminate(); return; }
+            first.offset += count;
+            if (first.offset < first.bytes.length) return;
+            queued.shift();
+          }
+          if (ending) socket.shutdown();
+        };
+        const write = (value: string | Uint8Array) => {
+          queued.push({ bytes: typeof value === "string" ? encodeText(value) : value, offset: 0 });
+          flush();
+        };
+        socket.data = {
+          request: new Uint8Array(), upgraded: false, flush,
+          peer: {
+            write,
+            end(value) { if (value !== undefined) write(value); ending = true; flush(); },
+            pause() { socket.pause(); },
+            resume() { socket.resume(); },
+          },
+        };
+      },
+      data(socket, bytes) {
+        const state = socket.data;
+        if (state.upgraded) { state.peer.onData?.(bytes); return; }
+        state.request = concatBytes([state.request, bytes]);
+        const text = decodeText(state.request);
+        const boundary = text.indexOf("\r\n\r\n");
+        if (boundary === -1) return;
+        const size = Number(/Content-Length: (\d+)/i.exec(text.slice(0, boundary))?.[1] || 0);
+        const body = encodeText(text.slice(0, boundary + 4)).length;
+        if (state.request.length < body + size) return;
+        state.upgraded = true;
+        reply(state.peer, state.request);
+      },
+      drain(socket) { socket.data.flush(); },
+      end(socket) { if (socket.data.peer.onEnd) socket.data.peer.onEnd(); else socket.end(); },
+      error(socket) { socket.terminate(); },
+    },
   });
-  server.listen(path);
-  await once(server, "listening");
-  cleanup.push(async () => {
-    for (const socket of sockets) socket.destroy();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
+  cleanup.push(() => listener.stop(true));
   return new DockerTransport(path);
 }
 
@@ -253,14 +291,14 @@ describe("Bun Docker duplex transport", () => {
     it(`preserves fragmented ${status} headers and output sharing the final header chunk`, async () => {
       let request = "";
       const transport = await upgradeFixture((socket, received) => {
-        request = received.toString();
+        request = decodeText(received);
         const header = status === 101 ? upgrade : "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n";
         socket.write(header.slice(0, -1));
-        setTimeout(() => socket.end(Buffer.concat([Buffer.from(header.slice(-1)), frame(1, "hello 🌍"), frame(2, "diagnostic")])), 5);
+        setTimeout(() => socket.end(concatBytes([fixtureBytes(header.slice(-1)), frame(1, "hello 🌍"), frame(2, "diagnostic")])), 5);
       });
       const stream = await transport.hijack("/v1.55/exec/fixture/start", { Detach: false, Tty: false });
       let out = "", err = "";
-      await demuxDockerStream(stream.readable, data => { out += Buffer.from(data).toString(); }, data => { err += Buffer.from(data).toString(); });
+      await demuxDockerStream(stream.readable, data => { out += decodeText(fixtureBytes(data)); }, data => { err += decodeText(fixtureBytes(data)); });
       expect(out).toBe("hello 🌍");
       expect(err).toBe("diagnostic");
       expect(request).toStartWith("POST /v1.55/exec/fixture/start HTTP/1.1\r\n");
@@ -269,18 +307,18 @@ describe("Bun Docker duplex transport", () => {
   }
 
   it("drains large stdin writes and receives a helper result after half-closing stdin", async () => {
-    const payload = Buffer.alloc(8 * 1024 * 1024, 97);
+    const payload = new Uint8Array(8 * 1024 * 1024).fill(97);
     let received = 0;
     const transport = await upgradeFixture((socket) => {
       socket.write(upgrade);
       socket.pause();
       setTimeout(() => socket.resume(), 25);
-      socket.on("data", (data: Buffer) => { received += data.length; });
-      socket.on("end", () => { socket.end(frame(1, String(received))); });
+      socket.onData = (data: Uint8Array) => { received += data.length; };
+      socket.onEnd = () => { socket.end(frame(1, String(received))); };
     });
     const stream = await transport.hijack("/exec/fixture/start", {});
     let output = "";
-    const completed = demuxDockerStream(stream.readable, data => { output += Buffer.from(data).toString(); });
+    const completed = demuxDockerStream(stream.readable, data => { output += decodeText(fixtureBytes(data)); });
     const writer = stream.writable.getWriter();
     await writer.write(payload);
     await writer.close();
@@ -294,7 +332,7 @@ describe("Bun Docker duplex transport", () => {
     const closed = Promise.withResolvers<void>();
     const transport = await upgradeFixture((socket) => {
       socket.write(upgrade);
-      socket.on("end", () => { socket.end(); closed.resolve(); });
+      socket.onEnd = () => { socket.end(); closed.resolve(); };
     });
     const stream = await transport.hijack("/containers/fixture/attach?stdin=true");
     stream.abort();
@@ -309,7 +347,7 @@ describe("Bun Docker duplex transport", () => {
     const stream = await transport.hijack("/exec/fixture/start", {});
     const writer = stream.writable.getWriter();
     void writer.closed.catch(() => {});
-    const writing = writer.write(Buffer.alloc(8 * 1024 * 1024, 97));
+    const writing = writer.write(new Uint8Array(8 * 1024 * 1024).fill(97));
     void writing.catch(() => {});
     await Bun.sleep(10);
     if (direction === "read") await stream.readable.cancel(new Error("Client disconnected"));
@@ -327,7 +365,7 @@ describe("Bun Docker duplex transport", () => {
       write(data: Uint8Array, offset = 0, length = data.length) {
         const count = first ? 2 : length;
         first = false;
-        written += Buffer.from(data.subarray(offset, offset + count)).toString();
+        written += decodeText(fixtureBytes(data.subarray(offset, offset + count)));
         return count;
       },
       terminate() {}, resume() {}, pause() {}, shutdown() {},
@@ -336,7 +374,7 @@ describe("Bun Docker duplex transport", () => {
       handlers = options.socket;
       queueMicrotask(() => {
         handlers.open!(socket);
-        handlers.data!(socket, Buffer.from(upgrade));
+        handlers.data!(socket, fixtureBytes(upgrade));
         release = () => handlers.drain!(socket);
       });
       return Promise.resolve(socket);
@@ -349,7 +387,7 @@ describe("Bun Docker duplex transport", () => {
     release();
     const stream = await opening;
     const writer = stream.writable.getWriter();
-    await writer.write(Buffer.from("stdin"));
+    await writer.write(fixtureBytes("stdin"));
     expect(written).toEndWith('{"Detach":false}stdin');
     writer.releaseLock();
     stream.abort();
@@ -367,12 +405,12 @@ describe("Bun Docker duplex transport", () => {
 
   it("resumes a partial native write at the exact byte offset before reporting completion", async () => {
     let handlers: Bun.SocketHandler<undefined>;
-    let written = Buffer.alloc(0);
+    let written = new Uint8Array(0);
     let short = false;
     const socket = {
-      write(data: Buffer, offset = 0, length = data.length) {
+      write(data: Uint8Array, offset = 0, length = data.length) {
         const count = short ? Math.min(2, length) : length;
-        written = Buffer.concat([written, data.subarray(offset, offset + count)]);
+        written = concatBytes([written, data.subarray(offset, offset + count)]);
         if (count < length) queueMicrotask(() => handlers.drain!(socket));
         return count;
       },
@@ -380,27 +418,36 @@ describe("Bun Docker duplex transport", () => {
     } as unknown as Bun.Socket<undefined>;
     spyOn(Bun, "connect").mockImplementation((options) => {
       handlers = options.socket;
-      queueMicrotask(() => { handlers.open!(socket); handlers.data!(socket, Buffer.from(upgrade)); });
+      queueMicrotask(() => { handlers.open!(socket); handlers.data!(socket, fixtureBytes(upgrade)); });
       return Promise.resolve(socket);
     });
     const stream = await new DockerTransport("/fixture.sock").hijack("/exec/id/start");
     short = true;
-    written = Buffer.alloc(0);
+    written = new Uint8Array(0);
     const writer = stream.writable.getWriter();
-    await writer.write(Buffer.from("abcdefghij"));
+    await writer.write(fixtureBytes("abcdefghij"));
     writer.releaseLock();
-    expect(written.toString()).toBe("abcdefghij");
+    expect(decodeText(written)).toBe("abcdefghij");
     stream.abort();
   });
 });
 
 describe("Docker output framing", () => {
+  it("reads a wire fixture from an offset byte view and preserves leading UTF-8 BOM data", async () => {
+    // Sentinel bytes surround a stdout frame containing BOM + A + an emoji.
+    const storage = Uint8Array.fromHex("aaaa0100000000000008efbbbf41f09f8c8dbbbb");
+    let result = "";
+    await demuxDockerStream(bytesStream([storage.subarray(2, storage.length - 2)]),
+      chunk => { result += decodeText(chunk); });
+    expect(result).toBe("\ufeffA🌍");
+  });
+
   it("decodes bytewise headers and bodies, drops stdin, and rejects incomplete output", async () => {
-    const bytes = Buffer.concat([frame(0, "ignored"), frame(1, "stdout"), frame(2, "stderr"), frame(1, "")]);
+    const bytes = concatBytes([frame(0, "ignored"), frame(1, "stdout"), frame(2, "stderr"), frame(1, "")]);
     let stdout = "", stderr = "";
-    await demuxDockerStream(bytesStream([...bytes].map(value => Buffer.from([value]))),
-      data => { stdout += Buffer.from(data).toString(); },
-      data => { stderr += Buffer.from(data).toString(); });
+    await demuxDockerStream(bytesStream([...bytes].map(value => fixtureBytes([value]))),
+      data => { stdout += decodeText(fixtureBytes(data)); },
+      data => { stderr += decodeText(fixtureBytes(data)); });
     expect({ stdout, stderr }).toEqual({ stdout: "stdout", stderr: "stderr" });
     for (const data of [bytes.subarray(0, 3), frame(1, "lost").subarray(0, 10), frame(3, "invalid")])
       await expect(demuxDockerStream(bytesStream([data]))).rejects.toThrow();
@@ -411,7 +458,7 @@ describe("Docker output framing", () => {
     const blocked = Promise.withResolvers<void>();
     let cancelled = false;
     const source = new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(Buffer.concat([frame(1, "first"), frame(1, "second")])); },
+      start(controller) { controller.enqueue(concatBytes([frame(1, "first"), frame(1, "second")])); },
       cancel() { cancelled = true; },
     });
     let writes = 0;

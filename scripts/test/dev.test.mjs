@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
@@ -10,7 +9,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll as after, beforeAll as before, it } from "bun:test";
+import { expect, afterAll as after, beforeAll as before, it } from "bun:test";
 import {
   developmentConfig,
   lockDevelopmentState,
@@ -35,14 +34,14 @@ it("isolates checkout state and cookies while canonical aliases share one identi
   const first = await developmentConfig(checkout, env);
   const alias = await developmentConfig(path.join(directory, "alias"), env);
   const second = await developmentConfig(path.join(directory, "worktree"), env);
-  assert.deepEqual(alias, first);
-  assert.notEqual(first.instance, second.instance);
-  assert.notEqual(first.database, second.database);
-  assert.match(first.instance, /^[a-f0-9]{12}$/);
-  assert.equal(first.backendPort, first.frontendPort + 1);
-  assert.equal(first.dockerConfigured, false);
-  assert.ok(first.dockerSocket.startsWith(first.stateDirectory + path.sep));
-  assert.ok(!first.database.startsWith(checkout + path.sep));
+  expect(alias).toStrictEqual(first);
+  expect(first.instance).not.toBe(second.instance);
+  expect(first.database).not.toBe(second.database);
+  expect(first.instance).toMatch(/^[a-f0-9]{12}$/);
+  expect(first.backendPort).toBe(first.frontendPort + 1);
+  expect(first.dockerConfigured).toBe(false);
+  expect(first.dockerSocket.startsWith(first.stateDirectory + path.sep)).toBeTruthy();
+  expect(!first.database.startsWith(checkout + path.sep)).toBeTruthy();
 });
 
 it("honors explicit configuration and rejects conflicting or invalid ports", async () => {
@@ -54,23 +53,17 @@ it("honors explicit configuration and rejects conflicting or invalid ports", asy
     LUDOCK_DB_PATH: ":memory:",
     DOCKER_SOCKET: "/tmp/development-docker.sock",
   });
-  assert.equal(config.database, ":memory:");
-  assert.equal(config.dockerSocket, "/tmp/development-docker.sock");
-  assert.equal(config.fixedPorts, true);
-  assert.equal(config.dockerConfigured, true);
+  expect(config.database).toBe(":memory:");
+  expect(config.dockerSocket).toBe("/tmp/development-docker.sock");
+  expect(config.fixedPorts).toBe(true);
+  expect(config.dockerConfigured).toBe(true);
   for (const value of ["0", "65536", "3000oops", "3.5"]) {
-    await assert.rejects(
-      developmentConfig(checkout, { LUDOCK_DEV_PORT: value }),
-      /port|between/,
-    );
+    await expect(developmentConfig(checkout, { LUDOCK_DEV_PORT: value })).rejects.toThrow(/port|between/);
   }
-  await assert.rejects(
-    developmentConfig(checkout, {
+  await expect(developmentConfig(checkout, {
       LUDOCK_DEV_PORT: "4100",
       LUDOCK_DEV_API_PORT: "4100",
-    }),
-    /must differ/,
-  );
+    })).rejects.toThrow(/must differ/);
 });
 
 it("finds an available pair but never silently moves explicitly requested ports", async () => {
@@ -80,25 +73,19 @@ it("finds an available pair but never silently moves explicitly requested ports"
   });
   const blockedPort = blocker.port;
   try {
-    await assert.rejects(
-      reserveDevelopmentPorts({
+    await expect(reserveDevelopmentPorts({
         frontendPort: blockedPort,
         backendPort: blockedPort + 1,
         fixedPorts: true,
-      }),
-      /already in use/,
-    );
+      })).rejects.toThrow(/already in use/);
     const selected = await reserveDevelopmentPorts({
       frontendPort: blockedPort,
       backendPort: blockedPort + 1,
       fixedPorts: false,
     });
     try {
-      assert.notEqual(selected.frontendPort, blockedPort);
-      await assert.rejects(
-        reserveDevelopmentPorts({ ...selected, fixedPorts: true }),
-        /already in use/,
-      );
+      expect(selected.frontendPort).not.toBe(blockedPort);
+      await expect(reserveDevelopmentPorts({ ...selected, fixedPorts: true })).rejects.toThrow(/already in use/);
     } finally {
       await selected.release();
       await selected.release();
@@ -117,10 +104,7 @@ it("releases the first reservation when the requested API port is occupied", asy
     socket: { data(socket) { socket.terminate(); } },
   });
   try {
-    await assert.rejects(
-      reserveDevelopmentPorts({ ...selected, fixedPorts: true }),
-      /already in use/,
-    );
+    await expect(reserveDevelopmentPorts({ ...selected, fixedPorts: true })).rejects.toThrow(/already in use/);
     // The frontend reservation from the rejected pair must be available now.
     const frontend = Bun.listen({
       hostname: "127.0.0.1", port: selected.frontendPort, exclusive: true,
@@ -186,21 +170,15 @@ it("prevents overlapping checkout runs and removes only its own locks", async ()
     LUDOCK_DEV_HOME: path.join(directory, "locks"),
   });
   const release = await lockDevelopmentState(config);
-  await assert.rejects(
-    lockDevelopmentState(config),
-    /already has a development lock/,
-  );
+  await expect(lockDevelopmentState(config)).rejects.toThrow(/already has a development lock/);
   const lockFile = path.join(config.stateDirectory, "dev.lock");
   const owner = JSON.parse(await readFile(lockFile, "utf8"));
-  assert.equal(owner.pid, process.pid);
+  expect(owner.pid).toBe(process.pid);
   await release();
   const releaseAgain = await lockDevelopmentState(config);
   await writeFile(lockFile, JSON.stringify({ nonce: "a different owner" }));
   await releaseAgain();
-  assert.equal(
-    JSON.parse(await readFile(lockFile, "utf8")).nonce,
-    "a different owner",
-  );
+  expect(JSON.parse(await readFile(lockFile, "utf8")).nonce).toBe("a different owner");
 });
 
 it("locks a shared database override across checkouts and directory aliases", async () => {
@@ -221,10 +199,7 @@ it("locks a shared database override across checkouts and directory aliases", as
   });
   const release = await lockDevelopmentState(first);
   try {
-    await assert.rejects(
-      lockDevelopmentState(second),
-      /already has a development lock/,
-    );
+    await expect(lockDevelopmentState(second)).rejects.toThrow(/already has a development lock/);
   } finally {
     await release();
   }
@@ -245,16 +220,13 @@ it("checks backend instance identity before accepting an occupied API port", asy
   });
   const port = server.port;
   try {
-    assert.equal(await verifyDevelopmentBackend(identity, port), true);
+    expect(await verifyDevelopmentBackend(identity, port)).toBe(true);
     identity = "abcdef123456";
-    await assert.rejects(
-      verifyDevelopmentBackend("012345abcdef", port),
-      /different backend/,
-    );
+    await expect(verifyDevelopmentBackend("012345abcdef", port)).rejects.toThrow(/different backend/);
   } finally {
     await server.stop(true);
   }
-  assert.equal(await verifyDevelopmentBackend(identity, port), false);
+  expect(await verifyDevelopmentBackend(identity, port)).toBe(false);
 });
 
 it("retains development locks until children drain after repeated shutdown signals", async () => {
@@ -317,7 +289,7 @@ it("retains development locks until children drain after repeated shutdown signa
       }
       await Bun.sleep(10);
     }
-    assert.fail(`Development fixture did not report ${event}`);
+    expect.unreachable(`Development fixture did not report ${event}`);
   };
   try {
     await waitFor("frontend-started");
@@ -326,10 +298,10 @@ it("retains development locks until children drain after repeated shutdown signa
     child.kill("SIGTERM");
     child.kill("SIGINT");
     await Bun.sleep(20);
-    assert.equal(child.exitCode, null, "Launcher must remain alive while the backend drains");
-    await assert.rejects(lockDevelopmentState(config), /already has a development lock/);
-    assert.equal(await child.exited, 0);
-    assert.match(await readFile(events, "utf8"), /backend-drained\n/);
+    expect(child.exitCode, "Launcher must remain alive while the backend drains").toBe(null);
+    await expect(lockDevelopmentState(config)).rejects.toThrow(/already has a development lock/);
+    expect(await child.exited).toBe(0);
+    expect(await readFile(events, "utf8")).toMatch(/backend-drained\n/);
     const release = await lockDevelopmentState(config);
     await release();
   } finally {

@@ -1,3 +1,4 @@
+import { decodeText, concatBytes, encodeText } from "./bytes.js";
 import { managedReadable } from "./managed-readable.js";
 import { demuxDockerStream, dockerStdout } from "./docker-stream.js";
 import { constants, createWriteStream } from "node:fs";
@@ -431,7 +432,7 @@ export function archiveValidator(
     }
   });
   const validator = new Writable({
-    write(chunk: Buffer, _encoding, callback) {
+    write(chunk: Uint8Array, _encoding, callback) {
       if (extract.write(chunk)) callback();
       else extract.once("drain", callback);
     },
@@ -468,7 +469,7 @@ export async function validateArchive(
   const hash = new Bun.CryptoHasher("sha256");
   let bytes = 0;
   const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
+    transform(chunk: Uint8Array, _encoding, callback) {
       bytes += chunk.length;
       if (bytes > maxBytes)
         return callback(
@@ -695,7 +696,7 @@ export async function helperExec(
       "DATA_OPERATION_FAILED",
       "A data operation failed. The server remains stopped until its data is safe.",
     );
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeText(concatBytes(chunks));
 }
 
 async function helperArchive(
@@ -755,7 +756,7 @@ export async function writeSnapshot(
   let size = 0,
     checked = 0;
   const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
+    transform(chunk: Uint8Array, _encoding, callback) {
       size += chunk.length;
       if (size > availableBytes)
         return callback(
@@ -950,7 +951,7 @@ export async function extractRootToStage(
   const hash = new Bun.CryptoHasher("sha256");
   let total = 0;
   const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
+    transform(chunk: Uint8Array, _encoding, callback) {
       total += chunk.length;
       if (total > maxBytes)
         return callback(
@@ -981,7 +982,7 @@ export async function extractRootToStage(
         return;
       }
       await write(
-        Buffer.from(
+        encodeText(
           JSON.stringify({
             name: name.slice(prefix.length),
             type: header.type,
@@ -993,7 +994,7 @@ export async function extractRootToStage(
       );
       for await (const chunk of stream)
         await write(
-          Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array),
+          Uint8Array.from(chunk as Uint8Array),
         );
       next();
     })().catch((error: Error) => {

@@ -1,6 +1,5 @@
 import { SERVER_STATE_ACTIONS, serverEventSchema } from "@ludock/shared";
 import { JsonLineDecoder } from "./json-lines.js";
-import type { ReadableStreamDefaultReader } from "node:stream/web";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { currentActor, hasServerCapability } from "./authorization.js";
@@ -12,7 +11,7 @@ import { createLogger } from "./logger.js";
 const eventClients = new Map<SocketChannel, WebSocketAuth>();
 const eventDeliveries = new Set<Promise<void>>();
 let eventStreamActive = false;
-let eventStream: ReadableStreamDefaultReader<Uint8Array> | null = null;
+let eventStream: ReturnType<ReadableStream<Uint8Array>["getReader"]> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let streamGeneration = 0;
 const logger = createLogger("events");

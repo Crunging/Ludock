@@ -1,5 +1,6 @@
-import assert from "node:assert/strict";
-import { afterAll as after, beforeAll as before, describe, it, spyOn, afterEach, mock } from "bun:test";
+import { decodeText } from "../src/bytes.js";
+import { rejectedBy } from "./fixtures/errors.js";
+import { expect, afterAll as after, beforeAll as before, describe, it, spyOn, afterEach, mock } from "bun:test";
 import {
   mkdtemp,
   mkdir,
@@ -51,7 +52,7 @@ before(async () => {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if(args.includes("secret-failure")){process.stderr.write("password=fixture-secret");process.exit(1);}
-if(args.includes("large-output")){process.stdout.write(Buffer.alloc(9 * 1024 * 1024));}
+if(args.includes("large-output")){await Bun.write(Bun.stdout, new Uint8Array(9 * 1024 * 1024));}
 else if(args.includes("orphaned-plugin")){
   const marker = args.at(-1);
   const script = 'const fs=require("node:fs");const marker=process.argv[1];fs.writeFileSync(marker+".pid",String(process.pid));process.on("SIGTERM",()=>setTimeout(()=>{fs.writeFileSync(marker,"stopped");process.exit(0);},50));setTimeout(()=>{},30000);';
@@ -91,9 +92,9 @@ describe("Compose execution boundary", () => {
       for (const value of roots) {
         if (value === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
         else process.env.LUDOCK_COMPOSE_ROOTS = value;
-        assert.equal(await isComposeAvailable(), false);
+        expect(await isComposeAvailable()).toBe(false);
       }
-      assert.equal(spawn.mock.calls.length, 0);
+      expect(spawn.mock.calls.length).toBe(0);
     } finally {
       if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
       else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
@@ -102,7 +103,7 @@ describe("Compose execution boundary", () => {
   });
 
   it.skipIf(process.platform !== "linux")("reports availability after a successful configured probe", async () => {
-    assert.equal(await isComposeAvailable(), true);
+    expect(await isComposeAvailable()).toBe(true);
   });
 
   it.skipIf(process.platform !== "linux")("rechecks approved roots after the probe finishes", async () => {
@@ -110,7 +111,7 @@ describe("Compose execution boundary", () => {
     const probe = isComposeAvailable();
     delete process.env.LUDOCK_COMPOSE_ROOTS;
     try {
-      assert.equal(await probe, false);
+      expect(await probe).toBe(false);
     } finally {
       if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
       else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
@@ -140,17 +141,17 @@ describe("Compose execution boundary", () => {
     await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n# edited by owning manager\n");
     const next = await validatedProject(context);
     try {
-      assert.equal(next.service, "game");
-      assert.equal(next.image, "alpine:latest");
-      assert.notEqual(next.snapshot.fingerprint, firstFingerprint);
+      expect(next.service).toBe("game");
+      expect(next.image).toBe("alpine:latest");
+      expect(next.snapshot.fingerprint).not.toBe(firstFingerprint);
     } finally { await next.snapshot.cleanup(); }
     // A discovered source is still subject to supported-service and path checks.
     await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n    scale: 2\n");
-    await assert.rejects(validatedProject(context), /one configured replica/);
+    await expect(validatedProject(context)).rejects.toThrow(/one configured replica/);
     context.observation.composeSourceLabels = {
       [COMPOSE_WORKING_DIR_LABEL]: directory, [COMPOSE_CONFIG_FILES_LABEL]: "/outside/compose.yaml",
     };
-    await assert.rejects(validatedProject(context), /cannot read this server/);
+    await expect(validatedProject(context)).rejects.toThrow(/cannot read this server/);
   });
 
   it.skipIf(process.platform !== "linux")("snapshots default .env safely and never falls back from a missing explicit env file", async () => {
@@ -165,16 +166,16 @@ describe("Compose execution boundary", () => {
     await writeFile(env, "WORLD=fixture\n");
     const loaded = await createComposeSnapshot(input, true);
     try {
-      assert.deepEqual(loaded.model.fixtureEnvFiles, ["WORLD=fixture\n"]);
-      assert.notEqual(loaded.fingerprint, missing.fingerprint);
-      assert.doesNotMatch(JSON.stringify((loaded.model.services as Record<string, { labels: unknown }>).game.labels), /WORLD|fixture/);
+      expect(loaded.model.fixtureEnvFiles).toStrictEqual(["WORLD=fixture\n"]);
+      expect(loaded.fingerprint).not.toBe(missing.fingerprint);
+      expect(JSON.stringify((loaded.model.services as Record<string, { labels: unknown }>).game.labels)).not.toMatch(/WORLD|fixture/);
     } finally { await loaded.cleanup(); }
-    await assert.rejects(createComposeSnapshot({ ...input, envFiles: ["missing.env"] }, true), /missing/);
+    await expect(createComposeSnapshot({ ...input, envFiles: ["missing.env"] }, true)).rejects.toThrow(/missing/);
     await rm(env);
     await symlink(filename, env);
-    await assert.rejects(createComposeSnapshot(input, true), /symbolic link/);
-    await assert.rejects(readOptionalApprovedFile(path.join(folder, "missing-parent/.env"), [directory]), /missing/);
-    await assert.rejects(readOptionalApprovedFile("/outside/.env", [directory]), /outside/);
+    await expect(createComposeSnapshot(input, true)).rejects.toThrow(/symbolic link/);
+    await expect(readOptionalApprovedFile(path.join(folder, "missing-parent/.env"), [directory])).rejects.toThrow(/missing/);
+    await expect(readOptionalApprovedFile("/outside/.env", [directory])).rejects.toThrow(/outside/);
   });
 
   it("uses the configured daemon with no inherited secrets or Compose overrides", async () => {
@@ -182,51 +183,45 @@ describe("Compose execution boundary", () => {
     process.env.COMPOSE_FILE = "/unapproved/compose.yaml";
     try {
       const env = composeEnvironment();
-      assert.equal(env.LUDOCK_PRIVATE_TEST_SECRET, undefined);
-      assert.equal(env.COMPOSE_FILE, undefined);
-      assert.equal(env.COMPOSE_DISABLE_ENV_FILE, "true");
+      expect(env.LUDOCK_PRIVATE_TEST_SECRET).toBe(undefined);
+      expect(env.COMPOSE_FILE).toBe(undefined);
+      expect(env.COMPOSE_DISABLE_ENV_FILE).toBe("true");
       const result = JSON.parse(await runCompose(["version", "--short"])) as {
         args: string[];
         env: Record<string, string>;
       };
-      assert.deepEqual(result.args, ["compose", "version", "--short"]);
-      assert.equal(result.env.LUDOCK_PRIVATE_TEST_SECRET, undefined);
-      assert.match(result.env.DOCKER_HOST, /^unix:\//);
+      expect(result.args).toStrictEqual(["compose", "version", "--short"]);
+      expect(result.env.LUDOCK_PRIVATE_TEST_SECRET).toBe(undefined);
+      expect(result.env.DOCKER_HOST).toMatch(/^unix:\//);
     } finally {
       delete process.env.LUDOCK_PRIVATE_TEST_SECRET;
       delete process.env.COMPOSE_FILE;
     }
   });
   it("bounds subprocess execution and never exposes raw diagnostics", async () => {
-    await assert.rejects(
-      runCompose(["secret-failure"]),
-      (error) =>
+    await expect(await rejectedBy(runCompose(["secret-failure"]))).toSatisfy((error) =>
         error instanceof Error &&
         !error.message.includes("fixture-secret") &&
-        error.message.includes("Docker Compose failed"),
-    );
-    await assert.rejects(runCompose(["hang"], 30), /execution limit/);
+        error.message.includes("Docker Compose failed"));
+    await expect(runCompose(["hang"], 30)).rejects.toThrow(/execution limit/);
   });
   it("passes shell metacharacters as literal arguments", async () => {
     const literal = "fixture; $(printf unsafe) `printf unsafe` > /unapproved";
     const result = JSON.parse(await runCompose(["version", literal])) as {
       args: string[];
     };
-    assert.deepEqual(result.args, ["compose", "version", literal]);
+    expect(result.args).toStrictEqual(["compose", "version", literal]);
   });
   it("terminates output that exceeds the configuration size limit", async () => {
-    await assert.rejects(runCompose(["large-output"]), /execution limit/);
+    await expect(runCompose(["large-output"])).rejects.toThrow(/execution limit/);
   });
   it("reports an unavailable executable without subprocess details", async () => {
     const currentPath = process.env.PATH;
     process.env.PATH = path.join(directory, "missing-bin");
     try {
-      await assert.rejects(
-        runCompose(["version"]),
-        (error) => error instanceof Error &&
-          error.message === "Docker Compose could not be executed",
-      );
-      assert.equal(await isComposeAvailable(), false);
+      await expect(await rejectedBy(runCompose(["version"]))).toSatisfy((error) => error instanceof Error &&
+          error.message === "Docker Compose could not be executed");
+      expect(await isComposeAvailable()).toBe(false);
     } finally {
       process.env.PATH = currentPath;
     }
@@ -236,13 +231,8 @@ describe("Compose execution boundary", () => {
     async () => {
       const marker = path.join(directory, "plugin-stopped");
       try {
-        await assert.rejects(
-          // Allow both Bun processes to initialize under CPU emulation before
-          // exercising the surviving plugin's delayed shutdown handler.
-          runCompose(["orphaned-plugin", marker], 5000),
-          /execution limit/,
-        );
-        assert.equal(await readFile(marker, "utf8"), "stopped");
+        await expect(runCompose(["orphaned-plugin", marker], 5000)).rejects.toThrow(/execution limit/);
+        expect(await readFile(marker, "utf8")).toBe("stopped");
       } finally {
         const pid = Number(await readFile(`${marker}.pid`, "utf8").catch(() => ""));
         if (pid > 0) {
@@ -253,27 +243,14 @@ describe("Compose execution boundary", () => {
     15_000,
   );
   it("rejects broad roots, prefix escapes and unsupported service replication", () => {
-    assert.throws(() => configuredRoots("/"), /dedicated/);
-    assert.throws(
-      () => approvedPath("/games-other/compose.yaml", ["/games"]),
-      /outside/,
-    );
-    assert.throws(() => approvedPath("../secret", ["/games"]), /absolute/);
-    assert.throws(
-      () => validateUpdateService({ scale: 2 }),
-      /one configured replica/,
-    );
-    assert.throws(
-      () => validateUpdateService({ deploy: { replicas: 2 } }),
-      /one configured replica/,
-    );
-    assert.throws(
-      () => validateUpdateService({ network_mode: "service:db" }),
-      /namespace/,
-    );
-    assert.doesNotThrow(() =>
-      validateUpdateService({ depends_on: ["db"], profiles: ["games"] }),
-    );
+    expect(() => configuredRoots("/")).toThrow(/dedicated/);
+    expect(() => approvedPath("/games-other/compose.yaml", ["/games"])).toThrow(/outside/);
+    expect(() => approvedPath("../secret", ["/games"])).toThrow(/absolute/);
+    expect(() => validateUpdateService({ scale: 2 })).toThrow(/one configured replica/);
+    expect(() => validateUpdateService({ deploy: { replicas: 2 } })).toThrow(/one configured replica/);
+    expect(() => validateUpdateService({ network_mode: "service:db" })).toThrow(/namespace/);
+    expect(() =>
+      validateUpdateService({ depends_on: ["db"], profiles: ["games"] })).not.toThrow();
   });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "pins safe file parents and rejects symlink inputs",
@@ -287,28 +264,19 @@ describe("Compose execution boundary", () => {
         path.join(directory, "safe"),
         path.join(directory, "linked"),
       );
-      assert.match(
-        (
+      expect(decodeText((
           await readApprovedFile(path.join(directory, "safe/config.yaml"), [
             directory,
           ])
-        ).toString(),
-        /services/,
-      );
-      await assert.rejects(
-        readApprovedFile(path.join(directory, "linked/config.yaml"), [
+        ))).toMatch(/services/);
+      await expect(readApprovedFile(path.join(directory, "linked/config.yaml"), [
           directory,
-        ]),
-        /symbolic link/,
-      );
-      await assert.rejects(
-        readApprovedFile(
+        ])).rejects.toThrow(/symbolic link/);
+      await expect(readApprovedFile(
           path.join(directory, "safe/config.yaml"),
           [directory],
           2,
-        ),
-        /size limit/,
-      );
+        )).rejects.toThrow(/size limit/);
     },
   );
   it.skipIf(Boolean(process.platform !== "linux"))(
@@ -318,11 +286,8 @@ describe("Compose execution boundary", () => {
       const fifoProcess = Bun.spawn(["mkfifo", fifo], {
         stdin: "ignore", stdout: "ignore", stderr: "ignore",
       });
-      assert.equal(await fifoProcess.exited, 0);
-      await assert.rejects(
-        readApprovedFile(fifo, [directory]),
-        /regular files/,
-      );
+      expect(await fifoProcess.exited).toBe(0);
+      await expect(readApprovedFile(fifo, [directory])).rejects.toThrow(/regular files/);
     }, 2000,
   );
   it.skipIf(Boolean(process.platform !== "linux"))(
@@ -346,23 +311,23 @@ describe("Compose execution boundary", () => {
       };
       const snapshot = await createComposeSnapshot(input);
       try {
-        assert.match(snapshot.fingerprint, /^hmac-sha256:[a-f0-9]{64}$/);
+        expect(snapshot.fingerprint).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
         const services = snapshot.model.services as Record<
           string,
           Record<string, unknown>
         >;
-        assert.equal(services.game.build, undefined);
-        assert.deepEqual(Object.keys(services), ["game", "dependency"]);
+        expect(services.game.build).toBe(undefined);
+        expect(Object.keys(services)).toStrictEqual(["game", "dependency"]);
         const resolved = await readFile(snapshot.configPath, "utf8");
-        assert.match(resolved, /cash\$\$value/);
-        assert.doesNotMatch(resolved, /must-not-read/);
+        expect(resolved).toMatch(/cash\$\$value/);
+        expect(resolved).not.toMatch(/must-not-read/);
         await writeFile(
           first,
           (await readFile(first, "utf8")) + "\n# owner source changed\n",
         );
         const next = await createComposeSnapshot(input);
         try {
-          assert.notEqual(next.fingerprint, snapshot.fingerprint);
+          expect(next.fingerprint).not.toBe(snapshot.fingerprint);
         } finally {
           await next.cleanup();
         }
@@ -394,7 +359,7 @@ describe("Compose execution boundary", () => {
       let delayedInode = firstInode;
       spyOn(prototype, "read").mockImplementation(async function (
         this: FileHandle,
-        buffer: Buffer,
+        buffer: Uint8Array,
         offset: number,
         length: number,
         position: number | null,
@@ -414,17 +379,14 @@ describe("Compose execution boundary", () => {
         delayedInode = secondInode;
         const second = await createComposeSnapshot(input);
         try {
-          assert.equal(second.fingerprint, first.fingerprint);
+          expect(second.fingerprint).toBe(first.fingerprint);
           for (const snapshot of [first, second]) {
             const services = snapshot.model.services as Record<
               string, { env_file: { path: string }[] }
             >;
-            assert.deepEqual(
-              await Promise.all(
+            expect(await Promise.all(
                 services.game.env_file.map((entry) => readFile(entry.path, "utf8")),
-              ),
-              ["WORLD=first\n", "WORLD=second\n"],
-            );
+              )).toStrictEqual(["WORLD=first\n", "WORLD=second\n"]);
           }
         } finally {
           await second.cleanup();
@@ -457,15 +419,15 @@ describe("Compose execution boundary", () => {
       try {
         const repeated = await createComposeSnapshot(input);
         try {
-          assert.match(first.fingerprint, /^hmac-sha256:[a-f0-9]{64}$/);
-          assert.equal(repeated.fingerprint, first.fingerprint);
+          expect(first.fingerprint).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
+          expect(repeated.fingerprint).toBe(first.fingerprint);
         } finally {
           await repeated.cleanup();
         }
         closeDatabase();
         const reopened = await createComposeSnapshot(input);
         try {
-          assert.equal(reopened.fingerprint, first.fingerprint);
+          expect(reopened.fingerprint).toBe(first.fingerprint);
         } finally {
           await reopened.cleanup();
         }
@@ -477,7 +439,7 @@ describe("Compose execution boundary", () => {
         );
         const otherInstallation = await createComposeSnapshot(input);
         try {
-          assert.notEqual(otherInstallation.fingerprint, first.fingerprint);
+          expect(otherInstallation.fingerprint).not.toBe(first.fingerprint);
         } finally {
           await otherInstallation.cleanup();
         }
@@ -497,15 +459,12 @@ describe("Compose execution boundary", () => {
         `x-base: &base [a, b, c]\nx-repeated: [${Array(30).fill("*base").join(", ")}]\nservices:\n  game:\n    image: alpine\n`,
       ]) {
         await writeFile(filename, yaml);
-        await assert.rejects(
-          createComposeSnapshot({
+        await expect(createComposeSnapshot({
             projectName: "fixture",
             projectDirectory: directory,
             composeFiles: [filename],
             envFiles: [],
-          }),
-          /YAML could not be parsed safely/,
-        );
+          })).rejects.toThrow(/YAML could not be parsed safely/);
       }
     },
   );
@@ -520,15 +479,12 @@ describe("Compose execution boundary", () => {
       ]) {
         const filename = path.join(directory, "unsupported.yaml");
         await writeFile(filename, yaml);
-        await assert.rejects(
-          createComposeSnapshot({
+        await expect(createComposeSnapshot({
             projectName: "fixture",
             projectDirectory: directory,
             composeFiles: [filename],
             envFiles: [],
-          }),
-          /outside the supported|Build-only/,
-        );
+          })).rejects.toThrow(/outside the supported|Build-only/);
       }
     },
   );
@@ -536,47 +492,29 @@ describe("Compose execution boundary", () => {
 
 describe("shared request contracts", () => {
   it("rejects coercion, unknown mutation fields and unscoped identifiers", () => {
-    assert.equal(
-      updateRequestSchema.safeParse({
+    expect(updateRequestSchema.safeParse({
         createBackup: true,
         forceRecreate: "false",
-      }).success,
-      false,
-    );
-    assert.equal(
-      updateRequestSchema.safeParse({ createBackup: true, command: "rm" })
-        .success,
-      false,
-    );
-    assert.equal(
-      updateRequestSchema.parse({ createBackup: true }).forceRecreate,
-      false,
-    );
-    assert.equal(
-      serverGrantsSchema.safeParse({
+      }).success).toBe(false);
+    expect(updateRequestSchema.safeParse({ createBackup: true, command: "rm" })
+        .success).toBe(false);
+    expect(updateRequestSchema.parse({ createBackup: true }).forceRecreate).toBe(false);
+    expect(serverGrantsSchema.safeParse({
         grants: [
           { serverId: "docker-physical-id", capabilities: ["server.view"] },
         ],
-      }).success,
-      false,
-    );
-    assert.equal(
-      scheduleSchema.safeParse({
+      }).success).toBe(false);
+    expect(scheduleSchema.safeParse({
         action: "update",
         time: "12:00",
         days: [1],
         timezone: "UTC",
-      }).success,
-      false,
-    );
-    assert.equal(
-      scheduleSchema.safeParse({
+      }).success).toBe(false);
+    expect(scheduleSchema.safeParse({
         action: "stop",
         time: "12:00",
         days: [1],
         timezone: "not-a-zone",
-      }).success,
-      false,
-    );
+      }).success).toBe(false);
   });
 });

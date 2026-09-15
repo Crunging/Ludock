@@ -1,6 +1,6 @@
+import { encodeText } from "./bytes.js";
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Database } from "bun:sqlite";
 
 const KEY_BYTES = 32;
@@ -52,10 +52,10 @@ function syncParentDirectory(directory: string): void {
   }
 }
 
-function readPublishedKey(directory: string): Buffer {
+function readPublishedKey(directory: string): Uint8Array {
   let directoryDescriptor: number | undefined;
   let keyDescriptor: number | undefined;
-  let key: Buffer | undefined;
+  let key: Uint8Array | undefined;
   try {
     directoryDescriptor = openKeyDirectory(directory);
     keyDescriptor = fs.openSync(
@@ -104,7 +104,7 @@ function discardStagingDirectory(directory: string): void {
 }
 
 function publishKeyDirectory(directory: string, key: Uint8Array): void {
-  const staging = `${directory}.stage-${process.pid}-${randomBytes(12).toString("hex")}`;
+  const staging = `${directory}.stage-${process.pid}-${crypto.getRandomValues(new Uint8Array(12)).toHex()}`;
   fs.mkdirSync(staging, { mode: KEY_DIRECTORY_MODE });
   let published = false;
   try {
@@ -144,8 +144,8 @@ function publishKeyDirectory(directory: string, key: Uint8Array): void {
 
 /** The key is separate from SQLite so a database-only disclosure cannot be
  * used to guess low-entropy secrets included in persisted fingerprints. */
-export function loadFingerprintKey(dbPath: string, required: boolean): Buffer {
-  if (dbPath === ":memory:") return randomBytes(KEY_BYTES);
+export function loadFingerprintKey(dbPath: string, required: boolean): Uint8Array {
+  if (dbPath === ":memory:") return crypto.getRandomValues(new Uint8Array(KEY_BYTES));
   // Database aliases share the same installation key.
   const keyDirectory = `${fs.realpathSync(dbPath)}.identity-key`;
   try {
@@ -157,7 +157,7 @@ export function loadFingerprintKey(dbPath: string, required: boolean): Buffer {
       throw keyError();
   }
 
-  const generated = randomBytes(KEY_BYTES);
+  const generated = crypto.getRandomValues(new Uint8Array(KEY_BYTES));
   try {
     publishKeyDirectory(keyDirectory, generated);
   } catch {
@@ -213,11 +213,11 @@ export function initializeFingerprintKey(
 export function assertFingerprintKey(db: Database, key: Uint8Array): void {
   const row = db.prepare("SELECT value_json FROM settings WHERE key=?")
     .get(KEY_CHECK_SETTING) as { value_json: string } | null;
-  const expected = Buffer.from(JSON.stringify(keyCheck(key)));
-  const actual = Buffer.from(row?.value_json ?? "");
+  const expected = encodeText(JSON.stringify(keyCheck(key)));
+  const actual = encodeText(row?.value_json ?? "");
   if (
     actual.length !== expected.length ||
-    !timingSafeEqual(actual, expected)
+    !crypto.timingSafeEqual(actual, expected)
   ) {
     throw keyError();
   }

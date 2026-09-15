@@ -1,3 +1,4 @@
+import { encodeText, concatBytes } from "./bytes.js";
 export interface DockerConnection {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
@@ -63,7 +64,7 @@ export class DockerTransport {
 function openDockerStream(socketPath: string, path: string, body?: unknown): Promise<DockerConnection> {
   return new Promise((resolve, reject) => {
     let socket: Bun.Socket | undefined;
-    let headers = Buffer.alloc(0);
+    let headers = new Uint8Array(0);
     let upgraded = false;
     let requestSent = false;
     let delivered = false;
@@ -140,14 +141,15 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       socket?.terminate();
     };
     const payload = body === undefined ? "" : JSON.stringify(body);
-    const request = Buffer.from(
+    const request = encodeText(
       `POST ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n` +
-      `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`,
+      `Content-Type: application/json\r\nContent-Length: ${encodeText(payload).byteLength}\r\n\r\n${payload}`,
     );
     void Bun.connect({
       unix: socketPath,
       allowHalfOpen: true,
       socket: {
+        binaryType: "uint8array",
         open(connected) {
           socket = connected;
           if (aborted) { connected.terminate(); return; }
@@ -155,16 +157,19 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
         },
         data(connected, data) {
           if (aborted || ended) return;
-          let chunk = Buffer.from(data);
+          let chunk = Uint8Array.from(data);
           if (!upgraded) {
-            headers = Buffer.concat([headers, chunk]);
-            const boundary = headers.indexOf("\r\n\r\n");
+            headers = concatBytes([headers, chunk]);
+            let boundary = -1;
+            for (let i = 0; i + 3 < headers.length; i++) {
+              if (headers[i] === 13 && headers[i + 1] === 10 && headers[i + 2] === 13 && headers[i + 3] === 10) { boundary = i; break; }
+            }
             if ((boundary === -1 ? headers.length : boundary) > 16_384) {
               fail(new Error("Docker upgrade headers exceeded their limit"));
               return;
             }
             if (boundary === -1) return;
-            const lines = headers.subarray(0, boundary).toString("latin1").split("\r\n");
+            const lines = String.fromCharCode(...headers.subarray(0, boundary)).split("\r\n");
             const status = /^HTTP\/1\.[01] (\d{3})(?: |$)/.exec(lines.shift() || "");
             if (!status) { fail(new Error("Invalid Docker upgrade response")); return; }
             const statusCode = Number(status[1]);
@@ -186,7 +191,7 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
               return;
             }
             chunk = headers.subarray(boundary + 4);
-            headers = Buffer.alloc(0);
+            headers = new Uint8Array(0);
             upgraded = true;
             deliver();
           }

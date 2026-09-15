@@ -1,3 +1,4 @@
+import { byteView } from "./bytes.js";
 export class DockerStreamError extends Error {
   constructor(readonly code: "INVALID_STREAM" | "INCOMPLETE_STREAM") {
     super(code === "INVALID_STREAM" ? "Invalid Docker stream frame" : "Incomplete Docker stream frame");
@@ -6,7 +7,7 @@ export class DockerStreamError extends Error {
 
 /** Retain only the eight-byte header, never a whole Docker output frame. */
 class DockerFrameDecoder {
-  private header = Buffer.alloc(8);
+  private header = new Uint8Array(8);
   private headerBytes = 0;
   private remaining = 0;
   private channel = 0;
@@ -21,7 +22,7 @@ class DockerFrameDecoder {
         offset += count;
         if (this.headerBytes !== 8) continue;
         this.channel = this.header[0];
-        this.remaining = this.header.readUInt32BE(4);
+        this.remaining = byteView(this.header).getUint32(4);
         if (![0, 1, 2].includes(this.channel) || this.header[1] || this.header[2] || this.header[3] || this.remaining > 64 * 1024 * 1024)
           throw new DockerStreamError("INVALID_STREAM");
         this.headerBytes = 0;

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import {
   createLogger,
   getLogLevelConfiguration,
@@ -8,9 +7,9 @@ import { listApplicationLogs } from "../src/application-logs.js";
 
 describe("logger", () => {
   it("uses info by default and falls back to info for invalid values", () => {
-    assert.deepEqual(getLogLevelConfiguration(undefined), { level: "info" });
-    assert.deepEqual(getLogLevelConfiguration(" DEBUG "), { level: "debug" });
-    assert.deepEqual(getLogLevelConfiguration("verbose"), {
+    expect(getLogLevelConfiguration(undefined)).toStrictEqual({ level: "info" });
+    expect(getLogLevelConfiguration(" DEBUG ")).toStrictEqual({ level: "debug" });
+    expect(getLogLevelConfiguration("verbose")).toStrictEqual({
       level: "info",
       invalidValue: "verbose",
     });
@@ -35,22 +34,16 @@ describe("logger", () => {
         detail: "password=context-secret",
       });
 
-      assert.equal(debugMessages.length, 0);
-      assert.equal(warnings.length, 1);
+      expect(debugMessages.length).toBe(0);
+      expect(warnings.length).toBe(1);
       const entry = listApplicationLogs({ limit: 1 }).entries[0];
-      assert.ok(entry);
-      assert.equal(
-        warnings[0],
-        `${new Date(entry.timestamp).toISOString()} WARN [test] ${entry.message} ${JSON.stringify(entry.context)}`,
-      );
-      assert.match(warnings[0] || "", /"requestId":"request-1"/);
-      assert.match(warnings[0] || "", /"apiToken":"\[REDACTED\]"/);
-      assert.match(warnings[0] || "", /"detail":"password=\[REDACTED\]"/);
+      expect(entry).toBeTruthy();
+      expect(warnings[0]).toBe(`${new Date(entry.timestamp).toISOString()} WARN [test] ${entry.message} ${JSON.stringify(entry.context)}`);
+      expect(warnings[0] || "").toMatch(/"requestId":"request-1"/);
+      expect(warnings[0] || "").toMatch(/"apiToken":"\[REDACTED\]"/);
+      expect(warnings[0] || "").toMatch(/"detail":"password=\[REDACTED\]"/);
       for (const output of [warnings[0] || "", JSON.stringify(entry)]) {
-        assert.doesNotMatch(
-          output,
-          /message-secret|must-not-appear|context-secret/,
-        );
+        expect(output).not.toMatch(/message-secret|must-not-appear|context-secret/);
       }
     } finally {
       if (previousLevel === undefined) delete process.env.LOG_LEVEL;

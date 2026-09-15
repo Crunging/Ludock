@@ -1,3 +1,4 @@
+import { encodeText, decodeText } from "./bytes.js";
 import { z } from "zod";
 import {
   operationStatusSchema,
@@ -34,7 +35,7 @@ function pageConditions(kind: "audit" | "operations", query: HistoryQuery, alias
   if (query.cursor) {
     let cursor: z.infer<typeof cursorSchema>;
     try {
-      cursor = cursorSchema.parse(JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8")));
+      cursor = cursorSchema.parse(JSON.parse(decodeText(Uint8Array.fromBase64(query.cursor, { alphabet: "base64url" }))));
       if (cursor.scope !== scope || typeof cursor.id !== (kind === "audit" ? "number" : "string"))
         throw new Error("Cursor scope mismatch");
     } catch {
@@ -57,7 +58,7 @@ function pageConditions(kind: "audit" | "operations", query: HistoryQuery, alias
 function nextCursor<T extends { id: string | number; createdAt: number }>(rows: T[], limit: number, scope: string): string | null {
   const last = rows[limit - 1];
   return rows.length > limit && last
-    ? Buffer.from(JSON.stringify({ scope, createdAt: last.createdAt, id: last.id })).toString("base64url")
+    ? encodeText(JSON.stringify({ scope, createdAt: last.createdAt, id: last.id })).toBase64({ alphabet: "base64url", omitPadding: true })
     : null;
 }
 

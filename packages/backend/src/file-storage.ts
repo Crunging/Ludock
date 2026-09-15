@@ -1,3 +1,4 @@
+import { decodeText, concatBytes, encodeText } from "./bytes.js";
 import { demuxDockerStream, dockerStdout, DockerStreamError } from "./docker-stream.js";
 import path from "node:path";
 import { managedReadable } from "./managed-readable.js";
@@ -297,7 +298,7 @@ export async function uploadFile(
           uploadId,
         },
         source,
-        Buffer.from(uploadId),
+        encodeText(uploadId),
         signal,
       );
     } finally {
@@ -428,7 +429,7 @@ async function helperRequest(
   access: FileContainerAccess,
   request: Omit<FileRequest, "blocked">,
   input?: ReadableStream<Uint8Array>,
-  inputTrailer?: Buffer,
+  inputTrailer?: Uint8Array,
   signal?: AbortSignal,
 ): Promise<{ stdout: string }> {
   return runExec(
@@ -583,7 +584,7 @@ async function runExec(
   options: Docker.ExecCreateOptions,
   input?: ReadableStream<Uint8Array>,
   assertAccess?: () => void,
-  inputTrailer?: Buffer,
+  inputTrailer?: Uint8Array,
   signal?: AbortSignal,
 ): Promise<{ stdout: string }> {
   assertAccess?.();
@@ -646,7 +647,7 @@ async function runExec(
     const status = await execution.inspect();
     if (status.ExitCode !== 0 || status.Running)
       throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
-    return { stdout: Buffer.concat(chunks).toString("utf8") };
+    return { stdout: decodeText(concatBytes(chunks)) };
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abortInput);

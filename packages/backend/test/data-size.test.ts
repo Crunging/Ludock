@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { thrownBy } from "./fixtures/errors.js";
+import { expect, describe, it } from "bun:test";
 import { formatByteSize, parseByteSize } from "@ludock/shared";
 import { getMaxUploadBytes } from "../src/upload-limit.js";
 
@@ -21,14 +21,14 @@ describe("readable byte sizes", () => {
       ["9007199254740991", Number.MAX_SAFE_INTEGER],
       ["9007199.254740991 GB", Number.MAX_SAFE_INTEGER],
     ] as const) {
-      assert.equal(parseByteSize(input), expected, input);
+      expect(parseByteSize(input), input).toBe(expected);
     }
     for (const input of [
       "", " ", "-1 GiB", "+1", "1e3", "0x100", "Infinity", "NaN",
       "1 PB", "1 K", "1 Mi B", "1,000 B", "1.5 B", "0.0001 KB",
       "9007199254740992", "9007199.254740992 GB", "999999999999 TiB",
     ]) {
-      assert.equal(parseByteSize(input), null, input);
+      expect(parseByteSize(input), input).toBe(null);
     }
   });
 
@@ -38,7 +38,7 @@ describe("readable byte sizes", () => {
       [1536, "1.5 KiB"], [123_456_789, "117.74 MiB"],
       [2_147_483_648, "2 GiB"], [1_099_511_627_776, "1 TiB"],
     ] as const) {
-      assert.equal(formatByteSize(input), expected);
+      expect(formatByteSize(input)).toBe(expected);
     }
   });
 });
@@ -54,7 +54,7 @@ describe("upload size configuration", () => {
       [{ MAX_UPLOAD_BYTES: " 570 " }, 570],
       [{ MAX_UPLOAD_SIZE: "", MAX_UPLOAD_BYTES: "1024" }, 1024],
     ] as const) {
-      assert.equal(getMaxUploadBytes(env), expected);
+      expect(getMaxUploadBytes(env)).toBe(expected);
     }
   });
 
@@ -64,18 +64,12 @@ describe("upload size configuration", () => {
         ? ["0", "-1 GiB", "1.5 B", "9007199254740992", "secret-marker-value"]
         : ["0", "-1", "1.5", "1e3", "1 KiB", "9007199254740992", "secret-marker-value"];
       for (const value of invalid) {
-        assert.throws(
-          () => getMaxUploadBytes({ [variable]: value }),
-          (error) => error instanceof Error &&
+        expect(thrownBy(() => getMaxUploadBytes({ [variable]: value }))).toSatisfy((error) => error instanceof Error &&
             error.message.startsWith(`Invalid ${variable}:`) &&
             error.message.includes("500 MB") &&
-            !error.message.includes("secret-marker-value"),
-        );
+            !error.message.includes("secret-marker-value"));
       }
     }
-    assert.throws(
-      () => getMaxUploadBytes({ MAX_UPLOAD_SIZE: "invalid", MAX_UPLOAD_BYTES: "1024" }),
-      /^Error: Invalid MAX_UPLOAD_SIZE:/,
-    );
+    expect(() => getMaxUploadBytes({ MAX_UPLOAD_SIZE: "invalid", MAX_UPLOAD_BYTES: "1024" })).toThrow(/^Invalid MAX_UPLOAD_SIZE:/);
   });
 });

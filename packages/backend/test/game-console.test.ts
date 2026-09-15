@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import {
   getGameConsoleAdapterSummary,
   resolveGameConsoleAdapter,
@@ -8,7 +7,7 @@ import {
 describe("game console adapters", () => {
   it("selects Minecraft RCON for Minecraft servers", () => {
     const server = { gameType: "minecraft", labels: {} };
-    assert.deepEqual(getGameConsoleAdapterSummary(server), {
+    expect(getGameConsoleAdapterSummary(server)).toStrictEqual({
       id: "minecraft-rcon",
       name: "Minecraft RCON",
       commandPlaceholder:
@@ -17,20 +16,14 @@ describe("game console adapters", () => {
   });
 
   it("can explicitly enable or disable an adapter", () => {
-    assert.equal(
-      resolveGameConsoleAdapter({
+    expect(resolveGameConsoleAdapter({
         gameType: "minecraft",
         labels: { "ludock.console": "disabled" },
-      }),
-      null
-    );
-    assert.equal(
-      resolveGameConsoleAdapter({
+      })).toBe(null);
+    expect(resolveGameConsoleAdapter({
         gameType: "custom",
         labels: { "ludock.console": "minecraft-rcon" },
-      })?.id,
-      "minecraft-rcon"
-    );
+      })?.id).toBe("minecraft-rcon");
   });
 
   it("passes native commands to rcon-cli without a shell", () => {
@@ -38,8 +31,8 @@ describe("game console adapters", () => {
       gameType: "minecraft",
       labels: {},
     });
-    assert.ok(adapter);
-    assert.deepEqual(adapter.createExecOptions?.("/whitelist add PlayerName"), {
+    expect(adapter).toBeTruthy();
+    expect(adapter.createExecOptions?.("/whitelist add PlayerName")).toStrictEqual({
       Cmd: ["rcon-cli", "whitelist add PlayerName"],
       AttachStdout: true,
       AttachStderr: true,
@@ -62,11 +55,7 @@ describe("game console adapters", () => {
       "7-days-to-die": "telnet-console",
     } as const;
     for (const [gameType, adapterId] of Object.entries(expected)) {
-      assert.equal(
-        resolveGameConsoleAdapter({ gameType, labels: {} })?.id,
-        adapterId,
-        gameType
-      );
+      expect(resolveGameConsoleAdapter({ gameType, labels: {} })?.id, gameType).toBe(adapterId);
     }
   });
 
@@ -78,37 +67,22 @@ describe("game console adapters", () => {
       "telnet-console",
       "stdin-console",
     ] as const) {
-      assert.equal(
-        resolveGameConsoleAdapter({
+      expect(resolveGameConsoleAdapter({
           gameType: "custom",
           labels: { "ludock.console": adapterId },
-        })?.id,
-        adapterId
-      );
+        })?.id).toBe(adapterId);
     }
   });
 
   it("does not guess an adapter for games without a remote protocol", () => {
-    assert.equal(
-      resolveGameConsoleAdapter({ gameType: "valheim", labels: {} }),
-      null
-    );
-    assert.equal(
-      resolveGameConsoleAdapter({ gameType: "satisfactory", labels: {} }),
-      null
-    );
+    expect(resolveGameConsoleAdapter({ gameType: "valheim", labels: {} })).toBe(null);
+    expect(resolveGameConsoleAdapter({ gameType: "satisfactory", labels: {} })).toBe(null);
   });
 
   it("recognizes credential variables used by popular CS2 and Rust images", () => {
-    assert.deepEqual(
-      resolveGameConsoleAdapter({ gameType: "cs2", labels: {} })
-        ?.passwordEnvCandidates,
-      ["CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"]
-    );
-    assert.deepEqual(
-      resolveGameConsoleAdapter({ gameType: "rust", labels: {} })
-        ?.passwordEnvCandidates,
-      ["RUST_RCON_PASSWORD", "RCON_PASSWORD"]
-    );
+    expect(resolveGameConsoleAdapter({ gameType: "cs2", labels: {} })
+        ?.passwordEnvCandidates).toStrictEqual(["CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"]);
+    expect(resolveGameConsoleAdapter({ gameType: "rust", labels: {} })
+        ?.passwordEnvCandidates).toStrictEqual(["RUST_RCON_PASSWORD", "RCON_PASSWORD"]);
   });
 });

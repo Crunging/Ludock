@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -37,7 +36,7 @@ async function finished(id: string) {
     if (!['queued', 'running'].includes(operation.status)) return operation;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.fail("Operation did not finish");
+  expect.unreachable("Operation did not finish");
 }
 
 beforeEach(async () => {
@@ -65,7 +64,7 @@ afterEach(async () => {
 describe("API token operation actors", () => {
   it("binds queued work to the current token generation and redacts its fingerprint", async () => {
     const firstActorId = boundActorId(firstToken);
-    assert.match(firstActorId, /^api-token:[0-9a-f]{64}$/);
+    expect(firstActorId).toMatch(/^api-token:[0-9a-f]{64}$/);
     const oldOperation = enqueueOperation({
       serverId,
       actorId: firstActorId,
@@ -74,17 +73,11 @@ describe("API token operation actors", () => {
     });
 
     process.env.LUDOCK_API_TOKEN = secondToken;
-    assert.throws(
-      () => jobActor({ job: getOperation(oldOperation.id)!, progress: () => {} }),
-      /no longer has access/,
-    );
-    assert.throws(
-      () => jobActor({
+    expect(() => jobActor({ job: getOperation(oldOperation.id)!, progress: () => {} })).toThrow(/no longer has access/);
+    expect(() => jobActor({
         job: { ...getOperation(oldOperation.id)!, actorId: "api-token" },
         progress: () => {},
-      }),
-      /no longer has access/,
-    );
+      })).toThrow(/no longer has access/);
 
     getDatabase()
       .prepare("UPDATE operations SET status='failed' WHERE id=?")
@@ -96,22 +89,17 @@ describe("API token operation actors", () => {
       kind: "api-token-operation",
       bindingRevision: 1,
     });
-    assert.equal(
-      jobActor({ job: getOperation(currentOperation.id)!, progress: () => {} }).id,
-      "api-token",
-    );
+    expect(jobActor({ job: getOperation(currentOperation.id)!, progress: () => {} }).id).toBe("api-token");
 
     registerJobHandler("api-token-operation", { run: async () => ({ ok: true }) });
     await startOperationRunner();
-    assert.equal((await finished(currentOperation.id)).status, "succeeded");
+    expect((await finished(currentOperation.id)).status).toBe("succeeded");
     const audit = JSON.stringify(listAuditHistory({ limit: 20 }).entries);
-    assert.equal(audit.includes(firstActorId), false);
-    assert.equal(audit.includes(currentActorId), false);
-    assert.ok(
-      listAuditHistory({ limit: 20 }).entries.some((entry) =>
+    expect(audit.includes(firstActorId)).toBe(false);
+    expect(audit.includes(currentActorId)).toBe(false);
+    expect(listAuditHistory({ limit: 20 }).entries.some((entry) =>
         entry.action === "server.api-token-operation.succeeded" &&
         (entry.details as { actorId?: string } | null)?.actorId === "api-token",
-      ),
-    );
+      )).toBeTruthy();
   });
 });

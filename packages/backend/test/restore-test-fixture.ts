@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+import { expect } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,7 @@ export type RestoreFixture = {
     script: string,
     request: Record<string, unknown>,
     options?: {
-      input?: Buffer;
+      input?: Uint8Array;
       rejection?: string;
       preludeData?: Record<string, string>;
     },
@@ -29,7 +29,7 @@ export function withRestoreFixture(body: (fixture: RestoreFixture) => Promise<vo
     const outside = path.join(directory, "outside");
     const runScript: RestoreFixture["runScript"] = async (script, request, options = {}) => {
       const remaining = deadline - performance.now();
-      assert.ok(remaining > 0, "Restore helper exceeded the test's helper deadline");
+      expect(remaining > 0, "Restore helper exceeded the test's helper deadline").toBeTruthy();
       const child = Bun.spawn(
         [process.execPath, "-e", script, JSON.stringify(request)],
         {
@@ -51,13 +51,13 @@ export function withRestoreFixture(body: (fixture: RestoreFixture) => Promise<vo
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
         ]);
-        assert.equal(child.signalCode, null, `Restore helper was killed: ${child.signalCode}`);
+        expect(child.signalCode, `Restore helper was killed: ${child.signalCode}`).toBe(null);
         if (options.rejection !== undefined) {
-          assert.equal(exitCode, 1, "Unsafe operation did not reject normally");
-          assert.equal(stderr, options.rejection);
-          assert.equal(stdout, "");
+          expect(exitCode, "Unsafe operation did not reject normally").toBe(1);
+          expect(stderr).toBe(options.rejection);
+          expect(stdout).toBe("");
         } else {
-          assert.equal(exitCode, 0, stderr);
+          expect(exitCode, stderr).toBe(0);
         }
         return stdout;
       } finally {
@@ -66,10 +66,7 @@ export function withRestoreFixture(body: (fixture: RestoreFixture) => Promise<vo
       }
     };
     async function sentinel() {
-      assert.equal(
-        await readFile(path.join(outside, "sentinel"), "utf8"),
-        "outside-data",
-      );
+      expect(await readFile(path.join(outside, "sentinel"), "utf8")).toBe("outside-data");
     }
     try {
       await mkdir(root);

@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { serve, type Server } from "bun";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const [{ createApp }, auth, database] = await Promise.all([
@@ -99,11 +97,11 @@ describe("account changes during password work", () => {
         body: JSON.stringify({ username: "admin", password: candidate }),
       })),
     );
-    assert.deepEqual(overlapping.map((response) => response.status), [
+    expect(overlapping.map((response) => response.status)).toStrictEqual([
       429, 429, 429, 429, 429,
     ]);
     hold.release();
-    assert.equal((await first).status, 401);
+    expect((await first).status).toBe(401);
   });
 
   it("scopes a login lockout to the source and account pair", async () => {
@@ -134,9 +132,9 @@ describe("account changes during password work", () => {
       });
 
     for (let attempt = 0; attempt < 5; attempt += 1)
-      assert.equal((await login("192.0.2.10", "incorrect-password")).status, 401);
-    assert.equal((await login("192.0.2.10", password)).status, 429);
-    assert.equal((await login("198.51.100.20", password)).status, 200);
+      expect((await login("192.0.2.10", "incorrect-password")).status).toBe(401);
+    expect((await login("192.0.2.10", password)).status).toBe(429);
+    expect((await login("198.51.100.20", password)).status).toBe(200);
   });
 
   it("rejects overlapping password changes for the same session", async () => {
@@ -158,11 +156,11 @@ describe("account changes during password work", () => {
         newPassword: "other-password-123",
       })),
     );
-    assert.deepEqual(overlapping.map((response) => response.status), [
+    expect(overlapping.map((response) => response.status)).toStrictEqual([
       429, 429, 429, 429, 429,
     ]);
     hold.release();
-    assert.equal((await first).status, 400);
+    expect((await first).status).toBe(400);
   });
 
   it("locks current-password guesses to one session rather than the account", async () => {
@@ -174,10 +172,10 @@ describe("account changes during password work", () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       database.recordLoginFailure(throttleKey, Date.now(), 15 * 60_000, 5);
     }
-    assert.equal((await post("/api/v1/account/change-password", {
+    expect((await post("/api/v1/account/change-password", {
       currentPassword: password,
       newPassword: "new-password-123",
-    })).status, 429);
+    })).status).toBe(429);
 
     const otherSession = auth.createSession(
       { id: "admin", username: "admin", role: "admin" },
@@ -195,20 +193,18 @@ describe("account changes during password work", () => {
         newPassword: "new-password-123",
       }),
     });
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
   });
 
-  it("upgrades a valid legacy password only after authentication succeeds", async () => {
-    const salt = Buffer.alloc(16, 1);
-    const key = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
-    const legacy = `scrypt$16384$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`;
+  it("upgrades a valid Argon2 cost only after authentication succeeds", async () => {
+    const legacy = await Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 8192, timeCost: 1 });
     database.updateUserPassword("admin", legacy);
-    assert.equal(await auth.authenticateUser("admin", "wrong-password"), null);
-    assert.equal(database.findUserById("admin")?.passwordHash, legacy);
-    assert.equal((await auth.authenticateUser("admin", password))?.id, "admin");
+    expect(await auth.authenticateUser("admin", "wrong-password")).toBe(null);
+    expect(database.findUserById("admin")?.passwordHash).toBe(legacy);
+    expect((await auth.authenticateUser("admin", password))?.id).toBe("admin");
     const upgraded = database.findUserById("admin")!.passwordHash;
-    assert.match(upgraded, /^\$argon2id\$/);
-    assert.equal(await auth.verifyPassword(password, upgraded), true);
+    expect(upgraded).toMatch(/^\$argon2id\$/);
+    expect(await auth.verifyPassword(password, upgraded)).toBe(true);
   });
 
   for (const change of ["reset", "disable", "delete"] as const) {
@@ -220,21 +216,19 @@ describe("account changes during password work", () => {
       else if (change === "disable") database.updateUserAccess("admin", "admin", true);
       else database.deleteUser("admin");
       hold.release();
-      assert.equal(await result, null);
+      expect(await result).toBe(null);
     });
   }
 
   it("does not overwrite a password reset during a delayed hash-cost upgrade", async () => {
-    const salt = Buffer.alloc(16, 1);
-    const key = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
-    database.updateUserPassword("admin", `scrypt$16384$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`);
+    database.updateUserPassword("admin", await Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 8192, timeCost: 1 }));
     const hold = pausePasswordWork("hashPassword");
     const result = auth.authenticateUser("admin", password);
     await hold.pending;
     database.updateUserPassword("admin", resetHash);
     hold.release();
-    assert.equal(await result, null);
-    assert.equal(database.findUserById("admin")?.passwordHash, resetHash);
+    expect(await result).toBe(null);
+    expect(database.findUserById("admin")?.passwordHash).toBe(resetHash);
   });
 
   it("returns the current role when it changes during login", async () => {
@@ -243,7 +237,7 @@ describe("account changes during password work", () => {
     await hold.pending;
     database.updateUserAccess("admin", "viewer", false);
     hold.release();
-    assert.equal((await result)?.role, "viewer");
+    expect((await result)?.role).toBe("viewer");
   });
 
   for (const operation of ["create", "reset"] as const) {
@@ -258,9 +252,9 @@ describe("account changes during password work", () => {
         else database.deleteUserSessions("admin");
         hold.release();
         const response = await result;
-        assert.equal(response.status, change === "demote" ? 403 : 401);
-        assert.equal(database.findUserByUsername("new-admin"), null);
-        assert.equal(database.findUserById("target")?.passwordHash, passwordHash);
+        expect(response.status).toBe(change === "demote" ? 403 : 401);
+        expect(database.findUserByUsername("new-admin")).toBe(null);
+        expect(database.findUserById("target")?.passwordHash).toBe(passwordHash);
       });
     }
   }
@@ -274,8 +268,8 @@ describe("account changes during password work", () => {
     database.updateUserPassword("admin", resetHash);
     hold.release();
     const response = await result;
-    assert.equal(response.status, 401);
-    assert.equal(response.headers.get("set-cookie"), null);
-    assert.equal(database.findUserById("admin")?.passwordHash, resetHash);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBe(null);
+    expect(database.findUserById("admin")?.passwordHash).toBe(resetHash);
   });
 });

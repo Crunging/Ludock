@@ -1,3 +1,4 @@
+import { concatBytes } from "./bytes.js";
 /** Keep wire record boundaries and byte limits around Bun's native parser.
  * Incomplete final records and partial results from malformed input must never
  * be mistaken for a successful Docker pull. Event feeds may skip bad records. */
@@ -11,7 +12,7 @@ export class JsonLineDecoder {
   ) {}
 
   push(chunk: Uint8Array): void {
-    if (this.pending.length) chunk = Buffer.concat([this.pending, chunk]);
+    if (this.pending.length) chunk = concatBytes([this.pending, chunk]);
     let start = 0;
     let newline: number;
     while ((newline = chunk.indexOf(10, start)) !== -1) {

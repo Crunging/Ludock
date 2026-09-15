@@ -35,7 +35,9 @@ the repository. Update user docs when procedures change.
   path. Inspect settings with `bun run dev --print-config`.
 - Bun runs all JavaScript; use native TypeScript 7 and Oxlint with matching
   `oxlint-tsgolint`. Follow `.bun-version` and `package.json`; keep `[run].bun = true`
-  in `bunfig.toml`. Use `process.execPath` for child scripts; `node:*` uses Bun compatibility.
+  in `bunfig.toml`. Use `process.execPath` for child scripts. Prefer Bun/Web APIs,
+  typed arrays, and `bun:test`; keep remaining filesystem and tar compatibility
+  confined to their existing boundaries.
 - Use a dedicated test daemon, disposable fixtures, and mock Discord endpoints;
   development has no Docker connection by default. Run one backend per Docker host.
   Clean up your own resources; stop processes with Ctrl+C or their captured PID.

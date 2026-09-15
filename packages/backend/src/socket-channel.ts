@@ -1,7 +1,8 @@
+import { encodeText } from "./bytes.js";
 import type { ServerWebSocket } from "bun";
 import { createLogger } from "./logger.js";
 
-export type SocketMessage = string | Buffer | ArrayBuffer;
+export type SocketMessage = string | Uint8Array | ArrayBuffer;
 export const MAX_SOCKET_BUFFER_BYTES = 1024 * 1024;
 const logger = createLogger("websocket");
 
@@ -31,7 +32,7 @@ export class NativeSocketChannel implements SocketChannel {
   send(message: string): void {
     if (!this.isOpen) return;
     // Disconnect a slow reader instead of retaining unlimited console/log data.
-    if (this.socket.getBufferedAmount() + Buffer.byteLength(message) > MAX_SOCKET_BUFFER_BYTES) {
+    if (this.socket.getBufferedAmount() + encodeText(message).byteLength > MAX_SOCKET_BUFFER_BYTES) {
       this.close(1013, "Client is not reading output");
       return;
     }

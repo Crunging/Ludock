@@ -1,7 +1,6 @@
-import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, it } from "bun:test";
-import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
+import { fixtureBytes, repeatedBytes } from "./fixtures/bytes.js";
+import { SocketFixture } from "./fixtures/socket-channel.js";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   addEventClient,
   dispatchDockerEvent,
@@ -50,23 +49,8 @@ function fixture(id: string) {
     Created: "2026-01-01T00:00:00.000Z",
   };
 }
-class FakeSocket extends EventEmitter implements SocketChannel {
-  get isOpen() { return this.readyState === 1; }
-  onMessage(listener: (message: SocketMessage) => void): void { this.on("message", listener); }
-  onClose(listener: (code: number) => void): void { this.once("close", listener); }
-  OPEN = 1;
-  readyState = 1;
-  messages: string[] = [];
-  closed = false;
-  send(data: string) {
-    this.messages.push(data);
-  }
-  close() {
-    this.closed = true;
-    this.readyState = 3;
-    this.emit("close");
-  }
-}
+const FakeSocket = SocketFixture;
+type FakeSocket = SocketFixture;
 function client(user: SessionUser): FakeSocket {
   const socket = new FakeSocket();
   clients.push(socket);
@@ -87,7 +71,7 @@ beforeEach(async () => {
       createdAt: 0,
     });
   docker.getEvents = (async (options: unknown) => {
-    assert.deepEqual(options, { filters: { type: ["container"] } });
+    expect(options).toStrictEqual({ filters: { type: ["container"] } });
     return new ReadableStream<Uint8Array>();
   }) as unknown as typeof docker.getEvents;
   docker.listContainers = (async () =>
@@ -122,22 +106,20 @@ describe("Docker event framing", () => {
   it("buffers split lines and accepts several events in a chunk", () => {
     const events: unknown[] = [];
     const decode = dockerEventDecoder((event) => events.push(event));
-    const content = Buffer.from(
-      '{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n',
-    );
-    const split = content.indexOf(Buffer.from("é")) + 1;
+    const content = fixtureBytes('{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n');
+    const split = content.indexOf(fixtureBytes("é")) + 1;
     decode(content.subarray(0, split));
-    assert.deepEqual(events, []);
+    expect(events).toStrictEqual([]);
     decode(content.subarray(split));
-    assert.equal(events.length, 2);
-    assert.equal((events[0] as { name: string }).name, "café");
+    expect(events.length).toBe(2);
+    expect((events[0] as { name: string }).name).toBe("café");
   });
   it("rejects oversized input and skips malformed lines", () => {
     const events: unknown[] = [];
     const decode = dockerEventDecoder((event) => events.push(event));
-    decode(Buffer.from('malformed\nnull\n[]\n{"Action":"start"}\n'));
-    assert.equal(events.length, 1);
-    assert.throws(() => decode(Buffer.alloc(1_048_577, "a")), /exceeded/);
+    decode(fixtureBytes('malformed\nnull\n[]\n{"Action":"start"}\n'));
+    expect(events.length).toBe(1);
+    expect(() => decode(repeatedBytes(1_048_577, "a"))).toThrow(/exceeded/);
   });
 });
 
@@ -158,11 +140,11 @@ describe("scoped Docker event delivery", () => {
     let stopped = false;
     const stopping = stopEventStream().then(() => { stopped = true; });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(stopped, false);
+    expect(stopped).toBe(false);
     release();
     await delivery;
     await stopping;
-    assert.equal(stopped, true);
+    expect(stopped).toBe(true);
   });
 
   it("sends only assigned logical server changes to non-administrators", async () => {
@@ -170,15 +152,15 @@ describe("scoped Docker event delivery", () => {
       allowed = client(friend),
       denied = client(stranger);
     await dispatchDockerEvent({ Action: "start", Actor: { ID: "second" } });
-    assert.equal(owner.messages.length, 1);
-    assert.equal(allowed.messages.length, 0);
-    assert.equal(denied.messages.length, 0);
+    expect(owner.messages.length).toBe(1);
+    expect(allowed.messages.length).toBe(0);
+    expect(denied.messages.length).toBe(0);
     await dispatchDockerEvent({ Action: "stop", Actor: { ID: "first" } });
-    assert.equal(allowed.messages.length, 1);
+    expect(allowed.messages.length).toBe(1);
     const event = JSON.parse(allowed.messages[0]);
-    assert.match(event.serverId, /^[0-9a-f-]{36}$/);
-    assert.equal(event.containerId, undefined);
-    assert.equal(event.name, undefined);
+    expect(event.serverId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(event.containerId).toBe(undefined);
+    expect(event.name).toBe(undefined);
   });
   it("ignores exec commands and unknown container metadata", async () => {
     const owner = client(admin);
@@ -190,7 +172,7 @@ describe("scoped Docker event delivery", () => {
       Action: "start",
       Actor: { ID: "unknown-container" },
     });
-    assert.deepEqual(owner.messages, []);
+    expect(owner.messages).toStrictEqual([]);
   });
   it("rechecks grants and account status before each event", async () => {
     const socket = client(friend);
@@ -199,17 +181,17 @@ describe("scoped Docker event delivery", () => {
     )!;
     setServerGrant(friend.id, first.id, [], admin);
     await dispatchDockerEvent({ Action: "start", Actor: { ID: "first" } });
-    assert.deepEqual(socket.messages, []);
+    expect(socket.messages).toStrictEqual([]);
     updateUserAccess(friend.id, "operator", true);
     await dispatchDockerEvent({ Action: "start", Actor: { ID: "first" } });
-    assert.equal(socket.closed, true);
+    expect(socket.closed).toBe(true);
   });
   it("invalidates a previously visible removed server without revealing metadata", async () => {
     const socket = client(friend);
     removed = true;
     await dispatchDockerEvent({ Action: "destroy", Actor: { ID: "first" } });
-    assert.equal(socket.messages.length, 1);
-    assert.equal(JSON.parse(socket.messages[0]).action, "refresh");
-    assert.equal(JSON.parse(socket.messages[0]).serverId, undefined);
+    expect(socket.messages.length).toBe(1);
+    expect(JSON.parse(socket.messages[0]).action).toBe("refresh");
+    expect(JSON.parse(socket.messages[0]).serverId).toBe(undefined);
   });
 });

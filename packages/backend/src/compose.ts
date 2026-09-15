@@ -1,3 +1,4 @@
+import { decodeText, concatBytes } from "./bytes.js";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -136,7 +137,7 @@ export async function runCompose(
         : "Docker Compose failed. Review the project through its owning manager.",
     );
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeText(concatBytes(chunks));
 }
 export async function isComposeAvailable(): Promise<boolean> {
   try {
@@ -236,7 +237,7 @@ export async function createComposeSnapshot(
       let model: Model;
       try {
         model = object(
-          parse(bytes.toString("utf8"), {
+          parse(decodeText(bytes), {
             maxAliasCount: 20,
             uniqueKeys: true,
           }),

@@ -185,9 +185,9 @@ async function main() {
   return { ok: true };
 }
 main()
-  .then((value) => process.stdout.write(JSON.stringify(value)))
-  .catch(() => {
-    process.stderr.write(
+  .then((value) => Bun.write(Bun.stdout, JSON.stringify(value)))
+  .catch(async () => {
+    await Bun.write(Bun.stderr,
       "Restore data changed, is unsafe, or cannot be accessed. Keep the server stopped and review recovery.",
     );
     process.exitCode = 1;

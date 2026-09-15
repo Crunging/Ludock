@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   attentionResponseSchema,
   operationsResponseSchema,
@@ -170,32 +169,32 @@ describe("dashboard attention", () => {
     const id = addOperation();
     getDatabase().prepare("UPDATE operations SET result_json='damaged private result' WHERE id=?").run(id);
     const result = await listAttention(admin);
-    assert.ok(result.items.some((item) => item.kind === "operation" && item.operationId === id));
-    assert.doesNotMatch(JSON.stringify(result), /private result/);
+    expect(result.items.some((item) => item.kind === "operation" && item.operationId === id)).toBeTruthy();
+    expect(JSON.stringify(result)).not.toMatch(/private result/);
   });
   it("authenticates the HTTP endpoint and validates its public response", async () => {
     const handler = createApp({ frontendDist: false }).routes["/api/v1/attention"].GET!;
     const server = { timeout: () => {}, requestIP: () => null };
     const url = "http://localhost/api/v1/attention";
     const anonymous = await handler(new Request(url), server);
-    assert.equal(anonymous.status, 401);
+    expect(anonymous.status).toBe(401);
     const operationId = addOperation();
     const session = createSession(viewer, new Request(url));
     const response = await handler(new Request(url, {
       headers: { Cookie: `ludock_session=${session.token}` },
     }), server);
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     const body: unknown = await response.json();
     const attention = attentionResponseSchema.parse(body);
-    assert.equal(attention.discoveryUnavailable, false);
-    assert.equal(attention.items.length, 1);
+    expect(attention.discoveryUnavailable).toBe(false);
+    expect(attention.items.length).toBe(1);
     const item = attention.items[0];
-    assert.equal(item.kind, "operation");
+    expect(item.kind).toBe("operation");
     if (item.kind !== "operation") throw new Error("Expected operation attention");
-    assert.equal(item.operationId, operationId);
-    assert.equal(item.serverId, worldId);
-    assert.doesNotMatch(JSON.stringify(body), /private-operation|world-container/);
+    expect(item.operationId).toBe(operationId);
+    expect(item.serverId).toBe(worldId);
+    expect(JSON.stringify(body)).not.toMatch(/private-operation|world-container/);
   });
 
   it("limits read-only issues to granted logical servers without exposing operation details", async () => {
@@ -208,14 +207,14 @@ describe("dashboard attention", () => {
 
     const response = attentionResponseSchema.parse(await listAttention(viewer, now));
 
-    assert.deepEqual(response.items.map((item) => item.kind), ["availability", "operation"]);
-    assert.ok(response.items.every((item) => item.serverId === worldId));
+    expect(response.items.map((item) => item.kind)).toStrictEqual(["availability", "operation"]);
+    expect(response.items.every((item) => item.serverId === worldId)).toBeTruthy();
     const operation = response.items.find((item) => item.kind === "operation")!;
-    assert.equal(operation.operationId, visible);
+    expect(operation.operationId).toBe(visible);
     const serialized = JSON.stringify(response);
-    assert.doesNotMatch(serialized, /private-world|private-container|private-operation/);
-    assert.ok(!serialized.includes(privateId));
-    assert.ok(!serialized.includes("world-container"));
+    expect(serialized).not.toMatch(/private-world|private-container|private-operation/);
+    expect(!serialized.includes(privateId)).toBeTruthy();
+    expect(!serialized.includes("world-container")).toBeTruthy();
   });
 
   it("shows only the operator's enabled suspended schedules and respects the current role ceiling", async () => {
@@ -227,17 +226,17 @@ describe("dashboard attention", () => {
     }
 
     const response = await listAttention(operator, now);
-    assert.equal(response.items.length, 1);
+    expect(response.items.length).toBe(1);
     const item = response.items[0];
-    assert.equal(item.kind, "schedule");
+    expect(item.kind).toBe("schedule");
     if (item.kind !== "schedule") throw new Error("Expected schedule attention");
-    assert.equal(item.scheduleId, own.id);
-    assert.equal(item.reason, "action_access_removed");
+    expect(item.scheduleId).toBe(own.id);
+    expect(item.reason).toBe("action_access_removed");
     const administrator = await listAttention(admin, now);
-    assert.deepEqual(new Set(administrator.items.map((entry) => entry.kind === "schedule" && entry.scheduleId)), new Set([own.id, another.id]));
+    expect(new Set(administrator.items.map((entry) => entry.kind === "schedule" && entry.scheduleId))).toStrictEqual(new Set([own.id, another.id]));
 
     updateUserAccess(operator.id, "viewer", false);
-    assert.deepEqual((await listAttention(operator, now)).items, []);
+    expect((await listAttention(operator, now)).items).toStrictEqual([]);
   });
 
   it("rechecks grants and disabled accounts after asynchronous discovery", async () => {
@@ -246,12 +245,12 @@ describe("dashboard attention", () => {
       setServerGrant(viewer.id, worldId, [], admin);
       unavailable = true;
     };
-    assert.deepEqual(await listAttention(viewer, now), {
+    expect(await listAttention(viewer, now)).toStrictEqual({
       items: [], discoveryUnavailable: false,
     });
 
     beforeList = () => updateUserAccess(admin.id, "admin", true);
-    assert.deepEqual(await listAttention(admin, now), {
+    expect(await listAttention(admin, now)).toStrictEqual({
       items: [], discoveryUnavailable: false,
     });
   });
@@ -264,25 +263,25 @@ describe("dashboard attention", () => {
 
     const response = await listAttention(viewer, now);
 
-    assert.equal(response.discoveryUnavailable, true);
-    assert.deepEqual(response.items.map((item) => item.kind), ["availability", "operation"]);
-    assert.equal(response.items.find((item) => item.kind === "operation")!.operationId, operationId);
+    expect(response.discoveryUnavailable).toBe(true);
+    expect(response.items.map((item) => item.kind)).toStrictEqual(["availability", "operation"]);
+    expect(response.items.find((item) => item.kind === "operation")!.operationId).toBe(operationId);
     const after = getLogicalServer(worldId)!;
-    assert.equal(after.containerId, original.containerId);
-    assert.equal(after.status, "active");
-    assert.equal(after.bindingRevision, original.bindingRevision);
-    assert.doesNotMatch(JSON.stringify(response), /private Docker connection failure/);
+    expect(after.containerId).toBe(original.containerId);
+    expect(after.status).toBe("active");
+    expect(after.bindingRevision).toBe(original.bindingRevision);
+    expect(JSON.stringify(response)).not.toMatch(/private Docker connection failure/);
   });
 
   it("does not disclose discovery outages to users without visible servers", async () => {
     unavailable = true;
     setServerGrant(viewer.id, worldId, [], admin);
-    assert.deepEqual(await listAttention(viewer, now), {
+    expect(await listAttention(viewer, now)).toStrictEqual({
       items: [], discoveryUnavailable: false,
     });
-    assert.equal((await listAttention(admin, now)).discoveryUnavailable, true);
+    expect((await listAttention(admin, now)).discoveryUnavailable).toBe(true);
     updateUserAccess(admin.id, "admin", true);
-    assert.deepEqual(await listAttention(admin, now), {
+    expect(await listAttention(admin, now)).toStrictEqual({
       items: [], discoveryUnavailable: false,
     });
   });
@@ -295,37 +294,37 @@ describe("dashboard attention", () => {
       Type: "bind", Source: "/fixture/replacement", Destination: "/data", RW: true,
     }];
 
-    assert.deepEqual((await listAttention(operator, now)).items, []);
+    expect((await listAttention(operator, now)).items).toStrictEqual([]);
     const response = await listAttention(admin, now);
-    assert.deepEqual(response.items.map((item) => item.kind), ["binding", "availability", "operation"]);
+    expect(response.items.map((item) => item.kind)).toStrictEqual(["binding", "availability", "operation"]);
     const binding = response.items[0];
-    assert.equal(binding.kind, "binding");
+    expect(binding.kind).toBe("binding");
     if (binding.kind !== "binding") throw new Error("Expected binding attention");
-    assert.equal(binding.bindingStatus, "review_required");
-    assert.equal(binding.serverId, worldId);
+    expect(binding.bindingStatus).toBe("review_required");
+    expect(binding.serverId).toBe(worldId);
   });
 
   it("shows missing and ambiguous bindings only to administrators", async () => {
     containers = [containers[1]];
-    assert.deepEqual((await listAttention(viewer, now)).items, []);
+    expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     const missing = (await listAttention(admin, now)).items[0];
-    assert.equal(missing.kind, "binding");
+    expect(missing.kind).toBe("binding");
     if (missing.kind !== "binding") throw new Error("Expected binding attention");
-    assert.equal(missing.bindingStatus, "missing");
+    expect(missing.bindingStatus).toBe("missing");
 
     containers.push({ id: "replacement-one", name: "world" }, { id: "replacement-two", name: "world" });
     const ambiguous = (await listAttention(admin, now)).items[0];
-    assert.equal(ambiguous.kind, "binding");
+    expect(ambiguous.kind).toBe("binding");
     if (ambiguous.kind !== "binding") throw new Error("Expected binding attention");
-    assert.equal(ambiguous.bindingStatus, "ambiguous");
-    assert.equal(ambiguous.serverId, worldId);
-    assert.deepEqual((await listAttention(operator, now)).items, []);
+    expect(ambiguous.bindingStatus).toBe("ambiguous");
+    expect(ambiguous.serverId).toBe(worldId);
+    expect((await listAttention(operator, now)).items).toStrictEqual([]);
   });
 
   it("requires an enabled outage past grace and suppresses intentional or active work downtime", async () => {
     persistOutage();
-    assert.deepEqual((await listAttention(viewer, 10_999)).items, []);
-    assert.equal((await listAttention(viewer, 11_000)).items[0].kind, "availability");
+    expect((await listAttention(viewer, 10_999)).items).toStrictEqual([]);
+    expect((await listAttention(viewer, 11_000)).items[0].kind).toBe("availability");
 
     for (const policy of [
       { enabled: false, maintenance: false, graceSeconds: 10 },
@@ -333,25 +332,25 @@ describe("dashboard attention", () => {
     ]) {
       getDatabase().prepare("UPDATE availability SET policy_json=? WHERE server_id=?")
         .run(JSON.stringify(policy), worldId);
-      assert.deepEqual((await listAttention(viewer, now)).items, []);
+      expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     }
     persistOutage();
     getDatabase().prepare("UPDATE availability SET intentionally_stopped=1 WHERE server_id=?").run(worldId);
-    assert.deepEqual((await listAttention(viewer, now)).items, []);
+    expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     getDatabase().prepare("UPDATE availability SET intentionally_stopped=0,suppressed_until=? WHERE server_id=?").run(now + 1, worldId);
-    assert.deepEqual((await listAttention(viewer, now)).items, []);
+    expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     getDatabase().prepare("UPDATE availability SET suppressed_until=0 WHERE server_id=?").run(worldId);
 
     const release = acquireLocks([`server:${worldId}`]);
     try {
-      assert.deepEqual((await listAttention(viewer, now)).items, []);
+      expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     } finally { release(); }
     const queued = addOperation(worldId, "queued");
-    assert.deepEqual((await listAttention(viewer, now)).items, []);
+    expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     getDatabase().prepare("UPDATE operations SET status='running' WHERE id=?").run(queued);
-    assert.deepEqual((await listAttention(viewer, now)).items, []);
+    expect((await listAttention(viewer, now)).items).toStrictEqual([]);
     getDatabase().prepare("UPDATE operations SET status='succeeded' WHERE id=?").run(queued);
-    assert.equal((await listAttention(viewer, now)).items[0].kind, "availability");
+    expect((await listAttention(viewer, now)).items[0].kind).toBe("availability");
   });
 
   it("limits failures to the most recent 100 operations and sorts them by latest update", async () => {
@@ -362,8 +361,8 @@ describe("dashboard attention", () => {
     getDatabase().prepare("UPDATE operations SET updated_at=101 WHERE id=?").run(older);
 
     const response = await listAttention(viewer, now);
-    assert.deepEqual(response.items.map((item) => item.kind === "operation" && item.operationId), [older, newer]);
-    assert.ok(!JSON.stringify(response).includes(expiredFailure));
+    expect(response.items.map((item) => item.kind === "operation" && item.operationId)).toStrictEqual([older, newer]);
+    expect(!JSON.stringify(response).includes(expiredFailure)).toBeTruthy();
   });
 });
 
@@ -379,16 +378,16 @@ describe("server detail and attention resolution", () => {
 
     for (const actor of [admin, operator, viewer]) {
       const response = await requestAs(actor, `/api/v1/servers/${worldId}`);
-      assert.equal(response.status, 200);
+      expect(response.status).toBe(200);
       const detail = serverResponseSchema.parse(await response.json());
-      assert.equal(detail.discoveryUnavailable, true);
-      assert.deepEqual(detail.server.latestBackup, actor.role === "viewer" ? null : { createdAt: 200, size: 24 });
-      assert.doesNotMatch(JSON.stringify(detail), /private-backup-destination|private-checksum|fixture-fingerprint/);
+      expect(detail.discoveryUnavailable).toBe(true);
+      expect(detail.server.latestBackup).toStrictEqual(actor.role === "viewer" ? null : { createdAt: 200, size: 24 });
+      expect(JSON.stringify(detail)).not.toMatch(/private-backup-destination|private-checksum|fixture-fingerprint/);
     }
 
     setServerGrant(operator.id, worldId, ["server.view"], admin);
     const response = await requestAs(operator, `/api/v1/servers/${worldId}`);
-    assert.equal(serverResponseSchema.parse(await response.json()).server.latestBackup, null);
+    expect(serverResponseSchema.parse(await response.json()).server.latestBackup).toBe(null);
   });
 
   it("keeps permitted detail, operation history, and schedule history available without live Docker metadata", async () => {
@@ -400,40 +399,40 @@ describe("server detail and attention resolution", () => {
 
     for (const actor of [viewer, operator, admin]) {
       const response = await requestAs(actor, `/api/v1/servers/${worldId}`);
-      assert.equal(response.status, 200);
+      expect(response.status).toBe(200);
       const raw: unknown = await response.json();
       const detail = serverResponseSchema.parse(raw);
-      assert.equal(detail.discoveryUnavailable, true);
-      assert.equal(detail.stats, null);
-      assert.equal(detail.server.id, worldId);
-      assert.equal(detail.server.bindingStatus, "active");
-      assert.equal(detail.server.state, "unknown");
-      assert.equal(detail.server.status, "Live status unavailable");
-      assert.equal(detail.server.shortId, "");
-      assert.equal(detail.server.image, "");
-      assert.equal(detail.server.gameConsole, null);
-      assert.deepEqual(detail.server.fileRoots, []);
-      assert.deepEqual(detail.server.ports, []);
-      assert.deepEqual(detail.server.labels, {});
-      assert.ok(detail.server.permissions.includes("server.view"));
-      if (actor.role !== "viewer") assert.ok(detail.server.permissions.includes("schedules.manage"));
-      assert.doesNotMatch(JSON.stringify(raw), /world-container|itzg\/minecraft|private Docker/);
+      expect(detail.discoveryUnavailable).toBe(true);
+      expect(detail.stats).toBe(null);
+      expect(detail.server.id).toBe(worldId);
+      expect(detail.server.bindingStatus).toBe("active");
+      expect(detail.server.state).toBe("unknown");
+      expect(detail.server.status).toBe("Live status unavailable");
+      expect(detail.server.shortId).toBe("");
+      expect(detail.server.image).toBe("");
+      expect(detail.server.gameConsole).toBe(null);
+      expect(detail.server.fileRoots).toStrictEqual([]);
+      expect(detail.server.ports).toStrictEqual([]);
+      expect(detail.server.labels).toStrictEqual({});
+      expect(detail.server.permissions.includes("server.view")).toBeTruthy();
+      if (actor.role !== "viewer") expect(detail.server.permissions.includes("schedules.manage")).toBeTruthy();
+      expect(JSON.stringify(raw)).not.toMatch(/world-container|itzg\/minecraft|private Docker/);
 
       const operations = await requestAs(actor, `/api/v1/servers/${worldId}/operations`);
-      assert.equal(operations.status, 200);
-      assert.equal(operationsResponseSchema.parse(await operations.json()).operations[0].id, operationId);
+      expect(operations.status).toBe(200);
+      expect(operationsResponseSchema.parse(await operations.json()).operations[0].id).toBe(operationId);
     }
     for (const actor of [operator, admin]) {
       const schedules = await requestAs(actor, `/api/v1/servers/${worldId}/schedules`);
-      assert.equal(schedules.status, 200);
+      expect(schedules.status).toBe(200);
       const saved = schedulesResponseSchema.parse(await schedules.json()).schedules;
-      assert.equal(saved[0].id, schedule.id);
-      assert.equal(saved[0].nextRunUnavailableReason, "action_access_removed");
+      expect(saved[0].id).toBe(schedule.id);
+      expect(saved[0].nextRunUnavailableReason).toBe("action_access_removed");
     }
-    assert.equal((await requestAs(viewer, `/api/v1/servers/${worldId}/schedules`)).status, 403);
-    assert.equal(inspectCalls, 0);
-    assert.equal(statsCalls, 0);
-    assert.deepEqual(mutationCalls, []);
+    expect((await requestAs(viewer, `/api/v1/servers/${worldId}/schedules`)).status).toBe(403);
+    expect(inspectCalls).toBe(0);
+    expect(statsCalls).toBe(0);
+    expect(mutationCalls).toStrictEqual([]);
   });
 
   it("preserves normal live detail and statistics when discovery succeeds", async () => {
@@ -441,47 +440,47 @@ describe("server detail and attention resolution", () => {
     beforeList = () => { lists += 1; };
     inspectCalls = 0;
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const detail = serverResponseSchema.parse(await response.json());
-    assert.equal(detail.discoveryUnavailable, false);
-    assert.equal(detail.server.state, "exited");
-    assert.equal(detail.server.bindingStatus, "active");
-    assert.equal(detail.server.image, "itzg/minecraft-server");
-    assert.deepEqual(detail.stats, { cpuPercent: 0, memUsageMB: 2, memLimitMB: 4 });
-    assert.equal(statsCalls, 1);
-    assert.equal(lists, 1, "A detail read should discover the fleet only once");
-    assert.equal(inspectCalls, containers.length + 1, "Only the selected container needs a second inspection");
+    expect(detail.discoveryUnavailable).toBe(false);
+    expect(detail.server.state).toBe("exited");
+    expect(detail.server.bindingStatus).toBe("active");
+    expect(detail.server.image).toBe("itzg/minecraft-server");
+    expect(detail.stats).toStrictEqual({ cpuPercent: 0, memUsageMB: 2, memLimitMB: 4 });
+    expect(statsCalls).toBe(1);
+    expect(lists, "A detail read should discover the fleet only once").toBe(1);
+    expect(inspectCalls, "Only the selected container needs a second inspection").toBe(containers.length + 1);
   });
 
   it("rejects unassigned, revoked, and disabled accounts after failed discovery", async () => {
     unavailable = true;
-    assert.equal((await requestAs(viewer, `/api/v1/servers/${privateId}`)).status, 404);
+    expect((await requestAs(viewer, `/api/v1/servers/${privateId}`)).status).toBe(404);
 
     beforeList = () => setServerGrant(viewer.id, worldId, [], admin);
     const revoked = await requestAs(viewer, `/api/v1/servers/${worldId}`);
-    assert.equal(revoked.status, 404);
-    assert.doesNotMatch(await revoked.text(), /world-container|Live status unavailable/);
+    expect(revoked.status).toBe(404);
+    expect(await revoked.text()).not.toMatch(/world-container|Live status unavailable/);
 
     beforeList = () => updateUserAccess(admin.id, "admin", true);
-    assert.equal((await requestAs(admin, `/api/v1/servers/${worldId}`)).status, 404);
+    expect((await requestAs(admin, `/api/v1/servers/${worldId}`)).status).toBe(404);
     beforeList = undefined;
-    assert.equal((await requestAs(admin, `/api/v1/servers/${worldId}`)).status, 401);
+    expect((await requestAs(admin, `/api/v1/servers/${worldId}`)).status).toBe(401);
   });
 
   it("keeps strict server reads and mutation binding resolution unavailable until Docker recovers", async () => {
     unavailable = true;
     inspectCalls = 0;
 
-    await assert.rejects(getServer(admin, worldId), /private Docker connection failure/);
-    await assert.rejects(resolveAuthorizedServer(admin, worldId, "server.start"), /private Docker connection failure/);
+    await expect(getServer(admin, worldId)).rejects.toThrow(/private Docker connection failure/);
+    await expect(resolveAuthorizedServer(admin, worldId, "server.start")).rejects.toThrow(/private Docker connection failure/);
     const start = await requestAs(admin, `/api/v1/servers/${worldId}/start`, "POST");
-    assert.equal(start.status, 500);
-    assert.doesNotMatch(await start.text(), /private Docker connection failure/);
-    assert.deepEqual(mutationCalls, []);
-    assert.equal(inspectCalls, 0);
-    assert.equal(statsCalls, 0);
-    assert.equal(getLogicalServer(worldId)!.containerId, "world-container");
-    assert.equal(getLogicalServer(worldId)!.status, "active");
+    expect(start.status).toBe(500);
+    expect(await start.text()).not.toMatch(/private Docker connection failure/);
+    expect(mutationCalls).toStrictEqual([]);
+    expect(inspectCalls).toBe(0);
+    expect(statsCalls).toBe(0);
+    expect(getLogicalServer(worldId)!.containerId).toBe("world-container");
+    expect(getLogicalServer(worldId)!.status).toBe("active");
   });
 
   it("rechecks view access when the selected binding inspection revokes a grant", async () => {
@@ -492,10 +491,10 @@ describe("server detail and attention resolution", () => {
 
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
 
-    assert.equal(response.status, 404);
-    assert.ok(inspectCalls > containers.length);
-    assert.equal(statsCalls, 0);
-    assert.doesNotMatch(await response.text(), /world-container|itzg\/minecraft/);
+    expect(response.status).toBe(404);
+    expect(inspectCalls > containers.length).toBeTruthy();
+    expect(statsCalls).toBe(0);
+    expect(await response.text()).not.toMatch(/world-container|itzg\/minecraft/);
   });
 
   it("rechecks view access after statistics finish", async () => {
@@ -503,9 +502,9 @@ describe("server detail and attention resolution", () => {
 
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
 
-    assert.equal(response.status, 404);
-    assert.equal(statsCalls, 1);
-    assert.doesNotMatch(await response.text(), /world-container|itzg\/minecraft/);
+    expect(response.status).toBe(404);
+    expect(statsCalls).toBe(1);
+    expect(await response.text()).not.toMatch(/world-container|itzg\/minecraft/);
   });
 
   it("discards live fields when the selected container changes before statistics", async () => {
@@ -517,41 +516,41 @@ describe("server detail and attention resolution", () => {
     };
     const response = await requestAs(admin, `/api/v1/servers/${worldId}`);
     const detail = serverResponseSchema.parse(await response.json());
-    assert.equal(response.status, 200);
-    assert.equal(detail.discoveryUnavailable, true);
-    assert.equal(detail.server.state, "unknown");
-    assert.equal(detail.server.image, "");
-    assert.deepEqual(detail.server.fileRoots, []);
-    assert.equal(detail.stats, null);
-    assert.equal(statsCalls, 0);
+    expect(response.status).toBe(200);
+    expect(detail.discoveryUnavailable).toBe(true);
+    expect(detail.server.state).toBe("unknown");
+    expect(detail.server.image).toBe("");
+    expect(detail.server.fileRoots).toStrictEqual([]);
+    expect(detail.stats).toBe(null);
+    expect(statsCalls).toBe(0);
   });
 
   it("retains the verified server snapshot if only its statistics read fails", async () => {
     beforeStats = () => { throw new Error("private statistics failure"); };
     const response = await requestAs(admin, `/api/v1/servers/${worldId}`);
     const detail = serverResponseSchema.parse(await response.json());
-    assert.equal(response.status, 200);
-    assert.equal(detail.discoveryUnavailable, false);
-    assert.equal(detail.server.state, "exited");
-    assert.equal(detail.stats, null);
+    expect(response.status).toBe(200);
+    expect(detail.discoveryUnavailable).toBe(false);
+    expect(detail.server.state).toBe("exited");
+    expect(detail.stats).toBe(null);
   });
 
   it("scrubs file roots and permissions revoked while statistics are pending", async () => {
     setServerGrant(operator.id, worldId, ["server.view", "files.read"], admin);
     const original = await getServer(operator, worldId);
-    assert.equal(original.fileRoots.length, 1);
-    assert.equal(original.fileRoots[0].path, "/data");
+    expect(original.fileRoots.length).toBe(1);
+    expect(original.fileRoots[0].path).toBe("/data");
     beforeStats = () => setServerGrant(operator.id, worldId, ["server.view"], admin);
 
     const response = await requestAs(operator, `/api/v1/servers/${worldId}`);
 
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const detail = serverResponseSchema.parse(await response.json());
-    assert.deepEqual(detail.server.permissions, ["server.view"]);
-    assert.deepEqual(detail.server.fileRoots, []);
-    assert.equal(detail.discoveryUnavailable, false);
-    assert.equal(detail.server.state, "exited");
-    assert.equal(statsCalls, 1);
+    expect(detail.server.permissions).toStrictEqual(["server.view"]);
+    expect(detail.server.fileRoots).toStrictEqual([]);
+    expect(detail.discoveryUnavailable).toBe(false);
+    expect(detail.server.state).toBe("exited");
+    expect(statsCalls).toBe(1);
   });
 
   it.each(["active", "review_required"] as const)(
@@ -570,21 +569,21 @@ describe("server detail and attention resolution", () => {
 
       const response = await requestAs(admin, `/api/v1/servers/${worldId}`);
 
-      assert.equal(response.status, 200);
+      expect(response.status).toBe(200);
       const detail = serverResponseSchema.parse(await response.json());
-      assert.equal(detail.server.id, worldId);
-      assert.equal(detail.server.bindingStatus, bindingStatus);
-      assert.equal(detail.server.state, "unknown");
-      assert.equal(detail.server.status, "Live status unavailable");
-      assert.equal(detail.server.shortId, "");
-      assert.equal(detail.server.image, "");
-      assert.equal(detail.server.gameConsole, null);
-      assert.deepEqual(detail.server.fileRoots, []);
-      assert.deepEqual(detail.server.ports, []);
-      assert.equal(detail.stats, null);
-      assert.equal(detail.discoveryUnavailable, true);
-      assert.equal(statsCalls, 1);
-      if (bindingStatus === "review_required") assert.deepEqual(detail.server.permissions, ["server.view"]);
+      expect(detail.server.id).toBe(worldId);
+      expect(detail.server.bindingStatus).toBe(bindingStatus);
+      expect(detail.server.state).toBe("unknown");
+      expect(detail.server.status).toBe("Live status unavailable");
+      expect(detail.server.shortId).toBe("");
+      expect(detail.server.image).toBe("");
+      expect(detail.server.gameConsole).toBe(null);
+      expect(detail.server.fileRoots).toStrictEqual([]);
+      expect(detail.server.ports).toStrictEqual([]);
+      expect(detail.stats).toBe(null);
+      expect(detail.discoveryUnavailable).toBe(true);
+      expect(statsCalls).toBe(1);
+      if (bindingStatus === "review_required") expect(detail.server.permissions).toStrictEqual(["server.view"]);
     },
   );
 });

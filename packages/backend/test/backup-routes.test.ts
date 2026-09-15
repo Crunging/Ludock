@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { SessionUser } from "../src/database.js";
 import type { ServerObservation } from "../src/identity.js";
 import type { RequestContext } from "../src/routes/request.js";
@@ -110,15 +109,15 @@ describe("backup storage status routes", () => {
     const handler = backupsRoutes["/api/v1/settings/backups/status"].GET!;
     for (const user of [operator, viewer]) {
       const denied = await handler(context(user, "/api/v1/settings/backups/status"));
-      assert.equal(denied.status, 403);
-      assert.doesNotMatch(await denied.text(), /archiveBytes|availableBytes/);
+      expect(denied.status).toBe(403);
+      expect(await denied.text()).not.toMatch(/archiveBytes|availableBytes/);
     }
-    assert.equal(inspect.mock.calls.length, 0);
+    expect(inspect.mock.calls.length).toBe(0);
 
     const allowed = await handler(context(admin, "/api/v1/settings/backups/status"));
-    assert.equal(allowed.status, 200);
-    assert.deepEqual(await allowed.json(), { storage: storageStatus });
-    assert.equal(inspect.mock.calls.length, 1);
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toStrictEqual({ storage: storageStatus });
+    expect(inspect.mock.calls.length).toBe(1);
   });
 
   for (const change of ["revoke-session", "demote"] as const) {
@@ -130,7 +129,7 @@ describe("backup storage status routes", () => {
         return storageStatus;
       });
       const handler = backupsRoutes["/api/v1/settings/backups/status"].GET!;
-      await assert.rejects(async () => handler(ctx), {
+      await expect((async () => handler(ctx))()).rejects.toMatchObject({
         code: change === "revoke-session" ? "AUTHENTICATION_REQUIRED" : "FORBIDDEN",
       });
     });
@@ -143,12 +142,12 @@ describe("backup preflight routes", () => {
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
     for (const user of [admin, operator]) {
       const result = await handler(context(user, `/api/v1/servers/${serverId}/backups/preflight`));
-      assert.equal(result.status, 200);
-      assert.deepEqual(await result.json(), { preflight });
+      expect(result.status).toBe(200);
+      expect(await result.json()).toStrictEqual({ preflight });
     }
-    assert.equal(inspect.mock.calls.length, 2);
-    assert.equal(inspect.mock.calls[0][0].logical.id, serverId);
-    assert.equal(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count, 0);
+    expect(inspect.mock.calls.length).toBe(2);
+    expect(inspect.mock.calls[0][0].logical.id).toBe(serverId);
+    expect(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
   });
 
   it("denies viewers and lifecycle-only operators before inspecting backup readiness", async () => {
@@ -156,17 +155,17 @@ describe("backup preflight routes", () => {
     const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
     for (const user of [viewer, operator]) {
-      await assert.rejects(async () => handler(context(user)), { code: "FORBIDDEN" });
+      await expect((async () => handler(context(user)))()).rejects.toMatchObject({ code: "FORBIDDEN" });
     }
-    assert.equal(inspect.mock.calls.length, 0);
+    expect(inspect.mock.calls.length).toBe(0);
   });
 
   it("rejects an unavailable binding before inspecting backup readiness", async () => {
     identity.reconcileServers([]);
     const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
-    await assert.rejects(async () => handler(context(admin)), { code: "FORBIDDEN" });
-    assert.equal(inspect.mock.calls.length, 0);
+    await expect((async () => handler(context(admin)))()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(inspect.mock.calls.length).toBe(0);
   });
 
   it("returns advisory problems without exposing internal diagnostic fields", async () => {
@@ -183,8 +182,8 @@ describe("backup preflight routes", () => {
     spyOn(backups, "getBackupPreflight").mockResolvedValue(diagnostic);
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
     const result = await handler(context(operator));
-    assert.equal(result.status, 200);
-    assert.deepEqual(await result.json(), {
+    expect(result.status).toBe(200);
+    expect(await result.json()).toStrictEqual({
       preflight: {
         ready: false,
         checkedAt: 1,
@@ -205,8 +204,8 @@ describe("backup preflight routes", () => {
     });
     const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
-    await assert.rejects(async () => handler(ctx), { code: "AUTHENTICATION_REQUIRED" });
-    assert.equal(inspect.mock.calls.length, 0);
+    await expect((async () => handler(ctx))()).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    expect(inspect.mock.calls.length).toBe(0);
   });
 
   for (const change of ["revoke-session", "remove-grant", "demote"] as const) {
@@ -220,7 +219,7 @@ describe("backup preflight routes", () => {
         return preflight;
       });
       const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
-      await assert.rejects(async () => handler(ctx), {
+      await expect((async () => handler(ctx))()).rejects.toMatchObject({
         code: change === "revoke-session" ? "AUTHENTICATION_REQUIRED" : "FORBIDDEN",
       });
     });
@@ -236,12 +235,12 @@ describe("backup metadata routes", () => {
   it("requires administrator backup-read access rather than backup-create access", async () => {
     const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
     const denied = await handler(context(operator));
-    assert.equal(denied.status, 403);
-    assert.doesNotMatch(await denied.text(), new RegExp(backupId));
+    expect(denied.status).toBe(403);
+    expect(await denied.text()).not.toMatch(new RegExp(backupId));
 
     const allowed = await handler(context(admin));
-    assert.equal(allowed.status, 200);
+    expect(allowed.status).toBe(200);
     const body = (await allowed.json()) as { backups: Array<{ id: string }> };
-    assert.deepEqual(body.backups.map((backup) => backup.id), [backupId]);
+    expect(body.backups.map((backup) => backup.id)).toStrictEqual([backupId]);
   });
 });

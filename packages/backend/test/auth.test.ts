@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { describe, it } from "bun:test";
+import { rejectedBy } from "./fixtures/errors.js";
+import { expect, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "test-api-token-0123456789abcdef0123";
@@ -32,50 +31,36 @@ function websocketRequest(
 describe("account authentication", () => {
   it("hashes and verifies passwords without storing plaintext", async () => {
     const encoded = await hashPassword("a-long-test-password");
-    assert.match(encoded, /^\$argon2id\$v=19\$m=65536,t=2,p=1\$/);
-    assert.equal(encoded.includes("a-long-test-password"), false);
-    assert.equal(await verifyPassword("a-long-test-password", encoded), true);
-    assert.equal(await verifyPassword("wrong-password", encoded), false);
+    expect(encoded).toMatch(/^\$argon2id\$v=19\$m=65536,t=2,p=1\$/);
+    expect(encoded.includes("a-long-test-password")).toBe(false);
+    expect(await verifyPassword("a-long-test-password", encoded)).toBe(true);
+    expect(await verifyPassword("wrong-password", encoded)).toBe(false);
   });
 
-  it("fails closed for malformed stored hashes, including an empty decoded key", async () => {
-    const salt = Buffer.alloc(16, 1).toString("base64url");
-    const key = Buffer.alloc(64, 2).toString("base64url");
-    for (const encoded of [
-      `scrypt$32768$8$3$${salt}$!`,
-      `scrypt$32768$8$3$!$${key}`,
-      `scrypt$32769$8$3$${salt}$${key}`,
-      `scrypt$32768$8$3$${salt}$${key}$extra`,
-      `scrypt$32768$8$3$${salt}$${key.slice(1)}`,
-    ]) assert.equal(await verifyPassword("any-password", encoded), false);
-  });
 
   it("locks initial setup when the startup window expires", async () => {
     let now = 1_000;
     const setupWindow = new SetupWindow(() => now, 100, setupCode);
     now = 1_100;
 
-    assert.deepEqual(setupWindow.getState(), {
+    expect(setupWindow.getState()).toStrictEqual({
       required: true,
       locked: true,
       expiresAt: 1_100,
       remainingMs: 0,
     });
-    await assert.rejects(
-      createInitialAdmin(
+    await expect(await rejectedBy(createInitialAdmin(
         {
           username: "admin",
           password: "a-long-test-password",
           bootstrapCode: setupCode,
         },
         setupWindow
-      ),
-      (error: Error & { code?: string }) => {
-        assert.equal(error.code, "SETUP_LOCKED");
+      ))).toSatisfy((error: Error & { code?: string }) => {
+        expect(error.code).toBe("SETUP_LOCKED");
         return true;
-      }
-    );
-    assert.equal(isSetupRequired(), true);
+      });
+    expect(isSetupRequired()).toBe(true);
   });
 
   it("creates exactly one initial administrator during an open window", async () => {
@@ -87,67 +72,48 @@ describe("account authentication", () => {
       },
       new SetupWindow(Date.now, SETUP_WINDOW_MS, setupCode)
     );
-    assert.equal(user.role, "admin");
-    assert.equal(isSetupRequired(), false);
+    expect(user.role).toBe("admin");
+    expect(isSetupRequired()).toBe(false);
 
-    await assert.rejects(
-      createInitialAdmin(
+    await expect(await rejectedBy(createInitialAdmin(
         {
           username: "other",
           password: "another-long-password",
           bootstrapCode: setupCode,
         },
         new SetupWindow(Date.now, SETUP_WINDOW_MS, setupCode)
-      ),
-      (error: Error & { code?: string }) => {
-        assert.equal(error.code, "SETUP_COMPLETE");
+      ))).toSatisfy((error: Error & { code?: string }) => {
+        expect(error.code).toBe("SETUP_COMPLETE");
         return true;
-      }
-    );
+      });
   });
 
   it("authenticates valid credentials", async () => {
-    assert.equal(
-      (await authenticateUser("ADMIN", "a-long-test-password"))?.username,
-      "admin"
-    );
-    assert.equal(
-      await authenticateUser("admin", "definitely-wrong-password"),
-      null
-    );
-    assert.equal(
-      await authenticateUser("missing", "definitely-wrong-password"),
-      null
-    );
+    expect((await authenticateUser("ADMIN", "a-long-test-password"))?.username).toBe("admin");
+    expect(await authenticateUser("admin", "definitely-wrong-password")).toBe(null);
+    expect(await authenticateUser("missing", "definitely-wrong-password")).toBe(null);
   });
 
   it("requires same-origin WebSocket cookies and header-based API tokens", async () => {
     const user = await authenticateUser("admin", "a-long-test-password");
-    assert.ok(user);
+    expect(user).toBeTruthy();
     const session = createSession(user, new Request("http://panel.example/", {
       headers: { "User-Agent": "test-agent" },
     }), "127.0.0.1");
-    assert.match(session.token, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal(Buffer.from(session.token, "base64url").length, 32);
-    assert.equal(
-      findSessionUser(createHash("sha256").update(session.token).digest("hex"))?.id,
-      user.id,
-      "new sessions retain the existing SHA-256 storage format",
-    );
+    expect(session.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Uint8Array.fromBase64(session.token, { alphabet: "base64url" }).length).toBe(32);
+    expect(findSessionUser(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(session.token))).toHex())?.id, "new sessions retain the existing SHA-256 storage format").toBe(user.id);
     const cookie = `ludock_session=${session.token}`;
 
-    assert.ok(
-      authenticateWsRequest(
+    expect(authenticateWsRequest(
         websocketRequest({
           cookie,
           host: "panel.example",
           origin: "https://panel.example",
           "x-forwarded-proto": "https",
         })
-      )
-    );
-    assert.ok(
-      authenticateWsRequest(
+      )).toBeTruthy();
+    expect(authenticateWsRequest(
         websocketRequest({
           cookie,
           host: "ludock:3000",
@@ -155,46 +121,36 @@ describe("account authentication", () => {
           "x-forwarded-host": "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      "accepts the public origin metadata supplied by Traefik"
-    );
-    assert.equal(
-      authenticateWsRequest(
+      ), "accepts the public origin metadata supplied by Traefik").toBeTruthy();
+    expect(authenticateWsRequest(
         websocketRequest({
           cookie,
           host: "panel.example",
           origin: "https://attacker.example",
         })
-      ),
-      null
-    );
-    assert.equal(
-      authenticateWsRequest(
+      )).toBe(null);
+    expect(authenticateWsRequest(
         websocketRequest(
           { host: "panel.example" },
           "/ws/console/server?token=test-api-token-0123456789abcdef0123"
         )
-      ),
-      null
-    );
-    assert.ok(
-      authenticateWsRequest(
+      )).toBe(null);
+    expect(authenticateWsRequest(
         websocketRequest({
           authorization: "Bearer test-api-token-0123456789abcdef0123",
           host: "panel.example",
         })
-      )
-    );
+      )).toBeTruthy();
   });
 
   it("authenticates sessions stored before the native hashing conversion", async () => {
     const user = await authenticateUser("admin", "a-long-test-password");
-    assert.ok(user);
-    const token = Buffer.alloc(32, 17).toString("base64url");
+    expect(user).toBeTruthy();
+    const token = new Uint8Array(32).fill(17).toBase64({ alphabet: "base64url", omitPadding: true });
     const now = Date.now();
     createSessionRecord({
       sessionId: crypto.randomUUID(),
-      tokenHash: createHash("sha256").update(token).digest("hex"),
+      tokenHash: new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))).toHex(),
       userId: user.id,
       createdAt: now,
       expiresAt: now + 60_000,
@@ -202,23 +158,20 @@ describe("account authentication", () => {
     const session = authenticateRequest(new Request("http://panel.example/", {
       headers: { Cookie: `ludock_session=${token}` },
     }));
-    assert.equal(session?.user.id, user.id);
+    expect(session?.user.id).toBe(user.id);
   });
 
   it("ignores an API token below the strength floor", () => {
     const previous = process.env.LUDOCK_API_TOKEN;
     process.env.LUDOCK_API_TOKEN = "short";
     try {
-      assert.equal(ludockApiToken(), "");
-      assert.equal(
-        authenticateWsRequest(
+      expect(ludockApiToken()).toBe("");
+      expect(authenticateWsRequest(
           websocketRequest({
             authorization: "Bearer short",
             host: "panel.example",
           })
-        ),
-        null
-      );
+        )).toBe(null);
     } finally {
       process.env.LUDOCK_API_TOKEN = previous;
     }

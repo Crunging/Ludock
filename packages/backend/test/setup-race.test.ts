@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { serve } from "bun";
-import { afterAll as after, describe, it } from "bun:test";
+import { expect, afterAll as after, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const setupCode = "fixture-race-setup-code-0123456789abcdef";
@@ -45,7 +44,7 @@ describe("concurrent initial setup", () => {
     ]);
 
     const created = responses.filter((response) => response.status === 201);
-    assert.equal(created.length, 1, "exactly one setup request should succeed");
-    assert.equal(listUsers().length, 1, "only one user should exist");
+    expect(created.length, "exactly one setup request should succeed").toBe(1);
+    expect(listUsers().length, "only one user should exist").toBe(1);
   });
 });

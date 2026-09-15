@@ -11,6 +11,9 @@ const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
 // This function runs inside the image without source mounts, so missing bundle
 // files, production dependencies, or frontend assets fail before source tests.
 async function smokeProductionBundle() {
+  if (["node", "npm", "npx"].some((command) => Bun.which(command))) {
+    throw new Error("The production image must use Bun as its only JavaScript runtime");
+  }
   for (const command of [
     [process.execPath, "--version"],
     ["docker", "--version"],

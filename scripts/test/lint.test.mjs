@@ -1,11 +1,9 @@
-import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { it } from "bun:test";
+import { expect, it } from "bun:test";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
+const root = Bun.fileURLToPath(new URL("../../", import.meta.url));
 
 // Exercise the real configs against isolated code so a tooling migration cannot
 // silently drop type-aware rules, React checks, or the JavaScript helper checks.
@@ -46,10 +44,10 @@ async function lintFixture(workspace, files) {
       stdout: "pipe", stderr: "pipe",
     });
     const output = result.stdout.toString();
-    assert.notEqual(result.exitCode, null, result.stderr.toString());
-    assert.ok(output, result.stderr.toString());
+    expect(result.exitCode, result.stderr.toString()).not.toBe(null);
+    expect(output, result.stderr.toString()).toBeTruthy();
     let report;
-    assert.doesNotThrow(() => { report = JSON.parse(output); }, output + result.stderr.toString());
+    expect(() => { report = JSON.parse(output); }, output + result.stderr.toString()).not.toThrow();
     return { exitCode: result.exitCode, report, output };
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -61,18 +59,18 @@ it("keeps promise safety in backend source and undefined-name checks in helpers"
     "src/work.ts": "export function run() { Promise.resolve(1); }",
     "src/helpers/probe.js": "export function probe() { return missingHelper(); }",
   });
-  assert.equal(result.exitCode, 1, result.output);
+  expect(result.exitCode, result.output).toBe(1);
   const codes = result.report.diagnostics.map((diagnostic) => diagnostic.code);
-  assert.ok(codes.includes("typescript(no-floating-promises)"), result.output);
-  assert.ok(codes.includes("eslint(no-undef)"), result.output);
+  expect(codes.includes("typescript(no-floating-promises)"), result.output).toBeTruthy();
+  expect(codes.includes("eslint(no-undef)"), result.output).toBeTruthy();
 
   const valid = await lintFixture("backend", {
     "src/work.ts": "export async function run() { await Promise.resolve(1); }",
     "test/work.test.ts": "Promise.resolve(1);",
     "src/helpers/probe.js": "export function probe() { return process.platform; }",
   });
-  assert.equal(valid.exitCode, 0, valid.output);
-  assert.deepEqual(valid.report.diagnostics, []);
+  expect(valid.exitCode, valid.output).toBe(0);
+  expect(valid.report.diagnostics).toStrictEqual([]);
 });
 
 it("keeps React hook ordering, effect dependencies, purity, and component exports", async () => {
@@ -90,13 +88,13 @@ it("keeps React hook ordering, effect dependencies, purity, and component export
     "src/Impure.tsx": "export function Impure() { return <div>{Math.random()}</div>; }",
     "src/Exports.tsx": "export const value = 1; export function Example() { return <div />; }",
   });
-  assert.equal(result.exitCode, 1, result.output);
+  expect(result.exitCode, result.output).toBe(1);
   const codes = result.report.diagnostics.map((diagnostic) => diagnostic.code);
   for (const code of [
     "react-hooks(rules-of-hooks)", "react-hooks(exhaustive-deps)",
     "react(purity)", "react(only-export-components)",
   ]) {
-    assert.ok(codes.includes(code), result.output);
+    expect(codes.includes(code), result.output).toBeTruthy();
   }
 
   const valid = await lintFixture("frontend", {
@@ -107,6 +105,6 @@ it("keeps React hook ordering, effect dependencies, purity, and component export
         return <button onClick={() => setCount(count + 1)}>{count}</button>;
       }`,
   });
-  assert.equal(valid.exitCode, 0, valid.output);
-  assert.deepEqual(valid.report.diagnostics, []);
+  expect(valid.exitCode, valid.output).toBe(0);
+  expect(valid.report.diagnostics).toStrictEqual([]);
 });

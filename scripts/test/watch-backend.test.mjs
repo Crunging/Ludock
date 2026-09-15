@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { mkdtemp, mkdir, copyFile, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { it } from "bun:test";
+import { expect, it } from "bun:test";
 
 it.each(["packages/backend/src/index.ts", "packages/shared/src/index.ts"])("drains the backend when %s changes and after repeated shutdown signals", async (watched) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-watch-test-"));
@@ -44,7 +43,7 @@ it.each(["packages/backend/src/index.ts", "packages/shared/src/index.ts"])("drai
         if (child.exitCode !== null) throw new Error(`Watcher exited: ${await new Response(child.stderr).text()}`);
         await Bun.sleep(10);
       }
-      assert.equal(await readFile(events, "utf8"), expected);
+      expect(await readFile(events, "utf8")).toBe(expected);
     };
     await waitFor("started\n");
     await writeFile(path.join(directory, watched), source + "\n// source changed\n");
@@ -54,9 +53,9 @@ it.each(["packages/backend/src/index.ts", "packages/shared/src/index.ts"])("drai
     child.kill("SIGTERM");
     child.kill("SIGINT");
     await Bun.sleep(20);
-    assert.equal(child.exitCode, null, "Watcher must remain alive while the backend drains");
-    assert.equal(await child.exited, 0);
-    assert.equal(await readFile(events, "utf8"), "started\nstopping\ndrained\nstarted\nstopping\ndrained\n");
+    expect(child.exitCode, "Watcher must remain alive while the backend drains").toBe(null);
+    expect(await child.exited).toBe(0);
+    expect(await readFile(events, "utf8")).toBe("started\nstopping\ndrained\nstarted\nstopping\ndrained\n");
   } finally {
     if (child?.exitCode === null) {
       child.kill("SIGTERM");

@@ -1,5 +1,6 @@
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { concatBytes, decodeText } from "../src/bytes.js";
 import { describe, expect, it } from "bun:test";
-import type { ReadableStreamDefaultReader } from "node:stream/web";
 import { docker, type Container } from "../src/docker-client.js";
 import { demuxDockerStream } from "../src/docker-stream.js";
 import { dockerEventDecoder } from "../src/events.js";
@@ -8,7 +9,7 @@ import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client acceptance", () => {
   it("pulls a pinned image and preserves events, TTY logs, exec output, stdin, and lifecycle state", async () => {
     const containers: Container[] = [];
-    let events: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let events: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
     let eventWork: Promise<void> | undefined;
     try {
       await docker.ping();
@@ -48,9 +49,9 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       });
       const stream = await execution.start();
       let out = "", err = "";
-      const completed = demuxDockerStream(stream.readable, data => { out += Buffer.from(data).toString(); }, data => { err += Buffer.from(data).toString(); });
+      const completed = demuxDockerStream(stream.readable, data => { out += decodeText(fixtureBytes(data)); }, data => { err += decodeText(fixtureBytes(data)); });
       const writer = stream.writable.getWriter();
-      await writer.write(Buffer.alloc(2 * 1024 * 1024, 97));
+      await writer.write(new Uint8Array(2 * 1024 * 1024).fill(97));
       await writer.close();
       writer.releaseLock();
       await completed;
@@ -61,13 +62,13 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       const attached = await container.attach({ stream: true, stdin: true, stdout: false, stderr: false });
       try {
         const writer = attached.writable.getWriter();
-        await writer.write(Buffer.from("fixture-command\n"));
+        await writer.write(fixtureBytes("fixture-command\n"));
         writer.releaseLock();
       } finally { attached.abort(); }
       await until(async () => {
         const logs = await container.logs({ follow: false, stdout: true, stderr: true });
         let content = "";
-        const output = (data: Uint8Array) => { content += Buffer.from(data).toString(); };
+        const output = (data: Uint8Array) => { content += decodeText(fixtureBytes(data)); };
         await demuxDockerStream(logs, output, output);
         return content.includes("command:fixture-command");
       });
@@ -88,9 +89,9 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       await tty.start();
       expect((await tty.wait()).StatusCode).toBe(0);
       const logs = await tty.logs({ follow: false, stdout: true, stderr: true });
-      const chunks: Buffer[] = [];
-      for await (const data of logs) chunks.push(data as Buffer);
-      expect(Buffer.concat(chunks).toString().trim()).toBe("tty-marker");
+      const chunks: Uint8Array[] = [];
+      for await (const data of logs) chunks.push(data as Uint8Array);
+      expect(decodeText(concatBytes(chunks)).trim()).toBe("tty-marker");
     } finally {
       await events?.cancel().catch(() => {});
       await eventWork?.catch(() => {});

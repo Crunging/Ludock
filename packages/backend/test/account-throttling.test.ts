@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -48,8 +47,8 @@ function setup(window = new auth.SetupWindow(() => now, 300_000, setupCode)) {
 async function exhaustSetupSource(attempt: ReturnType<typeof setup>, source = "192.0.2.10") {
   for (let failure = 0; failure < 20; failure++) {
     const response = await attempt(source, failure % 2 ? wrongCode : undefined);
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: "Initial setup authorization failed" });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toStrictEqual({ error: "Initial setup authorization failed" });
   }
 }
 
@@ -60,35 +59,35 @@ describe("setup-code source throttling", () => {
     await exhaustSetupSource(attempt);
     for (const code of [undefined, wrongCode, setupCode]) {
       const response = await attempt("192.0.2.10", code);
-      assert.equal(response.status, 429);
-      assert.deepEqual(await response.json(), { error: "Too many attempts. Try again later." });
+      expect(response.status).toBe(429);
+      expect(await response.json()).toStrictEqual({ error: "Too many attempts. Try again later." });
     }
-    assert.equal((await attempt("198.51.100.20", setupCode)).status, 400);
-    assert.equal(hash.mock.calls.length, 0);
-    assert.equal(database.countUsers(), 0);
+    expect((await attempt("198.51.100.20", setupCode)).status).toBe(400);
+    expect(hash.mock.calls.length).toBe(0);
+    expect(database.countUsers()).toBe(0);
   });
 
   it("clears failed attempts after successful code authorization", async () => {
     const attempt = setup();
     for (let failure = 0; failure < 19; failure++)
-      assert.equal((await attempt("192.0.2.10", wrongCode)).status, 403);
-    assert.equal((await attempt("192.0.2.10", setupCode)).status, 400);
+      expect((await attempt("192.0.2.10", wrongCode)).status).toBe(403);
+    expect((await attempt("192.0.2.10", setupCode)).status).toBe(400);
     await exhaustSetupSource(attempt);
-    assert.equal((await attempt("192.0.2.10", wrongCode)).status, 429);
+    expect((await attempt("192.0.2.10", wrongCode)).status).toBe(429);
   });
 
   it("shares limits across routes for one window, but not a fresh window with the same expiry", async () => {
     const window = new auth.SetupWindow(() => now, 300_000, setupCode);
     await exhaustSetupSource(setup(window));
-    assert.equal((await setup(window)("192.0.2.10", setupCode)).status, 429);
+    expect((await setup(window)("192.0.2.10", setupCode)).status).toBe(429);
     const freshWindow = new auth.SetupWindow(() => now, 300_000, setupCode);
-    assert.equal(window.expiresAt, freshWindow.expiresAt);
-    assert.equal((await setup(freshWindow)("192.0.2.10", setupCode)).status, 400);
+    expect(window.expiresAt).toBe(freshWindow.expiresAt);
+    expect((await setup(freshWindow)("192.0.2.10", setupCode)).status).toBe(400);
 
     now = window.expiresAt;
     const expired = await setup(window)("192.0.2.10", setupCode);
-    assert.equal(expired.status, 403);
-    assert.deepEqual(await expired.json(), {
+    expect(expired.status).toBe(403);
+    expect(await expired.json()).toStrictEqual({
       error: "Initial setup has expired. Restart the panel to reopen setup.",
     });
   });
@@ -98,8 +97,8 @@ describe("setup-code source throttling", () => {
     await exhaustSetupSource(attempt);
     database.createUser({ ...user, disabled: false, passwordHash: "fixture-unused-hash", createdAt: now });
     const completed = await attempt("192.0.2.10", setupCode);
-    assert.equal(completed.status, 409);
-    assert.deepEqual(await completed.json(), { error: "Initial setup has already been completed" });
+    expect(completed.status).toBe(409);
+    expect(await completed.json()).toStrictEqual({ error: "Initial setup has already been completed" });
   });
 });
 
@@ -134,29 +133,29 @@ describe("cross-source login cooldown", () => {
       const prior = accountThrottle();
       now = Math.max(now, prior.blockedUntil);
       const response = await attempt(`192.0.2.${failure + 1}`, undefined, failure % 2 ? " Admin " : "admin");
-      assert.equal(response.status, 401);
+      expect(response.status).toBe(401);
       const current = accountThrottle();
-      assert.equal(current.failures, failure + 1);
+      expect(current.failures).toBe(failure + 1);
       if (failure < 19) {
-        assert.equal(current.blockedUntil, 0);
+        expect(current.blockedUntil).toBe(0);
         continue;
       }
       const expectedMs = Math.min(5_000, 250 * 2 ** Math.floor((failure + 1 - 20) / 5));
-      assert.equal(current.blockedUntil - now, expectedMs);
+      expect(current.blockedUntil - now).toBe(expectedMs);
       const checksBefore = authenticate.mock.calls.length;
       now = current.blockedUntil - 1;
       const blocked = await attempt("198.51.100.20");
-      assert.equal(blocked.status, 429);
-      assert.equal(blocked.headers.get("retry-after"), "1");
-      assert.deepEqual(accountThrottle(), current);
-      assert.equal(authenticate.mock.calls.length, checksBefore);
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBe("1");
+      expect(accountThrottle()).toStrictEqual(current);
+      expect(authenticate.mock.calls.length).toBe(checksBefore);
     }
     const cooldown = accountThrottle();
     now = cooldown.blockedUntil;
-    assert.equal((await attempt("198.51.100.21", password)).status, 200);
-    assert.deepEqual(accountThrottle(), { failures: 0, blockedUntil: 0 });
-    assert.equal((await attempt("198.51.100.22")).status, 401);
-    assert.deepEqual(accountThrottle(), { failures: 1, blockedUntil: 0 });
+    expect((await attempt("198.51.100.21", password)).status).toBe(200);
+    expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
+    expect((await attempt("198.51.100.22")).status).toBe(401);
+    expect(accountThrottle()).toStrictEqual({ failures: 1, blockedUntil: 0 });
   });
 
   it("expires the account failure window and preserves another account's counters during pruning", async () => {
@@ -165,27 +164,27 @@ describe("cross-source login cooldown", () => {
     database.recordLoginFailure(unrelatedKey, now, 15 * 60_000, 20);
     for (let failure = 0; failure < 80; failure++) {
       now = Math.max(now, accountThrottle().blockedUntil);
-      assert.equal((await attempt(`192.0.2.${failure + 1}`)).status, 401);
+      expect((await attempt(`192.0.2.${failure + 1}`)).status).toBe(401);
     }
-    assert.equal(database.getLoginThrottle(unrelatedKey, now, 15 * 60_000).failures, 1);
+    expect(database.getLoginThrottle(unrelatedKey, now, 15 * 60_000).failures).toBe(1);
     now = 10_000 + 15 * 60_000;
-    assert.equal((await attempt("198.51.100.20")).status, 401);
-    assert.deepEqual(accountThrottle(), { failures: 1, blockedUntil: 0 });
+    expect((await attempt("198.51.100.20")).status).toBe(401);
+    expect(accountThrottle()).toStrictEqual({ failures: 1, blockedUntil: 0 });
   });
 
   it("does not count busy password work as a failed credential", async () => {
     const { attempt, authenticate } = login();
     authenticate.mockImplementation(async () => { throw new passwords.PasswordWorkBusyError(); });
-    assert.equal((await attempt("192.0.2.10")).status, 429);
-    assert.deepEqual(accountThrottle(), { failures: 0, blockedUntil: 0 });
+    expect((await attempt("192.0.2.10")).status).toBe(429);
+    expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
   });
 
   it("keeps a five-failure source lockout from denying the owner at another source", async () => {
     const { attempt } = login();
     for (let failure = 0; failure < 5; failure++)
-      assert.equal((await attempt("192.0.2.10")).status, 401);
-    assert.equal((await attempt("192.0.2.10", password)).status, 429);
-    assert.equal((await attempt("198.51.100.20", password)).status, 200);
-    assert.deepEqual(accountThrottle(), { failures: 0, blockedUntil: 0 });
+      expect((await attempt("192.0.2.10")).status).toBe(401);
+    expect((await attempt("192.0.2.10", password)).status).toBe(429);
+    expect((await attempt("198.51.100.20", password)).status).toBe(200);
+    expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
   });
 });

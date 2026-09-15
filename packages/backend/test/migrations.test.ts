@@ -1,9 +1,8 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import {
+import { expect,
   afterAll as after,
   afterEach,
   beforeEach,
@@ -72,16 +71,16 @@ after(() => {
 describe("application database ownership and schema migrations", () => {
   it("preserves foreign keys, busy timeout, and native result types", () => {
     const db = getDatabase();
-    assert.equal(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys, 1);
-    assert.equal(db.prepare("PRAGMA busy_timeout").get()?.timeout, 5000);
-    assert.equal(db.prepare("SELECT id FROM users WHERE id = 'missing'").get(), null);
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM users").get()?.count, 0);
-    assert.throws(() => db.prepare(
+    expect(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
+    expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    expect(db.prepare("SELECT id FROM users WHERE id = 'missing'").get()).toBe(null);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM users").get()?.count).toBe(0);
+    expect(() => db.prepare(
       "INSERT INTO sessions (token_hash, session_id, user_id, created_at, expires_at, last_seen_at) VALUES ('token', 'session', 'missing', 1, 2, 1)",
-    ).run(), /FOREIGN KEY/i);
+    ).run()).toThrow(/FOREIGN KEY/i);
     const statement = db.prepare("SELECT 1 AS value");
     closeDatabase();
-    assert.throws(() => statement.get(), /closed/i);
+    expect(() => statement.get()).toThrow(/closed/i);
   });
 
   it("initializes fresh storage and safely opens the same schema again", () => {
@@ -90,49 +89,34 @@ describe("application database ownership and schema migrations", () => {
     const db = getDatabase();
     const keyDirectory = `${fs.realpathSync(dbPath)}.identity-key`;
     const keyPath = path.join(keyDirectory, "key");
-    assert.equal(
-      db.prepare("PRAGMA application_id").get()?.application_id,
-      DATABASE_APPLICATION_ID,
-    );
-    assert.equal(
-      db.prepare("PRAGMA user_version").get()?.user_version,
-      DATABASE_MIGRATIONS.at(-1)?.version,
-    );
-    assert.match(
-      String(
+    expect(db.prepare("PRAGMA application_id").get()?.application_id).toBe(DATABASE_APPLICATION_ID);
+    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
+    expect(String(
         db.prepare("SELECT value_json FROM settings WHERE key='identity.key-check'")
           .get()?.value_json,
-      ),
-      /^"[a-f0-9]{64}"$/,
-    );
+      )).toMatch(/^"[a-f0-9]{64}"$/);
     db.prepare(
       "INSERT INTO docker_hosts (id, name, created_at) VALUES ('host', 'test', 1)",
     ).run();
-    assert.equal(fs.lstatSync(keyDirectory).isDirectory(), true);
-    assert.equal(fs.statSync(keyDirectory).mode & 0o777, 0o700);
+    expect(fs.lstatSync(keyDirectory).isDirectory()).toBe(true);
+    expect(fs.statSync(keyDirectory).mode & 0o777).toBe(0o700);
     const keyInfo = fs.lstatSync(keyPath);
-    assert.equal(keyInfo.isFile(), true);
-    assert.equal(keyInfo.nlink, 1);
-    assert.equal(keyInfo.size, 32);
-    assert.equal(keyInfo.mode & 0o777, 0o600);
+    expect(keyInfo.isFile()).toBe(true);
+    expect(keyInfo.nlink).toBe(1);
+    expect(keyInfo.size).toBe(32);
+    expect(keyInfo.mode & 0o777).toBe(0o600);
     if (process.getuid) {
-      assert.equal(fs.statSync(keyDirectory).uid, process.getuid());
-      assert.equal(keyInfo.uid, process.getuid());
+      expect(fs.statSync(keyDirectory).uid).toBe(process.getuid());
+      expect(keyInfo.uid).toBe(process.getuid());
     }
     const key = fs.readFileSync(keyPath);
-    assert.equal(
-      fs.readdirSync(directory).some((entry) =>
-        entry.startsWith("fresh.db.identity-key.stage-")),
-      false,
-    );
+    expect(fs.readdirSync(directory).some((entry) =>
+        entry.startsWith("fresh.db.identity-key.stage-"))).toBe(false);
     closeDatabase();
-    assert.equal(
-      getDatabase().prepare("SELECT COUNT(*) AS count FROM docker_hosts").get()
-        ?.count,
-      1,
-    );
-    assert.deepEqual(fs.readFileSync(keyPath), key);
-    assert.equal(fs.statSync(dbPath).mode & 0o777, 0o600);
+    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM docker_hosts").get()
+        ?.count).toBe(1);
+    expect(fs.readFileSync(keyPath)).toStrictEqual(key);
+    expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
   });
 
   it("rejects an unrelated database without changing its bytes, schema, or permissions", () => {
@@ -145,26 +129,23 @@ describe("application database ownership and schema migrations", () => {
     fs.chmodSync(dbPath, 0o640);
     const original = fs.readFileSync(dbPath);
     process.env.LUDOCK_DB_PATH = dbPath;
-    assert.throws(() => getDatabase(), /new application data volume/);
-    assert.deepEqual(fs.readFileSync(dbPath), original);
-    assert.equal(fs.statSync(dbPath).mode & 0o777, 0o640);
-    assert.equal(fs.existsSync(`${dbPath}-wal`), false);
-    assert.equal(fs.existsSync(`${dbPath}.identity-key`), false);
+    expect(() => getDatabase()).toThrow(/new application data volume/);
+    expect(fs.readFileSync(dbPath)).toStrictEqual(original);
+    expect(fs.statSync(dbPath).mode & 0o777).toBe(0o640);
+    expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(fs.existsSync(`${dbPath}.identity-key`)).toBe(false);
     // A failed open must not poison the process-wide database handle.
     process.env.LUDOCK_DB_PATH = ":memory:";
-    assert.doesNotThrow(() => getDatabase());
+    expect(() => getDatabase()).not.toThrow();
   });
 
   it("does not infer database ownership from familiar table names", () => {
     const db = new Database(":memory:");
     try {
       db.exec("CREATE TABLE users (id TEXT)");
-      assert.throws(() => applyMigrations(db), /incompatible with Ludock/);
-      assert.equal(
-        db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
-          .length,
-        1,
-      );
+      expect(() => applyMigrations(db)).toThrow(/incompatible with Ludock/);
+      expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
+          .length).toBe(1);
     } finally {
       db.close(true);
     }
@@ -175,12 +156,12 @@ describe("application database ownership and schema migrations", () => {
     fs.chmodSync(dbPath, 0o640);
     const original = fs.readFileSync(dbPath);
     process.env.LUDOCK_DB_PATH = dbPath;
-    assert.throws(() => getDatabase(), /incompatible with Ludock/);
-    assert.deepEqual(fs.readFileSync(dbPath), original);
-    assert.equal(fs.statSync(dbPath).mode & 0o777, 0o640);
-    assert.equal(fs.existsSync(`${dbPath}.identity-key`), false);
-    assert.equal(fs.existsSync(`${dbPath}-wal`), false);
-    assert.equal(fs.existsSync(`${dbPath}-journal`), false);
+    expect(() => getDatabase()).toThrow(/incompatible with Ludock/);
+    expect(fs.readFileSync(dbPath)).toStrictEqual(original);
+    expect(fs.statSync(dbPath).mode & 0o777).toBe(0o640);
+    expect(fs.existsSync(`${dbPath}.identity-key`)).toBe(false);
+    expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(fs.existsSync(`${dbPath}-journal`)).toBe(false);
   });
 
   it("never publishes a partial key and recovers a durable key before schema commit", () => {
@@ -189,14 +170,11 @@ describe("application database ownership and schema migrations", () => {
     spyOn(fs, "writeFileSync").mockImplementationOnce(() => {
       throw new Error("simulated interrupted key write");
     });
-    assert.throws(() => getDatabase(), /identity key/);
+    expect(() => getDatabase()).toThrow(/identity key/);
     mock.restore();
-    assert.equal(fs.existsSync(`${partialPath}.identity-key`), false);
-    assert.equal(
-      fs.readdirSync(directory).some((entry) =>
-        entry.startsWith("partial-key.db.identity-key.stage-")),
-      false,
-    );
+    expect(fs.existsSync(`${partialPath}.identity-key`)).toBe(false);
+    expect(fs.readdirSync(directory).some((entry) =>
+        entry.startsWith("partial-key.db.identity-key.stage-"))).toBe(false);
 
     const durablePath = path.join(directory, "durable-key.db");
     process.env.LUDOCK_DB_PATH = durablePath;
@@ -208,30 +186,21 @@ describe("application database ownership and schema migrations", () => {
         throw new Error("simulated interruption before parent sync");
       return originalFsync(descriptor);
     });
-    assert.throws(() => getDatabase(), /identity key/);
+    expect(() => getDatabase()).toThrow(/identity key/);
     mock.restore();
     const keyPath = path.join(`${durablePath}.identity-key`, "key");
-    assert.equal(fs.readFileSync(keyPath).length, 32);
-    assert.equal(
-      fs.readdirSync(directory).some((entry) =>
-        entry.startsWith("durable-key.db.identity-key.stage-")),
-      false,
-    );
+    expect(fs.readFileSync(keyPath).length).toBe(32);
+    expect(fs.readdirSync(directory).some((entry) =>
+        entry.startsWith("durable-key.db.identity-key.stage-"))).toBe(false);
     const published = fs.readFileSync(keyPath);
     if (fs.statSync(durablePath).size > 0) {
       const uninitialized = new Database(durablePath, { readonly: true });
-      assert.equal(
-        uninitialized.prepare("PRAGMA user_version").get()?.user_version,
-        0,
-      );
+      expect(uninitialized.prepare("PRAGMA user_version").get()?.user_version).toBe(0);
       uninitialized.close(true);
     }
     const db = getDatabase();
-    assert.equal(
-      db.prepare("PRAGMA user_version").get()?.user_version,
-      DATABASE_MIGRATIONS.at(-1)?.version,
-    );
-    assert.deepEqual(fs.readFileSync(keyPath), published);
+    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
+    expect(fs.readFileSync(keyPath)).toStrictEqual(published);
   });
 
   it("rejects missing, replaced, and unsafe key directories without changing schema 2", () => {
@@ -246,11 +215,11 @@ describe("application database ownership and schema migrations", () => {
     fs.renameSync(keyDirectory, savedDirectory);
 
     const reject = () => {
-      assert.throws(() => getDatabase(), /identity key/);
-      assert.deepEqual(fs.readFileSync(dbPath), databaseBytes);
+      expect(() => getDatabase()).toThrow(/identity key/);
+      expect(fs.readFileSync(dbPath)).toStrictEqual(databaseBytes);
     };
     reject();
-    assert.equal(fs.existsSync(keyDirectory), false);
+    expect(fs.existsSync(keyDirectory)).toBe(false);
 
     fs.writeFileSync(keyDirectory, "not-a-directory", { mode: 0o600 });
     reject();
@@ -270,7 +239,7 @@ describe("application database ownership and schema migrations", () => {
     reject();
     fs.rmSync(keyDirectory, { recursive: true });
 
-    for (const key of [Buffer.alloc(3), Buffer.alloc(32, 1)]) {
+    for (const key of [new Uint8Array(3), new Uint8Array(32).fill(1)]) {
       fs.mkdirSync(keyDirectory, { mode: 0o700 });
       fs.writeFileSync(path.join(keyDirectory, "key"), key, { mode: 0o600 });
       reject();
@@ -294,7 +263,7 @@ describe("application database ownership and schema migrations", () => {
     fs.rmSync(keyDirectory, { recursive: true });
 
     fs.renameSync(savedDirectory, keyDirectory);
-    assert.doesNotThrow(() => getDatabase());
+    expect(() => getDatabase()).not.toThrow();
   });
 
   it("uses the canonical key directory through a database path alias", () => {
@@ -305,28 +274,25 @@ describe("application database ownership and schema migrations", () => {
     const alias = path.join(directory, "alias.db");
     fs.symlinkSync(dbPath, alias);
     process.env.LUDOCK_DB_PATH = alias;
-    assert.equal(keyedBindingFingerprint("a".repeat(64)), fingerprint);
-    assert.equal(fs.existsSync(`${alias}.identity-key`), false);
-    assert.equal(fs.existsSync(path.join(`${dbPath}.identity-key`, "key")), true);
+    expect(keyedBindingFingerprint("a".repeat(64))).toBe(fingerprint);
+    expect(fs.existsSync(`${alias}.identity-key`)).toBe(false);
+    expect(fs.existsSync(path.join(`${dbPath}.identity-key`, "key"))).toBe(true);
   });
 
   it("uses deterministic, separate HMAC domains for binding and Compose digests", () => {
     const digest = "a".repeat(64);
     const binding = protectBindingFingerprint(digest, migrationKey);
     const compose = protectComposeSourceFingerprint(digest, migrationKey);
-    assert.match(binding, /^hmac-sha256:[a-f0-9]{64}$/);
-    assert.match(compose, /^hmac-sha256:[a-f0-9]{64}$/);
-    assert.notEqual(binding, compose);
-    assert.equal(binding, protectBindingFingerprint(digest, migrationKey));
-    assert.equal(compose, protectComposeSourceFingerprint(digest, migrationKey));
-    assert.throws(() => protectBindingFingerprint("invalid", migrationKey));
+    expect(binding).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
+    expect(compose).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
+    expect(binding).not.toBe(compose);
+    expect(binding).toBe(protectBindingFingerprint(digest, migrationKey));
+    expect(compose).toBe(protectComposeSourceFingerprint(digest, migrationKey));
+    expect(() => protectBindingFingerprint("invalid", migrationKey)).toThrow();
 
     closeDatabase();
     process.env.LUDOCK_DB_PATH = ":memory:";
-    assert.notEqual(
-      keyedBindingFingerprint(digest),
-      keyedComposeSourceFingerprint(digest),
-    );
+    expect(keyedBindingFingerprint(digest)).not.toBe(keyedComposeSourceFingerprint(digest));
   });
 
   it("adds schedule revisions while preserving existing schedules and queued work", () => {
@@ -349,15 +315,14 @@ describe("application database ownership and schema migrations", () => {
       ) VALUES ('operation','server','u','start','queued','queued','{"scheduleId":"schedule"}',1,1,1)`);
       applyMigrations(db);
       const schedule = db.prepare("SELECT * FROM schedules WHERE id='schedule'").get();
-      assert.equal(schedule?.revision, 1);
-      assert.equal(schedule?.input_json, settings);
-      assert.equal(schedule?.owner_id, "u");
-      assert.equal(schedule?.binding_revision, 1);
-      assert.equal(schedule?.last_slot, "consumed slot");
-      assert.equal(schedule?.last_result, "previous result");
-      assert.equal(db.prepare("SELECT input_json FROM operations WHERE id='operation'").get()?.input_json,
-        '{"scheduleId":"schedule"}');
-      assert.throws(() => db.exec("UPDATE schedules SET revision=0"), /CHECK/);
+      expect(schedule?.revision).toBe(1);
+      expect(schedule?.input_json).toBe(settings);
+      expect(schedule?.owner_id).toBe("u");
+      expect(schedule?.binding_revision).toBe(1);
+      expect(schedule?.last_slot).toBe("consumed slot");
+      expect(schedule?.last_result).toBe("previous result");
+      expect(db.prepare("SELECT input_json FROM operations WHERE id='operation'").get()?.input_json).toBe('{"scheduleId":"schedule"}');
+      expect(() => db.exec("UPDATE schedules SET revision=0")).toThrow(/CHECK/);
     } finally {
       db.close(true);
     }
@@ -383,19 +348,18 @@ describe("application database ownership and schema migrations", () => {
 
       applyMigrations(db);
 
-      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(),
-        originalSchedules.map((schedule) => ({
+      expect(db.prepare("SELECT * FROM schedules ORDER BY id").all()).toStrictEqual(originalSchedules.map((schedule) => ({
           ...schedule,
           last_operation_id: `operation-${schedule.id}`,
           last_run_at: 25,
         })));
-      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
+      expect(db.prepare("SELECT * FROM operations ORDER BY id").all()).toStrictEqual(originalOperations);
       const migrated = db.prepare("SELECT * FROM schedules ORDER BY id").all();
       applyMigrations(db);
-      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(), migrated);
-      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
-      assert.throws(() => db.exec("UPDATE schedules SET last_run_at = -1"), /CHECK/);
-      assert.doesNotThrow(() => db.exec("UPDATE schedules SET last_run_at = NULL"));
+      expect(db.prepare("SELECT * FROM schedules ORDER BY id").all()).toStrictEqual(migrated);
+      expect(db.prepare("SELECT * FROM operations ORDER BY id").all()).toStrictEqual(originalOperations);
+      expect(() => db.exec("UPDATE schedules SET last_run_at = -1")).toThrow(/CHECK/);
+      expect(() => db.exec("UPDATE schedules SET last_run_at = NULL")).not.toThrow();
     } finally {
       db.close(true);
     }
@@ -450,11 +414,10 @@ describe("application database ownership and schema migrations", () => {
       const originalSchedules = db.prepare("SELECT * FROM schedules ORDER BY id").all();
       const originalOperations = db.prepare("SELECT * FROM operations ORDER BY id").all();
 
-      assert.doesNotThrow(() => applyMigrations(db));
+      expect(() => applyMigrations(db)).not.toThrow();
 
-      assert.deepEqual(db.prepare("SELECT * FROM schedules ORDER BY id").all(),
-        originalSchedules.map((schedule) => ({ ...schedule, last_operation_id: null, last_run_at: null })));
-      assert.deepEqual(db.prepare("SELECT * FROM operations ORDER BY id").all(), originalOperations);
+      expect(db.prepare("SELECT * FROM schedules ORDER BY id").all()).toStrictEqual(originalSchedules.map((schedule) => ({ ...schedule, last_operation_id: null, last_run_at: null })));
+      expect(db.prepare("SELECT * FROM operations ORDER BY id").all()).toStrictEqual(originalOperations);
     } finally {
       db.close(true);
     }
@@ -475,7 +438,7 @@ describe("application database ownership and schema migrations", () => {
       applyMigrations(db);
 
       const migrated = db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all();
-      assert.deepEqual(migrated, original.map((delivery) => ({
+      expect(migrated).toStrictEqual(original.map((delivery) => ({
         ...delivery,
         kind: "event",
         retry_attempts: delivery.attempts,
@@ -484,9 +447,9 @@ describe("application database ownership and schema migrations", () => {
         failure_code: null,
       })));
       applyMigrations(db);
-      assert.deepEqual(db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all(), migrated);
-      assert.throws(() => insert.run("duplicate", "event-queued", "{}", 0, 1000, "queued", 400), /UNIQUE/);
-      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries").get()?.count, 3);
+      expect(db.prepare("SELECT * FROM notification_deliveries ORDER BY id").all()).toStrictEqual(migrated);
+      expect(() => insert.run("duplicate", "event-queued", "{}", 0, 1000, "queued", 400)).toThrow(/UNIQUE/);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries").get()?.count).toBe(3);
     } finally {
       db.close(true);
     }
@@ -509,12 +472,12 @@ describe("application database ownership and schema migrations", () => {
       const operations = db.prepare("SELECT * FROM operations").all();
       const deliveries = db.prepare("SELECT * FROM notification_deliveries").all();
 
-      assert.doesNotThrow(() => applyMigrations(db));
+      expect(() => applyMigrations(db)).not.toThrow();
 
-      assert.deepEqual(db.prepare("SELECT * FROM audit_log ORDER BY id").all(), events);
-      assert.deepEqual(db.prepare("SELECT * FROM operations").all(), operations);
-      assert.deepEqual(db.prepare("SELECT * FROM notification_deliveries").all(), deliveries);
-      assert.doesNotThrow(() => insert.run('{"operationId":'));
+      expect(db.prepare("SELECT * FROM audit_log ORDER BY id").all()).toStrictEqual(events);
+      expect(db.prepare("SELECT * FROM operations").all()).toStrictEqual(operations);
+      expect(db.prepare("SELECT * FROM notification_deliveries").all()).toStrictEqual(deliveries);
+      expect(() => insert.run('{"operationId":')).not.toThrow();
     } finally {
       db.close(true);
     }
@@ -534,18 +497,11 @@ describe("application database ownership and schema migrations", () => {
         },
       ];
       applyMigrations(db, migrations);
-      assert.equal(
-        db.prepare("SELECT username FROM users WHERE id = 'u'").get()?.username,
-        "player",
-      );
-      assert.equal(
-        db.prepare("PRAGMA user_version").get()?.user_version,
-        nextVersion,
-      );
+      expect(db.prepare("SELECT username FROM users WHERE id = 'u'").get()?.username).toBe("player");
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(nextVersion);
       db.exec("INSERT INTO test_preferences VALUES ('u', 'preserved account')");
-      assert.equal(db.prepare("SELECT note FROM test_preferences WHERE user_id = 'u'").get()?.note,
-        "preserved account");
-      assert.doesNotThrow(() => applyMigrations(db, migrations));
+      expect(db.prepare("SELECT note FROM test_preferences WHERE user_id = 'u'").get()?.note).toBe("preserved account");
+      expect(() => applyMigrations(db, migrations)).not.toThrow();
     } finally {
       db.close(true);
     }
@@ -556,25 +512,21 @@ describe("application database ownership and schema migrations", () => {
     try {
       applyMigrations(db);
       const currentVersion = DATABASE_MIGRATIONS.at(-1)!.version;
-      assert.throws(() =>
+      expect(() =>
         applyMigrations(db, [
           ...DATABASE_MIGRATIONS,
           {
             version: currentVersion + 1,
             sql: "CREATE TABLE should_rollback (id TEXT); INSERT INTO nonexistent VALUES (1);",
           },
-        ]),
-      );
-      assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, currentVersion);
-      assert.equal(
-        db
+        ])).toThrow();
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(currentVersion);
+      expect(db
           .prepare(
             "SELECT name FROM sqlite_schema WHERE name = 'should_rollback'",
           )
-          .get(),
-        null,
-      );
-      assert.doesNotThrow(() => applyMigrations(db));
+          .get()).toBe(null);
+      expect(() => applyMigrations(db)).not.toThrow();
     } finally {
       db.close(true);
     }
@@ -585,9 +537,9 @@ describe("application database ownership and schema migrations", () => {
     try {
       applyMigrations(db);
       db.exec("PRAGMA user_version = 999");
-      assert.throws(() => assertCompatibleDatabase(db), /incompatible/);
+      expect(() => assertCompatibleDatabase(db)).toThrow(/incompatible/);
       db.exec("PRAGMA user_version = 1; PRAGMA application_id = 123");
-      assert.throws(() => applyMigrations(db), /incompatible/);
+      expect(() => applyMigrations(db)).toThrow(/incompatible/);
     } finally {
       db.close(true);
     }

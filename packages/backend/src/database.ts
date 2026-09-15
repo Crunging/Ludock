@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { Database, constants as sqliteConstants } from "bun:sqlite";
 import {
   applyMigrations,
@@ -32,7 +31,7 @@ export interface LoginThrottle {
 }
 
 let database: Database | null = null;
-let fingerprintKey: Buffer | null = null;
+let fingerprintKey: Uint8Array | null = null;
 
 export function getDatabase(): Database {
   if (database) return database;
@@ -59,7 +58,7 @@ export function getDatabase(): Database {
     // creating sidecars; use the normal reader if journaled changes exist.
     const inspectionPath = hasJournal
       ? canonicalPath
-      : `${pathToFileURL(canonicalPath).href}?immutable=1`;
+      : `${Bun.pathToFileURL(canonicalPath).href}?immutable=1`;
     const inspectionOptions = hasJournal
       ? { readonly: true }
       : sqliteConstants.SQLITE_OPEN_READONLY |
@@ -77,7 +76,7 @@ export function getDatabase(): Database {
   const opened = new Database(dbPath, {
     strict: true,
   });
-  let key: Buffer | null = null;
+  let key: Uint8Array | null = null;
   try {
     assertCompatibleDatabase(opened);
     const version = (opened.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;

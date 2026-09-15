@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import {
   mkdir,
   readFile,
@@ -9,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { RESTORE_HELPER_SCRIPT } from "../src/restore-helper-script.js";
 import { type RestoreFixture, withRestoreFixture } from "./restore-test-fixture.js";
 
@@ -55,23 +54,17 @@ describe.skipIf(process.platform !== "linux")(
     restoreTest("creates exclusive staging, moves dotfiles, and cleans committed old data", async ({ root, run, sentinel }) => {
       await writeFile(path.join(root, "world"), "old-world");
       await writeFile(path.join(root, ".settings"), "old-settings");
-      assert.ok((await run("space"))!.availableBytes! > 0);
+      expect((await run("space"))!.availableBytes! > 0).toBeTruthy();
       await run("stage");
       await run("stage", { okay: false });
       await writeFile(path.join(root, stage, "new", "world"), "restored-world");
       await run("moveOld");
-      assert.equal(
-        await readFile(path.join(root, stage, "old", ".settings"), "utf8"),
-        "old-settings",
-      );
+      expect(await readFile(path.join(root, stage, "old", ".settings"), "utf8")).toBe("old-settings");
       await run("moveNew");
-      assert.equal(
-        await readFile(path.join(root, "world"), "utf8"),
-        "restored-world",
-      );
+      expect(await readFile(path.join(root, "world"), "utf8")).toBe("restored-world");
       await run("cleanup");
       await run("cleanup");
-      assert.deepEqual(await readdir(root), ["world"]);
+      expect(await readdir(root)).toStrictEqual(["world"]);
       await sentinel();
     });
     restoreTest("rolls replacement back and safely resumes a partially completed rollback", async ({ root, run }) => {
@@ -89,18 +82,18 @@ describe.skipIf(process.platform !== "linux")(
       await run("rollbackOld");
       await run("rollbackOld");
       await run("cleanup");
-      assert.equal(await readFile(path.join(root, "one"), "utf8"), "old-one");
-      assert.equal(await readFile(path.join(root, "two"), "utf8"), "old-two");
+      expect(await readFile(path.join(root, "one"), "utf8")).toBe("old-one");
+      expect(await readFile(path.join(root, "two"), "utf8")).toBe("old-two");
     });
     restoreTest("refuses to overwrite an existing root entry during replacement or rollback", async ({ root, run }) => {
       await run("stage");
       await writeFile(path.join(root, "world"), "keep-me");
       await writeFile(path.join(root, stage, "new", "world"), "new");
       await run("moveNew", { okay: false });
-      assert.equal(await readFile(path.join(root, "world"), "utf8"), "keep-me");
+      expect(await readFile(path.join(root, "world"), "utf8")).toBe("keep-me");
       await writeFile(path.join(root, stage, "old", "world"), "older");
       await run("rollbackOld", { okay: false });
-      assert.equal(await readFile(path.join(root, "world"), "utf8"), "keep-me");
+      expect(await readFile(path.join(root, "world"), "utf8")).toBe("keep-me");
     });
     restoreTest("rejects symlink roots, ancestor traversal, and an unsafe stage name", async ({ directory, root, outside, run, sentinel }) => {
       const alias = path.join(directory, "alias");
@@ -133,18 +126,16 @@ describe.skipIf(process.platform !== "linux")(
         path.join(root, ".ludock-restore-22222222-2222-4222-8222-222222222222"),
       );
       await run("moveOld", { okay: false });
-      assert.ok(
-        (await readdir(root)).includes(
+      expect((await readdir(root)).includes(
           ".ludock-restore-22222222-2222-4222-8222-222222222222",
-        ),
-      );
+        )).toBeTruthy();
     });
     restoreTest("cleanup unlinks nested symlinks without following their outside targets", async ({ root, outside, run, sentinel }) => {
       await run("stage");
       await symlink(outside, path.join(root, stage, "old", "escape"));
       await run("cleanup");
       await sentinel();
-      assert.deepEqual(await readdir(root), []);
+      expect(await readdir(root)).toStrictEqual([]);
     });
     restoreTest("pins the root before an ancestor is replaced with an outside symlink", async ({ directory, root, outside, run, sentinel }) => {
       await writeFile(path.join(root, "world"), "old-world");
@@ -167,11 +158,8 @@ describe.skipIf(process.platform !== "linux")(
       `;
       await run("moveOld", { prelude, preludeData: { root, moved, outside, stage } });
       await sentinel();
-      assert.equal(
-        await readFile(path.join(moved, stage, "old", "world"), "utf8"),
-        "old-world",
-      );
-      assert.equal((await readdir(outside)).includes("world"), false);
+      expect(await readFile(path.join(moved, stage, "old", "world"), "utf8")).toBe("old-world");
+      expect((await readdir(outside)).includes("world")).toBe(false);
     });
     restoreTest("pins recursive cleanup directories during a symlink substitution race", async ({ root, outside, run, sentinel }) => {
       await run("stage");
@@ -196,10 +184,7 @@ describe.skipIf(process.platform !== "linux")(
       `;
       await run("cleanup", { prelude, preludeData: { victim, moved, outside }, okay: false });
       await sentinel();
-      assert.equal(
-        await readFile(path.join(outside, "sentinel"), "utf8"),
-        "outside-data",
-      );
+      expect(await readFile(path.join(outside, "sentinel"), "utf8")).toBe("outside-data");
     });
   },
 );

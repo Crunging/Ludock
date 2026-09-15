@@ -53,7 +53,7 @@ export async function readApprovedFile(
   candidate: string,
   roots: readonly string[],
   maxBytes = 2 * 1024 * 1024,
-): Promise<Buffer> {
+): Promise<Uint8Array> {
   return (await readConfigurationFile(candidate, roots, maxBytes, false))!;
 }
 
@@ -61,7 +61,7 @@ export async function readApprovedFile(
 export async function readOptionalApprovedFile(
   candidate: string,
   roots: readonly string[],
-): Promise<Buffer | undefined> {
+): Promise<Uint8Array | undefined> {
   return readConfigurationFile(candidate, roots, 2 * 1024 * 1024, true);
 }
 
@@ -70,7 +70,7 @@ async function readConfigurationFile(
   roots: readonly string[],
   maxBytes: number,
   optional: boolean,
-): Promise<Buffer | undefined> {
+): Promise<Uint8Array | undefined> {
   const resolved = approvedPath(candidate, roots);
   if (process.platform !== "linux")
     throw new AppError(
@@ -109,7 +109,7 @@ async function readConfigurationFile(
           400,
           "Configuration inputs must be regular files within the size limit",
         );
-      const buffer = Buffer.alloc(maxBytes + 1);
+      const buffer = new Uint8Array(maxBytes + 1);
       let offset = 0;
       while (offset < buffer.length) {
         const read = await file.read(

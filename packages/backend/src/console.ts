@@ -1,5 +1,4 @@
 import { demuxDockerStream } from "./docker-stream.js";
-import type { ReadableStreamDefaultReader } from "node:stream/web";
 import type * as Docker from "./docker-client.js";
 import type { SocketChannel } from "./socket-channel.js";
 import { getContainer } from "./docker.js";
@@ -94,7 +93,7 @@ export async function handleConsoleConnection(
     ipAddress: remoteAddress,
   });
 
-  let logReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let logReader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
   const pendingMessages: string[] = [];
   const commandLifetime = new AbortController();
   const cleanup = () => {

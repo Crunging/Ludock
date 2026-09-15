@@ -1,6 +1,6 @@
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { describe, it } from "bun:test";
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { decodeText } from "../src/bytes.js";
+import { expect, describe, it } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
 import { getDockerInstance, getManagedContainerObservation } from "../src/docker.js";
 import {
@@ -47,7 +47,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
       const cleanup: Array<() => Promise<unknown>> = [];
       let testPassed = false;
       try {
-        const volumeName = `ludock-test-${randomUUID()}`;
+        const volumeName = `ludock-test-${crypto.randomUUID()}`;
         const volume = await docker.createVolume({ Name: volumeName });
         cleanup.push(() => volume.remove());
         const game = await docker.createContainer({
@@ -64,7 +64,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           if (state === "running") await game.start();
           const { container: server } = await getManagedContainerObservation(game.id);
           const root = server.fileRoots[0];
-          assert.ok(root);
+          expect(root).toBeTruthy();
           await createDirectory(server, root.id, "", state);
           await uploadFile(
             server,
@@ -74,16 +74,13 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             13,
             new Response("hello helper!").body!,
           );
-          assert.equal(
-            (await listFiles(server, root.id, state)).entries[0].name,
-            "test.txt",
-          );
+          expect((await listFiles(server, root.id, state)).entries[0].name).toBe("test.txt");
           const file = await openDownload(server, root.id, `${state}/test.txt`);
           let content = "";
           for await (const chunk of file.stream)
-            content += Buffer.from(chunk).toString();
+            content += decodeText(fixtureBytes(chunk));
           await file.completed;
-          assert.equal(content, "hello helper!");
+          expect(content).toBe("hello helper!");
           await renameFileEntry(
             server,
             root.id,
@@ -93,9 +90,9 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
           const archive = await openDownload(server, root.id, state);
           let bytes = 0;
           for await (const chunk of archive.stream)
-            bytes += (chunk as Buffer).length;
+            bytes += (chunk as Uint8Array).length;
           await archive.completed;
-          assert.ok(bytes >= 2048);
+          expect(bytes >= 2048).toBeTruthy();
           await deleteFileEntry(server, root.id, state);
         }
         testPassed = true;
@@ -108,7 +105,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
       const cleanup: Array<() => Promise<unknown>> = [];
       let testPassed = false;
       try {
-        const name = `ludock-proof-${randomUUID()}`;
+        const name = `ludock-proof-${crypto.randomUUID()}`;
         const volume = await docker.createVolume({ Name: name });
         cleanup.push(() => volume.remove());
         const mountpoint = (await volume.inspect()).Mountpoint;
@@ -149,25 +146,19 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
         cleanup.push(async () => { if (data) await data.remove({ force: true }); });
         await data.start();
         await assertMountIdentities(data, proof.identities);
-        await assert.rejects(
-          createMountProof([
+        await expect(createMountProof([
             {
               Type: "bind",
               Source: `${mountpoint}/link`,
               Destination: "/data",
               RW: true,
             },
-          ]),
-          /could not be verified/,
-        );
+          ])).rejects.toThrow(/could not be verified/);
         await data.remove({ force: true });
         data = undefined;
         data = await fixture(`${mountpoint}/other`);
         await data.start();
-        await assert.rejects(
-          assertMountIdentities(data, proof.identities),
-          /could not be verified/,
-        );
+        await expect(assertMountIdentities(data, proof.identities)).rejects.toThrow(/could not be verified/);
         testPassed = true;
       } finally {
         await cleanupFixtures(cleanup, testPassed);

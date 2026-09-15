@@ -25,7 +25,7 @@ function endToEndHeaders(source: Headers): Headers {
 }
 
 function size(message: Message): number {
-  return typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
+  return typeof message === "string" ? new TextEncoder().encode(message).byteLength : message.byteLength;
 }
 
 function closeUpstream(bridge: Bridge, code: number, reason: string) {

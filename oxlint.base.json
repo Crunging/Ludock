@@ -71,7 +71,109 @@
     "use-isnan": "error",
     "valid-typeof": "error",
     "no-undef": "error",
-    "no-useless-assignment": "error"
+    "no-useless-assignment": "error",
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "Buffer",
+        "message": "Use Uint8Array, DataView, and Bun/Web encoding APIs."
+      }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "assert",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:assert",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "assert/strict",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:assert/strict",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "buffer",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:buffer",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "crypto",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:crypto",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "events",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:events",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "http",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:http",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "https",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:https",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "net",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:net",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "url",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:url",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "child_process",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:child_process",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "stream/web",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "node:stream/web",
+            "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          }
+        ]
+      }
+    ]
   },
   "overrides": [
     {
