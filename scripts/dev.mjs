@@ -3,7 +3,6 @@ import {
   lstat,
   mkdir,
   open,
-  readFile,
   realpath,
   stat,
   unlink,
@@ -153,7 +152,7 @@ async function lockFile(file, instance) {
     await handle.close();
   }
   return async () => {
-    const current = JSON.parse(await readFile(file, "utf8"));
+    const current = await Bun.file(file).json();
     if (current.nonce === nonce) await unlink(file);
   };
 }

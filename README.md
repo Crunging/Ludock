@@ -119,6 +119,7 @@ Compose update access needs a read-only source mount; see
   permissions, files, backups, Compose updates, schedules, alerts, and recovery.
 - [Development instructions](./AGENTS.md): local setup, code boundaries, tests,
   and dependency/image updates.
+- [Development and CI](./docs/DEVELOPMENT.md): Bun execution, checks, and release tooling.
 - [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
 
 Licensed under the [MIT License](./LICENSE).

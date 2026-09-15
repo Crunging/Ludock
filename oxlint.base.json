@@ -170,6 +170,22 @@
           {
             "name": "node:stream/web",
             "message": "Use Bun/Web APIs or bun:test instead of this Node compatibility module."
+          },
+          {
+            "name": "stream",
+            "message": "Use Web Streams instead of Node stream adapters."
+          },
+          {
+            "name": "node:stream",
+            "message": "Use Web Streams instead of Node stream adapters."
+          },
+          {
+            "name": "stream/promises",
+            "message": "Use Web Streams instead of Node stream adapters."
+          },
+          {
+            "name": "node:stream/promises",
+            "message": "Use Web Streams instead of Node stream adapters."
           }
         ]
       }

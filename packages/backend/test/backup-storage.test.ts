@@ -15,21 +15,20 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
-import * as tar from "tar-stream";
+import { walkTar, encodeTarHeader, tarPadding, tarEnd } from "../src/tar.js";
 import type * as Docker from "../src/docker-client.js";
 import {
   archiveEntryMetadata,
   mappedArchiveHeader,
   approvedBackupDirectory,
-  archiveValidator,
+  validateArchiveStream,
   backupFilePath,
   createDataHelper,
   extractRootToStage,
   helperExec,
   validateArchive,
+  writeSnapshot,
   validateArchiveEntry,
   removeArchive,
   availableBackupDestinationBytes,
@@ -62,24 +61,28 @@ afterEach(async () => {
 async function archive(
   entries: Array<{ header: ArchiveHeader; body?: string }>,
 ): Promise<Uint8Array> {
-  const pack = tar.pack(),
-    chunks: Uint8Array[] = [];
-  pack.on("data", (chunk: Uint8Array) => chunks.push(chunk));
-  for (const { header, body } of entries)
-    await new Promise<void>((resolve, reject) =>
-      pack.entry(header, body || "", (error) =>
-        error ? reject(error) : resolve(),
-      ),
-    );
-  const done = new Promise<Uint8Array>((resolve, reject) => {
-    pack.once("end", () => resolve(concatBytes(chunks)));
-    pack.once("error", reject);
-  });
-  pack.finalize();
-  return done;
+  const chunks: Uint8Array[] = [];
+  for (const { header, body } of entries) {
+    const bytes = fixtureBytes(body || "");
+    chunks.push(encodeTarHeader({ ...header, size: header.size ?? bytes.length }), bytes, tarPadding(bytes.length));
+  }
+  return concatBytes([...chunks, tarEnd()]);
 }
 
 describe("backup storage boundaries", () => {
+  it.skipIf(process.platform !== "linux")("cleans up failed writes without removing a partial archive it did not create", async () => {
+    const id = crypto.randomUUID();
+    const filename = await backupFilePath(directory, id, true);
+    const settings = { destination: directory, retentionCount: 1, maxBytes: 10_000, reserveBytes: 0 };
+    const helper = { roots, container: {} as Docker.Container, cleanup: async () => {} };
+    await Bun.write(filename, "existing partial");
+    await expect(writeSnapshot({} as ServerContext, helper, settings, id, 1, async () => {})).rejects.toThrow();
+    expect(await Bun.file(filename).text()).toBe("existing partial");
+    await Bun.file(filename).delete();
+    await expect(writeSnapshot({} as ServerContext, helper, settings, id, 1, async () => {})).rejects.toThrow(/byte limit/);
+    expect(await Bun.file(filename).exists()).toBe(false);
+    expect(await Bun.file(await backupFilePath(directory, id)).exists()).toBe(false);
+  });
   it("accepts whitespace around configured roots and still confines the destination", async () => {
     process.env.LUDOCK_BACKUP_ROOTS = `  ${directory}  ${path.delimiter} `;
     expect(await approvedBackupDirectory(directory)).toBe(directory);
@@ -128,7 +131,7 @@ describe("backup storage boundaries", () => {
       import { archiveReadStream } from ${JSON.stringify(new URL("../src/backup-storage.ts", import.meta.url).href)};
       try {
         const stream = await archiveReadStream(${JSON.stringify(directory)}, ${JSON.stringify(id)});
-        stream.destroy(); process.exitCode = 2;
+        await stream.cancel(); process.exitCode = 2;
       } catch (error) {
         if (error.code !== "INVALID_BACKUP") { console.error(error); process.exitCode = 3; }
       }
@@ -258,20 +261,14 @@ describe("backup storage boundaries", () => {
     };
     const mapped = mappedArchiveHeader(source, "snapshot/root-0/world");
     const bytes = await archive([{ header: mapped, body: "hello" }]);
-    const extract = tar.extract();
     let found = false;
-    extract.on("entry", (header, stream, next) => {
+    await walkTar(ReadableStream.from([bytes]), (header) => {
       expect(header.name).toBe("snapshot/root-0/world");
       expect(archiveEntryMetadata(header)).toStrictEqual({
-        uid: 1_000_000,
-        gid: 2_000_000,
-        mtime: source.mtime.getTime() / 1000,
+        uid: 1_000_000, gid: 2_000_000, mtime: source.mtime.getTime() / 1000,
       });
       found = true;
-      stream.resume();
-      stream.once("end", next);
     });
-    await pipeline(Readable.from([bytes]), extract);
     expect(found).toBe(true);
     for (const metadata of [
       { uid: "4294967295" },
@@ -326,14 +323,14 @@ describe("backup storage boundaries", () => {
         body: "hello",
       },
     ]);
-    await pipeline(Readable.from([valid]), archiveValidator(roots, 10000));
+    await validateArchiveStream(ReadableStream.from([valid]), roots, 10000);
     const duplicate = await archive([...base, ...base]);
-    await expect(pipeline(Readable.from([duplicate]), archiveValidator(roots, 10000))).rejects.toThrow(/duplicate/);
+    await expect(validateArchiveStream(ReadableStream.from([duplicate]), roots, 10000)).rejects.toThrow(/duplicate/);
     const missing = await archive([
       { header: { name: "snapshot", type: "directory" } },
     ]);
-    await expect(pipeline(Readable.from([missing]), archiveValidator(roots, 10000))).rejects.toThrow(/missing/);
-    await expect(pipeline(Readable.from([valid]), archiveValidator(roots, 4))).rejects.toThrow(/size/);
+    await expect(validateArchiveStream(ReadableStream.from([missing]), roots, 10000)).rejects.toThrow(/missing/);
+    await expect(validateArchiveStream(ReadableStream.from([valid]), roots, 4)).rejects.toThrow(/size/);
   });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "verifies archive checksums and refuses symlink archive files",

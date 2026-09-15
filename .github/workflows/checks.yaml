@@ -1,90 +1,91 @@
 name: Checks
-
 on:
-  workflow_call:
-
+  workflow_call: null
 permissions:
   contents: read
-
 jobs:
   source:
     name: Source
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Check out repository with Git
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-
+        uses: ./.github/actions/setup-bun
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
       - name: Audit dependencies for vulnerabilities
         run: bun audit --audit-level=high
-
       - name: Type-check, lint, test, and build
         run: bun run check
-
   browser:
     name: Browser
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Check out repository with Git
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-
+        uses: ./.github/actions/setup-bun
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
       - name: Build frontend
         run: bun run --filter @ludock/frontend build
-
       - name: Install Chromium headless shell
         working-directory: packages/frontend
         run: bun x --bun playwright install --with-deps --only-shell chromium
-
       - name: Check desktop and mobile browser workflows
         run: bun run --filter @ludock/frontend test:e2e
-
       - name: Retain browser failure details
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/bun-action
         with:
+          integration: upload-artifact
           name: browser-failures
           path: |
             packages/frontend/test-results/
             packages/frontend/playwright-report/
           retention-days: 7
-
   workflows:
     name: Workflows
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Check out repository with Git
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Lint workflows
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # latest
-
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
   container:
     name: Container (${{ matrix.platform }})
     strategy:
@@ -97,83 +98,65 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out repository with Git
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+      - name: Expose BuildKit cache runtime
+        uses: ./.github/actions/bun-action
         with:
-          persist-credentials: false
-
+          integration: build-runtime
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-
+        run: bun scripts/ci/containers.mjs setup
       - name: Build production image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          pull: true
-          platforms: ${{ matrix.platform }}
-          push: false
-          load: true
-          tags: ludock:ci
-          cache-from: type=gha,scope=ci-${{ runner.arch }}
-          cache-to: type=gha,mode=max,scope=ci-${{ runner.arch }}
-
-      - name: Set up Bun for storage integration
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-
+        run: bun scripts/ci/containers.mjs build check
+        env:
+          LUDOCK_PLATFORM: ${{ matrix.platform }}
       - name: Install test harness dependencies
         run: bun install --frozen-lockfile
-
       - name: Check Compose updates with disposable services
         run: bun scripts/test-compose.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
-
       - name: Smoke-test production startup and run Linux backend suites
         run: bun scripts/test-linux.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
-
       - name: Select default helper
         id: helper
         run: |
           image="$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-
       - name: Check scoped file helpers with disposable data
         run: |
           docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
           bun scripts/test-files.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
-
       - name: Check backup and restore recovery with disposable data
         run: bun scripts/test-backups.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
-
       - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.74.0
-          scan-type: image
-          image-ref: ludock:ci
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          # Block vulnerabilities only when an upstream fix is available.
-          ignore-unfixed: true
-          exit-code: "1"
-
+        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
+        env:
+          SCAN_IMAGE: ludock:ci
       - name: Scan default helper for vulnerabilities
         if: ${{ !cancelled() && steps.helper.outcome == 'success' }}
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.74.0
-          image-ref: ${{ steps.helper.outputs.image }}
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
+        env:
+          SCAN_IMAGE: ${{ steps.helper.outputs.image }}
+      - name: Remove build instance
+        if: always()
+        run: docker buildx rm ludock

@@ -1,7 +1,7 @@
 import { decodeText, concatBytes, encodeText } from "./bytes.js";
 import { managedReadable } from "./managed-readable.js";
 import { demuxDockerStream, dockerStdout } from "./docker-stream.js";
-import { constants, createWriteStream } from "node:fs";
+import { constants } from "node:fs";
 import {
   access,
   lstat,
@@ -13,10 +13,8 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform, Writable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import type * as Docker from "./docker-client.js";
-import * as tar from "tar-stream";
+import { walkTar, encodeTarHeader, tarPadding, tarEnd, type TarHeader } from "./tar.js";
 import { backupSettingsSchema, type BackupSettings } from "@ludock/shared";
 import { getDockerInstance } from "./docker.js";
 import type { ServerContext } from "./servers.js";
@@ -301,7 +299,7 @@ export async function archiveReadStream(
 }
 
 // Accept the partial headers used when constructing an archive, as well as decoded headers.
-export type ArchiveHeader = Parameters<tar.Pack["entry"]>[0];
+export type ArchiveHeader = TarHeader;
 type ExtendedHeader = ArchiveHeader & { pax?: Record<string, string> | null };
 export function archiveEntryMetadata(header: ArchiveHeader): {
   uid: number;
@@ -398,64 +396,33 @@ export function validateArchiveEntry(
     );
 }
 
-export function archiveValidator(
+export async function validateArchiveStream(
+  input: ReadableStream<Uint8Array>,
   roots: readonly BackupRoot[],
   maxBytes: number,
-): Writable {
-  const extract = tar.extract();
+  onChunk?: (chunk: Uint8Array) => void,
+): Promise<void> {
   const names = new Set<string>();
   const foundRoots = new Set<string>();
-  let total = 0;
-  extract.on("entry", (header, stream, next) => {
-    stream.once("error", (error) => extract.destroy(error));
-    try {
-      validateArchiveEntry(header, roots);
-      const name = header.name.replace(/\/$/, "");
-      if (names.has(name) || names.size >= 100_000)
-        throw failBackup(
-          "UNSAFE_ARCHIVE",
-          "The archive has duplicate paths or too many entries.",
-        );
-      names.add(name);
-      total += header.size || 0;
-      if (!Number.isSafeInteger(total) || total > maxBytes)
-        throw failBackup(
-          "BACKUP_CAPACITY",
-          "The archive exceeds the configured size limit.",
-        );
-      if (name.split("/").length === 2) foundRoots.add(name.split("/")[1]);
-      stream.resume();
-      stream.once("end", next);
-    } catch (error) {
-      stream.destroy(error as Error);
-      extract.destroy(error as Error);
-    }
+  let total = 0, bytes = 0;
+  await walkTar(input, (header) => {
+    validateArchiveEntry(header, roots);
+    const name = header.name.replace(/\/$/, "");
+    if (names.has(name) || names.size >= 100_000)
+      throw failBackup("UNSAFE_ARCHIVE", "The archive has duplicate paths or too many entries.");
+    names.add(name);
+    total += header.size || 0;
+    if (!Number.isSafeInteger(total) || total > maxBytes)
+      throw failBackup("BACKUP_CAPACITY", "The archive exceeds the configured size limit.");
+    if (name.split("/").length === 2) foundRoots.add(name.split("/")[1]);
+  }, (chunk) => {
+    bytes += chunk.length;
+    if (bytes > maxBytes)
+      throw failBackup("BACKUP_CAPACITY", "The archive exceeds the configured size limit.");
+    onChunk?.(chunk);
   });
-  const validator = new Writable({
-    write(chunk: Uint8Array, _encoding, callback) {
-      if (extract.write(chunk)) callback();
-      else extract.once("drain", callback);
-    },
-    final(callback) {
-      extract.once("finish", () => {
-        callback(
-          roots.some((root) => !foundRoots.has(root.id))
-            ? failBackup(
-                "INVALID_BACKUP",
-                "The archive is missing a recorded data root.",
-              )
-            : undefined,
-        );
-      });
-      extract.end(undefined);
-    },
-    destroy(error, callback) {
-      extract.destroy(error || undefined);
-      callback(error);
-    },
-  });
-  extract.once("error", (error) => validator.destroy(error));
-  return validator;
+  if (roots.some((root) => !foundRoots.has(root.id)))
+    throw failBackup("INVALID_BACKUP", "The archive is missing a recorded data root.");
 }
 
 export async function validateArchive(
@@ -467,22 +434,7 @@ export async function validateArchive(
 ): Promise<void> {
   const input = await archiveReadStream(directory, id);
   const hash = new Bun.CryptoHasher("sha256");
-  let bytes = 0;
-  const meter = new Transform({
-    transform(chunk: Uint8Array, _encoding, callback) {
-      bytes += chunk.length;
-      if (bytes > maxBytes)
-        return callback(
-          failBackup(
-            "BACKUP_CAPACITY",
-            "The archive exceeds the configured size limit.",
-          ),
-        );
-      hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  await pipeline(Readable.fromWeb(input), meter, archiveValidator(roots, maxBytes));
+  await validateArchiveStream(input, roots, maxBytes, (chunk) => { hash.update(chunk); });
   if (hash.digest("hex") !== checksum)
     throw failBackup(
       "BACKUP_CHECKSUM",
@@ -750,148 +702,76 @@ export async function writeSnapshot(
     throw error;
   }
   const filename = `${pinned.path}/${id}.tar.partial`;
-  const output = createWriteStream(filename, { flags: "wx", mode: 0o600 });
-  const pack = tar.pack();
+  let file: FileHandle | undefined;
+  let output: Bun.FileSink | undefined;
+  let created = false;
   const hash = new Bun.CryptoHasher("sha256");
-  let size = 0,
-    checked = 0;
-  const meter = new Transform({
-    transform(chunk: Uint8Array, _encoding, callback) {
-      size += chunk.length;
-      if (size > availableBytes)
-        return callback(
-          failBackup(
-            "BACKUP_CAPACITY",
-            "The backup exceeds the global byte limit. Remove older backups or increase the limit.",
-          ),
-        );
-      if (BigInt(size) > diskBudget)
-        return callback(
-          failBackup(
-            "BACKUP_CAPACITY",
-            "The backup destination does not have enough free space above its configured reserve.",
-          ),
-        );
-      hash.update(chunk);
-      if (size - checked > 16_777_216) {
-        checked = size;
-        void destinationBudget(
-          pinned.path,
-          settings.reserveBytes,
-          chunk.length,
-        ).then(() => callback(null, chunk), callback);
-      } else callback(null, chunk);
-    },
-  });
-  const copy = new AbortController();
-  let outputFailure: Error | undefined;
-  const completed = pipeline(pack, meter, output).catch((error: Error) => {
-    outputFailure = error;
-    // Source extraction may be waiting for pack.entry's callback or drain.
-    // Cancel that pipeline too when the destination fails or fills up.
-    copy.abort(error);
-    throw error;
-  });
-  // Attach rejection immediately while Docker streams are still being consumed.
-  void completed.catch(() => {});
+  let size = 0, checked = 0;
+  const write = async (chunk: Uint8Array) => {
+    assertAccess?.();
+    size += chunk.length;
+    if (size > availableBytes)
+      throw failBackup("BACKUP_CAPACITY", "The backup exceeds the global byte limit. Remove older backups or increase the limit.");
+    if (BigInt(size) > diskBudget)
+      throw failBackup("BACKUP_CAPACITY", "The backup destination does not have enough free space above its configured reserve.");
+    if (size - checked > 16_777_216) {
+      checked = size;
+      await destinationBudget(pinned.path, settings.reserveBytes, chunk.length);
+    }
+    hash.update(chunk);
+    await output!.write(chunk);
+    // Flush before requesting more input: a full disk cancels the source and
+    // the writer never accumulates a game world's contents in memory.
+    await output!.flush();
+  };
   try {
-    await new Promise<void>((resolve, reject) =>
-      pack.entry(
-        { name: "snapshot/", type: "directory", mode: 0o755 },
-        (error) => (error ? reject(error) : resolve()),
-      ),
-    );
+    file = await open(filename, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    created = true;
+    output = Bun.file(file.fd).writer({ highWaterMark: 65_536 });
+    await write(encodeTarHeader({ name: "snapshot/", type: "directory", mode: 0o755 }));
     for (const root of helper.roots) {
       await assertStopped();
-      const input = await helperArchive(
-        helper.container,
-        helperRoot(context, root),
-        assertAccess,
-      );
-      const extract = tar.extract();
+      const input = await helperArchive(helper.container, helperRoot(context, root), assertAccess);
       let prefix: string | undefined;
-      let entries = 0;
-      extract.on("entry", (header, stream, next) => {
-        stream.once("error", (error) => extract.destroy(error));
+      const names = new Set<string>();
+      await walkTar(input, async (header, body) => {
         const name = header.name.replace(/\/$/, "");
-        if (
-          name.startsWith("/") ||
-          name.split("/").some((part) => !part || part === ".." || part === ".")
-        ) {
-          extract.destroy(
-            failBackup(
-              "UNSAFE_ARCHIVE",
-              "Docker returned an unsafe archive path.",
-            ),
-          );
-          return;
-        }
+        if (name.startsWith("/") || name.split("/").some((part) => !part || part === ".." || part === "."))
+          throw failBackup("UNSAFE_ARCHIVE", "Docker returned an unsafe archive path.");
         prefix ??= name.split("/")[0];
-        if (name !== prefix && !name.startsWith(`${prefix}/`)) {
-          extract.destroy(
-            failBackup(
-              "UNSAFE_ARCHIVE",
-              "Docker returned an archive outside the selected data root.",
-            ),
-          );
-          return;
-        }
-        // Rebuild only ordinary metadata: source PAX path fields must never
-        // override the root mapping when tar-stream writes a fresh header.
-        let mapped: ArchiveHeader;
-        try {
-          mapped = mappedArchiveHeader(
-            header,
-            `snapshot/${root.id}${name.slice(prefix.length)}${header.type === "directory" ? "/" : ""}`,
-          );
-          validateArchiveEntry(mapped, helper.roots);
-        } catch (error) {
-          stream.destroy(error as Error);
-          extract.destroy(error as Error);
-          return;
-        }
-        if (++entries > 100_000) {
-          extract.destroy(
-            failBackup(
-              "UNSAFE_ARCHIVE",
-              "The selected root has too many entries.",
-            ),
-          );
-          return;
-        }
-        try {
-          const target = pack.entry(mapped, (error) =>
-            error ? extract.destroy(error) : next(),
-          );
-          target.once("error", (error) => extract.destroy(error));
-          stream.pipe(target);
-        } catch (error) {
-          extract.destroy(outputFailure ?? (error as Error));
-        }
-        stream.once("error", (error) => extract.destroy(error));
+        if (name !== prefix && !name.startsWith(`${prefix}/`))
+          throw failBackup("UNSAFE_ARCHIVE", "Docker returned an archive outside the selected data root.");
+        const mapped = mappedArchiveHeader(header,
+          `snapshot/${root.id}${name.slice(prefix.length)}${header.type === "directory" ? "/" : ""}`);
+        validateArchiveEntry(mapped, helper.roots);
+        if (names.has(name) || names.size >= 100_000)
+          throw failBackup("UNSAFE_ARCHIVE", "The selected root has duplicate paths or too many entries.");
+        names.add(name);
+        await write(encodeTarHeader(mapped));
+        for await (const chunk of body) await write(chunk);
+        const padding = tarPadding(mapped.size || 0);
+        if (padding.length) await write(padding);
       });
-      await pipeline(Readable.fromWeb(input), extract, { signal: copy.signal });
+      if (!prefix || !names.has(prefix))
+        throw failBackup("INVALID_BACKUP", "The archive is missing a recorded data root.");
       await assertStopped();
     }
-    pack.finalize();
-    await completed;
+    await write(tarEnd());
+    await output.end();
+    output = undefined;
     await destinationBudget(pinned.path, settings.reserveBytes);
     await assertStopped();
-    const file = await open(
-      filename,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
     await file.sync();
     await file.close();
+    file = undefined;
     await rename(filename, `${pinned.path}/${id}.tar`);
     await pinned.descriptor.sync();
     return { size, checksum: hash.digest("hex") };
   } catch (error) {
-    copy.abort(error);
-    pack.destroy(error as Error);
-    await completed.catch(() => {});
-    await rm(filename, { force: true });
-    throw outputFailure ?? error;
+    try { await output?.end(); } catch { /* Retain the original failure. */ }
+    try { await file?.close(); }
+    finally { if (created) await rm(filename, { force: true }); }
+    throw error;
   } finally {
     await pinned.descriptor.close();
   }
@@ -946,64 +826,29 @@ export async function extractRootToStage(
     assertAccess?.();
     return writer.write(value);
   };
-  const extract = tar.extract();
   const names = new Set<string>();
   const hash = new Bun.CryptoHasher("sha256");
   let total = 0;
-  const meter = new Transform({
-    transform(chunk: Uint8Array, _encoding, callback) {
+  try {
+    await walkTar(await archiveReadStream(directory, id), async (header, body) => {
+      validateArchiveEntry(header, roots);
+      const name = header.name.replace(/\/$/, "");
+      if (names.has(name) || names.size >= 100_000)
+        throw failBackup("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.");
+      names.add(name);
+      const prefix = `snapshot/${root.id}/`;
+      if (!name.startsWith(prefix)) return;
+      await write(encodeText(JSON.stringify({
+        name: name.slice(prefix.length), type: header.type, mode: header.mode || 0,
+        ...archiveEntryMetadata(header), size: header.size || 0,
+      }) + "\n"));
+      for await (const chunk of body) await write(chunk);
+    }, (chunk) => {
       total += chunk.length;
       if (total > maxBytes)
-        return callback(
-          failBackup(
-            "BACKUP_CAPACITY",
-            "The archive exceeds its configured size limit.",
-          ),
-        );
+        throw failBackup("BACKUP_CAPACITY", "The archive exceeds its configured size limit.");
       hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  extract.on("entry", (header, stream, next) => {
-    stream.once("error", (error) => extract.destroy(error));
-    void (async () => {
-      validateArchiveEntry(header, roots);
-      if (names.has(header.name) || names.size >= 100_000)
-        throw failBackup(
-          "UNSAFE_ARCHIVE",
-          "The archive contains duplicate paths or too many entries.",
-        );
-      names.add(header.name);
-      const name = header.name.replace(/\/$/, ""),
-        prefix = `snapshot/${root.id}/`;
-      if (!name.startsWith(prefix)) {
-        stream.resume();
-        stream.once("end", next);
-        return;
-      }
-      await write(
-        encodeText(
-          JSON.stringify({
-            name: name.slice(prefix.length),
-            type: header.type,
-            mode: header.mode || 0,
-            ...archiveEntryMetadata(header),
-            size: header.size || 0,
-          }) + "\n",
-        ),
-      );
-      for await (const chunk of stream)
-        await write(
-          Uint8Array.from(chunk as Uint8Array),
-        );
-      next();
-    })().catch((error: Error) => {
-      stream.destroy(error);
-      extract.destroy(error);
     });
-  });
-  try {
-    await pipeline(Readable.fromWeb(await archiveReadStream(directory, id)), meter, extract);
     if (hash.digest("hex") !== checksum)
       throw failBackup(
         "BACKUP_CHECKSUM",

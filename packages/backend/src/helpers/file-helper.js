@@ -183,7 +183,7 @@ function tarHeader(name, info, directory, type = directory ? 53 : 48) {
     if (!Number.isSafeInteger(number)) fail("An archive value is too large");
     const encoded = number.toString(8);
     if (encoded.length >= length) {
-      // GNU/POSIX readers and tar-stream accept positive base-256 fields.
+      // GNU/POSIX readers accept positive base-256 fields.
       let remaining = BigInt(number);
       header[offset] = 128;
       for (let index = offset + length - 1; index > offset; index--) {

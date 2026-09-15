@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 
 export function staticFiles(directory: string) {
@@ -33,14 +33,14 @@ export function staticFiles(directory: string) {
       if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) {
         return new Response("Not found", { status: 404 });
       }
-      file = (await stat(resolved)).isFile() ? resolved : resolve(root, "index.html");
+      file = (await Bun.file(resolved).stat()).isFile() ? resolved : resolve(root, "index.html");
     } catch {
       if (extname(requested)) return new Response("Not found", { status: 404 });
       file = resolve(root, "index.html");
     }
     try {
       file = await realpath(file);
-      if (!file.startsWith(`${root}${sep}`) || !(await stat(file)).isFile()) {
+      if (!file.startsWith(`${root}${sep}`) || !(await Bun.file(file).stat()).isFile()) {
         return new Response("Not found", { status: 404 });
       }
     } catch {

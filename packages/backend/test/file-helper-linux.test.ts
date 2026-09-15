@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { FILE_HELPER_SCRIPT } from "../src/file-helper-script.js";
-import { extract } from "tar-stream";
+import { decodeTarHeader } from "../src/tar.js";
 
 // Run directly with Bun in the Linux container as part of Docker acceptance.
 // macOS has no /proc/self/fd and must not substitute weaker path semantics.
@@ -320,21 +320,9 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
           expect(done, "Archive ended before its PAX size header").toBe(false);
           buffer = concatBytes([buffer, value!]);
         }
-        const parser = extract();
-        const parsed = new Promise<number>((resolve, reject) => {
-          parser.once("error", reject);
-          parser.on("entry", (header, stream, next) => {
-            if (header.name === "world/large") resolve(header.size || 0);
-            stream.resume();
-            next();
-          });
-        });
-        parser.write(buffer.subarray(0, 1024));
-        try {
-          expect(await parsed).toBe(size);
-        } finally {
-          parser.destroy();
-        }
+        const header = decodeTarHeader(buffer.subarray(512, 1024));
+        expect(header.name).toBe("world/large");
+        expect(header.size).toBe(size);
       } finally {
         archive.kill("SIGKILL");
         await archive.exited;
