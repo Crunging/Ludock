@@ -519,7 +519,12 @@ describe("file uploads", () => {
   it("ignores a late upload completion after the user changes", async () => {
     const pending = Promise.withResolvers<Response>();
     let uploadSignal: AbortSignal | undefined;
+    let viewerActive = false;
+    const viewerFilename = "viewer-world.zip";
     const view = filesPage({
+      read: (path) => viewerActive && path.includes("/files?")
+        ? folderListing("data", "", [{ ...config, name: viewerFilename }])
+        : undefined,
       write: (_path, init) => {
         uploadSignal = init?.signal as AbortSignal;
         return pending.promise;
@@ -530,7 +535,10 @@ describe("file uploads", () => {
       screen.getByLabelText("Upload files"),
       new File(["data"], "world.zip"),
     );
+    viewerActive = true;
     view.changeUser("viewer", "viewer");
+    // The read-only notice can render before the new account's listing arrives.
+    await screen.findByText(viewerFilename);
     await screen.findByText(
       "Your account can browse and download files but cannot change them.",
     );
@@ -539,6 +547,7 @@ describe("file uploads", () => {
     expect(uploadSignal?.aborted).toBe(true);
     expect(screen.queryByText(/uploaded\.$/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Choose files" })).toBeNull();
+    expect(screen.getByText(viewerFilename)).toBeTruthy();
     expect(apiJsonMock.mock.calls.length).toBe(callsBeforeCompletion);
   });
 });
