@@ -31,31 +31,6 @@ Use HTTPS for remote access; the proxy must preserve the public host, forward
 the external protocol, and support WebSocket upgrades. API requests and
 WebSockets use same-origin session cookies.
 
-### Upgrade Ludock
-
-Wait for active operations to finish, record the current image version or digest,
-and [back up the application data](#back-up-application-data) before upgrading.
-Use a new backup folder for each upgrade so the previous copy stays available.
-Then pull the image selected in `compose.yaml` and recreate Ludock:
-
-```bash
-docker compose pull ludock
-docker compose up -d --no-deps ludock
-docker compose logs --tail 100 ludock
-```
-
-Sign in and check **Servers**, **Settings → Backup storage**, and your schedules.
-Existing users, grants, server identities, backup records, and schedules are
-preserved by supported database upgrades.
-
-Ludock 0.3.0 automatically upgrades the application database from schema 2 to
-schema 6 on startup. Version 0.2.1 cannot open that upgraded database. To roll
-back, stop Ludock, restore the complete application-data backup taken before
-the upgrade (including its identity key), select the previous image version or
-digest, and start Ludock again. Keep the upgraded data copy separately;
-restoring the earlier backup also returns application history and settings to
-that backup's point in time.
-
 ## Discovery and console setup
 
 `ludock.enable` takes precedence: invalid values exclude with an administrator
