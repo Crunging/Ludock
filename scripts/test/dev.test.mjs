@@ -261,8 +261,7 @@ it("retains development locks until children drain after repeated shutdown signa
   const checkout = path.join(directory, "shutdown-checkout");
   for (const folder of [
     "scripts",
-    "packages/shared/node_modules/typescript/bin",
-    "packages/shared/dist",
+    "packages/shared/src",
     "packages/backend/src",
     "packages/frontend/scripts",
   ]) await mkdir(path.join(checkout, folder), { recursive: true });
@@ -273,13 +272,6 @@ it("retains development locks until children drain after repeated shutdown signa
     );
   }
   await writeFile(path.join(checkout, "packages/shared/package.json"), "{}");
-  await writeFile(
-    path.join(checkout, "packages/shared/node_modules/typescript/bin/tsc"),
-    `if (process.argv.includes("--watch")) {
-      const timer = setInterval(() => {}, 1000);
-      process.on("SIGTERM", () => clearInterval(timer));
-    }`,
-  );
   const events = path.join(checkout, "events");
   await writeFile(path.join(checkout, "packages/backend/src/index.ts"), `
     import { appendFileSync } from "node:fs";

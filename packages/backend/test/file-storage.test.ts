@@ -616,7 +616,9 @@ describe("scoped file helper projections", () => {
         if (!allowed) throw new Error("Access revoked");
       });
       if (outcome === "complete") await uploading;
-      else await assert.rejects(uploading, outcome === "revoked" ? /Access revoked/ : /FILE_UPLOAD_FAILED/);
+      else await assert.rejects(uploading, (error) => outcome === "revoked"
+        ? error instanceof Error && error.message === "Access revoked"
+        : error instanceof FileStorageError && error.code === "FILE_UPLOAD_FAILED");
       assert.equal(removed, true);
       assert.match(uploadId, /^[a-f0-9-]{36}$/);
       assert.equal(cleanupId, uploadId);
@@ -844,7 +846,7 @@ describe("bounded Docker download transport", () => {
         Readable.from([data.subarray(0, data.length - 1)]),
         new PassThrough(),
       ),
-      /INCOMPLETE_DOWNLOAD_STREAM/,
+      (error) => error instanceof FileStorageError && error.code === "INCOMPLETE_DOWNLOAD_STREAM",
     );
   });
 

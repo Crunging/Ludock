@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { it } from "bun:test";
 
-it("drains the old backend before reloading and after repeated shutdown signals", async () => {
+it.each(["packages/backend/src/index.ts", "packages/shared/src/index.ts"])("drains the backend when %s changes and after repeated shutdown signals", async (watched) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-watch-test-"));
   let child;
   try {
-    for (const folder of ["scripts", "packages/backend/src", "packages/shared/dist"]) {
+    for (const folder of ["scripts", "packages/backend/src", "packages/shared/src"]) {
       await mkdir(path.join(directory, folder), { recursive: true });
     }
     await copyFile(new URL("../watch-backend.mjs", import.meta.url), path.join(directory, "scripts/watch-backend.mjs"));
@@ -47,7 +47,7 @@ it("drains the old backend before reloading and after repeated shutdown signals"
       assert.equal(await readFile(events, "utf8"), expected);
     };
     await waitFor("started\n");
-    await writeFile(entry, source + "\n// source changed\n");
+    await writeFile(path.join(directory, watched), source + "\n// source changed\n");
     await waitFor("started\nstopping\ndrained\nstarted\n");
     child.kill("SIGTERM");
     await waitFor("started\nstopping\ndrained\nstarted\nstopping\n");

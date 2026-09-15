@@ -10,20 +10,18 @@ COPY packages/frontend/package.json packages/frontend/
 COPY packages/shared/package.json packages/shared/
 RUN bun install --frozen-lockfile --linker=isolated
 
-FROM deps AS build-shared
 COPY packages/shared/src/ packages/shared/src/
-COPY packages/shared/tsconfig.json packages/shared/
-COPY tsconfig.base.json ./
-RUN bun run --filter @ludock/shared build
 
-FROM build-shared AS build-frontend
+FROM deps AS build-frontend
 COPY packages/frontend/src/ packages/frontend/src/
 COPY packages/frontend/public/ packages/frontend/public/
 COPY packages/frontend/scripts/ packages/frontend/scripts/
+# Preview and production share the asset handler; frontend tooling type-checks it.
+COPY packages/backend/src/static-files.ts packages/backend/src/static-files.ts
 COPY packages/frontend/index.html packages/frontend/tsconfig*.json packages/frontend/
 RUN bun run --filter @ludock/frontend build
 
-FROM build-shared AS build-backend
+FROM deps AS build-backend
 COPY packages/backend/src/ packages/backend/src/
 RUN bun run --filter @ludock/backend build
 
@@ -54,7 +52,7 @@ COPY --from=prod-deps /app/packages/backend/node_modules packages/backend/node_m
 COPY --from=prod-deps /app/packages/shared/node_modules packages/shared/node_modules/
 
 COPY --from=build-backend /app/packages/backend/dist packages/backend/dist/
-COPY --from=build-shared /app/packages/shared/dist packages/shared/dist/
+COPY --from=deps /app/packages/shared/src packages/shared/src/
 COPY --from=build-frontend /app/packages/frontend/dist packages/frontend/dist/
 
 ENV NODE_ENV=production

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "bun:test";
-import { mountsOverlap, recoverBackup, stopForDataOperation } from "../src/backups.js";
+import { mountsOverlap, recoverBackup, recoverRestore, stopForDataOperation } from "../src/backups.js";
 import type { ServerObservation } from "../src/identity.js";
 import { listLogicalServers } from "../src/identity.js";
 import { setServerGrant } from "../src/authorization.js";
@@ -165,6 +165,37 @@ describe("backup execution authority", () => {
     await assert.rejects(stopForDataOperation(context, job), /deleted, disabled, or changed/);
     assert.equal(stopped, 0);
     assert.deepEqual(job.job.recovery, {});
+  });
+
+  for (const restoreRoots of [null, {}, [{ root: {}, phase: "staging" }],
+    [{ root: { id: "root-0", path: "/data" }, phase: "unknown" }],
+    [{ root: { id: "../outside", path: "/data" }, phase: "replaced" }],
+    [0, 1].map(() => ({ root: { id: "root-0", path: "/data" }, phase: "replaced" })),
+  ]) {
+    it(`leaves the server stopped when restore recovery records are invalid: ${JSON.stringify(restoreRoots)}`, async () => {
+      await stopForDataOperation(context, job);
+      job.job.kind = "restore";
+      job.job.recovery.restoreRoots = restoreRoots;
+      await assert.rejects(recoverRestore(job), { code: "INVALID_RESTORE_JOURNAL" });
+      assert.equal(running, false);
+      assert.equal(job.job.recovery.stateRestored, undefined);
+      assert.deepEqual(job.job.recovery.restoreRoots, restoreRoots);
+    });
+  }
+
+  it("rejects a missing restore journal after data replacement began", async () => {
+    await stopForDataOperation(context, job);
+    job.job.kind = "restore";
+    job.job.recovery.dataSafe = false;
+    await assert.rejects(recoverRestore(job), { code: "INVALID_RESTORE_JOURNAL" });
+    assert.equal(running, false);
+  });
+
+  it("restores initial running state when interrupted before restore staging", async () => {
+    await stopForDataOperation(context, job);
+    job.job.kind = "restore";
+    await recoverRestore(job);
+    assert.equal(running, true);
   });
 
   it("restores a stopped backup server during recovery even after its schedule is paused", async () => {

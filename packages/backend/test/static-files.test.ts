@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { staticFiles } from "../static-files";
+import { staticFiles } from "../src/static-files.js";
+import { createApp } from "../src/app.js";
 
 let scratch: string;
 let serve: ReturnType<typeof staticFiles>;
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(scratch, { recursive: true, force: true }); });
 
-describe("static frontend preview", () => {
+describe("shared production and preview static files", () => {
   it("serves built files and SPA routes with safe response headers", async () => {
     const response = await serve(new Request("http://localhost/servers/world"));
     expect(await response.text()).toBe("<!doctype html><h1>Ludock fixture</h1>");
@@ -37,7 +38,7 @@ describe("static frontend preview", () => {
     expect(await response.text()).toBe("");
   });
 
-  it.each(["/api", "/api/v1/servers", "/ws", "/ws/v1/console", "/missing.js"])(
+  it.each(["/api", "/API/v1/servers", "/ws", "/ws/v1/console", "/missing.js", "/.env", "/%00"])(
     "does not substitute the SPA document for %s", async (path) => {
       const response = await serve(new Request(`http://localhost${path}`));
       expect(response.status).toBe(404);
@@ -73,5 +74,16 @@ describe("static frontend preview", () => {
     const response = await missing(new Request("http://localhost/"));
     expect(response.status).toBe(503);
     expect(await response.text()).toBe("Frontend build unavailable");
+  });
+  it("uses the same asset and navigation behavior behind the production wrapper", async () => {
+    const app = createApp({ frontendDist: join(scratch, "dist") });
+    for (const pathname of ["/missing.js", "/app.js", "/servers/world", "/.env"]) {
+      const request = new Request(`http://localhost${pathname}`);
+      const production = await app.fetch(request, { requestIP: () => null, timeout: () => {} });
+      const preview = await serve(request);
+      expect(production.status).toBe(preview.status);
+      expect(await production.text()).toBe(await preview.text());
+      expect(production.headers.get("content-security-policy")).toContain("default-src 'self'");
+    }
   });
 });

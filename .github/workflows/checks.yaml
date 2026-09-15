@@ -51,10 +51,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build frontend and shared contracts
-        run: |
-          bun run --filter @ludock/shared build
-          bun run --filter @ludock/frontend build
+      - name: Build frontend
+        run: bun run --filter @ludock/frontend build
 
       - name: Install Chromium headless shell
         working-directory: packages/frontend

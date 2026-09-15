@@ -4,6 +4,16 @@ import type Docker from "dockerode";
 import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
 import { getHelperImage } from "./runtime-images.js";
+import { AppError } from "./errors.js";
+import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
+
+// Bun embeds these checked programs without executing them in the backend.
+// @ts-expect-error TypeScript models JS exports, not Bun's text import attribute.
+import mountIdentitiesSource from "./helpers/mount-identities.js" with { type: "text" };
+// @ts-expect-error TypeScript models JS exports, not Bun's text import attribute.
+import mountProofSource from "./helpers/mount-proof.js" with { type: "text" };
+const MOUNT_IDENTITIES_SCRIPT = mountIdentitiesSource as string;
+export const MOUNT_PROOF_SCRIPT = mountProofSource as string;
 
 export interface MountIdentity {
   dev: string;
@@ -14,35 +24,10 @@ export interface MountProof {
   cleanup(): Promise<void>;
 }
 
-export const MOUNT_PROOF_SCRIPT = String.raw`
-const fs=require("node:fs/promises"),C=require("node:fs").constants;
-const sources=JSON.parse(process.argv[1]);const retained=[];
-(async()=>{
- const identities={};
- for(const source of sources){
-  if(!source.source.startsWith("/")||source.source.includes("\0")||source.source.split("/").includes(".."))throw new Error();
-  let current=await fs.open("/host",C.O_RDONLY|C.O_DIRECTORY|C.O_NOFOLLOW);
-  for(const part of source.source.split("/").filter(Boolean)){
-   const next=await fs.open("/proc/self/fd/"+current.fd+"/"+part,C.O_RDONLY|C.O_DIRECTORY|C.O_NOFOLLOW);
-   await current.close();current=next;
-  }
-  const info=await current.stat({bigint:true});retained.push(current);
-  identities[source.destination]={dev:String(info.dev),ino:String(info.ino)};
- }
- process.stdout.write(JSON.stringify({identities})+"\n");setInterval(()=>{},3600000);
- if(Number(process.argv[2])>0)setTimeout(()=>process.exit(0),Number(process.argv[2]));
-})().catch(()=>{process.stdout.write(JSON.stringify({error:"unsafe-source"})+"\n");process.exitCode=1;});
-`;
-
-function proofError(): Error {
-  return Object.assign(
-    new Error(
-      "A data mount could not be verified. Bind source paths must contain no symbolic links and must be accessible to the Docker host validator; named volumes must use the local driver without host remapping options.",
-    ),
-    {
-      code: "UNVERIFIED_DATA_MOUNT",
-      statusCode: 409,
-    },
+function proofError(): AppError {
+  return new AppError(
+    "UNVERIFIED_DATA_MOUNT", 409,
+    "A data mount could not be verified. Bind source paths must contain no symbolic links and must be accessible to the Docker host validator; named volumes must use the local driver without host remapping options.",
   );
 }
 
@@ -73,7 +58,7 @@ export async function createMountProof(
     }));
   if (!sources.length) return { identities: {}, cleanup: async () => {} };
   const image = getHelperImage();
-  const options: Docker.ContainerCreateOptions = {
+  const options: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     Entrypoint: ["bun", "-e"],
     Cmd: [
@@ -114,30 +99,13 @@ export async function createMountProof(
   };
   let container: Docker.Container;
   try {
-    container = await docker.createContainer(options);
-  } catch (error) {
-    if ((error as { statusCode?: number }).statusCode !== 404)
-      throw proofError();
-    try {
-      const input = await docker.pull(image);
-      await new Promise<void>((resolve, reject) =>
-        docker.modem.followProgress(input, (error) =>
-          error ? reject(error) : resolve(),
-        ),
-      );
-      container = await docker.createContainer(options);
-    } catch {
-      throw proofError();
-    }
+    container = await createHelperContainer(options);
+  } catch {
+    throw proofError();
   }
   let removal: Promise<void> | undefined;
   const cleanup = () => {
-    removal ??= container
-      .remove({ force: true })
-      .then(() => {})
-      .catch((error: { statusCode?: number }) => {
-        if (error.statusCode !== 404) throw proofError();
-      });
+    removal ??= removeHelperContainer(container);
     return removal;
   };
   try {
@@ -210,17 +178,8 @@ export async function assertMountIdentities(
   identities: Record<string, MountIdentity>,
 ): Promise<void> {
   if (!Object.keys(identities).length) return;
-  const script = String.raw`
-const fs=require("node:fs/promises"),C=require("node:fs").constants;
-(async()=>{for(const [name,expected] of Object.entries(JSON.parse(process.argv[1]))){
- let file=await fs.open("/",C.O_RDONLY|C.O_DIRECTORY|C.O_NOFOLLOW);
- for(const part of name.split("/").filter(Boolean)){const next=await fs.open("/proc/self/fd/"+file.fd+"/"+part,C.O_RDONLY|C.O_DIRECTORY|C.O_NOFOLLOW);await file.close();file=next;}
- const info=await file.stat({bigint:true});await file.close();
- if(String(info.dev)!==expected.dev||String(info.ino)!==expected.ino)throw new Error();
-}})().catch(()=>{process.exitCode=1});
-`;
   const execution = await container.exec({
-    Cmd: ["bun", "-e", script, JSON.stringify(identities)],
+    Cmd: ["bun", "-e", MOUNT_IDENTITIES_SCRIPT, JSON.stringify(identities)],
     AttachStdout: true,
     AttachStderr: true,
   });

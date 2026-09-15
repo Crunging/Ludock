@@ -1,6 +1,10 @@
 import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
-import { isApiTokenOperationActor, publicHistoryActor, publicOperationActorId } from "./auth.js";
+import {
+  isApiTokenOperationActor,
+  publicHistoryActor,
+  publicOperationActorId,
+} from "./auth.js";
 import { AppError, publicError } from "./errors.js";
 
 interface OperationRow {
@@ -40,14 +44,26 @@ let settled: Promise<void> = Promise.resolve();
 let starting: Promise<void> | null = null;
 
 function parseObject(json: string): Record<string, unknown> {
-  const value: unknown = JSON.parse(json);
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new AppError(
-      "INVALID_OPERATION_STATE",
-      409,
-      "Saved operation state is invalid; administrator review is required",
-    );
-  return value as Record<string, unknown>;
+  try {
+    const value: unknown = JSON.parse(json);
+    if (value && typeof value === "object" && !Array.isArray(value))
+      return value as Record<string, unknown>;
+  } catch {
+    /* Invalid persisted JSON receives the same safe diagnostic. */
+  }
+  throw new AppError(
+    "INVALID_OPERATION_STATE",
+    409,
+    "Saved operation state is invalid; administrator review is required",
+  );
+}
+function jobIdentity(row: OperationRow) {
+  return {
+    id: row.id,
+    serverId: row.server_id,
+    kind: row.kind,
+    actorId: row.actor_id,
+  };
 }
 function toJob(row: OperationRow): Job {
   return {
@@ -82,7 +98,10 @@ export function publicOperation(job: Job): Operation {
     id,
     serverId,
     kind,
-    actor: publicHistoryActor(job.actorId, findUserById(job.actorId)?.username ?? null),
+    actor: publicHistoryActor(
+      job.actorId,
+      findUserById(job.actorId)?.username ?? null,
+    ),
     status,
     phase,
     createdAt,
@@ -160,15 +179,18 @@ export function enqueueOperation(options: {
       now,
       now,
     );
-  writeAuditLog({
-    userId: isApiTokenOperationActor(options.actorId)
-      ? undefined
-      : options.actorId,
-    action: `server.${options.kind}.queued`,
-    targetType: "server",
-    targetId: options.serverId,
-    details: { operationId: id },
-  }, { prune: !options.deferAuditPrune });
+  writeAuditLog(
+    {
+      userId: isApiTokenOperationActor(options.actorId)
+        ? undefined
+        : options.actorId,
+      action: `server.${options.kind}.queued`,
+      targetType: "server",
+      targetId: options.serverId,
+      details: { operationId: id },
+    },
+    { prune: !options.deferAuditPrune },
+  );
   schedule();
   return publicOperation(getOperation(id)!);
 }
@@ -187,7 +209,7 @@ function context(job: Job): JobContext {
   };
 }
 function finish(
-  job: Job,
+  job: Pick<Job, "id" | "serverId" | "kind" | "actorId">,
   status: Operation["status"],
   result: Record<string, unknown> | null,
   error: string | null,
@@ -235,13 +257,14 @@ async function runNext() {
     .get() as OperationRow | null;
   if (!row) return;
   running = true;
-  const job = toJob(row);
-  getDatabase()
-    .prepare(
-      "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?",
-    )
-    .run(Date.now(), job.id);
   try {
+    // Damaged saved state must fail this job without wedging the runner.
+    const job = toJob(row);
+    getDatabase()
+      .prepare(
+        "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?",
+      )
+      .run(Date.now(), job.id);
     const handler = handlers.get(job.kind);
     if (!handler)
       throw new AppError(
@@ -257,7 +280,7 @@ async function runNext() {
       null,
     );
   } catch (error) {
-    finish(job, "failed", null, publicError(error).error);
+    finish(jobIdentity(row), "failed", null, publicError(error).error);
   } finally {
     running = false;
     schedule();
@@ -284,8 +307,8 @@ async function recoverInterruptedOperations(): Promise<void> {
     .prepare("SELECT * FROM operations WHERE status='running'")
     .all() as unknown as OperationRow[];
   for (const row of rows) {
-    const job = toJob(row);
     try {
+      const job = toJob(row);
       await handlers.get(job.kind)?.recover?.(context(job));
       finish(
         job,
@@ -295,7 +318,7 @@ async function recoverInterruptedOperations(): Promise<void> {
       );
     } catch {
       finish(
-        job,
+        jobIdentity(row),
         "interrupted",
         null,
         "Recovery requires administrator attention. The server has been left stopped where possible.",

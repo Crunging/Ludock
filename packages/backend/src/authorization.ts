@@ -6,6 +6,7 @@ import {
   type UserRecord,
 } from "./database.js";
 import { getLogicalServer, type LogicalServer } from "./identity.js";
+import { AppError } from "./errors.js";
 import { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
 export { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
 
@@ -36,13 +37,13 @@ export interface ServerGrantInput {
   capabilities: readonly string[];
 }
 
-export class AuthorizationError extends Error {
+export class AuthorizationError extends AppError {
   constructor(
-    public readonly code: string,
+    code: string,
     message: string,
-    public readonly statusCode = 403,
+    statusCode = 403,
   ) {
-    super(message);
+    super(code, statusCode, message);
   }
 }
 

@@ -1,7 +1,6 @@
 import type { AttentionItem, AttentionResponse } from "@ludock/shared";
 import { currentActor, getEffectiveCapabilities } from "./authorization.js";
-import type { SessionUser } from "./database.js";
-import { listOperationHistory } from "./history.js";
+import { getDatabase, type SessionUser } from "./database.js";
 import { listLogicalServers } from "./identity.js";
 import { getAvailabilityProblem } from "./monitoring.js";
 import { listSchedules } from "./schedules.js";
@@ -60,10 +59,17 @@ export async function listAttention(
         });
       }
     }
-    // Limit attention to each server's most recent 100 operations. Only
-    // summary fields are copied: inputs, results and errors stay on that screen.
-    for (const operation of listOperationHistory(actor, { serverId: server.id, limit: 100 }).operations) {
-      if (operation.status !== "failed" && operation.status !== "interrupted") continue;
+    // Authority was checked above. Limit recent work before filtering failures,
+    // and read only summary fields; history payloads and cursors are unnecessary.
+    const failures = getDatabase().prepare(`
+      SELECT id,kind,status,updated_at AS updatedAt FROM (
+        SELECT id,kind,status,updated_at FROM operations
+        WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100
+      ) WHERE status IN ('failed','interrupted')
+    `).all(server.id) as Array<{
+      id: string; kind: string; status: "failed" | "interrupted"; updatedAt: number;
+    }>;
+    for (const operation of failures) {
       items.push({
         ...base,
         id: `operation:${operation.id}`,

@@ -8,6 +8,9 @@ import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { getHelperImage } from "./runtime-images.js";
+import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
+import { AppError } from "./errors.js";
+import type { FileHelperRequest } from "./helpers/contracts.js";
 
 export const LABEL_FILES = "ludock.files";
 const logger = createLogger("files");
@@ -33,23 +36,10 @@ export interface FileContainerAccess {
   cleanup: () => Promise<void>;
   assertAccess?: () => void;
 }
-interface FileRequest {
-  operation:
-    | "check"
-    | "list"
-    | "stat"
-    | "mkdir"
-    | "delete"
-    | "rename"
-    | "upload"
-    | "upload-cleanup"
-    | "download";
-  root: string;
+interface FileRequest extends FileHelperRequest {
+  operation: Exclude<FileHelperRequest["operation"], "backup">;
   path: string;
   blocked: string[];
-  destination?: string;
-  size?: number;
-  uploadId?: string;
 }
 
 export function getFileRoots(
@@ -600,7 +590,7 @@ export async function acquireFileContainer(
   });
   const proof = await createMountProof(selected);
   const image = getHelperImage();
-  const containerOptions: Docker.ContainerCreateOptions = {
+  const containerOptions: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     Entrypoint: ["bun", "-e"],
     Cmd: [
@@ -623,38 +613,16 @@ export async function acquireFileContainer(
   };
   let helper: Docker.Container;
   try {
-    helper = await docker.createContainer(containerOptions);
+    helper = await createHelperContainer(containerOptions);
   } catch (error) {
-    try {
-      if ((error as { statusCode?: number }).statusCode !== 404) throw error;
-      const stream = await docker.pull(image);
-      await new Promise<void>((resolve, reject) =>
-        docker.modem.followProgress(stream, (error) =>
-          error ? reject(error) : resolve(),
-        ),
-      );
-      helper = await docker.createContainer(containerOptions);
-    } catch (failure) {
-      await proof.cleanup();
-      throw failure;
-    }
+    await proof.cleanup();
+    throw error;
   }
   let removal: Promise<void> | undefined;
   const cleanup = () => {
     removal ??= (async () => {
       try {
-        await helper.remove({ force: true });
-      } catch (error) {
-        if ((error as { statusCode?: number }).statusCode !== 404) {
-          try {
-            await helper.stop({ t: 0 });
-            await helper.remove({ force: true });
-          } catch {
-            logger.warn("Failed to remove file helper", {
-              container: server.id.slice(0, 12),
-            });
-          }
-        }
+        await removeHelperContainer(helper);
       } finally {
         await proof.cleanup();
       }
@@ -848,15 +816,22 @@ function validateName(name: string): void {
   }
 }
 
-export class FileStorageError extends Error {
+const fileErrorMessages: Record<string, string> = {
+  INVALID_PATH: "Invalid file path",
+  INVALID_NAME: "Invalid file or folder name",
+  ROOT_NOT_FOUND: "File root not found",
+  ROOT_MUTATION: "The configured root cannot be changed",
+  ROOT_DOWNLOAD: "Choose a file or folder to download",
+  UNSAFE_OR_CHANGED_FILE_PATH: "The path changed, is unsafe, or cannot be accessed",
+  FILE_TARGET_CHANGED: "The server changed while preparing file access. Refresh and try again.",
+  FILE_ROOT_CHANGED: "The file root changed. Refresh and try again.",
+  FILE_OPERATION_TIMEOUT: "The file operation timed out. Refresh and try again.",
+};
+export class FileStorageError extends AppError {
   constructor(
-    public readonly code: string,
-    public readonly statusCode: number,
+    code: string,
+    statusCode: number,
   ) {
-    super(
-      code === "UNSAFE_OR_CHANGED_FILE_PATH"
-        ? "The path changed, is unsafe, or cannot be accessed"
-        : code,
-    );
+    super(code, statusCode, fileErrorMessages[code] ?? "File operation failed");
   }
 }

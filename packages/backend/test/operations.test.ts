@@ -8,7 +8,7 @@ import {
   getDatabase,
   type SessionUser,
 } from "../src/database.js";
-import { reconcileServers } from "../src/identity.js";
+import { reconcileServers, ServerBindingError } from "../src/identity.js";
 import {
   enqueueOperation,
   getOperation,
@@ -72,6 +72,43 @@ async function finished(id: string) {
 }
 
 describe("durable operations", () => {
+  for (const status of ["queued", "running"] as const) {
+    for (const damaged of ["[]", "{private-fixture", "null"]) {
+      it(`isolates invalid ${status} state (${damaged}) and continues valid work`, async () => {
+        const runs: string[] = [];
+        registerJobHandler("damaged-state", {
+          run: async ({ job }) => { runs.push(job.id); },
+          recover: async () => { assert.fail("Damaged state must never reach recovery"); },
+        });
+        const damagedJob = enqueue("damaged-state");
+        getDatabase().prepare("UPDATE operations SET status=?,input_json=?,created_at=0 WHERE id=?")
+          .run(status, damaged, damagedJob.id);
+        const other = reconcileServers([{
+          containerId: "other", name: "other", displayName: "Other", gameType: "minecraft", mounts: [],
+        }])[0];
+        const valid = enqueueOperation({
+          serverId: other.id, actorId: owner.id, kind: "damaged-state", bindingRevision: 1,
+        });
+        await startOperationRunner();
+        assert.equal((await finished(valid.id)).status, "succeeded");
+        assert.deepEqual(runs, [valid.id]);
+        const saved = getDatabase().prepare("SELECT status,error,input_json FROM operations WHERE id=?")
+          .get(damagedJob.id) as { status: string; error: string; input_json: string };
+        assert.equal(saved.status, status === "queued" ? "failed" : "interrupted");
+        assert.match(saved.error, /administrator/);
+        assert.doesNotMatch(saved.error, /private-fixture/);
+        assert.equal(saved.input_json, damaged, "Keep damaged state available for administrator inspection");
+      });
+    }
+  }
+  it("preserves deliberate binding diagnostics when queued work fails", async () => {
+    registerJobHandler("binding-error", {
+      run: async () => { throw new ServerBindingError("SERVER_BINDING_CHANGED", "The server binding changed. Review it before retrying."); },
+    });
+    const operation = enqueue("binding-error");
+    await startOperationRunner();
+    assert.equal((await finished(operation.id)).error, "The server binding changed. Review it before retrying.");
+  });
   it("deduplicates retries while rejecting a reused key with different settings", () => {
     const first = enqueue("idempotency", "same", { createBackup: true });
     const retry = enqueue("idempotency", "same", { createBackup: true });

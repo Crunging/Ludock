@@ -380,7 +380,7 @@ describe("HTTP application", () => {
     // file root, despite MAX_UPLOAD_BYTES being configured as only one byte.
     const boundary = await upload(1536);
     assert.equal(boundary.status, 404);
-    assert.deepEqual(await boundary.json(), { error: "File root not found" });
+    assert.deepEqual(await boundary.json(), { error: "File root not found", code: "ROOT_NOT_FOUND" });
   });
 
   it("manages users without exposing password hashes", async () => {

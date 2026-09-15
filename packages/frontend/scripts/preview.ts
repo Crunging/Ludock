@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { serverOptions } from "./server-options";
-import { staticFiles } from "./static-files";
+import { staticFiles } from "../../backend/src/static-files";
 
 const options = serverOptions(process.argv.slice(2), Number(process.env.LUDOCK_E2E_PORT || 4179));
 const directory = resolve(import.meta.dir, "../dist");

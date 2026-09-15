@@ -83,9 +83,9 @@ interface OperationHistoryRow {
 /** Restrict readable server IDs before ordering, limiting, or making a cursor. */
 export function listOperationHistory(actor: SessionUser, query: OperationHistoryQuery): { operations: Operation[]; nextCursor: string | null } {
   const { conditions, values, scope } = pageConditions("operations", query, "o");
-  const serverIds = listLogicalServers()
-    .filter((server) => (!query.serverId || server.id === query.serverId) && hasServerCapability(actor, server, "server.view"))
-    .map((server) => server.id);
+  const candidates = query.serverId ? [query.serverId] : listLogicalServers();
+  const serverIds = candidates.filter((server) => hasServerCapability(actor, server, "server.view"))
+    .map((server) => typeof server === "string" ? server : server.id);
   if (serverIds.length === 0) return { operations: [], nextCursor: null };
   conditions.push(`o.server_id IN (${serverIds.map(() => "?").join(",")})`);
   values.push(...serverIds);

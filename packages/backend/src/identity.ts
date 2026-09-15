@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AppError } from "./errors.js";
 import { getDatabase, keyedBindingFingerprint } from "./database.js";
 import {
   dockerContainerIdSchema,
@@ -66,13 +67,13 @@ interface ServerRow {
   last_seen_at: number;
 }
 
-export class ServerBindingError extends Error {
+export class ServerBindingError extends AppError {
   constructor(
-    public readonly code: string,
+    code: string,
     message: string,
-    public readonly statusCode = 409,
+    statusCode = 409,
   ) {
-    super(message);
+    super(code, statusCode, message);
   }
 }
 

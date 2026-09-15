@@ -23,6 +23,7 @@ import { RESTORE_EXTRACT_SCRIPT } from "./restore-extract-script.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
 import { getHelperImage } from "./runtime-images.js";
+import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
 
 export interface BackupRoot {
   id: string;
@@ -553,11 +554,10 @@ export async function createDataHelper(
   readOnly: boolean,
   operationId: string,
 ): Promise<DataHelper> {
-  const docker = getDockerInstance();
   const { roots, mounts, aliases, checkedMounts } = planBackupRoots(context, readOnly);
   const proof = await createMountProof(checkedMounts, operationId);
   const image = getHelperImage();
-  const options: Docker.ContainerCreateOptions = {
+  const options: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     User: "0",
     Entrypoint: ["bun", "-e"],
@@ -581,24 +581,10 @@ export async function createDataHelper(
   };
   let container: Docker.Container;
   try {
-    container = await docker.createContainer(options);
+    container = await createHelperContainer(options);
   } catch (error) {
-    if ((error as { statusCode?: number }).statusCode !== 404) {
-      await proof.cleanup();
-      throw error;
-    }
-    try {
-      const stream = await docker.pull(image);
-      await new Promise<void>((resolve, reject) =>
-        docker.modem.followProgress(stream, (failure) =>
-          failure ? reject(failure) : resolve(),
-        ),
-      );
-      container = await docker.createContainer(options);
-    } catch (failure) {
-      await proof.cleanup();
-      throw failure;
-    }
+    await proof.cleanup();
+    throw error;
   }
   try {
     await container.start();
@@ -621,19 +607,15 @@ export async function createDataHelper(
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         try {
-          await container
-            .remove({ force: true })
-            .catch((error: { statusCode?: number }) => {
-              if (error.statusCode !== 404) throw error;
-            });
+          await removeHelperContainer(container);
         } finally {
           await proof.cleanup();
         }
       })());
     return { container, roots, cleanup };
   } catch (error) {
-    await container.remove({ force: true }).catch(() => {});
-    await proof.cleanup();
+    try { await removeHelperContainer(container); }
+    finally { await proof.cleanup(); }
     throw error;
   }
 }

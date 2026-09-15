@@ -163,6 +163,13 @@ afterEach(async () => {
 });
 
 describe("dashboard attention", () => {
+  it("reads failure summaries without decoding unrelated operation payloads", async () => {
+    const id = addOperation();
+    getDatabase().prepare("UPDATE operations SET result_json='damaged private result' WHERE id=?").run(id);
+    const result = await listAttention(admin);
+    assert.ok(result.items.some((item) => item.kind === "operation" && item.operationId === id));
+    assert.doesNotMatch(JSON.stringify(result), /private result/);
+  });
   it("authenticates the HTTP endpoint and validates its public response", async () => {
     const handler = createApp({ frontendDist: false }).routes["/api/v1/attention"].GET!;
     const server = { timeout: () => {}, requestIP: () => null };

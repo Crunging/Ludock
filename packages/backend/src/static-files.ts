@@ -13,8 +13,10 @@ export function staticFiles(directory: string) {
     } catch {
       return new Response("Invalid path", { status: 400 });
     }
-    // Preview fixtures must never reach a backend or receive an HTML API response.
-    if (/^\/(?:api|ws)(?:\/|$)/.test(pathname)) return new Response("Not found", { status: 404 });
+    // Missing API endpoints and assets must not receive the SPA document.
+    if (/^\/(?:api|ws)(?:\/|$)/i.test(pathname) || pathname.includes("\0") ||
+      pathname.split("/").some((part) => part.startsWith(".")))
+      return new Response("Not found", { status: 404 });
     try {
       canonicalRoot ||= await realpath(resolve(directory));
     } catch {

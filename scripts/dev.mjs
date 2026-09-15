@@ -221,10 +221,6 @@ export async function verifyDevelopmentBackend(instance, backendPort) {
   return true;
 }
 
-function script(packageName, module) {
-  return Bun.resolveSync(module, path.join(repository, "packages", packageName));
-}
-
 export async function runDevelopment(config) {
   const unlock = await lockDevelopmentState(config);
   let ports;
@@ -275,23 +271,6 @@ export async function runDevelopment(config) {
   try {
     ports = await reserveDevelopmentPorts(config);
     if (stopping) return;
-    const tsc = script("shared", "typescript/bin/tsc");
-    // Build once before either app imports the contracts, then watch all three
-    // packages. The backend watcher waits for shutdown before each restart.
-    const built = Bun.spawn([process.execPath, tsc], {
-      cwd: path.join(config.directory, "packages/shared"),
-      stdin: "ignore",
-      stdout: "inherit",
-      stderr: "inherit",
-      detached: process.platform !== "win32",
-    });
-    children.add(built);
-    const buildCode = await built.exited.finally(() => {
-      children.delete(built);
-      if (stopping && children.size === 0) stopped();
-    });
-    if (stopping) return;
-    if (buildCode !== 0) throw new Error("Shared contract build failed.");
     const env = {
       ...process.env,
       NODE_ENV: "development",
@@ -304,13 +283,6 @@ export async function runDevelopment(config) {
     };
     await ports.release();
     if (stopping) return;
-    launch(
-      "Shared contracts",
-      process.execPath,
-      [tsc, "--watch", "--preserveWatchOutput"],
-      path.join(config.directory, "packages/shared"),
-      env,
-    );
     launch(
       "Backend",
       process.execPath,

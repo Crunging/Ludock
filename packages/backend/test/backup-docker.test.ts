@@ -93,6 +93,9 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           Labels: { "ludock.enable": "true", "ludock.name": "Backup fixture" },
           Cmd: ["bun", "-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 3600000)"],
           HostConfig: {
+            // This idle fixture has no shutdown work. Forward signals even if
+            // a second stop races Bun startup after restart under emulation.
+            Init: true,
             Mounts: [{ Type: "volume", Source: volume.name, Target: "/data" }],
           },
         });

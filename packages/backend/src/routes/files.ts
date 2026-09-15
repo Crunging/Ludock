@@ -1,11 +1,8 @@
 import { createDirectoryRequestSchema, fileListingSchema, fileLocationSchema, formatByteSize, okResponseSchema, renameFileRequestSchema, uploadFileQuerySchema, } from "@ludock/shared";
 import { Readable } from "node:stream";
-import { AuthError } from "../auth.js";
-import { AuthorizationError } from "../authorization.js";
 import { writeAuditLog } from "../database.js";
-import { AppError } from "../errors.js";
-import { createDirectory, deleteFileEntry, FileStorageError, listFiles, openDownload, renameFileEntry, uploadFile, } from "../file-storage.js";
-import { ServerBindingError } from "../identity.js";
+import { AppError, errorResponse } from "../errors.js";
+import { createDirectory, deleteFileEntry, listFiles, openDownload, renameFileEntry, uploadFile, } from "../file-storage.js";
 import { createLogger, errorMessage } from "../logger.js";
 import { getMaxUploadBytes } from "../upload-limit.js";
 import { requestUser, respond, type ApiRoutes, type RequestContext } from "./request.js";
@@ -17,21 +14,7 @@ interface FileRouteError extends Error {
 }
 const maxUploadBytes = getMaxUploadBytes();
 function sendFileError(error: unknown): Response {
-  if (error instanceof AuthError || error instanceof AuthorizationError || error instanceof AppError || error instanceof ServerBindingError) {
-    return Response.json({ error: error.message, code: error.code }, { status: error.statusCode });
-  }
-  // Checked before the Docker cases below: FileStorageError carries its own
-  // statusCode and must keep its specific message.
-  if (error instanceof FileStorageError) {
-    const messages: Record<string, string> = {
-      INVALID_PATH: "Invalid file path",
-      INVALID_NAME: "Invalid file or folder name",
-      ROOT_NOT_FOUND: "File root not found",
-      ROOT_MUTATION: "The configured root cannot be changed",
-      ROOT_DOWNLOAD: "Choose a file or folder to download",
-    };
-    return Response.json({ error: messages[error.code] || "File operation failed" }, { status: error.statusCode });
-  }
+  if (error instanceof AppError) return errorResponse(error);
   const routeError = error as FileRouteError;
   if (routeError.code === "INVALID_CONTAINER_ID") {
     return Response.json({ error: "Invalid container identifier" }, { status: 400 });
