@@ -64,6 +64,8 @@ shared boundaries when working in parallel.
   a separate Node.js installation is not required. Keep `[run].bun = true` in
   `bunfig.toml` so dependency CLIs also run with Bun. Launch JavaScript test
   subprocesses with `process.execPath` rather than relying on a Node shebang.
+  Outside the checkout, use `bun run --bun` for dependency CLIs so their child
+  launchers also use Bun.
   Imports from `node:*` use Bun's built-in compatibility APIs.
 - Checkout state and cookies are separate, but Docker is not isolated by them.
   Development defaults to no Docker connection. Use a dedicated test daemon for

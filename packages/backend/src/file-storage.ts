@@ -332,7 +332,7 @@ export async function openDownload(
   name: string;
   type: "file" | "directory";
   size: number;
-  stream: NodeJS.ReadableStream;
+  stream: Readable;
   completed: Promise<void>;
 }> {
   const target = resolveTarget(server, rootId, relativePath);
