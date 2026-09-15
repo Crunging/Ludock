@@ -178,6 +178,10 @@ describe("needs attention", () => {
     link.focus();
     act(() => { poll(); });
     expect(request).toHaveBeenCalledTimes(2);
+    // A slow poll must finish before another interval starts a request.
+    act(() => { poll(); });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1][1]?.signal?.aborted).toBe(false);
     expect(document.activeElement).toBe(link);
     await act(async () => { pending.resolve(response(items)); });
     expect(document.activeElement).toBe(link);
