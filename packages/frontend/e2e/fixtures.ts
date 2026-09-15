@@ -29,7 +29,7 @@ import {
 
 export const ADMIN: AuthUser = {
   id: "11111111-1111-4111-8111-111111111111",
-  username: "alex",
+  username: "Crunging",
   role: "admin",
 };
 export const RUNNING_ID = "53bfe195-b78c-4c14-aebb-1bd09384f33b";
