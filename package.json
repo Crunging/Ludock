@@ -7,13 +7,15 @@
   ],
   "description": "A self-hosted control panel for existing Docker game servers",
   "scripts": {
-    "dev": "bun scripts/dev.mjs",
+    "dev": "bun run check:runtime && bun scripts/dev.mjs",
     "build": "bun run --filter @ludock/backend build && bun run --filter @ludock/frontend build",
     "typecheck": "bun run --filter @ludock/shared typecheck && bun run --filter @ludock/backend typecheck && bun run --filter @ludock/frontend typecheck",
-    "lint": "bun run --filter @ludock/backend lint && bun run --filter @ludock/frontend lint",
+    "lint": "bun run --filter @ludock/backend lint && bun run --filter @ludock/frontend lint && bun run lint:scripts",
+    "lint:scripts": "bun run --filter @ludock/backend lint:scripts",
+    "check:runtime": "bun scripts/ci/check-bun.mjs",
     "test": "bun run test:suites",
     "test:suites": "bun test --isolate ./scripts/test && bun run --filter @ludock/backend test && bun run --filter @ludock/frontend test",
-    "check": "bun run typecheck && bun run lint && bun run test:suites && bun run --filter @ludock/backend build && bun run --filter @ludock/frontend build:assets",
+    "check": "bun run check:runtime && bun run typecheck && bun run lint && bun run test:suites && bun run --filter @ludock/backend build && bun run --filter @ludock/frontend build:assets",
     "backend:dev": "bun run --filter @ludock/backend dev",
     "frontend:dev": "bun run --filter @ludock/frontend dev"
   },

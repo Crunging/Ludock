@@ -6,6 +6,7 @@
     "dev": "bun ../../scripts/watch-backend.mjs",
     "build": "bun ../../scripts/build-backend.mjs",
     "lint": "oxlint .",
+    "lint:scripts": "cd ../.. && oxlint --config scripts/.oxlintrc.json scripts",
     "test": "bun test --isolate ./test",
     "recover": "bun src/recovery.ts",
     "start": "bun dist/index.js",

@@ -27,6 +27,10 @@ describe("Bun-only CI", () => {
         for (const step of job.steps || []) {
           if (step.uses) expect(step.uses).toMatch(/^(?:\.\/\.github\/|docker:\/\/[^\s@]+@sha256:[a-f0-9]{64}$)/);
           if (step.run) expect(step.run).not.toMatch(/(?:^|[;&|]\s*|\n\s*)(?:node|npm|npx)\s/);
+          if (filename.endsWith("checks.yaml") && step.with?.integration === "release-please") {
+            expect(step.env["INPUT_SKIP-GITHUB-RELEASE"]).toBe("true");
+            expect(step.env["INPUT_SKIP-GITHUB-PULL-REQUEST"]).toBe("true");
+          }
         }
       }
     }
@@ -49,7 +53,7 @@ describe("Bun-only CI", () => {
     expect(() => imageTags({ ...base, IMAGE_NAME: "invalid\nimage" })).toThrow();
   });
 
-  it("accepts the selected Bun release range and enforces the package minimum during setup", async () => {
+  it("requires the exact Bun release and enforces the package minimum during setup", async () => {
     const setup = Bun.YAML.parse(await read(".github/actions/setup-bun/action.yaml"));
     expect(setup.runs.steps[0].run).toContain('"$bun_directory/bun" scripts/ci/check-bun.mjs');
     const script = Bun.fileURLToPath(new URL("scripts/ci/check-bun.mjs", root));
@@ -58,18 +62,18 @@ describe("Bun-only CI", () => {
     const directory = await mkdtemp(join(tmpdir(), "ludock-ci-bun-version-"));
     try {
       const [major] = Bun.version.split(".");
-      await Bun.write(join(directory, ".bun-version"), `${major}\n`);
+      await Bun.write(join(directory, ".bun-version"), Bun.version);
       await Bun.write(join(directory, "package.json"), JSON.stringify({ engines: { bun: `>=${Bun.version}` } }));
       expect(check(directory).exitCode).toBe(0);
+      for (const selected of [major, `${Number(major) + 1}.0.0`, `${Bun.version} garbage`, ""]) {
+        await Bun.write(join(directory, ".bun-version"), selected);
+        const rejected = check(directory);
+        expect(rejected.exitCode).not.toBe(0);
+        expect(new TextDecoder().decode(rejected.stderr)).toContain("does not match .bun-version");
+      }
       await Bun.write(join(directory, ".bun-version"), Bun.version);
-      expect(check(directory).exitCode).toBe(0);
-      await Bun.write(join(directory, ".bun-version"), String(Number(major) + 1));
-      let rejected = check(directory);
-      expect(rejected.exitCode).not.toBe(0);
-      expect(new TextDecoder().decode(rejected.stderr)).toContain("does not satisfy .bun-version");
-      await Bun.write(join(directory, ".bun-version"), major);
       await Bun.write(join(directory, "package.json"), JSON.stringify({ engines: { bun: `>=${Number(major) + 1}.0.0` } }));
-      rejected = check(directory);
+      const rejected = check(directory);
       expect(rejected.exitCode).not.toBe(0);
       expect(new TextDecoder().decode(rejected.stderr)).toContain("does not satisfy package.json engines.bun");
     } finally {

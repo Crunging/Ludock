@@ -10,6 +10,7 @@ coverage/
 *.tsbuildinfo
 packages/frontend/test-results/
 packages/frontend/playwright-report/
+/test-results/
 
 # Runtime data
 /data/

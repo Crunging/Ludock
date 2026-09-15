@@ -1,9 +1,9 @@
-// .bun-version may select a major release ("1"); package.json supplies the
-// minimum supported version. The image digest pins the exact CI executable.
+// Development and CI use the same exact release as the pinned Docker images.
 const selected = (await Bun.file(".bun-version").text()).trim();
+if (!/^\d+\.\d+\.\d+$/.test(selected) || Bun.version !== selected) {
+  throw new Error(`Bun ${Bun.version} does not match .bun-version: ${selected}. Install the pinned release.`);
+}
 const required = (await Bun.file("package.json").json()).engines?.bun;
-for (const [source, range] of [[".bun-version", selected], ["package.json engines.bun", required]]) {
-  if (typeof range !== "string" || !range.trim() || !Bun.semver.satisfies(Bun.version, range)) {
-    throw new Error(`Bun ${Bun.version} does not satisfy ${source}: ${String(range)}`);
-  }
+if (typeof required !== "string" || !required.trim() || !Bun.semver.satisfies(Bun.version, required)) {
+  throw new Error(`Bun ${Bun.version} does not satisfy package.json engines.bun: ${String(required)}`);
 }

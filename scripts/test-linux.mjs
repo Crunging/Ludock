@@ -8,10 +8,12 @@ import { backendSourceMounts } from "./test-source-mounts.mjs";
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const name = "ludock-linux-tests-" + crypto.randomUUID();
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
+const expectedBun = (await Bun.file(path.join(repository, ".bun-version")).text()).trim();
 
 // This function runs inside the image without source mounts, so missing bundle
 // files, production dependencies, or frontend assets fail before source tests.
-async function smokeProductionBundle() {
+async function smokeProductionBundle(expectedBun) {
+  if (Bun.version !== expectedBun) throw new Error(`Production Bun ${Bun.version} differs from .bun-version ${expectedBun}`);
   if (["node", "npm", "npx"].some((command) => Bun.which(command))) {
     throw new Error("The production image must use Bun as its only JavaScript runtime");
   }
@@ -124,7 +126,7 @@ try {
     "-e", "LUDOCK_SETUP_CODE=fixture-setup-" + crypto.randomUUID(),
     image,
   ]);
-  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")()"]);
+  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")(" + JSON.stringify(expectedBun) + ")"]);
   runDocker(["stop", "--time", "5", name + "-smoke"]);
   const exitCode = runDocker(["inspect", "--format", "{{.State.ExitCode}}", name + "-smoke"], "pipe")
     .stdout.toString().trim();

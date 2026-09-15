@@ -117,6 +117,7 @@ export async function reserveDevelopmentPorts(config) {
       if (config.fixedPorts)
         throw new Error(
           `A requested development port (${frontendPort} or ${backendPort}) is already in use.`,
+          { cause: error },
         );
     }
   }
@@ -133,6 +134,7 @@ async function lockFile(file, instance) {
     if (error.code !== "EEXIST") throw error;
     throw new Error(
       `This resource already has a development lock: ${file}. Stop its development run first. If that run crashed, verify its recorded PID has ended before removing this lock.`,
+      { cause: error },
     );
   }
   const nonce = crypto.randomUUID();

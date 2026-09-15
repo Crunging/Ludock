@@ -10,8 +10,9 @@ const root = Bun.fileURLToPath(new URL("../../", import.meta.url));
 async function lintFixture(workspace, files) {
   const directory = await mkdtemp(path.join(tmpdir(), "ludock-lint-"));
   try {
-    const cwd = path.join(directory, "packages", workspace);
-    const installed = path.join(root, "packages", workspace, "node_modules");
+    const relative = workspace === "scripts" ? "scripts" : path.join("packages", workspace);
+    const cwd = path.join(directory, relative);
+    const installed = path.join(root, "packages", workspace === "scripts" ? "backend" : workspace, "node_modules");
     await mkdir(cwd, { recursive: true });
     // This fixture runs outside the checkout's bunfig/PATH shim. A Node
     // shebang must not silently use a separately installed Node runtime.
@@ -22,7 +23,7 @@ async function lintFixture(workspace, files) {
       private: true, scripts: { lint: "oxlint --format=json ." },
     }));
     await copyFile(path.join(root, "oxlint.base.json"), path.join(directory, "oxlint.base.json"));
-    await copyFile(path.join(root, "packages", workspace, ".oxlintrc.json"), path.join(cwd, ".oxlintrc.json"));
+    await copyFile(path.join(root, relative, ".oxlintrc.json"), path.join(cwd, ".oxlintrc.json"));
     await symlink(installed, path.join(cwd, "node_modules"), "dir");
     await writeFile(path.join(cwd, "tsconfig.json"), JSON.stringify({
       compilerOptions: {
@@ -53,6 +54,21 @@ async function lintFixture(workspace, files) {
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+it("checks build and CI scripts while allowing Bun's filesystem APIs", async () => {
+  const invalid = await lintFixture("scripts", {
+    "ci/work.mjs": "export const run = () => missingTool();",
+    "build.mjs": "import { Readable } from 'node:stream'; export const stream = Readable;",
+  });
+  expect(invalid.exitCode, invalid.output).toBe(1);
+  const codes = invalid.report.diagnostics.map((diagnostic) => diagnostic.code);
+  expect(codes, invalid.output).toContain("eslint(no-undef)");
+  expect(codes, invalid.output).toContain("eslint(no-restricted-imports)");
+  const valid = await lintFixture("scripts", {
+    "ci/work.mjs": "import { realpath } from 'node:fs/promises'; export const run = async () => Bun.file(await realpath('.'));",
+  });
+  expect(valid.exitCode, valid.output).toBe(0);
+});
 
 it("keeps promise safety in backend source and undefined-name checks in helpers", async () => {
   const result = await lintFixture("backend", {

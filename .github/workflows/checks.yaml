@@ -29,6 +29,26 @@ jobs:
         run: bun audit --audit-level=high
       - name: Type-check, lint, test, and build
         run: bun run check
+      - name: Prepare Bun integration receipt
+        run: |
+          bun -e 'await Bun.write("test-results/ci-integration/receipt.json", JSON.stringify({ bun: Bun.version, commit: process.env.GITHUB_SHA }))'
+      - name: Verify artifact upload under Bun
+        uses: ./.github/actions/bun-action
+        with:
+          integration: upload-artifact
+          name: bun-integration-receipt
+          path: test-results/ci-integration/receipt.json
+          retention-days: 7
+        env:
+          INPUT_IF-NO-FILES-FOUND: error
+      - name: Verify Release Please starts under Bun
+        uses: ./.github/actions/bun-action
+        with:
+          integration: release-please
+        env:
+          INPUT_TARGET-BRANCH: main
+          INPUT_SKIP-GITHUB-RELEASE: 'true'
+          INPUT_SKIP-GITHUB-PULL-REQUEST: 'true'
   browser:
     name: Browser
     runs-on: ubuntu-latest
@@ -146,6 +166,10 @@ jobs:
           LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check backup and restore recovery with disposable data
         run: bun scripts/test-backups.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+      - name: Check packaged file transfers and backup restore
+        run: bun scripts/test-packaged.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
       - name: Scan image for vulnerabilities

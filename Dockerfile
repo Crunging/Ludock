@@ -4,11 +4,12 @@ ARG BUN_IMAGE=oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee645
 # Build JavaScript artifacts on the native build platform.
 FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS deps
 WORKDIR /app
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json bun.lock bunfig.toml .bun-version ./
+COPY scripts/ci/check-bun.mjs scripts/ci/check-bun.mjs
 COPY packages/backend/package.json packages/backend/
 COPY packages/frontend/package.json packages/frontend/
 COPY packages/shared/package.json packages/shared/
-RUN bun install --frozen-lockfile --linker=isolated
+RUN bun scripts/ci/check-bun.mjs && bun install --frozen-lockfile --linker=isolated
 
 COPY packages/shared/src/ packages/shared/src/
 
