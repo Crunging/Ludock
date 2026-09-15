@@ -49,6 +49,34 @@ describe("Bun-only CI", () => {
     expect(() => imageTags({ ...base, IMAGE_NAME: "invalid\nimage" })).toThrow();
   });
 
+  it("accepts the selected Bun release range and enforces the package minimum during setup", async () => {
+    const setup = Bun.YAML.parse(await read(".github/actions/setup-bun/action.yaml"));
+    expect(setup.runs.steps[0].run).toContain('"$bun_directory/bun" scripts/ci/check-bun.mjs');
+    const script = Bun.fileURLToPath(new URL("scripts/ci/check-bun.mjs", root));
+    const check = (cwd) => Bun.spawnSync([process.execPath, script], { cwd, stdout: "pipe", stderr: "pipe" });
+    expect(check(Bun.fileURLToPath(root)).exitCode).toBe(0);
+    const directory = await mkdtemp(join(tmpdir(), "ludock-ci-bun-version-"));
+    try {
+      const [major] = Bun.version.split(".");
+      await Bun.write(join(directory, ".bun-version"), `${major}\n`);
+      await Bun.write(join(directory, "package.json"), JSON.stringify({ engines: { bun: `>=${Bun.version}` } }));
+      expect(check(directory).exitCode).toBe(0);
+      await Bun.write(join(directory, ".bun-version"), Bun.version);
+      expect(check(directory).exitCode).toBe(0);
+      await Bun.write(join(directory, ".bun-version"), String(Number(major) + 1));
+      let rejected = check(directory);
+      expect(rejected.exitCode).not.toBe(0);
+      expect(new TextDecoder().decode(rejected.stderr)).toContain("does not satisfy .bun-version");
+      await Bun.write(join(directory, ".bun-version"), major);
+      await Bun.write(join(directory, "package.json"), JSON.stringify({ engines: { bun: `>=${Number(major) + 1}.0.0` } }));
+      rejected = check(directory);
+      expect(rejected.exitCode).not.toBe(0);
+      expect(new TextDecoder().decode(rejected.stderr)).toContain("does not satisfy package.json engines.bun");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("loads test builds locally and reserves publishing, attestations, and moving tags for release builds", () => {
     const check = buildArguments("check", { LUDOCK_PLATFORM: "linux/arm64", RUNNER_ARCH: "ARM64" });
     expect(check).toContain("--load");

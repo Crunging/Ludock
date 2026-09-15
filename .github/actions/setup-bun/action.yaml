@@ -14,5 +14,5 @@ runs:
         trap 'docker rm "$container_id" >/dev/null' EXIT
         docker cp "$container_id:/usr/local/bin/bun" "$bun_directory/bun"
         chmod +x "$bun_directory/bun"
-        test "$("$bun_directory/bun" --version)" = "$(tr -d '\r\n' < .bun-version)"
+        "$bun_directory/bun" scripts/ci/check-bun.mjs
         echo "$bun_directory" >> "$GITHUB_PATH"

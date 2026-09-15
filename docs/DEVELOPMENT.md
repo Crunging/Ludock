@@ -54,8 +54,9 @@ that the production image contains no Node, npm, or npx executable on PATH.
 
 Workflows check out their exact commit with Git and temporary authentication;
 credentials are not saved in the checkout. Bun is copied from a pinned official
-image and checked against `.bun-version`. Buildx and Trivy run as native tools
-with pinned container images.
+image and checked against the release range in `.bun-version` and the minimum
+version in `package.json`. Buildx and Trivy run as native tools with pinned
+container images.
 
 Release Please and artifact uploads use their maintained upstream bundles under
 Bun in the [local container action](../.github/actions/bun-action/action.yaml).
