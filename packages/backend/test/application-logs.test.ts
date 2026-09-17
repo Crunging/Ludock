@@ -46,6 +46,38 @@ describe("application log buffer", () => {
     expect(entry.context?.apiKey).toBe("[REDACTED]");
   });
 
+  it("redacts complete quoted credentials, including spaces and escaped quotes", () => {
+    for (const input of [
+      'password="synthetic secret words" action=connect',
+      "token='synthetic secret words' action=connect",
+      String.raw`password="synthetic\"credential-tail" action=connect`,
+      String.raw`secret='synthetic\'credential-tail' action=connect`,
+      'authorization="Bearer synthetic secret words" action=connect',
+      'password="synthetic unfinished secret',
+      'password="synthetic unfinished secret\\',
+    ]) {
+      const redacted = redactApplicationLog(input);
+      expect(redacted).not.toMatch(/synthetic|secret words|credential-tail|unfinished secret/);
+      expect(redacted).toContain("[REDACTED]");
+      if (input.endsWith("action=connect")) expect(redacted).toContain("action=connect");
+    }
+  });
+
+  it("redacts escaped JSON credentials before storing messages and context", () => {
+    const input = JSON.stringify({ password: 'synthetic"credential-tail\\', safe: true });
+    recordApplicationLog({
+      timestamp: 123,
+      level: "warn",
+      component: "test",
+      message: input,
+      context: { detail: input },
+    });
+    const entry = listApplicationLogs({ limit: 1 }).entries[0];
+    expect(JSON.stringify(entry)).not.toMatch(/synthetic|credential-tail/);
+    expect(JSON.parse(entry.message)).toEqual({ password: "[REDACTED]", safe: true });
+    expect(entry.context?.detail).toBe(entry.message);
+  });
+
   it("returns structured entries and resets stale process cursors", () => {
     recordApplicationLog({
       timestamp: 123,

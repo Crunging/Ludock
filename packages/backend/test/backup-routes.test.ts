@@ -232,6 +232,49 @@ afterEach(() => {
 });
 
 describe("backup metadata routes", () => {
+  it("keeps saved backup metadata readable when Docker discovery fails", async () => {
+    spyOn(servers, "refreshServers").mockRejectedValue(new Error("Docker unavailable"));
+    const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
+    const response = await handler(context(admin));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { backups: Array<{ id: string }> };
+    expect(body.backups.map((backup) => backup.id)).toEqual([backupId]);
+    expect((await handler(context(operator))).status).toBe(403);
+  });
+
+  for (const unavailable of [false, true]) {
+    it(`rechecks the session after ${unavailable ? "failed" : "successful"} backup discovery`, async () => {
+      const ctx = context(admin);
+      spyOn(servers, "refreshServers").mockImplementation(async () => {
+        auth.deleteRequestSession(ctx.request);
+        if (unavailable) throw new Error("Docker unavailable");
+        return new Map();
+      });
+      const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
+      await expect((async () => handler(ctx))()).rejects.toMatchObject({
+        code: "AUTHENTICATION_REQUIRED",
+      });
+    });
+  }
+
+  for (const change of ["demote", "disable", "binding-review"] as const) {
+    it(`withholds backup metadata after ${change} during discovery`, async () => {
+      spyOn(servers, "refreshServers").mockImplementation(async () => {
+        if (change === "demote")
+          database.getDatabase().query("UPDATE users SET role='viewer' WHERE id=?").run(admin.id);
+        else if (change === "disable")
+          database.getDatabase().query("UPDATE users SET disabled=1 WHERE id=?").run(admin.id);
+        else identity.reconcileServers([{ ...observation, gameType: "changed" }]);
+        throw new Error("Docker unavailable");
+      });
+      const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
+      await expect((async () => handler(context(admin)))()).rejects.toMatchObject({
+        code: change === "disable" ? "AUTHENTICATION_REQUIRED"
+          : change === "demote" ? "SERVER_NOT_FOUND" : "FORBIDDEN",
+      });
+    });
+  }
+
   it("requires administrator backup-read access rather than backup-create access", async () => {
     const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
     const denied = await handler(context(operator));

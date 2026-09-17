@@ -1,7 +1,8 @@
 import { serve, type Server } from "bun";
 import { expect, afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn } from "bun:test";
 import path from "node:path";
-import { scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
+import { auditResponseSchema, availabilityResponseSchema, scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
+import { DockerApiError } from "../src/docker-transport.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
@@ -9,7 +10,7 @@ process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
 process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }] =
+const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }, { setIntentionalStop }] =
   await Promise.all([
     import("../src/app.js"),
     import("../src/docker.js"),
@@ -18,6 +19,7 @@ const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, 
     import("../src/auth.js"),
     import("../src/compose.js"),
     import("../src/schedules.js"),
+    import("../src/monitoring.js"),
   ]);
 
 const docker = getDockerInstance();
@@ -32,6 +34,7 @@ let baseUrl: string;
 let managedStopCalled = false;
 let managedStartCalled = false;
 let stopGate: Promise<void> | undefined;
+let lifecycleError: DockerApiError | undefined;
 let unmanagedStopCalled = false;
 let managedServerId = "";
 
@@ -71,11 +74,13 @@ beforeAll(() => {
       }),
       start: async () => {
         managedStartCalled = managed;
+        if (lifecycleError) throw lifecycleError;
       },
       stop: async () => {
         if (managed) managedStopCalled = true;
         else unmanagedStopCalled = true;
         if (stopGate) await stopGate;
+        if (lifecycleError) throw lifecycleError;
       },
     };
   }) as unknown as typeof docker.getContainer;
@@ -88,6 +93,7 @@ beforeEach(async () => {
   managedStartCalled = false;
   unmanagedStopCalled = false;
   stopGate = undefined;
+  lifecycleError = undefined;
   server = serve({
     ...createApp({ frontendDist: false, setupWindow: new SetupWindow() }),
     hostname: "127.0.0.1",
@@ -485,6 +491,36 @@ describe("HTTP application", () => {
     });
     expect(demote.status).toBe(409);
   });
+
+  for (const action of ["start", "stop"] as const) {
+    for (const statusCode of [304, 500]) {
+      it(`records monitoring and audit state for HTTP ${action} after Docker returns ${statusCode}`, async () => {
+        const initiallyStopped = action === "start";
+        setIntentionalStop(managedServerId, initiallyStopped);
+        lifecycleError = new DockerApiError(statusCode);
+
+        const response = await authorizedFetch(`/api/v1/servers/${managedServerId}/${action}`, {
+          method: "POST",
+        });
+        expect(response.status).toBe(statusCode === 304 ? 200 : 500);
+        expect(await response.json()).toStrictEqual(statusCode === 304
+          ? { ok: true }
+          : { error: `Failed to ${action} container` });
+        expect(action === "start" ? managedStartCalled : managedStopCalled).toBe(true);
+
+        const availability = await authorizedFetch(`/api/v1/servers/${managedServerId}/availability`);
+        expect(availability.status).toBe(200);
+        expect(availabilityResponseSchema.parse(await availability.json()).state.intentionallyStopped)
+          .toBe(statusCode === 304 ? action === "stop" : initiallyStopped);
+
+        const audit = await authorizedFetch("/api/v1/audit");
+        expect(audit.status).toBe(200);
+        const entries = auditResponseSchema.parse(await audit.json()).entries.filter((entry) =>
+          entry.action === `server.${action}` && entry.targetId === managedServerId);
+        expect(entries).toHaveLength(statusCode === 304 ? 1 : 0);
+      });
+    }
+  }
 
   it("lets a friend start one server without granting command or file access", async () => {
     const { id: viewerId, cookie: viewerCookie } = await createViewerSession(await setupAdministrator());

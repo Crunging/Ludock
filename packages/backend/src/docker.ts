@@ -1,6 +1,7 @@
 import type * as Docker from "./docker-client.js";
 import { composeSourceLabels } from "./compose-source.js";
 import { docker } from "./docker-client.js";
+import { DockerApiError } from "./docker-transport.js";
 import {
   getGameConsoleAdapterSummary,
   resolveGameConsoleAdapter,
@@ -278,7 +279,7 @@ export async function startContainer(
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
   assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container.start();
+  await container.start().catch(acceptUnchangedState);
 }
 
 export async function stopContainer(
@@ -287,7 +288,14 @@ export async function stopContainer(
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
   assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container.stop();
+  await container.stop().catch(acceptUnchangedState);
+}
+
+// Docker returns 304 when the requested running state is already satisfied.
+// Treat it as success for both direct requests and scheduled jobs so monitoring
+// records intentional stops and repeated starts do not become failed operations.
+function acceptUnchangedState(error: unknown): void {
+  if (!(error instanceof DockerApiError) || error.statusCode !== 304) throw error;
 }
 
 export async function restartContainer(

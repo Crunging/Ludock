@@ -33,8 +33,10 @@ export const backupsRoutes: ApiRoutes = {
   "/api/v1/servers/:id/backups": {
     GET: administrator(async (ctx) => {
       const serverId = id(ctx.params.id);
-      await refreshServers();
-      const user = requestUser(ctx);
+      // Backup metadata is persisted locally and remains useful during a daemon
+      // outage. A successful refresh still applies binding changes before access.
+      await refreshServers().catch(() => undefined);
+      const user = assertRequestUser(ctx.request, requestUser(ctx));
       assertServerCapability(user, serverId, "backups.read");
       return respond(backupsResponseSchema, { backups: listBackups(serverId) });
     }),

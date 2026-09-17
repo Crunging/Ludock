@@ -122,7 +122,7 @@ describe("authentication request ownership", () => {
   it("moves to normal sign-in when another client completes setup during submission", async () => {
     spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(setupStatus())
-      .mockResolvedValueOnce(Response.json({ error: "Setup is unavailable" }, { status: 403 }))
+      .mockResolvedValueOnce(Response.json({ error: "Initial setup has already been completed" }, { status: 409 }))
       .mockResolvedValueOnce(status());
     const auth = renderAuth();
     await waitFor(() => expect(auth.result.current.loading).toBe(false));
@@ -131,7 +131,7 @@ describe("authentication request ownership", () => {
         "admin",
         "valid password for tests",
         "completed-fixture-setup-code-12345",
-      )).toBe("Setup is unavailable");
+      )).toBe("Initial setup has already been completed");
     });
     expect(auth.result.current.setupRequired).toBe(false);
     expect(auth.result.current.setupLocked).toBe(false);

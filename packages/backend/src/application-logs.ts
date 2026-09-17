@@ -18,13 +18,13 @@ const entries: ApplicationLogEntry[] = [];
 let nextId = 1;
 
 const SECRET_KEY_PATTERN =
-  /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(\s*[=:]\s*)(["']?)([^\s,"';&}]+)\3/gi;
+  /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(\s*[=:]\s*)[^\s,"';&}]+/gi;
 const BEARER_PATTERN = /\bBearer\s+[^\s,;]+/gi;
 const COOKIE_PATTERN = /\b(ludock_session(?:_[a-z0-9_-]+)?)=([^;\s]+)/gi;
 const SENSITIVE_QUERY_PATTERN =
   /([?&](?:token|api[-_]?key|password|secret|session)=)[^&#\s]+/gi;
-const JSON_SECRET_PATTERN =
-  /("(?:password|passwd|secret|token|authorization|cookie|api[-_]?key|session)"\s*:\s*")([^"]*)(")/gi;
+const QUOTED_SECRET_PATTERN =
+  /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))/gi;
 const SENSITIVE_CONTEXT_KEY_PATTERN =
   /(authorization|cookie|password|passwd|secret|token|api[-_]?key|session)/i;
 
@@ -41,10 +41,13 @@ interface ApplicationLogInput {
 
 export function redactApplicationLog(value: string): string {
   return value
+    // Consume quoted values before token-oriented passes can remove a closing
+    // quote. Escaped quotes are credential content, not the end of the value.
+    .replace(QUOTED_SECRET_PATTERN, (_match, key: string, separator: string, quoted: string) =>
+      `${key}${separator}${quoted[0]}[REDACTED]${quoted[0]}`)
     .replace(BEARER_PATTERN, "Bearer [REDACTED]")
     .replace(COOKIE_PATTERN, "$1=[REDACTED]")
     .replace(SENSITIVE_QUERY_PATTERN, "$1[REDACTED]")
-    .replace(JSON_SECRET_PATTERN, "$1[REDACTED]$3")
     .replace(SECRET_KEY_PATTERN, "$1$2[REDACTED]");
 }
 
