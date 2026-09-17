@@ -29,7 +29,7 @@ test("activity filters reveal active work and restore keyboard focus", { tag: "@
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("activity filter controls fit narrow screens", { tag: "@mobile" }, async ({ app, page }, testInfo) => {
+test("activity filter controls fit narrow screens", { tag: "@mobile" }, async ({ app, page }) => {
   await page.route(`**/api/v1/servers/${RUNNING_ID}/operations`, (route) => route.fulfill({ json: operationsResponseSchema.parse({ operations }) }));
   await page.setViewportSize({ width: 320, height: 844 });
   await app.open(`/servers/${RUNNING_ID}`);
@@ -39,8 +39,6 @@ test("activity filter controls fit narrow screens", { tag: "@mobile" }, async ({
   const heights = await filters.locator("select, button").evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
   for (const height of heights) expect(height).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: testInfo.outputPath("activity-filters-320.png"), fullPage: true });
   await page.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(page.getByText("Showing 3 of 3 recent operations.")).toBeVisible();
 });

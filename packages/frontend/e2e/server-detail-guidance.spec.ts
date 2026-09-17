@@ -29,7 +29,6 @@ test("operation progress stays reachable from blocked server controls", { tag: "
   await page.getByRole("tab", { name: "Backups", exact: true }).click();
   await page.setViewportSize({ width: 320, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("operation-progress.png"), fullPage: true });
 });
 
 test("checking update availability preserves monitoring drafts and confirmation", async ({ app, page }) => {
@@ -47,7 +46,6 @@ test("checking update availability preserves monitoring drafts and confirmation"
   await page.getByRole("spinbutton", { name: "Failure grace period (seconds)", exact: true }).fill("240");
   await page.getByRole("tab", { name: "Update", exact: true }).click();
   await expect(page.getByRole("link", { name: "Check source access", exact: true })).toHaveAttribute("href", "/settings");
-  await page.screenshot({ path: test.info().outputPath("update-unavailable.png"), fullPage: true });
   await page.getByRole("button", { name: "Check again", exact: true }).click();
   await expect(page.getByRole("button", { name: "Update server", exact: true })).toBeDisabled();
   await expect(page.getByRole("tabpanel", { name: "Update", exact: true })).toBeFocused();
@@ -70,7 +68,6 @@ test("paused containers explain recovery and keep permitted logs reachable", asy
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
   await expect(page.getByRole("link", { name: "Open server controls", exact: true })).toHaveCount(0);
   await expect(page.getByText(/Paused in Docker. Resume it through Docker/)).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("paused-console.png"), fullPage: true });
   await page.getByRole("button", { name: "View logs", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Docker Logs", exact: true })).toBeFocused();
   await expect.poll(() => app.sockets.map((socket) => socket.path)).toEqual([`/ws/v1/logs/${RUNNING_ID}`]);
@@ -82,7 +79,6 @@ test("a stopped console links to the permitted Start control", async ({ app, pag
   app.servers[0].state = "exited";
   await app.open(`/console/${RUNNING_ID}`);
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
-  await page.screenshot({ path: test.info().outputPath("stopped-console.png"), fullPage: true });
   await page.getByRole("link", { name: "Open server controls", exact: true }).click();
   await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(page.getByText("Server started.", { exact: true })).toBeVisible();

@@ -71,11 +71,6 @@ test("application log filters support keyboard clearing and fit the viewport", {
       expect(bounds!.height).toBeGreaterThanOrEqual(44);
     }
   }
-  const screenshot = testInfo.outputPath("application-log-filters.png");
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Application log filters", { path: screenshot, contentType: "image/png" });
-
   await component.selectOption("scheduler");
   await expect(output).toContainText("No recent log entries match these filters.");
   await expect(page.getByText("0 of 4 recent entries", { exact: true })).toBeVisible();

@@ -170,7 +170,11 @@ describe("notification delivery troubleshooting", () => {
   });
 
   it("pauses queued delivery polling while disabled and refreshes retry availability after enabling", async () => {
-    const interval = spyOn(window, "setInterval");
+    let poll: (() => void) | undefined;
+    const interval = spyOn(window, "setInterval").mockImplementation((handler) => {
+      poll = handler as () => void;
+      return 123;
+    });
     let enabled = false;
     apiJsonMock.mockImplementation(async () => ({ deliveries: [{ ...failed, retryable: enabled }, testDelivery] }));
     const view = renderDeliveries({ enabled });
@@ -185,6 +189,8 @@ describe("notification delivery troubleshooting", () => {
     expect(table().getByText("Queued", { exact: true, selector: "strong" })).toBeTruthy();
     expect(apiJsonMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 5_000));
+    await act(async () => { poll?.(); });
+    expect(apiJsonMock).toHaveBeenCalledTimes(3);
   });
 
   it("does not replace a failed retry with optimistic success and allows another attempt", async () => {

@@ -15,7 +15,6 @@ test("expired setup shows the commands to recover and fits a narrow screen", { t
   await expect(page.getByText(/docker compose restart ludock/)).toBeVisible();
   await page.setViewportSize({ width: 320, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("expired-setup.png"), fullPage: true });
   locked = false;
   await page.getByRole("button", { name: "Check again" }).click();
   await expect(page.getByRole("heading", { name: "Set up Ludock" })).toBeVisible();

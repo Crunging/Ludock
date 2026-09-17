@@ -99,7 +99,7 @@ function expectedFilters(action: string) {
   };
 }
 
-test("operation history searches the backend and preserves filters through pagination and refresh", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
+test("operation history searches the backend and preserves filters through pagination and refresh", { tag: "@responsive" }, async ({ app, page }) => {
   const requests = await mockHistory(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("link", { name: "Search operation history", exact: true }).click();
@@ -110,9 +110,6 @@ test("operation history searches the backend and preserves filters through pagin
   await expect.poll(() => Object.fromEntries(requests.operations.at(-1)!.searchParams)).toEqual(expectedFilters("restart"));
   await expect(page.getByRole("table", { name: "Operation history", exact: true })).toContainText(RUNNING_NAME);
   const filteredUrl = page.url();
-  const screenshot = testInfo.outputPath("operation-history-filters.png");
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Operation history filters", { path: screenshot, contentType: "image/png" });
 
   await page.getByRole("button", { name: "Older", exact: true }).click();
   await expect.poll(() => Object.fromEntries(requests.operations.at(-1)!.searchParams)).toEqual({ ...expectedFilters("restart"), cursor: OPERATION_CURSOR });
@@ -140,7 +137,7 @@ test("operation history searches the backend and preserves filters through pagin
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("audit search links to reloadable operation details and back to related events", async ({ app, page }, testInfo) => {
+test("audit search links to reloadable operation details and back to related events", async ({ app, page }) => {
   const requests = await mockHistory(page);
   await app.open("/audit");
   await expect(page.getByText("server.restart.failed", { exact: true })).toBeVisible();
@@ -148,9 +145,6 @@ test("audit search links to reloadable operation details and back to related eve
   await expect.poll(() => Object.fromEntries(requests.audit.at(-1)!.searchParams)).toEqual(expectedFilters("restart"));
   await expect(page.getByText("server.restart.failed", { exact: true })).toBeVisible();
   const auditUrl = page.url();
-  const screenshot = testInfo.outputPath("audit-history-filters.png");
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Audit history filters", { path: screenshot, contentType: "image/png" });
   await page.getByRole("button", { name: "Older", exact: true }).click();
   await expect(page.getByText("scheduled.restart.failed", { exact: true })).toBeVisible();
   await expect.poll(() => Object.fromEntries(requests.audit.at(-1)!.searchParams)).toEqual({ ...expectedFilters("restart"), cursor: AUDIT_CURSOR });
@@ -167,9 +161,6 @@ test("audit search links to reloadable operation details and back to related eve
   await page.reload();
   await expect(page.getByRole("heading", { name: "Operation details", exact: true })).toBeVisible();
   await expect.poll(() => requests.details.length).toBe(2);
-  const detailScreenshot = testInfo.outputPath("operation-details.png");
-  await page.screenshot({ path: detailScreenshot, fullPage: true });
-  await testInfo.attach("Operation details", { path: detailScreenshot, contentType: "image/png" });
   await page.getByRole("link", { name: "Related audit events", exact: true }).click();
   await expect.poll(() => requests.audit.at(-1)!.searchParams.get("operationId")).toBe(OPERATION_ID);
   await expect(page.getByRole("textbox", { name: "Operation ID", exact: true })).toHaveValue(OPERATION_ID);
@@ -192,7 +183,7 @@ test("an operator can open an authorized operation without administrator audit c
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("history filters and pagination fit a narrow screen with usable controls", { tag: "@mobile" }, async ({ app, page }, testInfo) => {
+test("history filters and pagination fit a narrow screen with usable controls", { tag: "@mobile" }, async ({ app, page }) => {
   await mockHistory(page);
   await page.setViewportSize({ width: 320, height: 844 });
   for (const path of ["/operations", "/audit"]) {
@@ -202,10 +193,6 @@ test("history filters and pagination fit a narrow screen with usable controls", 
     const heights = await controls.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
     for (const height of heights) expect(height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    const screenshot = testInfo.outputPath(`${path.slice(1)}-history-320.png`);
-    await page.screenshot({ path: screenshot, fullPage: true });
-    await testInfo.attach(`${path.slice(1)} history at 320px`, { path: screenshot, contentType: "image/png" });
   }
 });
 
