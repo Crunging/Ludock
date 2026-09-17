@@ -144,11 +144,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (
           !controller.signal.aborted && revision.current === owner &&
           path === "/auth/setup" && error instanceof ApiRequestError &&
-          error.status === 403
+          [403, 409].includes(error.status)
         ) {
-          // A 403 also covers an invalid bootstrap code. Ask the server whether
-          // setup actually expired before replacing the form, and leave its
-          // local draft mounted when the status check is unavailable.
+          // A 403 can be an invalid code or expiry; 409 means another client
+          // completed setup. Read current status before replacing the form,
+          // keeping its draft mounted if the status check is unavailable.
           try {
             const status = await apiJson("/auth/status", authStatusSchema, {
               signal: controller.signal,

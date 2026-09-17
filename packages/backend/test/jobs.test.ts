@@ -27,6 +27,8 @@ import {
   recoverUpdate,
 } from "../src/jobs.js";
 import { getDockerInstance } from "../src/docker.js";
+import { DockerApiError } from "../src/docker-transport.js";
+import { getAvailability } from "../src/monitoring.js";
 import { refreshServers } from "../src/servers.js";
 import { listLogicalServers } from "../src/identity.js";
 
@@ -108,6 +110,36 @@ function scheduled(): { context: JobContext; scheduleId: string } {
   return { context: { job, progress: () => {} }, scheduleId: schedule.id };
 }
 describe("queued operation authority", () => {
+  for (const action of ["start", "stop"] as const) {
+    for (const statusCode of [304, 500]) {
+      it(`records scheduled ${action} correctly after Docker returns ${statusCode}`, async () => {
+        setServerGrant(friend.id, serverId,
+          ["server.view", `server.${action}`, "schedules.manage"], admin);
+        createSchedule(friend, serverId, { ...input, action });
+        runSchedules(Date.parse("2026-09-09T08:00:00Z"));
+        const operation = listOperationHistory(admin, { serverId, limit: 50 }).operations[0];
+        const getContainer = docker.getContainer;
+        docker.getContainer = ((id: string) => {
+          const container = getContainer(id);
+          container[action] = async () => {
+            mutations++;
+            throw new DockerApiError(statusCode);
+          };
+          return container;
+        }) as typeof docker.getContainer;
+        registerBackgroundJobs();
+        await startOperationRunner();
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (["succeeded", "failed"].includes(getOperation(operation.id)!.status)) break;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(getOperation(operation.id)?.status).toBe(statusCode === 304 ? "succeeded" : "failed");
+        expect(mutations).toBe(1);
+        expect(getAvailability(serverId).state.intentionallyStopped).toBe(action === "stop" && statusCode === 304);
+      });
+    }
+  }
+
   it("does not invoke data recovery for an update interrupted while pulling", async () => {
     const { context } = scheduled();
     context.job.recovery = { containerId: "fixture", initiallyRunning: true };

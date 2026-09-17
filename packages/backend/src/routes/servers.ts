@@ -15,9 +15,6 @@ interface DockerRouteError extends Error {
 function sendDockerError(caught: unknown, fallbackMessage: string): Response {
   const error = caught as DockerRouteError;
   if (error instanceof AppError) return errorResponse(error);
-  if (error.statusCode === 304) {
-    return respond(okResponseSchema, { ok: true });
-  }
   if (error.code === "INVALID_CONTAINER_ID") {
     return Response.json({ error: "Invalid container identifier" }, { status: 400 });
   }
