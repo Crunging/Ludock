@@ -7,7 +7,7 @@ async function expectNoPageOverflow(page: Page) {
   )).toBe(true);
 }
 
-test("server states and ports stay aligned and usable across viewport widths", async ({ app, page }, testInfo) => {
+test("server states and ports stay aligned and usable across viewport widths", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   await app.open();
   await expect(page.getByRole("article")).toHaveCount(2);
   const widths = testInfo.project.name === "mobile"
@@ -70,7 +70,7 @@ test("search and state filters combine, survive refresh, and clear together", as
   await expect(page.getByRole("searchbox", { name: "Find a server" })).toHaveValue("");
 });
 
-test("More supports keyboard traversal, Escape, and outside dismissal", async ({ app, page }) => {
+test("More supports keyboard traversal, Escape, and outside dismissal", { tag: "@responsive" }, async ({ app, page }) => {
   await app.open();
   const row = page.getByRole("article", { name: RUNNING_NAME });
   const trigger = row.getByRole("button", { name: `More actions for ${RUNNING_NAME}` });
@@ -87,7 +87,7 @@ test("More supports keyboard traversal, Escape, and outside dismissal", async ({
   await expect(trigger).toHaveAttribute("aria-expanded", "false");
 });
 
-test("lifecycle confirmation traps page focus, restores its trigger, and sends only after confirmation", async ({ app, page }) => {
+test("lifecycle confirmation traps page focus, restores its trigger, and sends only after confirmation", { tag: "@responsive" }, async ({ app, page }) => {
   await app.open();
   const row = page.getByRole("article", { name: RUNNING_NAME });
   const stop = row.getByRole("button", { name: "Stop", exact: true });
@@ -117,7 +117,7 @@ test("lifecycle confirmation traps page focus, restores its trigger, and sends o
   await expect(row.getByRole("button", { name: "Start", exact: true })).toBeVisible();
 });
 
-test("detail tabs support arrow keys, Home and End without losing drafts", async ({ app, page }) => {
+test("detail tabs support arrow keys, Home and End without losing drafts", { tag: "@responsive" }, async ({ app, page }) => {
   await app.open(`/servers/${RUNNING_ID}`);
   const activity = page.getByRole("tab", { name: "Activity", exact: true });
   await activity.focus();
@@ -147,7 +147,7 @@ test("detail tabs support arrow keys, Home and End without losing drafts", async
   await expectNoPageOverflow(page);
 });
 
-test("empty assignment and sign-in remain usable on narrow screens", async ({ app, page }) => {
+test("empty assignment and sign-in remain usable on narrow screens", { tag: "@mobile" }, async ({ app, page }) => {
   app.user = { id: "22222222-2222-4222-8222-222222222222", username: "casey", role: "operator" };
   app.servers = [];
   await app.open();

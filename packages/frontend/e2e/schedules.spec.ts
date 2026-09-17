@@ -150,7 +150,7 @@ test("day presets and the local time zone produce a reviewable paused schedule",
   } }]);
 });
 
-test("schedules can be edited, paused, and resumed with the latest saved revision", async ({ app, page }, testInfo) => {
+test("schedules can be edited, paused, and resumed with the latest saved revision", { tag: "@responsive" }, async ({ app, page }) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
@@ -172,10 +172,6 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   await page.getByLabel("Time", { exact: true }).fill("14:45");
   await expect(page.locator(".schedule-preview")).toContainText(/14:45|2:45/);
   await expect(page.locator(".schedule-preview")).toContainText("UTC");
-  const screenshot = testInfo.outputPath("schedule-editor.png");
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Schedule editor", { path: screenshot, contentType: "image/png" });
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Add schedule", exact: true })).toBeVisible();
   expect(fixture.writes).toEqual([{
@@ -204,7 +200,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
 });
 
 for (const width of [320, 390]) {
-  test(`paused schedule drafts preview the selected time zone and remain usable at ${width}px`, async ({ app, page }, testInfo) => {
+  test(`paused schedule drafts preview the selected time zone and remain usable at ${width}px`, { tag: "@mobile" }, async ({ app, page }) => {
     const fixture = await mockSchedules(page, false);
     await page.setViewportSize({ width, height: 844 });
     await app.open(`/servers/${RUNNING_ID}`);
@@ -220,10 +216,6 @@ for (const width of [320, 390]) {
     await expect(preview).toContainText(/15:30|3:30/);
     await expect(page.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    const screenshot = testInfo.outputPath(`schedule-editor-${width}.png`);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({ path: screenshot, fullPage: true });
-    await testInfo.attach(`Schedule editor at ${width}px`, { path: screenshot, contentType: "image/png" });
 
     const cancel = page.getByRole("button", { name: "Cancel editing", exact: true });
     await cancel.focus();
@@ -259,7 +251,7 @@ test("invalid and rejected schedule edits preserve the draft for correction", as
   expect(fixture.writes[0]).toMatchObject({ body: { revision: 1 }, expectedRevision: 1 });
 });
 
-test("a new schedule can be created paused and only starts running after explicit resume", async ({ app, page }, testInfo) => {
+test("a new schedule can be created paused and only starts running after explicit resume", async ({ app, page }) => {
   const fixture = await mockSchedules(page, true, { empty: true });
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
@@ -269,10 +261,6 @@ test("a new schedule can be created paused and only starts running after explici
   await page.getByRole("checkbox", { name: "Create paused", exact: true }).check();
   await expect(page.locator(".schedule-preview")).toContainText("Next run when resumed:");
   await expect(page.locator(".schedule-preview")).toContainText("14:45");
-  const screenshot = testInfo.outputPath("schedule-create-paused.png");
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Create a paused schedule", { path: screenshot, contentType: "image/png" });
   await page.getByRole("button", { name: "Add schedule", exact: true }).click();
 
   const table = page.getByRole("table", { name: "Schedules", exact: true });
@@ -290,7 +278,7 @@ test("a new schedule can be created paused and only starts running after explici
   expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: true, revision: 1 }, expectedRevision: 1 });
 });
 
-test.describe("schedule controls on touch screens", () => {
+test.describe("schedule controls on touch screens", { tag: "@mobile" }, () => {
   test.use({ hasTouch: true, viewport: { width: 820, height: 1180 } });
 
   test("row and form actions retain usable touch targets on wider screens", async ({ app, page }) => {
@@ -307,7 +295,7 @@ test.describe("schedule controls on touch screens", () => {
   });
 });
 
-test("a scheduled result opens and focuses its operation even when it is absent from recent activity", async ({ app, page }, testInfo) => {
+test("a scheduled result opens and focuses its operation even when it is absent from recent activity", { tag: "@responsive" }, async ({ app, page }) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
@@ -327,10 +315,6 @@ test("a scheduled result opens and focuses its operation even when it is absent 
   await expect(selected).toContainText("Container stopped unexpectedly during restart.");
   await expect(page.getByText("No operations yet.", { exact: true })).toBeVisible();
   expect(fixture.operationReads).toContain(OPERATION_ID);
-  const screenshot = testInfo.outputPath("scheduled-operation.png");
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Scheduled operation details", { path: screenshot, contentType: "image/png" });
 });
 
 for (const unavailable of [

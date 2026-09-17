@@ -32,6 +32,10 @@ describe("application log browsing", () => {
     await screen.findByText("Ready");
     expect(screen.getByText("4 of 4 recent entries")).toBeTruthy();
     expect(screen.getByText(/recent entries buffered in this page/)).toBeTruthy();
+    for (const [query, count] of [["DOCKER", 3], ["ERROR", 1], ["retrying CONNECTION", 1]] as const) {
+      search(query);
+      expect(screen.getByText(`${count} of 4 recent entries`)).toBeTruthy();
+    }
     search("  TEST-daemon  ");
     expect(screen.getByText("3 of 4 recent entries")).toBeTruthy();
     select("Severity", "warn");
@@ -60,6 +64,7 @@ describe("application log browsing", () => {
     await screen.findByText("Original startup");
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     select("Component", "startup");
+    search("startup");
     refresh();
     await screen.findByText("0 of 1000 recent entries");
     expect(output().textContent).not.toContain("Original startup");
@@ -70,6 +75,7 @@ describe("application log browsing", () => {
     expect(screen.getByText("1 of 1 recent entries")).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "Component" }) as HTMLSelectElement).value).toBe("startup");
     expect(screen.queryByRole("option", { name: "app", exact: true })).toBeNull();
+    expect((screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement).value).toBe("startup");
     expect(String(request.mock.calls[1][0])).toContain(`after=1&generation=${generation}`);
     expect(String(request.mock.calls[2][0])).toContain(`after=1001&generation=${generation}`);
   });

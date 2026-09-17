@@ -1,7 +1,7 @@
 import { backupSettingsResponseSchema, backupSettingsSchema, backupStorageResponseSchema } from "@ludock/shared";
 import { test, expect } from "./fixtures";
 
-test("a fresh installation suggests its backup destination and saves only on request", async ({ app, page }) => {
+test("a fresh installation suggests its backup destination and saves only on request", { tag: "@responsive" }, async ({ app, page }) => {
   const writes: unknown[] = [];
   await page.route("**/api/v1/settings/deployment", (route) => route.fulfill({ json: {
     backupRoots: ["/backups"], composeRoots: [], composeAvailable: false,
@@ -31,8 +31,6 @@ test("a fresh installation suggests its backup destination and saves only on req
   await links.getByRole("link", { name: "Backup storage" }).click();
   await expect(destination).toHaveValue("/backups");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: test.info().outputPath("first-backup-settings.png"), fullPage: true });
   expect(writes).toEqual([]);
   await destination.clear();
   await page.getByRole("button", { name: "Save backup settings" }).click();

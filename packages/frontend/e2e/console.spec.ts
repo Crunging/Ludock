@@ -1,6 +1,6 @@
 import { test, expect, RUNNING_ID } from "./fixtures";
 
-test("console modes keep separate drafts and keyboard navigation", async ({ app, page }) => {
+test("console modes keep separate drafts and keyboard navigation", { tag: "@responsive" }, async ({ app, page }) => {
   await app.open(`/console/${RUNNING_ID}`);
   const game = page.getByRole("tab", { name: "Game Console", exact: true });
   await expect(game).toHaveAttribute("aria-selected", "true");

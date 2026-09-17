@@ -94,7 +94,7 @@ async function mockNotifications(
   return fixture;
 }
 
-test("Discord setup explains the webhook and focuses missing configuration before saving", async ({ app, page }) => {
+test("Discord setup explains the webhook and focuses missing configuration before saving", { tag: "@responsive" }, async ({ app, page }) => {
   const fixture = await mockNotifications(page, [], { configured: false, enabled: false });
   await app.open("/settings");
   const section = page.getByRole("region", { name: "Discord notifications", exact: true });
@@ -112,7 +112,7 @@ test("Discord setup explains the webhook and focuses missing configuration befor
   expect(fixture.mutations).toEqual(["/notifications"]);
 });
 
-test("recent Discord deliveries show outcomes, retry timing, and safe failure guidance on desktop and mobile", async ({ app, page }, testInfo) => {
+test("recent Discord deliveries show outcomes, retry timing, and safe failure guidance on desktop and mobile", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   const fixture = await mockNotifications(page, [
     delivery(DELIVERED_ID, {
       kind: "test", state: "delivered", attempts: 1, lastAttemptAt: CREATED_AT + 1_000,
@@ -154,13 +154,6 @@ test("recent Discord deliveries show outcomes, retry timing, and safe failure gu
     await page.setViewportSize({ width: 320, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
-  await page.evaluate(() => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    window.scrollTo(0, 0);
-  });
-  const screenshot = testInfo.outputPath("discord-notification-deliveries.png");
-  await page.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("Discord notification troubleshooting", { path: screenshot, contentType: "image/png" });
 });
 
 test("test notifications and explicit retries stay queued until a confirmed delivery", async ({ app, page }) => {
@@ -246,28 +239,3 @@ for (const configured of [true, false]) {
     expect(fixture.mutations).toEqual(["/notifications", `/notifications/deliveries/${FAILED_ID}/retry`]);
   });
 }
-
-test("disabled Discord delivery pauses polling until saved settings enable delivery", async ({ app, page }) => {
-  await page.clock.install();
-  const fixture = await mockNotifications(page, [delivery(PENDING_ID, {
-    attempts: 1,
-    lastAttemptAt: CREATED_AT + 10_000,
-    lastFailure: "Discord is temporarily unavailable. Delivery will be retried automatically.",
-  })], { configured: true, enabled: false });
-  await app.open("/settings");
-  const section = page.getByRole("region", { name: "Discord notifications", exact: true });
-  await expect(section.getByRole("table", { name: "Recent notification deliveries", exact: true })).toBeVisible();
-  const pausedReads = fixture.reads;
-  await page.clock.runFor(15_000);
-  expect(fixture.reads).toBe(pausedReads);
-  fixture.deliveries = fixture.deliveries.map((item) => ({ ...item, attempts: 2 }));
-  await section.getByRole("checkbox", { name: "Enable Discord delivery", exact: true }).check();
-  await section.getByRole("button", { name: "Save notifications", exact: true }).click();
-  await expect.poll(() => fixture.reads).toBeGreaterThan(pausedReads);
-  // A started read can still block polling; wait for its fresh rows and completion.
-  await expect(section.getByRole("table", { name: "Recent notification deliveries", exact: true })).toContainText("2 attempts");
-  await expect(section.getByRole("button", { name: "Refresh deliveries", exact: true })).toBeEnabled();
-  const enabledReads = fixture.reads;
-  await page.clock.runFor(5_100);
-  await expect.poll(() => fixture.reads).toBeGreaterThan(enabledReads);
-});

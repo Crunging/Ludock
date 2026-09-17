@@ -30,9 +30,11 @@ export default defineConfig({
     },
   },
   projects: [
-    { name: "desktop", use: { viewport: { width: 1360, height: 900 } } },
+    // Run behavior once; repeat only viewport-sensitive cases on mobile.
+    { name: "desktop", grepInvert: /@mobile\b/, use: { viewport: { width: 1360, height: 900 } } },
     {
       name: "mobile",
+      grep: /@(?:responsive|mobile)\b/,
       use: {
         viewport: { width: 390, height: 844 },
         isMobile: true,

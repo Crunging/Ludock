@@ -52,7 +52,7 @@ async function mockFailedOperation(page: Page) {
   }));
 }
 
-test("dashboard attention links open the failed operation, suspended schedule, binding review, and outage", async ({ app, page }) => {
+test("dashboard attention links open the failed operation, suspended schedule, binding review, and outage", { tag: "@responsive" }, async ({ app, page }) => {
   app.servers[1].bindingStatus = "review_required";
   await mockAttention(page);
   await mockAvailability(page);
@@ -165,7 +165,7 @@ test("a viewer can investigate an outage with monitoring settings kept read-only
 });
 
 for (const width of [320, 390]) {
-  test(`attention actions remain readable and keyboard accessible at ${width}px`, async ({ app, page }) => {
+  test(`attention actions remain readable and keyboard accessible at ${width}px`, { tag: "@mobile" }, async ({ app, page }) => {
     await mockAttention(page, items.map((item, index) => index === 0 ? {
       ...item, serverName: "Friends’ survival world — multiplayer-survival-with-a-long-server-name",
     } : item));

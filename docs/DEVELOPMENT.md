@@ -27,6 +27,9 @@ bun run --filter @ludock/frontend test:e2e
 
 Use `bun run lint:scripts` to lint repository scripts separately.
 
+Browser cases run on desktop by default. Use `@responsive` to also run on mobile,
+or `@mobile` for dedicated mobile cases.
+
 Docker acceptance uses `ludock:test`. Run the
 [Linux](../scripts/test-linux.mjs), [file](../scripts/test-files.mjs),
 [backup](../scripts/test-backups.mjs), [packaged](../scripts/test-packaged.mjs),
