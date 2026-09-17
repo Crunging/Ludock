@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { it, mock, spyOn } from "bun:test";
+import { expect, it, mock, spyOn } from "bun:test";
 import { startServer } from "../src/index.js";
 import { closeDatabase, createUser, getDatabase } from "../src/database.js";
 import { reconcileServers } from "../src/identity.js";
@@ -29,7 +28,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
   const delivery = spyOn(notifications, "deliverNotifications").mockImplementation(async () => {
     await gate;
     // Shutdown must leave storage open until delivery has finished recording its result.
-    assert.equal(database.prepare("SELECT 1 AS value").get()?.value, 1);
+    expect(database.prepare("SELECT 1 AS value").get()?.value).toBe(1);
   });
   let tick: (() => void) | undefined;
   const nativeInterval = globalThis.setInterval;
@@ -42,30 +41,30 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
   try {
     runtime = startServer({ port: 0, hostname: "127.0.0.1", frontendDist: false });
     await flush();
-    assert.ok(tick);
-    assert.equal(delivery.mock.calls.length, 1);
+    expect(tick).toBeTruthy();
+    expect(delivery.mock.calls.length).toBe(1);
     now += 60_000;
     tick();
     await flush();
     const row = database.prepare("SELECT last_slot,last_operation_id FROM schedules WHERE id=?")
       .get(schedule.id) as { last_slot: string | null; last_operation_id: string | null };
-    assert.equal(row.last_slot, "2026-09-15T08:00:UTC");
-    assert.ok(row.last_operation_id, "The due operation must queue while delivery is pending");
-    assert.equal(delivery.mock.calls.length, 1, "Delivery batches must not overlap");
+    expect(row.last_slot).toBe("2026-09-15T08:00:UTC");
+    expect(row.last_operation_id, "The due operation must queue while delivery is pending").toBeTruthy();
+    expect(delivery.mock.calls.length, "Delivery batches must not overlap").toBe(1);
 
     let stopped = false;
     const shutdown = runtime.shutdown("test").then(() => { stopped = true; });
     await flush();
-    assert.equal(stopped, false);
+    expect(stopped).toBe(false);
     const discoveries = discovery.mock.calls.length;
     tick();
     await flush();
-    assert.equal(discovery.mock.calls.length, discoveries, "Shutdown prevents new discovery");
-    assert.equal(delivery.mock.calls.length, 1);
+    expect(discovery.mock.calls.length, "Shutdown prevents new discovery").toBe(discoveries);
+    expect(delivery.mock.calls.length).toBe(1);
     releaseDelivery();
     await shutdown;
-    assert.equal(stopped, true);
-    assert.throws(() => database.prepare("SELECT 1").get(), /closed/i);
+    expect(stopped).toBe(true);
+    expect(() => database.prepare("SELECT 1").get()).toThrow(/closed/i);
   } finally {
     releaseDelivery();
     await runtime?.shutdown("test cleanup");

@@ -1,6 +1,4 @@
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { mountsOverlap, recoverBackup, recoverRestore, stopForDataOperation } from "../src/backups.js";
 import type { ServerObservation } from "../src/identity.js";
 import { listLogicalServers } from "../src/identity.js";
@@ -34,31 +32,21 @@ describe("backup shared-writer boundaries", () => {
       ["/srv//games/./", "/srv/games/world"],
       ["/srv/games/world", "/srv/games/world"],
     ]) {
-      assert.equal(
-        mountsOverlap(bind(left), bind(right)), true,
-        `${left} contains ${right}`,
-      );
-      assert.equal(
-        mountsOverlap(bind(right), bind(left)), true,
-        `${right} overlaps ${left}`,
-      );
+      expect(mountsOverlap(bind(left), bind(right)), `${left} contains ${right}`).toBe(true);
+      expect(mountsOverlap(bind(right), bind(left)), `${right} overlaps ${left}`).toBe(true);
     }
   });
 
   it("keeps sibling paths and distinct named volumes separate", () => {
-    assert.equal(mountsOverlap(bind("/srv/game"), bind("/srv/games")), false);
-    assert.equal(mountsOverlap(bind(""), bind("/srv/games")), false);
+    expect(mountsOverlap(bind("/srv/game"), bind("/srv/games"))).toBe(false);
+    expect(mountsOverlap(bind(""), bind("/srv/games"))).toBe(false);
     const volume = {
       ...bind("/var/lib/docker/volumes/world/_data"),
       type: "volume", name: "world",
     };
-    assert.equal(
-      mountsOverlap(volume, { ...volume, destination: "/other-data" }), true,
-    );
-    assert.equal(
-      mountsOverlap(volume, { ...volume, name: "other-world" }), false,
-    );
-    assert.equal(mountsOverlap(volume, bind("/var/lib/docker/volumes")), true);
+    expect(mountsOverlap(volume, { ...volume, destination: "/other-data" })).toBe(true);
+    expect(mountsOverlap(volume, { ...volume, name: "other-world" })).toBe(false);
+    expect(mountsOverlap(volume, bind("/var/lib/docker/volumes"))).toBe(true);
   });
 });
 
@@ -107,7 +95,7 @@ describe("backup execution authority", () => {
     setServerGrant(operator.id, serverId, ["server.view", "backups.create"], admin);
     context = await resolveAuthorizedServer(operator, serverId, "backups.create");
     const saved: JobContext["job"] = {
-      id: randomUUID(), serverId, actorId: operator.id, kind: "backup",
+      id: crypto.randomUUID(), serverId, actorId: operator.id, kind: "backup",
       status: "running", phase: "validating", input: {}, recovery: {},
       bindingRevision: context.logical.bindingRevision,
       createdAt: 0, updatedAt: 0, error: null, result: null,
@@ -129,19 +117,19 @@ describe("backup execution authority", () => {
     onInspect = () => setServerGrant(
       operator.id, context.logical.id, ["server.view"], admin,
     );
-    await assert.rejects(stopForDataOperation(context, job), /permission/);
-    assert.equal(stopped, 0);
-    assert.deepEqual(job.job.recovery, {});
+    await expect(stopForDataOperation(context, job)).rejects.toThrow(/permission/);
+    expect(stopped).toBe(0);
+    expect(job.job.recovery).toStrictEqual({});
   });
   it("rejects an owner disabled during Docker inspection", async () => {
     onInspect = () => updateUserAccess(operator.id, "operator", true);
-    await assert.rejects(stopForDataOperation(context, job), /no longer has access/);
-    assert.equal(stopped, 0);
+    await expect(stopForDataOperation(context, job)).rejects.toThrow(/no longer has access/);
+    expect(stopped).toBe(0);
   });
   it("records and stops for an authorized backup without requiring a lifecycle grant", async () => {
     await stopForDataOperation(context, job);
-    assert.equal(stopped, 1);
-    assert.equal(job.job.recovery.initialRunning, true);
+    expect(stopped).toBe(1);
+    expect(job.job.recovery.initialRunning).toBe(true);
   });
 
   function scheduledBackup(): string {
@@ -162,9 +150,9 @@ describe("backup execution authority", () => {
       setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: false, revision: 1 });
       setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: true, revision: 2 });
     };
-    await assert.rejects(stopForDataOperation(context, job), /deleted, disabled, or changed/);
-    assert.equal(stopped, 0);
-    assert.deepEqual(job.job.recovery, {});
+    await expect(stopForDataOperation(context, job)).rejects.toThrow(/deleted, disabled, or changed/);
+    expect(stopped).toBe(0);
+    expect(job.job.recovery).toStrictEqual({});
   });
 
   for (const restoreRoots of [null, {}, [{ root: {}, phase: "staging" }],
@@ -176,10 +164,10 @@ describe("backup execution authority", () => {
       await stopForDataOperation(context, job);
       job.job.kind = "restore";
       job.job.recovery.restoreRoots = restoreRoots;
-      await assert.rejects(recoverRestore(job), { code: "INVALID_RESTORE_JOURNAL" });
-      assert.equal(running, false);
-      assert.equal(job.job.recovery.stateRestored, undefined);
-      assert.deepEqual(job.job.recovery.restoreRoots, restoreRoots);
+      await expect(recoverRestore(job)).rejects.toMatchObject({ code: "INVALID_RESTORE_JOURNAL" });
+      expect(running).toBe(false);
+      expect(job.job.recovery.stateRestored).toBe(undefined);
+      expect(job.job.recovery.restoreRoots).toStrictEqual(restoreRoots);
     });
   }
 
@@ -187,24 +175,24 @@ describe("backup execution authority", () => {
     await stopForDataOperation(context, job);
     job.job.kind = "restore";
     job.job.recovery.dataSafe = false;
-    await assert.rejects(recoverRestore(job), { code: "INVALID_RESTORE_JOURNAL" });
-    assert.equal(running, false);
+    await expect(recoverRestore(job)).rejects.toMatchObject({ code: "INVALID_RESTORE_JOURNAL" });
+    expect(running).toBe(false);
   });
 
   it("restores initial running state when interrupted before restore staging", async () => {
     await stopForDataOperation(context, job);
     job.job.kind = "restore";
     await recoverRestore(job);
-    assert.equal(running, true);
+    expect(running).toBe(true);
   });
 
   it("restores a stopped backup server during recovery even after its schedule is paused", async () => {
     const scheduleId = scheduledBackup();
     await stopForDataOperation(context, job);
-    assert.equal(running, false);
+    expect(running).toBe(false);
     setScheduleEnabled(operator, context.logical.id, scheduleId, { enabled: false, revision: 1 });
     await recoverBackup(job);
-    assert.equal(running, true);
-    assert.equal(job.job.recovery.stateRestored, true);
+    expect(running).toBe(true);
+    expect(job.job.recovery.stateRestored).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { StringDecoder } from "node:string_decoder";
+import { concatBytes, byteView } from "./bytes.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
@@ -65,7 +65,7 @@ export async function handleContainerLogsConnection(
   });
   send("system", "Following Docker logs");
 
-  let logStream: NodeJS.ReadableStream | null = null;
+  let logReader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
   const secrets = observationSecrets(access.context.observation);
   const stdout = new ConsoleOutputRedactor(secrets, (value) =>
     send("stdout", value),
@@ -77,9 +77,8 @@ export async function handleContainerLogsConnection(
     (type === "stdout" ? stdout : stderr).push(data),
   );
   const destroyLogStream = () => {
-    if (!logStream) return;
-    (logStream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
-    logStream = null;
+    void logReader?.cancel().catch(() => {});
+    logReader = undefined;
   };
   ws.onClose(destroyLogStream);
   try {
@@ -90,28 +89,36 @@ export async function handleContainerLogsConnection(
       tail: 500,
       timestamps: true,
     });
-    logStream = stream;
+    const reader = stream.getReader();
+    logReader = reader;
     if (!access.allowed()) {
       destroyLogStream();
+      reader.releaseLock();
       return;
     }
-    stream.on("data", (chunk: Buffer) => decoder.push(chunk));
-    stream.on("error", () => {
-      logger.warn("Docker log stream failed", {
-        container: shortContainerId(containerId),
-      });
-      send("error", "Docker log stream failed");
-    });
-    stream.on("end", () => {
-      if (!decoder.end()) {
-        logger.warn("Docker log stream ended with an incomplete frame", {
-          container: shortContainerId(containerId),
-        });
+    void (async () => {
+      try {
+        while (logReader === reader) {
+          const { value, done } = await reader.read();
+          if (logReader !== reader) return;
+          if (done) break;
+          decoder.push(value);
+        }
+        if (!decoder.end()) logger.warn("Docker log stream ended with an incomplete frame", { container: shortContainerId(containerId) });
+        stdout.end();
+        stderr.end();
+        send("system", "Log stream ended (container may have stopped)");
+      } catch {
+        if (logReader === reader) {
+          logger.warn("Docker log stream failed", { container: shortContainerId(containerId) });
+          send("error", "Docker log stream failed");
+        }
+      } finally {
+        if (logReader === reader) logReader = undefined;
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
       }
-      stdout.end();
-      stderr.end();
-      send("system", "Log stream ended (container may have stopped)");
-    });
+    })();
   } catch {
     logger.warn("Failed to attach Docker log stream", {
       container: shortContainerId(containerId),
@@ -134,24 +141,24 @@ export async function handleContainerLogsConnection(
 
 export class DockerLogDecoder {
   private mode: "unknown" | "raw" | "multiplexed" = "unknown";
-  private buffer = Buffer.alloc(0);
+  private buffer = new Uint8Array(0);
   private readonly text = {
-    stdout: new StringDecoder("utf8"),
-    stderr: new StringDecoder("utf8"),
+    stdout: new TextDecoder("utf-8", { ignoreBOM: true }),
+    stderr: new TextDecoder("utf-8", { ignoreBOM: true }),
   };
 
   constructor(
     private readonly output: (type: "stdout" | "stderr", data: string) => void,
   ) {}
 
-  push(chunk: Buffer): void {
+  push(chunk: Uint8Array): void {
     if (chunk.length === 0) return;
     if (this.mode === "raw") {
       this.write("stdout", chunk);
       return;
     }
 
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    this.buffer = concatBytes([this.buffer, chunk]);
     if (this.mode === "unknown") {
       const firstByte = this.buffer[0];
       if (firstByte !== 1 && firstByte !== 2) {
@@ -172,7 +179,7 @@ export class DockerLogDecoder {
 
     while (this.buffer.length >= 8) {
       const streamType = this.buffer[0];
-      const frameSize = this.buffer.readUInt32BE(4);
+      const frameSize = byteView(this.buffer).getUint32(4);
       if (
         (streamType !== 1 && streamType !== 2) ||
         this.buffer[1] !== 0 ||
@@ -195,14 +202,14 @@ export class DockerLogDecoder {
       this.useRawMode();
     }
     for (const type of ["stdout", "stderr"] as const) {
-      const final = this.text[type].end();
+      const final = this.text[type].decode();
       if (final) this.output(type, final);
     }
     return this.buffer.length === 0;
   }
 
-  private write(type: "stdout" | "stderr", chunk: Buffer): void {
-    const value = this.text[type].write(chunk);
+  private write(type: "stdout" | "stderr", chunk: Uint8Array): void {
+    const value = this.text[type].decode(chunk, { stream: true });
     if (value) this.output(type, value);
   }
 
@@ -210,7 +217,7 @@ export class DockerLogDecoder {
     this.mode = "raw";
     if (this.buffer.length > 0) {
       this.write("stdout", this.buffer);
-      this.buffer = Buffer.alloc(0);
+      this.buffer = new Uint8Array(0);
     }
   }
 }

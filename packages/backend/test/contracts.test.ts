@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   credentialsRequestSchema,
   setupRequestSchema,
@@ -33,18 +32,13 @@ test("game capability response projects the actual integration registry without 
   const { integrations } = integrationsResponseSchema.parse({
     integrations: raw,
   });
-  assert.equal(integrations.length, raw.length);
-  assert.deepEqual(
-    integrations.map((value) => value.gameType),
-    raw.map((value) => value.gameType),
-  );
-  assert.deepEqual(integrations[0]?.capabilities, raw[0]?.capabilities);
-  assert(
-    integrations.every(
+  expect(integrations.length).toBe(raw.length);
+  expect(integrations.map((value) => value.gameType)).toStrictEqual(raw.map((value) => value.gameType));
+  expect(integrations[0]?.capabilities).toStrictEqual(raw[0]?.capabilities);
+  expect(integrations.every(
       (value) =>
         !Object.hasOwn(value, "console") && !Object.hasOwn(value, "aliases"),
-    ),
-  );
+    )).toBeTruthy();
 });
 
 test("request defaults and required persisted response fields remain distinct", () => {
@@ -67,13 +61,9 @@ test("request defaults and required persisted response fields remain distinct", 
     nextRunAt: null,
     nextRunUnavailableReason: null,
   };
-  assert(savedScheduleSchema.safeParse(saved).success);
-  assert(
-    !savedScheduleSchema.safeParse({ ...saved, ownerId: undefined }).success,
-  );
-  assert(
-    !savedScheduleSchema.safeParse({ ...saved, enabled: undefined }).success,
-  );
+  expect(savedScheduleSchema.safeParse(saved).success).toBeTruthy();
+  expect(!savedScheduleSchema.safeParse({ ...saved, ownerId: undefined }).success).toBeTruthy();
+  expect(!savedScheduleSchema.safeParse({ ...saved, enabled: undefined }).success).toBeTruthy();
   const policy = availabilitySchema.parse({ enabled: false });
   const state = {
     outageStartedAt: null,
@@ -82,19 +72,17 @@ test("request defaults and required persisted response fields remain distinct", 
     intentionallyStopped: false,
     lastState: null,
   };
-  assert(availabilityResponseSchema.safeParse({ policy, state }).success);
-  assert(
-    !availabilityResponseSchema.safeParse({
+  expect(availabilityResponseSchema.safeParse({ policy, state }).success).toBeTruthy();
+  expect(!availabilityResponseSchema.safeParse({
       policy: { enabled: false },
       state,
-    }).success,
-  );
+    }).success).toBeTruthy();
   const project = composeSourceProjectSchema.parse({
     projectName: "games", projectDirectory: "/compose/games",
     composeFiles: ["/compose/games/compose.yaml"],
   });
-  assert.deepEqual(project.envFiles, []);
-  assert(!composeSourceProjectSchema.safeParse({ ...project, composeFiles: [] }).success);
+  expect(project.envFiles).toStrictEqual([]);
+  expect(!composeSourceProjectSchema.safeParse({ ...project, composeFiles: [] }).success).toBeTruthy();
 });
 
 test("persisted operation response rejects unknown states and Docker references in the logical server field", () => {
@@ -109,20 +97,18 @@ test("persisted operation response rejects unknown states and Docker references 
     error: null,
     result: null,
   };
-  assert(operationSchema.safeParse(operation).success);
+  expect(operationSchema.safeParse(operation).success).toBeTruthy();
   for (const changes of [
     { status: "done" },
     { serverId: "minecraft" },
     { phase: undefined },
     { updatedAt: "2" },
   ]) {
-    assert(!operationSchema.safeParse({ ...operation, ...changes }).success);
+    expect(!operationSchema.safeParse({ ...operation, ...changes }).success).toBeTruthy();
   }
-  assert(
-    !serverGrantsResponseSchema.safeParse({
+  expect(!serverGrantsResponseSchema.safeParse({
       grants: [{ serverId, capabilities: ["server.everything"], updatedAt: 1 }],
-    }).success,
-  );
+    }).success).toBeTruthy();
 });
 
 test("events distinguish logical server updates from content-free invalidation", () => {
@@ -132,40 +118,31 @@ test("events distinguish logical server updates from content-free invalidation",
     serverId,
     time: 1,
   };
-  assert.deepEqual(serverEventSchema.parse(update), update);
-  assert(
-    !serverEventSchema.safeParse({
+  expect(serverEventSchema.parse(update)).toStrictEqual(update);
+  expect(!serverEventSchema.safeParse({
       ...update,
       serverId: undefined,
       containerId: "minecraft",
-    }).success,
-  );
-  assert(
-    !serverEventSchema.safeParse({ ...update, serverId: "minecraft" }).success,
-  );
-  assert(
-    !serverEventSchema.safeParse({ ...update, action: "exec_start" }).success,
-  );
-  assert.deepEqual(
-    serverEventSchema.parse({
+    }).success).toBeTruthy();
+  expect(!serverEventSchema.safeParse({ ...update, serverId: "minecraft" }).success).toBeTruthy();
+  expect(!serverEventSchema.safeParse({ ...update, action: "exec_start" }).success).toBeTruthy();
+  expect(serverEventSchema.parse({
       type: "container_event",
       action: "refresh",
       time: 1,
       containerId: "private",
-    }),
-    { type: "container_event", action: "refresh", time: 1 },
-  );
+    })).toStrictEqual({ type: "container_event", action: "refresh", time: 1 });
 });
 
 test("identifier boundary parsers preserve supported Docker references and reject paths", () => {
-  assert.equal(logicalServerIdSchema.parse(serverId), serverId);
-  assert(!logicalServerIdSchema.safeParse("minecraft").success);
+  expect(logicalServerIdSchema.parse(serverId)).toBe(serverId);
+  expect(!logicalServerIdSchema.safeParse("minecraft").success).toBeTruthy();
   for (const reference of [
     "a".repeat(64),
     "123456789abc",
     "minecraft-server.1",
   ]) {
-    assert.equal(dockerContainerIdSchema.parse(reference), reference);
+    expect(dockerContainerIdSchema.parse(reference)).toBe(reference);
   }
   for (const reference of [
     "../server",
@@ -174,111 +151,80 @@ test("identifier boundary parsers preserve supported Docker references and rejec
     "",
     "a".repeat(129),
   ]) {
-    assert(!dockerContainerIdSchema.safeParse(reference).success);
+    expect(!dockerContainerIdSchema.safeParse(reference).success).toBeTruthy();
   }
 });
 
 test("shared account requests normalize input, validate password changes, and strip unknown fields", () => {
   const password = "long-enough-password";
   const bootstrapCode = "fixture-setup-code-0123456789abcdef";
-  assert.deepEqual(
-    credentialsRequestSchema.parse({
+  expect(credentialsRequestSchema.parse({
       username: "  admin  ",
       password,
       ignored: true,
-    }),
-    { username: "admin", password },
-  );
-  assert.deepEqual(
-    setupRequestSchema.parse({
+    })).toStrictEqual({ username: "admin", password });
+  expect(setupRequestSchema.parse({
       username: "  admin  ",
       password,
       bootstrapCode,
-    }),
-    { username: "admin", password, bootstrapCode },
-  );
-  assert(!setupRequestSchema.safeParse({ username: "admin", password }).success);
-  assert(!setupRequestSchema.safeParse({
+    })).toStrictEqual({ username: "admin", password, bootstrapCode });
+  expect(!setupRequestSchema.safeParse({ username: "admin", password }).success).toBeTruthy();
+  expect(!setupRequestSchema.safeParse({
     username: "admin",
     password,
     bootstrapCode: "x".repeat(31),
-  }).success);
-  assert(!setupRequestSchema.safeParse({
+  }).success).toBeTruthy();
+  expect(!setupRequestSchema.safeParse({
     username: "admin",
     password,
     bootstrapCode: "x".repeat(129),
-  }).success);
-  assert(!setupRequestSchema.safeParse({
+  }).success).toBeTruthy();
+  expect(!setupRequestSchema.safeParse({
     username: "admin",
     password,
     bootstrapCode,
     ignored: true,
-  }).success);
-  assert.deepEqual(
-    createUserRequestSchema.parse({
+  }).success).toBeTruthy();
+  expect(createUserRequestSchema.parse({
       username: "friend",
       password,
       role: "operator",
       ignored: true,
-    }),
-    { username: "friend", password, role: "operator" },
-  );
-  assert.deepEqual(
-    userAccessRequestSchema.parse({
+    })).toStrictEqual({ username: "friend", password, role: "operator" });
+  expect(userAccessRequestSchema.parse({
       role: "viewer",
       disabled: false,
       ignored: true,
-    }),
-    { role: "viewer", disabled: false },
-  );
-  assert(
-    changePasswordRequestSchema.safeParse({
+    })).toStrictEqual({ role: "viewer", disabled: false });
+  expect(changePasswordRequestSchema.safeParse({
       currentPassword: "a",
       newPassword: password,
-    }).success,
-  );
-  assert(
-    !resetPasswordRequestSchema.safeParse({ password: "too-short" }).success,
-  );
-  assert(
-    !resetPasswordRequestSchema.safeParse({ password: "a".repeat(129) })
-      .success,
-  );
+    }).success).toBeTruthy();
+  expect(!resetPasswordRequestSchema.safeParse({ password: "too-short" }).success).toBeTruthy();
+  expect(!resetPasswordRequestSchema.safeParse({ password: "a".repeat(129) })
+      .success).toBeTruthy();
 });
 
 test("shared file requests retain root-relative defaults and reject oversized names before storage access", () => {
-  assert.deepEqual(fileLocationSchema.parse({ root: "data", ignored: true }), {
+  expect(fileLocationSchema.parse({ root: "data", ignored: true })).toStrictEqual({
     root: "data",
     path: "",
   });
-  assert.deepEqual(
-    createDirectoryRequestSchema.parse({
+  expect(createDirectoryRequestSchema.parse({
       root: "data",
       name: "worlds",
       ignored: true,
-    }),
-    { root: "data", path: "", name: "worlds" },
-  );
-  assert.deepEqual(
-    renameFileRequestSchema.parse({
+    })).toStrictEqual({ root: "data", path: "", name: "worlds" });
+  expect(renameFileRequestSchema.parse({
       root: "data",
       path: "worlds/old",
       newName: "new",
-    }),
-    { root: "data", path: "worlds/old", newName: "new" },
-  );
-  assert.deepEqual(
-    uploadFileQuerySchema.parse({ root: "data", name: "world.zip" }),
-    { root: "data", path: "", name: "world.zip" },
-  );
-  assert(
-    !createDirectoryRequestSchema.safeParse({
+    })).toStrictEqual({ root: "data", path: "worlds/old", newName: "new" });
+  expect(uploadFileQuerySchema.parse({ root: "data", name: "world.zip" })).toStrictEqual({ root: "data", path: "", name: "world.zip" });
+  expect(!createDirectoryRequestSchema.safeParse({
       root: "data",
       name: "a".repeat(256),
-    }).success,
-  );
-  assert(
-    !fileLocationSchema.safeParse({ root: "data", path: "a".repeat(2049) })
-      .success,
-  );
+    }).success).toBeTruthy();
+  expect(!fileLocationSchema.safeParse({ root: "data", path: "a".repeat(2049) })
+      .success).toBeTruthy();
 });

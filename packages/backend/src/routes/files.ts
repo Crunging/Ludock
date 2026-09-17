@@ -1,5 +1,4 @@
 import { createDirectoryRequestSchema, fileListingSchema, fileLocationSchema, formatByteSize, okResponseSchema, renameFileRequestSchema, uploadFileQuerySchema, } from "@ludock/shared";
-import { Readable } from "node:stream";
 import { writeAuditLog } from "../database.js";
 import { AppError, errorResponse } from "../errors.js";
 import { createDirectory, deleteFileEntry, listFiles, openDownload, renameFileEntry, uploadFile, } from "../file-storage.js";
@@ -104,7 +103,7 @@ export const filesRoutes: ApiRoutes = {
           : "application/octet-stream");
         fileAudit(ctx, "downloaded", id, parsed.data);
         context.waitForCleanup(download.completed);
-        return new Response(Readable.toWeb(download.stream) as ReadableStream<Uint8Array>);
+        return new Response(download.stream);
       }
       catch (error) {
         return sendFileError(error);
@@ -133,13 +132,11 @@ export const filesRoutes: ApiRoutes = {
       try {
         const id = context.logical.id;
         const server = context.container;
-        const source = ctx.request.body
-          ? Readable.fromWeb(ctx.request.body, { signal: context.signal })
-          : Readable.from([]);
+        const source = ctx.request.body ?? new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
         try {
-          await uploadFile(server, parsed.data.root, parsed.data.path, parsed.data.name, size, source, context.assertAccess);
+          await uploadFile(server, parsed.data.root, parsed.data.path, parsed.data.name, size, source, context.assertAccess, context.signal);
         } finally {
-          source.destroy();
+          await source.cancel().catch(() => {});
         }
         fileAudit(ctx, "uploaded", id, {
           root: parsed.data.root,

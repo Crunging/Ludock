@@ -1,10 +1,9 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { DEFAULT_HELPER_IMAGE, getHelperImage } from "../src/runtime-images.js";
 
 describe("trusted helper image references", () => {
   it("uses an immutable default and permits digest-pinned private mirrors", () => {
-    assert.equal(getHelperImage(DEFAULT_HELPER_IMAGE), DEFAULT_HELPER_IMAGE);
+    expect(getHelperImage(DEFAULT_HELPER_IMAGE)).toBe(DEFAULT_HELPER_IMAGE);
     for (const name of [
       "bun", "oven/bun", "oven/bun:1-alpine", "oven/bun:_RC.1-ALPINE",
       "registry.example:5000/ludock/bun:1-alpine", "REGISTRY.example/ludock/bun",
@@ -15,7 +14,7 @@ describe("trusted helper image references", () => {
       `oven/bun:${"a".repeat(128)}`,
     ]) {
       const image = `${name}@sha256:${"a".repeat(64)}`;
-      assert.equal(getHelperImage(image), image, name);
+      expect(getHelperImage(image), name).toBe(image);
     }
   });
 
@@ -33,11 +32,7 @@ describe("trusted helper image references", () => {
       "a".repeat(248), `docker.io/${"a".repeat(248)}`,
       `index.docker.io/${"a".repeat(248)}`,
     ]) {
-      assert.throws(
-        () => getHelperImage(`${name}@sha256:${"a".repeat(64)}`),
-        /immutable sha256 digest/,
-        name,
-      );
+      expect(() => getHelperImage(`${name}@sha256:${"a".repeat(64)}`), name).toThrow(/immutable sha256 digest/);
     }
   });
 
@@ -56,7 +51,7 @@ describe("trusted helper image references", () => {
       `registry.example\n/bun@sha256:${"a".repeat(64)}`,
       `oven/bun@sha256:${"a".repeat(64)}\n`,
     ]) {
-      assert.throws(() => getHelperImage(image), /immutable sha256 digest/);
+      expect(() => getHelperImage(image)).toThrow(/immutable sha256 digest/);
     }
   });
 });

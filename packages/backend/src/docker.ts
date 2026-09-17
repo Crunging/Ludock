@@ -1,4 +1,4 @@
-import Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import { composeSourceLabels } from "./compose-source.js";
 import { docker } from "./docker-client.js";
 import {
@@ -29,7 +29,7 @@ import {
 
 export { LABEL_ENABLE, LABEL_NAME, LABEL_GAME } from "./discovery.js";
 
-// Keep untrusted identifiers from altering dockerode's Docker API request path.
+// Keep untrusted identifiers from altering the Docker API request path.
 function assertValidContainerId(id: unknown): DockerContainerId {
   const parsed = dockerContainerIdSchema.safeParse(id);
   if (!parsed.success) {
@@ -299,7 +299,7 @@ export async function restartContainer(
   await container.restart();
 }
 
-export function getDockerInstance(): Docker {
+export function getDockerInstance(): Docker.DockerClient {
   return docker;
 }
 

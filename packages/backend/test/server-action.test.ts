@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import type { Server } from "bun";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { createApp } from "../src/app.js";
 import { createSession } from "../src/auth.js";
 import {
@@ -192,10 +191,10 @@ describe("explicit server action policies", () => {
     await bindingStarted;
     containerName = "/different-server";
     releases.splice(0).forEach((release) => release());
-    assert.equal((await result).status, 409);
-    assert.deepEqual(calls, []);
+    expect((await result).status).toBe(409);
+    expect(calls).toStrictEqual([]);
     await waitForLocksReleased();
-    assert.equal(isServerBusy(serverId), false);
+    expect(isServerBusy(serverId)).toBe(false);
   });
   for (const pauseAt of [2, 3]) {
     for (const revoke of ["grant", "session"] as const) {
@@ -209,10 +208,10 @@ describe("explicit server action policies", () => {
         else deleteUserSessions(friend.id);
         releases.splice(0).forEach((release) => release());
         const response = await result;
-        assert.equal(response.status, revoke === "grant" ? 403 : 401);
-        assert.deepEqual(calls, []);
+        expect(response.status).toBe(revoke === "grant" ? 403 : 401);
+        expect(calls).toStrictEqual([]);
         await waitForLocksReleased();
-        assert.equal(isServerBusy(serverId), false);
+        expect(isServerBusy(serverId)).toBe(false);
       });
     }
   }
@@ -223,44 +222,38 @@ describe("explicit server action policies", () => {
       ["server.view", "server.start", "server.stop"],
       admin,
     );
-    assert.equal(
-      (await friendFetch("/new-console-action", { method: "POST" })).status,
-      403,
-    );
-    assert.deepEqual(calls, []);
+    expect((await friendFetch("/new-console-action", { method: "POST" })).status).toBe(403);
+    expect(calls).toStrictEqual([]);
     setServerGrant(
       friend.id,
       serverId,
       ["server.view", "console.execute"],
       admin,
     );
-    assert.equal(
-      (await friendFetch("/NEW-CONSOLE-ACTION/", { method: "POST" })).status,
-      200,
-    );
-    assert.deepEqual(calls, ["physical-fixture"]);
+    expect((await friendFetch("/NEW-CONSOLE-ACTION/", { method: "POST" })).status).toBe(200);
+    expect(calls).toStrictEqual(["physical-fixture"]);
   });
   it("uses the same capability for GET, HEAD, case and trailing-slash variants", async () => {
     setServerGrant(friend.id, serverId, ["server.view"], admin);
     for (const method of ["GET", "HEAD"])
-      assert.equal((await friendFetch("/StReAm/", { method })).status, 403);
-    assert.deepEqual(calls, []);
+      expect((await friendFetch("/StReAm/", { method })).status).toBe(403);
+    expect(calls).toStrictEqual([]);
     setServerGrant(friend.id, serverId, ["server.view", "logs.read"], admin);
     const head = await friendFetch("/StReAm/", { method: "HEAD" });
-    assert.equal(head.status, 200);
-    assert.equal(await head.text(), "");
-    assert.deepEqual(calls, ["physical-fixture"]);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(calls).toStrictEqual(["physical-fixture"]);
   });
   it("retains locks after the response finishes until handler cleanup finishes", async () => {
     setServerGrant(friend.id, serverId, ["server.view", "logs.read"], admin);
     afterResponse = gate();
     const response = await friendFetch("/stream");
-    assert.equal(await response.text(), "first chunk\nlast chunk\n");
-    assert.equal(isServerBusy(serverId), true);
-    assert.throws(() => acquireLocks([`server:${serverId}`]), /conflicting/);
+    expect(await response.text()).toBe("first chunk\nlast chunk\n");
+    expect(isServerBusy(serverId)).toBe(true);
+    expect(() => acquireLocks([`server:${serverId}`])).toThrow(/conflicting/);
     releases.splice(0).forEach((release) => release());
     await waitForLocksReleased();
-    assert.equal(isServerBusy(serverId), false);
+    expect(isServerBusy(serverId)).toBe(false);
   });
   for (const revoke of ["grant", "session"] as const) {
     it(`closes a stream after ${revoke} revocation and retains its lock through cleanup`, async () => {
@@ -268,36 +261,36 @@ describe("explicit server action policies", () => {
       beforeResponse = gate();
       const response = await friendFetch("/stream");
       const reader = response.body!.getReader();
-      assert.equal((await reader.read()).done, false);
+      expect((await reader.read()).done).toBe(false);
       if (revoke === "grant")
         setServerGrant(friend.id, serverId, ["server.view"], admin);
       else deleteUserSessions(friend.id);
-      await assert.rejects(reader.read(), /terminated|aborted|socket|closed|connection/i);
-      assert.equal(isServerBusy(serverId), true);
+      await expect(reader.read()).rejects.toThrow(/terminated|aborted|socket|closed|connection/i);
+      expect(isServerBusy(serverId)).toBe(true);
       releases.splice(0).forEach((release) => release());
       await waitForLocksReleased();
-      assert.equal(isServerBusy(serverId), false);
+      expect(isServerBusy(serverId)).toBe(false);
     });
   }
   it("releases locks when an action fails before writing a response", async () => {
     setServerGrant(friend.id, serverId, ["server.view", "server.stop"], admin);
     const response = await friendFetch("/failure", { method: "POST" });
-    assert.equal(response.status, 409);
+    expect(response.status).toBe(409);
     await response.text();
     await waitForLocksReleased();
-    assert.equal(isServerBusy(serverId), false);
+    expect(isServerBusy(serverId)).toBe(false);
   });
   it("validates response contracts without leaking producer data or reporting a client error", async () => {
     output = { ok: true, privateToken: "fixture-private-value" };
     const valid = await friendFetch("/response");
-    assert.equal(valid.status, 200);
-    assert.deepEqual(await valid.json(), { ok: true });
+    expect(valid.status).toBe(200);
+    expect(await valid.json()).toStrictEqual({ ok: true });
     output = { ok: "true", privateToken: "fixture-private-value" };
     const invalid = await friendFetch("/response");
-    assert.equal(invalid.status, 500);
+    expect(invalid.status).toBe(500);
     const body = await invalid.text();
-    assert.match(body, /could not produce a valid response/);
-    assert.doesNotMatch(body, /fixture-private-value|ZodError|invalid_type/);
+    expect(body).toMatch(/could not produce a valid response/);
+    expect(body).not.toMatch(/fixture-private-value|ZodError|invalid_type/);
   });
   it("does not run an action after its client disconnects during authorization", async () => {
     setServerGrant(
@@ -320,7 +313,7 @@ describe("explicit server action policies", () => {
     releases.splice(0).forEach((release) => release());
     await refreshServers();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(calls, []);
-    assert.equal(isServerBusy(serverId), false);
+    expect(calls).toStrictEqual([]);
+    expect(isServerBusy(serverId)).toBe(false);
   });
 });

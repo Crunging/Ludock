@@ -1,4 +1,4 @@
-import type Docker from "dockerode";
+import type * as Docker from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 import { getGameIntegration } from "./server-presets.js";
 

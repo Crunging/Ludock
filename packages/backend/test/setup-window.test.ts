@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { serve } from "bun";
-import { afterAll as after, describe, it } from "bun:test";
+import { expect, afterAll as after, describe, it } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -23,8 +22,8 @@ after(async () => {
 describe("initial setup window", () => {
   it("reports a locked setup after the startup deadline", async () => {
     const response = await fetch(`${baseUrl}/api/v1/auth/status`);
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
+    expect(response.status).toBe(200);
+    expect(await response.json()).toStrictEqual({
       setupRequired: true,
       setupLocked: true,
       setupExpiresAt: 1_100,
@@ -44,8 +43,8 @@ describe("initial setup window", () => {
         bootstrapCode: setupCode,
       }),
     });
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), {
+    expect(response.status).toBe(403);
+    expect(await response.json()).toStrictEqual({
       error: "Initial setup has expired. Restart the panel to reopen setup.",
     });
   });

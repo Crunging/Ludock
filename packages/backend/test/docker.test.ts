@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
-import { afterEach, describe, it } from "bun:test";
+import { rejectedBy } from "./fixtures/errors.js";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   getContainer,
   getDockerInstance,
@@ -121,7 +121,7 @@ describe("automatic discovery boundary", () => {
     it(`applies the same list, detail and mutation policy to ${entry.name}`, async () => {
       const invoked: string[] = [];
       docker.listContainers = (async (options: unknown) => {
-        assert.deepEqual(options, { all: true });
+        expect(options).toStrictEqual({ all: true });
         return [listFixture(entry.image, entry.labels)];
       }) as unknown as typeof docker.listContainers;
       docker.getContainer = (() => ({
@@ -131,10 +131,7 @@ describe("automatic discovery boundary", () => {
         restart: async () => invoked.push("restart"),
       })) as unknown as typeof docker.getContainer;
 
-      assert.equal(
-        (await listManagedContainerObservations()).length,
-        entry.included ? 1 : 0,
-      );
+      expect((await listManagedContainerObservations()).length).toBe(entry.included ? 1 : 0);
       for (const action of [
         getManagedContainerObservation,
         startContainer,
@@ -142,12 +139,9 @@ describe("automatic discovery boundary", () => {
         restartContainer,
       ]) {
         if (entry.included) await action("minecraft");
-        else await assert.rejects(action("minecraft"), { code: "FORBIDDEN" });
+        else await expect(action("minecraft")).rejects.toMatchObject({ code: "FORBIDDEN" });
       }
-      assert.deepEqual(
-        invoked,
-        entry.included ? ["start", "stop", "restart"] : [],
-      );
+      expect(invoked).toStrictEqual(entry.included ? ["start", "stop", "restart"] : []);
     });
   }
 
@@ -159,9 +153,9 @@ describe("automatic discovery boundary", () => {
       listFixture("custom/server"),
     ]) as unknown as typeof docker.listContainers;
     const diagnostics = await getDiscoveryDiagnostics();
-    assert.equal(diagnostics.length, 1);
-    assert.equal(diagnostics[0].code, "INVALID_ENABLE_LABEL");
-    assert.equal(JSON.stringify(diagnostics).includes("private-token"), false);
+    expect(diagnostics.length).toBe(1);
+    expect(diagnostics[0].code).toBe("INVALID_ENABLE_LABEL");
+    expect(JSON.stringify(diagnostics).includes("private-token")).toBe(false);
   });
 
   it("keeps host mounts, Compose identity and environment out of public metadata", async () => {
@@ -177,27 +171,21 @@ describe("automatic discovery boundary", () => {
     })) as unknown as typeof docker.getContainer;
     const { container, observation } =
       await getManagedContainerObservation("minecraft");
-    assert.deepEqual(observation.compose, {
+    expect(observation.compose).toStrictEqual({
       project: "games",
       service: "rust",
       containerNumber: "1",
     });
-    assert.equal(observation.mounts[0].name, "game-data");
-    assert.equal(
-      observation.mounts[0].source,
-      "/var/lib/docker/volumes/game-data/_data",
-    );
-    assert.equal(
-      observation.gameConfiguration?.["env:RCON_PASSWORD"],
-      "private-password",
-    );
+    expect(observation.mounts[0].name).toBe("game-data");
+    expect(observation.mounts[0].source).toBe("/var/lib/docker/volumes/game-data/_data");
+    expect(observation.gameConfiguration?.["env:RCON_PASSWORD"]).toBe("private-password");
     for (const secret of [
       "private-password",
       "hidden-token",
       "/var/lib/docker",
       "com.docker.compose",
     ]) {
-      assert.equal(JSON.stringify(container).includes(secret), false, secret);
+      expect(JSON.stringify(container).includes(secret), secret).toBe(false);
     }
   });
 
@@ -209,7 +197,7 @@ describe("automatic discovery boundary", () => {
       inspect: async () =>
         inspectFixture("itzg/minecraft-server", { "ludock.enable": "false" }),
     })) as unknown as typeof docker.getContainer;
-    assert.deepEqual(await listManagedContainerObservations(), []);
+    expect(await listManagedContainerObservations()).toStrictEqual([]);
   });
 
   it("isolates incomplete Compose identities without breaking discovery", async () => {
@@ -220,12 +208,9 @@ describe("automatic discovery boundary", () => {
     docker.getContainer = (() => ({
       inspect: async () => inspectFixture("itzg/minecraft-server", labels),
     })) as unknown as typeof docker.getContainer;
-    assert.deepEqual(await listManagedContainerObservations(), []);
-    assert.equal(
-      (await getDiscoveryDiagnostics())[0]?.code,
-      "INVALID_COMPOSE_IDENTITY",
-    );
-    await assert.rejects(startContainer("minecraft"), {
+    expect(await listManagedContainerObservations()).toStrictEqual([]);
+    expect((await getDiscoveryDiagnostics())[0]?.code).toBe("INVALID_COMPOSE_IDENTITY");
+    await expect(startContainer("minecraft")).rejects.toMatchObject({
       code: "INVALID_COMPOSE_IDENTITY",
     });
   });
@@ -242,8 +227,8 @@ describe("automatic discovery boundary", () => {
       inspect: async () => inspectFixture("itzg/minecraft-server", labels),
     })) as unknown as typeof docker.getContainer;
     const { observation } = await getManagedContainerObservation("minecraft");
-    assert.equal(observation.compose, undefined);
-    assert.equal(observation.name, "minecraft");
+    expect(observation.compose).toBe(undefined);
+    expect(observation.name).toBe("minecraft");
   });
 
   it("tolerates external removal during observation but propagates daemon failures", async () => {
@@ -256,9 +241,9 @@ describe("automatic discovery boundary", () => {
         throw Object.assign(new Error("Docker failed"), { statusCode });
       },
     })) as unknown as typeof docker.getContainer;
-    assert.deepEqual(await listManagedContainerObservations(), []);
+    expect(await listManagedContainerObservations()).toStrictEqual([]);
     statusCode = 500;
-    await assert.rejects(listManagedContainerObservations(), /Docker failed/);
+    await expect(listManagedContainerObservations()).rejects.toThrow(/Docker failed/);
   });
 
   it("bounds concurrent inspections and preserves list order with fresh observations", async () => {
@@ -288,30 +273,27 @@ describe("automatic discovery boundary", () => {
 
     const pending = listManagedContainerObservations();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(started, ids.slice(0, 4));
+    expect(started).toStrictEqual(ids.slice(0, 4));
 
     // A removed container releases capacity; later completions keep list order.
     releases.get(ids[2])!();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(started, ids.slice(0, 5));
-    assert.equal(active, 4);
+    expect(started).toStrictEqual(ids.slice(0, 5));
+    expect(active).toBe(4);
     releases.get(ids[0])!();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(started, ids.slice(0, 6));
+    expect(started).toStrictEqual(ids.slice(0, 6));
     releases.get(ids[4])!();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(started, ids);
+    expect(started).toStrictEqual(ids);
 
     for (const release of releases.values()) release();
     const observations = await pending;
     const remaining = ids.filter((id) => id !== ids[2]);
-    assert.equal(peak, 4);
-    assert.equal(active, 0);
-    assert.deepEqual(observations.map(({ container }) => container.id), remaining);
-    assert.deepEqual(
-      observations.map(({ observation }) => observation.name),
-      remaining.map((id) => `current-${id}`),
-    );
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(observations.map(({ container }) => container.id)).toStrictEqual(remaining);
+    expect(observations.map(({ observation }) => observation.name)).toStrictEqual(remaining.map((id) => `current-${id}`));
   });
 
   it("stops dispatching after failure and drains active reads before rejecting", async () => {
@@ -343,23 +325,23 @@ describe("automatic discovery boundary", () => {
       () => { settled = true; },
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(started, ids.slice(0, 4));
+    expect(started).toStrictEqual(ids.slice(0, 4));
     const failure = Object.assign(new Error("Docker failed"), { statusCode: 500 });
     inspections.get(ids[1])!.reject(failure);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(settled, false);
-    assert.deepEqual(started, ids.slice(0, 4));
+    expect(settled).toBe(false);
+    expect(started).toStrictEqual(ids.slice(0, 4));
 
     inspections.get(ids[2])!.resolve();
     inspections.get(ids[0])!.reject(new Error("Another inspection failed"));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(settled, false);
-    assert.deepEqual(started, ids.slice(0, 4));
+    expect(settled).toBe(false);
+    expect(started).toStrictEqual(ids.slice(0, 4));
 
     inspections.get(ids[3])!.resolve();
-    await assert.rejects(pending, (error) => error === failure);
-    assert.equal(settled, true);
-    assert.deepEqual(started, ids.slice(0, 4));
+    await expect(await rejectedBy(pending)).toSatisfy((error) => error === failure);
+    expect(settled).toBe(true);
+    expect(started).toStrictEqual(ids.slice(0, 4));
   });
 });
 
@@ -384,7 +366,7 @@ describe("managed container lifecycle boundary", () => {
         container) as unknown as typeof docker.getContainer;
 
       await run("managed-id");
-      assert.equal(actionCalled, true);
+      expect(actionCalled).toBe(true);
     });
 
     it(`rejects ${action} for an unmanaged container`, async () => {
@@ -399,15 +381,12 @@ describe("managed container lifecycle boundary", () => {
       docker.getContainer = (() =>
         container) as unknown as typeof docker.getContainer;
 
-      await assert.rejects(
-        run("unmanaged-id"),
-        (error: Error & { statusCode?: number; code?: string }) => {
-          assert.equal(error.statusCode, 403);
-          assert.equal(error.code, "FORBIDDEN");
+      await expect(await rejectedBy(run("unmanaged-id"))).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {
+          expect(error.statusCode).toBe(403);
+          expect(error.code).toBe("FORBIDDEN");
           return true;
-        },
-      );
-      assert.equal(actionCalled, false);
+        });
+      expect(actionCalled).toBe(false);
     });
   }
 });
@@ -440,9 +419,9 @@ describe("managed container image inference", () => {
 
     const { container: managed } = await getManagedContainerObservation("terraria");
 
-    assert.equal(managed.gameType, "terraria");
-    assert.equal(managed.gameConsole?.id, "stdin-console");
-    assert.deepEqual(managed.fileRoots, [
+    expect(managed.gameType).toBe("terraria");
+    expect(managed.gameConsole?.id).toBe("stdin-console");
+    expect(managed.fileRoots).toStrictEqual([
       {
         id: "root-0",
         name: "Terraria worlds",
@@ -454,8 +433,7 @@ describe("managed container image inference", () => {
 
 describe("container identifier validation", () => {
   // URL decoding can turn %2f into "/", so an identifier can carry "../" and escape
-  // /containers/<id>/json. The daemon 301s to the cleaned path and docker-modem
-  // re-issues it over the network with a hostname taken from the identifier.
+  // /containers/<id>/json. Reject these before constructing any daemon request.
   const hostile = [
     "../../info",
     "..//attacker.example",
@@ -481,22 +459,19 @@ describe("container identifier validation", () => {
         () => startContainer(id),
         async () => getContainer(id),
       ]) {
-        await assert.rejects(
-          run(),
-          (error: Error & { statusCode?: number; code?: string }) => {
-            assert.equal(error.code, "INVALID_CONTAINER_ID");
-            assert.equal(error.statusCode, 400);
+        await expect(await rejectedBy(run())).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {
+            expect(error.code).toBe("INVALID_CONTAINER_ID");
+            expect(error.statusCode).toBe(400);
             return true;
-          },
-        );
+          });
       }
-      assert.equal(reached, false, "Docker must never be called");
+      expect(reached, "Docker must never be called").toBe(false);
     });
   }
 
   it("still accepts real Docker IDs and names", () => {
     for (const id of ["a".repeat(64), "abc123", "my-server_1.0", "3f2b1a"]) {
-      assert.doesNotThrow(() => getContainer(id));
+      expect(() => getContainer(id)).not.toThrow();
     }
   });
 });

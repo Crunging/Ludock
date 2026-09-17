@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { readFile, writeFile } from "node:fs/promises";
 
 /** Publish the release-please entry without inventing a second changelog policy. */
 export function releaseNotes(changelog, tag) {
@@ -20,5 +19,5 @@ export function releaseNotes(changelog, tag) {
 if (import.meta.main) {
   const [tag, output] = process.argv.slice(2);
   if (!output) throw new Error("Usage: bun scripts/release-notes.mjs <tag> <output>");
-  await writeFile(output, releaseNotes(await readFile("CHANGELOG.md", "utf8"), tag));
+  await Bun.write(output, releaseNotes(await Bun.file("CHANGELOG.md").text(), tag));
 }

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import {
   listApplicationLogs,
   recordApplicationLog,
@@ -22,9 +21,9 @@ describe("application log buffer", () => {
       "json-secret",
       "query-secret",
     ]) {
-      assert.doesNotMatch(redacted, new RegExp(secret));
+      expect(redacted).not.toMatch(new RegExp(secret));
     }
-    assert.match(redacted, /safe=value/);
+    expect(redacted).toMatch(/safe=value/);
   });
 
   it("redacts development session cookies before buffering logs", () => {
@@ -40,20 +39,11 @@ describe("application log buffer", () => {
       },
     });
     const entry = listApplicationLogs({ limit: 1 }).entries[0];
-    assert.ok(entry);
-    assert.doesNotMatch(
-      JSON.stringify(entry),
-      /development-secret|context-secret|unlabelled-key-secret/,
-    );
-    assert.equal(
-      entry.message,
-      "ludock_session_012345abcdef=[REDACTED]; Path=/; HttpOnly",
-    );
-    assert.equal(
-      entry.context?.detail,
-      "theme=dark; ludock_session_fedcba543210=[REDACTED]",
-    );
-    assert.equal(entry.context?.apiKey, "[REDACTED]");
+    expect(entry).toBeTruthy();
+    expect(JSON.stringify(entry)).not.toMatch(/development-secret|context-secret|unlabelled-key-secret/);
+    expect(entry.message).toBe("ludock_session_012345abcdef=[REDACTED]; Path=/; HttpOnly");
+    expect(entry.context?.detail).toBe("theme=dark; ludock_session_fedcba543210=[REDACTED]");
+    expect(entry.context?.apiKey).toBe("[REDACTED]");
   });
 
   it("returns structured entries and resets stale process cursors", () => {
@@ -66,17 +56,17 @@ describe("application log buffer", () => {
     });
     const first = listApplicationLogs({ limit: 10 });
     const entry = first.entries.at(-1);
-    assert.ok(entry);
-    assert.equal(entry.component, "test");
-    assert.equal(entry.timestamp, 123);
-    assert.doesNotMatch(JSON.stringify(entry), /message-secret|context-secret/);
+    expect(entry).toBeTruthy();
+    expect(entry.component).toBe("test");
+    expect(entry.timestamp).toBe(123);
+    expect(JSON.stringify(entry)).not.toMatch(/message-secret|context-secret/);
 
     const fromStaleGeneration = listApplicationLogs({
       after: Number.MAX_SAFE_INTEGER,
       limit: 10,
       generation: "previous-process",
     });
-    assert.equal(fromStaleGeneration.generation, first.generation);
-    assert.ok(fromStaleGeneration.entries.length > 0);
+    expect(fromStaleGeneration.generation).toBe(first.generation);
+    expect(fromStaleGeneration.entries.length > 0).toBeTruthy();
   });
 });

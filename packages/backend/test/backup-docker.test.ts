@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { fixtureBytes } from "./fixtures/bytes.js";
 import {
   mkdtemp,
   realpath,
@@ -10,8 +9,8 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { describe, it } from "bun:test";
-import type Docker from "dockerode";
+import { expect, describe, it } from "bun:test";
+import type * as Docker from "../src/docker-client.js";
 import { getDockerInstance } from "../src/docker.js";
 import { closeDatabase, createUser } from "../src/database.js";
 import { setSetting } from "../src/settings.js";
@@ -40,7 +39,7 @@ function context(
   input: Record<string, unknown> = {},
 ): JobContext {
   const job: JobContext["job"] = {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     serverId,
     actorId: "backup-test-admin",
     kind,
@@ -83,13 +82,13 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         oldSelf = process.env.LUDOCK_SELF_CONTAINER;
       try {
         const volume = await docker.createVolume({
-          Name: `ludock-test-${randomUUID()}`,
+          Name: `ludock-test-${crypto.randomUUID()}`,
         });
         volumes.push(volume);
         const source = await docker.createContainer({
           Image: DEFAULT_HELPER_IMAGE,
           Entrypoint: [],
-          name: `ludock-backup-test-${randomUUID()}`,
+          name: `ludock-backup-test-${crypto.randomUUID()}`,
           Labels: { "ludock.enable": "true", "ludock.name": "Backup fixture" },
           Cmd: ["bun", "-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 3600000)"],
           HostConfig: {
@@ -143,7 +142,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         const server = (await listServers(admin)).find(
           (entry) => entry.displayName === "Backup fixture",
         )!;
-        assert.ok(server);
+        expect(server).toBeTruthy();
         let state = await resolveAuthorizedServer(
           admin,
           server.id,
@@ -174,10 +173,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           aliasServer.id,
           "backups.create",
         );
-        await assert.rejects(
-          createDataHelper(aliasState, true, randomUUID()),
-          /overlap on the Docker host/,
-        );
+        await expect(createDataHelper(aliasState, true, crypto.randomUUID())).rejects.toThrow(/overlap on the Docker host/);
         await aliased.remove();
         containers.splice(containers.indexOf(aliased), 1);
         await helperExec(source, [
@@ -192,11 +188,11 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
         const result = await runBackup(backupJob);
         const backup = getBackup(server.id, String(result.backupId));
-        assert.equal("roots" in result, false);
-        assert.equal("backup" in result, false);
-        assert.equal(backup.state, "complete");
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(backupJob.job.recovery.stateRestored, true);
+        expect("roots" in result).toBe(false);
+        expect("backup" in result).toBe(false);
+        expect(backup.state).toBe("complete");
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect(backupJob.job.recovery.stateRestored).toBe(true);
         // Capacity failure while streaming cannot publish an incomplete archive
         // or leave a previously running server stopped.
         setSetting("backups", {
@@ -205,31 +201,22 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           maxBytes: backup.size + 1024,
           reserveBytes: 1_000_000,
         });
-        await assert.rejects(
-          runBackup(
+        await expect(runBackup(
             context(server.id, state.logical.bindingRevision, "backup"),
-          ),
-          /byte limit/,
-        );
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(listBackups(server.id).length, 1);
-        assert.equal(
-          (await readdir(directory)).some((name) => name.endsWith(".partial")),
-          false,
-        );
+          )).rejects.toThrow(/byte limit/);
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect(listBackups(server.id).length).toBe(1);
+        expect((await readdir(directory)).some((name) => name.endsWith(".partial"))).toBe(false);
         setSetting("backups", {
           destination: directory,
           retentionCount: 1,
           maxBytes: 20_000_000,
           reserveBytes: Number.MAX_SAFE_INTEGER,
         });
-        await assert.rejects(
-          runBackup(
+        await expect(runBackup(
             context(server.id, state.logical.bindingRevision, "backup"),
-          ),
-          /free space/,
-        );
-        assert.equal((await source.inspect()).State.Running, true);
+          )).rejects.toThrow(/free space/);
+        expect((await source.inspect()).State.Running).toBe(true);
         setSetting("backups", {
           destination: directory,
           retentionCount: 1,
@@ -238,22 +225,16 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         });
         const archivePath = path.join(directory, `${backup.id}.tar`),
           originalArchive = await readFile(archivePath);
-        const changedArchive = Buffer.from(originalArchive);
+        const changedArchive = fixtureBytes(originalArchive);
         changedArchive[changedArchive.length - 1] = 1;
         await writeFile(archivePath, changedArchive);
-        await assert.rejects(
-          runRestore(
+        await expect(runRestore(
             context(server.id, state.logical.bindingRevision, "restore", {
               backupId: backup.id,
               confirmation: "Backup fixture",
             }),
-          ),
-        );
-        assert.equal(
-          (await source.inspect()).State.Running,
-          true,
-          "invalid restore is rejected before stopping",
-        );
+          )).rejects.toThrow();
+        expect((await source.inspect()).State.Running, "invalid restore is rejected before stopping").toBe(true);
         await writeFile(archivePath, originalArchive);
         await helperExec(source, [
           "bun",
@@ -271,37 +252,23 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
             confirmation: "Backup fixture",
           }),
         );
-        assert.equal(restored.restoredBackupId, backup.id);
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(
-          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
-          "original-world",
-        );
-        assert.equal(
-          await helperExec(source, [
+        expect(restored.restoredBackupId).toBe(backup.id);
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"])).toBe("original-world");
+        expect(await helperExec(source, [
             "bun",
             "-e",
             'const s=require("node:fs").statSync("/data/high-owner");process.stdout.write(JSON.stringify([s.uid,s.gid,s.mtimeMs/1000]));',
-          ]),
-          "[1000000,2000000,2208988800]",
-        );
-        assert.equal(
-          await helperExec(source, [
+          ])).toBe("[1000000,2000000,2208988800]");
+        expect(await helperExec(source, [
             "bun",
             "-e",
             "if (require('node:fs').existsSync('/data/new.txt')) process.exit(1); process.stdout.write('ok');",
-          ]),
-          "ok",
-        );
-        assert.ok(
-          listBackups(server.id).some(
+          ])).toBe("ok");
+        expect(listBackups(server.id).some(
             (entry) => entry.id === restored.safetyBackupId,
-          ),
-        );
-        assert.ok(
-          listBackups(server.id).some((entry) => entry.id === backup.id),
-          "retention must not delete the restore target during its safety backup",
-        );
+          )).toBeTruthy();
+        expect(listBackups(server.id).some((entry) => entry.id === backup.id), "retention must not delete the restore target during its safety backup").toBeTruthy();
 
         await helperExec(source, [
           "bun",
@@ -314,18 +281,11 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           "backups.create",
         );
         const beforeFailure = listBackups(server.id).length;
-        await assert.rejects(
-          runBackup(
+        await expect(runBackup(
             context(server.id, state.logical.bindingRevision, "backup"),
-          ),
-          /symbolic links/,
-        );
-        assert.equal(
-          (await source.inspect()).State.Running,
-          true,
-          "copy failure restores initial running state",
-        );
-        assert.equal(listBackups(server.id).length, beforeFailure);
+          )).rejects.toThrow(/symbolic links/);
+        expect((await source.inspect()).State.Running, "copy failure restores initial running state").toBe(true);
+        expect(listBackups(server.id).length).toBe(beforeFailure);
         await helperExec(source, ["bun", "-e", "require('node:fs').unlinkSync('/data/unsafe-link')"]);
 
         const writer = await docker.createContainer({
@@ -346,17 +306,10 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           server.id,
           "backups.create",
         );
-        await assert.rejects(
-          runBackup(
+        await expect(runBackup(
             context(server.id, state.logical.bindingRevision, "backup"),
-          ),
-          /Another running container/,
-        );
-        assert.equal(
-          (await source.inspect()).State.Running,
-          true,
-          "shared writer check happens before stopping",
-        );
+          )).rejects.toThrow(/Another running container/);
+        expect((await source.inspect()).State.Running, "shared writer check happens before stopping").toBe(true);
         await writer.remove({ force: true });
         containers.splice(containers.indexOf(writer), 1);
         await source.stop({ t: 5 });
@@ -371,16 +324,8 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           "backup",
         );
         await runBackup(stoppedJob);
-        assert.equal(
-          (await source.inspect()).State.Running,
-          false,
-          "initially stopped server stays stopped",
-        );
-        assert.equal(
-          listBackups(server.id).length,
-          1,
-          "ordinary completed backups enforce retention after publishing",
-        );
+        expect((await source.inspect()).State.Running, "initially stopped server stays stopped").toBe(false);
+        expect(listBackups(server.id).length, "ordinary completed backups enforce retention after publishing").toBe(1);
 
         // Model an interrupted rollback: world.txt has already returned from old/
         // while settings/ is still staged. Recovery must not delete world.txt by
@@ -418,24 +363,15 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         // Leave the helper alive as a crashed Ludock process would; recovery must
         // remove this known operation helper before shared-writer validation.
         await recoverRestore(interrupted);
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(
-          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
-          "original-world",
-        );
-        assert.equal(
-          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/settings/server.cfg'))"]),
-          "original-config",
-        );
-        assert.equal(interrupted.job.recovery.dataSafe, true);
-        assert.equal(
-          await helperExec(
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"])).toBe("original-world");
+        expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/settings/server.cfg'))"])).toBe("original-config");
+        expect(interrupted.job.recovery.dataSafe).toBe(true);
+        expect(await helperExec(
             source,
             ["bun", "-e", "if (require('node:fs').existsSync(process.env.STAGE)) process.exit(1); process.stdout.write('clean');"],
             { STAGE: `/data/${stage}` },
-          ),
-          "clean",
-        );
+          )).toBe("clean");
 
         // A crash after the old files have returned and cleanup has removed the
         // stage must safely resume from the durable rolled_back journal phase.
@@ -455,16 +391,13 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           restoreRoots: [{ root, phase: "rolled_back" }],
         });
         await recoverRestore(cleaned);
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(
-          await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"]),
-          "original-world",
-        );
-        assert.deepEqual(cleaned.job.recovery.restoreRoots, []);
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"])).toBe("original-world");
+        expect(cleaned.job.recovery.restoreRoots).toStrictEqual([]);
         // Recovery is also idempotent after the restart was already completed.
         await recoverRestore(cleaned);
-        assert.equal((await source.inspect()).State.Running, true);
-        const unpublishedId = randomUUID();
+        expect((await source.inspect()).State.Running).toBe(true);
+        const unpublishedId = crypto.randomUUID();
         await writeFile(
           path.join(directory, `${unpublishedId}.tar.partial`),
           "interrupted-safety-backup",
@@ -480,13 +413,10 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           backupDestination: directory,
         });
         await recoverRestore(early);
-        assert.equal((await source.inspect()).State.Running, true);
-        assert.equal(
-          (await readdir(directory)).some((name) =>
+        expect((await source.inspect()).State.Running).toBe(true);
+        expect((await readdir(directory)).some((name) =>
             name.includes(unpublishedId),
-          ),
-          false,
-        );
+          )).toBe(false);
       } finally {
         for (const container of containers.reverse())
           await container.remove({ force: true, v: true }).catch(() => {});

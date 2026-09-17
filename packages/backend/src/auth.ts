@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { encodeText } from "./bytes.js";
 import { Cookie } from "bun";
 import { AppError } from "./errors.js";
 import {
@@ -81,7 +81,7 @@ export function ludockApiToken(): string {
 
 export class SetupWindow {
   readonly expiresAt: number;
-  private readonly authorizationHash: Buffer;
+  private readonly authorizationHash: Uint8Array;
   private pendingGeneratedCode: string | null;
 
   constructor(
@@ -92,7 +92,7 @@ export class SetupWindow {
     this.expiresAt = now() + durationMs;
     const configured = bootstrapCode ?? process.env.LUDOCK_SETUP_CODE;
     const generated = !configured;
-    const code = configured || randomBytes(32).toString("base64url");
+    const code = configured || crypto.getRandomValues(new Uint8Array(32)).toBase64({ alphabet: "base64url", omitPadding: true });
     if (
       code.length < SETUP_CODE_MIN_LENGTH ||
       code.length > SETUP_CODE_MAX_LENGTH
@@ -101,7 +101,7 @@ export class SetupWindow {
         `LUDOCK_SETUP_CODE must be between ${SETUP_CODE_MIN_LENGTH} and ${SETUP_CODE_MAX_LENGTH} characters`,
       );
     }
-    this.authorizationHash = createHash("sha256").update(code).digest();
+    this.authorizationHash = new Bun.CryptoHasher("sha256").update(code).digest();
     this.pendingGeneratedCode = generated ? code : null;
   }
 
@@ -125,8 +125,8 @@ export class SetupWindow {
   assertAuthorized(candidate: unknown): void {
     this.assertOpen();
     const value = typeof candidate === "string" ? candidate : "";
-    const candidateHash = createHash("sha256").update(value).digest();
-    const matches = timingSafeEqual(candidateHash, this.authorizationHash);
+    const candidateHash = new Bun.CryptoHasher("sha256").update(value).digest();
+    const matches = crypto.timingSafeEqual(candidateHash, this.authorizationHash);
     if (
       !matches ||
       value.length < SETUP_CODE_MIN_LENGTH ||
@@ -249,7 +249,7 @@ export function createSession(
   request: Request,
   ipAddress?: string,
 ): { token: string; expiresAt: number } {
-  const token = crypto.getRandomValues(Buffer.alloc(32)).toString("base64url");
+  const token = crypto.getRandomValues(new Uint8Array(32)).toBase64({ alphabet: "base64url", omitPadding: true });
   const now = Date.now();
   const expiresAt = now + SESSION_TTL_MS;
   createSessionRecord({
@@ -494,10 +494,10 @@ function cookieValue(header: string, name: string): string {
 }
 
 function tokensMatch(candidate: string, expected: string): boolean {
-  const candidateBuffer = Buffer.from(candidate);
-  const expectedBuffer = Buffer.from(expected);
+  const candidateBuffer = encodeText(candidate);
+  const expectedBuffer = encodeText(expected);
   return (
     candidateBuffer.length === expectedBuffer.length &&
-    timingSafeEqual(candidateBuffer, expectedBuffer)
+    crypto.timingSafeEqual(candidateBuffer, expectedBuffer)
   );
 }

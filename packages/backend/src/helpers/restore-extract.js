@@ -1,3 +1,5 @@
+const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 /** @typedef {import("node:fs/promises").FileHandle} FileHandle */
 /** @typedef {import("node:fs").Stats} Stats */
 /** @typedef {import("./contracts.js").RestoreRecord} RestoreRecord */
@@ -29,7 +31,7 @@ const parts = (name) => {
     name.includes("\0") ||
     name.includes("\\") ||
     name.split("/").some((p) => p === ".." || p === "." || p === "") ||
-    Buffer.byteLength(name) > 4096
+    encoder.encode(name).byteLength > 4096
   )
     throw new Error();
   return name.split("/");
@@ -73,7 +75,7 @@ const parts = (name) => {
   };
   /** @type {RestoreRecord[]} */
   const directories = [];
-  let buffer = Buffer.alloc(0),
+  let buffer = new Uint8Array(0),
     count = 0,
     total = 0;
   /** @type {{file: FileHandle, record: RestoreRecord, remaining: number} | null} */
@@ -85,8 +87,8 @@ const parts = (name) => {
     await close(current.file);
     current = null;
   };
-  for await (const chunk of process.stdin) {
-    buffer = Buffer.concat([buffer, chunk]);
+  for await (const chunk of Bun.stdin.stream()) {
+    buffer = new Uint8Array(Bun.concatArrayBuffers([buffer, chunk]));
     while (buffer.length) {
       if (current) {
         const take = Math.min(current.remaining, buffer.length);
@@ -111,7 +113,7 @@ const parts = (name) => {
       }
       if (end > 16384) throw new Error();
       const record = /** @type {RestoreRecord} */ (
-        JSON.parse(buffer.subarray(0, end).toString())
+        JSON.parse(decoder.decode(buffer.subarray(0, end)))
       );
       buffer = buffer.subarray(end + 1);
       if (
@@ -172,10 +174,10 @@ const parts = (name) => {
     if (owner !== destination) await close(owner);
   }
   await destination.sync();
-  process.stdout.write("ok");
+  await Bun.write(Bun.stdout, "ok");
 })()
-  .catch(() => {
-    process.stderr.write(
+  .catch(async () => {
+    await Bun.write(Bun.stderr,
       "Restore extraction failed: the archive or destination changed or is unsafe.",
     );
     process.exitCode = 1;

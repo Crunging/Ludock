@@ -1,5 +1,5 @@
 import { backupPreflightResponseSchema, backupSettingsResponseSchema, backupSettingsSchema, backupStorageResponseSchema, backupsResponseSchema, okResponseSchema, operationResponseSchema, restoreRequestSchema, type BackupSettings, } from "@ludock/shared";
-import { Readable } from "node:stream";
+import { managedReadable } from "../managed-readable.js";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
 import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
@@ -7,7 +7,7 @@ import { AppError } from "../errors.js";
 import { enqueueOperation } from "../operations.js";
 import { refreshServers, resolveAuthorizedServer } from "../servers.js";
 import { getSetting, setSetting } from "../settings.js";
-import { administrator, audit, id, requestKey, requestUser, respond, trackResponse, type ApiRoutes } from "./request.js";
+import { administrator, audit, id, requestKey, requestUser, respond, type ApiRoutes } from "./request.js";
 
 export const backupsRoutes: ApiRoutes = {
   "/api/v1/settings/backups/status": {
@@ -75,7 +75,7 @@ export const backupsRoutes: ApiRoutes = {
       try {
         assertServerCapability(assertRequestUser(ctx.request, requestUser(ctx)), serverId, "backups.read");
       } catch (error) {
-        stream.destroy();
+        await stream.cancel().catch(() => {});
         throw error;
       }
       ctx.headers.set("Content-Type", "application/x-tar");
@@ -92,10 +92,8 @@ export const backupsRoutes: ApiRoutes = {
         catch (error) { revoked.abort(error); }
       }, 1000);
       revalidate.unref();
-      return trackResponse(
-        new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>), signal,
-        () => { clearInterval(revalidate); stream.destroy(); },
-      );
+      const download = managedReadable(stream, { signal, cleanup() { clearInterval(revalidate); } });
+      return new Response(download.stream);
     })
   },
   "/api/v1/servers/:id/backups/:backupId": {

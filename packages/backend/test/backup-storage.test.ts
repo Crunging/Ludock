@@ -1,5 +1,8 @@
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { concatBytes, decodeText } from "../src/bytes.js";
+import { rejectedBy } from "./fixtures/errors.js";
+import { StreamFixture } from "./fixtures/web-streams.js";
 import type { ArchiveHeader } from "../src/backup-storage.js";
-import assert from "node:assert/strict";
 import {
   mkdtemp,
   rm,
@@ -12,22 +15,20 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { Duplex, Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
-import * as tar from "tar-stream";
-import { createHash, randomUUID } from "node:crypto";
-import type Docker from "dockerode";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { walkTar, encodeTarHeader, tarPadding, tarEnd } from "../src/tar.js";
+import type * as Docker from "../src/docker-client.js";
 import {
   archiveEntryMetadata,
   mappedArchiveHeader,
   approvedBackupDirectory,
-  archiveValidator,
+  validateArchiveStream,
   backupFilePath,
   createDataHelper,
   extractRootToStage,
   helperExec,
   validateArchive,
+  writeSnapshot,
   validateArchiveEntry,
   removeArchive,
   availableBackupDestinationBytes,
@@ -59,74 +60,78 @@ afterEach(async () => {
 });
 async function archive(
   entries: Array<{ header: ArchiveHeader; body?: string }>,
-): Promise<Buffer> {
-  const pack = tar.pack(),
-    chunks: Buffer[] = [];
-  pack.on("data", (chunk: Buffer) => chunks.push(chunk));
-  for (const { header, body } of entries)
-    await new Promise<void>((resolve, reject) =>
-      pack.entry(header, body || "", (error) =>
-        error ? reject(error) : resolve(),
-      ),
-    );
-  const done = new Promise<Buffer>((resolve, reject) => {
-    pack.once("end", () => resolve(Buffer.concat(chunks)));
-    pack.once("error", reject);
-  });
-  pack.finalize();
-  return done;
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for (const { header, body } of entries) {
+    const bytes = fixtureBytes(body || "");
+    chunks.push(encodeTarHeader({ ...header, size: header.size ?? bytes.length }), bytes, tarPadding(bytes.length));
+  }
+  return concatBytes([...chunks, tarEnd()]);
 }
 
 describe("backup storage boundaries", () => {
+  it.skipIf(process.platform !== "linux")("cleans up failed writes without removing a partial archive it did not create", async () => {
+    const id = crypto.randomUUID();
+    const filename = await backupFilePath(directory, id, true);
+    const settings = { destination: directory, retentionCount: 1, maxBytes: 10_000, reserveBytes: 0 };
+    const helper = { roots, container: {} as Docker.Container, cleanup: async () => {} };
+    await Bun.write(filename, "existing partial");
+    await expect(writeSnapshot({} as ServerContext, helper, settings, id, 1, async () => {})).rejects.toThrow();
+    expect(await Bun.file(filename).text()).toBe("existing partial");
+    await Bun.file(filename).delete();
+    await expect(writeSnapshot({} as ServerContext, helper, settings, id, 1, async () => {})).rejects.toThrow(/byte limit/);
+    expect(await Bun.file(filename).exists()).toBe(false);
+    expect(await Bun.file(await backupFilePath(directory, id)).exists()).toBe(false);
+  });
   it("accepts whitespace around configured roots and still confines the destination", async () => {
     process.env.LUDOCK_BACKUP_ROOTS = `  ${directory}  ${path.delimiter} `;
-    assert.equal(await approvedBackupDirectory(directory), directory);
-    await assert.rejects(approvedBackupDirectory(path.dirname(directory)), /inside/);
+    expect(await approvedBackupDirectory(directory)).toBe(directory);
+    await expect(approvedBackupDirectory(path.dirname(directory))).rejects.toThrow(/inside/);
   });
 
   it("explains missing roots and folders without exposing filesystem errors or creating directories", async () => {
     for (const missingRoot of [false, true]) {
       const missing = path.join(directory, "missing-private-fixture");
       process.env.LUDOCK_BACKUP_ROOTS = missingRoot ? missing : directory;
-      await assert.rejects(approvedBackupDirectory(missingRoot ? directory : missing), (error) => {
-        assert.ok(error instanceof AppError);
-        assert.equal(error.code, "BACKUP_DESTINATION");
-        assert.match(error.message, /Create the folder and check its mount and permissions/);
-        assert.doesNotMatch(error.message, /ENOENT|missing-private-fixture/);
+      await expect(await rejectedBy(approvedBackupDirectory(missingRoot ? directory : missing))).toSatisfy((error) => {
+        expect(error instanceof AppError).toBeTruthy();
+        expect(error.code).toBe("BACKUP_DESTINATION");
+        expect(error.message).toMatch(/Create the folder and check its mount and permissions/);
+        expect(error.message).not.toMatch(/ENOENT|missing-private-fixture/);
         return true;
       });
-      assert.deepEqual(await readdir(directory), []);
+      expect(await readdir(directory)).toStrictEqual([]);
     }
     process.env.LUDOCK_BACKUP_ROOTS = "   ";
-    await assert.rejects(approvedBackupDirectory(directory), /Set LUDOCK_BACKUP_ROOTS/);
+    await expect(approvedBackupDirectory(directory)).rejects.toThrow(/Set LUDOCK_BACKUP_ROOTS/);
   });
 
   it.skipIf(process.platform !== "linux")("measures free space through an approved destination without creating files", async () => {
     const available = await availableBackupDestinationBytes(directory);
-    assert.equal(Number.isSafeInteger(available), true);
-    assert.equal(available >= 0, true);
-    assert.deepEqual(await readdir(directory), []);
+    expect(Number.isSafeInteger(available)).toBe(true);
+    expect(available >= 0).toBe(true);
+    expect(await readdir(directory)).toStrictEqual([]);
     const linked = `${directory}-linked`;
     await symlink(directory, linked);
     try {
-      await assert.rejects(availableBackupDestinationBytes(linked), /inside|symbolic|symlink/);
+      await expect(availableBackupDestinationBytes(linked)).rejects.toThrow(/inside|symbolic|symlink/);
     } finally {
       await rm(linked, { force: true });
     }
   });
 
   it.skipIf(process.platform !== "linux")("rejects FIFO archives without waiting for a writer", async () => {
-    const id = randomUUID();
+    const id = crypto.randomUUID();
     const filename = await backupFilePath(directory, id);
     const fifo = Bun.spawn(["mkfifo", filename], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-    assert.equal(await fifo.exited, 0, await new Response(fifo.stderr).text());
+    expect(await fifo.exited, await new Response(fifo.stderr).text()).toBe(0);
     // Isolate a blocking-open regression so the test deadline can clean up its
     // process even if the runtime is waiting for a FIFO writer in native code.
     const child = Bun.spawn([process.execPath, "-e", `
       import { archiveReadStream } from ${JSON.stringify(new URL("../src/backup-storage.ts", import.meta.url).href)};
       try {
         const stream = await archiveReadStream(${JSON.stringify(directory)}, ${JSON.stringify(id)});
-        stream.destroy(); process.exitCode = 2;
+        await stream.cancel(); process.exitCode = 2;
       } catch (error) {
         if (error.code !== "INVALID_BACKUP") { console.error(error); process.exitCode = 3; }
       }
@@ -135,16 +140,16 @@ describe("backup storage boundaries", () => {
       stdin: "ignore", stdout: "ignore", stderr: "pipe",
     });
     const deadline = setTimeout(() => child.kill("SIGKILL"), 2000);
-    try { assert.equal(await child.exited, 0, await new Response(child.stderr).text()); }
+    try { expect(await child.exited, await new Response(child.stderr).text()).toBe(0); }
     finally { clearTimeout(deadline); child.kill("SIGKILL"); await child.exited; }
   }, 4000);
 
   it.skipIf(process.platform !== "linux")("keeps an archive when access is revoked before unlink dispatch", async () => {
-    const id = randomUUID();
+    const id = crypto.randomUUID();
     const filename = await backupFilePath(directory, id);
     await writeFile(filename, "keep this backup");
-    await assert.rejects(removeArchive(directory, id, () => { throw new Error("Access revoked"); }), /Access revoked/);
-    assert.equal(await readFile(filename, "utf8"), "keep this backup");
+    await expect(removeArchive(directory, id, () => { throw new Error("Access revoked"); })).rejects.toThrow(/Access revoked/);
+    expect(await readFile(filename, "utf8")).toBe("keep this backup");
   });
 
   for (const helperImage of [undefined, `example/custom-bun-helper:test@sha256:${"a".repeat(64)}`]) {
@@ -157,7 +162,7 @@ describe("backup storage boundaries", () => {
         start: async () => {},
         remove: async () => { removed = true; },
         exec: async () => ({
-          start: async () => Readable.from([]),
+          start: async () => { const stream = new StreamFixture(); stream.close(); return stream.connection; },
           inspect: async () => ({ ExitCode: 0 }),
         }),
       } as unknown as Docker.Container;
@@ -174,18 +179,18 @@ describe("backup storage boundaries", () => {
             destination: "/data", writable: true,
           }],
         },
-      } as ServerContext, true, randomUUID());
+      } as ServerContext, true, crypto.randomUUID());
       try {
         const options = create.mock.calls[0][0];
-        assert.equal(options.Image, helperImage || DEFAULT_HELPER_IMAGE);
-        assert.deepEqual(options.HostConfig?.Mounts, [{
+        expect(options.Image).toBe(helperImage || DEFAULT_HELPER_IMAGE);
+        expect(options.HostConfig?.Mounts).toStrictEqual([{
           Type: "volume", Source: "game-data", Target: "/mounts/root-0", ReadOnly: true,
         }]);
-        assert.equal(options.HostConfig?.NetworkMode, "none");
+        expect(options.HostConfig?.NetworkMode).toBe("none");
       } finally {
         await access.cleanup();
       }
-      assert.equal(removed, true);
+      expect(removed).toBe(true);
     });
   }
   it("rechecks access after helper exec preparation before starting a restore", async () => {
@@ -200,20 +205,14 @@ describe("backup storage boundaries", () => {
     const assertAccess = () => {
       if (!allowed) throw new Error("Access revoked during preparation");
     };
-    await assert.rejects(
-      helperExec(helper, ["bun", "restore-helper"], {}, assertAccess),
-      /Access revoked/,
-    );
+    await expect(helperExec(helper, ["bun", "restore-helper"], {}, assertAccess)).rejects.toThrow(/Access revoked/);
     allowed = true;
-    await assert.rejects(
-      extractRootToStage(
-        directory, randomUUID(), helper, roots[0], "/data",
-        `.ludock-restore-${randomUUID()}`, roots, 10000, "checksum",
+    await expect(extractRootToStage(
+        directory, crypto.randomUUID(), helper, roots[0], "/data",
+        `.ludock-restore-${crypto.randomUUID()}`, roots, 10000, "checksum",
         assertAccess,
-      ),
-      /Access revoked/,
-    );
-    assert.equal(starts, 0);
+      )).rejects.toThrow(/Access revoked/);
+    expect(starts).toBe(0);
   });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "stops streaming restore data when access changes after extraction starts",
@@ -224,42 +223,30 @@ describe("backup storage boundaries", () => {
           body: "hello",
         },
       ]);
-      const id = randomUUID();
+      const id = crypto.randomUUID();
       await writeFile(await backupFilePath(directory, id), bytes);
       let allowed = true;
-      const writes: Buffer[] = [];
-      const socket = new Duplex({
-        read() {},
-        write(chunk: Buffer, _encoding, callback) {
-          writes.push(Buffer.from(chunk));
-          allowed = false;
-          callback();
-        },
-        final(callback) {
-          this.push(null);
-          callback();
-        },
-      });
+      const writes: Uint8Array[] = [];
+      const socket = new StreamFixture();
+      socket.onInput = chunk => { writes.push(fixtureBytes(chunk)); allowed = false; };
+      socket.onInputEnd = () => socket.close();
       const helper = {
         exec: async () => ({
-          start: async () => socket,
+          start: async () => socket.connection,
           inspect: async () => ({ ExitCode: 0 }),
         }),
       } as unknown as Docker.Container;
-      await assert.rejects(
-        extractRootToStage(
+      await expect(extractRootToStage(
           directory, id, helper, roots[0], "/data",
-          `.ludock-restore-${randomUUID()}`, roots, 10000,
-          createHash("sha256").update(bytes).digest("hex"),
+          `.ludock-restore-${crypto.randomUUID()}`, roots, 10000,
+          new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
           () => {
             if (!allowed) throw new Error("Access revoked during streaming");
           },
-        ),
-        /Access revoked/,
-      );
-      assert.equal(writes.length, 1);
-      assert.match(writes[0].toString(), /world\.txt/);
-      assert.equal(socket.destroyed, true);
+        )).rejects.toThrow(/Access revoked/);
+      expect(writes.length).toBe(1);
+      expect(decodeText(writes[0])).toMatch(/world\.txt/);
+      expect(socket.closed).toBe(true);
     },
   );
   it("preserves large Linux IDs and future timestamps through tar repacking without source path overrides", async () => {
@@ -274,49 +261,34 @@ describe("backup storage boundaries", () => {
     };
     const mapped = mappedArchiveHeader(source, "snapshot/root-0/world");
     const bytes = await archive([{ header: mapped, body: "hello" }]);
-    const extract = tar.extract();
     let found = false;
-    extract.on("entry", (header, stream, next) => {
-      assert.equal(header.name, "snapshot/root-0/world");
-      assert.deepEqual(archiveEntryMetadata(header), {
-        uid: 1_000_000,
-        gid: 2_000_000,
-        mtime: source.mtime.getTime() / 1000,
+    await walkTar(ReadableStream.from([bytes]), (header) => {
+      expect(header.name).toBe("snapshot/root-0/world");
+      expect(archiveEntryMetadata(header)).toStrictEqual({
+        uid: 1_000_000, gid: 2_000_000, mtime: source.mtime.getTime() / 1000,
       });
       found = true;
-      stream.resume();
-      stream.once("end", next);
     });
-    await pipeline(Readable.from(bytes), extract);
-    assert.equal(found, true);
+    expect(found).toBe(true);
     for (const metadata of [
       { uid: "4294967295" },
       { gid: "-1" },
       { mtime: "Infinity" },
     ])
-      assert.throws(() => archiveEntryMetadata({ ...source, pax: metadata }));
+      expect(() => archiveEntryMetadata({ ...source, pax: metadata })).toThrow();
   });
 
   it("uses only existing approved directories and rejects symlink traversal", async () => {
     await mkdir(path.join(directory, "archives"));
-    assert.equal(
-      await approvedBackupDirectory(path.join(directory, "archives")),
-      path.join(directory, "archives"),
-    );
+    expect(await approvedBackupDirectory(path.join(directory, "archives"))).toBe(path.join(directory, "archives"));
     await symlink(
       path.join(directory, "archives"),
       path.join(directory, "shortcut"),
     );
-    await assert.rejects(
-      approvedBackupDirectory(path.join(directory, "shortcut")),
-      /symlink|symbolic/,
-    );
-    await assert.rejects(
-      approvedBackupDirectory(path.dirname(directory)),
-      /inside/,
-    );
-    await assert.rejects(approvedBackupDirectory("relative/path"), /absolute/);
-    await assert.rejects(backupFilePath(directory, "../../data"), /identifier/);
+    await expect(approvedBackupDirectory(path.join(directory, "shortcut"))).rejects.toThrow(/symlink|symbolic/);
+    await expect(approvedBackupDirectory(path.dirname(directory))).rejects.toThrow(/inside/);
+    await expect(approvedBackupDirectory("relative/path")).rejects.toThrow(/absolute/);
+    await expect(backupFilePath(directory, "../../data")).rejects.toThrow(/identifier/);
   });
   it("rejects unsafe links, devices, traversal and restore staging data", () => {
     for (const header of [
@@ -337,7 +309,7 @@ describe("backup storage boundaries", () => {
       { name: "snapshot/root-0/.ludock-restore-secret/data", type: "file" },
       { name: "snapshot/root-unknown/data", type: "file" },
     ] as ArchiveHeader[])
-      assert.throws(() => validateArchiveEntry(header, roots));
+      expect(() => validateArchiveEntry(header, roots)).toThrow();
   });
   it("validates recorded roots and rejects duplicate paths and oversized archives", async () => {
     const base: Array<{ header: ArchiveHeader; body?: string }> = [
@@ -351,23 +323,14 @@ describe("backup storage boundaries", () => {
         body: "hello",
       },
     ]);
-    await pipeline(Readable.from(valid), archiveValidator(roots, 10000));
+    await validateArchiveStream(ReadableStream.from([valid]), roots, 10000);
     const duplicate = await archive([...base, ...base]);
-    await assert.rejects(
-      pipeline(Readable.from(duplicate), archiveValidator(roots, 10000)),
-      /duplicate/,
-    );
+    await expect(validateArchiveStream(ReadableStream.from([duplicate]), roots, 10000)).rejects.toThrow(/duplicate/);
     const missing = await archive([
       { header: { name: "snapshot", type: "directory" } },
     ]);
-    await assert.rejects(
-      pipeline(Readable.from(missing), archiveValidator(roots, 10000)),
-      /missing/,
-    );
-    await assert.rejects(
-      pipeline(Readable.from(valid), archiveValidator(roots, 4)),
-      /size/,
-    );
+    await expect(validateArchiveStream(ReadableStream.from([missing]), roots, 10000)).rejects.toThrow(/missing/);
+    await expect(validateArchiveStream(ReadableStream.from([valid]), roots, 4)).rejects.toThrow(/size/);
   });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "verifies archive checksums and refuses symlink archive files",
@@ -376,7 +339,7 @@ describe("backup storage boundaries", () => {
         { header: { name: "snapshot", type: "directory" } },
         { header: { name: "snapshot/root-0", type: "directory" } },
       ]);
-      const id = randomUUID();
+      const id = crypto.randomUUID();
       const filename = await backupFilePath(directory, id);
       await writeFile(filename, bytes);
       await validateArchive(
@@ -384,17 +347,12 @@ describe("backup storage boundaries", () => {
         id,
         roots,
         10000,
-        createHash("sha256").update(bytes).digest("hex"),
+        new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
       );
-      await assert.rejects(
-        validateArchive(directory, id, roots, 10000, "bad-checksum"),
-        /checksum/,
-      );
-      const linked = randomUUID();
+      await expect(validateArchive(directory, id, roots, 10000, "bad-checksum")).rejects.toThrow(/checksum/);
+      const linked = crypto.randomUUID();
       await symlink(filename, await backupFilePath(directory, linked));
-      await assert.rejects(
-        validateArchive(directory, linked, roots, 10000, "bad-checksum"),
-      );
+      await expect(validateArchive(directory, linked, roots, 10000, "bad-checksum")).rejects.toThrow();
     },
   );
 });

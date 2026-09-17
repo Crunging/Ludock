@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { serve } from "bun";
-import { afterAll as after, it } from "bun:test";
+import { expect, afterAll as after, it } from "bun:test";
 
 process.env.NODE_ENV = "development";
 process.env.LUDOCK_DEV_INSTANCE = "012345abcdef";
@@ -19,7 +17,7 @@ after(closeDatabase);
 
 it("keeps sessions separate when development checkouts share a browser host", () => {
   const user = {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     username: "developer",
     passwordHash: "unused-test-hash",
     role: "admin" as const,
@@ -33,27 +31,21 @@ it("keeps sessions separate when development checkouts share a browser host", ()
   setSessionCookie(headers, request, token);
   const cookie = headers.get("Set-Cookie")!;
   const cookieName = cookie.split("=", 1)[0];
-  assert.ok(cookie.startsWith(`${cookieName}=${token};`));
-  assert.match(cookie, /; HttpOnly(?:;|$)/i);
-  assert.match(cookie, /; SameSite=Strict(?:;|$)/i);
-  assert.equal(cookieName, "ludock_session_012345abcdef");
-  assert.equal(
-    getRequestSession(new Request(request, {
+  expect(cookie.startsWith(`${cookieName}=${token};`)).toBeTruthy();
+  expect(cookie).toMatch(/; HttpOnly(?:;|$)/i);
+  expect(cookie).toMatch(/; SameSite=Strict(?:;|$)/i);
+  expect(cookieName).toBe("ludock_session_012345abcdef");
+  expect(getRequestSession(new Request(request, {
       headers: {
         cookie: `ludock_session=${token}; ludock_session_fedcba543210=${token}`,
       },
-    })),
-    null,
-  );
-  assert.equal(
-    getRequestSession(new Request(request, { headers: { cookie: `${cookieName}=${token}` } }))?.user
-      .id,
-    user.id,
-  );
+    }))).toBe(null);
+  expect(getRequestSession(new Request(request, { headers: { cookie: `${cookieName}=${token}` } }))?.user
+      .id).toBe(user.id);
   const cleared = new Headers();
   clearSessionCookie(cleared);
-  assert.ok(cleared.get("Set-Cookie")?.startsWith(`${cookieName}=;`));
-  assert.match(cleared.get("Set-Cookie")!, /; Max-Age=0(?:;|$)/i);
+  expect(cleared.get("Set-Cookie")?.startsWith(`${cookieName}=;`)).toBeTruthy();
+  expect(cleared.get("Set-Cookie")!).toMatch(/; Max-Age=0(?:;|$)/i);
 });
 
 it("rejects another checkout before processing its HTTP request", async () => {
@@ -64,18 +56,18 @@ it("rejects another checkout before processing its HTTP request", async () => {
       method: "POST",
       headers: { "X-Ludock-Dev-Instance": "fedcba543210" },
     });
-    assert.equal(response.status, 409);
-    assert.equal(response.headers.get("x-ludock-dev-instance"), "012345abcdef");
-    assert.equal(response.headers.get("set-cookie"), null);
-    assert.equal(response.headers.get("clear-site-data"), null);
-    assert.deepEqual(await response.json(), {
+    expect(response.status).toBe(409);
+    expect(response.headers.get("x-ludock-dev-instance")).toBe("012345abcdef");
+    expect(response.headers.get("set-cookie")).toBe(null);
+    expect(response.headers.get("clear-site-data")).toBe(null);
+    expect(await response.json()).toStrictEqual({
       error: "This request belongs to a different development checkout.",
     });
 
     for (const headers of [{}, { "X-Ludock-Dev-Instance": "012345abcdef" }]) {
       const status = await fetch(`${origin}/api/v1/auth/status`, { headers });
-      assert.equal(status.status, 200);
-      assert.equal(status.headers.get("x-ludock-dev-instance"), "012345abcdef");
+      expect(status.status).toBe(200);
+      expect(status.headers.get("x-ludock-dev-instance")).toBe("012345abcdef");
       await status.body?.cancel();
     }
   } finally {
@@ -91,13 +83,10 @@ it("logs out one checkout without clearing cookies for its peers", async () => {
       method: "POST",
       headers: { "X-Ludock-Dev-Instance": "012345abcdef", Origin: origin },
     });
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("clear-site-data"), '"cache", "storage"');
-    assert.match(
-      response.headers.get("set-cookie") || "",
-      /^ludock_session_012345abcdef=;/,
-    );
-    assert.deepEqual(await response.json(), { ok: true });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("clear-site-data")).toBe('"cache", "storage"');
+    expect(response.headers.get("set-cookie") || "").toMatch(/^ludock_session_012345abcdef=;/);
+    expect(await response.json()).toStrictEqual({ ok: true });
   } finally {
     await server.stop(true);
   }

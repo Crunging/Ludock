@@ -4,11 +4,12 @@ ARG BUN_IMAGE=oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee645
 # Build JavaScript artifacts on the native build platform.
 FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS deps
 WORKDIR /app
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json bun.lock bunfig.toml .bun-version ./
+COPY scripts/ci/check-bun.mjs scripts/ci/check-bun.mjs
 COPY packages/backend/package.json packages/backend/
 COPY packages/frontend/package.json packages/frontend/
 COPY packages/shared/package.json packages/shared/
-RUN bun install --frozen-lockfile --linker=isolated
+RUN bun scripts/ci/check-bun.mjs && bun install --frozen-lockfile --linker=isolated
 
 COPY packages/shared/src/ packages/shared/src/
 
@@ -22,17 +23,11 @@ COPY packages/frontend/index.html packages/frontend/tsconfig*.json packages/fron
 RUN bun run --filter @ludock/frontend build
 
 FROM deps AS build-backend
+# Published attestations also record the installed inputs to the bundled code.
+ARG BUILDKIT_SBOM_SCAN_STAGE=true
 COPY packages/backend/src/ packages/backend/src/
+COPY scripts/build-backend.mjs scripts/build-backend.mjs
 RUN bun run --filter @ludock/backend build
-
-FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS prod-deps
-WORKDIR /app
-COPY package.json bun.lock bunfig.toml ./
-COPY packages/backend/package.json packages/backend/
-COPY packages/frontend/package.json packages/frontend/
-COPY packages/shared/package.json packages/shared/
-RUN bun install --production --frozen-lockfile --linker=isolated \
-    --filter @ludock/backend --filter @ludock/shared
 
 # The runtime executable must match the target platform.
 FROM ${BUN_IMAGE} AS bun-runtime
@@ -43,16 +38,9 @@ RUN apk upgrade --no-cache \
 WORKDIR /app
 
 COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
-COPY packages/backend/package.json packages/backend/
-COPY packages/shared/package.json packages/shared/
 
-# Bun's isolated package links depend on the store and workspace directories.
-COPY --from=prod-deps /app/node_modules node_modules/
-COPY --from=prod-deps /app/packages/backend/node_modules packages/backend/node_modules/
-COPY --from=prod-deps /app/packages/shared/node_modules packages/shared/node_modules/
-
+# Includes shared chunks, source maps, dependency inventory, and license notices.
 COPY --from=build-backend /app/packages/backend/dist packages/backend/dist/
-COPY --from=deps /app/packages/shared/src packages/shared/src/
 COPY --from=build-frontend /app/packages/frontend/dist packages/frontend/dist/
 
 ENV NODE_ENV=production

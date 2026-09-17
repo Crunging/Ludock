@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
-import { PassThrough } from "node:stream";
 import { serve } from "bun";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { createSession } from "../src/auth.js";
 import { closeDatabase, createUser, deleteUserSessions } from "../src/database.js";
 import { getDockerInstance } from "../src/docker.js";
@@ -35,7 +33,7 @@ function startFixture() {
 
 beforeEach(() => {
   closeDatabase();
-  docker.getEvents = (async () => new PassThrough()) as typeof docker.getEvents;
+  docker.getEvents = (async () => new ReadableStream<Uint8Array>()) as typeof docker.getEvents;
   createUser({ id: "viewer", username: "viewer", role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
   gateway = createWebSocketGateway();
   server = startFixture();
@@ -73,16 +71,16 @@ function upgradeStatus(path: string, headers: Record<string, string> = {}) {
 
 describe("native WebSocket admission and lifetime", () => {
   it("requires authentication, same-origin browser sessions, and administrator shell access", async () => {
-    assert.equal(await upgradeStatus("/ws/v1/events"), 401);
-    assert.equal(await upgradeStatus("/ws/v1/events", {
+    expect(await upgradeStatus("/ws/v1/events")).toBe(401);
+    expect(await upgradeStatus("/ws/v1/events", {
       Authorization: `Bearer ${apiToken}`, Origin: "https://untrusted.example",
-    }), 401);
-    assert.equal(await upgradeStatus("/ws/v1/unknown", { Authorization: `Bearer ${apiToken}` }), 404);
+    })).toBe(401);
+    expect(await upgradeStatus("/ws/v1/unknown", { Authorization: `Bearer ${apiToken}` })).toBe(404);
     const session = createSession({ id: "viewer", username: "viewer", role: "viewer" }, new Request(server.url));
-    assert.equal(await upgradeStatus("/ws/v1/shell/server", {
+    expect(await upgradeStatus("/ws/v1/shell/server", {
       Cookie: `ludock_session=${session.token}`, Origin: server.url.origin,
-    }), 403);
-    assert.equal(gateway.connectionCount, 0);
+    })).toBe(403);
+    expect(gateway.connectionCount).toBe(0);
   });
 
   it("closes a real browser session before handling input after revocation", async () => {
@@ -91,8 +89,8 @@ describe("native WebSocket admission and lifetime", () => {
     const closing = closed(client);
     deleteUserSessions("viewer");
     client.send("{}");
-    assert.equal(await closing, 1008);
-    assert.equal(gateway.connectionCount, 0);
+    expect(await closing).toBe(1008);
+    expect(gateway.connectionCount).toBe(0);
   });
 
   it("rejects an oversized native WebSocket message", async () => {
@@ -110,9 +108,9 @@ describe("native WebSocket admission and lifetime", () => {
     client.send(new Uint8Array(MAX_WEBSOCKET_PAYLOAD_BYTES + 1));
     // Bun may abort the transport before sending a 1009 close frame. In either
     // case the oversized payload must never reach a business handler.
-    assert.ok([1006, 1009].includes(await closing));
-    assert.equal(messages.mock.calls.length, 1);
-    assert.equal(gateway.connectionCount, 0);
+    expect([1006, 1009].includes(await closing)).toBeTruthy();
+    expect(messages.mock.calls.length).toBe(1);
+    expect(gateway.connectionCount).toBe(0);
   });
 
   it("isolates users and sessions and releases their closed slots", async () => {
@@ -121,7 +119,7 @@ describe("native WebSocket admission and lifetime", () => {
       { length: MAX_WEBSOCKET_CONNECTIONS_PER_SESSION },
       () => connect(first),
     ));
-    assert.equal(await upgradeStatus("/ws/v1/events", first), 429);
+    expect(await upgradeStatus("/ws/v1/events", first)).toBe(429);
 
     const second = sessionHeaders("viewer");
     await Promise.all(Array.from(
@@ -131,19 +129,17 @@ describe("native WebSocket admission and lifetime", () => {
       },
       () => connect(second),
     ));
-    assert.equal(await upgradeStatus("/ws/v1/events", second), 429);
+    expect(await upgradeStatus("/ws/v1/events", second)).toBe(429);
 
     createUser({ id: "admin", username: "admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
     await connect(sessionHeaders("admin", "admin"));
-    assert.equal(gateway.connectionCount,
-      MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
+    expect(gateway.connectionCount).toBe(MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
 
     const closing = closed(connected[0]);
     connected[0].close();
     await closing;
     await connect(first);
-    assert.equal(gateway.connectionCount,
-      MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
+    expect(gateway.connectionCount).toBe(MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
   });
 
   it("retains the global cap across many administrator principals", async () => {
@@ -158,12 +154,12 @@ describe("native WebSocket admission and lifetime", () => {
         count++) headers.push(credentials);
     }
     await Promise.all(headers.map((credentials) => connect(credentials)));
-    assert.equal(gateway.connectionCount, MAX_WEBSOCKET_CONNECTIONS);
+    expect(gateway.connectionCount).toBe(MAX_WEBSOCKET_CONNECTIONS);
     createUser({ id: "later-admin", username: "later-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
-    assert.equal(await upgradeStatus(
+    expect(await upgradeStatus(
       "/ws/v1/events",
       sessionHeaders("later-admin", "admin"),
-    ), 503);
+    )).toBe(503);
   });
 
   it("reserves global capacity for administrators", async () => {
@@ -181,23 +177,23 @@ describe("native WebSocket admission and lifetime", () => {
     }
     await Promise.all(headers.map((credentials) => connect(credentials)));
     createUser({ id: "later-viewer", username: "later-viewer", role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
-    assert.equal(await upgradeStatus(
+    expect(await upgradeStatus(
       "/ws/v1/events",
       sessionHeaders("later-viewer"),
-    ), 503);
+    )).toBe(503);
 
     createUser({ id: "reserved-admin", username: "reserved-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
     await connect(sessionHeaders("reserved-admin", "admin"));
-    assert.equal(gateway.connectionCount, nonAdminLimit + 1);
+    expect(gateway.connectionCount).toBe(nonAdminLimit + 1);
   });
 
   it("sends shutdown close frames and rejects further admission", async () => {
     const client = await connect();
     const closing = closed(client);
     await gateway.close();
-    assert.equal(await closing, 1001);
-    assert.equal(gateway.connectionCount, 0);
-    assert.equal(await upgradeStatus("/ws/v1/events", { Authorization: `Bearer ${apiToken}` }), 503);
+    expect(await closing).toBe(1001);
+    expect(gateway.connectionCount).toBe(0);
+    expect(await upgradeStatus("/ws/v1/events", { Authorization: `Bearer ${apiToken}` })).toBe(503);
   });
 });
 
@@ -227,10 +223,10 @@ describe("native socket output bounds", () => {
     channel.send("too much output");
     channel.send("later output");
     channel.finish(1006);
-    assert.equal(channel.isOpen, false);
-    assert.equal(cleaned, 1);
-    assert.deepEqual(closes, [1013]);
-    assert.deepEqual(sent, []);
+    expect(channel.isOpen).toBe(false);
+    expect(cleaned).toBe(1);
+    expect(closes).toStrictEqual([1013]);
+    expect(sent).toStrictEqual([]);
   });
 
   it("accepts queued native sends without duplicating the frame", () => {
@@ -239,10 +235,10 @@ describe("native socket output bounds", () => {
       readyState: 1,
       getBufferedAmount: () => 0,
       sendText: (message) => { sent.push(message); return -1; },
-      close() { assert.fail("A queued frame below the limit should stay connected"); },
+      close() { expect.unreachable("A queued frame below the limit should stay connected"); },
     });
     channel.send("queued output");
-    assert.equal(channel.isOpen, true);
-    assert.deepEqual(sent, ["queued output"]);
+    expect(channel.isOpen).toBe(true);
+    expect(sent).toStrictEqual(["queued output"]);
   });
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { listOperationHistory } from "../src/history.js";
 import {
   closeDatabase,
@@ -114,53 +113,53 @@ describe("queued operation authority", () => {
     context.job.recovery = { containerId: "fixture", initiallyRunning: true };
     // No data-operation binding was persisted and the game was never stopped.
     await recoverUpdate(context);
-    assert.equal(mutations, 0);
+    expect(mutations).toBe(0);
   });
   it("rejects a schedule deleted after its operation was queued", () => {
     const { context, scheduleId } = scheduled();
-    assert.equal(jobActor(context).id, friend.id);
+    expect(jobActor(context).id).toBe(friend.id);
     deleteSchedule(friend, serverId, scheduleId);
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
   it("rejects a disabled schedule or disabled owner at execution", () => {
     const { context, scheduleId } = scheduled();
     getDatabase()
       .prepare("UPDATE schedules SET input_json=? WHERE id=?")
       .run(JSON.stringify({ ...input, enabled: false }), scheduleId);
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
     updateUserAccess(friend.id, "operator", true);
-    assert.throws(() => jobActor(context), /no longer has access/);
+    expect(() => jobActor(context)).toThrow(/no longer has access/);
   });
   it("rejects a schedule whose action changed after it was queued", () => {
     const { context, scheduleId } = scheduled();
     getDatabase()
       .prepare("UPDATE schedules SET input_json=? WHERE id=?")
       .run(JSON.stringify({ ...input, action: "stop" }), scheduleId);
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
   it("rejects queued work after editing the schedule time without changing its action", () => {
     const { context, scheduleId } = scheduled();
     updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
   it("does not revive old queued work after pausing and resuming a schedule", () => {
     const { context, scheduleId } = scheduled();
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: false, revision: 1 });
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
   it("only accepts legacy jobs without a revision while the schedule remains untouched", () => {
     const { context, scheduleId } = scheduled();
     delete context.job.input.scheduleRevision;
-    assert.equal(jobActor(context).id, friend.id);
+    expect(jobActor(context).id).toBe(friend.id);
     updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
-    assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
   it("rejects invalid or future schedule generations", () => {
     const { context } = scheduled();
     for (const revision of [null, "1", 0, 2]) {
       context.job.input.scheduleRevision = revision;
-      assert.throws(() => jobActor(context), /deleted, disabled, or changed/);
+      expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
     }
   });
   it("rechecks action grants before a scheduled job touches Docker", async () => {
@@ -177,8 +176,8 @@ describe("queued operation authority", () => {
       if (getOperation(context.job.id)?.status === "failed") break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    assert.equal(getOperation(context.job.id)?.status, "failed");
-    assert.equal(mutations, 0);
+    expect(getOperation(context.job.id)?.status).toBe("failed");
+    expect(mutations).toBe(0);
   });
   for (const change of ["grant revocation", "container rename", "schedule pause and resume"] as const)
   it(`rechecks a scheduled action after ${change} during the final lifecycle inspection`, async () => {
@@ -212,8 +211,8 @@ describe("queued operation authority", () => {
       if (getOperation(context.job.id)?.status === "failed") break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    assert.equal(dispatchInspected, true);
-    assert.equal(getOperation(context.job.id)?.status, "failed");
-    assert.equal(mutations, 0);
+    expect(dispatchInspected).toBe(true);
+    expect(getOperation(context.job.id)?.status).toBe("failed");
+    expect(mutations).toBe(0);
   });
 });

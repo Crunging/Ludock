@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { DockerContainerId } from "@ludock/shared";
 import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src/database.js";
 import { setServerGrant } from "../src/authorization.js";
@@ -74,32 +73,32 @@ describe("server backup summaries", () => {
     const other = (await listServers(admin)).find((server) => server.id !== serverId)!;
     backup(400, 48, "complete", other.id);
 
-    assert.deepEqual((await getServer(admin, serverId)).latestBackup, { createdAt: 200, size: 24 });
-    assert.deepEqual((await listServers(admin)).find((server) => server.id === serverId)?.latestBackup, { createdAt: 200, size: 24 });
+    expect((await getServer(admin, serverId)).latestBackup).toStrictEqual({ createdAt: 200, size: 24 });
+    expect((await listServers(admin)).find((server) => server.id === serverId)?.latestBackup).toStrictEqual({ createdAt: 200, size: 24 });
 
     getDatabase().prepare("DELETE FROM backups WHERE id=?").run(latest);
-    assert.deepEqual((await getServer(admin, serverId)).latestBackup, { createdAt: 100, size: 12 });
+    expect((await getServer(admin, serverId)).latestBackup).toStrictEqual({ createdAt: 100, size: 12 });
     getDatabase().prepare("DELETE FROM backups WHERE server_id=? AND state='complete'").run(serverId);
-    assert.equal((await getServer(admin, serverId)).latestBackup, null);
+    expect((await getServer(admin, serverId)).latestBackup).toBe(null);
   });
 
   it("returns an explicit empty summary when the server has no successful backup", async () => {
-    assert.equal((await getServer(admin, serverId)).latestBackup, null);
+    expect((await getServer(admin, serverId)).latestBackup).toBe(null);
     backup(100, 12, "failed");
-    assert.equal((await listServers(admin))[0].latestBackup, null);
+    expect((await listServers(admin))[0].latestBackup).toBe(null);
   });
 
   it("exposes only timestamp and size to backup creators and removes them when the grant is revoked", async () => {
     backup(100, 12);
     setServerGrant(operator.id, serverId, ["server.view", "backups.create"], admin);
     const server = await getServer(operator, serverId);
-    assert.deepEqual(server.latestBackup, { createdAt: 100, size: 12 });
-    assert.equal(server.permissions.includes("backups.read"), false);
-    assert.doesNotMatch(JSON.stringify(server), /private-backup-destination|private-checksum|fixture-fingerprint/);
+    expect(server.latestBackup).toStrictEqual({ createdAt: 100, size: 12 });
+    expect(server.permissions.includes("backups.read")).toBe(false);
+    expect(JSON.stringify(server)).not.toMatch(/private-backup-destination|private-checksum|fixture-fingerprint/);
 
     setServerGrant(operator.id, serverId, ["server.view", "server.start"], admin);
-    assert.equal((await getServer(operator, serverId)).latestBackup, null);
-    assert.equal((await listServers(operator))[0].latestBackup, null);
+    expect((await getServer(operator, serverId)).latestBackup).toBe(null);
+    expect((await listServers(operator))[0].latestBackup).toBe(null);
   });
 
   it("keeps viewer and unassigned access within their role and server grants", async () => {
@@ -109,9 +108,9 @@ describe("server backup summaries", () => {
     getDatabase().prepare("UPDATE server_grants SET capabilities_json=? WHERE user_id=?").run(
       JSON.stringify(["server.view", "backups.create", "backups.read"]), viewer.id,
     );
-    assert.equal((await getServer(viewer, serverId)).latestBackup, null);
-    assert.deepEqual(await listServers(operator), []);
-    await assert.rejects(getServer(operator, serverId), /Server not found/);
+    expect((await getServer(viewer, serverId)).latestBackup).toBe(null);
+    expect(await listServers(operator)).toStrictEqual([]);
+    await expect(getServer(operator, serverId)).rejects.toThrow(/Server not found/);
   });
 
   it("preserves administrator backup history when the container is missing", async () => {
@@ -119,10 +118,10 @@ describe("server backup summaries", () => {
     setServerGrant(operator.id, serverId, ["server.view", "backups.create"], admin);
     observations = [];
     const server = await getServer(admin, serverId);
-    assert.equal(server.bindingStatus, "missing");
-    assert.deepEqual(server.permissions, ["server.view"]);
-    assert.deepEqual(server.latestBackup, { createdAt: 100, size: 12 });
-    assert.deepEqual((await listServers(admin))[0].latestBackup, { createdAt: 100, size: 12 });
-    assert.deepEqual(await listServers(operator), []);
+    expect(server.bindingStatus).toBe("missing");
+    expect(server.permissions).toStrictEqual(["server.view"]);
+    expect(server.latestBackup).toStrictEqual({ createdAt: 100, size: 12 });
+    expect((await listServers(admin))[0].latestBackup).toStrictEqual({ createdAt: 100, size: 12 });
+    expect(await listServers(operator)).toStrictEqual([]);
   });
 });

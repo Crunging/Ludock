@@ -1,7 +1,6 @@
-import assert from "node:assert/strict";
-import { Readable } from "node:stream";
+import { StreamFixture } from "./fixtures/web-streams.js";
 import { serve, type Server } from "bun";
-import { afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { BackupSettings } from "@ludock/shared";
 import type { ServerObservation } from "../src/identity.js";
 import type { ServerContext } from "../src/servers.js";
@@ -64,11 +63,11 @@ describe("authorization after administrator request preparation", () => {
       if (change === "revoke-session") database.deleteSessionRecord(sessionHash);
       else database.getDatabase().prepare("UPDATE users SET role='viewer' WHERE id=?").run(actor.id);
       hold.release();
-      assert.equal((await response).status, change === "revoke-session" ? 401 : 403);
+      expect((await response).status).toBe(change === "revoke-session" ? 401 : 403);
       const current = identity.getLogicalServer(logical.id)!;
-      assert.equal(current.status, "review_required");
-      assert.equal(current.pendingFingerprint, pendingFingerprint);
-      assert.equal(current.reviewRequired, true);
+      expect(current.status).toBe("review_required");
+      expect(current.pendingFingerprint).toBe(pendingFingerprint);
+      expect(current.reviewRequired).toBe(true);
     });
   }
 
@@ -84,8 +83,8 @@ describe("authorization after administrator request preparation", () => {
     await hold.pending;
     database.deleteSessionRecord(sessionHash);
     hold.release();
-    assert.equal((await response).status, 401);
-    assert.deepEqual(settings.getSetting("backups"), initial);
+    expect((await response).status).toBe(401);
+    expect(settings.getSetting("backups")).toStrictEqual(initial);
   });
 
   it("closes an opened backup stream before returning bytes after access is revoked", async () => {
@@ -94,17 +93,18 @@ describe("authorization after administrator request preparation", () => {
     database.getDatabase().prepare(`INSERT INTO backups
       (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
       VALUES(?,?,?,?,?,?,?,?,'complete')`).run(backupId, logical.id, logical.bindingFingerprint, "/backups", "[]", 15, "fixture", 1);
-    const stream = Readable.from([Buffer.from("private archive")]);
+    const stream = new StreamFixture();
+    stream.enqueue("private archive");
     const hold = gate();
-    spyOn(backups, "openBackupDownload").mockImplementation(async () => { await hold.wait(); return stream; });
+    spyOn(backups, "openBackupDownload").mockImplementation(async () => { await hold.wait(); return stream.readable; });
     const response = request(`/api/v1/servers/${logical.id}/backups/${backupId}/download`, "GET");
     await hold.pending;
     database.deleteSessionRecord(sessionHash);
     hold.release();
     const result = await response;
-    assert.equal(result.status, 401);
-    assert.doesNotMatch(await result.text(), /private archive/);
-    assert.equal(stream.destroyed, true);
+    expect(result.status).toBe(401);
+    expect(await result.text()).not.toMatch(/private archive/);
+    expect(stream.closed).toBe(true);
   });
 
   it("does not enqueue a backup after its requesting session is revoked during binding resolution", async () => {
@@ -118,7 +118,7 @@ describe("authorization after administrator request preparation", () => {
     await hold.pending;
     database.deleteSessionRecord(sessionHash);
     hold.release();
-    assert.equal((await response).status, 401);
-    assert.equal(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count, 0);
+    expect((await response).status).toBe(401);
+    expect(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
   });
 });

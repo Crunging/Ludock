@@ -1,16 +1,41 @@
 #!/usr/bin/env bun
 // Check the production bundle, then run the backend suites with its Linux
-// runtime and dependencies. Neither fixture gets a Docker socket or network.
+// runtime. Neither fixture gets a Docker socket or network.
 import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { backendSourceMounts } from "./test-source-mounts.mjs";
 
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const name = "ludock-linux-tests-" + crypto.randomUUID();
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
+const expectedBun = (await Bun.file(path.join(repository, ".bun-version")).text()).trim();
 
 // This function runs inside the image without source mounts, so missing bundle
 // files, production dependencies, or frontend assets fail before source tests.
-async function smokeProductionBundle() {
+async function smokeProductionBundle(expectedBun) {
+  if (Bun.version !== expectedBun) throw new Error(`Production Bun ${Bun.version} differs from .bun-version ${expectedBun}`);
+  if (["node", "npm", "npx"].some((command) => Bun.which(command))) {
+    throw new Error("The production image must use Bun as its only JavaScript runtime");
+  }
+  if ([...new Bun.Glob("**/node_modules").scanSync({ cwd: "/app", onlyFiles: false })].length) {
+    throw new Error("Production must run its bundles without installed packages");
+  }
+  const inventory = await Bun.file("packages/backend/dist/dependencies.cdx.json").json();
+  if (inventory.bomFormat !== "CycloneDX" || !inventory.components.length) {
+    throw new Error("Production bundle dependency inventory is missing");
+  }
+  for (const entry of ["index", "recovery"]) {
+    if (!(await Bun.file(`packages/backend/dist/${entry}.js.map`).exists())) {
+      throw new Error(`Production ${entry} source map is missing`);
+    }
+  }
+  const recovery = Bun.spawnSync([process.execPath, "packages/backend/dist/recovery.js"], {
+    env: { ...process.env, LUDOCK_DB_PATH: ":memory:", LUDOCK_RECOVERY_PASSWORD: "" },
+    stdout: "pipe", stderr: "pipe",
+  });
+  if (recovery.exitCode !== 2 || !new TextDecoder().decode(recovery.stderr).includes("Usage:")) {
+    throw new Error("Production account recovery entry point did not load");
+  }
   for (const command of [
     [process.execPath, "--version"],
     ["docker", "--version"],
@@ -60,7 +85,31 @@ async function smokeProductionBundle() {
     throw new Error("Production bundle did not serve its frontend script");
   }
   await script.arrayBuffer();
-  console.log("Production bundle serves health, frontend, and built assets.");
+  const username = "bundle-fixture-admin";
+  const oldPassword = "fixture-original-password-0123456789";
+  const newPassword = "fixture-recovered-password-0123456789";
+  const post = (endpoint, body) => fetch(base + "/api/v1" + endpoint, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const setup = await post("/auth/setup", { username, password: oldPassword, bootstrapCode: process.env.LUDOCK_SETUP_CODE });
+  if (!setup.ok) throw new Error("Production bundle administrator setup failed");
+  const cookie = setup.headers.getSetCookie().map((value) => value.split(";", 1)[0]).join("; ");
+  await setup.arrayBuffer();
+  if (!cookie) throw new Error("Production setup did not create a session");
+  const recovered = Bun.spawnSync([process.execPath, "packages/backend/dist/recovery.js", username], {
+    env: { ...process.env, LUDOCK_RECOVERY_PASSWORD: newPassword }, stdout: "pipe", stderr: "pipe",
+  });
+  if (recovered.exitCode !== 0) throw new Error("Production account recovery failed");
+  const status = await fetch(base + "/api/v1/auth/status", { headers: { Cookie: cookie } });
+  if ((await status.json()).authenticated) throw new Error("Account recovery left the old session active");
+  const oldLogin = await post("/auth/login", { username, password: oldPassword });
+  await oldLogin.arrayBuffer();
+  if (oldLogin.status !== 401) throw new Error("Account recovery left the old password usable");
+  const newLogin = await post("/auth/login", { username, password: newPassword });
+  await newLogin.arrayBuffer();
+  if (!newLogin.ok) throw new Error("Recovered account could not log in");
+  console.log("Production bundle serves health/assets and recovers accounts with session revocation.");
 }
 
 function runDocker(args, stdout = "inherit") {
@@ -74,9 +123,10 @@ try {
   runDocker([
     "run", "-d", "--name", name + "-smoke",
     "--network", "none", "--label", "ludock.enable=false",
+    "-e", "LUDOCK_SETUP_CODE=fixture-setup-" + crypto.randomUUID(),
     image,
   ]);
-  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")()"]);
+  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")(" + JSON.stringify(expectedBun) + ")"]);
   runDocker(["stop", "--time", "5", name + "-smoke"]);
   const exitCode = runDocker(["inspect", "--format", "{{.State.ExitCode}}", name + "-smoke"], "pipe")
     .stdout.toString().trim();
@@ -91,8 +141,7 @@ try {
       "docker",
       "run", "--rm", "--name", name,
       "--network", "none", "--label", "ludock.enable=false",
-      "-v", repository + "/packages/backend/src:/app/packages/backend/src:ro",
-      "-v", repository + "/packages/backend/test:/app/packages/backend/test:ro",
+      ...backendSourceMounts(repository),
       image, "bun", "test", "--isolate",
       ...files.map((file) => "./packages/backend/test/" + file),
     ],

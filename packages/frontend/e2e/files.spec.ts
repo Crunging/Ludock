@@ -146,15 +146,16 @@ test("changing storage roots cancels an older folder request and hides stale ent
   await expect(page.getByRole("button", { name: "New folder", exact: true })).toBeEnabled();
 });
 
-test("canceling an upload stops the batch and keeps the selected folder", async ({ app, page }) => {
+test("canceling an upload stops the batch and keeps the selected folder", async ({ app, page }, testInfo) => {
   const uploads: Route[] = [];
   await page.route(`**/api/v1/servers/${RUNNING_ID}/files/upload?*`, (route) => { uploads.push(route); });
   await app.open(`/files/${RUNNING_ID}`);
   await expect(page.getByRole("button", { name: "Choose files", exact: true })).toBeEnabled();
-  await page.getByLabel("Upload files", { exact: true }).setInputFiles([
-    { name: "first.txt", mimeType: "text/plain", buffer: Buffer.from("First fixture file") },
-    { name: "second.txt", mimeType: "text/plain", buffer: Buffer.from("Second fixture file") },
-  ]);
+  const first = testInfo.outputPath("first.txt");
+  const second = testInfo.outputPath("second.txt");
+  await Bun.write(first, "First fixture file");
+  await Bun.write(second, "Second fixture file");
+  await page.getByLabel("Upload files", { exact: true }).setInputFiles([first, second]);
   await expect.poll(() => uploads.length).toBe(1);
   await expect(page.getByText("Uploading 1 of 2: first.txt", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "New folder", exact: true })).toBeDisabled();

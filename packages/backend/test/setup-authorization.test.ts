@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { serve } from "bun";
-import { afterAll, describe, it, spyOn } from "bun:test";
+import { expect, afterAll, describe, it, spyOn } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 delete process.env.LUDOCK_SETUP_CODE;
@@ -26,7 +25,7 @@ try {
   write.mockRestore();
 }
 const setupCode = /Ludock initial setup code: (\S+)/.exec(consoleOutput)?.[1];
-assert.ok(setupCode);
+expect(setupCode).toBeTruthy();
 
 const server = serve({
   ...createApp({ frontendDist: false, setupWindow }),
@@ -48,11 +47,11 @@ function setup(body: unknown): Promise<Response> {
 
 describe("local setup authorization", () => {
   it("prints a generated code once without adding it to application logs", () => {
-    assert.match(setupCode, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal(consoleOutput.split("Ludock initial setup code:").length - 1, 1);
+    expect(setupCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(consoleOutput.split("Ludock initial setup code:").length - 1).toBe(1);
     logSetupInstructions(setupWindow);
     const stored = applicationLogs.listApplicationLogs({ limit: 100 });
-    assert.equal(JSON.stringify(stored).includes(setupCode), false);
+    expect(JSON.stringify(stored).includes(setupCode)).toBe(false);
   });
 
   it("does not print configured codes and rejects weak configuration", () => {
@@ -70,17 +69,11 @@ describe("local setup authorization", () => {
     } finally {
       configuredWrite.mockRestore();
     }
-    assert.equal(directOutput.includes(configuredCode), false);
-    assert.equal(
-      JSON.stringify(applicationLogs.listApplicationLogs({ limit: 100 }))
-        .includes(configuredCode),
-      false,
-    );
-    assert.equal(configuredWindow.takeGeneratedCode(), null);
-    assert.throws(
-      () => new SetupWindow(Date.now, 60_000, "too-short"),
-      /between 32 and 128 characters/,
-    );
+    expect(directOutput.includes(configuredCode)).toBe(false);
+    expect(JSON.stringify(applicationLogs.listApplicationLogs({ limit: 100 }))
+        .includes(configuredCode)).toBe(false);
+    expect(configuredWindow.takeGeneratedCode()).toBe(null);
+    expect(() => new SetupWindow(Date.now, 60_000, "too-short")).toThrow(/between 32 and 128 characters/);
   });
 
   it("rejects missing and incorrect codes before validating account fields", async () => {
@@ -90,12 +83,12 @@ describe("local setup authorization", () => {
       password: "short",
       bootstrapCode: "incorrect-setup-code-0123456789abcdef",
     });
-    assert.equal(missing.status, 403);
-    assert.equal(incorrect.status, 403);
+    expect(missing.status).toBe(403);
+    expect(incorrect.status).toBe(403);
     const missingBody = await missing.json();
     const incorrectBody = await incorrect.json();
-    assert.deepEqual(missingBody, incorrectBody);
-    assert.deepEqual(missingBody, {
+    expect(missingBody).toStrictEqual(incorrectBody);
+    expect(missingBody).toStrictEqual({
       error: "Initial setup authorization failed",
     });
   });
@@ -107,15 +100,15 @@ describe("local setup authorization", () => {
       bootstrapCode: setupCode,
       ignored: true,
     });
-    assert.equal(invalid.status, 400);
+    expect(invalid.status).toBe(400);
 
     const created = await setup({
       username: "admin",
       password: "a-valid-setup-password",
       bootstrapCode: setupCode,
     });
-    assert.equal(created.status, 201);
-    assert.equal(JSON.stringify(applicationLogs.listApplicationLogs({ limit: 100 }))
-      .includes(setupCode), false);
+    expect(created.status).toBe(201);
+    expect(JSON.stringify(applicationLogs.listApplicationLogs({ limit: 100 }))
+      .includes(setupCode)).toBe(false);
   });
 });

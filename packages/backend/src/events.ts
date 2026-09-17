@@ -1,5 +1,5 @@
 import { SERVER_STATE_ACTIONS, serverEventSchema } from "@ludock/shared";
-import { StringDecoder } from "node:string_decoder";
+import { JsonLineDecoder } from "./json-lines.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { currentActor, hasServerCapability } from "./authorization.js";
@@ -11,8 +11,7 @@ import { createLogger } from "./logger.js";
 const eventClients = new Map<SocketChannel, WebSocketAuth>();
 const eventDeliveries = new Set<Promise<void>>();
 let eventStreamActive = false;
-let eventStream: (NodeJS.ReadableStream & { destroy?: () => void }) | null =
-  null;
+let eventStream: ReturnType<ReadableStream<Uint8Array>["getReader"]> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let streamGeneration = 0;
 const logger = createLogger("events");
@@ -29,27 +28,11 @@ const STATE_ACTIONS = new Set<string>(SERVER_STATE_ACTIONS);
 /** Docker JSON events can span chunks or share a chunk. Bound incomplete input. */
 export function dockerEventDecoder(
   deliver: (event: DockerEvent) => void,
-): (chunk: Buffer) => void {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  return (chunk) => {
-    pending += decoder.write(chunk);
-    if (Buffer.byteLength(pending) > 1_048_576)
-      throw new Error("Docker event buffer exceeded its limit");
-    let newline: number;
-    while ((newline = pending.indexOf("\n")) !== -1) {
-      const line = pending.slice(0, newline);
-      pending = pending.slice(newline + 1);
-      if (!line.trim()) continue;
-      try {
-        const value: unknown = JSON.parse(line);
-        if (value && typeof value === "object" && !Array.isArray(value))
-          deliver(value);
-      } catch {
-        /* Ignore malformed lines without recording their contents. */
-      }
-    }
-  };
+): (chunk: Uint8Array) => void {
+  const decoder = new JsonLineDecoder(value => {
+    if (value && typeof value === "object" && !Array.isArray(value)) deliver(value);
+  }, true);
+  return chunk => decoder.push(chunk);
 }
 
 export function addEventClient(ws: SocketChannel, auth: WebSocketAuth): void {
@@ -70,7 +53,7 @@ export async function stopEventStream(): Promise<void> {
   const stream = eventStream;
   eventStream = null;
   eventStreamActive = false;
-  stream?.destroy?.();
+  await stream?.cancel().catch(() => {});
   // A decoded event may still be awaiting a Docker refresh. It must finish
   // before shutdown closes the database used by its authorization checks.
   await Promise.allSettled(eventDeliveries);
@@ -143,10 +126,11 @@ async function startEventStream(): Promise<void> {
       filters: { type: ["container"] },
     });
     if (generation !== streamGeneration || eventClients.size === 0) {
-      (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+      await stream.cancel().catch(() => {});
       return;
     }
-    eventStream = stream;
+    const reader = stream.getReader();
+    eventStream = reader;
     // Coalesce Docker bursts; dashboard updates need the latest state, not an
     // unbounded queue of health/exec events. Only state actions enter the queue.
     const pending = new Map<string, DockerEvent>();
@@ -155,7 +139,7 @@ async function startEventStream(): Promise<void> {
       if (draining) return;
       draining = true;
       try {
-        while (pending.size && eventStream === stream) {
+        while (pending.size && eventStream === reader) {
           const [id, event] = pending.entries().next().value!;
           pending.delete(id);
           try {
@@ -175,19 +159,21 @@ async function startEventStream(): Promise<void> {
       pending.set(id, event);
       void drain();
     });
-    stream.on("data", (chunk: Buffer) => {
+    void (async () => {
       try {
-        decode(chunk);
+        while (eventStream === reader) {
+          const { value, done } = await reader.read();
+          if (eventStream !== reader) return;
+          if (done) { scheduleReconnect(2000); return; }
+          decode(value);
+        }
       } catch {
-        scheduleReconnect(5000);
+        if (eventStream === reader) scheduleReconnect(5000);
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
       }
-    });
-    stream.on("error", () => {
-      if (eventStream === stream) scheduleReconnect(5000);
-    });
-    stream.on("end", () => {
-      if (eventStream === stream) scheduleReconnect(2000);
-    });
+    })();
   } catch {
     if (generation === streamGeneration) scheduleReconnect(5000);
   }

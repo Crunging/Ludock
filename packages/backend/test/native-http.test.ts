@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
 import { serve } from "bun";
-import { afterEach, beforeEach, describe, it } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { createApp } from "../src/app.js";
 import { createSession } from "../src/auth.js";
 import {
@@ -17,8 +15,8 @@ let target: SessionUser;
 let cookie: string;
 beforeEach(() => {
   closeDatabase();
-  admin = { id: randomUUID(), username: "admin", role: "admin" };
-  target = { id: randomUUID(), username: "target", role: "viewer" };
+  admin = { id: crypto.randomUUID(), username: "admin", role: "admin" };
+  target = { id: crypto.randomUUID(), username: "target", role: "viewer" };
   for (const user of [admin, target])
     createUser({ ...user, passwordHash: "fixture", disabled: false, createdAt: 0 });
   cookie = `ludock_session=${createSession(admin, new Request("http://localhost")).token}`;
@@ -31,37 +29,37 @@ describe("native HTTP request lifetimes", () => {
       "/api/v1/mount-proof": {
         GET: async () => {
           await createMountProof([{ Type: "volume", Source: "/invalid/volume", Destination: "/data", RW: true }]);
-          assert.fail("An invalid named volume cannot produce a proof");
+          expect.unreachable("An invalid named volume cannot produce a proof");
         },
       },
     } });
     const response = await app.fetch(new Request("http://localhost/api/v1/mount-proof", {
       headers: { Cookie: cookie },
     }), { requestIP: () => null, timeout: () => {} });
-    assert.equal(response.status, 409);
+    expect(response.status).toBe(409);
     const body = await response.json() as { code: string; error: string };
-    assert.equal(body.code, "UNVERIFIED_DATA_MOUNT");
-    assert.match(body.error, /data mount could not be verified/);
-    assert.doesNotMatch(body.error, /invalid\/volume/);
+    expect(body.code).toBe("UNVERIFIED_DATA_MOUNT");
+    expect(body.error).toMatch(/data mount could not be verified/);
+    expect(body.error).not.toMatch(/invalid\/volume/);
   });
   it("serves public case and trailing-slash variants without redirects or broader method access", async () => {
     const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
     try {
       for (const pathname of ["/API/v1/AuTh/StAtUs/", "/api/v1/auth/status/"]) {
         const response = await fetch(new URL(pathname, server.url), { redirect: "error" });
-        assert.equal(response.status, 200);
-        assert.equal(response.headers.get("Location"), null);
-        assert.equal((await response.json() as { authenticated: boolean }).authenticated, false);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Location")).toBe(null);
+        expect((await response.json() as { authenticated: boolean }).authenticated).toBe(false);
         const head = await fetch(new URL(pathname, server.url), { method: "HEAD", redirect: "error" });
-        assert.equal(head.status, 200);
-        assert.equal(await head.text(), "");
+        expect(head.status).toBe(200);
+        expect(await head.text()).toBe("");
         const unsupported = await fetch(new URL(pathname, server.url), { method: "POST", redirect: "error" });
-        assert.equal(unsupported.status, 401);
+        expect(unsupported.status).toBe(401);
         await unsupported.body?.cancel();
       }
       const logout = await fetch(new URL("/API/v1/AUTH/LOGOUT/", server.url), { method: "POST", redirect: "error" });
-      assert.equal(logout.status, 200);
-      assert.deepEqual(await logout.json(), { ok: true });
+      expect(logout.status).toBe(200);
+      expect(await logout.json()).toStrictEqual({ ok: true });
     } finally { await server.stop(true); }
   });
 
@@ -83,9 +81,9 @@ describe("native HTTP request lifetimes", () => {
     try {
       const url = new URL("/API/v1/NATIVE-ECHO/MiXeD%20%252fName/?value=CaSe%2BValue", server.url);
       const denied = await fetch(url, { method: "POST", redirect: "error" });
-      assert.equal(denied.status, 401);
+      expect(denied.status).toBe(401);
       await denied.body?.cancel();
-      assert.deepEqual(calls, []);
+      expect(calls).toStrictEqual([]);
       const post = await fetch(url, {
         method: "POST", redirect: "error",
         headers: { Cookie: cookie, "Content-Type": "application/json" },
@@ -97,9 +95,9 @@ describe("native HTTP request lifetimes", () => {
           },
         }),
       });
-      assert.equal(post.status, 200);
-      assert.equal(post.headers.get("Location"), null);
-      assert.deepEqual(await post.json(), { value: "MiXeD %2fName", query: "CaSe+Value", body: { unchanged: "JSON body" } });
+      expect(post.status).toBe(200);
+      expect(post.headers.get("Location")).toBe(null);
+      expect(await post.json()).toStrictEqual({ value: "MiXeD %2fName", query: "CaSe+Value", body: { unchanged: "JSON body" } });
       const put = await fetch(url, {
         method: "PUT", redirect: "error",
         headers: { Cookie: cookie, "Content-Type": "application/octet-stream" },
@@ -110,9 +108,9 @@ describe("native HTTP request lifetimes", () => {
           },
         }),
       });
-      assert.equal(put.status, 200);
-      assert.deepEqual(await put.json(), { value: "MiXeD %2fName", body: "binary body\u0000preserved" });
-      assert.deepEqual(calls, ["POST", "PUT"]);
+      expect(put.status).toBe(200);
+      expect(await put.json()).toStrictEqual({ value: "MiXeD %2fName", body: "binary body\u0000preserved" });
+      expect(calls).toStrictEqual(["POST", "PUT"]);
     } finally { await server.stop(true); }
   });
 
@@ -141,15 +139,15 @@ describe("native HTTP request lifetimes", () => {
       }), { params: { id: target.id } });
       const response = createApp({ frontendDist: false }).routes["/api/v1/users/:id"].PATCH!(request, server);
       await reading;
-      assert.deepEqual(timeouts, [30], "incoming bodies keep their idle deadline");
+      expect(timeouts, "incoming bodies keep their idle deadline").toStrictEqual([30]);
       if (change === "revoke session") deleteUserSessions(admin.id);
       else updateUserAccess(admin.id, "viewer", false);
       finish();
       const result = await response;
-      assert.equal(result.status, change === "revoke session" ? 401 : 403);
+      expect(result.status).toBe(change === "revoke session" ? 401 : 403);
       await result.text();
-      assert.equal(findUserById(target.id)?.role, "viewer");
-      assert.deepEqual(timeouts, [30, 0]);
+      expect(findUserById(target.id)?.role).toBe("viewer");
+      expect(timeouts).toStrictEqual([30, 0]);
     });
   }
 });

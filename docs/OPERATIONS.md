@@ -25,6 +25,9 @@ target. A missing host socket fails at startup instead of creating a directory.
 [Rootless Docker](https://docs.docker.com/engine/security/rootless/tips/)
 typically uses `/run/user/<uid>/docker.sock`. Run Compose on the game servers’
 Docker host, using the same Docker context as those containers.
+The daemon must support Engine API 1.44 or newer. Ludock negotiates a supported
+API version over the mounted Unix socket; `DOCKER_HOST`, TLS, and SSH environment
+settings do not configure this connection.
 
 Docker socket access grants host-level power even with a read-only mount.
 Use HTTPS for remote access; the proxy must preserve the public host, forward

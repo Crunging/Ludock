@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun ../../scripts/watch-backend.mjs",
-    "build": "bun build src/index.ts src/recovery.ts --target=bun --outdir=dist --sourcemap=linked --packages=external",
+    "build": "bun ../../scripts/build-backend.mjs",
     "lint": "oxlint .",
+    "lint:scripts": "cd ../.. && oxlint --config scripts/.oxlintrc.json scripts",
     "test": "bun test --isolate ./test",
     "recover": "bun src/recovery.ts",
     "start": "bun dist/index.js",
@@ -13,14 +14,11 @@
   },
   "dependencies": {
     "@ludock/shared": "workspace:*",
-    "dockerode": "^5.0.1",
-    "tar-stream": "^3.2.1",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
-    "@types/dockerode": "^4.0.1",
     "oxlint": "^1.83.0",
     "oxlint-tsgolint": "^7.0.2001",
     "typescript": "^7.0.2"

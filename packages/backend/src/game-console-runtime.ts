@@ -1,7 +1,6 @@
-import { PassThrough } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
-import type Docker from "dockerode";
-import { getDockerInstance } from "./docker.js";
+import { encodeText, concatBytes, byteView } from "./bytes.js";
+import { demuxDockerStream } from "./docker-stream.js";
+import type * as Docker from "./docker-client.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
   LABEL_CONSOLE_PORT,
@@ -152,7 +151,7 @@ export async function executeSourceRcon(
   assertAccess?.();
   const authId = randomRequestId();
   const commandId = randomRequestId();
-  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let buffer: Uint8Array = new Uint8Array(0);
   let authenticated = false;
   let commandSent = false;
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -171,7 +170,7 @@ export async function executeSourceRcon(
       tcp.write(encodeRconPacket(authId, 3, password));
     },
     data(tcp, chunk) {
-      buffer = Buffer.concat([buffer, chunk]);
+      buffer = concatBytes([buffer, chunk]);
       const decoded = decodeRconPackets(buffer);
       buffer = decoded.remaining;
       for (const packet of decoded.packets) {
@@ -264,7 +263,7 @@ export async function executeRustWebRcon(
         const raw: unknown = event.data;
         if (typeof raw !== "string" && !(raw instanceof ArrayBuffer))
           throw new Error("Unsupported WebRCON message");
-        if ((typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength) > MAX_RCON_PACKET_SIZE)
+        if ((typeof raw === "string" ? encodeText(raw).byteLength : raw.byteLength) > MAX_RCON_PACKET_SIZE)
           throw new Error("WebRCON response is too large");
         const message = JSON.parse(rawDataToString(raw)) as {
           Identifier?: unknown;
@@ -320,10 +319,10 @@ export async function executeTelnetCommand(
       if (tcp.settled) return;
       if (!passwordSent && /password\s*[:>]?/i.test(output)) {
         passwordSent = true;
-        tcp.write(Buffer.from(`${password}\n`), () => {
+        tcp.write(encodeText(`${password}\n`), () => {
           commandTimer = setTimeout(() => {
             if (tcp.settled) return;
-            tcp.write(Buffer.from(`${command}\n`), () => {
+            tcp.write(encodeText(`${command}\n`), () => {
               commandSent = true;
               quietTimer = setTimeout(() => finishResponse(tcp), 250);
             });
@@ -355,7 +354,7 @@ export async function executeTelnetCommand(
 
 interface ConsoleTcpSession {
   readonly settled: boolean;
-  write(data: Buffer, written?: () => void): void;
+  write(data: Uint8Array, written?: () => void): void;
   finish(error?: Error, response?: string): void;
 }
 
@@ -368,7 +367,7 @@ function runConsoleTcp(options: {
   connectionErrorMessage: string;
   responseLimitMessage: string;
   open?(tcp: ConsoleTcpSession): void;
-  data(tcp: ConsoleTcpSession, chunk: Buffer): void;
+  data(tcp: ConsoleTcpSession, chunk: Uint8Array): void;
   end(tcp: ConsoleTcpSession): void;
   cleanup(): void;
 }): Promise<string> {
@@ -379,7 +378,7 @@ function runConsoleTcp(options: {
     let queuedBytes = 0;
     let draining = false;
     let blocked = false;
-    const writes: Array<{ data: Buffer; offset: number; written?: () => void }> = [];
+    const writes: Array<{ data: Uint8Array; offset: number; written?: () => void }> = [];
     const connectTimer = setTimeout(() => {
       tcp.finish(new Error(options.connectTimeoutMessage));
     }, CONNECT_TIMEOUT_MS);
@@ -456,6 +455,7 @@ function runConsoleTcp(options: {
         hostname: options.host,
         port: options.port,
         socket: {
+          binaryType: "uint8array",
           open(connected) {
             socket = connected;
             if (settled) { connected.terminate(); return; }
@@ -608,7 +608,7 @@ async function executeInContainer(
   if (signal?.aborted) throw new Error("Console command cancelled");
   // Starting is a mutation: an HTTP timeout cannot prove Docker rejected it.
   // Keep the caller's lock until the outcome and subsequent cleanup are known.
-  const stream = await exec.start({ hijack: true, stdin: false });
+  const stream = await exec.start();
   let cancellationRequested = false;
   let cancelled = false;
   let outputLimited = false;
@@ -649,7 +649,7 @@ async function executeInContainer(
   const hardDeadline = setTimeout(() => {
     forcedDeadline = true;
     requestCancellation();
-    (stream as NodeJS.ReadWriteStream & { destroy(error?: Error): void }).destroy(
+    stream.abort(
       new Error("Game console command timed out"),
     );
   },
@@ -658,7 +658,7 @@ async function executeInContainer(
   hardDeadline.unref();
   let streamFailure: unknown;
   try {
-    await streamExecOutput(stream, guardedOutput, () => {
+    await streamExecOutput(stream.readable, guardedOutput, () => {
       outputLimited = true;
       requestCancellation();
     });
@@ -732,8 +732,10 @@ async function cancelDockerExec(
     Tty: false,
     ...(user ? { User: user } : {}),
   });
-  const stream = await cancellation.start({ hijack: true, stdin: false });
-  (stream as NodeJS.ReadableStream & { resume?: () => void }).resume?.();
+  const stream = await cancellation.start();
+  const timeout = setTimeout(() => stream.abort(new Error("Console cancellation timed out")), 10_000);
+  try { await demuxDockerStream(stream.readable); }
+  finally { clearTimeout(timeout); stream.abort(); }
 }
 
 async function inspectDockerExec(exec: Docker.Exec): Promise<Docker.ExecInspectInfo> {
@@ -777,43 +779,34 @@ async function writeContainerStdin(
     stdin: true,
     stdout: false,
     stderr: false,
-    hijack: true,
   });
   try {
     assertAccess?.();
     await writeAttachedInput(stream, `${command}\n`);
   } finally {
-    (stream as NodeJS.ReadWriteStream & { destroy(): void }).destroy();
+    stream.abort();
   }
   output.system("Command sent to the server process");
 }
 
-async function writeAttachedInput(
-  stream: NodeJS.ReadWriteStream,
-  data: string
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    stream.write(data, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+async function writeAttachedInput(stream: Docker.DockerConnection, data: string): Promise<void> {
+  const writer = stream.writable.getWriter();
+  try { await writer.write(new TextEncoder().encode(data)); }
+  finally { writer.releaseLock(); }
 }
 
 async function streamExecOutput(
-  stream: NodeJS.ReadWriteStream,
+  stream: ReadableStream<Uint8Array>,
   output: GameCommandOutput,
   onLimit: () => void,
 ): Promise<void> {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
   const decoders = {
-    stdout: new StringDecoder("utf8"),
-    stderr: new StringDecoder("utf8"),
+    stdout: new TextDecoder("utf-8", { ignoreBOM: true }),
+    stderr: new TextDecoder("utf-8", { ignoreBOM: true }),
   };
   let receivedBytes = 0;
   let limited = false;
-  const receive = (type: "stdout" | "stderr", chunk: Buffer) => {
+  const receive = (type: "stdout" | "stderr", chunk: Uint8Array) => {
     if (limited) return;
     receivedBytes += chunk.length;
     if (receivedBytes > MAX_DOCKER_EXEC_OUTPUT_BYTES) {
@@ -821,58 +814,46 @@ async function streamExecOutput(
       onLimit();
       return;
     }
-    const value = decoders[type].write(chunk);
+    const value = decoders[type].decode(chunk, { stream: true });
     if (value) output[type](value);
   };
-  stdout.on("data", (chunk: Buffer) => receive("stdout", chunk));
-  stderr.on("data", (chunk: Buffer) => receive("stderr", chunk));
-  try {
-    await new Promise<void>((resolve, reject) => {
-      stream.once("end", resolve);
-      stream.once("close", resolve);
-      stream.once("error", reject);
-      getDockerInstance().modem.demuxStream(stream, stdout, stderr);
-    });
-    if (!limited) {
-      const finalStdout = decoders.stdout.end();
-      const finalStderr = decoders.stderr.end();
-      if (finalStdout) output.stdout(finalStdout);
-      if (finalStderr) output.stderr(finalStderr);
-    }
-  } finally {
-    stdout.end();
-    stderr.end();
+  await demuxDockerStream(stream, chunk => receive("stdout", chunk), chunk => receive("stderr", chunk));
+  if (!limited) {
+    const finalStdout = decoders.stdout.decode();
+    const finalStderr = decoders.stderr.decode();
+    if (finalStdout) output.stdout(finalStdout);
+    if (finalStderr) output.stderr(finalStderr);
   }
 }
 
-function encodeRconPacket(id: number, type: number, body: string): Buffer {
-  if (Buffer.byteLength(body, "utf8") > MAX_RCON_PACKET_SIZE - 10)
+function encodeRconPacket(id: number, type: number, body: string): Uint8Array {
+  if (encodeText(body).byteLength > MAX_RCON_PACKET_SIZE - 10)
     throw new Error("RCON command or credential is too large");
-  const payload = Buffer.from(body, "utf8");
-  const packet = Buffer.alloc(payload.length + 14);
-  packet.writeInt32LE(payload.length + 10, 0);
-  packet.writeInt32LE(id, 4);
-  packet.writeInt32LE(type, 8);
-  payload.copy(packet, 12);
+  const payload = encodeText(body);
+  const packet = new Uint8Array(payload.length + 14);
+  byteView(packet).setInt32(0, payload.length + 10, true);
+  byteView(packet).setInt32(4, id, true);
+  byteView(packet).setInt32(8, type, true);
+  packet.set(payload, 12);
   return packet;
 }
 
-function decodeRconPackets(buffer: Buffer): {
-  packets: Array<{ id: number; type: number; body: Buffer }>;
-  remaining: Buffer;
+function decodeRconPackets(buffer: Uint8Array): {
+  packets: Array<{ id: number; type: number; body: Uint8Array }>;
+  remaining: Uint8Array;
 } {
-  const packets: Array<{ id: number; type: number; body: Buffer }> = [];
+  const packets: Array<{ id: number; type: number; body: Uint8Array }> = [];
   let offset = 0;
   while (buffer.length - offset >= 4) {
-    const size = buffer.readInt32LE(offset);
+    const size = byteView(buffer).getInt32(offset, true);
     if (size < 10 || size > MAX_RCON_PACKET_SIZE) {
       throw new Error("The RCON server returned an invalid packet");
     }
     if (buffer.length - offset < size + 4) break;
     const end = offset + size + 4;
     packets.push({
-      id: buffer.readInt32LE(offset + 4),
-      type: buffer.readInt32LE(offset + 8),
+      id: byteView(buffer).getInt32(offset + 4, true),
+      type: byteView(buffer).getInt32(offset + 8, true),
       body: buffer.subarray(offset + 12, end - 2),
     });
     offset = end;
@@ -897,11 +878,11 @@ function isValidConsoleHost(host: string): boolean {
   );
 }
 
-function createTelnetDecoder(): (chunk: Buffer, tcp: ConsoleTcpSession) => Buffer {
+function createTelnetDecoder(): (chunk: Uint8Array, tcp: ConsoleTcpSession) => Uint8Array {
   let state: "text" | "command" | "option" | "subnegotiation" | "subcommand" = "text";
   let command = 0;
   return (chunk, tcp) => {
-    const output = Buffer.allocUnsafe(chunk.length);
+    const output = new Uint8Array(chunk.length);
     let length = 0;
     for (const byte of chunk) {
       if (tcp.settled) break;
@@ -920,7 +901,7 @@ function createTelnetDecoder(): (chunk: Buffer, tcp: ConsoleTcpSession) => Buffe
           } else state = byte === 250 ? "subnegotiation" : "text";
           break;
         case "option":
-          tcp.write(Buffer.from([255, command <= 252 ? 254 : 252, byte]));
+          tcp.write(Uint8Array.from([255, command <= 252 ? 254 : 252, byte]));
           state = "text";
           break;
         case "subnegotiation":

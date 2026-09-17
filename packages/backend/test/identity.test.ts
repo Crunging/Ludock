@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll as after, beforeEach, describe, it } from "bun:test";
+import { expect, afterAll as after, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import {
   assertObservedServerBinding,
@@ -54,15 +53,15 @@ describe("logical server identities", () => {
     const firstPath = path.join(identityDirectory, "first.db");
     process.env.LUDOCK_DB_PATH = firstPath;
     const original = bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } }));
-    assert.match(original, /^hmac-sha256:[a-f0-9]{64}$/);
-    assert.equal(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
-    assert.notEqual(original, bindingFingerprint(observation({ gameConfiguration: { password: "second-secret" } })));
+    expect(original).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
+    expect(original).toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
+    expect(original).not.toBe(bindingFingerprint(observation({ gameConfiguration: { password: "second-secret" } })));
     closeDatabase();
-    assert.equal(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
+    expect(original).toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
 
     closeDatabase();
     process.env.LUDOCK_DB_PATH = path.join(identityDirectory, "second.db");
-    assert.notEqual(original, bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
+    expect(original).not.toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
   });
 
   it("reattaches ordinary recreations to the same UUID and revises observed-container attribution", () => {
@@ -71,23 +70,17 @@ describe("logical server identities", () => {
       [observation({ containerId: "docker-b" })],
       { now: 200 },
     )[0];
-    assert.equal(recreated.id, original.id);
-    assert.equal(recreated.status, "active");
-    assert.equal(recreated.bindingRevision, original.bindingRevision + 1);
-    assert.equal(recreated.containerId, "docker-b");
-    assert.equal(recreated.firstSeenAt, 100);
-    assert.equal(recreated.lastSeenAt, 200);
-    assert.throws(
-      () => resolveServerBinding(recreated.id, original.bindingRevision),
-      /binding changed/,
-    );
-    assert.deepEqual(
-      getDatabase()
+    expect(recreated.id).toBe(original.id);
+    expect(recreated.status).toBe("active");
+    expect(recreated.bindingRevision).toBe(original.bindingRevision + 1);
+    expect(recreated.containerId).toBe("docker-b");
+    expect(recreated.firstSeenAt).toBe(100);
+    expect(recreated.lastSeenAt).toBe(200);
+    expect(() => resolveServerBinding(recreated.id, original.bindingRevision)).toThrow(/binding changed/);
+    expect(getDatabase()
         .prepare("SELECT container_id FROM server_bindings ORDER BY id")
         .all()
-        .map((row) => row.container_id),
-      ["docker-a", "docker-b"],
-    );
+        .map((row) => row.container_id)).toStrictEqual(["docker-a", "docker-b"]);
   });
 
   it("uses Compose project/service/replica rather than Docker container name", () => {
@@ -104,37 +97,32 @@ describe("logical server identities", () => {
         name: "renamed-by-compose",
       }),
     ])[0];
-    assert.equal(recreated.id, original.id);
-    assert.equal(recreated.externalIdentity, "compose:games:minecraft:1");
-    assert.equal(recreated.status, "active");
+    expect(recreated.id).toBe(original.id);
+    expect(recreated.externalIdentity).toBe("compose:games:minecraft:1");
+    expect(recreated.status).toBe("active");
   });
 
   it("keeps missing history and assigns a new UUID to standalone renames", () => {
     const original = reconcileServers([observation()])[0];
     const result = reconcileServers([observation({ name: "different-name" })]);
-    assert.equal(result.length, 2);
-    assert.equal(getLogicalServer(original.id)?.status, "missing");
-    assert.equal(getLogicalServer(original.id)?.containerId, null);
-    assert.ok(
-      result.some(
+    expect(result.length).toBe(2);
+    expect(getLogicalServer(original.id)?.status).toBe("missing");
+    expect(getLogicalServer(original.id)?.containerId).toBe(null);
+    expect(result.some(
         (server) => server.id !== original.id && server.status === "active",
-      ),
-    );
-    assert.throws(
-      () => resolveServerBinding(original.id),
-      /binding is unavailable/,
-    );
+      )).toBeTruthy();
+    expect(() => resolveServerBinding(original.id)).toThrow(/binding is unavailable/);
   });
 
   it("scopes the same identity to separate persisted Docker hosts", () => {
     const localHost = getDockerHostId();
-    assert.equal(getDockerHostId(), localHost);
+    expect(getDockerHostId()).toBe(localHost);
     const otherHost = getDockerHostId("another-daemon");
     const first = reconcileServers([observation()], { hostId: localHost })[0];
     const second = reconcileServers([observation()], { hostId: otherHost })[0];
-    assert.notEqual(first.id, second.id);
-    assert.equal(listLogicalServers().length, 2);
-    assert.equal(getLogicalServer(first.id)?.status, "active");
+    expect(first.id).not.toBe(second.id);
+    expect(listLogicalServers().length).toBe(2);
+    expect(getLogicalServer(first.id)?.status).toBe("active");
   });
 
   it("shows duplicate Compose identities but refuses binding and history attribution", () => {
@@ -144,22 +132,16 @@ describe("logical server identities", () => {
       observation({ compose }),
       observation({ compose, containerId: "docker-b", name: "duplicate" }),
     ])[0];
-    assert.equal(duplicate.id, original.id);
-    assert.equal(duplicate.status, "ambiguous");
-    assert.equal(duplicate.containerId, null);
-    assert.throws(
-      () => resolveServerBinding(duplicate.id),
-      /binding is unavailable/,
-    );
-    assert.equal(
-      getDatabase()
+    expect(duplicate.id).toBe(original.id);
+    expect(duplicate.status).toBe("ambiguous");
+    expect(duplicate.containerId).toBe(null);
+    expect(() => resolveServerBinding(duplicate.id)).toThrow(/binding is unavailable/);
+    expect(getDatabase()
         .prepare("SELECT COUNT(*) AS count FROM server_bindings")
-        .get()?.count,
-      1,
-    );
+        .get()?.count).toBe(1);
     const recovered = reconcileServers([observation({ compose })])[0];
-    assert.equal(recovered.id, original.id);
-    assert.equal(recovered.status, "active");
+    expect(recovered.id).toBe(original.id);
+    expect(recovered.status).toBe("active");
   });
 
   it("requires explicit review after mount, game, registration, or configuration changes", () => {
@@ -175,30 +157,24 @@ describe("logical server identities", () => {
       ],
     });
     const pending = reconcileServers([changed])[0];
-    assert.equal(pending.id, original.id);
-    assert.equal(pending.status, "review_required");
-    assert.equal(pending.bindingFingerprint, original.bindingFingerprint);
-    assert.notEqual(pending.pendingFingerprint, original.bindingFingerprint);
-    assert.throws(() => resolveServerBinding(pending.id), /review/);
-    assert.throws(
-      () => reviewServerBinding(pending.id, "stale-fingerprint"),
-      /pending server binding changed/,
-    );
+    expect(pending.id).toBe(original.id);
+    expect(pending.status).toBe("review_required");
+    expect(pending.bindingFingerprint).toBe(original.bindingFingerprint);
+    expect(pending.pendingFingerprint).not.toBe(original.bindingFingerprint);
+    expect(() => resolveServerBinding(pending.id)).toThrow(/review/);
+    expect(() => reviewServerBinding(pending.id, "stale-fingerprint")).toThrow(/pending server binding changed/);
     const reviewed = reviewServerBinding(
       pending.id,
       pending.pendingFingerprint!,
     );
-    assert.equal(reviewed.status, "active");
-    assert.equal(reviewed.bindingFingerprint, bindingFingerprint(changed));
-    assert.ok(reviewed.bindingRevision > pending.bindingRevision);
+    expect(reviewed.status).toBe("active");
+    expect(reviewed.bindingFingerprint).toBe(bindingFingerprint(changed));
+    expect(reviewed.bindingRevision > pending.bindingRevision).toBeTruthy();
     for (const candidate of [
       { ...changed, gameType: "factorio" },
       { ...changed, gameConfiguration: { "ludock.console": "different" } },
     ]) {
-      assert.notEqual(
-        bindingFingerprint(candidate),
-        reviewed.bindingFingerprint,
-      );
+      expect(bindingFingerprint(candidate)).not.toBe(reviewed.bindingFingerprint);
     }
   });
 
@@ -207,41 +183,31 @@ describe("logical server identities", () => {
     reconcileServers([observation({ gameType: "factorio" })]);
     reconcileServers([]);
     const reappeared = reconcileServers([observation()])[0];
-    assert.equal(reappeared.id, original.id);
-    assert.equal(reappeared.status, "review_required");
-    assert.equal(reappeared.reviewRequired, true);
+    expect(reappeared.id).toBe(original.id);
+    expect(reappeared.status).toBe("review_required");
+    expect(reappeared.reviewRequired).toBe(true);
   });
 
   it("rejects an external replacement observed between authorization and mutation", () => {
     const server = reconcileServers([observation()])[0];
-    assert.doesNotThrow(() =>
+    expect(() =>
       assertObservedServerBinding(
         server.id,
         observation(),
         server.bindingRevision,
-      ),
-    );
-    assert.throws(
-      () =>
+      )).not.toThrow();
+    expect(() =>
         assertObservedServerBinding(
           server.id,
           observation({ containerId: "external-new" }),
-        ),
-      /identity changed/,
-    );
-    assert.throws(
-      () =>
+        )).toThrow(/identity changed/);
+    expect(() =>
         assertObservedServerBinding(
           server.id,
           observation({ gameType: "factorio" }),
-        ),
-      /identity changed/,
-    );
-    assert.throws(
-      () =>
-        assertObservedServerBinding(server.id, observation({ name: "other" })),
-      /identity changed/,
-    );
+        )).toThrow(/identity changed/);
+    expect(() =>
+        assertObservedServerBinding(server.id, observation({ name: "other" }))).toThrow(/identity changed/);
   });
 
   it("makes fingerprints independent of mount/config order and ignores read-only mounts", () => {
@@ -261,40 +227,31 @@ describe("logical server identities", () => {
         ...first.mounts,
       ],
     };
-    assert.equal(bindingFingerprint(first), bindingFingerprint(second));
+    expect(bindingFingerprint(first)).toBe(bindingFingerprint(second));
     reconcileServers([first]);
     const rows = getDatabase().prepare("SELECT * FROM logical_servers").all();
-    assert.equal(JSON.stringify(rows).includes("never-store-me"), false);
-    assert.equal(JSON.stringify(rows).includes("/srv/minecraft"), false);
+    expect(JSON.stringify(rows).includes("never-store-me")).toBe(false);
+    expect(JSON.stringify(rows).includes("/srv/minecraft")).toBe(false);
   });
 
   it("rejects invalid or partial observations before mutating the snapshot", () => {
     const original = reconcileServers([observation()])[0];
-    assert.throws(
-      () => reconcileServers([observation(), observation()]),
-      /Duplicate container/,
-    );
-    assert.throws(
-      () =>
+    expect(() => reconcileServers([observation(), observation()])).toThrow(/Duplicate container/);
+    expect(() =>
         reconcileServers([
           observation({
             compose: { project: "games", service: "", containerNumber: "1" },
           }),
-        ]),
-      /Incomplete Compose/,
-    );
-    assert.equal(getLogicalServer(original.id)?.status, "active");
-    assert.notEqual(
-      externalServerIdentity(
+        ])).toThrow(/Incomplete Compose/);
+    expect(getLogicalServer(original.id)?.status).toBe("active");
+    expect(externalServerIdentity(
         observation({
           compose: { project: "a:b", service: "c", containerNumber: "1" },
         }),
-      ),
-      externalServerIdentity(
+      )).not.toBe(externalServerIdentity(
         observation({
           compose: { project: "a", service: "b:c", containerNumber: "1" },
         }),
-      ),
-    );
+      ));
   });
 });

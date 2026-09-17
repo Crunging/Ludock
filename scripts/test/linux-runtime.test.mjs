@@ -1,11 +1,9 @@
-import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 
-const harness = fileURLToPath(new URL("../test-linux.mjs", import.meta.url));
+const harness = Bun.fileURLToPath(new URL("../test-linux.mjs", import.meta.url));
 
 async function runHarness(scenario) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ludock-linux-harness-test-"));
@@ -40,30 +38,34 @@ if (args[0] === "run" && args.includes("test") && process.env.LUDOCK_SCENARIO ==
 describe("Linux production harness", () => {
   it("checks the default image command before source suites and cleans up fixture volumes", async () => {
     const { result, commands } = await runHarness("success");
-    assert.equal(result.exitCode, 0, result.stderr.toString());
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
     const smoke = commands[0];
-    assert.equal(smoke.at(-1), "ludock:fixture");
-    assert.ok(!smoke.includes("--entrypoint") && !smoke.includes("-v") && !smoke.includes("-p"));
-    assert.equal(smoke[smoke.indexOf("--network") + 1], "none");
-    assert.deepEqual(commands.map((command) => command[0]), ["run", "exec", "stop", "inspect", "run", "rm"]);
-    assert.ok(commands[4].includes("test"));
-    assert.deepEqual(commands.at(-1).slice(0, 2), ["rm", "-fv"]);
-    assert.equal(commands.at(-1)[2], smoke[smoke.indexOf("--name") + 1]);
+    expect(smoke.at(-1)).toBe("ludock:fixture");
+    expect(!smoke.includes("--entrypoint") && !smoke.includes("-v") && !smoke.includes("-p")).toBeTruthy();
+    expect(smoke[smoke.indexOf("--network") + 1]).toBe("none");
+    expect(commands.map((command) => command[0])).toStrictEqual(["run", "exec", "stop", "inspect", "run", "rm"]);
+    expect(commands[4].includes("test")).toBeTruthy();
+    const mounts = commands[4].filter((argument, index, args) => args[index - 1] === "-v");
+    for (const directory of ["node_modules", "packages/backend/node_modules", "packages/shared/node_modules", "packages/shared/src"]) {
+      expect(mounts.some((mount) => mount.endsWith(`:/app/${directory}:ro`))).toBe(true);
+    }
+    expect(commands.at(-1).slice(0, 2)).toStrictEqual(["rm", "-fv"]);
+    expect(commands.at(-1)[2]).toBe(smoke[smoke.indexOf("--name") + 1]);
   });
 
   for (const scenario of ["failed-smoke", "unclean-stop"]) {
     it(`rejects ${scenario} before source tests and retains diagnostic output`, async () => {
       const { result, commands } = await runHarness(scenario);
-      assert.equal(result.exitCode, 1);
-      assert.ok(!commands.some((command) => command[0] === "run" && command.includes("test")));
-      assert.equal(commands.at(-2)[0], "logs");
-      assert.equal(commands.at(-1)[0], "rm");
+      expect(result.exitCode).toBe(1);
+      expect(!commands.some((command) => command[0] === "run" && command.includes("test"))).toBeTruthy();
+      expect(commands.at(-2)[0]).toBe("logs");
+      expect(commands.at(-1)[0]).toBe("rm");
     });
   }
 
   it("propagates source-suite failures and still removes its fixtures", async () => {
     const { result, commands } = await runHarness("failed-suite");
-    assert.equal(result.exitCode, 9);
-    assert.equal(commands.at(-1)[0], "rm");
+    expect(result.exitCode).toBe(9);
+    expect(commands.at(-1)[0]).toBe("rm");
   });
 });

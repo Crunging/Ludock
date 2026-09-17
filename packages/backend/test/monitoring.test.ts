@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import { getDockerInstance } from "../src/docker.js";
 import { listLogicalServers } from "../src/identity.js";
@@ -84,29 +83,29 @@ describe("availability monitoring", () => {
     state = "exited";
     await checkAvailability(1000);
     await checkAvailability(10_999);
-    assert.equal(deliveries().length, 0);
+    expect(deliveries().length).toBe(0);
     await checkAvailability(11_000);
     await checkAvailability(30_000);
-    assert.equal(deliveries().length, 1);
+    expect(deliveries().length).toBe(1);
     state = "running";
     await checkAvailability(31_000);
     await checkAvailability(32_000);
-    assert.equal(deliveries().length, 2);
-    assert.equal(getAvailability(serverId).state.outageStartedAt, null);
+    expect(deliveries().length).toBe(2);
+    expect(getAvailability(serverId).state.outageStartedAt).toBe(null);
   });
   it("suppresses intentional stops until the server has actually been observed running", async () => {
     setIntentionalStop(serverId, true);
     state = "exited";
     await checkAvailability(1000);
     await checkAvailability(30_000);
-    assert.equal(deliveries().length, 0);
+    expect(deliveries().length).toBe(0);
     state = "running";
     await checkAvailability(40_000);
-    assert.equal(getAvailability(serverId).state.intentionallyStopped, false);
+    expect(getAvailability(serverId).state.intentionallyStopped).toBe(false);
     state = "exited";
     await checkAvailability(50_000);
     await checkAvailability(60_000);
-    assert.equal(deliveries().length, 1);
+    expect(deliveries().length).toBe(1);
   });
   it("suppresses operation downtime plus the configured completion grace", async () => {
     const operation = enqueueOperation({
@@ -119,17 +118,17 @@ describe("availability monitoring", () => {
     const now = Date.now();
     await checkAvailability(now);
     await checkAvailability(now + 100_000);
-    assert.equal(deliveries().length, 0);
+    expect(deliveries().length).toBe(0);
     getDatabase()
       .prepare("UPDATE operations SET status='succeeded' WHERE id=?")
       .run(operation.id);
     suppressMonitoring(serverId);
     const end = getAvailability(serverId).state.suppressedUntil;
     await checkAvailability(end - 1);
-    assert.equal(deliveries().length, 0);
+    expect(deliveries().length).toBe(0);
     await checkAvailability(end);
     await checkAvailability(end + 10_000);
-    assert.equal(deliveries().length, 1);
+    expect(deliveries().length).toBe(1);
   });
   it("suppresses a direct lifecycle action throughout its held lock", async () => {
     const release = acquireLocks([`server:${serverId}`]);
@@ -137,23 +136,23 @@ describe("availability monitoring", () => {
     try {
       await checkAvailability(1000);
       await checkAvailability(121_000);
-      assert.equal(deliveries().length, 0);
-      assert.equal(getAvailability(serverId).state.outageStartedAt, null);
+      expect(deliveries().length).toBe(0);
+      expect(getAvailability(serverId).state.outageStartedAt).toBe(null);
     } finally {
       release();
     }
     await checkAvailability(122_000);
     await checkAvailability(132_000);
-    assert.equal(deliveries().length, 1);
+    expect(deliveries().length).toBe(1);
   });
   it("does not treat Docker health starting as ready, and respects maintenance", async () => {
     health = "starting";
     await checkAvailability(1000);
     await checkAvailability(11_000);
-    assert.equal(deliveries().length, 1);
+    expect(deliveries().length).toBe(1);
     health = "healthy";
     await checkAvailability(12_000);
-    assert.equal(deliveries().length, 2);
+    expect(deliveries().length).toBe(2);
     configureAvailability(serverId, {
       enabled: true,
       maintenance: true,
@@ -162,21 +161,18 @@ describe("availability monitoring", () => {
     health = "unhealthy";
     await checkAvailability(20_000);
     await checkAvailability(40_000);
-    assert.equal(deliveries().length, 2);
+    expect(deliveries().length).toBe(2);
   });
   it("reports lost Docker connectivity without deleting or rebinding servers", async () => {
     unavailable = true;
     await checkAvailability(1000);
     await checkAvailability(11_000);
-    assert.equal(deliveries().length, 1);
-    assert.match(deliveries()[0].payload_json as string, /cannot reach Docker/);
-    assert.equal(listLogicalServers()[0].status, "active");
-    assert.equal(
-      getAvailability(serverId).state.lastState,
-      "docker_unavailable",
-    );
+    expect(deliveries().length).toBe(1);
+    expect(deliveries()[0].payload_json as string).toMatch(/cannot reach Docker/);
+    expect(listLogicalServers()[0].status).toBe("active");
+    expect(getAvailability(serverId).state.lastState).toBe("docker_unavailable");
     unavailable = false;
     await checkAvailability(12_000);
-    assert.equal(deliveries().length, 2);
+    expect(deliveries().length).toBe(2);
   });
 });

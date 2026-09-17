@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { Readable } from "node:stream";
 import { z } from "zod";
 import {
   backupSettingsSchema,
@@ -100,7 +99,7 @@ export function getBackup(serverId: string, id: string): Backup {
 export async function openBackupDownload(
   serverId: string,
   id: string,
-): Promise<Readable> {
+): Promise<ReadableStream<Uint8Array>> {
   const row = backupRow(serverId, id);
   return archiveReadStream(row.destination, row.id);
 }

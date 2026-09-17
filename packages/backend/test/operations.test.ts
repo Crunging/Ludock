@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { listAuditHistory, listOperationHistory } from "../src/history.js";
 import {
   closeDatabase,
@@ -68,7 +67,7 @@ async function finished(id: string) {
     if (!["queued", "running"].includes(operation.status)) return operation;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.fail("Operation did not finish");
+  expect.unreachable("Operation did not finish");
 }
 
 describe("durable operations", () => {
@@ -78,7 +77,7 @@ describe("durable operations", () => {
         const runs: string[] = [];
         registerJobHandler("damaged-state", {
           run: async ({ job }) => { runs.push(job.id); },
-          recover: async () => { assert.fail("Damaged state must never reach recovery"); },
+          recover: async () => { expect.unreachable("Damaged state must never reach recovery"); },
         });
         const damagedJob = enqueue("damaged-state");
         getDatabase().prepare("UPDATE operations SET status=?,input_json=?,created_at=0 WHERE id=?")
@@ -90,14 +89,14 @@ describe("durable operations", () => {
           serverId: other.id, actorId: owner.id, kind: "damaged-state", bindingRevision: 1,
         });
         await startOperationRunner();
-        assert.equal((await finished(valid.id)).status, "succeeded");
-        assert.deepEqual(runs, [valid.id]);
+        expect((await finished(valid.id)).status).toBe("succeeded");
+        expect(runs).toStrictEqual([valid.id]);
         const saved = getDatabase().prepare("SELECT status,error,input_json FROM operations WHERE id=?")
           .get(damagedJob.id) as { status: string; error: string; input_json: string };
-        assert.equal(saved.status, status === "queued" ? "failed" : "interrupted");
-        assert.match(saved.error, /administrator/);
-        assert.doesNotMatch(saved.error, /private-fixture/);
-        assert.equal(saved.input_json, damaged, "Keep damaged state available for administrator inspection");
+        expect(saved.status).toBe(status === "queued" ? "failed" : "interrupted");
+        expect(saved.error).toMatch(/administrator/);
+        expect(saved.error).not.toMatch(/private-fixture/);
+        expect(saved.input_json, "Keep damaged state available for administrator inspection").toBe(damaged);
       });
     }
   }
@@ -107,21 +106,15 @@ describe("durable operations", () => {
     });
     const operation = enqueue("binding-error");
     await startOperationRunner();
-    assert.equal((await finished(operation.id)).error, "The server binding changed. Review it before retrying.");
+    expect((await finished(operation.id)).error).toBe("The server binding changed. Review it before retrying.");
   });
   it("deduplicates retries while rejecting a reused key with different settings", () => {
     const first = enqueue("idempotency", "same", { createBackup: true });
     const retry = enqueue("idempotency", "same", { createBackup: true });
-    assert.equal(retry.id, first.id);
-    assert.throws(
-      () => enqueue("idempotency", "same", { createBackup: false }),
-      /different operation settings/,
-    );
-    assert.throws(
-      () => enqueue("idempotency", "other"),
-      /already queued or running/,
-    );
-    assert.equal(listOperationHistory(owner, { serverId, limit: 50 }).operations.length, 1);
+    expect(retry.id).toBe(first.id);
+    expect(() => enqueue("idempotency", "same", { createBackup: false })).toThrow(/different operation settings/);
+    expect(() => enqueue("idempotency", "other")).toThrow(/already queued or running/);
+    expect(listOperationHistory(owner, { serverId, limit: 50 }).operations.length).toBe(1);
   });
   it("persists recovery data before the handler continues, without exposing it publicly", async () => {
     registerJobHandler("progress", {
@@ -131,22 +124,19 @@ describe("durable operations", () => {
           privatePath: "/private/secret",
         });
         const saved = getOperation(job.id)!;
-        assert.equal(saved.phase, "copying");
-        assert.equal(saved.recovery.initiallyRunning, true);
-        assert.equal(
-          JSON.stringify(listOperationHistory(owner, { serverId, limit: 50 }).operations).includes("/private/secret"),
-          false,
-        );
+        expect(saved.phase).toBe("copying");
+        expect(saved.recovery.initiallyRunning).toBe(true);
+        expect(JSON.stringify(listOperationHistory(owner, { serverId, limit: 50 }).operations).includes("/private/secret")).toBe(false);
         return { copied: true };
       },
     });
     const operation = enqueue("progress");
     await startOperationRunner();
-    assert.equal((await finished(operation.id)).status, "succeeded");
+    expect((await finished(operation.id)).status).toBe("succeeded");
     const audit = listAuditHistory({ limit: 20 }).entries.find(
       (event) => event.action === "server.progress.succeeded",
     );
-    assert.equal(audit?.username, "owner");
+    expect(audit?.username).toBe("owner");
   });
   it("reconciles a persisted interrupted phase without replaying its mutation", async () => {
     let runs = 0,
@@ -157,8 +147,8 @@ describe("durable operations", () => {
       },
       recover: async ({ job, progress }) => {
         recoveries++;
-        assert.equal(job.phase, "replacing_data");
-        assert.equal(job.recovery.initiallyRunning, true);
+        expect(job.phase).toBe("replacing_data");
+        expect(job.recovery.initiallyRunning).toBe(true);
         progress("restoring_state");
       },
     });
@@ -169,12 +159,12 @@ describe("durable operations", () => {
       )
       .run(JSON.stringify({ initiallyRunning: true }), operation.id);
     await startOperationRunner();
-    assert.equal(getOperation(operation.id)?.status, "interrupted");
-    assert.equal(recoveries, 1);
-    assert.equal(runs, 0);
+    expect(getOperation(operation.id)?.status).toBe("interrupted");
+    expect(recoveries).toBe(1);
+    expect(runs).toBe(0);
     await stopOperationRunner();
     await startOperationRunner();
-    assert.equal(recoveries, 1);
+    expect(recoveries).toBe(1);
   });
   it("reports recovery failure without exposing exception credentials", async () => {
     registerJobHandler("recovery-failure", {
@@ -188,11 +178,8 @@ describe("durable operations", () => {
       .prepare("UPDATE operations SET status='running' WHERE id=?")
       .run(operation.id);
     await startOperationRunner();
-    assert.match(getOperation(operation.id)!.error!, /administrator attention/);
-    assert.equal(
-      JSON.stringify(listAuditHistory({ limit: 10 }).entries).includes("token=secret"),
-      false,
-    );
+    expect(getOperation(operation.id)!.error!).toMatch(/administrator attention/);
+    expect(JSON.stringify(listAuditHistory({ limit: 10 }).entries).includes("token=secret")).toBe(false);
   });
   it("waits for startup recovery on shutdown without starting queued work", async () => {
     let release!: () => void;
@@ -216,22 +203,22 @@ describe("durable operations", () => {
       .run(interrupted.id);
     const starting = startOperationRunner();
     const sameStart = startOperationRunner();
-    assert.equal(recoveries, 1);
+    expect(recoveries).toBe(1);
     let stopped = false;
     const stopping = stopOperationRunner().then(() => {
       stopped = true;
     });
     await Promise.resolve();
-    assert.equal(stopped, false);
+    expect(stopped).toBe(false);
     release();
     await Promise.all([starting, sameStart, stopping]);
-    assert.equal(getOperation(interrupted.id)?.status, "interrupted");
+    expect(getOperation(interrupted.id)?.status).toBe("interrupted");
     const queued = enqueue("startup-shutdown");
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(getOperation(queued.id)?.status, "queued");
-    assert.equal(runs, 0);
+    expect(getOperation(queued.id)?.status).toBe("queued");
+    expect(runs).toBe(0);
     await startOperationRunner();
-    assert.equal((await finished(queued.id)).status, "succeeded");
+    expect((await finished(queued.id)).status).toBe("succeeded");
   });
   it("completes failure auditing even if an operation's account was deleted", async () => {
     registerJobHandler("deleted-owner", {
@@ -242,12 +229,10 @@ describe("durable operations", () => {
     const operation = enqueue("deleted-owner");
     deleteUser("owner");
     await startOperationRunner();
-    assert.equal((await finished(operation.id)).status, "failed");
-    assert.ok(
-      listAuditHistory({ limit: 20 }).entries.some(
+    expect((await finished(operation.id)).status).toBe("failed");
+    expect(listAuditHistory({ limit: 20 }).entries.some(
         (event) => event.action === "server.deleted-owner.failed",
-      ),
-    );
+      )).toBeTruthy();
   });
   it("serializes queued jobs and stops accepting work during shutdown", async () => {
     let release!: () => void;
@@ -283,12 +268,12 @@ describe("durable operations", () => {
     await startOperationRunner();
     for (let count = 0; count < 100 && started.length === 0; count++)
       await new Promise((resolve) => setTimeout(resolve, 2));
-    assert.equal(started.length, 1);
+    expect(started.length).toBe(1);
     const stopped = stopOperationRunner();
     release();
     await stopped;
-    assert.equal(getOperation(first.id)?.status, "succeeded");
-    assert.equal(started.length, 1);
+    expect(getOperation(first.id)?.status).toBe("succeeded");
+    expect(started.length).toBe(1);
   });
 });
 
@@ -302,23 +287,17 @@ describe("resource locks", () => {
     });
     first();
     await Promise.resolve();
-    assert.equal(completed, false);
+    expect(completed).toBe(false);
     second();
     await draining;
-    assert.equal(completed, true);
+    expect(completed).toBe(true);
     await waitForLocksReleased();
   });
   it("conflicts on overlapping roots and normalized aliases, but not adjacent names", () => {
     const release = acquireLocks(["path:/srv/world/", "server:one"]);
     try {
-      assert.throws(
-        () => acquireLocks(["path:/srv/world/saves"]),
-        /conflicting/,
-      );
-      assert.throws(
-        () => acquireLocks(["path:/srv/other/../world"]),
-        /conflicting/,
-      );
+      expect(() => acquireLocks(["path:/srv/world/saves"])).toThrow(/conflicting/);
+      expect(() => acquireLocks(["path:/srv/other/../world"])).toThrow(/conflicting/);
       const adjacent = acquireLocks(["path:/srv/world-two"]);
       adjacent();
     } finally {
@@ -327,23 +306,20 @@ describe("resource locks", () => {
     }
     const root = acquireLocks(["path:/"]);
     try {
-      assert.throws(() => acquireLocks(["path:/srv/other"]), /conflicting/);
+      expect(() => acquireLocks(["path:/srv/other"])).toThrow(/conflicting/);
     } finally {
       root();
     }
   });
   it("releases all keys after failure and never partially acquires a failed request", async () => {
     const held = acquireLocks(["server:b"]);
-    assert.throws(() => acquireLocks(["server:a", "server:b"]), /conflicting/);
+    expect(() => acquireLocks(["server:a", "server:b"])).toThrow(/conflicting/);
     const first = acquireLocks(["server:a"]);
     first();
     held();
-    await assert.rejects(
-      withLocks(["server:a"], async () => {
+    await expect(withLocks(["server:a"], async () => {
         throw new Error("copy failed");
-      }),
-      /copy failed/,
-    );
+      })).rejects.toThrow(/copy failed/);
     const next = acquireLocks(["server:a"]);
     next();
   });
@@ -365,11 +341,8 @@ describe("resource locks", () => {
     });
     const release = acquireLocks(keys);
     try {
-      assert.throws(
-        () => acquireLocks(["path:/var/lib/docker/volumes/world/_data/subdir"]),
-        /conflicting/,
-      );
-      assert.throws(() => acquireLocks(["volume:world"]), /conflicting/);
+      expect(() => acquireLocks(["path:/var/lib/docker/volumes/world/_data/subdir"])).toThrow(/conflicting/);
+      expect(() => acquireLocks(["volume:world"])).toThrow(/conflicting/);
     } finally {
       release();
     }

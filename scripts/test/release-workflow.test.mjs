@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 
 import { releaseNotes } from "../release-notes.mjs";
 
@@ -35,7 +34,7 @@ async function withRepository(previousVersion, currentVersion, check) {
   };
   function git(...args) {
     const result = Bun.spawnSync(["git", ...args], { cwd: directory, env: environment, stdout: "pipe", stderr: "pipe" });
-    assert.equal(result.exitCode, 0, result.stderr.toString());
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
     return result.stdout.toString().trim();
   }
   async function run(script, extraEnvironment = {}) {
@@ -69,8 +68,8 @@ describe("release workflow decisions", () => {
     it(`publishes only nightly when ${version} is unchanged`, async () => {
       await withRepository(version, version, async ({ run }) => {
         const result = await run(versionScript);
-        assert.equal(result.exitCode, 0, result.diagnostic);
-        assert.deepEqual(result.outputs, { should_release: "false", tag: `v${version}` });
+        expect(result.exitCode, result.diagnostic).toBe(0);
+        expect(result.outputs).toStrictEqual({ should_release: "false", tag: `v${version}` });
       });
     });
   }
@@ -78,8 +77,8 @@ describe("release workflow decisions", () => {
   it("selects a stable release when the version changes", async () => {
     await withRepository("1.0.0", "1.0.1", async ({ run }) => {
       const result = await run(versionScript);
-      assert.equal(result.exitCode, 0, result.diagnostic);
-      assert.deepEqual(result.outputs, { should_release: "true", tag: "v1.0.1" });
+      expect(result.exitCode, result.diagnostic).toBe(0);
+      expect(result.outputs).toStrictEqual({ should_release: "true", tag: "v1.0.1" });
     });
   });
 
@@ -87,8 +86,8 @@ describe("release workflow decisions", () => {
     it(`rejects changed nonstable version ${version}`, async () => {
       await withRepository("1.0.0", version, async ({ run }) => {
         const result = await run(versionScript);
-        assert.equal(result.exitCode, 1, result.diagnostic);
-        assert.equal(result.outputs.should_release, undefined);
+        expect(result.exitCode, result.diagnostic).toBe(1);
+        expect(result.outputs.should_release).toBe(undefined);
       });
     });
   }
@@ -98,11 +97,11 @@ describe("release workflow decisions", () => {
       git("tag", "--annotate", "v1.0.1", "--message", "Fixture release");
       const originalTag = git("rev-parse", "refs/tags/v1.0.1");
       const version = await run(versionScript);
-      assert.equal(version.exitCode, 0, version.diagnostic);
-      assert.equal(version.outputs.should_release, "true");
+      expect(version.exitCode, version.diagnostic).toBe(0);
+      expect(version.outputs.should_release).toBe("true");
       const tag = await run(tagScript, { RELEASE_TAG: "v1.0.1" });
-      assert.equal(tag.exitCode, 0, tag.diagnostic);
-      assert.equal(git("rev-parse", "refs/tags/v1.0.1"), originalTag);
+      expect(tag.exitCode, tag.diagnostic).toBe(0);
+      expect(git("rev-parse", "refs/tags/v1.0.1")).toBe(originalTag);
     });
   });
 
@@ -111,8 +110,8 @@ describe("release workflow decisions", () => {
       git("tag", "v1.0.1", previousCommit);
       for (const script of [versionScript, tagScript]) {
         const result = await run(script, { RELEASE_TAG: "v1.0.1" });
-        assert.equal(result.exitCode, 1, result.diagnostic);
-        assert.equal(git("rev-list", "-n", "1", "v1.0.1"), previousCommit);
+        expect(result.exitCode, result.diagnostic).toBe(1);
+        expect(git("rev-list", "-n", "1", "v1.0.1")).toBe(previousCommit);
       }
     });
   });
@@ -128,11 +127,8 @@ describe("release workflow decisions", () => {
       await withRepository("0.0.0", current.slice(1), async ({ git, run }) => {
         for (const tag of [...existing, current, "v9.0.0-beta.1", "nonrelease"]) git("tag", tag);
         const result = await run(rankScript, { RELEASE_TAG: current });
-        assert.equal(result.exitCode, 0, result.diagnostic);
-        assert.deepEqual(
-          ["is_latest", "is_major_latest", "is_minor_latest"].map((key) => result.outputs[key]),
-          expected.map(String),
-        );
+        expect(result.exitCode, result.diagnostic).toBe(0);
+        expect(["is_latest", "is_major_latest", "is_minor_latest"].map((key) => result.outputs[key])).toStrictEqual(expected.map(String));
       });
     });
   }
@@ -198,10 +194,10 @@ if (method === "GET") process.stdout.write(readFileSync(process.env.GH_RESPONSE)
 describe("release PR publication state", () => {
   it("updates PR state only after successful stable publication", () => {
     const steps = workflow.jobs.release.steps;
-    assert.equal(publicationStep.if, "needs.validate.outputs.should_release == 'true'");
-    assert.ok(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Create GitHub release"));
-    assert.ok(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Build and publish image"));
-    assert.equal(workflow.jobs.release.permissions["pull-requests"], "write");
+    expect(publicationStep.if).toBe("needs.validate.outputs.should_release == 'true'");
+    expect(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Create GitHub release")).toBeTruthy();
+    expect(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Build and publish image")).toBeTruthy();
+    expect(workflow.jobs.release.permissions["pull-requests"]).toBe("write");
   });
 
   it("marks only the merged pending PR for the published commit, including later API pages", async () => {
@@ -215,8 +211,8 @@ describe("release PR publication state", () => {
       ],
       [pendingPullRequest()],
     ]);
-    assert.equal(result.exitCode, 0, result.diagnostic);
-    assert.deepEqual(result.calls, [
+    expect(result.exitCode, result.diagnostic).toBe(0);
+    expect(result.calls).toStrictEqual([
       ["api", "--paginate", `repos/${publicationRepository}/commits/${publicationSha}/pulls`],
       ["api", "--method", "POST", `repos/${publicationRepository}/issues/6/labels`, "-f", "labels[]=autorelease: tagged", "--silent"],
       ["api", "--method", "DELETE", `repos/${publicationRepository}/issues/6/labels/autorelease%3A%20pending`, "--silent"],
@@ -229,28 +225,28 @@ describe("release PR publication state", () => {
   ]) {
     it(`does not mutate labels for ${description}`, async () => {
       const result = await runPublicationLabels([pulls]);
-      assert.equal(result.exitCode, 0, result.diagnostic);
-      assert.equal(result.calls.length, 1);
+      expect(result.exitCode, result.diagnostic).toBe(0);
+      expect(result.calls.length).toBe(1);
     });
   }
 
   it("retries a transition interrupted after adding the tagged label", async () => {
     const result = await runPublicationLabels([[pendingPullRequest({ labels: [{ name: "autorelease: pending" }, { name: "autorelease: tagged" }] })]]);
-    assert.equal(result.exitCode, 0, result.diagnostic);
-    assert.deepEqual(result.calls.slice(1).map((args) => args[2]), ["POST", "DELETE"]);
+    expect(result.exitCode, result.diagnostic).toBe(0);
+    expect(result.calls.slice(1).map((args) => args[2])).toStrictEqual(["POST", "DELETE"]);
   });
 
   it("rejects ambiguous matches without changing labels", async () => {
     const result = await runPublicationLabels([[pendingPullRequest()], [pendingPullRequest({ number: 7 })]]);
-    assert.equal(result.exitCode, 1, result.diagnostic);
-    assert.equal(result.calls.length, 1);
+    expect(result.exitCode, result.diagnostic).toBe(1);
+    expect(result.calls.length).toBe(1);
   });
 
   for (const [method, expectedCalls] of [["GET", 1], ["POST", 2], ["DELETE", 3]]) {
     it(`preserves a retryable pending state and fails when ${method} fails`, async () => {
       const result = await runPublicationLabels([[pendingPullRequest()]], method);
-      assert.equal(result.exitCode, 1, result.diagnostic);
-      assert.equal(result.calls.length, expectedCalls);
+      expect(result.exitCode, result.diagnostic).toBe(1);
+      expect(result.calls.length).toBe(expectedCalls);
     });
   }
 });
@@ -260,15 +256,15 @@ describe("release notes", () => {
   const current = "## [1.2.3](https://example.invalid/compare/v1.2.2...v1.2.3) (2026-09-14)\n\n### Bug Fixes\n\n* Preserve the reviewed entry.\n";
   const older = "## 1.2.2 (2026-09-01)\n\n* Earlier change.\n";
   it("uses only the selected release-please section, including the first release", () => {
-    assert.equal(releaseNotes(`# Changelog\n\n${current}\n${older}`, "v1.2.3"), current);
-    assert.equal(releaseNotes(`# Changelog\n\n${current}`, "v1.2.3"), current);
-    assert.equal(releaseNotes(current + older, "v1.2.2"), older);
+    expect(releaseNotes(`# Changelog\n\n${current}\n${older}`, "v1.2.3")).toBe(current);
+    expect(releaseNotes(`# Changelog\n\n${current}`, "v1.2.3")).toBe(current);
+    expect(releaseNotes(current + older, "v1.2.2")).toBe(older);
   });
   it("fails before publication for missing, duplicate, or empty entries", () => {
     for (const changelog of [older, current + current, "## 1.2.3\n\n" + older])
-      assert.throws(() => releaseNotes(changelog, "v1.2.3"));
-    assert.throws(() => releaseNotes(current, "v1.2.3-beta.1"));
+      expect(() => releaseNotes(changelog, "v1.2.3")).toThrow();
+    expect(() => releaseNotes(current, "v1.2.3-beta.1")).toThrow();
     const steps = workflow.jobs.release.steps;
-    assert.ok(steps.findIndex((step) => step.name === "Generate release notes") < steps.findIndex((step) => step.name === "Create release tag"));
+    expect(steps.findIndex((step) => step.name === "Generate release notes") < steps.findIndex((step) => step.name === "Create release tag")).toBeTruthy();
   });
 });

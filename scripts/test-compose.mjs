@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
+import { expect } from "bun:test";
 // Opt-in Docker acceptance against unique fixture containers and volumes.
 // Build ludock:test first, or set LUDOCK_TEST_IMAGE to another local image.
-import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -70,8 +70,7 @@ try {
   const [fixtureTag, expectedDigest] = expectedFixtureImage.split("@");
   docker("pull", fixtureTag);
   const fixture = JSON.parse(docker("image", "inspect", fixtureTag))[0];
-  assert.ok(fixture.RepoDigests.some((reference) => reference.endsWith(`@${expectedDigest}`)),
-    "The fixture image tag changed; review and update its pin before running Compose acceptance");
+  expect(fixture.RepoDigests.some((reference) => reference.endsWith(`@${expectedDigest}`)), "The fixture image tag changed; review and update its pin before running Compose acceptance").toBeTruthy();
   cli("up", "-d");
   const before = cli("ps", "-q", "game");
   const dependency = cli("ps", "-q", "dependency");
@@ -87,23 +86,23 @@ try {
     try { await request("/health"); ready = true; break; }
     catch { await Bun.sleep(200); }
   }
-  assert.ok(ready, "Fixture API must become healthy");
+  expect(ready, "Fixture API must become healthy").toBeTruthy();
   serverId = (await request("/servers")).servers.find((server) => server.displayName === "Compose Smoke").id;
   const { capability } = await request(`/servers/${serverId}/update-capability`);
-  assert.equal(capability.available, true, capability.unavailableReason);
+  expect(capability.available, capability.unavailableReason).toBe(true);
   const unchanged = await update(false);
-  assert.equal(unchanged.status, "already_current");
-  assert.equal(cli("ps", "-q", "game"), before);
+  expect(unchanged.status).toBe("already_current");
+  expect(cli("ps", "-q", "game")).toBe(before);
   const forced = await update(true);
-  assert.equal(forced.status, "succeeded");
+  expect(forced.status).toBe("succeeded");
   const after = cli("ps", "-q", "game");
-  assert.notEqual(after, before);
-  assert.equal(cli("ps", "-q", "dependency"), dependency);
+  expect(after).not.toBe(before);
+  expect(cli("ps", "-q", "dependency")).toBe(dependency);
   const environment = inspect(after).Config.Env;
-  assert.ok(environment.includes("WORLD=automatic-source"));
-  assert.ok(environment.includes("LITERAL=cash$value"));
-  assert.ok(environment.includes("BRACED=${literal}"));
-  assert.ok(environment.every((entry) => !entry.includes("must-not-be-inherited") && !entry.includes(token)));
+  expect(environment.includes("WORLD=automatic-source")).toBeTruthy();
+  expect(environment.includes("LITERAL=cash$value")).toBeTruthy();
+  expect(environment.includes("BRACED=${literal}")).toBeTruthy();
+  expect(environment.every((entry) => !entry.includes("must-not-be-inherited") && !entry.includes(token))).toBeTruthy();
   // Discovery must survive both snapshot cleanup and an application restart.
   docker("restart", app);
   base = `http://127.0.0.1:${inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort}`;
@@ -112,14 +111,14 @@ try {
     try { await request("/health"); restarted = true; break; }
     catch { await Bun.sleep(200); }
   }
-  assert.ok(restarted, "Fixture API must recover after restart");
+  expect(restarted, "Fixture API must recover after restart").toBeTruthy();
   await request(`/servers/${serverId}/stop`, {}, "POST");
   const stopped = await update(true);
-  assert.equal(stopped.status, "succeeded");
+  expect(stopped.status).toBe("succeeded");
   const final = cli("ps", "-a", "-q", "game");
-  assert.notEqual(final, after);
-  assert.equal(inspect(final).State.Running, false);
-  assert.equal(cli("ps", "-q", "dependency"), dependency);
+  expect(final).not.toBe(after);
+  expect(inspect(final).State.Running).toBe(false);
+  expect(cli("ps", "-q", "dependency")).toBe(dependency);
 
   // Verify Docker Desktop has propagated the host write before validation.
   const source = await Bun.file(compose).text() + "\n# changed owner source\n";
@@ -134,11 +133,11 @@ try {
     }
     await Bun.sleep(100);
   }
-  assert.ok(propagated, "Changed Compose source must reach the fixture mount");
-  assert.equal((await request(`/servers/${serverId}/update-capability`)).capability.available, true);
+  expect(propagated, "Changed Compose source must reach the fixture mount").toBeTruthy();
+  expect((await request(`/servers/${serverId}/update-capability`)).capability.available).toBe(true);
   const edited = await update(true);
-  assert.equal(edited.status, "succeeded");
-  assert.equal(inspect(cli("ps", "-a", "-q", "game")).State.Running, false);
+  expect(edited.status).toBe("succeeded");
+  expect(inspect(cli("ps", "-a", "-q", "game")).State.Running).toBe(false);
   console.log(JSON.stringify({
     result: "pass", logicalIdentitySurvived: true, alreadyCurrent: unchanged.status,
     forcedRunning: forced.status, forcedStopped: stopped.status, dependencyUntouched: true,

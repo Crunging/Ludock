@@ -1,11 +1,10 @@
 import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { backupsResponseSchema, serverResponseSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID, RUNNING_NAME } from "./fixtures";
 
 // Capture the built UI with the same contract-checked, network-isolated fixtures
 // as browser tests. Run explicitly; normal checks never rewrite docs.
-const directory = fileURLToPath(new URL("../../../docs/screenshots/", import.meta.url));
+const directory = Bun.fileURLToPath(new URL("../../../docs/screenshots/", import.meta.url));
 const now = Date.parse("2026-09-15T12:00:00Z");
 const latestBackup = { createdAt: now - 2 * 3_600_000, size: 1_288_490_188 };
 

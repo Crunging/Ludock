@@ -1,0 +1,8 @@
+{
+  "$schema": "../packages/backend/node_modules/oxlint/configuration_schema.json",
+  "extends": ["../oxlint.base.json"],
+  "categories": { "correctness": "off" },
+  "ignorePatterns": ["node_modules"],
+  "env": { "node": true },
+  "globals": { "Bun": "readonly" }
+}

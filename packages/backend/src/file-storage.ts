@@ -1,6 +1,8 @@
+import { decodeText, concatBytes, encodeText } from "./bytes.js";
+import { demuxDockerStream, dockerStdout, DockerStreamError } from "./docker-stream.js";
 import path from "node:path";
-import { PassThrough, type Readable } from "node:stream";
-import type Docker from "dockerode";
+import { managedReadable } from "./managed-readable.js";
+import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 import { createLogger } from "./logger.js";
@@ -270,8 +272,9 @@ export async function uploadFile(
   relativeParent: string,
   name: string,
   size: number,
-  source: Readable,
+  source: ReadableStream<Uint8Array>,
   assertAccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   validateName(name);
   if (!Number.isSafeInteger(size) || size < 0)
@@ -281,9 +284,6 @@ export async function uploadFile(
     rootId,
     joinRelative(relativeParent, name),
   );
-  // The HTTP body may be aborted while Docker is still preparing its helper.
-  const ignoreInputError = () => {};
-  source.on("error", ignoreInputError);
   try {
     const access = await acquireFileContainer(server, target.root, { assertAccess });
     const uploadId = crypto.randomUUID();
@@ -298,7 +298,8 @@ export async function uploadFile(
           uploadId,
         },
         source,
-        Buffer.from(uploadId),
+        encodeText(uploadId),
+        signal,
       );
     } finally {
       try {
@@ -319,7 +320,7 @@ export async function uploadFile(
       }
     }
   } finally {
-    source.off("error", ignoreInputError);
+    await source.cancel().catch(() => {});
   }
 }
 
@@ -332,7 +333,7 @@ export async function openDownload(
   name: string;
   type: "file" | "directory";
   size: number;
-  stream: Readable;
+  stream: ReadableStream<Uint8Array>;
   completed: Promise<void>;
 }> {
   const target = resolveTarget(server, rootId, relativePath);
@@ -360,119 +361,39 @@ export async function openDownload(
       }),
     );
     access.assertAccess?.();
-    const stream = await execution.start({ hijack: true, stdin: false });
-    const output = new PassThrough();
-    output.once("error", () => {});
-    let finishCleanup!: () => void;
-    const completed = new Promise<void>((resolve) => {
-      finishCleanup = resolve;
-    });
-    let cleaning = false;
-    const timeout = setTimeout(() => {
-      output.destroy(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
-    }, 30 * 60_000);
-    const cleanup = () => {
-      if (cleaning) return;
-      cleaning = true;
-      clearTimeout(timeout);
-      stream.destroy();
-      void access
-        .cleanup()
-        .catch(() =>
-          logger.warn("Failed to remove download helper", {
-            container: server.id.slice(0, 12),
-          }),
-        )
-        .finally(finishCleanup);
-    };
-    output.once("close", cleanup);
-    output.once("error", cleanup);
-    output.once("end", cleanup);
-    void pumpDockerDownload(stream, output)
-      .then(async () => {
+    const stream = await execution.start();
+    const deadline = new AbortController();
+    const timeout = setTimeout(() => deadline.abort(new FileStorageError("FILE_OPERATION_TIMEOUT", 409)), 30 * 60_000);
+    const output = managedReadable(dockerStdout(stream.readable), {
+      signal: deadline.signal,
+      async complete() {
         const status = await execution.inspect();
         if (status.ExitCode !== 0 || status.Running)
-          output.destroy(
-            new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409),
-          );
-        else output.end();
-      })
-      .catch(() =>
-        output.destroy(new FileStorageError("FILE_DOWNLOAD_FAILED", 409)),
-      );
+          throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
+      },
+      async cleanup() {
+        clearTimeout(timeout);
+        stream.abort();
+        await access.cleanup().catch(() => logger.warn("Failed to remove download helper", { container: server.id.slice(0, 12) }));
+      },
+      mapError(error) {
+        if (error instanceof FileStorageError) return error;
+        if (error instanceof DockerStreamError)
+          return new FileStorageError(error.code === "INCOMPLETE_STREAM" ? "INCOMPLETE_DOWNLOAD_STREAM" : "INVALID_DOWNLOAD_STREAM", 409);
+        return new FileStorageError("FILE_DOWNLOAD_FAILED", 409);
+      },
+    });
     const name = path.posix.basename(target.relativePath);
     return {
       name: info.type === "directory" ? `${name}.tar` : name,
       type: info.type,
       size: info.size,
-      stream: output,
-      completed,
+      ...output,
     };
   } catch (error) {
     await access.cleanup();
     throw error;
   }
-}
-
-/** Honor the HTTP consumer's backpressure while decoding Docker's non-TTY
- * frames. docker-modem's event-based demux ignores writable backpressure. */
-export async function pumpDockerDownload(
-  source: Readable,
-  output: PassThrough,
-): Promise<void> {
-  let header = Buffer.alloc(0);
-  let remaining = 0;
-  let channel = 0;
-  for await (const value of source) {
-    const chunk = value as Buffer;
-    let offset = 0;
-    while (offset < chunk.length) {
-      if (!remaining) {
-        const count = Math.min(8 - header.length, chunk.length - offset);
-        header = Buffer.concat([
-          header,
-          chunk.subarray(offset, offset + count),
-        ]);
-        offset += count;
-        if (header.length !== 8) continue;
-        channel = header[0];
-        remaining = header.readUInt32BE(4);
-        if (
-          ![0, 1, 2].includes(channel) ||
-          header[1] ||
-          header[2] ||
-          header[3] ||
-          remaining > 64 * 1024 * 1024
-        )
-          throw new FileStorageError("INVALID_DOWNLOAD_STREAM", 409);
-        header = Buffer.alloc(0);
-        if (!remaining) continue;
-      }
-      const count = Math.min(remaining, chunk.length - offset);
-      if (channel === 1 && count)
-        await new Promise<void>((resolve, reject) => {
-          const closed = () =>
-            finish(new FileStorageError("FILE_DOWNLOAD_CLOSED", 409));
-          const finish = (error?: Error | null) => {
-            output.off("error", finish);
-            output.off("close", closed);
-            if (error) reject(error);
-            else resolve();
-          };
-          if (output.destroyed) {
-            closed();
-            return;
-          }
-          output.once("error", finish);
-          output.once("close", closed);
-          output.write(chunk.subarray(offset, offset + count), finish);
-        });
-      offset += count;
-      remaining -= count;
-    }
-  }
-  if (header.length || remaining)
-    throw new FileStorageError("INCOMPLETE_DOWNLOAD_STREAM", 409);
 }
 
 function helperOptions(request: FileRequest): Docker.ExecCreateOptions {
@@ -507,8 +428,9 @@ function fileTargetSignature(inspection: Docker.ContainerInspectInfo): string {
 async function helperRequest(
   access: FileContainerAccess,
   request: Omit<FileRequest, "blocked">,
-  input?: Readable,
-  inputTrailer?: Buffer,
+  input?: ReadableStream<Uint8Array>,
+  inputTrailer?: Uint8Array,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string }> {
   return runExec(
     access.container,
@@ -516,6 +438,7 @@ async function helperRequest(
     input,
     access.assertAccess,
     inputTrailer,
+    signal,
   );
 }
 
@@ -659,95 +582,81 @@ export async function acquireFileContainer(
 async function runExec(
   container: Docker.Container,
   options: Docker.ExecCreateOptions,
-  input?: Readable,
+  input?: ReadableStream<Uint8Array>,
   assertAccess?: () => void,
-  inputTrailer?: Buffer,
+  inputTrailer?: Uint8Array,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string }> {
   assertAccess?.();
-  if (input?.destroyed && !input.readableEnded)
-    throw new FileStorageError("FILE_UPLOAD_FAILED", 400);
+  signal?.throwIfAborted();
   const execution = await container.exec(options);
   assertAccess?.();
-  const stream = await execution.start({
-    hijack: true,
-    stdin: Boolean(input),
-  });
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const chunks: Buffer[] = [];
+  const stream = await execution.start();
+  const reader = input?.getReader();
+  const writer = input ? stream.writable.getWriter() : undefined;
+  void reader?.closed.catch(() => {});
+  void writer?.closed.catch(() => {});
+  const chunks: Uint8Array[] = [];
   let size = 0;
-  stdout.on("data", (chunk: Buffer) => {
+  let inputFailure: Error | undefined;
+  let cancellationTimeout: ReturnType<typeof setTimeout> | undefined;
+  const abortInput = () => {
+    inputFailure ??= signal!.reason instanceof Error ? signal!.reason : new FileStorageError("FILE_UPLOAD_FAILED", 400);
+    void reader?.cancel().catch(() => {});
+    cancellationTimeout ??= setTimeout(() => stream.abort(inputFailure), 5_000);
+  };
+  signal?.addEventListener("abort", abortInput, { once: true });
+  if (signal?.aborted) abortInput();
+  const timeout = setTimeout(() => {
+    const error = new FileStorageError("FILE_OPERATION_TIMEOUT", 409);
+    inputFailure ??= error;
+    stream.abort(error);
+    void reader?.cancel().catch(() => {});
+  }, input ? 30 * 60_000 : 60_000);
+  const received = demuxDockerStream(stream.readable, chunk => {
     size += chunk.length;
-    if (size > MAX_HELPER_OUTPUT)
-      stream.destroy(new FileStorageError("FILE_OUTPUT_LIMIT", 409));
-    else chunks.push(chunk);
-  });
-  stderr.resume();
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let inputEnded = false;
-    let inputFailure: Error | undefined;
-    let cancellationTimeout: ReturnType<typeof setTimeout> | undefined;
-    const timeout = setTimeout(
-      () => {
-        stream.destroy();
-        finish(new FileStorageError("FILE_OPERATION_TIMEOUT", 409));
-      },
-      input ? 30 * 60_000 : 60_000,
-    );
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      clearTimeout(cancellationTimeout);
-      input?.unpipe(stream);
-      input?.off("end", endInput);
-      input?.off("error", errorInput);
-      input?.off("close", closeInput);
-      const failure = inputFailure || error;
-      if (failure) reject(failure);
-      else resolve();
-    };
-    const failInput = (error?: Error) => {
-      if (settled || inputFailure) return;
-      inputFailure = error || new FileStorageError("FILE_UPLOAD_FAILED", 400);
-      input?.unpipe(stream);
-      // Missing commit trailer makes even a full-length cancelled body fail.
-      // Keep the read side alive until the helper finishes its own cleanup.
-      stream.end();
-      cancellationTimeout = setTimeout(() => {
-        stream.destroy();
-        finish(inputFailure);
-      }, 5_000);
-    };
-    const endInput = () => {
-      inputEnded = true;
-      if (settled || inputFailure) return;
-      try { assertAccess?.(); }
-      catch (error) { failInput(error as Error); return; }
-      stream.end(inputTrailer);
-    };
-    const closeInput = () => { if (!inputEnded) failInput(); };
-    const errorInput = () => failInput();
-    stream.once("end", () => finish());
-    stream.once("close", () => finish(new FileStorageError("FILE_OPERATION_FAILED", 409)));
-    stream.once("error", () =>
-      finish(new FileStorageError("FILE_OPERATION_FAILED", 409)),
-    );
-    docker.modem.demuxStream(stream, stdout, stderr);
-    if (input) {
-      input.once("error", errorInput);
-      input.once("end", endInput);
-      input.once("close", closeInput);
-      if (input.destroyed && !input.readableEnded) failInput();
-      else if (input.readableEnded) endInput();
-      else input.pipe(stream, { end: false });
+    if (size > MAX_HELPER_OUTPUT) throw new FileStorageError("FILE_OUTPUT_LIMIT", 409);
+    chunks.push(chunk);
+  }).finally(() => { void reader?.cancel().catch(() => {}); });
+  const sent = (async () => {
+    if (!reader || !writer) return;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (inputFailure) throw inputFailure;
+        try { assertAccess?.(); }
+        catch (error) { inputFailure = error instanceof Error ? error : new FileStorageError("FILE_UPLOAD_FAILED", 400); throw error; }
+        if (done) break;
+        await writer.write(value);
+      }
+      signal?.throwIfAborted();
+      if (inputTrailer) await writer.write(inputTrailer);
+      await writer.close();
+    } catch (error) {
+      inputFailure ??= error instanceof AppError ? error : new FileStorageError("FILE_UPLOAD_FAILED", 400);
+      // Omit the commit trailer and send EOF. Keep stdout alive while the helper
+      // removes its temporary file; terminate only if cleanup stops responding.
+      cancellationTimeout ??= setTimeout(() => stream.abort(inputFailure), 5_000);
+      await writer.close().catch(() => {});
     }
-  });
-  const status = await execution.inspect();
-  if (status.ExitCode !== 0 || status.Running)
-    throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
-  return { stdout: Buffer.concat(chunks).toString("utf8") };
+  })();
+  try {
+    const results = await Promise.allSettled([sent, received]);
+    if (inputFailure) throw inputFailure;
+    if (results[1].status === "rejected") throw new FileStorageError("FILE_OPERATION_FAILED", 409);
+    const status = await execution.inspect();
+    if (status.ExitCode !== 0 || status.Running)
+      throw new FileStorageError("UNSAFE_OR_CHANGED_FILE_PATH", 409);
+    return { stdout: decodeText(concatBytes(chunks)) };
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortInput);
+    clearTimeout(cancellationTimeout);
+    stream.abort();
+    await reader?.cancel().catch(() => {});
+    reader?.releaseLock();
+    writer?.releaseLock();
+  }
 }
 
 function rootName(gameType: string, rootPath: string): string {

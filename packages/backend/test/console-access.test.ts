@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
-import type { SocketChannel, SocketMessage } from "../src/socket-channel.js";
+import { fixtureBytes } from "./fixtures/bytes.js";
+import { SocketFixture } from "./fixtures/socket-channel.js";
+import { StreamFixture } from "./fixtures/web-streams.js";
+import { expect, afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
 import { getDockerInstance } from "../src/docker.js";
 import { handleConsoleConnection } from "../src/console.js";
 import { handleContainerLogsConnection } from "../src/container-logs.js";
@@ -35,33 +34,15 @@ const operator: SessionUser = {
   username: "friend",
   role: "operator",
 };
-let logStream: PassThrough;
+let logStream: StreamFixture;
 let logCalls = 0;
 let attachCalls = 0;
 let containerId = "physical-server";
 let serverId: string;
 const sockets: FakeWebSocket[] = [];
 
-class FakeWebSocket extends EventEmitter implements SocketChannel {
-  get isOpen() { return this.readyState === 1; }
-  onMessage(listener: (message: SocketMessage) => void): void { this.on("message", listener); }
-  onClose(listener: (code: number) => void): void { this.once("close", listener); }
-  readonly OPEN = 1;
-  readyState = this.OPEN;
-  sent: Array<{ type: string; data: string }> = [];
-  closeCode: number | null = null;
-  constructor() {
-    super();
-    sockets.push(this);
-  }
-  send(raw: string): void {
-    this.sent.push(JSON.parse(raw) as { type: string; data: string });
-  }
-  close(code: number): void {
-    this.closeCode = code;
-    this.readyState = 3;
-    this.emit("close", code);
-  }
+class FakeWebSocket extends SocketFixture {
+  constructor() { super(); sockets.push(this); }
 }
 
 beforeEach(async () => {
@@ -72,7 +53,7 @@ beforeEach(async () => {
     disabled: false,
     createdAt: 1,
   });
-  logStream = new PassThrough();
+  logStream = new StreamFixture();
   logCalls = 0;
   attachCalls = 0;
   containerId = "physical-server";
@@ -101,13 +82,13 @@ beforeEach(async () => {
     }),
     logs: async () => {
       logCalls += 1;
-      return logStream;
+      return logStream.readable;
     },
     attach: async () => {
       attachCalls += 1;
-      const stream = new PassThrough();
-      stream.resume();
-      return stream;
+      const stream = new StreamFixture();
+
+      return stream.connection;
     },
   })) as unknown as typeof docker.getContainer;
   await refreshServers();
@@ -141,10 +122,10 @@ describe("WebSocket server capability boundaries", () => {
       request("logs"),
       auth(),
     );
-    assert.equal(console.closeCode, 1008);
-    assert.equal(logs.closeCode, 1008);
-    assert.equal(logCalls, 0);
-    assert.equal(attachCalls, 0);
+    expect(console.closeCode).toBe(1008);
+    expect(logs.closeCode).toBe(1008);
+    expect(logCalls).toBe(0);
+    expect(attachCalls).toBe(0);
   });
 
   it("lets a command-only grant execute without attaching historical or live logs", async () => {
@@ -161,12 +142,12 @@ describe("WebSocket server capability boundaries", () => {
       auth(),
       "game",
     );
-    assert.equal(ws.closeCode, null);
-    assert.equal(logCalls, 0);
-    ws.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    expect(ws.closeCode).toBe(null);
+    expect(logCalls).toBe(0);
+    ws.receive(fixtureBytes('{"type":"input","data":"help"}'));
     await settle();
-    assert.equal(attachCalls, 1);
-    assert.ok(ws.sent.some((message) => message.data.includes("Command sent")));
+    expect(attachCalls).toBe(1);
+    expect(ws.sent.some((message) => message.data.includes("Command sent"))).toBeTruthy();
   });
 
   it("closes the console when log access is revoked during asynchronous attachment", async () => {
@@ -176,9 +157,9 @@ describe("WebSocket server capability boundaries", () => {
       ["server.view", "console.execute", "logs.read"],
       administrator,
     );
-    let attachLogs!: (stream: PassThrough) => void;
+    let attachLogs!: (stream: StreamFixture) => void;
     let requestedLogs!: () => void;
-    const pendingLogs = new Promise<PassThrough>((resolve) => { attachLogs = resolve; });
+    const pendingLogs = new Promise<StreamFixture>((resolve) => { attachLogs = resolve; });
     const didRequestLogs = new Promise<void>((resolve) => { requestedLogs = resolve; });
     const getFixtureContainer = docker.getContainer;
     docker.getContainer = ((id: string) => ({
@@ -186,7 +167,7 @@ describe("WebSocket server capability boundaries", () => {
       logs: async () => {
         logCalls++;
         requestedLogs();
-        return pendingLogs;
+        return pendingLogs.then(stream => stream.readable);
       },
     })) as unknown as typeof docker.getContainer;
 
@@ -202,21 +183,21 @@ describe("WebSocket server capability boundaries", () => {
     attachLogs(logStream);
     await connection;
 
-    assert.equal(ws.isOpen, false);
-    assert.equal(ws.closeCode, 1008);
-    assert.equal(logStream.destroyed, true);
-    ws.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    expect(ws.isOpen).toBe(false);
+    expect(ws.closeCode).toBe(1008);
+    expect(logStream.closed).toBe(true);
+    ws.receive(fixtureBytes('{"type":"input","data":"help"}'));
     await settle();
-    assert.equal(attachCalls, 0);
+    expect(attachCalls).toBe(0);
 
     // The remaining command grant works on a fresh, command-only connection.
     const reconnected = new FakeWebSocket();
     await handleConsoleConnection(reconnected, request("game-console"), auth(), "game");
-    reconnected.emit("message", Buffer.from('{"type":"input","data":"help"}'));
+    reconnected.receive(fixtureBytes('{"type":"input","data":"help"}'));
     await settle();
-    assert.equal(reconnected.isOpen, true);
-    assert.equal(logCalls, 1);
-    assert.equal(attachCalls, 1);
+    expect(reconnected.isOpen).toBe(true);
+    expect(logCalls).toBe(1);
+    expect(attachCalls).toBe(1);
   });
 
   it("closes and destroys the log stream before sending any frame after grants are revoked", async () => {
@@ -233,13 +214,11 @@ describe("WebSocket server capability boundaries", () => {
       auth(),
     );
     setUserServerGrants(operator.id, [], administrator);
-    logStream.write("must not reach revoked user");
-    assert.equal(ws.closeCode, 1008);
-    assert.equal(logStream.destroyed, true);
-    assert.equal(
-      ws.sent.some((message) => message.data.includes("must not reach")),
-      false,
-    );
+    logStream.enqueue("must not reach revoked user");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(ws.closeCode).toBe(1008);
+    expect(logStream.closed).toBe(true);
+    expect(ws.sent.some((message) => message.data.includes("must not reach"))).toBe(false);
   });
 
   it("blocks the next console command immediately after account disablement", async () => {
@@ -257,10 +236,10 @@ describe("WebSocket server capability boundaries", () => {
       "game",
     );
     updateUserAccess(operator.id, "operator", true);
-    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    ws.receive(fixtureBytes('{"type":"input","data":"save"}'));
     await settle();
-    assert.equal(ws.closeCode, 1008);
-    assert.equal(attachCalls, 0);
+    expect(ws.closeCode).toBe(1008);
+    expect(attachCalls).toBe(0);
   });
 
   it("rejects commands while a conflicting operation owns the server lock", async () => {
@@ -279,14 +258,12 @@ describe("WebSocket server capability boundaries", () => {
     );
     const release = acquireLocks([`server:${serverId}`]);
     try {
-      ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+      ws.receive(fixtureBytes('{"type":"input","data":"save"}'));
       await settle();
-      assert.equal(attachCalls, 0);
-      assert.ok(
-        ws.sent.some((message) =>
+      expect(attachCalls).toBe(0);
+      expect(ws.sent.some((message) =>
           message.data.includes("conflicting operation"),
-        ),
-      );
+        )).toBeTruthy();
     } finally {
       release();
     }
@@ -307,10 +284,10 @@ describe("WebSocket server capability boundaries", () => {
       "game",
     );
     containerId = "new-container";
-    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    ws.receive(fixtureBytes('{"type":"input","data":"save"}'));
     await settle();
-    assert.equal(ws.closeCode, 1008);
-    assert.equal(attachCalls, 0);
+    expect(ws.closeCode).toBe(1008);
+    expect(attachCalls).toBe(0);
   });
 
   it("keeps the server lock until a disconnected Docker exec has ended", async () => {
@@ -321,7 +298,7 @@ describe("WebSocket server capability boundaries", () => {
       disabled: false,
       createdAt: 1,
     });
-    const mainStream = new PassThrough();
+    const mainStream = new StreamFixture();
     let executionCount = 0;
     let started!: () => void;
     let cancellationStarted!: () => void;
@@ -354,7 +331,7 @@ describe("WebSocket server capability boundaries", () => {
           return {
             start: async () => {
               started();
-              return mainStream;
+              return mainStream.connection;
             },
             inspect: async () => ({ Running: false, ExitCode: 125 }),
           };
@@ -362,9 +339,9 @@ describe("WebSocket server capability boundaries", () => {
         return {
           start: async () => {
             cancellationStarted();
-            const stream = new PassThrough();
-            setImmediate(() => stream.end());
-            return stream;
+            const stream = new StreamFixture();
+            setImmediate(() => stream.close());
+            return stream.connection;
           },
         };
       },
@@ -384,16 +361,16 @@ describe("WebSocket server capability boundaries", () => {
       auth(),
       "game",
     );
-    ws.emit("message", Buffer.from('{"type":"input","data":"save"}'));
+    ws.receive(fixtureBytes('{"type":"input","data":"save"}'));
     await didStart;
-    assert.equal(serverLockIsHeld(), true);
+    expect(serverLockIsHeld()).toBe(true);
 
     ws.close(1000);
     await didCancel;
-    assert.equal(serverLockIsHeld(), true);
-    mainStream.end();
+    expect(serverLockIsHeld()).toBe(true);
+    mainStream.close();
     await settle();
-    assert.equal(serverLockIsHeld(), false);
+    expect(serverLockIsHeld()).toBe(false);
   });
 
   it("does not grant administrator shell access through an operator's console grant", async () => {
@@ -410,7 +387,7 @@ describe("WebSocket server capability boundaries", () => {
       auth(),
       "shell",
     );
-    assert.equal(ws.closeCode, 1008);
+    expect(ws.closeCode).toBe(1008);
   });
 });
 
@@ -424,7 +401,7 @@ describe("console credential redaction", () => {
     redactor.push("ret-va");
     redactor.push("lue suffix");
     redactor.end();
-    assert.equal(values.join(""), "prefix [redacted] suffix");
+    expect(values.join("")).toBe("prefix [redacted] suffix");
     const secrets = observationSecrets({
       containerId: "id",
       name: "game",
@@ -438,10 +415,7 @@ describe("console credential redaction", () => {
         "env:RCON_PORT": "25575",
       },
     });
-    assert.deepEqual(
-      new Set(secrets),
-      new Set(["do-not-leak", "another-secret"]),
-    );
+    expect(new Set(secrets)).toStrictEqual(new Set(["do-not-leak", "another-secret"]));
   });
 });
 

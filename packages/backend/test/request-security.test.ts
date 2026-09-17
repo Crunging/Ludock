@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import {
   isExternalHttpsRequest,
   isSameOriginRequest,
@@ -16,96 +15,65 @@ function request(
 
 describe("request security metadata", () => {
   it("detects HTTPS directly and through a reverse proxy", () => {
-    assert.equal(isExternalHttpsRequest(request({}, true)), true);
-    assert.equal(
-      isExternalHttpsRequest(
+    expect(isExternalHttpsRequest(request({}, true))).toBe(true);
+    expect(isExternalHttpsRequest(
         request({ "x-forwarded-proto": "https", host: "panel.example" })
-      ),
-      true
-    );
-    assert.equal(
-      isExternalHttpsRequest(
+      )).toBe(true);
+    expect(isExternalHttpsRequest(
         request({
           origin: "https://panel.example",
           host: "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      true
-    );
-    assert.equal(
-      isExternalHttpsRequest(
+      )).toBe(true);
+    expect(isExternalHttpsRequest(
         request({ origin: "http://panel.example", host: "panel.example" })
-      ),
-      false
-    );
+      )).toBe(false);
   });
 
   it("accepts same-host browser origins through TLS-terminating proxies", () => {
-    assert.equal(
-      isSameOriginRequest(
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example",
           host: "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      true
-    );
-    assert.equal(
-      isSameOriginRequest(
+      )).toBe(true);
+    expect(isSameOriginRequest(
         request({
           origin: "https://PANEL.example",
           host: "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      true
-    );
-    assert.equal(
-      isSameOriginRequest(
+      )).toBe(true);
+    expect(isSameOriginRequest(
         request({ origin: "https://panel.example", host: "panel.example" })
-      ),
-      false
-    );
-    assert.equal(
-      isSameOriginRequest(
+      )).toBe(false);
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example",
           host: "ludock:3000",
           "x-forwarded-host": "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      true,
-      "a proxy may use the internal service name in Host"
-    );
-    assert.equal(
-      isSameOriginRequest(
+      ), "a proxy may use the internal service name in Host").toBe(true);
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example",
           host: "panel.example",
           "x-forwarded-host": "ludock:3000",
           "x-forwarded-proto": "https",
         })
-      ),
-      true,
-      "the public Host remains a valid candidate"
-    );
-    assert.equal(
-      isSameOriginRequest(
+      ), "the public Host remains a valid candidate").toBe(true);
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example",
           host: "ludock:3000",
           "x-forwarded-host": "panel.example:443",
           "x-forwarded-proto": "https",
         })
-      ),
-      true,
-      "default ports are normalized"
-    );
-    assert.equal(
-      isSameOriginRequest(
+      ), "default ports are normalized").toBe(true);
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example:8443",
           host: "ludock:3000",
@@ -113,10 +81,7 @@ describe("request security metadata", () => {
           "x-forwarded-port": "8443",
           "x-forwarded-proto": "https",
         })
-      ),
-      true,
-      "a forwarded non-default port is included"
-    );
+      ), "a forwarded non-default port is included").toBe(true);
   });
 
   it("uses forwarded public origin metadata", () => {
@@ -129,8 +94,8 @@ describe("request security metadata", () => {
       },
       false
     );
-    assert.equal(isExternalHttpsRequest(proxied), true);
-    assert.equal(isSameOriginRequest(proxied), true);
+    expect(isExternalHttpsRequest(proxied)).toBe(true);
+    expect(isSameOriginRequest(proxied)).toBe(true);
   });
 
   it("accepts public metadata from a multi-proxy chain", () => {
@@ -140,8 +105,8 @@ describe("request security metadata", () => {
       "x-forwarded-host": "panel.example, gateway.internal",
       "x-forwarded-proto": "http, https",
     });
-    assert.equal(isSameOriginRequest(proxied), true);
-    assert.deepEqual(requestOriginDiagnostic(proxied), {
+    expect(isSameOriginRequest(proxied)).toBe(true);
+    expect(requestOriginDiagnostic(proxied)).toStrictEqual({
       originHost: "panel.example",
       originProtocol: "https:",
       host: "ludock:3000",
@@ -154,8 +119,7 @@ describe("request security metadata", () => {
   });
 
   it("uses browser fetch metadata when proxy metadata is rewritten", () => {
-    assert.equal(
-      isSameOriginRequest(
+    expect(isSameOriginRequest(
         request({
           origin: "https://panel.example",
           host: "ludock:3000",
@@ -163,20 +127,15 @@ describe("request security metadata", () => {
           "x-forwarded-proto": "http",
           "sec-fetch-site": "same-origin",
         })
-      ),
-      true
-    );
-    assert.equal(
-      isSameOriginRequest(
+      )).toBe(true);
+    expect(isSameOriginRequest(
         request({
           origin: "https://attacker.example",
           host: "panel.example",
           "x-forwarded-proto": "https",
           "sec-fetch-site": "cross-site",
         })
-      ),
-      false
-    );
+      )).toBe(false);
   });
 
   it("rejects cross-host and malformed origins", () => {
@@ -187,21 +146,15 @@ describe("request security metadata", () => {
       "https://panel.example/path",
       "null",
     ]) {
-      assert.equal(
-        isSameOriginRequest(request({ origin, host: "panel.example" })),
-        false
-      );
+      expect(isSameOriginRequest(request({ origin, host: "panel.example" }))).toBe(false);
     }
-    assert.equal(
-      isSameOriginRequest(
+    expect(isSameOriginRequest(
         request({
           origin: "https://attacker.example",
           host: "ludock:3000",
           "x-forwarded-host": "panel.example",
           "x-forwarded-proto": "https",
         })
-      ),
-      false
-    );
+      )).toBe(false);
   });
 });
