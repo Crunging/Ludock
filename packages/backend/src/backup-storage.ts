@@ -706,7 +706,8 @@ export async function writeSnapshot(
   let output: Bun.FileSink | undefined;
   let created = false;
   const hash = new Bun.CryptoHasher("sha256");
-  let size = 0, checked = 0;
+  const writeBatchBytes = 65_536;
+  let size = 0, checked = 0, buffered = 0;
   const write = async (chunk: Uint8Array) => {
     assertAccess?.();
     size += chunk.length;
@@ -720,14 +721,18 @@ export async function writeSnapshot(
     }
     hash.update(chunk);
     await output!.write(chunk);
-    // Flush before requesting more input: a full disk cancels the source and
-    // the writer never accumulates a game world's contents in memory.
-    await output!.flush();
+    buffered += chunk.length;
+    // Combine small headers and bodies within Bun's bounded buffer. Await
+    // writes and batch flushes so destination errors still cancel the source.
+    if (buffered >= writeBatchBytes) {
+      await output!.flush();
+      buffered = 0;
+    }
   };
   try {
     file = await open(filename, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     created = true;
-    output = Bun.file(file.fd).writer({ highWaterMark: 65_536 });
+    output = Bun.file(file.fd).writer({ highWaterMark: writeBatchBytes });
     await write(encodeTarHeader({ name: "snapshot/", type: "directory", mode: 0o755 }));
     for (const root of helper.roots) {
       await assertStopped();

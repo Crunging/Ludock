@@ -1,4 +1,4 @@
-import { concatBytes, byteView } from "./bytes.js";
+import { byteView } from "./bytes.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
@@ -104,7 +104,7 @@ export async function handleContainerLogsConnection(
           if (done) break;
           decoder.push(value);
         }
-        if (!decoder.end()) logger.warn("Docker log stream ended with an incomplete frame", { container: shortContainerId(containerId) });
+        if (!decoder.end()) throw new Error("Incomplete Docker log frame");
         stdout.end();
         stderr.end();
         send("system", "Log stream ended (container may have stopped)");
@@ -141,7 +141,10 @@ export async function handleContainerLogsConnection(
 
 export class DockerLogDecoder {
   private mode: "unknown" | "raw" | "multiplexed" = "unknown";
-  private buffer = new Uint8Array(0);
+  private readonly header = new Uint8Array(8);
+  private headerBytes = 0;
+  private remaining = 0;
+  private channel: "stdout" | "stderr" = "stdout";
   private readonly text = {
     stdout: new TextDecoder("utf-8", { ignoreBOM: true }),
     stderr: new TextDecoder("utf-8", { ignoreBOM: true }),
@@ -158,54 +161,62 @@ export class DockerLogDecoder {
       return;
     }
 
-    this.buffer = concatBytes([this.buffer, chunk]);
-    if (this.mode === "unknown") {
-      const firstByte = this.buffer[0];
-      if (firstByte !== 1 && firstByte !== 2) {
-        this.useRawMode();
-        return;
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (this.remaining) {
+        const count = Math.min(this.remaining, chunk.length - offset);
+        this.write(this.channel, chunk.subarray(offset, offset + count));
+        this.remaining -= count;
+        offset += count;
+        continue;
       }
-      if (this.buffer.length < 4) return;
-      if (
-        this.buffer[1] !== 0 ||
-        this.buffer[2] !== 0 ||
-        this.buffer[3] !== 0
-      ) {
-        this.useRawMode();
-        return;
+      // Only retain a partial header. Bodies can span many socket chunks and
+      // must reach the consumer without accumulating or copying whole frames.
+      const count = Math.min(8 - this.headerBytes, chunk.length - offset);
+      this.header.set(chunk.subarray(offset, offset + count), this.headerBytes);
+      this.headerBytes += count;
+      offset += count;
+      if (this.mode === "unknown") {
+        if ((this.header[0] !== 1 && this.header[0] !== 2) ||
+            (this.headerBytes >= 4 && (this.header[1] || this.header[2] || this.header[3]))) {
+          this.useRawMode();
+          this.write("stdout", chunk.subarray(offset));
+          return;
+        }
+        if (this.headerBytes >= 4) this.mode = "multiplexed";
       }
-      this.mode = "multiplexed";
-    }
-
-    while (this.buffer.length >= 8) {
-      const streamType = this.buffer[0];
-      const frameSize = byteView(this.buffer).getUint32(4);
+      if (this.headerBytes < 8) return;
+      const streamType = this.header[0];
+      const frameSize = byteView(this.header).getUint32(4);
       if (
         (streamType !== 1 && streamType !== 2) ||
-        this.buffer[1] !== 0 ||
-        this.buffer[2] !== 0 ||
-        this.buffer[3] !== 0 ||
+        this.header[1] !== 0 ||
+        this.header[2] !== 0 ||
+        this.header[3] !== 0 ||
         frameSize > MAX_FRAME_BYTES
       ) {
         this.useRawMode();
+        this.write("stdout", chunk.subarray(offset));
         return;
       }
-      if (this.buffer.length < 8 + frameSize) return;
-      const payload = this.buffer.subarray(8, 8 + frameSize);
-      this.write(streamType === 2 ? "stderr" : "stdout", payload);
-      this.buffer = this.buffer.subarray(8 + frameSize);
+      this.channel = streamType === 2 ? "stderr" : "stdout";
+      this.remaining = frameSize;
+      this.headerBytes = 0;
     }
   }
 
   end(): boolean {
-    if (this.mode === "unknown" && this.buffer.length > 0) {
+    if (this.mode === "unknown" && this.headerBytes > 0) {
       this.useRawMode();
     }
+    // Do not flush incomplete UTF-8 or the downstream redaction tail after a
+    // truncated frame: that tail may contain a fragment of a credential.
+    if (this.headerBytes || this.remaining) return false;
     for (const type of ["stdout", "stderr"] as const) {
       const final = this.text[type].decode();
       if (final) this.output(type, final);
     }
-    return this.buffer.length === 0;
+    return true;
   }
 
   private write(type: "stdout" | "stderr", chunk: Uint8Array): void {
@@ -215,9 +226,9 @@ export class DockerLogDecoder {
 
   private useRawMode(): void {
     this.mode = "raw";
-    if (this.buffer.length > 0) {
-      this.write("stdout", this.buffer);
-      this.buffer = new Uint8Array(0);
+    if (this.headerBytes > 0) {
+      this.write("stdout", this.header.subarray(0, this.headerBytes));
+      this.headerBytes = 0;
     }
   }
 }

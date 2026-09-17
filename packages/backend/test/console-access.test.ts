@@ -221,6 +221,41 @@ describe("WebSocket server capability boundaries", () => {
     expect(ws.sent.some((message) => message.data.includes("must not reach"))).toBe(false);
   });
 
+  for (const endpoint of ["logs", "game-console"] as const) {
+    it(`does not release a credential fragment when ${endpoint} ends inside a UTF-8 frame`, async () => {
+      const getFixtureContainer = docker.getContainer;
+      docker.getContainer = ((id: string) => {
+        const container = getFixtureContainer(id);
+        return {
+          ...container,
+          inspect: async () => {
+            const info = await container.inspect();
+            return { ...info, Config: { ...info.Config, Env: ["API_TOKEN=secreté"] } };
+          },
+        };
+      }) as unknown as typeof docker.getContainer;
+      // Discover the fixture with its credential from the outset, so this is
+      // ordinary stream output rather than a changed binding under review.
+      closeDatabase();
+      createUser({ ...operator, passwordHash: "fixture", disabled: false, createdAt: 1 });
+      await refreshServers();
+      serverId = listLogicalServers()[0].id;
+      setServerGrant(operator.id, serverId, ["server.view", "logs.read", "console.execute"], administrator);
+      const ws = new FakeWebSocket();
+      if (endpoint === "logs") await handleContainerLogsConnection(ws, request(endpoint), auth());
+      else await handleConsoleConnection(ws, request(endpoint), auth(), "game");
+      const body = fixtureBytes("secreté");
+      const wire = new Uint8Array(8 + body.length);
+      wire[0] = 1;
+      new DataView(wire.buffer).setUint32(4, body.length);
+      wire.set(body, 8);
+      logStream.close(wire.subarray(0, wire.length - 1));
+      await settle();
+      expect(ws.sent.filter(message => message.type === "stdout" || message.type === "stderr")).toStrictEqual([]);
+      expect(ws.sent.some(message => message.type === "error" && message.data === "Docker log stream failed")).toBe(true);
+    });
+  }
+
   it("blocks the next console command immediately after account disablement", async () => {
     setServerGrant(
       operator.id,

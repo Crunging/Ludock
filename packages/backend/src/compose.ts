@@ -429,7 +429,7 @@ export async function updateCapability(
     if (
       isServerBusy(context.logical.id) ||
       getDatabase()
-        .prepare(
+        .query(
           "SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running')",
         )
         .get(context.logical.id)

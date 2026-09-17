@@ -82,7 +82,7 @@ function roleCapabilities(role: UserRecord["role"]): ServerCapability[] {
 
 export function listUserServerGrants(userId: string): ServerGrant[] {
   const rows = getDatabase()
-    .prepare(
+    .query(
       `SELECT server_id, capabilities_json, updated_at
     FROM server_grants WHERE user_id = ? ORDER BY server_id`,
     )
@@ -100,7 +100,7 @@ export function listUserServerGrants(userId: string): ServerGrant[] {
 
 /** Read the assigned grant without treating binding availability as revocation. */
 export function getUserServerGrant(userId: string, serverId: string): ServerGrant | null {
-  const row = getDatabase().prepare(
+  const row = getDatabase().query(
     "SELECT capabilities_json,updated_at FROM server_grants WHERE user_id=? AND server_id=?",
   ).get(userId, serverId) as { capabilities_json: string; updated_at: number } | null;
   return row ? {
@@ -141,7 +141,7 @@ export function getEffectiveCapabilities(
   }
   if (server.status !== "active" || server.reviewRequired) return [];
   const grant = getDatabase()
-    .prepare(
+    .query(
       `SELECT capabilities_json FROM server_grants
     WHERE user_id = ? AND server_id = ?`,
     )
@@ -274,8 +274,8 @@ export function setUserServerGrants(
   const now = Date.now();
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare("DELETE FROM server_grants WHERE user_id = ?").run(userId);
-    const insert = db.prepare(`INSERT INTO server_grants
+    db.query("DELETE FROM server_grants WHERE user_id = ?").run(userId);
+    const insert = db.query(`INSERT INTO server_grants
       (user_id, server_id, capabilities_json, updated_at) VALUES (?, ?, ?, ?)`);
     for (const grant of validated) {
       if (grant.capabilities.length === 0) continue;

@@ -33,6 +33,8 @@ export interface LoginThrottle {
 let database: Database | null = null;
 let fingerprintKey: Uint8Array | null = null;
 
+// Fixed runtime SQL uses query() to reuse compiled statements on this connection.
+// Results stay fresh; prepare() is reserved for migrations and variable SQL.
 export function getDatabase(): Database {
   if (database) return database;
 
@@ -127,7 +129,7 @@ export function getLoginThrottle(
   windowMs: number,
 ): LoginThrottle {
   const row = getDatabase()
-    .prepare(
+    .query(
       `SELECT failures, window_started_at, blocked_until
        FROM login_attempts WHERE attempt_key = ?`,
     )
@@ -160,12 +162,12 @@ export function recordLoginFailure(
   const blockedUntil =
     failures >= maxFailures ? now + blockMs : current.blockedUntil;
   const existing = getDatabase()
-    .prepare(
+    .query(
       "SELECT window_started_at FROM login_attempts WHERE attempt_key = ?",
     )
     .get(attemptKey) as { window_started_at: number } | null;
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO login_attempts
         (attempt_key, failures, window_started_at, blocked_until, updated_at)
        VALUES (?, ?, ?, ?, ?)
@@ -192,13 +194,13 @@ export function recordLoginFailure(
 
 export function clearLoginThrottle(attemptKey: string): void {
   getDatabase()
-    .prepare("DELETE FROM login_attempts WHERE attempt_key = ?")
+    .query("DELETE FROM login_attempts WHERE attempt_key = ?")
     .run(attemptKey);
 }
 
 export function countUsers(): number {
   const row = getDatabase()
-    .prepare("SELECT COUNT(*) AS count FROM users")
+    .query("SELECT COUNT(*) AS count FROM users")
     .get() as {
     count: number;
   };
@@ -206,12 +208,12 @@ export function countUsers(): number {
 }
 
 export function checkDatabase(): void {
-  getDatabase().prepare("SELECT 1").get();
+  getDatabase().query("SELECT 1").get();
 }
 
 export function createUser(user: UserRecord): void {
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO users
         (id, username, password_hash, role, disabled, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -229,7 +231,7 @@ export function createUser(user: UserRecord): void {
 
 export function findUserByUsername(username: string): UserRecord | null {
   const row = getDatabase()
-    .prepare(
+    .query(
       `SELECT id, username, password_hash, role, disabled, created_at
        FROM users WHERE username = ?`,
     )
@@ -258,7 +260,7 @@ export function findUserByUsername(username: string): UserRecord | null {
 
 export function findUserById(id: string): UserRecord | null {
   const row = getDatabase()
-    .prepare(
+    .query(
       `SELECT id, username, password_hash, role, disabled, created_at
        FROM users WHERE id = ?`,
     )
@@ -286,7 +288,7 @@ export function findUserById(id: string): UserRecord | null {
 
 export function listUsers(): UserSummary[] {
   const rows = getDatabase()
-    .prepare(
+    .query(
       `SELECT id, username, role, disabled, created_at
        FROM users ORDER BY username COLLATE NOCASE`,
     )
@@ -308,7 +310,7 @@ export function listUsers(): UserSummary[] {
 
 export function countEnabledAdmins(): number {
   const row = getDatabase()
-    .prepare(
+    .query(
       "SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled = 0",
     )
     .get() as { count: number };
@@ -321,7 +323,7 @@ export function updateUserAccess(
   disabled: boolean,
 ): void {
   getDatabase()
-    .prepare(
+    .query(
       "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?",
     )
     .run(role, disabled ? 1 : 0, Date.now(), id);
@@ -330,7 +332,7 @@ export function updateUserAccess(
 
 export function updateUserPassword(id: string, passwordHash: string): void {
   getDatabase()
-    .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+    .query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
     .run(passwordHash, Date.now(), id);
   deleteUserSessions(id);
 }
@@ -340,16 +342,16 @@ export function upgradeUserPasswordHash(
   passwordHash: string,
 ): void {
   getDatabase()
-    .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+    .query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
     .run(passwordHash, Date.now(), id);
 }
 
 export function deleteUser(id: string): void {
-  getDatabase().prepare("DELETE FROM users WHERE id = ?").run(id);
+  getDatabase().query("DELETE FROM users WHERE id = ?").run(id);
 }
 
 export function deleteUserSessions(userId: string): void {
-  getDatabase().prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  getDatabase().query("DELETE FROM sessions WHERE user_id = ?").run(userId);
 }
 
 /**
@@ -359,7 +361,7 @@ export function deleteUserSessions(userId: string): void {
  */
 export function pruneLoginAttempts(now: number, windowMs: number): void {
   getDatabase()
-    .prepare(
+    .query(
       `DELETE FROM login_attempts
        WHERE blocked_until <= ? AND updated_at < ?`,
     )
@@ -376,8 +378,8 @@ export function createSessionRecord(input: {
   userAgent?: string;
 }): void {
   const db = getDatabase();
-  db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(input.createdAt);
-  db.prepare(
+  db.query("DELETE FROM sessions WHERE expires_at <= ?").run(input.createdAt);
+  db.query(
     `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -398,7 +400,7 @@ export function listUserSessions(
   currentTokenHash: string,
 ): SessionSummary[] {
   const rows = getDatabase()
-    .prepare(
+    .query(
       `SELECT session_id, token_hash, created_at, expires_at, last_seen_at,
               ip_address, user_agent
        FROM sessions
@@ -435,7 +437,7 @@ export function deleteUserSessionById(
   sessionId: string,
 ): boolean {
   const result = getDatabase()
-    .prepare("DELETE FROM sessions WHERE user_id = ? AND session_id = ?")
+    .query("DELETE FROM sessions WHERE user_id = ? AND session_id = ?")
     .run(userId, sessionId);
   return result.changes > 0;
 }
@@ -447,7 +449,7 @@ export function findSessionUser(
   now: number,
 ): SessionUser | null {
   const row = getDatabase()
-    .prepare(
+    .query(
       `SELECT users.id, users.username, users.role, users.disabled,
               sessions.expires_at, sessions.last_seen_at
        FROM sessions
@@ -474,7 +476,7 @@ export function findSessionUser(
   // value only drives the session list and coarse activity display.
   if (now - row.last_seen_at >= LAST_SEEN_WRITE_INTERVAL_MS) {
     getDatabase()
-      .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
+      .query("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
       .run(now, tokenHash);
   }
 
@@ -483,7 +485,7 @@ export function findSessionUser(
 
 export function deleteSessionRecord(tokenHash: string): void {
   getDatabase()
-    .prepare("DELETE FROM sessions WHERE token_hash = ?")
+    .query("DELETE FROM sessions WHERE token_hash = ?")
     .run(tokenHash);
 }
 
@@ -500,7 +502,7 @@ let auditWritesSincePrune = 0;
 
 export function pruneAuditLog(): void {
   getDatabase()
-    .prepare(
+    .query(
       `DELETE FROM audit_log
        WHERE id <= (SELECT MAX(id) FROM audit_log) - ?`,
     )
@@ -523,7 +525,7 @@ export function writeAuditLog(input: {
   ipAddress?: string;
 }, options: { prune?: boolean } = {}): void {
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO audit_log
         (user_id, action, target_type, target_id, details_json, ip_address, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,

@@ -53,7 +53,7 @@ export function jobActor(context: JobContext): SessionUser {
     );
   if (typeof context.job.input.scheduleId === "string") {
     const schedule = getDatabase()
-      .prepare(
+      .query(
         "SELECT owner_id,input_json,revision FROM schedules WHERE id=? AND server_id=?",
       )
       .get(context.job.input.scheduleId, context.job.serverId) as

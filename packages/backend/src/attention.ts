@@ -61,7 +61,7 @@ export async function listAttention(
     }
     // Authority was checked above. Limit recent work before filtering failures,
     // and read only summary fields; history payloads and cursors are unnecessary.
-    const failures = getDatabase().prepare(`
+    const failures = getDatabase().query(`
       SELECT id,kind,status,updated_at AS updatedAt FROM (
         SELECT id,kind,status,updated_at FROM operations
         WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100

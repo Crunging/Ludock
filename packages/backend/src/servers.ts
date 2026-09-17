@@ -71,7 +71,7 @@ function toPublicServer(
       currentActor(actor)?.role === "admin" ||
       permissions.includes("backups.read") ||
       permissions.includes("backups.create")
-        ? (getDatabase().prepare(
+        ? (getDatabase().query(
             `SELECT created_at AS createdAt,size FROM backups
              WHERE server_id=? AND state='complete'
              ORDER BY created_at DESC,id LIMIT 1`,
