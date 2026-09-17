@@ -3,13 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Keep the maintained GitHub protocols and release policy, with Bun as the
-// executable. These are immutable, self-contained upstream distribution files.
+// executable. Download each bundle and its companion assets from one revision.
 export const integrations = {
   "release-please": {
     repository: "googleapis/release-please-action",
     revision: "45996ed1f6d02564a971a2fa1b5860e934307cf7", // v5
     entry: "dist/index.js",
     extension: "cjs",
+    assets: [
+      "action.js", "module.js", "esprima.js",
+      "commit.hbs", "commit1.hbs", "commit2.hbs", "footer.hbs", "footer1.hbs",
+      "header.hbs", "header1.hbs", "header2.hbs", "template.hbs", "template1.hbs", "template2.hbs",
+    ],
     defaults: {
       "config-file": "release-please-config.json", "manifest-file": ".release-please-manifest.json",
       "skip-github-release": "false", "skip-github-pull-request": "false", "skip-labeling": "false",
@@ -56,25 +61,40 @@ export async function exportBuildRuntime(environment) {
   await Bun.write(file, previous + values.map(([name, value]) => `${name}=${value}\n`).join(""));
 }
 
+export async function stageIntegration(name, directory) {
+  const integration = integrations[name];
+  if (!integration) throw new Error("Unknown GitHub integration");
+  const bundle = join(directory, `action.${integration.extension}`);
+  const files = [[integration.entry, bundle], ...(integration.assets || []).map((asset) => [`dist/${asset}`, join(directory, asset)])];
+  const results = await Promise.allSettled(files.map(async ([entry, filename]) => {
+    const url = `https://raw.githubusercontent.com/${integration.repository}/${integration.revision}/${entry}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: "error" });
+    if (!response.ok) throw new Error(`Cannot download pinned ${name} file ${entry} (${response.status})`);
+    if (entry === integration.entry && integration.extension === "mjs") {
+      // The upstream ESM bundle contains UMD probes for these CommonJS names.
+      // Explicitly absent bindings preserve ESM semantics and stop Bun from
+      // classifying the whole bundle as CommonJS because of those probes.
+      await Bun.write(filename, "const exports = undefined, module = undefined;\n" + await response.text());
+    } else await Bun.write(filename, response);
+  }));
+  // Finish every write before the caller can remove the staging directory.
+  for (const result of results) if (result.status === "rejected") throw result.reason;
+  return bundle;
+}
+
 export async function runIntegration(name, environment = process.env) {
   if (["node", "npm", "npx"].some((command) => Bun.which(command)))
     throw new Error("GitHub integrations must run in the Bun-only action image");
   if (name === "build-runtime") return exportBuildRuntime(environment);
+  const verifyRelease = name === "verify-release-please";
+  if (verifyRelease) name = "release-please";
   const integration = integrations[name];
   if (!integration) throw new Error("Unknown GitHub integration");
   const directory = await mkdtemp(join(tmpdir(), "ludock-github-"));
   try {
-    const url = `https://raw.githubusercontent.com/${integration.repository}/${integration.revision}/${integration.entry}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(60_000), redirect: "error" });
-    if (!response.ok) throw new Error(`Cannot download pinned ${name} bundle (${response.status})`);
-    const bundle = join(directory, `action.${integration.extension}`);
-    if (integration.extension === "mjs") {
-      // The upstream ESM bundle contains UMD probes for these CommonJS names.
-      // Explicitly absent bindings preserve ESM semantics and stop Bun from
-      // classifying the whole bundle as CommonJS because of those probes.
-      await Bun.write(bundle, "const exports = undefined, module = undefined;\n" + await response.text());
-    } else await Bun.write(bundle, response);
-    const child = Bun.spawn([process.execPath, bundle], {
+    const bundle = await stageIntegration(name, directory);
+    const entrypoints = verifyRelease ? [join(import.meta.dir, "../test/fixtures/release-please.mjs"), bundle] : [bundle];
+    const child = Bun.spawn([process.execPath, ...entrypoints], {
       env: integrationEnvironment(name, environment), stdin: "ignore", stdout: "inherit", stderr: "inherit",
     });
     const code = await child.exited;
