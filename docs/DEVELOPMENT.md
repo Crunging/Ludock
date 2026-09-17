@@ -27,6 +27,16 @@ bun run --filter @ludock/frontend test:e2e
 
 Use `bun run lint:scripts` to lint repository scripts separately.
 
+Frontend component tests own detailed state transitions, filter combinations,
+and failure cases. Browser tests cover navigation, native dialogs and focus,
+network cancellation, and rendered layout or scrolling. Before removing a
+browser case, check that its assertions remain covered at the appropriate layer.
+
+Playwright runs untagged cases on desktop. Use `{ tag: "@responsive" }` for
+cases that need both desktop and mobile, or `{ tag: "@mobile" }` for dedicated
+narrow-screen or touch cases that set their own viewport. Inspect the selected
+cases with `bun run --filter @ludock/frontend test:e2e --list`.
+
 Docker acceptance uses `ludock:test`. Run the
 [Linux](../scripts/test-linux.mjs), [file](../scripts/test-files.mjs),
 [backup](../scripts/test-backups.mjs), [packaged](../scripts/test-packaged.mjs),

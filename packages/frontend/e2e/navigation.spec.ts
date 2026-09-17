@@ -29,7 +29,7 @@ test("server tools return to the remembered detail tab and filtered list", async
   await expect(page.getByRole("article")).toHaveCount(1);
 });
 
-test("signing in continues to the requested server page", async ({ app, page }) => {
+test("signing in continues to the requested server page", { tag: "@responsive" }, async ({ app, page }) => {
   app.user = null;
   await app.open(`/files/${RUNNING_ID}`);
   await expect(page.getByRole("heading", { name: "Sign in to Ludock" })).toBeVisible();

@@ -1,7 +1,7 @@
 import { operationsResponseSchema, updateCapabilityResponseSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID } from "./fixtures";
 
-test("operation progress stays reachable from blocked server controls", async ({ app, page }) => {
+test("operation progress stays reachable from blocked server controls", { tag: "@responsive" }, async ({ app, page }) => {
   await page.route(`**/api/v1/servers/${RUNNING_ID}/operations`, (route) => route.fulfill({
     json: operationsResponseSchema.parse({ operations: [{
       id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0",

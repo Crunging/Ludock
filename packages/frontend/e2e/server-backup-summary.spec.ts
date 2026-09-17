@@ -1,6 +1,6 @@
 import { test, expect, RUNNING_NAME } from "./fixtures";
 
-test("server backup summaries remain readable and refresh after a successful backup", async ({ app, page }, testInfo) => {
+test("server backup summaries remain readable and refresh after a successful backup", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   const createdAt = Date.UTC(2026, 8, 14, 10, 30);
   app.servers[0].latestBackup = { createdAt, size: 1024 };
   await app.open();

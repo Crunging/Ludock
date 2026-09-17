@@ -2,7 +2,7 @@ import type { Route } from "@playwright/test";
 import { apiErrorSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID, RUNNING_NAME } from "./fixtures";
 
-test("filename filters and sort controls work locally with keyboard and touch", async ({ app, page }, testInfo) => {
+test("filename filters and sort controls work locally with keyboard and touch", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   app.files.set("data:", [
     { name: "world", type: "directory", size: 0, modifiedAt: 3_000 },
     { name: "server.properties", type: "file", size: 342, modifiedAt: 1_000 },
@@ -41,28 +41,7 @@ test("filename filters and sort controls work locally with keyboard and touch", 
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("refresh keeps file filters while folder navigation clears the query and keeps the sort", async ({ app, page }) => {
-  await app.open(`/files/${RUNNING_ID}`);
-  const search = page.getByRole("searchbox", { name: "Filter filenames", exact: true });
-  const sort = page.getByRole("combobox", { name: "Sort by", exact: true });
-  await search.fill("world");
-  await sort.selectOption("modified-desc");
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByText("Showing 1 of 2 entries", { exact: true })).toBeVisible();
-  await expect(search).toHaveValue("world");
-  await expect(sort).toHaveValue("modified-desc");
-  await page.getByRole("button", { name: "world", exact: true }).click();
-  await expect(page.getByText("level.dat", { exact: true })).toBeVisible();
-  await expect(search).toHaveValue("");
-  await expect(sort).toHaveValue("modified-desc");
-  await search.fill("level");
-  await page.getByRole("combobox", { name: "Storage location", exact: true }).selectOption("config");
-  await expect(page.getByText("settings.yml", { exact: true })).toBeVisible();
-  await expect(search).toHaveValue("");
-  await expect(sort).toHaveValue("modified-desc");
-});
-
-test("folder creation and deletion name the target and require explicit confirmation", async ({ app, page }) => {
+test("folder creation and deletion name the target and require explicit confirmation", { tag: "@responsive" }, async ({ app, page }) => {
   await app.open(`/files/${RUNNING_ID}`);
   const create = page.getByRole("button", { name: "New folder", exact: true });
   await create.click();
@@ -95,7 +74,7 @@ test("folder creation and deletion name the target and require explicit confirma
   });
 });
 
-test("rename failures retain the dialog and draft for correction", async ({ app, page }) => {
+test("rename failures retain the dialog and draft for correction", { tag: "@responsive" }, async ({ app, page }) => {
   let failedOnce = false;
   await page.route(`**/api/v1/servers/${RUNNING_ID}/files/rename`, async (route) => {
     if (!failedOnce) {

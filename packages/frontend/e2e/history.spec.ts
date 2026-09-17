@@ -99,7 +99,7 @@ function expectedFilters(action: string) {
   };
 }
 
-test("operation history searches the backend and preserves filters through pagination and refresh", async ({ app, page }, testInfo) => {
+test("operation history searches the backend and preserves filters through pagination and refresh", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   const requests = await mockHistory(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("link", { name: "Search operation history", exact: true }).click();
@@ -192,7 +192,7 @@ test("an operator can open an authorized operation without administrator audit c
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("history filters and pagination fit a narrow screen with usable controls", async ({ app, page }, testInfo) => {
+test("history filters and pagination fit a narrow screen with usable controls", { tag: "@mobile" }, async ({ app, page }, testInfo) => {
   await mockHistory(page);
   await page.setViewportSize({ width: 320, height: 844 });
   for (const path of ["/operations", "/audit"]) {

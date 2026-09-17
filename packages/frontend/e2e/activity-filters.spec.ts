@@ -1,4 +1,4 @@
-import { operationsResponseSchema, type Operation } from "@ludock/shared";
+import { operationsResponseSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID } from "./fixtures";
 
 const operations = operationsResponseSchema.parse({ operations: [
@@ -7,9 +7,8 @@ const operations = operationsResponseSchema.parse({ operations: [
   { id: "33333333-3333-4333-8333-333333333333", serverId: RUNNING_ID, kind: "stop", status: "succeeded", phase: "Complete", createdAt: 0, updatedAt: 0, error: null, result: null },
 ] }).operations;
 
-test("activity filters preserve refresh and tab selections while running work stays reachable", async ({ app, page }) => {
-  let current: Operation[] = operations;
-  await page.route(`**/api/v1/servers/${RUNNING_ID}/operations`, (route) => route.fulfill({ json: operationsResponseSchema.parse({ operations: current }) }));
+test("activity filters reveal active work and restore keyboard focus", { tag: "@responsive" }, async ({ app, page }) => {
+  await page.route(`**/api/v1/servers/${RUNNING_ID}/operations`, (route) => route.fulfill({ json: operationsResponseSchema.parse({ operations }) }));
   await app.open(`/servers/${RUNNING_ID}`);
   const status = page.getByRole("combobox", { name: "Status", exact: true });
   const kind = page.getByRole("combobox", { name: "Operation", exact: true });
@@ -20,24 +19,17 @@ test("activity filters preserve refresh and tab selections while running work st
   await expect(table.getByRole("row")).toHaveCount(2);
   await expect(table).toContainText("Restart failed");
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeDisabled();
-  await page.getByRole("tab", { name: "Backups", exact: true }).click();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
-  await expect(status).toHaveValue("failed");
-  await expect(kind).toHaveValue("restart");
-  current = [operations[0], operations[2]];
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(table).toContainText("No recent operations match these filters.");
-  await expect(kind).toHaveValue("restart");
   const reveal = page.getByRole("button", { name: "Show active work", exact: true });
   await reveal.focus();
   await page.keyboard.press("Enter");
   await expect(status).toBeFocused();
   await expect(status).toHaveValue("all");
+  await expect(kind).toHaveValue("all");
   await expect(table).toContainText("Copying game data");
   expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
 });
 
-test("activity filter controls fit narrow screens", async ({ app, page }, testInfo) => {
+test("activity filter controls fit narrow screens", { tag: "@mobile" }, async ({ app, page }, testInfo) => {
   await page.route(`**/api/v1/servers/${RUNNING_ID}/operations`, (route) => route.fulfill({ json: operationsResponseSchema.parse({ operations }) }));
   await page.setViewportSize({ width: 320, height: 844 });
   await app.open(`/servers/${RUNNING_ID}`);

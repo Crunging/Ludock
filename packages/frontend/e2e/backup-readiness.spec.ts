@@ -1,7 +1,7 @@
 import { backupPreflightResponseSchema, operationResponseSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID, RUNNING_NAME } from "./fixtures";
 
-test("backup readiness explains problems before a fresh check and downtime confirmation", async ({ app, page }, testInfo) => {
+test("backup readiness explains problems before a fresh check and downtime confirmation", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   app.user = { ...app.user!, role: "operator" };
   app.servers[0].permissions = ["server.view", "backups.create"];
   app.servers[0].latestBackup = { createdAt: Date.UTC(2026, 8, 13, 12), size: 1024 };

@@ -70,10 +70,12 @@ describe("activity filters", () => {
   it("preserves filters across tabs while View progress explicitly reveals running work", async () => {
     detail();
     await screen.findByText("Showing 4 of 4 recent operations.");
+    await userEvent.selectOptions(kindFilter(), "restart");
     await userEvent.selectOptions(statusFilter(), "failed");
     await userEvent.click(screen.getByRole("tab", { name: "Backups", exact: true }));
     await userEvent.click(screen.getByRole("tab", { name: "Activity", exact: true }));
     expect((statusFilter() as HTMLSelectElement).value).toBe("failed");
+    expect((kindFilter() as HTMLSelectElement).value).toBe("restart");
     await userEvent.click(screen.getByRole("tab", { name: "Backups", exact: true }));
     await userEvent.click(screen.getByRole("button", { name: "View progress", exact: true }));
     expect((statusFilter() as HTMLSelectElement).value).toBe("all");

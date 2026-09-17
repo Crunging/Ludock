@@ -150,7 +150,7 @@ test("day presets and the local time zone produce a reviewable paused schedule",
   } }]);
 });
 
-test("schedules can be edited, paused, and resumed with the latest saved revision", async ({ app, page }, testInfo) => {
+test("schedules can be edited, paused, and resumed with the latest saved revision", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();
@@ -204,7 +204,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
 });
 
 for (const width of [320, 390]) {
-  test(`paused schedule drafts preview the selected time zone and remain usable at ${width}px`, async ({ app, page }, testInfo) => {
+  test(`paused schedule drafts preview the selected time zone and remain usable at ${width}px`, { tag: "@mobile" }, async ({ app, page }, testInfo) => {
     const fixture = await mockSchedules(page, false);
     await page.setViewportSize({ width, height: 844 });
     await app.open(`/servers/${RUNNING_ID}`);
@@ -290,7 +290,7 @@ test("a new schedule can be created paused and only starts running after explici
   expect(fixture.writes[1]).toEqual({ method: "PATCH", body: { enabled: true, revision: 1 }, expectedRevision: 1 });
 });
 
-test.describe("schedule controls on touch screens", () => {
+test.describe("schedule controls on touch screens", { tag: "@mobile" }, () => {
   test.use({ hasTouch: true, viewport: { width: 820, height: 1180 } });
 
   test("row and form actions retain usable touch targets on wider screens", async ({ app, page }) => {
@@ -307,7 +307,7 @@ test.describe("schedule controls on touch screens", () => {
   });
 });
 
-test("a scheduled result opens and focuses its operation even when it is absent from recent activity", async ({ app, page }, testInfo) => {
+test("a scheduled result opens and focuses its operation even when it is absent from recent activity", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Schedules", exact: true }).click();

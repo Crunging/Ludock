@@ -1,7 +1,7 @@
 import { authStatusSchema, authUserResponseSchema, setupRequestSchema } from "@ludock/shared";
 import { test, expect, ADMIN } from "./fixtures";
 
-test("expired setup shows the commands to recover and fits a narrow screen", async ({ app, page }) => {
+test("expired setup shows the commands to recover and fits a narrow screen", { tag: "@mobile" }, async ({ app, page }) => {
   app.user = null;
   let locked = true;
   await page.route("**/api/v1/auth/status", (route) => route.fulfill({ json: authStatusSchema.parse({

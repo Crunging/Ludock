@@ -1,7 +1,7 @@
 import { backupSettingsResponseSchema, backupSettingsSchema, backupStorageResponseSchema } from "@ludock/shared";
 import { test, expect } from "./fixtures";
 
-test("a fresh installation suggests its backup destination and saves only on request", async ({ app, page }) => {
+test("a fresh installation suggests its backup destination and saves only on request", { tag: "@responsive" }, async ({ app, page }) => {
   const writes: unknown[] = [];
   await page.route("**/api/v1/settings/deployment", (route) => route.fulfill({ json: {
     backupRoots: ["/backups"], composeRoots: [], composeAvailable: false,
