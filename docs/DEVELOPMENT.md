@@ -100,8 +100,9 @@ Image scans export a local image and analyze that archive offline in Trivy.
 Advisory downloads run separately without access to the image. The scanner never
 receives the Docker socket, and temporary exports are removed after each scan.
 
-Release Please and artifact uploads use their maintained upstream bundles under
-Bun in the [local container action](../.github/actions/bun-action/action.yaml).
+Release Please and artifact uploads use their maintained upstream bundles and
+companion assets from pinned revisions under Bun in the
+[local container action](../.github/actions/bun-action/action.yaml).
 Release Please continues to own versions and the release manifest. The Publish
 workflow preserves immutable version tags and updates moving tags only when the
 release owns them. The `node` release type in `release-please-config.json` selects
@@ -111,9 +112,10 @@ Container actions receive GitHub's artifact/cache credentials. The Bun action
 exports masked cache credentials for the native Buildx steps and keeps browser
 failure artifacts with seven-day retention. JavaScript actions that launch Node
 are rejected by the CI policy tests.
-Source CI also uploads a small receipt on successful runs and starts Release
-Please with both mutation paths disabled. This exercises the Bun integration
-entry points without creating a release or release PR during validation.
+Source CI also uploads a small receipt on successful runs and exercises the
+unmodified Release Please bundle against a fixture GitHub API. It verifies
+changelog rendering, package/manifest versions, and release PR generation without
+accessing a live repository or using a real token.
 
 When updating Bun, update `.bun-version` and its image pins in the Dockerfile, helper configuration,
 and local actions together. Check the immutable bundle revisions in

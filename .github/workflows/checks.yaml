@@ -41,14 +41,10 @@ jobs:
           retention-days: 7
         env:
           INPUT_IF-NO-FILES-FOUND: error
-      - name: Verify Release Please starts under Bun
+      - name: Verify Release Please generation under Bun
         uses: ./.github/actions/bun-action
         with:
-          integration: release-please
-        env:
-          INPUT_TARGET-BRANCH: main
-          INPUT_SKIP-GITHUB-RELEASE: 'true'
-          INPUT_SKIP-GITHUB-PULL-REQUEST: 'true'
+          integration: verify-release-please
   browser:
     name: Browser
     runs-on: ubuntu-latest

@@ -2,7 +2,7 @@ name: Run GitHub integrations with Bun
 description: Run pinned release and artifact bundles using Bun, or expose the job's BuildKit cache credentials.
 inputs:
   integration:
-    description: release-please, upload-artifact, or build-runtime
+    description: release-please, verify-release-please, upload-artifact, or build-runtime
     required: true
   token:
     description: Repository token for release-please

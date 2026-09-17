@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { imageTags, buildArguments, scanImage, BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE } from "../ci/containers.mjs";
-import { exportBuildRuntime, integrationEnvironment, integrations } from "../ci/integration.mjs";
+import { exportBuildRuntime, integrationEnvironment, integrations, stageIntegration } from "../ci/integration.mjs";
 import { DEFAULT_HELPER_IMAGE } from "../../packages/backend/src/runtime-images.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -27,10 +27,8 @@ describe("Bun-only CI", () => {
         for (const step of job.steps || []) {
           if (step.uses) expect(step.uses).toMatch(/^(?:\.\/\.github\/|docker:\/\/[^\s@]+@sha256:[a-f0-9]{64}$)/);
           if (step.run) expect(step.run).not.toMatch(/(?:^|[;&|]\s*|\n\s*)(?:node|npm|npx)\s/);
-          if (filename.endsWith("checks.yaml") && step.with?.integration === "release-please") {
-            expect(step.env["INPUT_SKIP-GITHUB-RELEASE"]).toBe("true");
-            expect(step.env["INPUT_SKIP-GITHUB-PULL-REQUEST"]).toBe("true");
-          }
+          if (filename.endsWith("checks.yaml") && step.with?.integration)
+            expect(["upload-artifact", "build-runtime", "verify-release-please"]).toContain(step.with.integration);
         }
       }
     }
@@ -38,6 +36,44 @@ describe("Bun-only CI", () => {
     for (const image of [BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE]) expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
     expect(await read(".github/actions/setup-bun/action.yaml")).toContain(DEFAULT_HELPER_IMAGE);
     expect(Bun.TOML.parse(await read("bunfig.toml")).run.bun).toBe(true);
+    const checks = Bun.YAML.parse(await read(".github/workflows/checks.yaml"));
+    expect(checks.jobs.source.steps.some((step) => step.with?.integration === "verify-release-please")).toBe(true);
+  });
+
+  it("stages companion assets beside their bundle and waits for downloads before reporting failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ludock-ci-assets-"));
+    const integration = integrations["release-please"];
+    let missing = false;
+    const delayed = Promise.withResolvers();
+    const requested = [];
+    const fetcher = spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const base = `https://raw.githubusercontent.com/${integration.repository}/${integration.revision}/dist/`;
+      expect(url).toStartWith(base);
+      const name = url.slice(base.length);
+      requested.push(name);
+      if (missing && name === "header1.hbs") await delayed.promise;
+      return new Response(name, { status: missing && name === "template1.hbs" ? 404 : 200 });
+    });
+    try {
+      const bundle = await stageIntegration("release-please", directory);
+      expect(await Bun.file(bundle).text()).toBe("index.js");
+      expect(await Bun.file(join(directory, "template1.hbs")).text()).toBe("template1.hbs");
+      expect(requested).toContain("header1.hbs");
+      expect(requested).toContain("commit1.hbs");
+      expect(requested).toContain("footer1.hbs");
+      missing = true;
+      let settled = false;
+      const staging = stageIntegration("release-please", directory).finally(() => { settled = true; });
+      void staging.catch(() => {});
+      await Bun.sleep(10);
+      expect(settled).toBe(false);
+      delayed.resolve();
+      await expect(staging).rejects.toThrow("template1.hbs (404)");
+    } finally {
+      delayed.resolve();
+      fetcher.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("keeps nightly and stable tag ownership, including older hotfix releases", () => {
