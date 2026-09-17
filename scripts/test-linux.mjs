@@ -1,18 +1,24 @@
 #!/usr/bin/env bun
-// Check the production bundle, then run the backend suites with its Linux
-// runtime. Neither fixture gets a Docker socket or network.
+// Check the production bundle, then (unless --smoke-only) run the backend suites
+// with its Linux runtime. Neither fixture gets a Docker socket or network.
 import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { backendSourceMounts } from "./test-source-mounts.mjs";
 
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 1 || args[0] !== "--smoke-only")) {
+  throw new Error("Usage: bun scripts/test-linux.mjs [--smoke-only]");
+}
+const smokeOnly = args.length === 1;
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const name = "ludock-linux-tests-" + crypto.randomUUID();
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
 const expectedBun = (await Bun.file(path.join(repository, ".bun-version")).text()).trim();
+const expectedVersion = (await Bun.file(path.join(repository, "package.json")).json()).version;
 
 // This function runs inside the image without source mounts, so missing bundle
 // files, production dependencies, or frontend assets fail before source tests.
-async function smokeProductionBundle(expectedBun) {
+async function smokeProductionBundle(expectedBun, expectedVersion) {
   if (Bun.version !== expectedBun) throw new Error(`Production Bun ${Bun.version} differs from .bun-version ${expectedBun}`);
   if (["node", "npm", "npx"].some((command) => Bun.which(command))) {
     throw new Error("The production image must use Bun as its only JavaScript runtime");
@@ -23,6 +29,9 @@ async function smokeProductionBundle(expectedBun) {
   const inventory = await Bun.file("packages/backend/dist/dependencies.cdx.json").json();
   if (inventory.bomFormat !== "CycloneDX" || !inventory.components.length) {
     throw new Error("Production bundle dependency inventory is missing");
+  }
+  if (inventory.metadata?.component?.version !== expectedVersion) {
+    throw new Error(`Production bundle version differs from package.json ${expectedVersion}`);
   }
   for (const entry of ["index", "recovery"]) {
     if (!(await Bun.file(`packages/backend/dist/${entry}.js.map`).exists())) {
@@ -126,28 +135,31 @@ try {
     "-e", "LUDOCK_SETUP_CODE=fixture-setup-" + crypto.randomUUID(),
     image,
   ]);
-  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")(" + JSON.stringify(expectedBun) + ")"]);
+  runDocker(["exec", name + "-smoke", "bun", "-e", "await (" + smokeProductionBundle.toString() + ")(" +
+    JSON.stringify(expectedBun) + "," + JSON.stringify(expectedVersion) + ")"]);
   runDocker(["stop", "--time", "5", name + "-smoke"]);
   const exitCode = runDocker(["inspect", "--format", "{{.State.ExitCode}}", name + "-smoke"], "pipe")
     .stdout.toString().trim();
   if (exitCode !== "0") {
     throw new Error("Production bundle did not shut down cleanly (exit " + exitCode + ")");
   }
-  const files = (await readdir(path.join(repository, "packages/backend/test")))
-    .filter((file) => file.endsWith(".test.ts"))
-    .sort();
-  const result = Bun.spawnSync(
-    [
-      "docker",
-      "run", "--rm", "--name", name,
-      "--network", "none", "--label", "ludock.enable=false",
-      ...backendSourceMounts(repository),
-      image, "bun", "test", "--isolate",
-      ...files.map((file) => "./packages/backend/test/" + file),
-    ],
-    { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
-  );
-  process.exitCode = result.exitCode ?? 1;
+  if (!smokeOnly) {
+    const files = (await readdir(path.join(repository, "packages/backend/test")))
+      .filter((file) => file.endsWith(".test.ts"))
+      .sort();
+    const result = Bun.spawnSync(
+      [
+        "docker",
+        "run", "--rm", "--name", name,
+        "--network", "none", "--label", "ludock.enable=false",
+        ...backendSourceMounts(repository),
+        image, "bun", "test", "--isolate",
+        ...files.map((file) => "./packages/backend/test/" + file),
+      ],
+      { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+    );
+    process.exitCode = result.exitCode ?? 1;
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   Bun.spawnSync(["docker", "logs", name + "-smoke"], { stdout: "inherit", stderr: "inherit" });
