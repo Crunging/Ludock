@@ -56,7 +56,8 @@ the repository. Update user docs when procedures change.
   Pin Actions to full SHAs and images to verified multi-platform digests; prefer official images.
 - Validated Conventional Commits are authorized. Release-please owns versions and
   the release manifest; preserve published tags. After preparation merges, review
-  the refreshed release PR, approve its latest CI run, and wait for all checks.
+  the refreshed release PR and wait for its latest checks; approve the run if
+  GitHub requests it. See Development and CI for automatic release-run setup.
 
 ## Code and docs
 

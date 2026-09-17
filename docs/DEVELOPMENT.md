@@ -71,6 +71,9 @@ that the production image contains no Node, npm, or npx executable on PATH.
 It checks frontend assets, administrator setup, account recovery, and session
 revocation before mounting source files and dependencies for the Linux suites.
 The source mounts are test fixtures and are never included in the production image.
+Use `bun scripts/test-linux.mjs --smoke-only` to check the production bundle,
+embedded package version, startup, assets, recovery, and clean shutdown without
+running the backend suites or requiring installed harness dependencies.
 The packaged harness uses the image's normal command without source mounts and
 checks binary upload/download, archive checksums, backup restoration, safety
 backups, and preservation of initially running and stopped servers through HTTP.
@@ -116,6 +119,25 @@ Source CI also uploads a small receipt on successful runs and exercises the
 unmodified Release Please bundle against a fixture GitHub API. It verifies
 changelog rendering, package/manifest versions, and release PR generation without
 accessing a live repository or using a real token.
+
+Code PRs run the full Source, Browser, Workflows, and native AMD64/ARM64 Container
+checks. Release PRs use focused checks: the release branch must be based on the
+current main commit and change only the root package version, release manifest,
+and a new changelog entry. Versions must agree and increase, published changelog
+history must remain intact, and the release tag must not exist. A production image
+build and startup smoke test on AMD64 then verify the generated release, including
+its embedded version. Unexpected code or dependency edits fail release validation.
+The Publish workflow still runs the full suite on both native architectures
+before publishing any image or release.
+
+To run bot-created release PR checks without manual approval, configure the
+repository Actions secret `RELEASE_PLEASE_TOKEN` with a fine-grained personal
+access token restricted to this repository, with Contents and Pull requests write
+permissions. The Release PR workflow uses it only for Release Please. Without
+that secret it uses `GITHUB_TOKEN`, and GitHub requires approval of each generated
+PR workflow run. Review the refreshed release PR after preparation merges and
+wait for its latest checks. This token choice does not change contributor approval
+settings. See [GitHub's workflow-trigger documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
 
 When updating Bun, update `.bun-version` and its image pins in the Dockerfile, helper configuration,
 and local actions together. Check the immutable bundle revisions in

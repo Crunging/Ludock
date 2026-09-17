@@ -15,4 +15,50 @@ concurrency:
 
 jobs:
   check:
+    if: >-
+      ${{ !(github.base_ref == 'main' &&
+      github.head_ref == 'release-please--branches--main--components--ludock' &&
+      github.event.pull_request.head.repo.full_name == github.repository) }}
     uses: ./.github/workflows/checks.yaml
+  release:
+    name: Release metadata, build, and startup
+    if: >-
+      ${{ github.base_ref == 'main' &&
+      github.head_ref == 'release-please--branches--main--components--ludock' &&
+      github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository with Git
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |-
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
+          echo "::add-mask::$authorization"
+          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+      - name: Validate release changes, versions, changelog, and tag
+        run: bun scripts/ci/pr-checks.mjs
+      - name: Expose BuildKit cache runtime
+        uses: ./.github/actions/bun-action
+        with:
+          integration: build-runtime
+      - name: Set up Docker Buildx
+        run: bun scripts/ci/containers.mjs setup
+      - name: Build production image
+        run: bun scripts/ci/containers.mjs build check
+        env:
+          LUDOCK_PLATFORM: linux/amd64
+      - name: Smoke-test production release
+        run: bun scripts/test-linux.mjs --smoke-only
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+      - name: Remove build instance
+        if: always()
+        run: docker buildx rm ludock
