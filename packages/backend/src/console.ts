@@ -271,7 +271,7 @@ export async function handleConsoleConnection(
             if (done) break;
             decoder.push(value);
           }
-          decoder.end();
+          if (!decoder.end()) throw new Error("Incomplete Docker log frame");
           stdout.end();
           stderr.end();
           send("system", "Log stream ended");

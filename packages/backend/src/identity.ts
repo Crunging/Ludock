@@ -80,11 +80,11 @@ export class ServerBindingError extends AppError {
 export function getDockerHostId(name = "local"): string {
   const db = getDatabase();
   const existing = db
-    .prepare("SELECT id FROM docker_hosts WHERE name = ?")
+    .query("SELECT id FROM docker_hosts WHERE name = ?")
     .get(name) as { id: string } | null;
   if (existing) return existing.id;
   const id = crypto.randomUUID();
-  db.prepare(
+  db.query(
     "INSERT INTO docker_hosts (id, name, created_at) VALUES (?, ?, ?)",
   ).run(id, name, Date.now());
   return id;
@@ -194,12 +194,12 @@ export function listLogicalServers(hostId?: string): LogicalServer[] {
   const db = getDatabase();
   const rows = (hostId
     ? db
-        .prepare(
+        .query(
           "SELECT * FROM logical_servers WHERE host_id = ? ORDER BY display_name COLLATE NOCASE, id",
         )
         .all(hostId)
     : db
-        .prepare(
+        .query(
           "SELECT * FROM logical_servers ORDER BY display_name COLLATE NOCASE, id",
         )
         .all()) as unknown as ServerRow[];
@@ -208,7 +208,7 @@ export function listLogicalServers(hostId?: string): LogicalServer[] {
 
 export function getLogicalServer(serverId: string): LogicalServer | null {
   const row = getDatabase()
-    .prepare("SELECT * FROM logical_servers WHERE id = ?")
+    .query("SELECT * FROM logical_servers WHERE id = ?")
     .get(serverId) as ServerRow | null;
   return row ? toLogicalServer(row) : null;
 }
@@ -303,7 +303,7 @@ export function reconcileServers(
       if (!server) {
         const id = crypto.randomUUID();
         const fingerprint = ambiguous ? "" : bindingFingerprint(observation);
-        db.prepare(
+        db.query(
           `INSERT INTO logical_servers
           (id, host_id, external_identity, container_id, display_name, game_type,
            status, binding_revision, binding_fingerprint, first_seen_at, last_seen_at)
@@ -326,7 +326,7 @@ export function reconcileServers(
         continue;
       }
       if (ambiguous) {
-        db.prepare(
+        db.query(
           "UPDATE logical_servers SET status = 'ambiguous', container_id = NULL, last_seen_at = ? WHERE id = ?",
         ).run(now, server.id);
         continue;
@@ -345,7 +345,7 @@ export function reconcileServers(
         ? server.bindingRevision + 1
         : server.bindingRevision;
       if (reviewRequired) {
-        db.prepare(
+        db.query(
           `UPDATE logical_servers SET container_id = ?, display_name = ?,
           status = 'review_required', binding_revision = ?, pending_fingerprint = ?,
           pending_game_type = ?, review_required = 1, last_seen_at = ? WHERE id = ?`,
@@ -359,7 +359,7 @@ export function reconcileServers(
           server.id,
         );
       } else {
-        db.prepare(
+        db.query(
           `UPDATE logical_servers SET container_id = ?, display_name = ?, game_type = ?,
           status = 'active', binding_revision = ?, binding_fingerprint = ?, last_seen_at = ? WHERE id = ?`,
         ).run(
@@ -386,7 +386,7 @@ export function reconcileServers(
     }
     for (const server of current.values()) {
       if (!groups.has(server.externalIdentity)) {
-        db.prepare(
+        db.query(
           "UPDATE logical_servers SET status = 'missing', container_id = NULL WHERE id = ?",
         ).run(server.id);
       }
@@ -408,7 +408,7 @@ function recordBinding(
   accepted: boolean,
 ): void {
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO server_bindings
     (server_id, binding_revision, container_id, binding_fingerprint, observed_at, accepted)
     VALUES (?, ?, ?, ?, ?, ?)`,
@@ -446,12 +446,12 @@ export function reviewServerBinding(
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare(
+    db.query(
       `UPDATE logical_servers SET status = 'active', binding_revision = binding_revision + 1,
       binding_fingerprint = pending_fingerprint, game_type = pending_game_type,
       pending_fingerprint = NULL, pending_game_type = NULL, review_required = 0 WHERE id = ?`,
     ).run(serverId);
-    db.prepare(
+    db.query(
       `INSERT INTO server_bindings
       (server_id, binding_revision, container_id, binding_fingerprint, observed_at, accepted)
       VALUES (?, ?, ?, ?, ?, 1)`,

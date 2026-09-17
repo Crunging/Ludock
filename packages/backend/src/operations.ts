@@ -112,7 +112,7 @@ export function publicOperation(job: Job): Operation {
 }
 export function getOperation(id: string): Job | null {
   const row = getDatabase()
-    .prepare("SELECT * FROM operations WHERE id = ?")
+    .query("SELECT * FROM operations WHERE id = ?")
     .get(id) as OperationRow | null;
   return row ? toJob(row) : null;
 }
@@ -139,7 +139,7 @@ export function enqueueOperation(options: {
     : null;
   if (key) {
     const prior = getDatabase()
-      .prepare("SELECT * FROM operations WHERE request_key = ?")
+      .query("SELECT * FROM operations WHERE request_key = ?")
       .get(key) as OperationRow | null;
     if (prior) {
       if (prior.input_json !== input)
@@ -152,7 +152,7 @@ export function enqueueOperation(options: {
     }
   }
   const conflict = getDatabase()
-    .prepare(
+    .query(
       "SELECT id FROM operations WHERE server_id = ? AND status IN ('queued','running')",
     )
     .get(options.serverId);
@@ -165,7 +165,7 @@ export function enqueueOperation(options: {
   const id = crypto.randomUUID();
   const now = Date.now();
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,binding_revision,request_key,created_at,updated_at) VALUES (?,?,?,?,'queued','queued',?,?,?,?,?)`,
     )
     .run(
@@ -201,7 +201,7 @@ function context(job: Job): JobContext {
       if (recovery) job.recovery = { ...job.recovery, ...recovery };
       job.phase = phase;
       getDatabase()
-        .prepare(
+        .query(
           "UPDATE operations SET phase=?, recovery_json=?, updated_at=? WHERE id=?",
         )
         .run(phase, JSON.stringify(job.recovery), Date.now(), job.id);
@@ -215,7 +215,7 @@ function finish(
   error: string | null,
 ) {
   getDatabase()
-    .prepare(
+    .query(
       "UPDATE operations SET status=?,phase=?,result_json=?,error=?,updated_at=? WHERE id=?",
     )
     .run(
@@ -251,7 +251,7 @@ function schedule() {
 async function runNext() {
   if (!enabled || running) return;
   const row = getDatabase()
-    .prepare(
+    .query(
       "SELECT * FROM operations WHERE status='queued' ORDER BY created_at,id LIMIT 1",
     )
     .get() as OperationRow | null;
@@ -261,7 +261,7 @@ async function runNext() {
     // Damaged saved state must fail this job without wedging the runner.
     const job = toJob(row);
     getDatabase()
-      .prepare(
+      .query(
         "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?",
       )
       .run(Date.now(), job.id);
@@ -304,7 +304,7 @@ export async function startOperationRunner(): Promise<void> {
 async function recoverInterruptedOperations(): Promise<void> {
   // Interrupted mutations are reconciled, never replayed.
   const rows = getDatabase()
-    .prepare("SELECT * FROM operations WHERE status='running'")
+    .query("SELECT * FROM operations WHERE status='running'")
     .all() as unknown as OperationRow[];
   for (const row of rows) {
     try {

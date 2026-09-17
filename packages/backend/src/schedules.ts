@@ -93,7 +93,7 @@ function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
   const logical = getLogicalServer(row.server_id);
   if (!logical) throw new ScheduleUnavailableError("binding_unavailable");
   const original = getDatabase()
-    .prepare(
+    .query(
       "SELECT binding_fingerprint FROM server_bindings WHERE server_id=? AND binding_revision=? AND accepted=1 ORDER BY id DESC LIMIT 1",
     )
     .get(row.server_id, row.binding_revision) as
@@ -193,9 +193,9 @@ export function listSchedules(actor: SessionUser, serverId: string) {
     ? "SELECT * FROM schedules WHERE server_id=? ORDER BY created_at,id LIMIT ?"
     : "SELECT * FROM schedules WHERE server_id=? AND owner_id=? ORDER BY created_at,id LIMIT ?";
   const rows = current.role === "admin"
-    ? getDatabase().prepare(query).all(serverId, MAX_SCHEDULES_PER_SERVER)
+    ? getDatabase().query(query).all(serverId, MAX_SCHEDULES_PER_SERVER)
     : getDatabase()
-        .prepare(query)
+        .query(query)
         .all(serverId, current.id, MAX_SCHEDULES_PER_SERVER);
   const now = Date.now();
   const checkAuthority = createPreviewAuthority();
@@ -233,7 +233,7 @@ export function createSchedule(
     // Check the global boundary first. If an older database already exceeds it,
     // this query still stops after a bounded number of rows.
     const globalLimitReached = db
-      .prepare("SELECT 1 AS present FROM schedules ORDER BY rowid LIMIT 1 OFFSET ?")
+      .query("SELECT 1 AS present FROM schedules ORDER BY rowid LIMIT 1 OFFSET ?")
       .get(MAX_SCHEDULES_TOTAL - 1);
     if (globalLimitReached)
       throw new AppError(
@@ -242,7 +242,7 @@ export function createSchedule(
         `Ludock supports up to ${MAX_SCHEDULES_TOTAL} schedules`,
       );
     const count = db
-      .prepare("SELECT COUNT(*) AS count FROM schedules WHERE server_id=?")
+      .query("SELECT COUNT(*) AS count FROM schedules WHERE server_id=?")
       .get(serverId) as { count: number };
     if (count.count >= MAX_SCHEDULES_PER_SERVER)
       throw new AppError(
@@ -250,7 +250,7 @@ export function createSchedule(
         409,
         `A server can have up to ${MAX_SCHEDULES_PER_SERVER} schedules`,
       );
-    db.prepare(
+    db.query(
       "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
     ).run(
       id,
@@ -285,7 +285,7 @@ export function createSchedule(
     logger.warn("Audit retention cleanup failed after schedule creation; it will be retried");
   }
   return publicSchedule(
-    db.prepare("SELECT * FROM schedules WHERE id=?").get(id) as ScheduleRow,
+    db.query("SELECT * FROM schedules WHERE id=?").get(id) as ScheduleRow,
   );
 }
 export function deleteSchedule(
@@ -295,12 +295,12 @@ export function deleteSchedule(
 ): void {
   assertServerCapability(actor, serverId, "schedules.manage");
   const row = getDatabase()
-    .prepare("SELECT * FROM schedules WHERE id=? AND server_id=?")
+    .query("SELECT * FROM schedules WHERE id=? AND server_id=?")
     .get(id, serverId) as ScheduleRow | null;
   const current = currentActor(actor)!;
   if (!row || (current.role !== "admin" && row.owner_id !== current.id))
     throw new AppError("NOT_FOUND", 404, "Schedule not found");
-  getDatabase().prepare("DELETE FROM schedules WHERE id=?").run(id);
+  getDatabase().query("DELETE FROM schedules WHERE id=?").run(id);
   writeAuditLog({
     userId: actor.id === "api-token" ? undefined : actor.id,
     action: "schedule.deleted",
@@ -325,7 +325,7 @@ function mutateSchedule(
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db
-      .prepare("SELECT * FROM schedules WHERE id=? AND server_id=?")
+      .query("SELECT * FROM schedules WHERE id=? AND server_id=?")
       .get(id, serverId) as ScheduleRow | null;
     if (!row || (current.role !== "admin" && row.owner_id !== current.id))
       throw new AppError("NOT_FOUND", 404, "Schedule not found");
@@ -356,7 +356,7 @@ function mutateSchedule(
       const inputJson = JSON.stringify(data);
       // Keep the original binding baseline, consumed clock slot, and history.
       // Every mutation invalidates work queued from an earlier configuration.
-      db.prepare("UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?")
+      db.query("UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?")
         .run(inputJson, id);
       result = { ...row, input_json: inputJson, revision: row.revision + 1 };
       writeAuditLog({
@@ -411,7 +411,7 @@ export function setScheduleEnabled(
 }
 export function runSchedules(now = Date.now()): void {
   const rows = getDatabase()
-    .prepare("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
+    .query("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
     .all(MAX_SCHEDULES_TOTAL + 1) as unknown as ScheduleRow[];
   if (rows.length > MAX_SCHEDULES_TOTAL)
     logger.warn("Schedule limit exceeded; schedules beyond the limit are not evaluated", {
@@ -441,7 +441,7 @@ export function runSchedules(now = Date.now()): void {
         });
         // Queue and associate the same attempt atomically. Completing an older
         // operation never changes this association or a newer attempt's result.
-        db.prepare(
+        db.query(
           "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=?",
         ).run(slot, now, op.id, `Queued operation ${op.id}`, row.id);
         db.exec("COMMIT");
@@ -466,11 +466,11 @@ export function runSchedules(now = Date.now()): void {
           : "Skipped: server state or a conflicting operation prevented this run";
       try {
         if (slot) {
-          getDatabase().prepare(
+          getDatabase().query(
             "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=?",
           ).run(slot, now, reason, row.id);
         } else {
-          getDatabase().prepare("UPDATE schedules SET last_result=? WHERE id=?")
+          getDatabase().query("UPDATE schedules SET last_result=? WHERE id=?")
             .run(reason, row.id);
         }
         if (!configurationValid && row.last_result !== reason)

@@ -48,19 +48,33 @@ export class ConsoleOutputRedactor {
     const limit = final
       ? this.pending.length
       : Math.max(0, this.pending.length - this.tailLength);
+    if (limit === 0) return;
+    // Keep each search result for this chunk. Otherwise a frequent short secret
+    // would repeatedly rescan the whole suffix for another, absent credential.
+    const positions = this.secrets.map(secret => secret ? this.pending.indexOf(secret) : -1);
     let offset = 0;
     let safe = "";
     while (offset < limit) {
-      const matched = this.secrets.find((secret) =>
-        this.pending.startsWith(secret, offset),
-      );
-      if (matched) {
-        safe += "[redacted]";
-        offset += matched.length;
-      } else {
-        safe += this.pending[offset];
-        offset += 1;
+      let next = limit;
+      let matched = "";
+      // Native string searches skip ordinary log text in one pass. At the same
+      // offset, retain the supplied secret order (longest first in production).
+      for (let index = 0; index < this.secrets.length; index++) {
+        const secret = this.secrets[index];
+        let found = positions[index];
+        if (found !== -1 && found < offset)
+          positions[index] = found = this.pending.indexOf(secret, offset);
+        if (found !== -1 && found < next) {
+          next = found;
+          matched = secret;
+          if (next === offset) break;
+        }
       }
+      safe += this.pending.slice(offset, next);
+      offset = next;
+      if (!matched) break;
+      safe += "[redacted]";
+      offset += matched.length;
     }
     this.pending = this.pending.slice(offset);
     if (safe) this.output(safe);

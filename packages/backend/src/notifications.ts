@@ -109,14 +109,14 @@ function publicDelivery(row: DeliveryRow, enabled: boolean): NotificationDeliver
 }
 
 function deliveryRow(id: string): DeliveryRow {
-  const row = getDatabase().prepare("SELECT * FROM notification_deliveries WHERE id=?")
+  const row = getDatabase().query("SELECT * FROM notification_deliveries WHERE id=?")
     .get(id) as DeliveryRow | null;
   if (!row) throw new AppError("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found");
   return row;
 }
 
 export function listNotificationDeliveries(): NotificationDelivery[] {
-  const rows = getDatabase().prepare(`SELECT * FROM notification_deliveries
+  const rows = getDatabase().query(`SELECT * FROM notification_deliveries
     ORDER BY created_at DESC, id DESC LIMIT 50`).all() as DeliveryRow[];
   const { enabled } = notificationConfiguration();
   return rows.map((row) => publicDelivery(row, enabled));
@@ -131,7 +131,7 @@ function assertDeliveryEnabled(): void {
 function enqueueNotification(key: string, message: string, kind: NotificationDelivery["kind"]): string {
   const id = crypto.randomUUID();
   const now = Date.now();
-  getDatabase().prepare(`INSERT OR IGNORE INTO notification_deliveries
+  getDatabase().query(`INSERT OR IGNORE INTO notification_deliveries
     (id,event_key,payload_json,next_attempt_at,created_at,kind) VALUES(?,?,?,?,?,?)`)
     .run(id, key, JSON.stringify({ content: message.slice(0, 1800), allowed_mentions: { parse: [] } }), now, now, kind);
   return id;
@@ -156,7 +156,7 @@ export function retryNotificationDelivery(id: string): NotificationDelivery {
     throw new AppError("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered");
   // Preserve lifetime attempts and the previous failure while granting a fresh
   // bounded retry cycle. Clearing its cycle count also rejects duplicate clicks.
-  getDatabase().prepare(`UPDATE notification_deliveries
+  getDatabase().query(`UPDATE notification_deliveries
     SET state='queued',retry_attempts=0,next_attempt_at=? WHERE id=?`).run(Date.now(), id);
   return publicDelivery(deliveryRow(id), true);
 }
@@ -177,7 +177,7 @@ export async function deliverNotifications(
   if (delivering || !notificationConfiguration().enabled) return;
   delivering = true;
   try {
-    const rows = getDatabase().prepare(`SELECT id FROM notification_deliveries
+    const rows = getDatabase().query(`SELECT id FROM notification_deliveries
       WHERE state='queued' AND next_attempt_at<=? ORDER BY created_at, rowid LIMIT 10`)
       .all(Date.now()) as { id: string }[];
     for (const { id } of rows) {
@@ -190,7 +190,7 @@ export async function deliverNotifications(
       activeDeliveryId = id;
       try {
         const startedAt = Date.now();
-        getDatabase().prepare("UPDATE notification_deliveries SET last_attempt_at=? WHERE id=?")
+        getDatabase().query("UPDATE notification_deliveries SET last_attempt_at=? WHERE id=?")
           .run(startedAt, id);
         let failure: FailureCode | null = null;
         const signal = AbortSignal.timeout(10_000);
@@ -214,7 +214,7 @@ export async function deliverNotifications(
         const attempts = row.attempts + 1;
         const retryAttempts = row.retry_attempts + 1;
         const finishedAt = Date.now();
-        getDatabase().prepare(`UPDATE notification_deliveries
+        getDatabase().query(`UPDATE notification_deliveries
           SET attempts=?,retry_attempts=?,state=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`)
           .run(attempts, retryAttempts, failure === null ? "delivered" : retryAttempts >= 5 ? "failed" : "queued",
             finishedAt + Math.min(3600_000, 30_000 * 2 ** retryAttempts),
@@ -224,7 +224,7 @@ export async function deliverNotifications(
       }
     }
     // Newly delivered older retries get the same retention as fresh deliveries.
-    getDatabase().prepare(`DELETE FROM notification_deliveries
+    getDatabase().query(`DELETE FROM notification_deliveries
       WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?`)
       .run(Date.now() - 30 * 86400_000);
   } finally {

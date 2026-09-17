@@ -18,7 +18,7 @@ interface AvailabilityRow {
 }
 function rowFor(serverId: string): AvailabilityRow | null {
   return getDatabase()
-    .prepare("SELECT * FROM availability WHERE server_id=?")
+    .query("SELECT * FROM availability WHERE server_id=?")
     .get(serverId) as AvailabilityRow | null;
 }
 export function getAvailability(serverId: string) {
@@ -39,7 +39,7 @@ export function getAvailability(serverId: string) {
 export function configureAvailability(serverId: string, input: unknown) {
   const policy = availabilitySchema.parse(input);
   getDatabase()
-    .prepare(
+    .query(
       `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0`,
     )
     .run(serverId, JSON.stringify(policy), Date.now());
@@ -51,7 +51,7 @@ function ensureRow(serverId: string) {
 export function setIntentionalStop(serverId: string, stopped: boolean): void {
   ensureRow(serverId);
   getDatabase()
-    .prepare(
+    .query(
       "UPDATE availability SET intentionally_stopped=?,outage_started_at=NULL,notified=0,updated_at=? WHERE server_id=?",
     )
     .run(stopped ? 1 : 0, Date.now(), serverId);
@@ -60,7 +60,7 @@ export function suppressMonitoring(serverId: string): void {
   ensureRow(serverId);
   const { policy } = getAvailability(serverId);
   getDatabase()
-    .prepare(
+    .query(
       "UPDATE availability SET suppressed_until=?,outage_started_at=NULL,notified=0 WHERE server_id=?",
     )
     .run(Date.now() + policy.graceSeconds * 1000, serverId);
@@ -74,7 +74,7 @@ function monitoringSuppressed(
 ): boolean {
   return !policy.enabled || policy.maintenance || suppressedUntil > now ||
     isServerBusy(serverId) || Boolean(getDatabase()
-      .prepare("SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running') LIMIT 1")
+      .query("SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running') LIMIT 1")
       .get(serverId));
 }
 
@@ -116,7 +116,7 @@ export async function checkAvailability(now = Date.now()): Promise<void> {
           `${server.displayName} recovered.`,
         );
       getDatabase()
-        .prepare(
+        .query(
           "UPDATE availability SET outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=? WHERE server_id=?",
         )
         .run(now, server.id);
@@ -131,7 +131,7 @@ export async function checkAvailability(now = Date.now()): Promise<void> {
             : `${server.displayName} is unavailable.`,
         );
       getDatabase()
-        .prepare(
+        .query(
           "UPDATE availability SET outage_started_at=?,notified=?,last_state=?,updated_at=? WHERE server_id=?",
         )
         .run(

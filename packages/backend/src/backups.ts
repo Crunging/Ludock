@@ -78,7 +78,7 @@ const toBackup = (row: BackupRow): Backup => ({
 });
 function backupRow(serverId: string, id: string): BackupRow {
   const row = getDatabase()
-    .prepare("SELECT * FROM backups WHERE server_id=? AND id=?")
+    .query("SELECT * FROM backups WHERE server_id=? AND id=?")
     .get(serverId, id) as BackupRow | null;
   if (!row || row.state !== "complete")
     throw failBackup("BACKUP_NOT_FOUND", "Backup not found.");
@@ -87,7 +87,7 @@ function backupRow(serverId: string, id: string): BackupRow {
 export function listBackups(serverId: string): Backup[] {
   return (
     getDatabase()
-      .prepare(
+      .query(
         "SELECT * FROM backups WHERE server_id=? ORDER BY created_at DESC,id",
       )
       .all(serverId) as unknown as BackupRow[]
@@ -112,7 +112,7 @@ export async function deleteBackup(
   await withLocks([`server:${serverId}`, "backups:storage"], async () => {
     await removeArchive(row.destination, id, assertAccess);
     getDatabase()
-      .prepare("DELETE FROM backups WHERE id=? AND server_id=?")
+      .query("DELETE FROM backups WHERE id=? AND server_id=?")
       .run(id, serverId);
   });
 }
@@ -129,7 +129,7 @@ async function settingsForBackup(): Promise<BackupSettings> {
 function archiveUsageBytes(): number {
   return (
     getDatabase()
-      .prepare("SELECT COALESCE(SUM(size),0) AS size FROM backups WHERE state='complete'")
+      .query("SELECT COALESCE(SUM(size),0) AS size FROM backups WHERE state='complete'")
       .get() as { size: number }
   ).size;
 }
@@ -541,7 +541,7 @@ export async function createStoppedBackup(
     await assertCopyAllowed();
     const createdAt = Date.now();
     getDatabase()
-      .prepare(
+      .query(
         "INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state) VALUES(?,?,?,?,?,?,?,?,'complete')",
       )
       .run(
@@ -562,7 +562,7 @@ export async function createStoppedBackup(
       if (old.id === job.job.input.backupId) continue;
       const row = backupRow(context.logical.id, old.id);
       await removeArchive(row.destination, old.id);
-      getDatabase().prepare("DELETE FROM backups WHERE id=?").run(old.id);
+      getDatabase().query("DELETE FROM backups WHERE id=?").run(old.id);
     }
     return {
       id,
@@ -653,7 +653,7 @@ async function removeUnpublishedBackup(job: JobContext): Promise<void> {
   if (
     typeof id === "string" &&
     typeof destination === "string" &&
-    !getDatabase().prepare("SELECT id FROM backups WHERE id=?").get(id)
+    !getDatabase().query("SELECT id FROM backups WHERE id=?").get(id)
   ) {
     await removeArchive(destination, id);
     await removePartialArchive(destination, id);

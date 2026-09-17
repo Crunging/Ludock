@@ -827,13 +827,14 @@ async function streamExecOutput(
 }
 
 function encodeRconPacket(id: number, type: number, body: string): Uint8Array {
-  if (encodeText(body).byteLength > MAX_RCON_PACKET_SIZE - 10)
-    throw new Error("RCON command or credential is too large");
   const payload = encodeText(body);
+  if (payload.byteLength > MAX_RCON_PACKET_SIZE - 10)
+    throw new Error("RCON command or credential is too large");
   const packet = new Uint8Array(payload.length + 14);
-  byteView(packet).setInt32(0, payload.length + 10, true);
-  byteView(packet).setInt32(4, id, true);
-  byteView(packet).setInt32(8, type, true);
+  const header = byteView(packet);
+  header.setInt32(0, payload.length + 10, true);
+  header.setInt32(4, id, true);
+  header.setInt32(8, type, true);
   packet.set(payload, 12);
   return packet;
 }

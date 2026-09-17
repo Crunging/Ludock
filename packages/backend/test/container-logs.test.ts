@@ -54,7 +54,7 @@ afterEach(() => {
 after(() => closeDatabase());
 
 describe("Docker log decoder", () => {
-  it("reassembles multiplexed headers and payloads split across chunks", () => {
+  it("streams partial payloads while reassembling split multiplexed headers", () => {
     const output: Array<{ type: string; data: string }> = [];
     const decoder = new DockerLogDecoder((type, data) =>
       output.push({ type, data }),
@@ -65,12 +65,14 @@ describe("Docker log decoder", () => {
 
     decoder.push(combined.subarray(0, 2));
     decoder.push(combined.subarray(2, 11));
+    expect(output).toStrictEqual([{ type: "stdout", data: "hel" }]);
     decoder.push(combined.subarray(11, 17));
     decoder.push(combined.subarray(17));
 
     expect(decoder.end()).toBe(true);
     expect(output).toStrictEqual([
-      { type: "stdout", data: "hello " },
+      { type: "stdout", data: "hel" },
+      { type: "stdout", data: "lo " },
       { type: "stderr", data: "world" },
     ]);
   });
@@ -82,6 +84,67 @@ describe("Docker log decoder", () => {
     decoder.push(fixtureBytes("output"));
     expect(decoder.end()).toBe(true);
     expect(output).toStrictEqual(["plain ", "output"]);
+  });
+
+  it("streams a large frame before its final chunk and tolerates reused input buffers", () => {
+    let received = 0;
+    const decoder = new DockerLogDecoder((type, data) => {
+      expect(type).toBe("stdout");
+      expect(data).toBe("x".repeat(data.length));
+      received += data.length;
+    });
+    const header = new Uint8Array(8);
+    header[0] = 1;
+    byteView(header).setUint32(4, 1024 * 1024);
+    decoder.push(header);
+    const payload = new Uint8Array(4096);
+    for (let n = 0; n < 256; n++) {
+      payload.fill(120);
+      decoder.push(payload);
+      payload.fill(0);
+      expect(received).toBe((n + 1) * 4096);
+    }
+    expect(decoder.end()).toBe(true);
+  });
+
+  it("keeps UTF-8 decoding separate for interleaved channels and empty frames", () => {
+    const output = { stdout: "", stderr: "" };
+    const decoder = new DockerLogDecoder((type, value) => { output[type] += value; });
+    const stdout = fixtureBytes("🔑"), stderr = fixtureBytes("é");
+    const bytes = concatBytes([
+      frame(1, stdout.subarray(0, 2)), frame(2, stderr.subarray(0, 1)),
+      frame(1, ""), frame(1, stdout.subarray(2)), frame(2, stderr.subarray(1)),
+    ]);
+    for (const byte of bytes) decoder.push(fixtureBytes([byte]));
+    expect(decoder.end()).toBe(true);
+    expect(output).toStrictEqual({ stdout: "🔑", stderr: "é" });
+  });
+
+  it("reports truncated headers and payloads without emitting framing bytes", () => {
+    for (const length of [4, 7, 8, 10]) {
+      let output = "";
+      const decoder = new DockerLogDecoder((_type, data) => { output += data; });
+      decoder.push(frame(1, "hello").subarray(0, length));
+      expect(decoder.end()).toBe(false);
+      expect(output).toBe(length > 8 ? "hello".slice(0, length - 8) : "");
+    }
+  });
+
+  it("preserves raw fallback for invalid or oversized headers, including after a frame", () => {
+    const oversized = frame(1, "raw text");
+    byteView(oversized).setUint32(4, 16 * 1024 * 1024 + 1);
+    for (const bytes of [fixtureBytes([1, 0, 0]), fixtureBytes("\x01\0\0raw text"), oversized]) {
+      for (const framedPrefix of [false, true]) {
+        // A short ambiguous prefix at EOF is raw only before framed mode starts.
+        if (framedPrefix && bytes.length < 8) continue;
+        let output = "";
+        const decoder = new DockerLogDecoder((_type, data) => { output += data; });
+        if (framedPrefix) decoder.push(frame(1, "prefix "));
+        for (const byte of bytes) decoder.push(fixtureBytes([byte]));
+        expect(decoder.end()).toBe(true);
+        expect(output).toBe((framedPrefix ? "prefix " : "") + new TextDecoder().decode(bytes));
+      }
+    }
   });
 
   for (const framed of [false, true]) {

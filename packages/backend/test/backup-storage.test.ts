@@ -69,7 +69,98 @@ async function archive(
   return concatBytes([...chunks, tarEnd()]);
 }
 
+async function snapshotFixture(body: string, options: { keepOpen?: boolean; onStart?: () => void } = {}) {
+  const input = await archive([
+    { header: { name: "data/", type: "directory", mode: 0o755 } },
+    { header: { name: "data/file", type: "file", mode: 0o640 }, body },
+  ]);
+  const frame = new Uint8Array(input.length + 8);
+  frame[0] = 1;
+  new DataView(frame.buffer).setUint32(4, input.length);
+  frame.set(input, 8);
+  const stream = new StreamFixture();
+  stream.enqueue(frame);
+  if (!options.keepOpen) stream.close();
+  const helper = {
+    roots,
+    container: {
+      exec: async () => ({
+        start: async () => { options.onStart?.(); return stream.connection; },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    } as unknown as Docker.Container,
+    cleanup: async () => {},
+  };
+  const context = { observation: { mounts: [{ destination: "/data", writable: true }] } } as ServerContext;
+  const settings = { destination: directory, retentionCount: 1, maxBytes: 1_000_000, reserveBytes: 0 };
+  const id = crypto.randomUUID();
+  return {
+    id, stream,
+    write: (assertAccess?: () => void) => writeSnapshot(context, helper, settings, id, settings.maxBytes, async () => {}, assertAccess),
+  };
+}
+
 describe("backup storage boundaries", () => {
+  it.skipIf(process.platform !== "linux")("publishes the final buffered bytes with the complete archive checksum", async () => {
+    const body = "buffered data".repeat(11);
+    const fixture = await snapshotFixture(body);
+    const result = await fixture.write();
+    const bytes = new Uint8Array(await Bun.file(await backupFilePath(directory, fixture.id)).arrayBuffer());
+    expect(result).toStrictEqual({
+      size: bytes.length,
+      checksum: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+    });
+    const entries: Array<{ name: string; body: string }> = [];
+    await walkTar(ReadableStream.from([bytes]), async (header, chunks) => {
+      const content: Uint8Array[] = [];
+      for await (const chunk of chunks) content.push(chunk);
+      entries.push({ name: header.name, body: decodeText(concatBytes(content)) });
+    });
+    expect(entries).toStrictEqual([
+      { name: "snapshot/", body: "" },
+      { name: "snapshot/root-0/", body: "" },
+      { name: "snapshot/root-0/file", body },
+    ]);
+    expect(await readdir(directory)).toStrictEqual([`${fixture.id}.tar`]);
+  });
+
+  for (const failureAt of ["write", "flush", "end"] as const) {
+    it.skipIf(process.platform !== "linux")(`cleans up a buffered archive when ${failureAt} fails`, async () => {
+      const probePath = path.join(directory, "writer-probe");
+      const probe = Bun.file(probePath).writer();
+      const prototype = Object.getPrototypeOf(probe) as Bun.FileSink;
+      await probe.end();
+      await rm(probePath);
+      // Keep the source open for write/flush failures to prove cancellation
+      // does not depend on reaching EOF or consuming the rest of the archive.
+      const fixture = await snapshotFixture(failureAt === "end" ? "small" : "x".repeat(131_072), {
+        keepOpen: failureAt !== "end",
+      });
+      const failure = new Error("Fixture destination full");
+      if (failureAt === "write") {
+        const write = prototype.write;
+        spyOn(prototype, "write")
+          .mockImplementationOnce(function (this: Bun.FileSink, chunk) { return write.call(this, chunk); })
+          .mockImplementationOnce(async () => { throw failure; });
+      } else {
+        spyOn(prototype, failureAt).mockImplementationOnce(async () => { throw failure; });
+      }
+      await expect(fixture.write()).rejects.toThrow(failure.message);
+      expect(fixture.stream.cancelled).toBe(true);
+      expect(await readdir(directory)).toStrictEqual([]);
+    });
+  }
+
+  it.skipIf(process.platform !== "linux")("discards buffered output when access is revoked after the source starts", async () => {
+    let allowed = true;
+    const fixture = await snapshotFixture("small", { keepOpen: true, onStart: () => { allowed = false; } });
+    await expect(fixture.write(() => {
+      if (!allowed) throw new Error("Access revoked");
+    })).rejects.toThrow(/Access revoked/);
+    expect(fixture.stream.cancelled).toBe(true);
+    expect(await readdir(directory)).toStrictEqual([]);
+  });
+
   it.skipIf(process.platform !== "linux")("cleans up failed writes without removing a partial archive it did not create", async () => {
     const id = crypto.randomUUID();
     const filename = await backupFilePath(directory, id, true);
