@@ -20,6 +20,8 @@ describe("Bun-only CI", () => {
           const dockerfile = await read(filename.replace(/action\.yaml$/, "Dockerfile"));
           expect(dockerfile).toContain(`FROM ${bunImage}`);
           expect(dockerfile).toContain("RUN apk upgrade --no-cache");
+          expect(dockerfile).toContain("&& rm /usr/local/bun-node-fallback-bin/node");
+          expect(dockerfile).toContain('["node", "npm", "npx"].some(command => Bun.which(command))');
           expect(dockerfile).toContain('ENTRYPOINT ["/usr/local/bin/bun"]');
         }
       }
