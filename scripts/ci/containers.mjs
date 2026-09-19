@@ -67,7 +67,7 @@ export async function scanImage(value, environment = process.env) {
     run(["run", "--rm", "--network", "none", "--volume", cache,
       "--volume", `${directory}:/scan:ro`, TRIVY_IMAGE,
       "image", "--input", "/scan/image.tar", "--skip-db-update", "--offline-scan",
-      "--scanners", "vuln", "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
+      "--scanners", "vuln", "--severity", "MEDIUM,HIGH,CRITICAL", "--ignore-unfixed",
       "--exit-code", "1", "--timeout", "8m"]);
   } finally {
     await rm(directory, { recursive: true, force: true });

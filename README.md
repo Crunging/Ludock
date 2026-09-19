@@ -38,44 +38,27 @@ The current interface, shown with demo servers and data.
 ## Run with Docker
 
 Use Docker with [Compose 2.24.0 or later](https://docs.docker.com/reference/compose-file/services/#required).
-Check with `docker compose version`. Save [`compose.yaml`](./compose.yaml) in
-a folder on the host that runs your game containers. Run the commands below
-from that folder. **The default installation needs no `.env` file.
-Recognized game images need no extra labels.**
-
-Start the panel:
+Save [`compose.yaml`](./compose.yaml) on your game-server host and run:
 
 ```bash
 docker compose up -d
 ```
 
-Open `http://localhost:3000` (or your chosen port). From another device, replace
-`localhost` with your Docker host's address. On the Docker host, retrieve the
-one-time setup code:
+No `.env` file or extra game labels are needed for recognized images.
+Open `http://<docker-host>:3000` and retrieve the one-time setup code:
 
 ```bash
 docker compose logs ludock
 ```
 
-Enter the most recent code in the setup page and create the first administrator
-within five minutes. The generated code is written directly to the local container console,
-not Ludock's browser-accessible application logs. If setup expires, run
-`docker compose restart ludock`, retrieve the newly generated code, then choose
-**Check again** in the panel. You can instead configure a private
-`LUDOCK_SETUP_CODE` in `.env`; configured codes are not printed.
+Use the code to create the first administrator within five minutes. If it expires,
+run `docker compose restart ludock` for a new code.
 
 The example creates separate volumes for Ludock application data and backups.
 Existing game containers and game-data volumes stay in place.
 
-After signing in:
-
-1. Open **Servers**. Recognized game containers appear automatically; use
-   **Game not shown?** if one is missing.
-2. To enable backups, open **Settings → Backup storage**. `/backups` is filled
-   in for you; review the suggested limits and save. No extra mount setup is
-   needed with this example.
-3. To share a server, open **Users**, create an account, then choose its servers
-   and permitted actions in the access editor.
+Recognized servers appear automatically. Enable backups in **Settings → Backup
+storage**; the default storage is already mounted.
 
 Ludock images target **Linux AMD64 and ARM64**; individual game images may
 support fewer platforms. Backups require downtime. Compose updates require
@@ -88,18 +71,7 @@ and use an HTTPS reverse proxy for remote access.
 
 ## Optional configuration
 
-Most everyday configuration happens in the browser:
-
-| What you want to do | Where to do it |
-| --- | --- |
-| Start, stop, or restart a server | **Servers** or the server’s details |
-| Set backup limits and retention | **Settings → Backup storage** |
-| Run an action regularly | **Server → Schedules**; choose an action, time, and days |
-| Monitor a server expected to stay online | **Server → Availability** |
-| Receive Discord alerts | **Settings → Discord notifications** |
-| Share specific servers and controls | **Users → Server access** |
-
-Browser settings take effect when saved. For deployment settings, copy
+Most configuration happens in the browser. For deployment settings, copy
 [`.env.example`](./.env.example) to `.env` beside `compose.yaml`, uncomment only
 the values you need, and recreate Ludock:
 
@@ -107,9 +79,6 @@ the values you need, and recreate Ludock:
 docker compose up -d --force-recreate ludock
 ```
 
-For example, `LUDOCK_PORT=8080` changes the browser port and
-`MAX_UPLOAD_SIZE=500 MB` limits each upload. A different host socket uses
-`LUDOCK_DOCKER_SOCKET=/run/user/1000/docker.sock` (replace the path with yours).
 Compose update access needs a read-only source mount; see
 [Operations](./docs/OPERATIONS.md#compose-updates) for that setup.
 

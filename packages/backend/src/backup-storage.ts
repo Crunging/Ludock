@@ -23,7 +23,7 @@ import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { RESTORE_EXTRACT_SCRIPT } from "./restore-extract-script.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
-import { getHelperImage } from "./runtime-images.js";
+import { resolveHelperImage } from "./runtime-images.js";
 import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
 
 export interface BackupRoot {
@@ -537,8 +537,8 @@ export async function createDataHelper(
   operationId: string,
 ): Promise<DataHelper> {
   const { roots, mounts, aliases, checkedMounts } = planBackupRoots(context, readOnly);
+  const image = await resolveHelperImage();
   const proof = await createMountProof(checkedMounts, operationId);
-  const image = getHelperImage();
   const options: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     User: "0",

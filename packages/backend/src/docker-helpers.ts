@@ -6,13 +6,15 @@ import { AppError } from "./errors.js";
 export async function createHelperContainer(
   options: Docker.ContainerCreateOptions & { Image: string },
 ): Promise<Docker.Container> {
+  // Helpers reuse the runtime image but never start the panel or its healthcheck.
+  const helperOptions = { ...options, Healthcheck: { Test: ["NONE"] } };
   try {
-    return await docker.createContainer(options);
+    return await docker.createContainer(helperOptions);
   } catch (error) {
-    if ((error as { statusCode?: number }).statusCode !== 404) throw error;
+    if ((error as { statusCode?: number }).statusCode !== 404 || !options.Image.includes("@sha256:")) throw error;
   }
   await docker.pull(options.Image);
-  return docker.createContainer(options);
+  return docker.createContainer(helperOptions);
 }
 
 export async function removeHelperContainer(
@@ -21,7 +23,8 @@ export async function removeHelperContainer(
   async function remove(): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await container.remove({ force: true });
+        // Remove image-declared anonymous volumes; Docker retains named mounts.
+        await container.remove({ force: true, v: true });
         return;
       } catch (error) {
         const status = (error as { statusCode?: number }).statusCode;

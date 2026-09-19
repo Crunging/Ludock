@@ -3,7 +3,7 @@ import path from "node:path";
 import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
-import { getHelperImage } from "./runtime-images.js";
+import { resolveHelperImage } from "./runtime-images.js";
 import { AppError } from "./errors.js";
 import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
 
@@ -57,7 +57,7 @@ export async function createMountProof(
       destination: path.posix.normalize(mount.Destination).replace(/\/$/, ""),
     }));
   if (!sources.length) return { identities: {}, cleanup: async () => {} };
-  const image = getHelperImage();
+  const image = await resolveHelperImage();
   const options: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     Entrypoint: ["bun", "-e"],

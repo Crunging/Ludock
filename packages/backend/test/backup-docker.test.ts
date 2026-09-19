@@ -29,7 +29,7 @@ import {
   helperRoot,
 } from "../src/backup-storage.js";
 import type { JobContext } from "../src/operations.js";
-import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
+import { resolveHelperImage } from "../src/runtime-images.js";
 
 const enabled = process.env.LUDOCK_DOCKER_TESTS === "1";
 function context(
@@ -80,13 +80,14 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         volumes: Docker.Volume[] = [];
       const oldRoots = process.env.LUDOCK_BACKUP_ROOTS,
         oldSelf = process.env.LUDOCK_SELF_CONTAINER;
+      const image = await resolveHelperImage();
       try {
         const volume = await docker.createVolume({
           Name: `ludock-test-${crypto.randomUUID()}`,
         });
         volumes.push(volume);
         const source = await docker.createContainer({
-          Image: DEFAULT_HELPER_IMAGE,
+          Image: image,
           Entrypoint: [],
           name: `ludock-backup-test-${crypto.randomUUID()}`,
           Labels: { "ludock.enable": "true", "ludock.name": "Backup fixture" },
@@ -107,7 +108,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         ]);
         const self = !oldSelf
           ? await docker.createContainer({
-              Image: DEFAULT_HELPER_IMAGE,
+              Image: image,
               Entrypoint: [],
               Cmd: ["bun", "-e", ""],
               HostConfig: {
@@ -150,7 +151,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
 
         const aliased = await docker.createContainer({
-          Image: DEFAULT_HELPER_IMAGE,
+          Image: image,
           Entrypoint: [],
           Cmd: ["bun", "-e", ""],
           Labels: {
@@ -289,7 +290,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         await helperExec(source, ["bun", "-e", "require('node:fs').unlinkSync('/data/unsafe-link')"]);
 
         const writer = await docker.createContainer({
-          Image: DEFAULT_HELPER_IMAGE,
+          Image: image,
           Entrypoint: [],
           Cmd: ["bun", "-e", "setInterval(() => {}, 3600000)"],
           HostConfig: {
@@ -310,7 +311,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
             context(server.id, state.logical.bindingRevision, "backup"),
           )).rejects.toThrow(/Another running container/);
         expect((await source.inspect()).State.Running, "shared writer check happens before stopping").toBe(true);
-        await writer.remove({ force: true });
+        await writer.remove({ force: true, v: true });
         containers.splice(containers.indexOf(writer), 1);
         await source.stop({ t: 5 });
         state = await resolveAuthorizedServer(

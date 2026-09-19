@@ -9,7 +9,7 @@ import { createLogger } from "./logger.js";
 import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
-import { getHelperImage } from "./runtime-images.js";
+import { resolveHelperImage } from "./runtime-images.js";
 import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
 import { AppError } from "./errors.js";
 import type { FileHelperRequest } from "./helpers/contracts.js";
@@ -511,8 +511,8 @@ export async function acquireFileContainer(
         : {}),
     };
   });
+  const image = await resolveHelperImage();
   const proof = await createMountProof(selected);
-  const image = getHelperImage();
   const containerOptions: Docker.ContainerCreateOptions & { Image: string } = {
     Image: image,
     Entrypoint: ["bun", "-e"],

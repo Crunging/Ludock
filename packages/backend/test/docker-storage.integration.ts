@@ -12,7 +12,8 @@ import {
   deleteFileEntry,
 } from "../src/file-storage.js";
 import { createMountProof, assertMountIdentities } from "../src/mount-proof.js";
-import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
+import { resolveHelperImage } from "../src/runtime-images.js";
+import { createHelperContainer, removeHelperContainer } from "../src/docker-helpers.js";
 
 async function cleanupFixtures(
   cleanup: Array<() => Promise<unknown>>,
@@ -41,9 +42,38 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
   "Docker storage acceptance",
   () => {
     const docker = getDockerInstance();
-    const image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE;
+
+    it("removes inherited anonymous helper volumes without removing named game data", async () => {
+      const cleanup: Array<() => Promise<unknown>> = [];
+      let testPassed = false;
+      try {
+        const image = await resolveHelperImage();
+        const name = `ludock-helper-cleanup-${crypto.randomUUID()}`;
+        const volume = await docker.createVolume({ Name: name });
+        cleanup.push(() => volume.remove());
+        const helper = await createHelperContainer({
+          Image: image,
+          Entrypoint: [],
+          Cmd: ["bun", "--version"],
+          Labels: { "ludock.enable": "false" },
+          HostConfig: { NetworkMode: "none", Mounts: [{ Type: "volume", Source: name, Target: "/world" }] },
+        });
+        cleanup.push(() => removeHelperContainer(helper));
+        const inherited = (await helper.inspect()).Mounts.find((mount) => mount.Destination === "/data");
+        expect(inherited?.Type).toBe("volume");
+        expect(inherited?.Name).toBeTruthy();
+        expect(inherited?.Name).not.toBe(name);
+        await removeHelperContainer(helper);
+        await expect(docker.getVolume(inherited!.Name!).inspect()).rejects.toMatchObject({ statusCode: 404 });
+        expect((await volume.inspect()).Name).toBe(name);
+        testPassed = true;
+      } finally {
+        await cleanupFixtures(cleanup, testPassed);
+      }
+    }, 120_000);
 
     it("uses scoped helpers for complete file operations on stopped and running servers", async () => {
+      const image = await resolveHelperImage();
       const cleanup: Array<() => Promise<unknown>> = [];
       let testPassed = false;
       try {
@@ -59,7 +89,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             Mounts: [{ Type: "volume", Source: volumeName, Target: "/data" }],
           },
         });
-        cleanup.push(() => game.remove({ force: true }));
+        cleanup.push(() => game.remove({ force: true, v: true }));
         for (const state of ["stopped", "running"]) {
           if (state === "running") await game.start();
           const { container: server } = await getManagedContainerObservation(game.id);
@@ -102,6 +132,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
     }, 120_000);
 
     it("proves bind source identity and rejects symlink or swapped source directories", async () => {
+      const image = await resolveHelperImage();
       const cleanup: Array<() => Promise<unknown>> = [];
       let testPassed = false;
       try {
@@ -121,7 +152,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             Mounts: [{ Type: "volume", Source: name, Target: "/data" }],
           },
         });
-        cleanup.push(() => setup.remove({ force: true }));
+        cleanup.push(() => setup.remove({ force: true, v: true }));
         await setup.start();
         await setup.wait();
         const proof = await createMountProof([
@@ -143,7 +174,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
             },
           });
         let data: Docker.Container | undefined = await fixture(`${mountpoint}/target`);
-        cleanup.push(async () => { if (data) await data.remove({ force: true }); });
+        cleanup.push(async () => { if (data) await data.remove({ force: true, v: true }); });
         await data.start();
         await assertMountIdentities(data, proof.identities);
         await expect(createMountProof([
@@ -154,7 +185,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
               RW: true,
             },
           ])).rejects.toThrow(/could not be verified/);
-        await data.remove({ force: true });
+        await data.remove({ force: true, v: true });
         data = undefined;
         data = await fixture(`${mountpoint}/other`);
         await data.start();

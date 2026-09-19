@@ -34,7 +34,6 @@ import {
   availableBackupDestinationBytes,
 } from "../src/backup-storage.js";
 import { getDockerInstance } from "../src/docker.js";
-import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
 import type { ServerContext } from "../src/servers.js";
 import { AppError } from "../src/errors.js";
 
@@ -42,12 +41,16 @@ const roots = [{ id: "root-0", path: "/data" }];
 let directory: string;
 let oldRoots: string | undefined;
 let oldHelperImage: string | undefined;
+let oldSelf: string | undefined;
+const fixtureRuntimeImage = `sha256:${"b".repeat(64)}`;
 beforeEach(async () => {
   directory = await realpath(
     await mkdtemp(path.join(tmpdir(), "ludock-backup-test-")),
   );
   oldRoots = process.env.LUDOCK_BACKUP_ROOTS;
   oldHelperImage = process.env.FILE_HELPER_IMAGE;
+  oldSelf = process.env.LUDOCK_SELF_CONTAINER;
+  process.env.FILE_HELPER_IMAGE = `example/helper@sha256:${"a".repeat(64)}`;
   process.env.LUDOCK_BACKUP_ROOTS = directory;
 });
 afterEach(async () => {
@@ -56,6 +59,7 @@ afterEach(async () => {
   else process.env.LUDOCK_BACKUP_ROOTS = oldRoots;
   if (oldHelperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
   else process.env.FILE_HELPER_IMAGE = oldHelperImage;
+  process.env.LUDOCK_SELF_CONTAINER = oldSelf;
   await rm(directory, { recursive: true, force: true });
 });
 async function archive(
@@ -244,10 +248,14 @@ describe("backup storage boundaries", () => {
   });
 
   for (const helperImage of [undefined, `example/custom-bun-helper:test@sha256:${"a".repeat(64)}`]) {
-    it(`uses the ${helperImage ? "configured" : "pinned default"} image for a scoped backup helper`, async () => {
+    it(`uses the ${helperImage ? "configured" : "deployment"} image for a scoped backup helper`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
       else process.env.FILE_HELPER_IMAGE = helperImage;
       const docker = getDockerInstance();
+      process.env.LUDOCK_SELF_CONTAINER = `fixture-${crypto.randomUUID()}`;
+      spyOn(docker, "getContainer").mockReturnValue({
+        inspect: async () => ({ Image: fixtureRuntimeImage }),
+      } as unknown as Docker.Container);
       let removed = false;
       const helper = {
         start: async () => {},
@@ -273,7 +281,7 @@ describe("backup storage boundaries", () => {
       } as ServerContext, true, crypto.randomUUID());
       try {
         const options = create.mock.calls[0][0];
-        expect(options.Image).toBe(helperImage || DEFAULT_HELPER_IMAGE);
+        expect(options.Image).toBe(helperImage || fixtureRuntimeImage);
         expect(options.HostConfig?.Mounts).toStrictEqual([{
           Type: "volume", Source: "game-data", Target: "/mounts/root-0", ReadOnly: true,
         }]);

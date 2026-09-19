@@ -1,5 +1,33 @@
-// Official Bun 1.4.2 distroless helper; production helpers execute Bun directly.
-export const DEFAULT_HELPER_IMAGE = "oven/bun:1-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec";
+import { docker } from "./docker-client.js";
+import { AppError } from "./errors.js";
+
+// Reviewed multi-platform Ludock runtime for native runs and custom hostnames.
+export const FALLBACK_HELPER_IMAGE = "ghcr.io/crunging/ludock@sha256:87806cbb9082cae6f2ce55d6c26e35f1cd28d97a6a2acd92da483f96ffdeeb67";
+
+let selfImage: { container: string; result: Promise<string> } | undefined;
+
+/** Reuse this deployment's exact, patched runtime without another registry pull. */
+export async function resolveHelperImage(): Promise<string> {
+  if (process.env.FILE_HELPER_IMAGE) return validateHelperImage(process.env.FILE_HELPER_IMAGE);
+  const container = process.env.LUDOCK_SELF_CONTAINER || process.env.HOSTNAME;
+  if (!container) return FALLBACK_HELPER_IMAGE;
+  const unavailable = () => new AppError("HELPER_IMAGE_UNAVAILABLE", 503,
+    "Ludock could not identify its runtime image. Check Docker connectivity and any LUDOCK_SELF_CONTAINER setting.");
+  if (selfImage?.container === container) return selfImage.result;
+  const result = Promise.resolve().then(() => docker.getContainer(container).inspect()).then((inspection) => {
+    // Config.Image may be a moving tag. Only Docker's content-addressed ID is safe.
+    if (!/^sha256:[a-f0-9]{64}$/.test(inspection.Image)) throw unavailable();
+    return inspection.Image;
+  }).catch((error: unknown) => {
+    // A native hostname or custom Docker hostname need not name a container.
+    // Other daemon failures remain retryable errors, not silent fallbacks.
+    if ((error as { statusCode?: number })?.statusCode === 404) return FALLBACK_HELPER_IMAGE;
+    if (selfImage?.result === result) selfImage = undefined;
+    throw unavailable();
+  });
+  selfImage = { container, result };
+  return result;
+}
 
 // Docker's reference grammar and familiar-name rules:
 // https://github.com/distribution/reference/tree/v0.6.0
@@ -37,7 +65,7 @@ function isPinnedImageReference(image: string): boolean {
     repository.split("/").every((component) => REPOSITORY_COMPONENT.test(component));
 }
 
-export function getHelperImage(image = process.env.FILE_HELPER_IMAGE || DEFAULT_HELPER_IMAGE): string {
+export function validateHelperImage(image: string): string {
   if (!isPinnedImageReference(image)) {
     throw new Error("FILE_HELPER_IMAGE must identify a trusted Bun helper by its immutable sha256 digest.");
   }

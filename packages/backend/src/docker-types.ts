@@ -81,6 +81,7 @@ export interface HostConfig {
 
 export interface ContainerCreateOptions {
   Image: string;
+  Healthcheck?: { Test: string[] };
   name?: string;
   Entrypoint?: string[];
   Cmd?: string[];

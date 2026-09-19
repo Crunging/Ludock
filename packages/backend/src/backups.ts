@@ -941,7 +941,7 @@ async function removeOperationHelpers(job: JobContext): Promise<void> {
       helper.Labels?.["ludock.operation"] !== job.job.id
     )
       continue;
-    await docker.getContainer(helper.Id).remove({ force: true });
+    await docker.getContainer(helper.Id).remove({ force: true, v: true });
   }
   job.progress("recovering", { dataHelperId: null });
 }

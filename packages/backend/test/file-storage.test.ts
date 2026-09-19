@@ -3,7 +3,7 @@ import { byteView, concatBytes, decodeText } from "../src/bytes.js";
 import { thrownBy, rejectedBy } from "./fixtures/errors.js";
 import { StreamFixture, bytesStream } from "./fixtures/web-streams.js";
 import { dockerStdout, DockerStreamError } from "../src/docker-stream.js";
-import { expect, afterEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   FileStorageError,
   getFileRoots,
@@ -17,7 +17,8 @@ import {
 import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
 import type * as Docker from "../src/docker-client.js";
 import { createMountProof } from "../src/mount-proof.js";
-import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
+const fixtureHelperImage = `example/helper@sha256:${"a".repeat(64)}`;
+const fixtureRuntimeImage = `sha256:${"b".repeat(64)}`;
 
 function frame(channel: number, payload: string | Uint8Array): Uint8Array {
   const content = fixtureBytes(payload);
@@ -277,13 +278,16 @@ describe("scoped file helper projections", () => {
     getVolume: docker.getVolume,
     createContainer: docker.createContainer,
     helperImage: process.env.FILE_HELPER_IMAGE,
+    selfContainer: process.env.LUDOCK_SELF_CONTAINER,
   };
+  beforeEach(() => { process.env.FILE_HELPER_IMAGE = fixtureHelperImage; });
   afterEach(() => {
     docker.getContainer = originals.getContainer;
     docker.getVolume = originals.getVolume;
     docker.createContainer = originals.createContainer;
     if (originals.helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
     else process.env.FILE_HELPER_IMAGE = originals.helperImage;
+    process.env.LUDOCK_SELF_CONTAINER = originals.selfContainer;
   });
   it("rejects a rename after authorization before proving or exposing mounts", async () => {
     let inspectedVolumes = 0;
@@ -376,6 +380,7 @@ describe("scoped file helper projections", () => {
     it(`projects approved mounts for a ${state} server using the ${helperImage ? "custom" : "default"} helper without inheriting sockets`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
       else process.env.FILE_HELPER_IMAGE = helperImage;
+      process.env.LUDOCK_SELF_CONTAINER = `fixture-${crypto.randomUUID()}`;
       let created: Docker.ContainerCreateOptions | undefined;
       let validatorImage: string | undefined;
       let removed = false;
@@ -404,6 +409,7 @@ describe("scoped file helper projections", () => {
       docker.getContainer = (() => ({
         inspect: async () => ({
           Id: "physical",
+          Image: fixtureRuntimeImage,
           Name: "/game",
           Config: {
             Image: "example/game",
@@ -464,8 +470,8 @@ describe("scoped file helper projections", () => {
         { id: "root-0", name: "data", path: "/data" },
         { readOnly: true },
       );
-      expect(created?.Image).toBe(helperImage || DEFAULT_HELPER_IMAGE);
-      expect(validatorImage).toBe(helperImage || DEFAULT_HELPER_IMAGE);
+      expect(created?.Image).toBe(helperImage || fixtureRuntimeImage);
+      expect(validatorImage).toBe(helperImage || fixtureRuntimeImage);
       expect(created?.HostConfig?.VolumesFrom).toBe(undefined);
       expect(created?.HostConfig?.Mounts?.map((mount) => [
           mount.Source,

@@ -4,6 +4,7 @@
 import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { backendSourceMounts } from "./test-source-mounts.mjs";
+import { hardenedContainerArguments } from "./test-container-options.mjs";
 
 const args = process.argv.slice(2);
 if (args.length && (args.length !== 1 || args[0] !== "--smoke-only")) {
@@ -19,6 +20,10 @@ const expectedVersion = (await Bun.file(path.join(repository, "package.json")).j
 // This function runs inside the image without source mounts, so missing bundle
 // files, production dependencies, or frontend assets fail before source tests.
 async function smokeProductionBundle(expectedBun, expectedVersion) {
+  const processStatus = await Bun.file("/proc/self/status").text();
+  if (!/^CapEff:\s+0+2$/m.test(processStatus) || !/^NoNewPrivs:\s+1$/m.test(processStatus)) {
+    throw new Error("Production must retain only mounted-file access and prevent privilege escalation");
+  }
   if (Bun.version !== expectedBun) throw new Error(`Production Bun ${Bun.version} differs from .bun-version ${expectedBun}`);
   if (["node", "npm", "npx"].some((command) => Bun.which(command))) {
     throw new Error("The production image must use Bun as its only JavaScript runtime");
@@ -131,6 +136,7 @@ try {
   // Start the image's default command with its own disposable /data volume.
   runDocker([
     "run", "-d", "--name", name + "-smoke",
+    ...hardenedContainerArguments,
     "--network", "none", "--label", "ludock.enable=false",
     "-e", "LUDOCK_SETUP_CODE=fixture-setup-" + crypto.randomUUID(),
     image,
@@ -151,6 +157,8 @@ try {
       [
         "docker",
         "run", "--rm", "--name", name,
+        // Source suites create executable command stubs in /tmp. The packaged
+        // smoke test above verifies the actual production restrictions.
         "--network", "none", "--label", "ludock.enable=false",
         ...backendSourceMounts(repository),
         image, "bun", "test", "--isolate",

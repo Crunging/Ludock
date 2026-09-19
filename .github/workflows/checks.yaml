@@ -149,15 +149,12 @@ jobs:
         run: bun scripts/test-linux.mjs
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
-      - name: Select default helper
-        id: helper
-        run: |
-          image="$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
       - name: Check scoped file helpers with disposable data
-        run: |
-          docker pull "$(bun -p "(await import('./packages/backend/src/runtime-images.ts')).DEFAULT_HELPER_IMAGE")"
-          bun scripts/test-files.mjs
+        run: bun scripts/test-files.mjs
+        env:
+          LUDOCK_TEST_IMAGE: ludock:ci
+      - name: Check automatic fallback helpers with disposable data
+        run: bun scripts/test-files.mjs --fallback-helper
         env:
           LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check backup and restore recovery with disposable data
@@ -172,11 +169,12 @@ jobs:
         run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
         env:
           SCAN_IMAGE: ludock:ci
-      - name: Scan default helper for vulnerabilities
-        if: ${{ !cancelled() && steps.helper.outcome == 'success' }}
-        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
-        env:
-          SCAN_IMAGE: ${{ steps.helper.outputs.image }}
+      - name: Scan fallback helper for vulnerabilities
+        run: bun scripts/ci/containers.mjs scan "$(bun -p '(await import("./packages/backend/src/runtime-images.ts")).FALLBACK_HELPER_IMAGE')"
+      - name: Build and scan CI action runtime
+        run: |
+          docker build --pull --tag ludock:ci-action .github/actions/bun-action
+          bun scripts/ci/containers.mjs scan ludock:ci-action
       - name: Remove build instance
         if: always()
         run: docker buildx rm ludock
