@@ -99,7 +99,7 @@ describe("Bun Docker HTTP client", () => {
     const execution = await container.exec({ Cmd: ["bun", "-e", "dummy command"], AttachStdin: true });
     await execution.inspect();
     expect(await container.wait()).toEqual({ StatusCode: 0 });
-    await container.remove({ force: true });
+    await container.remove({ force: true, v: true });
     const volume = await client.createVolume({ Name: "fixture-volume" });
     await volume.inspect();
     await volume.remove();
@@ -109,7 +109,7 @@ describe("Bun Docker HTTP client", () => {
       "POST /v1.55/containers/fixture-id/stop?t=0", "POST /v1.55/containers/fixture-id/restart",
       "GET /v1.55/containers/fixture-id/stats?stream=false", "POST /v1.55/containers/fixture-id/exec",
       "GET /v1.55/exec/exec-id/json", "POST /v1.55/containers/fixture-id/wait",
-      "DELETE /v1.55/containers/fixture-id?force=true", "POST /v1.55/volumes/create",
+      "DELETE /v1.55/containers/fixture-id?force=true&v=true", "POST /v1.55/volumes/create",
       "GET /v1.55/volumes/fixture-volume", "DELETE /v1.55/volumes/fixture-volume",
     ]);
     expect(requests[1].body).toEqual({ Image: options.Image, HostConfig: options.HostConfig });

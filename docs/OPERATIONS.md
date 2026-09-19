@@ -9,30 +9,23 @@ The example keeps application data at `/data` and game backup archives at
 unsupported schemas are rejected without modification; retain their data
 before choosing a fresh application volume.
 
-Use [`.env.example`](../.env.example) as the configuration reference. Copy it
-to `.env` beside the Compose file and uncomment the settings you need.
-`LUDOCK_PORT` changes the browser port; root lists use `:`-separated absolute
-paths inside Ludock. Recreate the service after changing environment or mounts:
+Optional deployment settings are listed in [`.env.example`](../.env.example).
+Copy it to `.env` and uncomment the values you need. Recreate after changes:
 
 ```bash
 docker compose up -d --force-recreate ludock
 ```
 
-For a custom or rootless Docker socket, set `LUDOCK_DOCKER_SOCKET` to its
-**host** path in `.env`; the example mounts it at `/var/run/docker.sock` inside
-Ludock. Leave `DOCKER_SOCKET` at its default unless you also change the mount
-target. A missing host socket fails at startup instead of creating a directory.
-[Rootless Docker](https://docs.docker.com/engine/security/rootless/tips/)
-typically uses `/run/user/<uid>/docker.sock`. Run Compose on the game servers’
-Docker host, using the same Docker context as those containers.
-The daemon must support Engine API 1.44 or newer. Ludock negotiates a supported
-API version over the mounted Unix socket; `DOCKER_HOST`, TLS, and SSH environment
-settings do not configure this connection.
+Ludock connects through the mounted Unix socket and requires Engine API 1.44+.
+For [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/),
+mount its socket at `/var/run/docker.sock`. Remote Docker connections are unsupported.
 
 Docker socket access grants host-level power even with a read-only mount.
 Use HTTPS for remote access; the proxy must preserve the public host, forward
 the external protocol, and support WebSocket upgrades. API requests and
-WebSockets use same-origin session cookies.
+WebSockets use same-origin session cookies. Configure the proxy to overwrite
+client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port`
+headers. Expose only the HTTPS proxy to untrusted networks.
 
 ## Discovery and console setup
 
@@ -149,9 +142,7 @@ Listings allow 10,000 entries. Transfers have a 30-minute limit; uploads also
 stop after 60 seconds without input. Ordinary commands have a 55-second limit.
 Helpers are removed after use and expire after 35 minutes if Ludock is interrupted.
 
-Use the default helper digest unless you have validated an override. Missing
-images are pulled automatically; upgrading Ludock adopts its new default digest.
-Custom images must meet the requirements in [`.env.example`](../.env.example).
+Helper overrides and custom hostnames are covered in [`.env.example`](../.env.example).
 
 ## Configure backups
 
@@ -166,8 +157,6 @@ replace the existing `/backups` volume mount with a host directory:
 ```yaml
 services:
   ludock:
-    environment:
-      LUDOCK_BACKUP_ROOTS: /backups
     volumes:
       - /srv/ludock-backups:/backups
 ```

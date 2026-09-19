@@ -58,24 +58,23 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
-      - name: Select published and helper images
+      - name: Install image selector dependencies
+        run: bun install --frozen-lockfile
+      - name: Select published runtime image
         id: images
         shell: bash
         run: |
           set -euo pipefail
 
           repository="$(bun --print 'process.env.GITHUB_REPOSITORY.toLowerCase()')"
-          helper_image="$(bun --print '(await import("./packages/backend/src/runtime-images.ts")).DEFAULT_HELPER_IMAGE')"
-          {
-            echo "release=ghcr.io/${repository}:latest"
-            echo "helper=${helper_image}"
-          } >> "$GITHUB_OUTPUT"
+          echo "release=ghcr.io/${repository}:latest" >> "$GITHUB_OUTPUT"
       - name: Scan published release image
         run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
         env:
           SCAN_IMAGE: ${{ steps.images.outputs.release }}
-      - name: Scan helper image
-        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
-        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
-        env:
-          SCAN_IMAGE: ${{ steps.images.outputs.helper }}
+      - name: Scan fallback helper for vulnerabilities
+        run: bun scripts/ci/containers.mjs scan "$(bun -p '(await import("./packages/backend/src/runtime-images.ts")).FALLBACK_HELPER_IMAGE')"
+      - name: Build and scan CI action runtime
+        run: |
+          docker build --pull --tag ludock:ci-action .github/actions/bun-action
+          bun scripts/ci/containers.mjs scan ludock:ci-action

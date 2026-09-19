@@ -4,7 +4,7 @@ import { describe, expect, it } from "bun:test";
 import { docker, type Container } from "../src/docker-client.js";
 import { demuxDockerStream } from "../src/docker-stream.js";
 import { dockerEventDecoder } from "../src/events.js";
-import { DEFAULT_HELPER_IMAGE } from "../src/runtime-images.js";
+import { resolveHelperImage } from "../src/runtime-images.js";
 
 describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client acceptance", () => {
   it("pulls a pinned image and preserves events, TTY logs, exec output, stdin, and lifecycle state", async () => {
@@ -13,9 +13,10 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
     let eventWork: Promise<void> | undefined;
     try {
       await docker.ping();
-      await docker.pull(DEFAULT_HELPER_IMAGE);
+      await docker.pull("alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6");
+      const image = await resolveHelperImage();
       const container = await docker.createContainer({
-        Image: DEFAULT_HELPER_IMAGE,
+        Image: image,
         name: `ludock-client-${crypto.randomUUID()}`,
         Entrypoint: ["bun", "-e"],
         Cmd: ["process.on('SIGTERM', () => process.exit(0)); process.stdin.on('data', data => process.stdout.write('command:' + data)); console.log('ready'); setInterval(() => {}, 1000);"],
@@ -25,6 +26,13 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
         HostConfig: { Init: true },
       });
       containers.push(container);
+      const readLogs = async () => {
+        const logs = await container.logs({ follow: false, stdout: true, stderr: true });
+        let content = "";
+        const output = (data: Uint8Array) => { content += decodeText(fixtureBytes(data)); };
+        await demuxDockerStream(logs, output, output);
+        return content;
+      };
       const actions = new Set<string>();
       events = (await docker.getEvents({ filters: { type: ["container"], container: [container.id] } })).getReader();
       const decode = dockerEventDecoder(event => { if (event.Action) actions.add(event.Action); });
@@ -40,7 +48,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       await until(() => actions.has("start"));
       const info = await container.inspect();
       expect(info.State.Running).toBe(true);
-      expect(info.Image).toBe((await docker.getImage(DEFAULT_HELPER_IMAGE).inspect()).Id);
+      expect(info.Image).toBe((await docker.getImage(image).inspect()).Id);
       expect((await container.stats({ stream: false })).memory_stats.limit).toBeGreaterThan(0);
 
       const execution = await container.exec({
@@ -65,23 +73,20 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
         await writer.write(fixtureBytes("fixture-command\n"));
         writer.releaseLock();
       } finally { attached.abort(); }
-      await until(async () => {
-        const logs = await container.logs({ follow: false, stdout: true, stderr: true });
-        let content = "";
-        const output = (data: Uint8Array) => { content += decodeText(fixtureBytes(data)); };
-        await demuxDockerStream(logs, output, output);
-        return content.includes("command:fixture-command");
-      });
+      await until(async () => (await readLogs()).includes("command:fixture-command"));
       expect((await container.inspect()).Config.OpenStdin).toBe(true);
       await container.restart();
       expect((await container.inspect()).State.Running).toBe(true);
+      // Running precedes Bun installing its signal handler, especially under
+      // emulation. Wait for the second startup before testing graceful stop.
+      await until(async () => (await readLogs()).split("\n").filter((line) => line === "ready").length === 2);
       await container.stop({ t: 1 });
       expect((await container.wait()).StatusCode).toBe(0);
       await until(() => actions.has("die"));
       expect((await container.inspect()).State.Running).toBe(false);
 
       const tty = await docker.createContainer({
-        Image: DEFAULT_HELPER_IMAGE, Entrypoint: ["bun", "-e"],
+        Image: image, Entrypoint: ["bun", "-e"],
         Cmd: ["console.log('tty-marker')"], Tty: true,
         Labels: { "ludock.enable": "false" },
       });
@@ -96,7 +101,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       await events?.cancel().catch(() => {});
       await eventWork?.catch(() => {});
       events?.releaseLock();
-      for (const container of containers.reverse()) await container.remove({ force: true });
+      for (const container of containers.reverse()) await container.remove({ force: true, v: true });
     }
   }, 120_000);
 });

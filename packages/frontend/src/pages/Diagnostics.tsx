@@ -73,8 +73,8 @@ export default function Diagnostics() {
               </p>
               <pre><code>/var/run/docker.sock:/var/run/docker.sock:ro</code></pre>
               <p>
-                With the example Compose file, set <code>LUDOCK_DOCKER_SOCKET</code> in
-                Ludock’s <code>.env</code> to the socket path on the Docker host.
+                In <code>compose.yaml</code>, change the socket mount’s <code>source</code>
+                {" "}to the socket path on the Docker host.
                 For rootless Docker, this is usually <code>/run/user/1000/docker.sock</code>;
                 replace <code>1000</code> with the Docker user’s ID.
               </p>

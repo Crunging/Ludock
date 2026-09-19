@@ -1,2 +1,6 @@
-FROM oven/bun:1-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+FROM oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f
+# The upstream image includes a node -> bun fallback alias.
+RUN apk upgrade --no-cache \
+    && rm /usr/local/bun-node-fallback-bin/node \
+    && bun -e 'if (["node", "npm", "npx"].some(command => Bun.which(command))) throw new Error("CI image must expose only Bun")'
 ENTRYPOINT ["/usr/local/bin/bun"]

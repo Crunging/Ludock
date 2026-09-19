@@ -2,7 +2,7 @@
 // Exercise the shipped API and embedded helper programs with disposable data.
 // Build ludock:test first. Run sequentially with the other Docker harnesses.
 import { expect } from "bun:test";
-import { DEFAULT_HELPER_IMAGE } from "../packages/backend/src/runtime-images.ts";
+import { hardenedContainerArguments } from "./test-container-options.mjs";
 
 const name = `ludock-packaged-${crypto.randomUUID()}`;
 const app = `${name}-app`;
@@ -70,21 +70,22 @@ async function operation(endpoint, body) {
 }
 
 try {
-  expect(docker("run", "--rm", "--network", "none", "--entrypoint", "/usr/local/bin/bun", DEFAULT_HELPER_IMAGE, "--version")).toBe(expectedBun);
+  expect(docker("run", "--rm", "--network", "none", "--entrypoint", "/usr/local/bin/bun", image, "--version")).toBe(expectedBun);
   for (const volume of volumes) {
     docker("volume", "create", volume);
     createdVolumes.push(volume);
   }
   docker("create", "--name", game, "--init", "--network", "none",
     "--label", "ludock.enable=true", "--label", `ludock.name=${game}`,
-    "-v", `${volumes[0]}:/data`, "--entrypoint", "/usr/local/bin/bun", DEFAULT_HELPER_IMAGE,
+    "-v", `${volumes[0]}:/data`, "--entrypoint", "/usr/local/bin/bun", image,
     "-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 3600000)");
   createdContainers.push(game);
   // Only the socket and a fresh backup volume are mounted. The image owns its
   // entry point, dependencies, helper source strings, and disposable /data.
   docker("create", "--name", app, "--label", "ludock.enable=false", "-p", "127.0.0.1::3000",
-    "-e", `LUDOCK_API_TOKEN=${token}`, "-e", `LUDOCK_SELF_CONTAINER=${app}`,
-    "-e", "LUDOCK_BACKUP_ROOTS=/backups", "-v", `${volumes[1]}:/backups`,
+    ...hardenedContainerArguments,
+    "-e", `LUDOCK_API_TOKEN=${token}`,
+    "-v", `${volumes[1]}:/backups`,
     "-v", "/var/run/docker.sock:/var/run/docker.sock", image);
   createdContainers.push(app);
   docker("start", app);
@@ -96,6 +97,7 @@ try {
     catch { await Bun.sleep(200); }
   }
   expect(ready, "Packaged API must become healthy").toBe(true);
+  expect((await json("/settings/deployment")).backupRoots).toEqual(["/backups"]);
   const server = (await json("/servers")).servers.find((entry) => entry.displayName === game);
   expect(server, "Discover only the unique game fixture").toBeTruthy();
   serverId = server.id;

@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { backendSourceMounts } from "./test-source-mounts.mjs";
+import { hardenedContainerArguments } from "./test-container-options.mjs";
 
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const folder = await realpath(
@@ -18,6 +19,7 @@ try {
     [
       "docker",
       "run", "--rm", "--name", name,
+      ...hardenedContainerArguments,
       "--label", "ludock.enable=false",
       "-e", "LUDOCK_DOCKER_TESTS=1",
       "-e", "LUDOCK_SELF_CONTAINER=" + name,

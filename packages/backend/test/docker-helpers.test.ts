@@ -15,7 +15,10 @@ describe("Docker helper lifetime", () => {
     const create = spyOn(docker, "createContainer").mockRejectedValueOnce(missing).mockResolvedValue(helper);
     const pull = spyOn(docker, "pull").mockResolvedValue(undefined);
     expect(await createHelperContainer(options)).toBe(helper);
-    expect(create.mock.calls).toEqual([[options], [options]]);
+    expect(create.mock.calls).toEqual([
+      [{ ...options, Healthcheck: { Test: ["NONE"] } }],
+      [{ ...options, Healthcheck: { Test: ["NONE"] } }],
+    ]);
     expect(pull).toHaveBeenCalledWith(options.Image);
   });
 
@@ -28,12 +31,19 @@ describe("Docker helper lifetime", () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it("does not interpret a missing local runtime ID as a registry image", async () => {
+    spyOn(docker, "createContainer").mockRejectedValue(missing);
+    const pull = spyOn(docker, "pull");
+    await expect(createHelperContainer({ Image: `sha256:${"b".repeat(64)}` })).rejects.toBe(missing);
+    expect(pull).not.toHaveBeenCalled();
+  });
+
   for (const initiallyMissing of [false, true]) {
     it(`finishes cleanup without stopping an already ${initiallyMissing ? "missing" : "removed"} helper`, async () => {
       const remove = mock(async () => { if (initiallyMissing) throw missing; });
       const stop = mock(async () => {});
       await removeHelperContainer({ remove, stop } as unknown as Docker.Container);
-      expect(remove).toHaveBeenCalledWith({ force: true });
+      expect(remove).toHaveBeenCalledWith({ force: true, v: true });
       expect(stop).not.toHaveBeenCalled();
     });
   }

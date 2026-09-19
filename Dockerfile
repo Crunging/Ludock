@@ -1,4 +1,4 @@
-ARG ALPINE_IMAGE=alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+ARG ALPINE_IMAGE=alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 ARG BUN_IMAGE=oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f
 
 # Build JavaScript artifacts on the native build platform.
@@ -46,6 +46,7 @@ COPY --from=build-frontend /app/packages/frontend/dist packages/frontend/dist/
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV LUDOCK_DB_PATH=/data/ludock.db
+ENV LUDOCK_BACKUP_ROOTS=/backups
 VOLUME ["/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

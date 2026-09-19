@@ -173,7 +173,7 @@ export class Container {
     await this.client.transport.empty(await this.client.path(`${this.endpoint}/restart`), "POST");
   }
 
-  async remove(options: { force?: boolean } = {}): Promise<void> {
+  async remove(options: { force?: boolean; v?: boolean } = {}): Promise<void> {
     await this.client.transport.empty(await this.client.path(query(this.endpoint, options)), "DELETE");
   }
 

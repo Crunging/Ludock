@@ -5,10 +5,11 @@ import { expect } from "bun:test";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { hardenedContainerArguments } from "./test-container-options.mjs";
 
 // The update API intentionally requires a pullable tag. Check its current
 // contents against the reviewed pin before creating any fixture services.
-const expectedFixtureImage = "alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b";
+const expectedFixtureImage = "alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6";
 const project = `ludock-compose-smoke-${crypto.randomUUID().slice(0, 8)}`;
 const root = await realpath(await mkdtemp(path.join(process.env.LUDOCK_TEST_DIRECTORY || tmpdir(), `${project}-`)));
 const app = `${project}-app`;
@@ -67,14 +68,34 @@ async function update(forceRecreate) {
 }
 
 try {
+  // The shipped deployment works without .env, but loads optional application
+  // settings without using them to interpolate the image or published port.
+  const deployment = path.join(root, "deployment");
+  await Bun.write(path.join(deployment, "compose.yaml"), await Bun.file(new URL("../compose.yaml", import.meta.url)).text());
+  const deploymentConfig = () => JSON.parse(docker("compose", "--project-directory", deployment,
+    "-f", path.join(deployment, "compose.yaml"), "config", "--format", "json")).services.ludock;
+  expect(deploymentConfig().image).toBe("ghcr.io/crunging/ludock:latest");
+  await Bun.write(path.join(deployment, ".env"), "MAX_UPLOAD_SIZE=500 MB\nLUDOCK_BACKUP_ROOTS=/custom-backups\n");
+  const configured = deploymentConfig();
+  expect(configured.environment.MAX_UPLOAD_SIZE).toBe("500 MB");
+  expect(configured.environment.LUDOCK_BACKUP_ROOTS).toBe("/custom-backups");
+  expect(configured.ports[0].published).toBe("3000");
+
   const [fixtureTag, expectedDigest] = expectedFixtureImage.split("@");
   docker("pull", fixtureTag);
   const fixture = JSON.parse(docker("image", "inspect", fixtureTag))[0];
   expect(fixture.RepoDigests.some((reference) => reference.endsWith(`@${expectedDigest}`)), "The fixture image tag changed; review and update its pin before running Compose acceptance").toBeTruthy();
+  // Private owner-managed .env files must remain readable inside Ludock. The
+  // host Compose CLI still owns/reads the file, including on non-root CI hosts.
+  docker("run", "--rm", "--network", "none", "-v", `${root}:/fixture`, fixtureTag,
+    "chown", String(process.getuid() || 65534), "/fixture/.env");
+  docker("run", "--rm", "--network", "none", "-v", `${root}:/fixture`, fixtureTag,
+    "chmod", "600", "/fixture/.env");
   cli("up", "-d");
   const before = cli("ps", "-q", "game");
   const dependency = cli("ps", "-q", "dependency");
   docker("run", "-d", "--name", app, "--label", "ludock.enable=false", "-p", "127.0.0.1::3000",
+    ...hardenedContainerArguments,
     "-e", `LUDOCK_API_TOKEN=${token}`, "-e", `LUDOCK_COMPOSE_ROOTS=${root}`,
     "-e", "UNRELATED_LUDOCK_SECRET=must-not-be-inherited",
     "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", `${root}:${root}:ro`,

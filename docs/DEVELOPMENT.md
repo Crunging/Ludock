@@ -35,6 +35,8 @@ Docker acceptance uses `ludock:test`. Run the
 [backup](../scripts/test-backups.mjs), [packaged](../scripts/test-packaged.mjs),
 and [Compose](../scripts/test-compose.mjs) harnesses sequentially against a
 dedicated daemon. Validate Linux AMD64 and ARM64 and report any emulation.
+The harnesses apply the example deployment's filesystem and capability
+restrictions, including to packaged file, backup, and Compose operations.
 For just the production startup check, run
 `bun scripts/test-linux.mjs --smoke-only`.
 
@@ -60,6 +62,11 @@ bun outdated --recursive
 bun audit
 ```
 
-Update `.bun-version` and Bun image pins in the Dockerfile, helper configuration,
-and local actions together. Keep [integration revisions](../scripts/ci/integration.mjs)
+Update `.bun-version` and Bun image pins in the Dockerfile and local actions
+together. File and backup helpers reuse the running production image automatically.
+Native runs use the reviewed `FALLBACK_HELPER_IMAGE` pin in
+`packages/backend/src/runtime-images.ts`; update it when the Bun minimum changes.
+Keep [integration revisions](../scripts/ci/integration.mjs)
 and [CI images](../scripts/ci/containers.mjs) pinned and validate both architectures.
+Image checks reject fixable medium, high, and critical vulnerabilities in
+the production runtime, fallback helper, and CI action runtime.

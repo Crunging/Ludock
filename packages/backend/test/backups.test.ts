@@ -186,6 +186,24 @@ describe("backup execution authority", () => {
     expect(running).toBe(true);
   });
 
+  it("recovers only this operation's helpers and removes their anonymous volumes", async () => {
+    const removed: Array<{ id: string; options: unknown }> = [];
+    docker.listContainers = (async () => [
+      { Id: "backup", Labels: { "ludock.internal": "backup-helper", "ludock.operation": job.job.id } },
+      { Id: "validator", Labels: { "ludock.internal": "mount-validator", "ludock.operation": job.job.id } },
+      { Id: "other-job", Labels: { "ludock.internal": "backup-helper", "ludock.operation": "other" } },
+      { Id: "game", Labels: { "ludock.enable": "true", "ludock.operation": job.job.id } },
+    ]) as unknown as typeof docker.listContainers;
+    docker.getContainer = ((id: string) => ({
+      remove: async (options: unknown) => { removed.push({ id, options }); },
+    })) as unknown as typeof docker.getContainer;
+    await recoverBackup(job);
+    expect(removed).toEqual([
+      { id: "backup", options: { force: true, v: true } },
+      { id: "validator", options: { force: true, v: true } },
+    ]);
+  });
+
   it("restores a stopped backup server during recovery even after its schedule is paused", async () => {
     const scheduleId = scheduledBackup();
     await stopForDataOperation(context, job);

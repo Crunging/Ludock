@@ -2,19 +2,25 @@ services:
   ludock:
     image: ghcr.io/crunging/ludock:latest
     ports:
-      - "${LUDOCK_PORT:-3000}:3000"
+      - "3000:3000"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
     volumes:
-      # Set LUDOCK_DOCKER_SOCKET in .env for a different host socket.
       # A missing socket must fail instead of creating an empty host directory.
       - type: bind
-        source: ${LUDOCK_DOCKER_SOCKET:-/var/run/docker.sock}
+        source: /var/run/docker.sock
         target: /var/run/docker.sock
         read_only: true
         bind:
           create_host_path: false
-      # Persistent application data.
       - ludock-data:/data
-      # Separate backup storage, suggested in Settings after first sign-in.
       - ludock-backups:/backups
       # To keep backups on another disk, replace the backup volume above with
       # a host-directory mount (create the directory first), for example:
@@ -25,8 +31,6 @@ services:
     env_file:
       - path: .env
         required: false
-    environment:
-      LUDOCK_BACKUP_ROOTS: "${LUDOCK_BACKUP_ROOTS-/backups}"
     restart: unless-stopped
 
 volumes:
