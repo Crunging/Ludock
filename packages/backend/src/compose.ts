@@ -25,7 +25,7 @@ import { isServerBusy } from "./operation-locks.js";
 import { COMPOSE_SOURCE_LABEL, discoverComposeSource } from "./compose-source.js";
 
 type Model = Record<string, unknown>;
-export interface ComposeSnapshot {
+interface ComposeSnapshot {
   directory: string;
   configPath: string;
   model: Model;

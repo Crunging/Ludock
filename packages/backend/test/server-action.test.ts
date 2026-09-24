@@ -8,7 +8,7 @@ import {
   deleteUserSessions,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { docker } from "../src/docker-client.js";
 import { changeContainerState } from "../src/docker.js";
 import { AppError } from "../src/errors.js";

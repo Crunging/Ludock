@@ -12,11 +12,10 @@ const {
   authenticateWsRequest,
   createInitialAdmin,
   createSession,
-  hashPassword,
   isSetupRequired,
   ludockApiToken,
-  verifyPassword,
 } = await import("../src/auth.js");
+const { hashPassword, verifyPassword } = await import("../src/password.js");
 const { createSessionRecord, findSessionUser } = await import("../src/database.js");
 const setupCode = "fixture-setup-code-0123456789abcdef";
 

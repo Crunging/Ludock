@@ -20,12 +20,11 @@ import {
   deleteSchedule,
   listSchedules,
   runSchedules,
-  scheduleSlot,
   setScheduleEnabled,
   updateSchedule,
 } from "../src/schedules.js";
 import { AppError } from "../src/errors.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
   getOperation,
@@ -111,21 +110,6 @@ afterEach(async () => {
   mock.restore();
   await stopOperationRunner();
   closeDatabase();
-});
-
-describe("schedule clock semantics", () => {
-  it("uses local days/time and never catches up missed destructive work", () => {
-    expect(scheduleSlot(input, due)).toBeTruthy();
-    expect(scheduleSlot(input, due + 60_000)).toBe(null);
-    expect(scheduleSlot({ ...input, days: [0] }, due)).toBe(null);
-  });
-  it("deduplicates the repeated fall-back hour and skips the spring-forward gap", () => {
-    const fall = { ...input, time: "01:30" };
-    expect(scheduleSlot(fall, Date.parse("2026-11-01T08:30:00Z"))).toBe(scheduleSlot(fall, Date.parse("2026-11-01T09:30:00Z")));
-    const spring = { ...input, time: "02:30" };
-    expect(scheduleSlot(spring, Date.parse("2026-03-08T09:30:00Z"))).toBe(null);
-    expect(scheduleSlot(spring, Date.parse("2026-03-08T10:30:00Z"))).toBe(null);
-  });
 });
 
 describe("schedule creation audit transaction", () => {

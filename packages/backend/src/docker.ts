@@ -53,7 +53,7 @@ export interface ManagedContainer {
   labels: Record<string, string>;
 }
 
-export interface DiscoveryDiagnostic {
+interface DiscoveryDiagnostic {
   containerId: string;
   name: string;
   code: "INVALID_ENABLE_LABEL" | "INVALID_COMPOSE_IDENTITY";

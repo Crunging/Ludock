@@ -20,7 +20,7 @@ const [
   import("../src/database.js"),
   import("../src/identity.js"),
   import("../src/servers.js"),
-  import("../src/authorization.js"),
+  import("./fixtures/grants.js"),
 ]);
 
 const originalGetContainer = docker.getContainer.bind(docker);

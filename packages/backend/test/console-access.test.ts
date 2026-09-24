@@ -12,7 +12,8 @@ import {
   type SessionUser,
 } from "../src/database.js";
 import { listLogicalServers } from "../src/identity.js";
-import { setServerGrant, setUserServerGrants } from "../src/authorization.js";
+import { setUserServerGrants } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { refreshServers } from "../src/servers.js";
 import { acquireLocks } from "../src/operation-locks.js";
 import {

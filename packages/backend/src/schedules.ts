@@ -30,7 +30,6 @@ import { createLogger } from "./logger.js";
 import type { ServerCapability } from "@ludock/shared";
 
 const logger = createLogger("schedules");
-export { scheduleSlot } from "@ludock/shared";
 
 interface ScheduleRow {
   id: string;

@@ -13,9 +13,9 @@ import {
   getEffectiveCapabilities,
   hasServerCapability,
   listUserServerGrants,
-  setServerGrant,
   setUserServerGrants,
 } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   reconcileServers,
   reviewServerBinding,

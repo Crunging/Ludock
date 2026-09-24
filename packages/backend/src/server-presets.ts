@@ -8,7 +8,7 @@ interface GameConsolePreset {
   passwordEnvCandidates?: readonly string[];
 }
 
-export interface GameIntegration {
+interface GameIntegration {
   gameType: string;
   repositories: readonly string[];
   aliases?: readonly string[];

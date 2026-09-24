@@ -16,7 +16,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let streamGeneration = 0;
 const logger = createLogger("events");
 
-export interface DockerEvent {
+interface DockerEvent {
   Action?: string;
   Actor?: { ID?: string };
   id?: string;

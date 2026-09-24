@@ -7,8 +7,12 @@ import {
 } from "./database.js";
 import { getLogicalServer, type LogicalServer } from "./identity.js";
 import { AppError } from "./errors.js";
-import { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
-export { SERVER_CAPABILITIES, type ServerCapability } from "@ludock/shared";
+import {
+  SERVER_CAPABILITIES,
+  type ServerCapability,
+  type ServerGrant,
+  type ServerGrantInput,
+} from "@ludock/shared";
 
 const READ_CAPABILITIES = new Set<ServerCapability>([
   "server.view",
@@ -26,27 +30,6 @@ const OPERATOR_CAPABILITIES = new Set<ServerCapability>([
   "schedules.manage",
 ]);
 
-export interface ServerGrant {
-  serverId: string;
-  capabilities: ServerCapability[];
-  updatedAt: number;
-}
-
-export interface ServerGrantInput {
-  serverId: string;
-  capabilities: readonly string[];
-}
-
-export class AuthorizationError extends AppError {
-  constructor(
-    code: string,
-    message: string,
-    statusCode = 403,
-  ) {
-    super(code, statusCode, message);
-  }
-}
-
 /** Resolve current account state for requests, streams, jobs, and schedules.
  * A role carried in a queued payload is never an authorization authority. */
 export function currentActor(
@@ -63,10 +46,7 @@ export function currentActor(
 export function assertAdministrator(actor: SessionUser): SessionUser {
   const current = currentActor(actor);
   if (!current || current.role !== "admin") {
-    throw new AuthorizationError(
-      "FORBIDDEN",
-      "Administrator permission required",
-    );
+    throw new AppError("FORBIDDEN", 403, "Administrator permission required");
   }
   return current;
 }
@@ -175,14 +155,11 @@ export function assertServerCapability(
     auditDenial(actor, serverId, capability);
     // The same response covers a nonexistent server, suspended identity, and an
     // unassigned server, without disclosing another user's resource identifiers.
-    throw new AuthorizationError("SERVER_NOT_FOUND", "Server not found", 404);
+    throw new AppError("SERVER_NOT_FOUND", 404, "Server not found");
   }
   if (!capabilities.includes(capability)) {
     auditDenial(actor, serverId, capability);
-    throw new AuthorizationError(
-      "FORBIDDEN",
-      "Insufficient server permissions",
-    );
+    throw new AppError("FORBIDDEN", 403, "Insufficient server permissions");
   }
   return getLogicalServer(serverId)!;
 }
@@ -208,35 +185,23 @@ function validateGrant(
   input: ServerGrantInput,
 ): ServerCapability[] {
   if (!getLogicalServer(input.serverId)) {
-    throw new AuthorizationError("SERVER_NOT_FOUND", "Server not found", 404);
+    throw new AppError("SERVER_NOT_FOUND", 404, "Server not found");
   }
   const ceiling = new Set<string>(roleCapabilities(role));
   if (input.capabilities.some((capability) => !ceiling.has(capability))) {
-    throw new AuthorizationError(
-      "INVALID_GRANT",
-      "A capability exceeds this user's role",
-      400,
-    );
+    throw new AppError("INVALID_GRANT", 400, "A capability exceeds this user's role");
   }
   const capabilities = SERVER_CAPABILITIES.filter((capability) =>
     input.capabilities.includes(capability),
   );
   if (capabilities.length > 0 && !capabilities.includes("server.view")) {
-    throw new AuthorizationError(
-      "INVALID_GRANT",
-      "Server access is required for every server capability",
-      400,
-    );
+    throw new AppError("INVALID_GRANT", 400, "Server access is required for every server capability");
   }
   if (
     capabilities.includes("files.write") &&
     !capabilities.includes("files.read")
   ) {
-    throw new AuthorizationError(
-      "INVALID_GRANT",
-      "File writing also requires file reading",
-      400,
-    );
+    throw new AppError("INVALID_GRANT", 400, "File writing also requires file reading");
   }
   return capabilities;
 }
@@ -251,20 +216,12 @@ export function setUserServerGrants(
   const administrator = assertAdministrator(actor);
   const user = findUserById(userId);
   if (!user)
-    throw new AuthorizationError("USER_NOT_FOUND", "User not found", 404);
+    throw new AppError("USER_NOT_FOUND", 404, "User not found");
   if (user.role === "admin") {
-    throw new AuthorizationError(
-      "INVALID_GRANT",
-      "Administrators already have access to all eligible servers",
-      400,
-    );
+    throw new AppError("INVALID_GRANT", 400, "Administrators already have access to all eligible servers");
   }
   if (new Set(inputs.map((input) => input.serverId)).size !== inputs.length) {
-    throw new AuthorizationError(
-      "INVALID_GRANT",
-      "Duplicate server assignment",
-      400,
-    );
+    throw new AppError("INVALID_GRANT", 400, "Duplicate server assignment");
   }
   const validated = inputs.map((input) => ({
     ...input,
@@ -304,20 +261,4 @@ export function setUserServerGrants(
     throw error;
   }
   return listUserServerGrants(userId);
-}
-
-export function setServerGrant(
-  userId: string,
-  serverId: string,
-  capabilities: readonly string[],
-  actor: SessionUser,
-): ServerGrant[] {
-  const current = listUserServerGrants(userId).filter(
-    (grant) => grant.serverId !== serverId,
-  );
-  return setUserServerGrants(
-    userId,
-    [...current, { serverId, capabilities }],
-    actor,
-  );
 }

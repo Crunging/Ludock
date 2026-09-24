@@ -1,6 +1,7 @@
 import { encodeText, concatBytes, byteView } from "./bytes.js";
 import { demuxDockerStream } from "./docker-stream.js";
 import type * as Docker from "./docker-client.js";
+import type { DockerConnection } from "./docker-transport.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
   LABEL_CONSOLE_PORT,
@@ -789,7 +790,7 @@ async function writeContainerStdin(
   output.system("Command sent to the server process");
 }
 
-async function writeAttachedInput(stream: Docker.DockerConnection, data: string): Promise<void> {
+async function writeAttachedInput(stream: DockerConnection, data: string): Promise<void> {
   const writer = stream.writable.getWriter();
   try { await writer.write(new TextEncoder().encode(data)); }
   finally { writer.releaseLock(); }

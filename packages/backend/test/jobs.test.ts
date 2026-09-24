@@ -7,7 +7,7 @@ import {
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   createSchedule,
   deleteSchedule,

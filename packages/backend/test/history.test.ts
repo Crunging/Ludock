@@ -6,7 +6,7 @@ import {
 } from "@ludock/shared";
 import { createApp } from "../src/app.js";
 import { createSession } from "../src/auth.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { closeDatabase, createUser, deleteUser, getDatabase, updateUserAccess, type SessionUser } from "../src/database.js";
 import { listAuditHistory, listOperationHistory } from "../src/history.js";
 import { reconcileServers } from "../src/identity.js";

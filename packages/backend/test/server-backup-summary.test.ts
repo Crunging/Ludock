@@ -1,7 +1,7 @@
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import type { DockerContainerId } from "@ludock/shared";
 import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import * as docker from "../src/docker.js";
 import { getServer, listServers } from "../src/servers.js";
 

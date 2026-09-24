@@ -19,9 +19,8 @@ import {
 import { listApplicationLogs } from "../application-logs.js";
 import {
   AuthError, assertRequestUser, authenticateUser, clearSessionCookie, createInitialAdmin,
-  createSession, deleteRequestSession, getRequestSession, hashPassword, isSetupRequired,
+  createSession, deleteRequestSession, getRequestSession, isSetupRequired,
   setSessionCookie,
-  verifyPassword,
   type SetupWindow,
 } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
@@ -38,6 +37,8 @@ import { AppError } from "../errors.js";
 import { listAuditHistory } from "../history.js";
 import {
   PasswordWorkBusyError,
+  hashPassword,
+  verifyPassword,
   withPasswordWork,
 } from "../password.js";
 import { administrator, requestUser, respond, type ApiRoutes } from "./request.js";

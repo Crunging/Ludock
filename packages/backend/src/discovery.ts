@@ -3,9 +3,9 @@ import { inferGameType } from "./server-presets.js";
 export const LABEL_ENABLE = "ludock.enable";
 export const LABEL_NAME = "ludock.name";
 export const LABEL_GAME = "ludock.game";
-export const LABEL_COMPOSE_ONEOFF = "com.docker.compose.oneoff";
+const LABEL_COMPOSE_ONEOFF = "com.docker.compose.oneoff";
 
-export type EligibilityReason =
+type EligibilityReason =
   | "invalid-enable-label"
   | "opted-out"
   | "explicitly-enabled"
@@ -13,7 +13,7 @@ export type EligibilityReason =
   | "recognized-image"
   | "unrecognized-image";
 
-export interface ContainerEligibility {
+interface ContainerEligibility {
   eligible: boolean;
   reason: EligibilityReason;
   recognizedGameType: string;

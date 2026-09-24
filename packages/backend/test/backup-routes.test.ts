@@ -4,11 +4,11 @@ import type { ServerObservation } from "../src/identity.js";
 import type { RequestContext } from "../src/routes/request.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const [database, identity, authorization, servers, backups, docker, auth, { backupsRoutes }] =
+const [database, identity, { setServerGrant }, servers, backups, docker, auth, { backupsRoutes }] =
   await Promise.all([
     import("../src/database.js"),
     import("../src/identity.js"),
-    import("../src/authorization.js"),
+    import("./fixtures/grants.js"),
     import("../src/servers.js"),
     import("../src/backups.js"),
     import("../src/docker.js"),
@@ -69,13 +69,13 @@ beforeEach(() => {
     });
   }
   serverId = identity.reconcileServers([observation])[0].id;
-  authorization.setServerGrant(
+  setServerGrant(
     operator.id,
     serverId,
     ["server.view", "backups.create"],
     admin,
   );
-  authorization.setServerGrant(viewer.id, serverId, ["server.view"], admin);
+  setServerGrant(viewer.id, serverId, ["server.view"], admin);
   backupId = crypto.randomUUID();
   database.getDatabase().prepare(
     `INSERT INTO backups
@@ -151,7 +151,7 @@ describe("backup preflight routes", () => {
   });
 
   it("denies viewers and lifecycle-only operators before inspecting backup readiness", async () => {
-    authorization.setServerGrant(operator.id, serverId, ["server.view", "server.start", "server.stop"], admin);
+    setServerGrant(operator.id, serverId, ["server.view", "server.start", "server.stop"], admin);
     const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
     for (const user of [viewer, operator]) {
@@ -214,7 +214,7 @@ describe("backup preflight routes", () => {
       spyOn(backups, "getBackupPreflight").mockImplementation(async () => {
         if (change === "revoke-session") auth.deleteRequestSession(ctx.request);
         else if (change === "remove-grant")
-          authorization.setServerGrant(operator.id, serverId, ["server.view"], admin);
+          setServerGrant(operator.id, serverId, ["server.view"], admin);
         else database.getDatabase().prepare("UPDATE users SET role='viewer' WHERE id=?").run(operator.id);
         return preflight;
       });

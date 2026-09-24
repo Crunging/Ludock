@@ -2,10 +2,10 @@ import {
   recordApplicationLog,
 } from "./application-logs.js";
 
-export const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
+const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
 
-export type LogLevel = (typeof LOG_LEVELS)[number];
-export type LogContext = Record<
+type LogLevel = (typeof LOG_LEVELS)[number];
+type LogContext = Record<
   string,
   string | number | boolean | null | undefined
 >;
@@ -17,7 +17,7 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
   debug: 3,
 };
 
-export interface LogLevelConfiguration {
+interface LogLevelConfiguration {
   level: LogLevel;
   invalidValue?: string;
 }

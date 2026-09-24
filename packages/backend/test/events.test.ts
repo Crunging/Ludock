@@ -14,7 +14,7 @@ import {
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 

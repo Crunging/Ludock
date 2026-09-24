@@ -121,7 +121,7 @@ export async function recoverUpdate(context: JobContext): Promise<void> {
   if (typeof context.job.recovery.initialRunning !== "boolean") return;
   await recoverBackup(context);
 }
-export async function runUpdate(
+async function runUpdate(
   context: JobContext,
 ): Promise<Record<string, unknown>> {
   const request = updateRequestSchema.parse(context.job.input.request);

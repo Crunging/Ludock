@@ -413,7 +413,7 @@ function assertDataOperationAuthority(
   );
 }
 
-export async function assertDataOperationStopped(
+async function assertDataOperationStopped(
   context: ServerContext,
   job: JobContext,
 ): Promise<void> {

@@ -1,6 +1,7 @@
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
-import { hasServerCapability, type ServerCapability } from "./authorization.js";
+import type { ServerCapability } from "@ludock/shared";
+import { hasServerCapability } from "./authorization.js";
 import { getLogicalServer } from "./identity.js";
 import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
 

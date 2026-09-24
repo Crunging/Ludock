@@ -20,7 +20,7 @@ import {
   observationSecrets,
 } from "./console-redaction.js";
 
-export type ConsoleMode = "game" | "shell";
+type ConsoleMode = "game" | "shell";
 const logger = createLogger("console");
 const MAX_PENDING_MESSAGES = 10;
 

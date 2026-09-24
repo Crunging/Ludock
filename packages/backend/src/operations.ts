@@ -28,7 +28,7 @@ export interface JobContext {
   job: Job;
   progress: (phase: string, recovery?: Record<string, unknown>) => void;
 }
-export interface JobHandler {
+interface JobHandler {
   run: (context: JobContext) => Promise<Record<string, unknown> | void>;
   recover?: (context: JobContext) => Promise<void>;
 }
