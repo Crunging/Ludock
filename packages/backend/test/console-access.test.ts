@@ -2,7 +2,7 @@ import { fixtureBytes } from "./fixtures/bytes.js";
 import { SocketFixture } from "./fixtures/socket-channel.js";
 import { StreamFixture } from "./fixtures/web-streams.js";
 import { expect, afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { handleConsoleConnection } from "../src/console.js";
 import { handleContainerLogsConnection } from "../src/container-logs.js";
 import {
@@ -12,16 +12,17 @@ import {
   type SessionUser,
 } from "../src/database.js";
 import { listLogicalServers } from "../src/identity.js";
-import { setServerGrant, setUserServerGrants } from "../src/authorization.js";
+import { setUserServerGrants } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { refreshServers } from "../src/servers.js";
 import { acquireLocks } from "../src/operation-locks.js";
 import {
   ConsoleOutputRedactor,
   observationSecrets,
 } from "../src/console-redaction.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originalGetContainer = docker.getContainer.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const administrator: SessionUser = {
@@ -438,7 +439,7 @@ describe("console credential redaction", () => {
     redactor.end();
     expect(values.join("")).toBe("prefix [redacted] suffix");
     const secrets = observationSecrets({
-      containerId: "id",
+      containerId: dockerId("id"),
       name: "game",
       displayName: "game",
       gameType: "unknown",

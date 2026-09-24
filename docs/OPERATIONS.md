@@ -36,9 +36,9 @@ images are included, and other images are excluded. A game label alone does
 not make an unknown image eligible.
 
 Recognition strips tags, digests, and registry prefixes and matches repository
-suffixes, so private mirrors can work. This selects capabilities; it does not
-verify image provenance or a game release's compatibility. **Diagnostics →
-Game capabilities** shows current prerequisites and validation evidence from
+suffixes, so private mirrors can work. This selects a console adapter; it does
+not verify image provenance or a game release's compatibility. **Diagnostics →
+Supported games** lists the registry in
 [`server-presets.ts`](../packages/backend/src/server-presets.ts).
 
 | Game | Recognized repository suffixes | Console | Default port |
@@ -350,5 +350,5 @@ Audit also accepts `operationId`. Pass `nextCursor` with unchanged filters until
 it is null. Every page and operation detail rechecks current access.
 
 `GET /attention` returns authorized summaries and `discoveryUnavailable` when
-current Docker state cannot be checked. `GET /integrations` supplies the capability
-registry shown in Diagnostics.
+current Docker state cannot be checked. `GET /integrations` lists the supported
+games shown in Diagnostics.

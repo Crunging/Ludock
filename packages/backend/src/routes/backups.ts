@@ -2,7 +2,8 @@ import { backupPreflightResponseSchema, backupSettingsResponseSchema, backupSett
 import { managedReadable } from "../managed-readable.js";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
-import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
+import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload } from "../backups.js";
+import { validateBackupSettings } from "../backup-storage.js";
 import { AppError } from "../errors.js";
 import { enqueueOperation } from "../operations.js";
 import { refreshServers, resolveAuthorizedServer } from "../servers.js";
@@ -26,7 +27,7 @@ export const backupsRoutes: ApiRoutes = {
       await validateBackupSettings(settings);
       assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       setSetting("backups", settings);
-      audit(requestUser(ctx), "settings.backups.updated");
+      audit(ctx, "settings.backups.updated");
       return respond(backupSettingsResponseSchema, { settings });
     })
   },
@@ -82,7 +83,7 @@ export const backupsRoutes: ApiRoutes = {
       }
       ctx.headers.set("Content-Type", "application/x-tar");
       ctx.headers.set("Content-Disposition", `attachment; filename="ludock-${backupId}.tar"`);
-      audit(requestUser(ctx), "backup.downloaded", serverId, { backupId });
+      audit(ctx, "backup.downloaded", serverId, { backupId });
       const user = requestUser(ctx);
       const revoked = new AbortController();
       const signal = AbortSignal.any([ctx.request.signal, revoked.signal]);
@@ -105,7 +106,7 @@ export const backupsRoutes: ApiRoutes = {
       await deleteBackup(serverId, id(ctx.params.backupId), () => {
         assertServerCapability(assertRequestUser(ctx.request, requestUser(ctx)), serverId, "backups.delete");
       });
-      audit(requestUser(ctx), "backup.deleted", serverId, {
+      audit(ctx, "backup.deleted", serverId, {
         backupId: ctx.params.backupId,
       });
       return respond(okResponseSchema, { ok: true });

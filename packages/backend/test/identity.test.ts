@@ -15,6 +15,8 @@ import {
   reviewServerBinding,
   type ServerObservation,
 } from "../src/identity.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 const identityDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "ludock-identity-"));
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -31,7 +33,7 @@ function observation(
   overrides: Partial<ServerObservation> = {},
 ): ServerObservation {
   return {
-    containerId: "docker-a",
+    containerId: dockerId("docker-a"),
     name: "minecraft-1",
     displayName: "Minecraft",
     gameType: "minecraft",
@@ -67,18 +69,18 @@ describe("logical server identities", () => {
   it("reattaches ordinary recreations to the same UUID and revises observed-container attribution", () => {
     const original = reconcileServers([observation()], { now: 100 })[0];
     const recreated = reconcileServers(
-      [observation({ containerId: "docker-b" })],
+      [observation({ containerId: dockerId("docker-b") })],
       { now: 200 },
     )[0];
     expect(recreated.id).toBe(original.id);
     expect(recreated.status).toBe("active");
     expect(recreated.bindingRevision).toBe(original.bindingRevision + 1);
-    expect(recreated.containerId).toBe("docker-b");
+    expect<string | null>(recreated.containerId).toBe("docker-b");
     expect(recreated.firstSeenAt).toBe(100);
     expect(recreated.lastSeenAt).toBe(200);
     expect(() => resolveServerBinding(recreated.id, original.bindingRevision)).toThrow(/binding changed/);
     expect(getDatabase()
-        .prepare("SELECT container_id FROM server_bindings ORDER BY id")
+        .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT container_id FROM server_bindings ORDER BY id")
         .all()
         .map((row) => row.container_id)).toStrictEqual(["docker-a", "docker-b"]);
   });
@@ -93,7 +95,7 @@ describe("logical server identities", () => {
     const recreated = reconcileServers([
       observation({
         compose,
-        containerId: "replacement",
+        containerId: dockerId("replacement"),
         name: "renamed-by-compose",
       }),
     ])[0];
@@ -130,14 +132,14 @@ describe("logical server identities", () => {
     const original = reconcileServers([observation({ compose })])[0];
     const duplicate = reconcileServers([
       observation({ compose }),
-      observation({ compose, containerId: "docker-b", name: "duplicate" }),
+      observation({ compose, containerId: dockerId("docker-b"), name: "duplicate" }),
     ])[0];
     expect(duplicate.id).toBe(original.id);
     expect(duplicate.status).toBe("ambiguous");
     expect(duplicate.containerId).toBe(null);
     expect(() => resolveServerBinding(duplicate.id)).toThrow(/binding is unavailable/);
     expect(getDatabase()
-        .prepare("SELECT COUNT(*) AS count FROM server_bindings")
+        .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM server_bindings")
         .get()?.count).toBe(1);
     const recovered = reconcileServers([observation({ compose })])[0];
     expect(recovered.id).toBe(original.id);
@@ -199,7 +201,7 @@ describe("logical server identities", () => {
     expect(() =>
         assertObservedServerBinding(
           server.id,
-          observation({ containerId: "external-new" }),
+          observation({ containerId: dockerId("external-new") }),
         )).toThrow(/identity changed/);
     expect(() =>
         assertObservedServerBinding(
@@ -229,7 +231,7 @@ describe("logical server identities", () => {
     };
     expect(bindingFingerprint(first)).toBe(bindingFingerprint(second));
     reconcileServers([first]);
-    const rows = getDatabase().prepare("SELECT * FROM logical_servers").all();
+    const rows = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM logical_servers").all();
     expect(JSON.stringify(rows).includes("never-store-me")).toBe(false);
     expect(JSON.stringify(rows).includes("/srv/minecraft")).toBe(false);
   });

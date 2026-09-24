@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { expect, describe, it } from "bun:test";
-import { RESTORE_EXTRACT_SCRIPT } from "../src/restore-extract-script.js";
+import { RESTORE_EXTRACT_SCRIPT } from "../src/helper-scripts.js";
 import { type RestoreFixture, withRestoreFixture } from "./restore-test-fixture.js";
 
 const stage = ".ludock-restore-11111111-1111-4111-8111-111111111111";

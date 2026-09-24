@@ -16,11 +16,11 @@ import path from "node:path";
 import type * as Docker from "./docker-client.js";
 import { walkTar, encodeTarHeader, tarPadding, tarEnd, type TarHeader } from "./tar.js";
 import { backupSettingsSchema, type BackupSettings } from "@ludock/shared";
-import { getDockerInstance } from "./docker.js";
+import { docker } from "./docker-client.js";
 import type { ServerContext } from "./servers.js";
 import { AppError } from "./errors.js";
-import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
-import { RESTORE_EXTRACT_SCRIPT } from "./restore-extract-script.js";
+import { rootList } from "./approved-paths.js";
+import { FILE_HELPER_SCRIPT, RESTORE_EXTRACT_SCRIPT } from "./helper-scripts.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
 import { resolveHelperImage } from "./runtime-images.js";
@@ -62,7 +62,7 @@ export async function validateBackupSettings(
       "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.",
     );
   try {
-    const self = await getDockerInstance().getContainer(selfId).inspect();
+    const self = await docker.getContainer(selfId).inspect();
     const mount = (self.Mounts || [])
       .filter(
         (entry) =>
@@ -107,10 +107,7 @@ async function resolveBackupDirectory(directory: string): Promise<string> {
       "BACKUP_DESTINATION",
       "Choose an absolute mounted backup destination inside LUDOCK_BACKUP_ROOTS.",
     );
-  const configured = (process.env.LUDOCK_BACKUP_ROOTS || "")
-    .split(path.delimiter)
-    .map((root) => root.trim())
-    .filter(Boolean);
+  const configured = rootList(process.env.LUDOCK_BACKUP_ROOTS);
   if (configured.length === 0)
     throw failBackup(
       "BACKUP_DESTINATION",
@@ -899,4 +896,3 @@ export async function removeArchive(
   }
 }
 
-export const newBackupId = () => crypto.randomUUID();

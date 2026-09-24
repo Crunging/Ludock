@@ -9,21 +9,20 @@ process.env.LUDOCK_DB_PATH = ":memory:";
 
 const [
   { DockerLogDecoder, handleContainerLogsConnection },
-  { getDockerInstance },
+  { docker },
   { closeDatabase, createUser },
   { listLogicalServers },
   { refreshServers },
   { setServerGrant },
 ] = await Promise.all([
   import("../src/container-logs.js"),
-  import("../src/docker.js"),
+  import("../src/docker-client.js"),
   import("../src/database.js"),
   import("../src/identity.js"),
   import("../src/servers.js"),
-  import("../src/authorization.js"),
+  import("./fixtures/grants.js"),
 ]);
 
-const docker = getDockerInstance();
 const originalGetContainer = docker.getContainer.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const administrator = {
@@ -198,7 +197,7 @@ describe("Docker log WebSocket", () => {
       viewerAuth(),
     );
 
-    expect(logOptions).toStrictEqual({
+    expect<unknown>(logOptions).toStrictEqual({
       follow: true,
       stdout: true,
       stderr: true,

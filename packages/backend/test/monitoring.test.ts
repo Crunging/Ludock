@@ -1,6 +1,6 @@
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 import {
@@ -13,9 +13,9 @@ import {
 import { configureNotifications } from "../src/notifications.js";
 import { enqueueOperation, stopOperationRunner } from "../src/operations.js";
 import { acquireLocks } from "../src/operation-locks.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originals = {
   listContainers: docker.listContainers,
   getContainer: docker.getContainer,
@@ -26,7 +26,7 @@ let serverId: string,
   unavailable: boolean;
 function deliveries() {
   return getDatabase()
-    .prepare("SELECT * FROM notification_deliveries ORDER BY created_at")
+    .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM notification_deliveries ORDER BY created_at")
     .all();
 }
 beforeEach(async () => {

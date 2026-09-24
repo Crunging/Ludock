@@ -1,30 +1,13 @@
-import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic, type GameCapability, type GameIntegration, } from "@ludock/shared";
-import path from "node:path";
-import { assertRequestUser, } from "../auth.js";
+import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic } from "@ludock/shared";
+import { rootList } from "../approved-paths.js";
+import { assertRequestUser } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
 import { isComposeAvailable } from "../compose.js";
 import { getDiscoveryDiagnostics } from "../docker.js";
 import { configureNotifications, listNotificationDeliveries, notificationConfiguration, queueTestNotification, retryNotificationDelivery, } from "../notifications.js";
-import { getGameCapabilityMatrix, type GameCapability as RegistryCapability, } from "../server-presets.js";
+import { resolveGameConsoleAdapter } from "../game-console.js";
+import { GAME_INTEGRATIONS } from "../server-presets.js";
 import { administrator, audit, id, requestUser, respond, type ApiRoutes } from "./request.js";
-function publicCapability(capability: RegistryCapability): GameCapability {
-  return { ...capability, evidence: [...capability.evidence] };
-}
-function publicIntegration(integration: ReturnType<typeof getGameCapabilityMatrix>[number]): GameIntegration {
-  const { capabilities } = integration;
-  return {
-    gameType: integration.gameType,
-    repositories: [...integration.repositories],
-    capabilities: {
-      recognition: publicCapability(capabilities.recognition),
-      platforms: publicCapability(capabilities.platforms),
-      console: publicCapability(capabilities.console),
-      backup: publicCapability(capabilities.backup),
-      readiness: publicCapability(capabilities.readiness),
-      update: publicCapability(capabilities.update),
-    },
-  };
-}
 
 export const settingsRoutes: ApiRoutes = {
   "/api/v1/settings/deployment": {
@@ -32,10 +15,8 @@ export const settingsRoutes: ApiRoutes = {
       const composeAvailable = await isComposeAvailable();
       assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       return respond(deploymentSettingsResponseSchema, {
-        backupRoots: [...new Set((process.env.LUDOCK_BACKUP_ROOTS || "")
-          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
-        composeRoots: [...new Set((process.env.LUDOCK_COMPOSE_ROOTS || "")
-          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
+        backupRoots: rootList(process.env.LUDOCK_BACKUP_ROOTS),
+        composeRoots: rootList(process.env.LUDOCK_COMPOSE_ROOTS),
         composeAvailable,
       });
     })
@@ -45,7 +26,7 @@ export const settingsRoutes: ApiRoutes = {
     PUT: administrator((ctx) => {
       const input = notificationSettingsRequestSchema.parse(ctx.body);
       configureNotifications(input.enabled, input.webhookUrl);
-      audit(requestUser(ctx), "notifications.configured");
+      audit(ctx, "notifications.configured");
       return respond(notificationSettingsResponseSchema, notificationConfiguration());
     })
   },
@@ -57,14 +38,14 @@ export const settingsRoutes: ApiRoutes = {
   "/api/v1/notifications/test": {
     POST: administrator((ctx) => {
       const delivery = queueTestNotification();
-      audit(requestUser(ctx), "notifications.test_queued", undefined, { deliveryId: delivery.id });
+      audit(ctx, "notifications.test_queued", undefined, { deliveryId: delivery.id });
       return respond(notificationDeliveryResponseSchema, { delivery }, 202);
     }),
   },
   "/api/v1/notifications/deliveries/:id/retry": {
     POST: administrator((ctx) => {
       const delivery = retryNotificationDelivery(id(ctx.params.id));
-      audit(requestUser(ctx), "notifications.retry_queued", undefined, { deliveryId: delivery.id });
+      audit(ctx, "notifications.retry_queued", undefined, { deliveryId: delivery.id });
       return respond(notificationDeliveryResponseSchema, { delivery }, 202);
     }),
   },
@@ -89,7 +70,11 @@ export const settingsRoutes: ApiRoutes = {
   },
   "/api/v1/integrations": {
     GET: administrator(() => respond(integrationsResponseSchema, {
-      integrations: getGameCapabilityMatrix().map(publicIntegration),
+      integrations: GAME_INTEGRATIONS.map(({ gameType, repositories }) => ({
+        gameType,
+        repositories: [...repositories],
+        console: resolveGameConsoleAdapter({ gameType, labels: {} })?.name ?? null,
+      })),
     }))
   }
 };

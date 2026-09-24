@@ -2,13 +2,13 @@ import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { mountsOverlap, recoverBackup, recoverRestore, stopForDataOperation } from "../src/backups.js";
 import type { ServerObservation } from "../src/identity.js";
 import { listLogicalServers } from "../src/identity.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   closeDatabase,
   createUser,
   updateUserAccess,
 } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import type { JobContext } from "../src/operations.js";
 import { createSchedule, setScheduleEnabled } from "../src/schedules.js";
 import {
@@ -55,7 +55,6 @@ describe("backup execution authority", () => {
   const operator = {
     id: "operator", username: "operator", role: "operator" as const,
   };
-  const docker = getDockerInstance();
   const originalList = docker.listContainers;
   const originalGet = docker.getContainer;
   let context: ServerContext;

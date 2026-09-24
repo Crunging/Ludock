@@ -12,16 +12,15 @@ const {
   authenticateWsRequest,
   createInitialAdmin,
   createSession,
-  hashPassword,
   isSetupRequired,
   ludockApiToken,
-  verifyPassword,
 } = await import("../src/auth.js");
+const { hashPassword, verifyPassword } = await import("../src/password.js");
 const { createSessionRecord, findSessionUser } = await import("../src/database.js");
 const setupCode = "fixture-setup-code-0123456789abcdef";
 
 function websocketRequest(
-  headers: HeadersInit,
+  headers: Record<string, string>,
   url = "/ws/console/server"
 ): Request {
   const values = new Headers(headers);
@@ -95,14 +94,14 @@ describe("account authentication", () => {
   });
 
   it("requires same-origin WebSocket cookies and header-based API tokens", async () => {
-    const user = await authenticateUser("admin", "a-long-test-password");
+    const user = (await authenticateUser("admin", "a-long-test-password"))!;
     expect(user).toBeTruthy();
     const session = createSession(user, new Request("http://panel.example/", {
       headers: { "User-Agent": "test-agent" },
     }), "127.0.0.1");
     expect(session.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(Uint8Array.fromBase64(session.token, { alphabet: "base64url" }).length).toBe(32);
-    expect(findSessionUser(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(session.token))).toHex())?.id, "new sessions retain the existing SHA-256 storage format").toBe(user.id);
+    expect(findSessionUser(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(session.token))).toHex(), Date.now())?.id, "new sessions retain the existing SHA-256 storage format").toBe(user.id);
     const cookie = `ludock_session=${session.token}`;
 
     expect(authenticateWsRequest(
@@ -144,7 +143,7 @@ describe("account authentication", () => {
   });
 
   it("authenticates sessions stored before the native hashing conversion", async () => {
-    const user = await authenticateUser("admin", "a-long-test-password");
+    const user = (await authenticateUser("admin", "a-long-test-password"))!;
     expect(user).toBeTruthy();
     const token = new Uint8Array(32).fill(17).toBase64({ alphabet: "base64url", omitPadding: true });
     const now = Date.now();

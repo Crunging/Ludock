@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
-import { FILE_HELPER_SCRIPT } from "../src/file-helper-script.js";
+import { FILE_HELPER_SCRIPT } from "../src/helper-scripts.js";
 import { decodeTarHeader } from "../src/tar.js";
 
 // Run directly with Bun in the Linux container as part of Docker acceptance.

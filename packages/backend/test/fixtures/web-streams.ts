@@ -53,5 +53,12 @@ export class StreamFixture {
 }
 
 export function bytesStream(chunks: Iterable<Uint8Array>): ReadableStream<Uint8Array> {
-  return ReadableStream.from(chunks);
+  return streamFrom(chunks);
+}
+
+/** Bun implements ReadableStream.from, but its bundled types do not declare it. */
+export function streamFrom<T>(source: Iterable<T> | AsyncIterable<T>): ReadableStream<T> {
+  return (ReadableStream as unknown as {
+    from(source: Iterable<T> | AsyncIterable<T>): ReadableStream<T>;
+  }).from(source);
 }

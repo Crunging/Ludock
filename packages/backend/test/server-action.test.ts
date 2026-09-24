@@ -8,8 +8,9 @@ import {
   deleteUserSessions,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
-import { getDockerInstance, startContainer } from "../src/docker.js";
+import { setServerGrant } from "./fixtures/grants.js";
+import { docker } from "../src/docker-client.js";
+import { changeContainerState } from "../src/docker.js";
 import { AppError } from "../src/errors.js";
 import { listLogicalServers } from "../src/identity.js";
 import {
@@ -34,7 +35,6 @@ const friend: SessionUser = {
   username: "friend",
   role: "operator",
 };
-const docker = getDockerInstance();
 const originalList = docker.listContainers.bind(docker);
 const originalGet = docker.getContainer.bind(docker);
 let http: Server<unknown>;
@@ -126,7 +126,7 @@ beforeEach(async () => {
   const app = createApp({ frontendDist: false, routes: {
     "/servers/:id/start": {
       POST: serverAction("server.start", async (_ctx, context) => {
-        await startContainer(context.container.id, context.assertAccess);
+        await changeContainerState(context.container.id, "start", context.assertAccess);
         return Response.json({ ok: true });
       }),
     },

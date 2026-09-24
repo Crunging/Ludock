@@ -28,7 +28,7 @@ import {
   validatedProject,
 } from "../src/compose.js";
 import { COMPOSE_SOURCE_LABEL, COMPOSE_CONFIG_FILES_LABEL, COMPOSE_WORKING_DIR_LABEL } from "../src/compose-source.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
 import { closeDatabase } from "../src/database.js";
 import {
@@ -126,9 +126,9 @@ describe("Compose execution boundary", () => {
         composeSourceLabels: { [COMPOSE_WORKING_DIR_LABEL]: directory, [COMPOSE_CONFIG_FILES_LABEL]: filename } },
       container: { id: "a".repeat(64) },
     } as unknown as ServerContext;
-    spyOn(getDockerInstance(), "listContainers").mockResolvedValue([
+    spyOn(docker, "listContainers").mockResolvedValue([
       { Id: context.container.id, Labels: {} },
-    ] as Awaited<ReturnType<ReturnType<typeof getDockerInstance>["listContainers"]>>);
+    ] as unknown as Awaited<ReturnType<typeof docker["listContainers"]>>);
     const first = await validatedProject(context);
     const model = JSON.parse(await readFile(first.snapshot.configPath, "utf8"));
     const originalSource = model.services.game.labels[COMPOSE_SOURCE_LABEL].replaceAll("$$", "$");
@@ -191,7 +191,7 @@ describe("Compose execution boundary", () => {
         env: Record<string, string>;
       };
       expect(result.args).toStrictEqual(["compose", "version", "--short"]);
-      expect(result.env.LUDOCK_PRIVATE_TEST_SECRET).toBe(undefined);
+      expect(Object.hasOwn(result.env, "LUDOCK_PRIVATE_TEST_SECRET")).toBe(false);
       expect(result.env.DOCKER_HOST).toMatch(/^unix:\//);
     } finally {
       delete process.env.LUDOCK_PRIVATE_TEST_SECRET;
@@ -357,7 +357,7 @@ describe("Compose execution boundary", () => {
       await firstHandle.close();
       await secondHandle.close();
       let delayedInode = firstInode;
-      spyOn(prototype, "read").mockImplementation(async function (
+      spyOn(prototype, "read").mockImplementation((async function (
         this: FileHandle,
         buffer: Uint8Array,
         offset: number,
@@ -366,8 +366,9 @@ describe("Compose execution boundary", () => {
       ) {
         if ((await this.stat()).ino === delayedInode)
           await new Promise((resolve) => setTimeout(resolve, 40));
-        return originalRead.call(this, buffer, offset, length, position);
-      });
+        return (originalRead as (...args: unknown[]) => Promise<unknown>)
+          .call(this, buffer, offset, length, position);
+      }) as unknown as typeof prototype.read);
       const input = {
         projectName: "fixture",
         projectDirectory: directory,

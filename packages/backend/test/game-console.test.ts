@@ -32,7 +32,7 @@ describe("game console adapters", () => {
       labels: {},
     });
     expect(adapter).toBeTruthy();
-    expect(adapter.createExecOptions?.("/whitelist add PlayerName")).toStrictEqual({
+    expect(adapter?.createExecOptions?.("/whitelist add PlayerName")).toStrictEqual({
       Cmd: ["rcon-cli", "whitelist add PlayerName"],
       AttachStdout: true,
       AttachStderr: true,

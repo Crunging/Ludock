@@ -13,14 +13,15 @@ import {
   getEffectiveCapabilities,
   hasServerCapability,
   listUserServerGrants,
-  setServerGrant,
   setUserServerGrants,
 } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   reconcileServers,
   reviewServerBinding,
   type ServerObservation,
 } from "../src/identity.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin: SessionUser = { id: "admin", username: "owner", role: "admin" };
@@ -36,7 +37,7 @@ const viewer: SessionUser = {
 };
 const observations: ServerObservation[] = ["minecraft", "factorio"].map(
   (name) => ({
-    containerId: `docker-${name}`,
+    containerId: dockerId(`docker-${name}`),
     name,
     displayName: name,
     gameType: name,
@@ -203,7 +204,7 @@ describe("server assignments and independent capabilities", () => {
     );
     const replaced = observations.map((entry) => ({
       ...entry,
-      containerId: `${entry.containerId}-replacement`,
+      containerId: dockerId(`${entry.containerId}-replacement`),
     }));
     reconcileServers(replaced);
     expect(hasServerCapability(operator, first.id, "server.stop")).toBe(true);

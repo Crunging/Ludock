@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { apiJson } from "../api";
 import { usePageRead } from "../hooks/usePageRead";
 import { NavLink } from "../navigation";
@@ -8,15 +7,6 @@ import {
   diagnosticsResponseSchema,
   integrationsResponseSchema,
 } from "@ludock/shared";
-
-const columns = [
-  { id: "recognition", title: "Recognition" },
-  { id: "console", title: "Console" },
-  { id: "backup", title: "Backups" },
-  { id: "readiness", title: "Readiness" },
-  { id: "update", title: "Updates" },
-  { id: "platforms", title: "Image platforms" },
-] as const;
 
 async function readDiagnostics(signal: AbortSignal) {
   const [system, games] = await Promise.all([
@@ -28,8 +18,6 @@ async function readDiagnostics(signal: AbortSignal) {
 
 export default function Diagnostics() {
   const { data, loading, error, refresh } = usePageRead(readDiagnostics, "Unable to load diagnostics.");
-  const [selected, setSelected] = useState("");
-  const integration = data?.integrations.find((item) => item.gameType === selected);
   return (
     <div className="page">
       <div className="page__header page__header--actions">
@@ -133,59 +121,32 @@ export default function Diagnostics() {
             </div>
           </section>
           <section className="settings-section">
-            <h2>Game capabilities</h2>
+            <h2>Supported games</h2>
             <p className="section-note">
-              Image recognition is separate from console, backup, readiness, and
-              platform support. Select a game for prerequisites and limitations.
+              These images are managed automatically and get a built-in console.
+              Recognition does not verify an image; other images need
+              {" "}<code>ludock.enable=true</code>.
             </p>
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>Game</th>
-                    {columns.map((column) => (
-                      <th key={column.id}>{column.title}</th>
-                    ))}
+                    <th>Recognized images</th>
+                    <th>Console</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.integrations.map((game) => (
                     <tr key={game.gameType}>
-                      <td>
-                        <button
-                          className="text-link"
-                          onClick={() => setSelected(game.gameType)}
-                          aria-expanded={selected === game.gameType}
-                        >
-                          {game.gameType}
-                        </button>
-                      </td>
-                      {columns.map((column) => (
-                        <td key={column.id}>
-                          {game.capabilities[column.id].status}
-                        </td>
-                      ))}
+                      <td>{game.gameType}</td>
+                      <td>{game.repositories.join(", ")}</td>
+                      <td>{game.console ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {integration && (
-              <div className="help-panel integration-detail">
-                <h3>{integration.gameType}</h3>
-                <p className="muted">
-                  Recognized repositories: {integration.repositories.join(", ")}
-                </p>
-                {columns.map((column) => (
-                  <div key={column.id}>
-                    <h4>{column.title}</h4>
-                    <p>
-                      {integration.capabilities[column.id].description}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </>
       )}

@@ -13,6 +13,7 @@ import {
   queueTestNotification,
   retryNotificationDelivery,
 } from "../src/notifications.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const webhook = "https://discord.com/api/webhooks/123456/fake-secret-for-tests";
@@ -22,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => closeDatabase());
 function deliveries() {
-  return getDatabase().prepare("SELECT * FROM notification_deliveries").all();
+  return getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM notification_deliveries").all() as Record<string, unknown>[];
 }
 function makeQueuedDeliveriesDue() {
   getDatabase().prepare("UPDATE notification_deliveries SET next_attempt_at=0 WHERE state='queued'").run();
@@ -71,7 +72,7 @@ describe("Discord notification delivery", () => {
       expect(init?.redirect).toBe("error");
       expect(init?.signal).toBeTruthy();
       throw new Error(`network error ${webhook}`);
-    }) as typeof fetch;
+    });
     await deliverNotifications(fetcher);
     expect(deliveries()[0].attempts).toBe(1);
     expect(deliveries()[0].state).toBe("queued");
@@ -99,7 +100,7 @@ describe("Discord notification delivery", () => {
       calls++;
       await gate;
       return new Response(null, { status: 204 });
-    }) as typeof fetch;
+    });
     const first = deliverNotifications(fetcher);
     await deliverNotifications(fetcher);
     expect(calls).toBe(1);
@@ -118,7 +119,7 @@ describe("Discord notification delivery", () => {
       calls++;
       configureNotifications(false);
       return new Response(null, { status: 204 });
-    }) as typeof fetch);
+    }));
     expect(calls).toBe(1);
     expect(deliveries().map((row) => [row.state, row.attempts]).sort()).toStrictEqual([
         ["delivered", 1],
@@ -136,7 +137,7 @@ describe("Discord notification delivery", () => {
       destinations.push(url);
       configureNotifications(true, replacement);
       return new Response(null, { status: 204 });
-    }) as typeof fetch);
+    }));
     expect(destinations).toStrictEqual([`${webhook}?wait=true`, `${replacement}?wait=true`]);
     expect(deliveries().every((row) => row.state === "delivered")).toBe(true);
   });
@@ -165,7 +166,7 @@ describe("Discord notification troubleshooting", () => {
       expect(init?.redirect).toBe("error");
       messages.push(JSON.parse(String(init?.body)));
       return new Response(null, { status: 204 });
-    }) as typeof fetch);
+    }));
     expect(messages.length).toBe(2);
     for (const message of messages) {
       expect((message as { allowed_mentions: unknown }).allowed_mentions).toStrictEqual({ parse: [] });
@@ -199,7 +200,7 @@ describe("Discord notification troubleshooting", () => {
     await deliverNotifications((async () => new Response(`untrusted-body ${webhook}`, {
       status,
       statusText: `untrusted-status ${webhook}`,
-    })) as typeof fetch);
+    })));
     const delivery = listNotificationDeliveries()[0];
     expect(delivery.lastFailure!).toMatch(reason);
     expect(delivery.state).toBe("queued");
@@ -217,7 +218,7 @@ describe("Discord notification troubleshooting", () => {
     queueTestNotification();
     await deliverNotifications((async () => {
       throw new Error(`untrusted-exception ${webhook}`);
-    }) as typeof fetch);
+    }));
     expect(listNotificationDeliveries()[0].lastFailure!).toMatch(/Unable to reach Discord/);
     expect(JSON.stringify(deliveries())).not.toMatch(/untrusted-exception|fake-secret-for-tests/);
     expect(JSON.stringify(listNotificationDeliveries())).not.toMatch(/untrusted-exception|fake-secret-for-tests/);
@@ -226,7 +227,7 @@ describe("Discord notification troubleshooting", () => {
   it("gives each explicit retry five attempts while preserving lifetime history and using the replacement webhook", async () => {
     configureNotifications(true, webhook);
     const delivery = queueTestNotification();
-    const failure = (async () => new Response(null, { status: 404 })) as typeof fetch;
+    const failure = (async () => new Response(null, { status: 404 }));
     for (let attempt = 0; attempt < 5; attempt++) {
       makeQueuedDeliveriesDue();
       await deliverNotifications(failure);
@@ -255,7 +256,7 @@ describe("Discord notification troubleshooting", () => {
     await deliverNotifications((async (url) => {
       expect(url).toBe(`${replacement}?wait=true`);
       return new Response(null, { status: 204 });
-    }) as typeof fetch);
+    }));
     const delivered = listNotificationDeliveries()[0];
     expect(delivered.id).toBe(delivery.id);
     expect(delivered.state).toBe("delivered");
@@ -272,7 +273,7 @@ describe("Discord notification troubleshooting", () => {
     expect(() => retryNotificationDelivery(crypto.randomUUID())).toThrow(expect.objectContaining({ code: "NOTIFICATION_NOT_FOUND" }));
     const queued = queueTestNotification();
     expect(() => retryNotificationDelivery(queued.id)).toThrow(expect.objectContaining({ code: "NOTIFICATION_NOT_RETRYABLE" }));
-    await deliverNotifications((async () => new Response(null, { status: 503 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 503 })));
     configureNotifications(false);
     expect(listNotificationDeliveries()[0].retryable).toBe(false);
     expect(() => retryNotificationDelivery(queued.id)).toThrow(expect.objectContaining({ code: "NOTIFICATIONS_DISABLED" }));
@@ -282,7 +283,7 @@ describe("Discord notification troubleshooting", () => {
     expect(retried.attempts).toBe(1);
     expect(retried.retryable).toBe(false);
     expect(() => retryNotificationDelivery(queued.id)).toThrow(expect.objectContaining({ code: "NOTIFICATION_NOT_RETRYABLE" }));
-    await deliverNotifications((async () => new Response(null, { status: 204 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 204 })));
     expect(() => retryNotificationDelivery(queued.id)).toThrow(expect.objectContaining({ code: "NOTIFICATION_NOT_RETRYABLE" }));
     expect(deliveries()[0].attempts).toBe(2);
   });
@@ -290,14 +291,14 @@ describe("Discord notification troubleshooting", () => {
   it("rejects retries of a delivery already being sent", async () => {
     configureNotifications(true, webhook);
     const queued = queueTestNotification();
-    await deliverNotifications((async () => new Response(null, { status: 503 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 503 })));
     makeQueuedDeliveriesDue();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const pending = deliverNotifications((async () => {
       await gate;
       return new Response(null, { status: 204 });
-    }) as typeof fetch);
+    }));
     try {
       expect(listNotificationDeliveries()[0].retryable).toBe(false);
       expect(() => retryNotificationDelivery(queued.id)).toThrow(expect.objectContaining({ code: "NOTIFICATION_NOT_RETRYABLE" }));
@@ -323,7 +324,7 @@ describe("Discord notification troubleshooting", () => {
         return new Response(null, { status: 204 });
       }
       return new Response(null, { status: 503 });
-    }) as typeof fetch);
+    }));
     expect(calls).toBe(2);
     const retried = listNotificationDeliveries().find(({ id }) => id === second.id)!;
     expect(retried.attempts).toBe(10);
@@ -336,8 +337,8 @@ describe("Discord notification troubleshooting", () => {
     const ids: string[] = [];
     for (let index = 0; index < 55; index++) {
       notifyEvent(`private-event-${index}`, `private-payload-${index}`);
-      const row = getDatabase().prepare("SELECT id FROM notification_deliveries WHERE event_key=?")
-        .get(`private-event-${index}`)!;
+      const row = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT id FROM notification_deliveries WHERE event_key=?")
+        .get(`private-event-${index}`) as { id: string };
       ids.push(row.id as string);
       getDatabase().prepare("UPDATE notification_deliveries SET created_at=? WHERE id=?").run(index, row.id);
     }
@@ -361,7 +362,7 @@ describe("Discord notification troubleshooting", () => {
     try {
       configureNotifications(true, webhook);
       const queued = queueTestNotification();
-      await deliverNotifications((async () => new Response(null, { status: 404 })) as typeof fetch);
+      await deliverNotifications((async () => new Response(null, { status: 404 })));
       const failureHistory = listNotificationDeliveries();
       closeDatabase();
       expect(listNotificationDeliveries()).toStrictEqual(failureHistory);
@@ -373,7 +374,7 @@ describe("Discord notification troubleshooting", () => {
       await deliverNotifications((async (url) => {
         expect(url).toBe(`${webhook}?wait=true`);
         return new Response(null, { status: 204 });
-      }) as typeof fetch);
+      }));
       const deliveredHistory = listNotificationDeliveries();
       expect(deliveredHistory[0].state).toBe("delivered");
       expect(deliveredHistory[0].attempts).toBe(2);
@@ -396,7 +397,7 @@ describe("Discord notification troubleshooting", () => {
     getDatabase().prepare(`UPDATE notification_deliveries
       SET created_at=?,state='delivered',attempts=1,retry_attempts=1 WHERE id=?`).run(old, legacyDelivered.id);
     retryNotificationDelivery(oldRetry.id);
-    await deliverNotifications((async () => new Response(null, { status: 204 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 204 })));
     const history = listNotificationDeliveries();
     expect(history.length).toBe(1);
     expect(history[0].id).toBe(oldRetry.id);

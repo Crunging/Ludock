@@ -3,7 +3,6 @@ import { authenticateWsRequest, type WebSocketAuth } from "./auth.js";
 import { handleConsoleConnection } from "./console.js";
 import { handleContainerLogsConnection } from "./container-logs.js";
 import { addEventClient } from "./events.js";
-import { matchesDevelopmentInstance } from "./development-instance.js";
 import { createLogger } from "./logger.js";
 import { MAX_SOCKET_BUFFER_BYTES, NativeSocketChannel } from "./socket-channel.js";
 
@@ -108,15 +107,13 @@ export function createWebSocketGateway() {
     websocket,
     get connectionCount() { return sessions.size; },
     upgrade(request: Request, server: Pick<Server<SocketSession>, "upgrade" | "requestIP">): Response | undefined {
-      if (!matchesDevelopmentInstance(request.headers.get("x-ludock-dev-instance") ?? undefined))
-        return new Response("Development instance mismatch", { status: 409 });
       if (stopping) return new Response("Server shutting down", { status: 503 });
       const pathname = new URL(request.url).pathname;
       const auth = authenticateWsRequest(request);
       if (!auth) return new Response("Authentication required", { status: 401 });
       const kind = pathname === "/ws/v1/events" ? "events"
         : pathname.startsWith("/ws/v1/logs/") ? "logs"
-          : pathname.startsWith("/ws/v1/game-console/") || pathname.startsWith("/ws/v1/console/") ? "game"
+          : pathname.startsWith("/ws/v1/game-console/") ? "game"
             : pathname.startsWith("/ws/v1/shell/") ? "shell" : null;
       if (!kind) return new Response("Unknown WebSocket endpoint", { status: 404 });
       if (kind === "shell" && auth.user.role !== "admin")

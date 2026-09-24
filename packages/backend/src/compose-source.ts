@@ -10,7 +10,7 @@ export const COMPOSE_WORKING_DIR_LABEL = "com.docker.compose.project.working_dir
 export const COMPOSE_CONFIG_FILES_LABEL = "com.docker.compose.project.config_files";
 export const COMPOSE_ENV_FILES_LABEL = "com.docker.compose.project.environment_file";
 
-export interface ComposeSource {
+interface ComposeSource {
   project: ComposeProjectSource;
   loadDefaultEnv: boolean;
 }

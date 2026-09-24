@@ -7,19 +7,18 @@ import {
   dockerEventDecoder,
   stopEventStream,
 } from "../src/events.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import {
   closeDatabase,
   createUser,
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originals = {
   getEvents: docker.getEvents,
   getContainer: docker.getContainer,
@@ -106,8 +105,10 @@ describe("Docker event framing", () => {
   it("buffers split lines and accepts several events in a chunk", () => {
     const events: unknown[] = [];
     const decode = dockerEventDecoder((event) => events.push(event));
-    const content = fixtureBytes('{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n');
-    const split = content.indexOf(fixtureBytes("é")) + 1;
+    const text = '{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n';
+    const content = fixtureBytes(text);
+    // Split inside the two-byte "é".
+    const split = fixtureBytes(text.slice(0, text.indexOf("é"))).length + 1;
     decode(content.subarray(0, split));
     expect(events).toStrictEqual([]);
     decode(content.subarray(split));

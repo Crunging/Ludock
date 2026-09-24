@@ -7,7 +7,7 @@ import {
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   createSchedule,
   deleteSchedule,
@@ -26,11 +26,12 @@ import {
   registerBackgroundJobs,
   recoverUpdate,
 } from "../src/jobs.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { DockerApiError } from "../src/docker-transport.js";
 import { getAvailability } from "../src/monitoring.js";
 import { refreshServers } from "../src/servers.js";
 import { listLogicalServers } from "../src/identity.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin: SessionUser = { id: "owner", username: "owner", role: "admin" };
@@ -39,7 +40,6 @@ const friend: SessionUser = {
   username: "friend",
   role: "operator",
 };
-const docker = getDockerInstance();
 const originalList = docker.listContainers.bind(docker),
   originalGet = docker.getContainer.bind(docker);
 let serverId: string,
@@ -142,7 +142,7 @@ describe("queued operation authority", () => {
 
   it("does not invoke data recovery for an update interrupted while pulling", async () => {
     const { context } = scheduled();
-    context.job.recovery = { containerId: "fixture", initiallyRunning: true };
+    context.job.recovery = { containerId: dockerId("fixture"), initiallyRunning: true };
     // No data-operation binding was persisted and the game was never stopped.
     await recoverUpdate(context);
     expect(mutations).toBe(0);
@@ -180,16 +180,9 @@ describe("queued operation authority", () => {
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
     expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
-  it("only accepts legacy jobs without a revision while the schedule remains untouched", () => {
-    const { context, scheduleId } = scheduled();
-    delete context.job.input.scheduleRevision;
-    expect(jobActor(context).id).toBe(friend.id);
-    updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
-    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
-  });
   it("rejects invalid or future schedule generations", () => {
     const { context } = scheduled();
-    for (const revision of [null, "1", 0, 2]) {
+    for (const revision of [undefined, null, "1", 0, 2]) {
       context.job.input.scheduleRevision = revision;
       expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
     }

@@ -1,10 +1,6 @@
 import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
-import {
-  isApiTokenOperationActor,
-  publicHistoryActor,
-  publicOperationActorId,
-} from "./auth.js";
+import { publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
 
 interface OperationRow {
@@ -32,7 +28,7 @@ export interface JobContext {
   job: Job;
   progress: (phase: string, recovery?: Record<string, unknown>) => void;
 }
-export interface JobHandler {
+interface JobHandler {
   run: (context: JobContext) => Promise<Record<string, unknown> | void>;
   recover?: (context: JobContext) => Promise<void>;
 }
@@ -181,9 +177,7 @@ export function enqueueOperation(options: {
     );
   writeAuditLog(
     {
-      userId: isApiTokenOperationActor(options.actorId)
-        ? undefined
-        : options.actorId,
+      userId: options.actorId,
       action: `server.${options.kind}.queued`,
       targetType: "server",
       targetId: options.serverId,
@@ -227,10 +221,8 @@ function finish(
       job.id,
     );
   writeAuditLog({
-    userId:
-      !isApiTokenOperationActor(job.actorId) && findUserById(job.actorId)
-        ? job.actorId
-        : undefined,
+    // The owner may have been deleted since queueing.
+    userId: findUserById(job.actorId) ? job.actorId : undefined,
     action: `server.${job.kind}.${status}`,
     targetType: "server",
     targetId: job.serverId,

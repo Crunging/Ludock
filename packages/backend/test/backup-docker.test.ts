@@ -11,7 +11,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { expect, describe, it } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { closeDatabase, createUser } from "../src/database.js";
 import { setSetting } from "../src/settings.js";
 import { listServers, resolveAuthorizedServer } from "../src/servers.js";
@@ -75,8 +75,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           ),
         ),
       );
-      const docker = getDockerInstance(),
-        containers: Docker.Container[] = [],
+      const containers: Docker.Container[] = [],
         volumes: Docker.Volume[] = [];
       const oldRoots = process.env.LUDOCK_BACKUP_ROOTS,
         oldSelf = process.env.LUDOCK_SELF_CONTAINER;

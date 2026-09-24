@@ -30,7 +30,6 @@ import { createLogger } from "./logger.js";
 import type { ServerCapability } from "@ludock/shared";
 
 const logger = createLogger("schedules");
-export { scheduleSlot } from "@ludock/shared";
 
 interface ScheduleRow {
   id: string;
@@ -302,7 +301,7 @@ export function deleteSchedule(
     throw new AppError("NOT_FOUND", 404, "Schedule not found");
   getDatabase().query("DELETE FROM schedules WHERE id=?").run(id);
   writeAuditLog({
-    userId: actor.id === "api-token" ? undefined : actor.id,
+    userId: actor.id,
     action: "schedule.deleted",
     targetType: "server",
     targetId: serverId,
@@ -360,7 +359,7 @@ function mutateSchedule(
         .run(inputJson, id);
       result = { ...row, input_json: inputJson, revision: row.revision + 1 };
       writeAuditLog({
-        userId: current.id === "api-token" ? undefined : current.id,
+        userId: current.id,
         action: typeof update === "boolean"
           ? update ? "schedule.resumed" : "schedule.paused"
           : "schedule.updated",

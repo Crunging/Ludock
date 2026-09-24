@@ -39,7 +39,7 @@ export const accessRoutes: ApiRoutes = {
         assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
         reviewServerBinding(serverId, server.pendingFingerprint!);
       });
-      audit(requestUser(ctx), "server.binding.reviewed", serverId);
+      audit(ctx, "server.binding.reviewed", serverId);
       return respond(bindingReviewResponseSchema, {
         server: await getServer(requestUser(ctx), serverId),
       });

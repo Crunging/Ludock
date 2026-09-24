@@ -2,15 +2,16 @@ import { serve, type Server } from "bun";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const [{ createApp }, auth, database] = await Promise.all([
+const [{ createApp }, auth, database, { hashPassword, verifyPassword }] = await Promise.all([
   import("../src/app.js"),
   import("../src/auth.js"),
   import("../src/database.js"),
+  import("../src/password.js"),
 ]);
 const { accountRoutes } = await import("../src/routes/accounts.js");
 const password = "original-password-123";
-const passwordHash = await auth.hashPassword(password);
-const resetHash = await auth.hashPassword("reset-password-123");
+const passwordHash = await hashPassword(password);
+const resetHash = await hashPassword("reset-password-123");
 const passwords = await import("../src/password.js");
 let server: Server<unknown>;
 let baseUrl: string;
@@ -204,7 +205,7 @@ describe("account changes during password work", () => {
     expect((await auth.authenticateUser("admin", password))?.id).toBe("admin");
     const upgraded = database.findUserById("admin")!.passwordHash;
     expect(upgraded).toMatch(/^\$argon2id\$/);
-    expect(await auth.verifyPassword(password, upgraded)).toBe(true);
+    expect(await verifyPassword(password, upgraded)).toBe(true);
   });
 
   for (const change of ["reset", "disable", "delete"] as const) {

@@ -4,7 +4,7 @@ import {
   updateUserPassword,
   writeAuditLog,
 } from "./database.js";
-import { hashPassword } from "./auth.js";
+import { hashPassword } from "./password.js";
 
 async function main() {
   const username = process.argv[2]?.trim();

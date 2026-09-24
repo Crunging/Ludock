@@ -19,9 +19,8 @@ import {
 import { listApplicationLogs } from "../application-logs.js";
 import {
   AuthError, assertRequestUser, authenticateUser, clearSessionCookie, createInitialAdmin,
-  createSession, deleteRequestSession, getRequestSession, hashPassword, isSetupRequired,
+  createSession, deleteRequestSession, getRequestSession, isSetupRequired,
   setSessionCookie,
-  verifyPassword,
   type SetupWindow,
 } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
@@ -33,11 +32,12 @@ import {
   updateUserAccess, updateUserPassword, writeAuditLog,
   type UserRecord
 } from "../database.js";
-import { developmentInstance } from "../development-instance.js";
 import { AppError } from "../errors.js";
 import { listAuditHistory } from "../history.js";
 import {
   PasswordWorkBusyError,
+  hashPassword,
+  verifyPassword,
   withPasswordWork,
 } from "../password.js";
 import { administrator, requestUser, respond, type ApiRoutes } from "./request.js";
@@ -245,9 +245,9 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
               LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
             );
           // A rotating source cannot avoid this account-wide slowdown. Keep
-          // the cooldown short: the old five-guess account lockout let anyone
-          // deny the owner access for fifteen minutes. Rejected retries do not
-          // extend this cooldown, and successful authentication clears it.
+          // the cooldown short so an attacker cannot lock the owner out for
+          // long. Rejected retries do not extend this cooldown, and successful
+          // authentication clears it.
           const accountFailures = getLoginThrottle(accountKey, failedAt, LOGIN_WINDOW_MS).failures + 1;
           const step = Math.max(0, Math.min(5, Math.floor(
             (accountFailures - LOGIN_ACCOUNT_COOLDOWN_THRESHOLD) / 5,
@@ -266,11 +266,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           writeAuditLog({
             action: "auth.login.failed",
             targetType: "user",
-            details: {
-              username: typeof parsed.data.username === "string"
-                ? parsed.data.username.slice(0, 32)
-                : null,
-            },
+            details: { username: parsed.data.username.slice(0, 32) },
             ipAddress: ctx.ipAddress,
           });
           return Response.json({ error: "Invalid username or password" }, { status: 401 });
@@ -293,11 +289,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         const session = getRequestSession(ctx.request);
         deleteRequestSession(ctx.request);
         clearSessionCookie(ctx.headers);
-        // Cookie clearing is host-wide, so development checkouts on other ports
-        // must retain their sessions. clearSessionCookie removes this one's cookie.
-        ctx.headers.set("Clear-Site-Data", developmentInstance
-          ? '"cache", "storage"'
-          : '"cache", "cookies", "storage"');
+        ctx.headers.set("Clear-Site-Data", '"cache", "cookies", "storage"');
         if (session) {
           writeAuditLog({
             userId: session.user.id,
@@ -386,7 +378,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
             LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
           );
           writeAuditLog({
-            userId: actor.id === "api-token" ? undefined : actor.id,
+            userId: actor.id,
             action: "auth.password.change-failed",
             targetType: "user",
             targetId: actor.id,
@@ -403,7 +395,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         const session = createSession(current, ctx.request, ctx.ipAddress);
         setSessionCookie(ctx.headers, ctx.request, session.token);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "auth.password.changed",
           targetType: "user",
           targetId: actor.id,
@@ -430,7 +422,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           return Response.json({ error: "Session not found" }, { status: 404 });
         }
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "auth.session.revoked",
           targetType: "session",
           targetId: sessionId,
@@ -478,7 +470,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           throw error;
         }
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.created",
           targetType: "user",
           targetId: id,
@@ -508,7 +500,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         updateUserAccess(target.id, parsed.data.role, parsed.data.disabled);
         const actor = requestUser(ctx);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.access.updated",
           targetType: "user",
           targetId: target.id,
@@ -535,7 +527,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         }
         deleteUser(target.id);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.deleted",
           targetType: "user",
           targetId: target.id,
@@ -577,7 +569,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         }
         updateUserPassword(target.id, passwordHash);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.password.reset",
           targetType: "user",
           targetId: target.id,

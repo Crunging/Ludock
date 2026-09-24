@@ -9,9 +9,15 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Use the printed URLs and state path. `bun run dev --print-config` shows the
-configuration without starting a backend. Development has no Docker connection
-by default; use a dedicated test daemon with disposable game data.
+Open <http://127.0.0.1:3000> and use the setup code printed in the output.
+The frontend hot-reloads and forwards `/api` and `/ws` to the backend on port
+3001, which restarts when its source changes. Data lives in `data/dev/`
+(override with `LUDOCK_DB_PATH`); `LUDOCK_DEV_PORT` and `PORT` change the
+frontend and backend ports.
+
+Development has no Docker connection by default. To manage containers, set
+`DOCKER_SOCKET` to a dedicated test daemon with disposable game data, never one
+running real servers.
 
 Bun runs all JavaScript; TypeScript 7 and Oxlint use native executables. Keep
 `[run].bun = true` in `bunfig.toml`. Bun's built-in `node:fs`, `node:path`, and
@@ -45,15 +51,20 @@ For just the production startup check, run
 `bun run build` builds the backend and frontend. Keep `packages/backend/dist`
 together: its entry points share generated chunks and source maps.
 
-Code PRs run the full CI suite. Release PRs validate the generated version,
-manifest, and changelog, then build and smoke-test the image. Publish runs the
-full suite on native AMD64 and ARM64 before publication. Release Please owns
-versions and the release manifest; preserve published tags.
+Every PR, including the release PR, runs the full CI suite on native AMD64 and
+ARM64. Every push to `main` publishes the multi-platform image to `ghcr.io` as
+`nightly`. Release Please keeps a release PR open on `main`; merging it tags the
+version, publishes the GitHub release with its changelog, and also publishes
+`X.Y.Z`. Stable releases additionally move `X.Y`, `X`, and `latest`, so
+`latest` is always the newest stable release. Release
+Please owns versions, `CHANGELOG.md`, and the release manifest; preserve
+published tags. A weekly workflow audits dependencies and scans the latest
+published image.
 
-For automatic release PR runs, set the Actions secret `RELEASE_PLEASE_TOKEN` to a
-fine-grained personal access token restricted to this repository, with Contents
-and Pull requests write permissions. Without it, GitHub requires run approval.
-Review the refreshed release PR and wait for its latest checks before merging.
+PRs opened with the default `GITHUB_TOKEN` do not trigger CI. For CI on release
+PRs, set the Actions secret `RELEASE_PLEASE_TOKEN` to a fine-grained personal
+access token restricted to this repository, with Contents, Issues, and Pull
+requests write permissions. Wait for the release PR's checks before merging.
 
 ## Tool updates
 
@@ -62,11 +73,14 @@ bun outdated --recursive
 bun audit
 ```
 
-Update `.bun-version` and Bun image pins in the Dockerfile and local actions
-together. File and backup helpers reuse the running production image automatically.
-Native runs use the reviewed `FALLBACK_HELPER_IMAGE` pin in
-`packages/backend/src/runtime-images.ts`; update it when the Bun minimum changes.
-Keep [integration revisions](../scripts/ci/integration.mjs)
-and [CI images](../scripts/ci/containers.mjs) pinned and validate both architectures.
-Image checks reject fixable medium, high, and critical vulnerabilities in
-the production runtime, fallback helper, and CI action runtime.
+Update `.bun-version` and the Bun image pin in the Dockerfile together; CI
+installs the version in `.bun-version`. File and backup helpers reuse the running
+production image automatically. Native runs use the reviewed
+`FALLBACK_HELPER_IMAGE` pin in `packages/backend/src/runtime-images.ts`; update
+it when the Bun minimum changes.
+
+Workflows pin every action to a full commit SHA (with its release as a comment)
+and every image to a digest; `scripts/test/security-pins.test.mjs` enforces
+this. Image checks in [`scripts/ci/containers.mjs`](../scripts/ci/containers.mjs)
+reject fixable medium, high, and critical vulnerabilities in the production
+runtime and fallback helper.

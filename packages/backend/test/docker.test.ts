@@ -1,17 +1,18 @@
 import { rejectedBy } from "./fixtures/errors.js";
 import { expect, afterEach, describe, it } from "bun:test";
+import type { DockerContainerId } from "@ludock/shared";
+import { docker } from "../src/docker-client.js";
 import {
+  changeContainerState,
   getContainer,
-  getDockerInstance,
   getManagedContainerObservation,
   getDiscoveryDiagnostics,
   listManagedContainerObservations,
-  restartContainer,
-  startContainer,
-  stopContainer,
 } from "../src/docker.js";
 
-const docker = getDockerInstance();
+/** Container IDs arrive from untrusted sources; the functions under test validate them. */
+const untrusted = (id: string) => id as DockerContainerId;
+
 const originalGetContainer = docker.getContainer.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 
@@ -134,12 +135,12 @@ describe("automatic discovery boundary", () => {
       expect((await listManagedContainerObservations()).length).toBe(entry.included ? 1 : 0);
       for (const action of [
         getManagedContainerObservation,
-        startContainer,
-        stopContainer,
-        restartContainer,
+        (id: DockerContainerId) => changeContainerState(id, "start"),
+        (id: DockerContainerId) => changeContainerState(id, "stop"),
+        (id: DockerContainerId) => changeContainerState(id, "restart"),
       ]) {
-        if (entry.included) await action("minecraft");
-        else await expect(action("minecraft")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        if (entry.included) await action(untrusted("minecraft"));
+        else await expect(action(untrusted("minecraft"))).rejects.toMatchObject({ code: "FORBIDDEN" });
       }
       expect(invoked).toStrictEqual(entry.included ? ["start", "stop", "restart"] : []);
     });
@@ -170,7 +171,7 @@ describe("automatic discovery boundary", () => {
       inspect: async () => info,
     })) as unknown as typeof docker.getContainer;
     const { container, observation } =
-      await getManagedContainerObservation("minecraft");
+      await getManagedContainerObservation(untrusted("minecraft"));
     expect(observation.compose).toStrictEqual({
       project: "games",
       service: "rust",
@@ -210,7 +211,7 @@ describe("automatic discovery boundary", () => {
     })) as unknown as typeof docker.getContainer;
     expect(await listManagedContainerObservations()).toStrictEqual([]);
     expect((await getDiscoveryDiagnostics())[0]?.code).toBe("INVALID_COMPOSE_IDENTITY");
-    await expect(startContainer("minecraft")).rejects.toMatchObject({
+    await expect(changeContainerState(untrusted("minecraft"), "start")).rejects.toMatchObject({
       code: "INVALID_COMPOSE_IDENTITY",
     });
   });
@@ -226,7 +227,7 @@ describe("automatic discovery boundary", () => {
     docker.getContainer = (() => ({
       inspect: async () => inspectFixture("itzg/minecraft-server", labels),
     })) as unknown as typeof docker.getContainer;
-    const { observation } = await getManagedContainerObservation("minecraft");
+    const { observation } = await getManagedContainerObservation(untrusted("minecraft"));
     expect(observation.compose).toBe(undefined);
     expect(observation.name).toBe("minecraft");
   });
@@ -292,7 +293,7 @@ describe("automatic discovery boundary", () => {
     const remaining = ids.filter((id) => id !== ids[2]);
     expect(peak).toBe(4);
     expect(active).toBe(0);
-    expect(observations.map(({ container }) => container.id)).toStrictEqual(remaining);
+    expect<string[]>(observations.map(({ container }) => container.id)).toStrictEqual(remaining);
     expect(observations.map(({ observation }) => observation.name)).toStrictEqual(remaining.map((id) => `current-${id}`));
   });
 
@@ -346,11 +347,8 @@ describe("automatic discovery boundary", () => {
 });
 
 describe("managed container lifecycle boundary", () => {
-  for (const [action, run] of [
-    ["start", startContainer],
-    ["stop", stopContainer],
-    ["restart", restartContainer],
-  ] as const) {
+  for (const action of ["start", "stop", "restart"] as const) {
+    const run = (id: string) => changeContainerState(untrusted(id), action);
     it(`allows ${action} for an opted-in container`, async () => {
       let actionCalled = false;
       const container = {
@@ -417,7 +415,7 @@ describe("managed container image inference", () => {
     docker.getContainer = (() =>
       container) as unknown as typeof docker.getContainer;
 
-    const { container: managed } = await getManagedContainerObservation("terraria");
+    const { container: managed } = await getManagedContainerObservation(untrusted("terraria"));
 
     expect(managed.gameType).toBe("terraria");
     expect(managed.gameConsole?.id).toBe("stdin-console");
@@ -455,9 +453,9 @@ describe("container identifier validation", () => {
       }) as unknown as typeof docker.getContainer;
 
       for (const run of [
-        () => getManagedContainerObservation(id),
-        () => startContainer(id),
-        async () => getContainer(id),
+        () => getManagedContainerObservation(untrusted(id)),
+        () => changeContainerState(untrusted(id), "start"),
+        async () => getContainer(untrusted(id)),
       ]) {
         await expect(await rejectedBy(run())).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {
             expect(error.code).toBe("INVALID_CONTAINER_ID");
@@ -471,7 +469,7 @@ describe("container identifier validation", () => {
 
   it("still accepts real Docker IDs and names", () => {
     for (const id of ["a".repeat(64), "abc123", "my-server_1.0", "3f2b1a"]) {
-      expect(() => getContainer(id)).not.toThrow();
+      expect(() => getContainer(untrusted(id))).not.toThrow();
     }
   });
 });

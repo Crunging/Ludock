@@ -3,17 +3,17 @@ import { expect, afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn
 import path from "node:path";
 import { auditResponseSchema, availabilityResponseSchema, scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
 import { DockerApiError } from "../src/docker-transport.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
 process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
-process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }, { setIntentionalStop }] =
+const [{ createApp }, { docker }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }, { setIntentionalStop }] =
   await Promise.all([
     import("../src/app.js"),
-    import("../src/docker.js"),
+    import("../src/docker-client.js"),
     import("../src/logger.js"),
     import("../src/database.js"),
     import("../src/auth.js"),
@@ -22,7 +22,6 @@ const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, 
     import("../src/monitoring.js"),
   ]);
 
-const docker = getDockerInstance();
 const testLogger = createLogger("http-test");
 const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
@@ -54,7 +53,7 @@ const managedInfo = {
 };
 
 beforeAll(() => {
-  docker.ping = (async () => "OK") as typeof docker.ping;
+  docker.ping = async () => {};
   docker.listContainers = (async () => [
     managedInfo,
   ]) as unknown as typeof docker.listContainers;
@@ -360,8 +359,7 @@ describe("HTTP application", () => {
       error: "File exceeds the upload size limit of 1.5 KiB",
     });
 
-    // The exact limit passes the size gate and reaches this fixture's missing
-    // file root, despite MAX_UPLOAD_BYTES being configured as only one byte.
+    // The exact limit passes the size gate and reaches this fixture's missing file root.
     const boundary = await upload(1536);
     expect(boundary.status).toBe(404);
     expect(await boundary.json()).toStrictEqual({ error: "File root not found", code: "ROOT_NOT_FOUND" });
@@ -479,7 +477,7 @@ describe("HTTP application", () => {
         headers: { Cookie: sessionCookie },
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
-    const admin = users.users.find((user) => user.username === "admin");
+    const admin = users.users.find((user) => user.username === "admin")!;
     expect(admin).toBeTruthy();
     const demote = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {
       method: "PATCH",
@@ -503,9 +501,9 @@ describe("HTTP application", () => {
           method: "POST",
         });
         expect(response.status).toBe(statusCode === 304 ? 200 : 500);
-        expect(await response.json()).toStrictEqual(statusCode === 304
+        expect(await response.json()).toMatchObject(statusCode === 304
           ? { ok: true }
-          : { error: `Failed to ${action} container` });
+          : { error: "Internal server error" });
         expect(action === "start" ? managedStartCalled : managedStopCalled).toBe(true);
 
         const availability = await authorizedFetch(`/api/v1/servers/${managedServerId}/availability`);
@@ -775,7 +773,7 @@ describe("HTTP application", () => {
     };
     runSchedules(due);
     expect((await readSchedule()).lastOperation).toBe(null);
-    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
 
     const resumed = await fetch(`${baseUrl}${collection}/${original.id}`, {
       method: "PATCH", headers,
@@ -783,7 +781,7 @@ describe("HTTP application", () => {
     });
     expect(resumed.status).toBe(200);
     runSchedules(due);
-    const queued = await readSchedule();
+    const queued = await readSchedule() as { lastRunAt: number | null; lastOperation: { id: string; status: string; serverId: string } };
     expect(queued.lastRunAt).toBe(due);
     expect(queued.lastOperation?.status).toBe("queued");
     expect(queued.lastOperation?.serverId).toBe(managedServerId);
@@ -941,7 +939,7 @@ describe("HTTP application", () => {
     const marker = body.entries.find(
       (entry) =>
         entry.component === "http-test" && entry.message.includes("diagnostic"),
-    );
+    )!;
     expect(marker).toBeTruthy();
     expect(marker.level).toBe("warn");
     expect(marker.context?.apiToken).toBe("[REDACTED]");
@@ -1014,7 +1012,7 @@ describe("HTTP application", () => {
         headers: { Cookie: sessionCookie },
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
-    const admin = users.users.find((user) => user.username === "admin");
+    const admin = users.users.find((user) => user.username === "admin")!;
     expect(admin).toBeTruthy();
 
     const selfDelete = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {

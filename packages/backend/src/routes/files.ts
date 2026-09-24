@@ -1,42 +1,19 @@
-import { createDirectoryRequestSchema, fileListingSchema, fileLocationSchema, formatByteSize, okResponseSchema, renameFileRequestSchema, uploadFileQuerySchema, } from "@ludock/shared";
-import { writeAuditLog } from "../database.js";
-import { AppError, errorResponse } from "../errors.js";
-import { createDirectory, deleteFileEntry, listFiles, openDownload, renameFileEntry, uploadFile, } from "../file-storage.js";
-import { createLogger, errorMessage } from "../logger.js";
+import { createDirectoryRequestSchema, fileListingSchema, fileLocationSchema, formatByteSize, okResponseSchema, renameFileRequestSchema, uploadFileQuerySchema } from "@ludock/shared";
+import { createDirectory, deleteFileEntry, listFiles, openDownload, renameFileEntry, uploadFile } from "../file-storage.js";
 import { getMaxUploadBytes } from "../upload-limit.js";
-import { requestUser, respond, type ApiRoutes, type RequestContext } from "./request.js";
+import { audit, respond, type ApiRoutes, type RequestContext } from "./request.js";
 import { serverAction } from "./server-action.js";
-const logger = createLogger("api");
-interface FileRouteError extends Error {
-  statusCode?: number;
-  code?: string;
-}
+
 const maxUploadBytes = getMaxUploadBytes();
-function sendFileError(error: unknown): Response {
-  if (error instanceof AppError) return errorResponse(error);
-  const routeError = error as FileRouteError;
-  if (routeError.code === "INVALID_CONTAINER_ID") {
-    return Response.json({ error: "Invalid container identifier" }, { status: 400 });
-  }
-  if (routeError.code === "FORBIDDEN") {
-    return Response.json({ error: "Container is not managed by Ludock" }, { status: 403 });
-  }
-  if (routeError.statusCode === 404) {
-    return Response.json({ error: "Container not found" }, { status: 404 });
-  }
-  logger.error("File operation failed", { error: errorMessage(error) });
-  return Response.json({ error: "File operation failed" }, { status: 500 });
-}
-function fileAudit(ctx: RequestContext, action: string, containerId: string, details: Record<string, unknown>): void {
-  const user = requestUser(ctx);
-  writeAuditLog({
-    userId: user.id === "api-token" ? undefined : user.id,
-    action: `server.file.${action}`,
-    targetType: "server",
-    targetId: containerId,
-    details,
-    ipAddress: ctx.ipAddress,
+
+function fileLocation(ctx: RequestContext) {
+  return fileLocationSchema.safeParse({
+    root: ctx.url.searchParams.get("root") ?? undefined,
+    path: ctx.url.searchParams.get("path") ?? "",
   });
+}
+function invalid(error: string): Response {
+  return Response.json({ error }, { status: 400 });
 }
 function contentDisposition(name: string): string {
   const fallback = name
@@ -49,66 +26,34 @@ function contentDisposition(name: string): string {
 export const filesRoutes: ApiRoutes = {
   "/api/v1/servers/:id/files": {
     GET: serverAction("files.read", async (ctx, context) => {
-      const parsed = fileLocationSchema.safeParse({
-        root: ctx.url.searchParams.get("root") ?? undefined,
-        path: ctx.url.searchParams.get("path") ?? "",
-      });
-      if (!parsed.success) {
-        return Response.json({ error: "Invalid file location" }, { status: 400 });
-      }
-      try {
-        const server = context.container;
-        return respond(fileListingSchema, await listFiles(server, parsed.data.root, parsed.data.path, context.assertAccess));
-      }
-      catch (error) {
-        return sendFileError(error);
-      }
+      const location = fileLocation(ctx);
+      if (!location.success) return invalid("Invalid file location");
+      const { root, path } = location.data;
+      return respond(fileListingSchema, await listFiles(context.container, root, path, context.assertAccess));
     }),
     DELETE: serverAction("files.write", async (ctx, context) => {
-      const parsed = fileLocationSchema.safeParse({
-        root: ctx.url.searchParams.get("root") ?? undefined,
-        path: ctx.url.searchParams.get("path") ?? "",
-      });
-      if (!parsed.success) {
-        return Response.json({ error: "Invalid file location" }, { status: 400 });
-      }
-      try {
-        const id = context.logical.id;
-        const server = context.container;
-        await deleteFileEntry(server, parsed.data.root, parsed.data.path, context.assertAccess);
-        fileAudit(ctx, "deleted", id, parsed.data);
-        return respond(okResponseSchema, { ok: true });
-      }
-      catch (error) {
-        return sendFileError(error);
-      }
-    })
+      const location = fileLocation(ctx);
+      if (!location.success) return invalid("Invalid file location");
+      const { root, path } = location.data;
+      await deleteFileEntry(context.container, root, path, context.assertAccess);
+      audit(ctx, "server.file.deleted", context.logical.id, location.data);
+      return respond(okResponseSchema, { ok: true });
+    }),
   },
   "/api/v1/servers/:id/files/download": {
     GET: serverAction("files.read", async (ctx, context) => {
-      const parsed = fileLocationSchema.safeParse({
-        root: ctx.url.searchParams.get("root") ?? undefined,
-        path: ctx.url.searchParams.get("path") ?? "",
-      });
-      if (!parsed.success) {
-        return Response.json({ error: "Invalid file location" }, { status: 400 });
-      }
-      try {
-        const id = context.logical.id;
-        const server = context.container;
-        const download = await openDownload(server, parsed.data.root, parsed.data.path, context.assertAccess);
-        ctx.headers.set("Content-Disposition", contentDisposition(download.name));
-        ctx.headers.set("Content-Type", download.type === "directory"
-          ? "application/x-tar"
-          : "application/octet-stream");
-        fileAudit(ctx, "downloaded", id, parsed.data);
-        context.waitForCleanup(download.completed);
-        return new Response(download.stream);
-      }
-      catch (error) {
-        return sendFileError(error);
-      }
-    })
+      const location = fileLocation(ctx);
+      if (!location.success) return invalid("Invalid file location");
+      const { root, path } = location.data;
+      const download = await openDownload(context.container, root, path, context.assertAccess);
+      ctx.headers.set("Content-Disposition", contentDisposition(download.name));
+      ctx.headers.set("Content-Type", download.type === "directory"
+        ? "application/x-tar"
+        : "application/octet-stream");
+      audit(ctx, "server.file.downloaded", context.logical.id, location.data);
+      context.waitForCleanup(download.completed);
+      return new Response(download.stream);
+    }),
   },
   "/api/v1/servers/:id/files/upload": {
     PUT: serverAction("files.write", async (ctx, context) => {
@@ -121,70 +66,41 @@ export const filesRoutes: ApiRoutes = {
         name: ctx.url.searchParams.get("name") ?? undefined,
       });
       const size = Number(ctx.request.headers.get("content-length") ?? undefined);
-      if (!parsed.success || !Number.isSafeInteger(size) || size < 0) {
-        return Response.json({ error: "Invalid upload request" }, { status: 400 });
-      }
+      if (!parsed.success || !Number.isSafeInteger(size) || size < 0) return invalid("Invalid upload request");
       if (size > maxUploadBytes) {
         return Response.json({
           error: `File exceeds the upload size limit of ${formatByteSize(maxUploadBytes)}`,
         }, { status: 413 });
       }
+      const { root, path, name } = parsed.data;
+      const source = ctx.request.body ?? new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
       try {
-        const id = context.logical.id;
-        const server = context.container;
-        const source = ctx.request.body ?? new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
-        try {
-          await uploadFile(server, parsed.data.root, parsed.data.path, parsed.data.name, size, source, context.assertAccess, context.signal);
-        } finally {
-          await source.cancel().catch(() => {});
-        }
-        fileAudit(ctx, "uploaded", id, {
-          root: parsed.data.root,
-          path: parsed.data.path,
-          name: parsed.data.name,
-          size,
-        });
-        return respond(okResponseSchema, { ok: true }, 201);
+        await uploadFile(context.container, root, path, name, size, source, context.assertAccess, context.signal);
+      } finally {
+        await source.cancel().catch(() => {});
       }
-      catch (error) {
-        return sendFileError(error);
-      }
-    })
+      audit(ctx, "server.file.uploaded", context.logical.id, { root, path, name, size });
+      return respond(okResponseSchema, { ok: true }, 201);
+    }),
   },
   "/api/v1/servers/:id/files/directory": {
     POST: serverAction("files.write", async (ctx, context) => {
       const parsed = createDirectoryRequestSchema.safeParse(ctx.body);
-      if (!parsed.success) {
-        return Response.json({ error: "Invalid folder request" }, { status: 400 });
-      }
-      try {
-        const id = context.logical.id;
-        const server = context.container;
-        await createDirectory(server, parsed.data.root, parsed.data.path, parsed.data.name, context.assertAccess);
-        fileAudit(ctx, "directory.created", id, parsed.data);
-        return respond(okResponseSchema, { ok: true }, 201);
-      }
-      catch (error) {
-        return sendFileError(error);
-      }
-    })
+      if (!parsed.success) return invalid("Invalid folder request");
+      const { root, path, name } = parsed.data;
+      await createDirectory(context.container, root, path, name, context.assertAccess);
+      audit(ctx, "server.file.directory.created", context.logical.id, parsed.data);
+      return respond(okResponseSchema, { ok: true }, 201);
+    }),
   },
   "/api/v1/servers/:id/files/rename": {
     PATCH: serverAction("files.write", async (ctx, context) => {
       const parsed = renameFileRequestSchema.safeParse(ctx.body);
-      if (!parsed.success) {
-        return Response.json({ error: "Invalid rename request" }, { status: 400 });
-      }
-      try {
-        const id = context.logical.id;
-        const server = context.container;
-        await renameFileEntry(server, parsed.data.root, parsed.data.path, parsed.data.newName, context.assertAccess);
-        fileAudit(ctx, "renamed", id, parsed.data);
-        return respond(okResponseSchema, { ok: true });
-      }
-      catch (error) {
-        return sendFileError(error);
-      }
-    })
-  }
+      if (!parsed.success) return invalid("Invalid rename request");
+      const { root, path, newName } = parsed.data;
+      await renameFileEntry(context.container, root, path, newName, context.assertAccess);
+      audit(ctx, "server.file.renamed", context.logical.id, parsed.data);
+      return respond(okResponseSchema, { ok: true });
+    }),
+  },
 };

@@ -2,17 +2,15 @@ import type * as Docker from "./docker-client.js";
 import { composeSourceLabels } from "./compose-source.js";
 import { docker } from "./docker-client.js";
 import { DockerApiError } from "./docker-transport.js";
+import { AppError } from "./errors.js";
 import {
   getGameConsoleAdapterSummary,
   resolveGameConsoleAdapter,
   type GameConsoleAdapterId,
 } from "./game-console.js";
-import { getFileRoots, type FileRoot } from "./file-storage.js";
-import {
-  getGameCapabilities,
-  inferGameType,
-  type GameCapabilities,
-} from "./server-presets.js";
+import type { FileRoot } from "@ludock/shared";
+import { getFileRoots } from "./file-storage.js";
+import { inferGameType } from "./server-presets.js";
 import {
   approvedConfigurationLabels,
   composeIdentityLabels,
@@ -28,16 +26,11 @@ import {
   type DockerContainerId,
 } from "@ludock/shared";
 
-export { LABEL_ENABLE, LABEL_NAME, LABEL_GAME } from "./discovery.js";
-
 // Keep untrusted identifiers from altering the Docker API request path.
 function assertValidContainerId(id: unknown): DockerContainerId {
   const parsed = dockerContainerIdSchema.safeParse(id);
-  if (!parsed.success) {
-    const error = new Error("Invalid container identifier");
-    Object.assign(error, { statusCode: 400, code: "INVALID_CONTAINER_ID" });
-    throw error;
-  }
+  if (!parsed.success)
+    throw new AppError("INVALID_CONTAINER_ID", 400, "Invalid container identifier");
   return parsed.data;
 }
 
@@ -50,7 +43,6 @@ export interface ManagedContainer {
   state: string;
   status: string;
   gameType: string;
-  capabilities?: GameCapabilities;
   gameConsole: {
     id: GameConsoleAdapterId;
     name: string;
@@ -62,7 +54,7 @@ export interface ManagedContainer {
   labels: Record<string, string>;
 }
 
-export interface DiscoveryDiagnostic {
+interface DiscoveryDiagnostic {
   containerId: string;
   name: string;
   code: "INVALID_ENABLE_LABEL" | "INVALID_COMPOSE_IDENTITY";
@@ -191,7 +183,6 @@ function toInspectedManagedContainer(
   };
   return {
     ...managed,
-    capabilities: capabilitiesForContainer(managed),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, info.Mounts || []),
   };
@@ -273,42 +264,21 @@ export async function getContainerStats(
   };
 }
 
-export async function startContainer(
+export type ContainerAction = "start" | "stop" | "restart";
+
+/** Inspect and authorize the current container immediately before acting on it.
+ * Docker's 304 means start/stop was already satisfied, which is not a failure. */
+export async function changeContainerState(
   id: DockerContainerId,
+  action: ContainerAction,
   assertAccess?: (observation: ServerObservation) => void,
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
   assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container.start().catch(acceptUnchangedState);
-}
-
-export async function stopContainer(
-  id: DockerContainerId,
-  assertAccess?: (observation: ServerObservation) => void,
-): Promise<void> {
-  const { container, info } = await getManagedDockerContainer(id);
-  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container.stop().catch(acceptUnchangedState);
-}
-
-// Docker returns 304 when the requested running state is already satisfied.
-// Treat it as success for both direct requests and scheduled jobs so monitoring
-// records intentional stops and repeated starts do not become failed operations.
-function acceptUnchangedState(error: unknown): void {
-  if (!(error instanceof DockerApiError) || error.statusCode !== 304) throw error;
-}
-
-export async function restartContainer(
-  id: DockerContainerId,
-  assertAccess?: (observation: ServerObservation) => void,
-): Promise<void> {
-  const { container, info } = await getManagedDockerContainer(id);
-  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container.restart();
-}
-
-export function getDockerInstance(): Docker.DockerClient {
-  return docker;
+  await container[action]().catch((error: unknown) => {
+    if (action === "restart" || !(error instanceof DockerApiError) || error.statusCode !== 304)
+      throw error;
+  });
 }
 
 export async function checkDockerConnection(): Promise<void> {
@@ -330,43 +300,11 @@ async function getManagedDockerContainer(
 }
 
 function assertEligible(info: Docker.ContainerInspectInfo): void {
-  if (
-    !evaluateContainerEligibility(
-      info.Config.Image || "",
-      info.Config.Labels || {},
-    ).eligible
-  ) {
-    const error = new Error("Container is not managed by Ludock");
-    Object.assign(error, { statusCode: 403, code: "FORBIDDEN" });
-    throw error;
-  }
-  if (hasInvalidComposeIdentity(info.Config.Labels || {})) {
-    const error = new Error(
+  if (!evaluateContainerEligibility(info.Config.Image || "", info.Config.Labels || {}).eligible)
+    throw new AppError("FORBIDDEN", 403, "Container is not managed by Ludock");
+  if (hasInvalidComposeIdentity(info.Config.Labels || {}))
+    throw new AppError(
+      "INVALID_COMPOSE_IDENTITY", 409,
       "Container Compose identity is incomplete; administrator review required",
     );
-    Object.assign(error, { statusCode: 409, code: "INVALID_COMPOSE_IDENTITY" });
-    throw error;
-  }
-}
-
-function capabilitiesForContainer(
-  server: Pick<ManagedContainer, "gameType" | "image" | "labels">,
-): GameCapabilities {
-  const capabilities = getGameCapabilities(server.gameType);
-  // An explicit game override does not turn an unknown image into a recognized repository.
-  capabilities.recognition = getGameCapabilities(
-    inferGameType(server.image),
-  ).recognition;
-  const configured = server.labels["ludock.console"]?.trim().toLowerCase();
-  if (configured) {
-    const adapter = resolveGameConsoleAdapter(server);
-    capabilities.console = {
-      status: adapter ? "conditional" : "unsupported",
-      description: adapter
-        ? "An explicit console adapter is configured. Its protocol, address, port, and credentials must be validated independently for this image."
-        : "Console access is disabled for this container.",
-      evidence: ["test/game-console.test.ts"],
-    };
-  }
-  return capabilities;
 }

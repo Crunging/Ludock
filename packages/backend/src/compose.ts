@@ -20,12 +20,12 @@ import {
 } from "./approved-paths.js";
 import { AppError } from "./errors.js";
 import type { ServerContext } from "./servers.js";
-import { getDockerInstance } from "./docker.js";
+import { docker } from "./docker-client.js";
 import { isServerBusy } from "./operation-locks.js";
 import { COMPOSE_SOURCE_LABEL, discoverComposeSource } from "./compose-source.js";
 
 type Model = Record<string, unknown>;
-export interface ComposeSnapshot {
+interface ComposeSnapshot {
   directory: string;
   configPath: string;
   model: Model;
@@ -146,10 +146,8 @@ export async function isComposeAvailable(): Promise<boolean> {
       configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length === 0
     ) return false;
     await runCompose(["version", "--short"], 5000);
-    return (
-      process.platform === "linux" &&
-      configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length > 0
-    );
+    // Configuration can change while the probe runs; report the current roots.
+    return configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length > 0;
   } catch {
     return false;
   }
@@ -489,7 +487,7 @@ export async function assertSingleServiceContainer(
       409,
       "Update this server through its original container manager",
     );
-  const containers = await getDockerInstance().listContainers({
+  const containers = await docker.listContainers({
     all: true,
     filters: {
       label: [

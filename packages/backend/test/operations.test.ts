@@ -21,6 +21,8 @@ import {
   waitForLocksReleased,
 } from "../src/operation-locks.js";
 import { serverLockKeys } from "../src/servers.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const owner: SessionUser = { id: "owner", username: "owner", role: "admin" };
@@ -36,7 +38,7 @@ beforeEach(async () => {
   });
   serverId = reconcileServers([
     {
-      containerId: "container",
+      containerId: dockerId("container"),
       name: "world",
       displayName: "World",
       gameType: "minecraft",
@@ -83,7 +85,7 @@ describe("durable operations", () => {
         getDatabase().prepare("UPDATE operations SET status=?,input_json=?,created_at=0 WHERE id=?")
           .run(status, damaged, damagedJob.id);
         const other = reconcileServers([{
-          containerId: "other", name: "other", displayName: "Other", gameType: "minecraft", mounts: [],
+          containerId: dockerId("other"), name: "other", displayName: "Other", gameType: "minecraft", mounts: [],
         }])[0];
         const valid = enqueueOperation({
           serverId: other.id, actorId: owner.id, kind: "damaged-state", bindingRevision: 1,
@@ -91,7 +93,7 @@ describe("durable operations", () => {
         await startOperationRunner();
         expect((await finished(valid.id)).status).toBe("succeeded");
         expect(runs).toStrictEqual([valid.id]);
-        const saved = getDatabase().prepare("SELECT status,error,input_json FROM operations WHERE id=?")
+        const saved = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT status,error,input_json FROM operations WHERE id=?")
           .get(damagedJob.id) as { status: string; error: string; input_json: string };
         expect(saved.status).toBe(status === "queued" ? "failed" : "interrupted");
         expect(saved.error).toMatch(/administrator/);
@@ -249,7 +251,7 @@ describe("durable operations", () => {
     const first = enqueue("serialized");
     const otherId = reconcileServers([
       {
-        containerId: "other",
+        containerId: dockerId("other"),
         name: "other",
         displayName: "Other",
         gameType: "minecraft",
@@ -325,7 +327,7 @@ describe("resource locks", () => {
   });
   it("coordinates named volumes with bind mounts to the same physical data", () => {
     const keys = serverLockKeys("one", {
-      containerId: "one",
+      containerId: dockerId("one"),
       name: "one",
       displayName: "one",
       gameType: "minecraft",

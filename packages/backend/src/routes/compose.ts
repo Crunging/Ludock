@@ -29,7 +29,7 @@ export const composeRoutes: ApiRoutes = {
       const { snapshot } = await validatedProject(context);
       try {
         assertServerCapability(assertRequestUser(ctx.request, user), serverId, request.forceRecreate ? "server.recreate" : "server.update");
-        audit(user, "server.update.confirmed", serverId, {
+        audit(ctx, "server.update.confirmed", serverId, {
           createBackup: request.createBackup,
           forceRecreate: request.forceRecreate,
           sourceFingerprint: snapshot.fingerprint,

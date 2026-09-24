@@ -5,6 +5,8 @@ import { reconcileServers } from "../src/identity.js";
 import { createSchedule } from "../src/schedules.js";
 import * as servers from "../src/servers.js";
 import * as notifications from "../src/notifications.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "background-fixture-token-0123456789";
@@ -16,7 +18,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
   const actor = { id: crypto.randomUUID(), username: "scheduler", role: "admin" as const };
   createUser({ ...actor, passwordHash: "fixture", disabled: false, createdAt: now });
   const server = reconcileServers([{
-    containerId: "background-fixture", name: "world", displayName: "World", gameType: "minecraft", mounts: [],
+    containerId: dockerId("background-fixture"), name: "world", displayName: "World", gameType: "minecraft", mounts: [],
   }])[0];
   const schedule = createSchedule(actor, server.id, {
     action: "start", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
@@ -28,7 +30,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
   const delivery = spyOn(notifications, "deliverNotifications").mockImplementation(async () => {
     await gate;
     // Shutdown must leave storage open until delivery has finished recording its result.
-    expect(database.prepare("SELECT 1 AS value").get()?.value).toBe(1);
+    expect(database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1 AS value").get()?.value).toBe(1);
   });
   let tick: (() => void) | undefined;
   const nativeInterval = globalThis.setInterval;
@@ -44,9 +46,9 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     expect(tick).toBeTruthy();
     expect(delivery.mock.calls.length).toBe(1);
     now += 60_000;
-    tick();
+    tick?.();
     await flush();
-    const row = database.prepare("SELECT last_slot,last_operation_id FROM schedules WHERE id=?")
+    const row = database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT last_slot,last_operation_id FROM schedules WHERE id=?")
       .get(schedule.id) as { last_slot: string | null; last_operation_id: string | null };
     expect(row.last_slot).toBe("2026-09-15T08:00:UTC");
     expect(row.last_operation_id, "The due operation must queue while delivery is pending").toBeTruthy();
@@ -57,14 +59,14 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     await flush();
     expect(stopped).toBe(false);
     const discoveries = discovery.mock.calls.length;
-    tick();
+    tick?.();
     await flush();
     expect(discovery.mock.calls.length, "Shutdown prevents new discovery").toBe(discoveries);
     expect(delivery.mock.calls.length).toBe(1);
     releaseDelivery();
     await shutdown;
     expect(stopped).toBe(true);
-    expect(() => database.prepare("SELECT 1").get()).toThrow(/closed/i);
+    expect(() => database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1").get()).toThrow(/closed/i);
   } finally {
     releaseDelivery();
     await runtime?.shutdown("test cleanup");

@@ -2,7 +2,8 @@ import { fixtureBytes } from "./fixtures/bytes.js";
 import { decodeText } from "../src/bytes.js";
 import { expect, describe, it } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
-import { getDockerInstance, getManagedContainerObservation } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
+import { getManagedContainerObservation } from "../src/docker.js";
 import {
   createDirectory,
   uploadFile,
@@ -41,7 +42,6 @@ async function cleanupFixtures(
 describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")(
   "Docker storage acceptance",
   () => {
-    const docker = getDockerInstance();
 
     it("removes inherited anonymous helper volumes without removing named game data", async () => {
       const cleanup: Array<() => Promise<unknown>> = [];

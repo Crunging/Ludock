@@ -10,55 +10,104 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    if: >-
-      ${{ !(github.base_ref == 'main' &&
-      github.head_ref == 'release-please--branches--main--components--ludock' &&
-      github.event.pull_request.head.repo.full_name == github.repository) }}
-    uses: ./.github/workflows/checks.yaml
-  release:
-    name: Release metadata, build, and startup
-    if: >-
-      ${{ github.base_ref == 'main' &&
-      github.head_ref == 'release-please--branches--main--components--ludock' &&
-      github.event.pull_request.head.repo.full_name == github.repository }}
+  source:
+    name: Source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun audit --audit-level=high
+      - name: Type-check, lint, test, and build
+        run: bun run check
+
+  browser:
+    name: Browser
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-      - name: Validate release changes, versions, changelog, and tag
-        run: bun scripts/ci/pr-checks.mjs
-      - name: Expose BuildKit cache runtime
-        uses: ./.github/actions/bun-action
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          integration: build-runtime
-      - name: Set up Docker Buildx
-        run: bun scripts/ci/containers.mjs setup
-      - name: Build production image
-        run: bun scripts/ci/containers.mjs build check
-        env:
-          LUDOCK_PLATFORM: linux/amd64
-      - name: Smoke-test production release
-        run: bun scripts/test-linux.mjs --smoke-only
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
-      - name: Remove build instance
-        if: always()
-        run: docker buildx rm ludock
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @ludock/frontend build
+      - name: Install Chromium
+        working-directory: packages/frontend
+        run: bun x --bun playwright install --with-deps --only-shell chromium
+      - run: bun run --filter @ludock/frontend test:e2e
+      - name: Keep browser failure details
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-failures
+          path: |
+            packages/frontend/test-results/
+            packages/frontend/playwright-report/
+          retention-days: 7
+
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+  container:
+    name: Container (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      LUDOCK_TEST_IMAGE: ludock:ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ludock:ci
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/test-compose.mjs
+      - name: Smoke-test startup and run Linux backend suites
+        run: bun scripts/test-linux.mjs
+      - run: bun scripts/test-files.mjs
+      - run: bun scripts/test-files.mjs --fallback-helper
+      - run: bun scripts/test-backups.mjs
+      - run: bun scripts/test-packaged.mjs
+      - name: Scan image for vulnerabilities
+        run: bun scripts/ci/containers.mjs scan ludock:ci

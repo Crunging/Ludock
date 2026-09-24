@@ -6,7 +6,7 @@ import {
 } from "../src/request-security.js";
 
 function request(
-  headers: HeadersInit,
+  headers: Record<string, string>,
   encrypted = false
 ): Request {
   const values = new Headers(headers);

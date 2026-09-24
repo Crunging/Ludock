@@ -3,7 +3,7 @@ import { JsonLineDecoder } from "./json-lines.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { currentActor, hasServerCapability } from "./authorization.js";
-import { getDockerInstance } from "./docker.js";
+import { docker } from "./docker-client.js";
 import { listLogicalServers } from "./identity.js";
 import { refreshServers } from "./servers.js";
 import { createLogger } from "./logger.js";
@@ -16,7 +16,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let streamGeneration = 0;
 const logger = createLogger("events");
 
-export interface DockerEvent {
+interface DockerEvent {
   Action?: string;
   Actor?: { ID?: string };
   id?: string;
@@ -122,7 +122,7 @@ async function startEventStream(): Promise<void> {
   eventStreamActive = true;
   const generation = streamGeneration;
   try {
-    const stream = await getDockerInstance().getEvents({
+    const stream = await docker.getEvents({
       filters: { type: ["container"] },
     });
     if (generation !== streamGeneration || eventClients.size === 0) {

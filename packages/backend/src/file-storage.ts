@@ -6,7 +6,7 @@ import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 import { createLogger } from "./logger.js";
-import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
+import { FILE_HELPER_SCRIPT } from "./helper-scripts.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { resolveHelperImage } from "./runtime-images.js";
@@ -14,7 +14,7 @@ import { createHelperContainer, removeHelperContainer } from "./docker-helpers.j
 import { AppError } from "./errors.js";
 import type { FileHelperRequest } from "./helpers/contracts.js";
 
-export const LABEL_FILES = "ludock.files";
+const LABEL_FILES = "ludock.files";
 const logger = createLogger("files");
 const MAX_HELPER_OUTPUT = 4 * 1024 * 1024;
 const normalizedMountPath = (value: string) =>
@@ -23,7 +23,6 @@ const within = (value: string, root: string) =>
   value === root || value.startsWith(`${root}/`);
 
 import type { FileRoot, FileEntry } from "@ludock/shared";
-export type { FileRoot, FileEntry } from "@ludock/shared";
 
 export interface ContainerFileMount {
   Type: string;

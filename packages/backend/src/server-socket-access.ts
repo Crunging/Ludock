@@ -1,8 +1,40 @@
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
-import { hasServerCapability, type ServerCapability } from "./authorization.js";
+import type { ServerCapability } from "@ludock/shared";
+import { hasServerCapability } from "./authorization.js";
 import { getLogicalServer } from "./identity.js";
 import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
+
+export type SocketOutput = "stdout" | "stderr" | "system" | "error";
+
+export function sendSocketMessage(ws: SocketChannel, type: SocketOutput, data: string): void {
+  if (ws.isOpen) ws.send(JSON.stringify({ type, data }));
+}
+
+/** Authorize the server named by the last URL segment, or report why not and
+ * close the socket. */
+export async function openServerSocket(
+  ws: SocketChannel,
+  request: Request,
+  auth: WebSocketAuth,
+  capability: ServerCapability,
+  unavailable: string,
+) {
+  const serverId = new URL(request.url).pathname.split("/").filter(Boolean).at(-1);
+  if (!serverId) {
+    sendSocketMessage(ws, "error", "Missing server ID");
+    ws.close(1008, "Missing server ID");
+    return null;
+  }
+  try {
+    const access = await authorizeServerSocket(ws, auth, serverId, capability);
+    return access.allowed() ? { serverId, ...access } : null;
+  } catch {
+    sendSocketMessage(ws, "error", unavailable);
+    ws.close(1008, "Server access unavailable");
+    return null;
+  }
+}
 
 /** A stream stays attached to the exact reviewed binding used when it opened.
  * Check local revocation before every output frame, and refresh Docker while

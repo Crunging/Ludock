@@ -1,6 +1,5 @@
 import { JsonLineDecoder } from "./json-lines.js";
 import type { DockerConnection } from "./docker-transport.js";
-export type { DockerConnection } from "./docker-transport.js";
 import { dockerContainerIdSchema } from "@ludock/shared";
 import { DockerApiError, DockerTransport } from "./docker-transport.js";
 import type {

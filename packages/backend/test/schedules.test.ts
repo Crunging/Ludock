@@ -20,12 +20,11 @@ import {
   deleteSchedule,
   listSchedules,
   runSchedules,
-  scheduleSlot,
   setScheduleEnabled,
   updateSchedule,
 } from "../src/schedules.js";
 import { AppError } from "../src/errors.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
   getOperation,
@@ -33,6 +32,8 @@ import {
   startOperationRunner,
   stopOperationRunner,
 } from "../src/operations.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin: SessionUser = { id: "admin", username: "owner", role: "admin" };
@@ -43,7 +44,7 @@ const friend: SessionUser = {
 };
 const other: SessionUser = { id: "other", username: "other", role: "operator" };
 const observation = {
-  containerId: "original",
+  containerId: dockerId("original"),
   name: "world",
   displayName: "World",
   gameType: "minecraft",
@@ -113,21 +114,6 @@ afterEach(async () => {
   closeDatabase();
 });
 
-describe("schedule clock semantics", () => {
-  it("uses local days/time and never catches up missed destructive work", () => {
-    expect(scheduleSlot(input, due)).toBeTruthy();
-    expect(scheduleSlot(input, due + 60_000)).toBe(null);
-    expect(scheduleSlot({ ...input, days: [0] }, due)).toBe(null);
-  });
-  it("deduplicates the repeated fall-back hour and skips the spring-forward gap", () => {
-    const fall = { ...input, time: "01:30" };
-    expect(scheduleSlot(fall, Date.parse("2026-11-01T08:30:00Z"))).toBe(scheduleSlot(fall, Date.parse("2026-11-01T09:30:00Z")));
-    const spring = { ...input, time: "02:30" };
-    expect(scheduleSlot(spring, Date.parse("2026-03-08T09:30:00Z"))).toBe(null);
-    expect(scheduleSlot(spring, Date.parse("2026-03-08T10:30:00Z"))).toBe(null);
-  });
-});
-
 describe("schedule creation audit transaction", () => {
   it("commits creation and its audit before attempting retention cleanup", () => {
     const db = getDatabase();
@@ -143,7 +129,7 @@ describe("schedule creation audit transaction", () => {
     expect(cleanup.mock.calls.length).toBe(1);
     expect(cleanupInTransaction).toBe(false);
     expect(listSchedules(friend, serverId)[0].id).toBe(schedule.id);
-    const audit = db.prepare(
+    const audit = db.prepare<Record<string, unknown>, SQLQueryBindings[]>(
       "SELECT details_json FROM audit_log WHERE action='schedule.created'",
     ).get() as { details_json: string };
     expect(JSON.parse(audit.details_json).scheduleId).toBe(schedule.id);
@@ -228,7 +214,7 @@ describe("schedule authority", () => {
   it("follows validated ordinary recreation using its new binding revision", () => {
     createSchedule(friend, serverId, input);
     const replacement = reconcileServers([
-      { ...observation, containerId: "replacement" },
+      { ...observation, containerId: dockerId("replacement") },
     ])[0];
     runSchedules(due);
     const operations = serverOperations();
@@ -252,7 +238,7 @@ describe("schedule editing and suspension", () => {
   it("edits in place while preserving owner, binding baseline, history, and consumed slots", () => {
     const created = createSchedule(friend, serverId, input);
     runSchedules(due);
-    const before = getDatabase().prepare("SELECT * FROM schedules WHERE id=?")
+    const before = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM schedules WHERE id=?")
       .get(created.id) as Record<string, unknown>;
     const edited = updateSchedule(admin, serverId, created.id, {
       ...input, time: "09:00", revision: created.revision,
@@ -261,7 +247,7 @@ describe("schedule editing and suspension", () => {
     expect(edited.ownerId).toBe(friend.id);
     expect(edited.revision).toBe(2);
     expect(edited.time).toBe("09:00");
-    const after = getDatabase().prepare("SELECT * FROM schedules WHERE id=?")
+    const after = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM schedules WHERE id=?")
       .get(created.id) as Record<string, unknown>;
     for (const key of ["owner_id", "binding_revision", "last_slot", "last_result", "created_at"])
       expect(after[key]).toBe(before[key]);
@@ -294,7 +280,7 @@ describe("schedule editing and suspension", () => {
     expect(setScheduleEnabled(friend, serverId, schedule.id, {
       enabled: true, revision: 1,
     }).revision).toBe(1);
-    expect(getDatabase().prepare(
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>(
       "SELECT COUNT(*) AS count FROM audit_log WHERE action IN ('schedule.updated','schedule.resumed')",
     ).get()?.count).toBe(0);
   });
@@ -371,7 +357,7 @@ describe("schedule editing and suspension", () => {
     expect(() => setScheduleEnabled(admin, serverId, schedule.id, {
       enabled: true, revision: 2,
     })).toThrow(/server configuration changed/);
-    expect(getDatabase().prepare("SELECT binding_revision FROM schedules WHERE id=?")
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT binding_revision FROM schedules WHERE id=?")
       .get(schedule.id)?.binding_revision).toBe(1);
   });
 
@@ -539,7 +525,7 @@ describe("schedule outcomes", () => {
     const schedule = createSchedule(friend, serverId, input);
     runSchedules(due);
     const operation = listSchedules(friend, serverId)[0].lastOperation!;
-    const another = reconcileServers([observation, { ...observation, name: "another", containerId: "another" }])
+    const another = reconcileServers([observation, { ...observation, name: "another", containerId: dockerId("another") }])
       .find((server) => server.id !== serverId)!;
     const db = getDatabase();
     for (const [targetServer, owner, operationInput] of [
@@ -581,7 +567,7 @@ describe("schedule outcomes", () => {
       BEGIN SELECT RAISE(ABORT, 'fixture association failed'); END`);
     runSchedules(due);
     expect(serverOperations().length).toBe(0);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action='server.start.queued'").get()?.count).toBe(0);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM audit_log WHERE action='server.start.queued'").get()?.count).toBe(0);
     const skipped = listSchedules(friend, serverId)[0];
     expect(skipped.id).toBe(schedule.id);
     expect(skipped.lastOperation).toBe(null);
@@ -723,7 +709,7 @@ describe("schedule failure isolation", () => {
       const operations = serverOperations();
       expect(operations.length).toBe(1);
       expect(getOperation(operations[0].id)?.input.scheduleId).toBe(valid.id);
-      const invalid = getDatabase().prepare(
+      const invalid = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>(
         "SELECT last_slot,last_result FROM schedules WHERE id=?",
       ).get(invalidId) as { last_slot: string | null; last_result: string | null };
       expect(invalid.last_slot).toBe(null);
@@ -748,7 +734,7 @@ describe("schedule failure isolation", () => {
     const operations = serverOperations();
     expect(operations.length).toBe(1);
     expect(getOperation(operations[0].id)?.input.scheduleId).toBe(valid.id);
-    const state = getDatabase().prepare(
+    const state = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>(
       "SELECT last_slot,last_result FROM schedules WHERE id=?",
     ).get(disabled.id) as { last_slot: string | null; last_result: string | null };
     expect(state.last_slot).toBe(null);
@@ -810,7 +796,7 @@ describe("schedule resource limits", () => {
       observation,
       {
         ...observation,
-        containerId: "second",
+        containerId: dockerId("second"),
         name: "second-world",
         displayName: "Second World",
       },
@@ -829,7 +815,7 @@ describe("schedule resource limits", () => {
     expect(() => runSchedules(due)).not.toThrow();
     expect(warn.mock.calls.length).toBe(1);
     expect(String(warn.mock.calls[0][0])).toMatch(/Schedule limit exceeded/);
-    const overflow = getDatabase().prepare(
+    const overflow = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>(
       "SELECT last_slot,last_result FROM schedules WHERE id=?",
     ).get(overflowId) as { last_slot: string | null; last_result: string | null };
     expect(overflow.last_slot).toBe(null);

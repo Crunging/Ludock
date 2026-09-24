@@ -31,20 +31,16 @@ import {
   verifyPassword,
   withPasswordWork,
 } from "./password.js";
-export { hashPassword, verifyPassword } from "./password.js";
 
-import { developmentInstance } from "./development-instance.js";
-const SESSION_COOKIE = developmentInstance
-  ? `ludock_session_${developmentInstance}`
-  : "ludock_session";
+const SESSION_COOKIE = "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const MIN_API_TOKEN_LENGTH = 32;
+const MIN_API_TOKEN_LENGTH = 32;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;
 const API_TOKEN_OPERATION_ACTOR_PREFIX = "api-token:";
 const API_TOKEN_OPERATION_ACTOR_PATTERN = /^api-token:[0-9a-f]{64}$/;
 const logger = createLogger("auth");
 
-export interface SetupState {
+interface SetupState {
   required: boolean;
   locked: boolean;
   expiresAt: number | null;

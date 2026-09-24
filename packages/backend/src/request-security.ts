@@ -34,12 +34,10 @@ export function requestOriginDiagnostic(request: RequestMetadata): {
   return {
     originHost: origin?.host || "missing-or-invalid",
     originProtocol: origin?.protocol || "missing-or-invalid",
-    host: (request.headers.get("host") || new URL(request.url).host) || "missing",
-    forwardedHost:
-      (request.headers.get("x-forwarded-host") || "") || "missing",
-    forwardedProtocol:
-      (request.headers.get("x-forwarded-proto") || "") || "missing",
-    fetchSite: (request.headers.get("sec-fetch-site") || "") || "missing",
+    host: request.headers.get("host") || new URL(request.url).host || "missing",
+    forwardedHost: request.headers.get("x-forwarded-host") || "missing",
+    forwardedProtocol: request.headers.get("x-forwarded-proto") || "missing",
+    fetchSite: request.headers.get("sec-fetch-site") || "missing",
     resolvedHosts: externalHosts(request).join(",") || "none",
     resolvedProtocols: externalProtocols(request).join(",") || "none",
   };
@@ -114,14 +112,10 @@ function externalHosts(request: RequestMetadata): string[] {
 }
 
 function forwardedValues(value: string | null): string[] {
-  return headerValue(value)
+  return (value || "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function headerValue(value: string | null): string {
-  return value || "";
 }
 
 function hostHasPort(host: string): boolean {

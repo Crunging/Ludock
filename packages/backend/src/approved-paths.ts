@@ -3,11 +3,13 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { AppError } from "./errors.js";
 
+/** Split a path-delimited root setting such as LUDOCK_BACKUP_ROOTS. */
+export function rootList(value: string | undefined): string[] {
+  return [...new Set((value ?? "").split(path.delimiter).map((root) => root.trim()).filter(Boolean))];
+}
+
 export function configuredRoots(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(path.delimiter)
-    .map((root) => root.trim())
-    .filter(Boolean)
+  return rootList(value)
     .map((root) => {
       if (
         !path.isAbsolute(root) ||

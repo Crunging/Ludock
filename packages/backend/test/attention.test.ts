@@ -10,7 +10,7 @@ import {
 import { createApp } from "../src/app.js";
 import { listAttention } from "../src/attention.js";
 import { createSession } from "../src/auth.js";
-import { setServerGrant } from "../src/authorization.js";
+import { setServerGrant } from "./fixtures/grants.js";
 import {
   closeDatabase,
   createUser,
@@ -18,7 +18,7 @@ import {
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { getLogicalServer, listLogicalServers } from "../src/identity.js";
 import { configureAvailability } from "../src/monitoring.js";
 import { acquireLocks } from "../src/operation-locks.js";
@@ -44,7 +44,6 @@ interface ContainerFixture {
   name: string;
   mounts?: Array<{ Type: string; Source: string; Destination: string; RW: boolean }>;
 }
-const docker = getDockerInstance();
 const originals = { listContainers: docker.listContainers, getContainer: docker.getContainer };
 let containers: ContainerFixture[];
 let unavailable: boolean;
@@ -456,7 +455,7 @@ describe("server detail and attention resolution", () => {
     unavailable = true;
     expect((await requestAs(viewer, `/api/v1/servers/${privateId}`)).status).toBe(404);
 
-    beforeList = () => setServerGrant(viewer.id, worldId, [], admin);
+    beforeList = () => { setServerGrant(viewer.id, worldId, [], admin); };
     const revoked = await requestAs(viewer, `/api/v1/servers/${worldId}`);
     expect(revoked.status).toBe(404);
     expect(await revoked.text()).not.toMatch(/world-container|Live status unavailable/);
@@ -479,7 +478,7 @@ describe("server detail and attention resolution", () => {
     expect(mutationCalls).toStrictEqual([]);
     expect(inspectCalls).toBe(0);
     expect(statsCalls).toBe(0);
-    expect(getLogicalServer(worldId)!.containerId).toBe("world-container");
+    expect<string | null>(getLogicalServer(worldId)!.containerId).toBe("world-container");
     expect(getLogicalServer(worldId)!.status).toBe("active");
   });
 
@@ -498,7 +497,7 @@ describe("server detail and attention resolution", () => {
   });
 
   it("rechecks view access after statistics finish", async () => {
-    beforeStats = () => setServerGrant(viewer.id, worldId, [], admin);
+    beforeStats = () => { setServerGrant(viewer.id, worldId, [], admin); };
 
     const response = await requestAs(viewer, `/api/v1/servers/${worldId}`);
 
@@ -540,7 +539,7 @@ describe("server detail and attention resolution", () => {
     const original = await getServer(operator, worldId);
     expect(original.fileRoots.length).toBe(1);
     expect(original.fileRoots[0].path).toBe("/data");
-    beforeStats = () => setServerGrant(operator.id, worldId, ["server.view"], admin);
+    beforeStats = () => { setServerGrant(operator.id, worldId, ["server.view"], admin); };
 
     const response = await requestAs(operator, `/api/v1/servers/${worldId}`);
 

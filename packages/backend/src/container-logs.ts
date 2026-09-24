@@ -1,10 +1,11 @@
+import type { DockerContainerId } from "@ludock/shared";
 import { byteView } from "./bytes.js";
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import { writeAuditLog } from "./database.js";
 import { getContainer } from "./docker.js";
 import { createLogger } from "./logger.js";
-import { authorizeServerSocket } from "./server-socket-access.js";
+import { openServerSocket, sendSocketMessage, type SocketOutput } from "./server-socket-access.js";
 import {
   ConsoleOutputRedactor,
   observationSecrets,
@@ -19,124 +20,104 @@ export async function handleContainerLogsConnection(
   auth: WebSocketAuth,
   remoteAddress?: string,
 ): Promise<void> {
-  const url = new URL(req.url);
-  const serverId = url.pathname.split("/").filter(Boolean).at(-1);
-  if (!serverId) {
-    sendMessage(ws, "error", "Missing server ID");
-    ws.close(1008, "Missing server ID");
-    return;
-  }
-  let access;
-  try {
-    access = await authorizeServerSocket(ws, auth, serverId, "logs.read");
-  } catch {
-    sendMessage(
-      ws,
-      "error",
-      "Server logs are unavailable or access was denied",
-    );
-    ws.close(1008, "Server access unavailable");
-    return;
-  }
-  if (!access.allowed()) return;
-  const containerId = access.context.logical.containerId;
-  const send = (
-    type: "stdout" | "stderr" | "system" | "error",
-    data: string,
-  ) => {
-    if (access.allowed()) sendMessage(ws, type, data);
+  const access = await openServerSocket(
+    ws, req, auth, "logs.read", "Server logs are unavailable or access was denied",
+  );
+  if (!access) return;
+  const { serverId, context } = access;
+  const containerId = context.logical.containerId;
+  const send = (type: SocketOutput, data: string) => {
+    if (access.allowed()) sendSocketMessage(ws, type, data);
   };
-  const user = auth.user;
-  const container = getContainer(containerId);
   logger.info("Docker log connection opened", {
-    container: shortContainerId(containerId),
-    role: user.role,
+    container: containerId.slice(0, 12),
+    role: auth.user.role,
   });
   writeAuditLog({
-    userId: user.id === "api-token" ? undefined : user.id,
+    userId: auth.user.id,
     action: "server.logs.opened",
     targetType: "server",
     targetId: serverId,
-    details: {
-      containerId,
-      bindingRevision: access.context.logical.bindingRevision,
-    },
+    details: { containerId, bindingRevision: context.logical.bindingRevision },
     ipAddress: remoteAddress,
   });
   send("system", "Following Docker logs");
-
-  let logReader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
-  const secrets = observationSecrets(access.context.observation);
-  const stdout = new ConsoleOutputRedactor(secrets, (value) =>
-    send("stdout", value),
-  );
-  const stderr = new ConsoleOutputRedactor(secrets, (value) =>
-    send("stderr", value),
-  );
-  const decoder = new DockerLogDecoder((type, data) =>
-    (type === "stdout" ? stdout : stderr).push(data),
-  );
-  const destroyLogStream = () => {
-    void logReader?.cancel().catch(() => {});
-    logReader = undefined;
-  };
-  ws.onClose(destroyLogStream);
-  try {
-    const stream = await container.logs({
-      follow: true,
-      stdout: true,
-      stderr: true,
-      tail: 500,
-      timestamps: true,
-    });
-    const reader = stream.getReader();
-    logReader = reader;
-    if (!access.allowed()) {
-      destroyLogStream();
-      reader.releaseLock();
-      return;
-    }
-    void (async () => {
-      try {
-        while (logReader === reader) {
-          const { value, done } = await reader.read();
-          if (logReader !== reader) return;
-          if (done) break;
-          decoder.push(value);
-        }
-        if (!decoder.end()) throw new Error("Incomplete Docker log frame");
-        stdout.end();
-        stderr.end();
-        send("system", "Log stream ended (container may have stopped)");
-      } catch {
-        if (logReader === reader) {
-          logger.warn("Docker log stream failed", { container: shortContainerId(containerId) });
-          send("error", "Docker log stream failed");
-        }
-      } finally {
-        if (logReader === reader) logReader = undefined;
-        await reader.cancel().catch(() => {});
-        reader.releaseLock();
-      }
-    })();
-  } catch {
-    logger.warn("Failed to attach Docker log stream", {
-      container: shortContainerId(containerId),
-    });
-    send("error", "Failed to open Docker logs");
-  }
-
-  ws.onMessage(() => {
-    send("error", "Docker logs are read-only");
-  });
+  ws.onMessage(() => send("error", "Docker logs are read-only"));
   ws.onClose((code) => {
-    logger.info("Docker log connection closed", {
-      container: shortContainerId(containerId),
-      code,
-    });
-    destroyLogStream();
+    logger.info("Docker log connection closed", { container: containerId.slice(0, 12), code });
   });
+  await followContainerLogs(ws, containerId, {
+    tail: 500,
+    timestamps: true,
+    secrets: observationSecrets(context.observation),
+    allowed: () => access.allowed(),
+    send,
+    endedMessage: "Log stream ended (container may have stopped)",
+  });
+}
 
+/** Stream redacted container output until the socket closes or access ends. */
+export async function followContainerLogs(
+  ws: SocketChannel,
+  containerId: DockerContainerId,
+  options: {
+    tail: number;
+    timestamps: boolean;
+    secrets: readonly string[];
+    allowed: () => boolean;
+    send: (type: SocketOutput, data: string) => void;
+    endedMessage: string;
+  },
+): Promise<void> {
+  const { send } = options;
+  const stdout = new ConsoleOutputRedactor(options.secrets, (value) => send("stdout", value));
+  const stderr = new ConsoleOutputRedactor(options.secrets, (value) => send("stderr", value));
+  const decoder = new DockerLogDecoder((type, value) =>
+    (type === "stdout" ? stdout : stderr).push(value),
+  );
+  let reader: ReturnType<ReadableStream<Uint8Array>["getReader"]>;
+  try {
+    const stream = await getContainer(containerId).logs({
+      follow: true, stdout: true, stderr: true,
+      tail: options.tail, timestamps: options.timestamps,
+    });
+    reader = stream.getReader();
+  } catch {
+    logger.warn("Failed to attach Docker log stream", { container: containerId.slice(0, 12) });
+    send("error", "Failed to open Docker logs");
+    return;
+  }
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    void reader.cancel().catch(() => {});
+  };
+  ws.onClose(stop);
+  if (!options.allowed()) stop();
+  void (async () => {
+    try {
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (stopped) return;
+        if (done) break;
+        decoder.push(value);
+      }
+      if (stopped) return;
+      if (!decoder.end()) throw new Error("Incomplete Docker log frame");
+      stdout.end();
+      stderr.end();
+      send("system", options.endedMessage);
+    } catch {
+      if (!stopped) {
+        logger.warn("Docker log stream failed", { container: containerId.slice(0, 12) });
+        send("error", "Docker log stream failed");
+      }
+    } finally {
+      stopped = true;
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  })();
 }
 
 export class DockerLogDecoder {
@@ -231,16 +212,4 @@ export class DockerLogDecoder {
       this.headerBytes = 0;
     }
   }
-}
-
-function sendMessage(
-  ws: SocketChannel,
-  type: "stdout" | "stderr" | "system" | "error",
-  data: string,
-): void {
-  if (ws.isOpen) ws.send(JSON.stringify({ type, data }));
-}
-
-function shortContainerId(containerId: string): string {
-  return containerId.slice(0, 12);
 }
