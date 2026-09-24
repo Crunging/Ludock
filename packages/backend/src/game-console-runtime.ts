@@ -9,7 +9,7 @@ import {
   type GameConsoleAdapter,
 } from "./game-console.js";
 import type { ManagedContainer } from "./docker.js";
-import { rawDataToString } from "./ws-message.js";
+import { socketMessageText } from "./socket-channel.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -266,7 +266,7 @@ export async function executeRustWebRcon(
           throw new Error("Unsupported WebRCON message");
         if ((typeof raw === "string" ? encodeText(raw).byteLength : raw.byteLength) > MAX_RCON_PACKET_SIZE)
           throw new Error("WebRCON response is too large");
-        const message = JSON.parse(rawDataToString(raw)) as {
+        const message = JSON.parse(socketMessageText(raw)) as {
           Identifier?: unknown;
           Message?: unknown;
         };

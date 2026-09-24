@@ -6,7 +6,7 @@ import type * as Docker from "./docker-client.js";
 import { docker } from "./docker-client.js";
 import type { ManagedContainer } from "./docker.js";
 import { createLogger } from "./logger.js";
-import { FILE_HELPER_SCRIPT } from "./file-helper-script.js";
+import { FILE_HELPER_SCRIPT } from "./helper-scripts.js";
 import { evaluateContainerEligibility } from "./discovery.js";
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { resolveHelperImage } from "./runtime-images.js";

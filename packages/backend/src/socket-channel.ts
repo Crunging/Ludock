@@ -1,8 +1,13 @@
-import { encodeText } from "./bytes.js";
+import { decodeText, encodeText } from "./bytes.js";
 import type { ServerWebSocket } from "bun";
 import { createLogger } from "./logger.js";
 
 export type SocketMessage = string | Uint8Array | ArrayBuffer;
+
+/** Bun supplies text messages as strings and binary messages as byte buffers. */
+export function socketMessageText(message: SocketMessage): string {
+  return typeof message === "string" ? message : decodeText(message);
+}
 export const MAX_SOCKET_BUFFER_BYTES = 1024 * 1024;
 const logger = createLogger("websocket");
 

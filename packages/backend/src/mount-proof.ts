@@ -6,14 +6,7 @@ import type { ContainerFileMount } from "./file-storage.js";
 import { resolveHelperImage } from "./runtime-images.js";
 import { AppError } from "./errors.js";
 import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
-
-// Bun embeds these checked programs without executing them in the backend.
-// @ts-expect-error TypeScript models JS exports, not Bun's text import attribute.
-import mountIdentitiesSource from "./helpers/mount-identities.js" with { type: "text" };
-// @ts-expect-error TypeScript models JS exports, not Bun's text import attribute.
-import mountProofSource from "./helpers/mount-proof.js" with { type: "text" };
-const MOUNT_IDENTITIES_SCRIPT = mountIdentitiesSource as string;
-export const MOUNT_PROOF_SCRIPT = mountProofSource as string;
+import { MOUNT_IDENTITIES_SCRIPT, MOUNT_PROOF_SCRIPT } from "./helper-scripts.js";
 
 export interface MountIdentity {
   dev: string;

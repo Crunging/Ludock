@@ -28,7 +28,7 @@ import { withLocks } from "./operation-locks.js";
 import type { JobContext } from "./operations.js";
 import { suppressMonitoring } from "./monitoring.js";
 import { notifyEvent } from "./notifications.js";
-import { RESTORE_HELPER_SCRIPT } from "./restore-helper-script.js";
+import { RESTORE_HELPER_SCRIPT } from "./helper-scripts.js";
 import { AppError } from "./errors.js";
 import {
   approvedBackupDirectory,
