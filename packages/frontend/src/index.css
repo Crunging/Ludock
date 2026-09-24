@@ -1426,7 +1426,6 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .help-panel h2 { font-size: 15px; margin-bottom: 8px; }
 .help-panel p + p, .help-panel pre { margin-top: 10px; }
 .help-panel pre { padding: 12px; background: var(--bg-body); margin-bottom: 10px; }
-.table-empty { padding: 24px 12px; color: var(--text-dim); }
 .grants-editor { grid-column: 1 / -1; border-top: 1px solid var(--border); padding-top: 16px; width: 100%; }
 .grants-editor h3 { font-size: 15px; margin-bottom: 8px; }
 .grants-editor .muted { margin-bottom: 12px; }

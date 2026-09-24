@@ -28,19 +28,11 @@ export function can(
   server: Server | null,
   capability: ServerCapability,
 ): boolean {
-  if (!user || !server) return false;
-  if (user.role === "admin")
-    return Boolean(
-      server.permissions?.includes("server.view") &&
-        server.permissions.includes(capability),
-    );
-  if (!(capability in CAPABILITY_LABELS)) return false;
-  if (user.role === "viewer" && !VIEWER_CAPABILITIES.includes(capability))
+  if (!user || !server?.permissions.includes("server.view") || !server.permissions.includes(capability))
     return false;
-  return Boolean(
-    server.permissions?.includes("server.view") &&
-      server.permissions.includes(capability),
-  );
+  if (user.role === "admin") return true;
+  if (!(capability in CAPABILITY_LABELS)) return false;
+  return user.role !== "viewer" || VIEWER_CAPABILITIES.includes(capability);
 }
 
 export function toggleGrant(
