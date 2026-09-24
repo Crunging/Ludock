@@ -11,6 +11,8 @@ import { docker } from "../src/docker-client.js";
 import { reconcileServers } from "../src/identity.js";
 import { setSetting } from "../src/settings.js";
 import type { ServerContext } from "../src/servers.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 let directory: string;
 let context: ServerContext;
@@ -34,7 +36,7 @@ beforeEach(async () => {
   destinationSource = "/srv/ludock-archives";
   otherWriter = false;
   const observation = {
-    containerId: "readiness-game", name: "readiness-game", displayName: "Readiness fixture",
+    containerId: dockerId("readiness-game"), name: "readiness-game", displayName: "Readiness fixture",
     gameType: "minecraft" as const,
     mounts: [{ type: "bind", source: "/srv/game", destination: "/data", writable: true }],
   };
@@ -139,7 +141,7 @@ describe("read-only backup preflight", () => {
     }
     expect(create.mock.calls.length).toBe(0);
     expect(await readdir(directory)).toStrictEqual([]);
-    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
   });
 
   it("collects independent root, state and shared-writer problems", async () => {

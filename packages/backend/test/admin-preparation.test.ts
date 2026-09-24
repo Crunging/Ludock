@@ -4,6 +4,8 @@ import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:te
 import type { BackupSettings } from "@ludock/shared";
 import type { ServerObservation } from "../src/identity.js";
 import type { ServerContext } from "../src/servers.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const [{ createApp }, auth, database, identity, servers, backups, storage, settings] = await Promise.all([
@@ -13,7 +15,7 @@ const [{ createApp }, auth, database, identity, servers, backups, storage, setti
 ]);
 const actor = { id: "admin", username: "admin", role: "admin" as const };
 const observation: ServerObservation = {
-  containerId: "docker-fixture", name: "fixture", displayName: "Fixture", gameType: "minecraft",
+  containerId: dockerId("docker-fixture"), name: "fixture", displayName: "Fixture", gameType: "minecraft",
   mounts: [{ type: "bind", source: "/srv/game", destination: "/data", writable: true }],
 };
 let server: Server<unknown>;
@@ -84,7 +86,7 @@ describe("authorization after administrator request preparation", () => {
     database.deleteSessionRecord(sessionHash);
     hold.release();
     expect((await response).status).toBe(401);
-    expect(settings.getSetting("backups")).toStrictEqual(initial);
+    expect(settings.getSetting<BackupSettings>("backups")).toStrictEqual(initial);
   });
 
   it("closes an opened backup stream before returning bytes after access is revoked", async () => {
@@ -119,6 +121,6 @@ describe("authorization after administrator request preparation", () => {
     database.deleteSessionRecord(sessionHash);
     hold.release();
     expect((await response).status).toBe(401);
-    expect(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
+    expect(database.getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
   });
 });

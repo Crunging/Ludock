@@ -15,9 +15,21 @@ import {
   openDownload,
 } from "../src/file-storage.js";
 import { docker } from "../src/docker-client.js";
+import { dockerId } from "./fixtures/ids.js";
 import type { ManagedContainer } from "../src/docker.js";
 import type * as Docker from "../src/docker-client.js";
 import { createMountProof } from "../src/mount-proof.js";
+import { streamFrom } from "./fixtures/web-streams.js";
+
+/** A complete container record with test defaults; tests override what they exercise. */
+function managed(fields: Partial<ManagedContainer> & Pick<ManagedContainer, "id">): ManagedContainer {
+  return {
+    shortId: fields.id.slice(0, 12), name: "game", displayName: "game", image: "example/game",
+    state: "running", status: "running", gameType: "unknown", gameConsole: null,
+    fileRoots: [], ports: [], created: 0, labels: { "ludock.enable": "true" },
+    ...fields,
+  };
+}
 const fixtureHelperImage = `example/helper@sha256:${"a".repeat(64)}`;
 const fixtureRuntimeImage = `sha256:${"b".repeat(64)}`;
 
@@ -292,14 +304,14 @@ describe("scoped file helper projections", () => {
   it("rejects a rename after authorization before proving or exposing mounts", async () => {
     let inspectedVolumes = 0;
     let createdHelpers = 0;
-    const server = {
-      id: "physical",
+    const server = managed({
+      id: dockerId("physical"),
       name: "before-rename",
       image: "example/game",
       gameType: "unknown",
       labels: { "ludock.enable": "true" },
       fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
-    } as ManagedContainer;
+    });
     docker.getContainer = (() => ({
       inspect: async () => ({
         Id: server.id,
@@ -335,11 +347,11 @@ describe("scoped file helper projections", () => {
       let allowed = true;
       let removed = false;
       const dispatched: string[] = [];
-      const server = {
-        id: "physical", name: "game", image: "example/game", gameType: "unknown",
+      const server = managed({
+        id: dockerId("physical"), name: "game", image: "example/game", gameType: "unknown",
         labels: { "ludock.enable": "true" },
         fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
-      } as ManagedContainer;
+      });
       docker.getContainer = (() => ({
         inspect: async () => ({
           Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
@@ -459,20 +471,20 @@ describe("scoped file helper projections", () => {
         };
       }) as unknown as typeof docker.createContainer;
       const access = await acquireFileContainer(
-        {
-          id: "physical",
+        managed({
+          id: dockerId("physical"),
           name: "game",
           state,
           image: "example/game",
           gameType: "unknown",
           labels: { "ludock.enable": "true" },
-        } as ManagedContainer,
+        }),
         { id: "root-0", name: "data", path: "/data" },
         { readOnly: true },
       );
       expect(created?.Image).toBe(helperImage || fixtureRuntimeImage);
       expect(validatorImage).toBe(helperImage || fixtureRuntimeImage);
-      expect(created?.HostConfig?.VolumesFrom).toBe(undefined);
+      expect(created?.HostConfig).not.toHaveProperty("VolumesFrom");
       expect(created?.HostConfig?.Mounts?.map((mount) => [
           mount.Source,
           mount.Target,
@@ -501,11 +513,11 @@ describe("scoped file helper projections", () => {
       let cleanupId = "";
       const sent: Uint8Array[] = [];
       const bodyReceived = Promise.withResolvers<void>();
-      const server = {
-        id: "physical", name: "game", image: "example/game", gameType: "unknown",
+      const server = managed({
+        id: dockerId("physical"), name: "game", image: "example/game", gameType: "unknown",
         labels: { "ludock.enable": "true" },
         fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
-      } as ManagedContainer;
+      });
       docker.getContainer = (() => ({
         inspect: async () => ({
           Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
@@ -659,13 +671,13 @@ describe("scoped file helper projections", () => {
       }),
     })) as unknown as typeof docker.createContainer;
     await expect(await rejectedBy(acquireFileContainer(
-        {
-          id: "physical",
+        managed({
+          id: dockerId("physical"),
           name: "game",
           image: "example/game",
           gameType: "unknown",
           labels: { "ludock.enable": "true" },
-        } as ManagedContainer,
+        }),
         { id: "root-0", name: "data", path: "/data" },
       ))).toSatisfy((error) =>
         error instanceof FileStorageError &&
@@ -728,14 +740,14 @@ describe("scoped file helper projections", () => {
       }),
     })) as unknown as typeof docker.createContainer;
     const download = await openDownload(
-      {
-        id: "physical",
+      managed({
+        id: dockerId("physical"),
         name: "game",
         image: "example/game",
         gameType: "unknown",
         labels: { "ludock.enable": "true" },
         fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
-      } as ManagedContainer,
+      }),
       "root-0",
       "file",
     );
@@ -769,7 +781,7 @@ describe("bounded Docker download transport", () => {
 
   it("waits for a slow consumer instead of draining the entire Docker source into memory", async () => {
     let emitted = 0;
-    const source = ReadableStream.from(
+    const source = streamFrom(
       (async function* () {
         for (let index = 0; index < 1000; index++) {
           emitted++;

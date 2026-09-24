@@ -21,6 +21,7 @@ import {
   serverEventSchema,
   serverGrantsResponseSchema,
 } from "@ludock/shared";
+import { dockerId } from "./fixtures/ids.js";
 
 const serverId = "5b9dfbf4-59b0-4ae8-ad5f-4c755f7c02de";
 const ownerId = "eaa9292a-d218-4696-8c86-f3ebd176dbd4";
@@ -102,11 +103,11 @@ test("events distinguish logical server updates from content-free invalidation",
     serverId,
     time: 1,
   };
-  expect(serverEventSchema.parse(update)).toStrictEqual(update);
+  expect<unknown>(serverEventSchema.parse(update)).toStrictEqual(update);
   expect(!serverEventSchema.safeParse({
       ...update,
       serverId: undefined,
-      containerId: "minecraft",
+      containerId: dockerId("minecraft"),
     }).success).toBeTruthy();
   expect(!serverEventSchema.safeParse({ ...update, serverId: "minecraft" }).success).toBeTruthy();
   expect(!serverEventSchema.safeParse({ ...update, action: "exec_start" }).success).toBeTruthy();
@@ -114,19 +115,19 @@ test("events distinguish logical server updates from content-free invalidation",
       type: "container_event",
       action: "refresh",
       time: 1,
-      containerId: "private",
+      containerId: dockerId("private"),
     })).toStrictEqual({ type: "container_event", action: "refresh", time: 1 });
 });
 
 test("identifier boundary parsers preserve supported Docker references and reject paths", () => {
-  expect(logicalServerIdSchema.parse(serverId)).toBe(serverId);
+  expect<string>(logicalServerIdSchema.parse(serverId)).toBe(serverId);
   expect(!logicalServerIdSchema.safeParse("minecraft").success).toBeTruthy();
   for (const reference of [
     "a".repeat(64),
     "123456789abc",
     "minecraft-server.1",
   ]) {
-    expect(dockerContainerIdSchema.parse(reference)).toBe(reference);
+    expect<string>(dockerContainerIdSchema.parse(reference)).toBe(reference);
   }
   for (const reference of [
     "../server",

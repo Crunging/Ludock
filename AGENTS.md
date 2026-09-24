@@ -55,8 +55,6 @@ at a daemon running real game servers.
   in `AppError` messages.
 - Send API responses through `respond(schema, value)`. Record route audit events
   with `audit(ctx, action, serverId?, details?)`.
-- Only backend `src/` is type-checked. Backend tests are not, so run them after
-  changing exports.
 - Commit with Conventional Commits. Release Please owns versions, `CHANGELOG.md`,
   and `.release-please-manifest.json`. Don't edit those by hand or move published tags.
 - Pin GitHub Actions to full commit SHAs and container images to digests.

@@ -20,6 +20,7 @@ import {
   ConsoleOutputRedactor,
   observationSecrets,
 } from "../src/console-redaction.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const originalGetContainer = docker.getContainer.bind(docker);
@@ -438,7 +439,7 @@ describe("console credential redaction", () => {
     redactor.end();
     expect(values.join("")).toBe("prefix [redacted] suffix");
     const secrets = observationSecrets({
-      containerId: "id",
+      containerId: dockerId("id"),
       name: "game",
       displayName: "game",
       gameType: "unknown",

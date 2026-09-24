@@ -75,7 +75,7 @@ describe("native WebSocket admission and lifetime", () => {
       Authorization: `Bearer ${apiToken}`, Origin: "https://untrusted.example",
     })).toBe(401);
     expect(await upgradeStatus("/ws/v1/unknown", { Authorization: `Bearer ${apiToken}` })).toBe(404);
-    const session = createSession({ id: "viewer", username: "viewer", role: "viewer" }, new Request(server.url));
+    const session = createSession({ id: "viewer", username: "viewer", role: "viewer" }, new Request(String(server.url)));
     expect(await upgradeStatus("/ws/v1/shell/server", {
       Cookie: `ludock_session=${session.token}`, Origin: server.url.origin,
     })).toBe(403);
@@ -83,7 +83,7 @@ describe("native WebSocket admission and lifetime", () => {
   });
 
   it("closes a real browser session before handling input after revocation", async () => {
-    const session = createSession({ id: "viewer", username: "viewer", role: "viewer" }, new Request(server.url));
+    const session = createSession({ id: "viewer", username: "viewer", role: "viewer" }, new Request(String(server.url)));
     const client = await connect({ Cookie: `ludock_session=${session.token}`, Origin: server.url.origin });
     const closing = closed(client);
     deleteUserSessions("viewer");
@@ -96,7 +96,7 @@ describe("native WebSocket admission and lifetime", () => {
     let accepted!: () => void;
     const delivered = new Promise<void>((resolve) => { accepted = resolve; });
     const receive = NativeSocketChannel.prototype.receive;
-    const messages = spyOn(NativeSocketChannel.prototype, "receive").mockImplementation(function (message) {
+    const messages = spyOn(NativeSocketChannel.prototype, "receive").mockImplementation(function (this: NativeSocketChannel, message) {
       receive.call(this, message);
       accepted();
     });
@@ -199,7 +199,7 @@ describe("native WebSocket admission and lifetime", () => {
 function sessionHeaders(id: string, role: "viewer" | "admin" = "viewer") {
   const session = createSession(
     { id, username: id, role },
-    new Request(server.url),
+    new Request(String(server.url)),
   );
   return {
     Cookie: `ludock_session=${session.token}`,

@@ -24,7 +24,7 @@ try {
 } finally {
   write.mockRestore();
 }
-const setupCode = /Ludock initial setup code: (\S+)/.exec(consoleOutput)?.[1];
+const setupCode = /Ludock initial setup code: (\S+)/.exec(consoleOutput)?.[1] ?? "";
 expect(setupCode).toBeTruthy();
 
 const server = serve({

@@ -172,7 +172,7 @@ function responseFailure(status: number): FailureCode {
 
 let delivering = false;
 export async function deliverNotifications(
-  fetcher: typeof fetch = fetch,
+  fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<void> {
   if (delivering || !notificationConfiguration().enabled) return;
   delivering = true;

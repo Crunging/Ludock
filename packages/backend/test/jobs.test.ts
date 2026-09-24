@@ -31,6 +31,7 @@ import { DockerApiError } from "../src/docker-transport.js";
 import { getAvailability } from "../src/monitoring.js";
 import { refreshServers } from "../src/servers.js";
 import { listLogicalServers } from "../src/identity.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin: SessionUser = { id: "owner", username: "owner", role: "admin" };
@@ -141,7 +142,7 @@ describe("queued operation authority", () => {
 
   it("does not invoke data recovery for an update interrupted while pulling", async () => {
     const { context } = scheduled();
-    context.job.recovery = { containerId: "fixture", initiallyRunning: true };
+    context.job.recovery = { containerId: dockerId("fixture"), initiallyRunning: true };
     // No data-operation binding was persisted and the game was never stopped.
     await recoverUpdate(context);
     expect(mutations).toBe(0);

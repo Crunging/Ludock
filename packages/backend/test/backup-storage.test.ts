@@ -36,6 +36,7 @@ import {
 import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
 import { AppError } from "../src/errors.js";
+import { streamFrom } from "./fixtures/web-streams.js";
 
 const roots = [{ id: "root-0", path: "/data" }];
 let directory: string;
@@ -115,7 +116,7 @@ describe("backup storage boundaries", () => {
       checksum: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
     });
     const entries: Array<{ name: string; body: string }> = [];
-    await walkTar(ReadableStream.from([bytes]), async (header, chunks) => {
+    await walkTar(streamFrom([bytes]), async (header, chunks) => {
       const content: Uint8Array[] = [];
       for await (const chunk of chunks) content.push(chunk);
       entries.push({ name: header.name, body: decodeText(concatBytes(content)) });
@@ -360,7 +361,7 @@ describe("backup storage boundaries", () => {
     const mapped = mappedArchiveHeader(source, "snapshot/root-0/world");
     const bytes = await archive([{ header: mapped, body: "hello" }]);
     let found = false;
-    await walkTar(ReadableStream.from([bytes]), (header) => {
+    await walkTar(streamFrom([bytes]), (header) => {
       expect(header.name).toBe("snapshot/root-0/world");
       expect(archiveEntryMetadata(header)).toStrictEqual({
         uid: 1_000_000, gid: 2_000_000, mtime: source.mtime.getTime() / 1000,
@@ -372,7 +373,7 @@ describe("backup storage boundaries", () => {
       { uid: "4294967295" },
       { gid: "-1" },
       { mtime: "Infinity" },
-    ])
+    ] as Record<string, string>[])
       expect(() => archiveEntryMetadata({ ...source, pax: metadata })).toThrow();
   });
 
@@ -421,14 +422,14 @@ describe("backup storage boundaries", () => {
         body: "hello",
       },
     ]);
-    await validateArchiveStream(ReadableStream.from([valid]), roots, 10000);
+    await validateArchiveStream(streamFrom([valid]), roots, 10000);
     const duplicate = await archive([...base, ...base]);
-    await expect(validateArchiveStream(ReadableStream.from([duplicate]), roots, 10000)).rejects.toThrow(/duplicate/);
+    await expect(validateArchiveStream(streamFrom([duplicate]), roots, 10000)).rejects.toThrow(/duplicate/);
     const missing = await archive([
       { header: { name: "snapshot", type: "directory" } },
     ]);
-    await expect(validateArchiveStream(ReadableStream.from([missing]), roots, 10000)).rejects.toThrow(/missing/);
-    await expect(validateArchiveStream(ReadableStream.from([valid]), roots, 4)).rejects.toThrow(/size/);
+    await expect(validateArchiveStream(streamFrom([missing]), roots, 10000)).rejects.toThrow(/missing/);
+    await expect(validateArchiveStream(streamFrom([valid]), roots, 4)).rejects.toThrow(/size/);
   });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "verifies archive checksums and refuses symlink archive files",

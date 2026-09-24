@@ -2,6 +2,8 @@ import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:te
 import type { SessionUser } from "../src/database.js";
 import type { ServerObservation } from "../src/identity.js";
 import type { RequestContext } from "../src/routes/request.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const [database, identity, { setServerGrant }, servers, backups, docker, auth, { backupsRoutes }] =
@@ -24,7 +26,7 @@ const operator = {
 };
 const viewer = { id: "viewer", username: "viewer", role: "viewer" as const };
 const observation: ServerObservation = {
-  containerId: "backup-route-fixture",
+  containerId: dockerId("backup-route-fixture"),
   name: "backup-route-fixture",
   displayName: "Backup route fixture",
   gameType: "minecraft",
@@ -47,9 +49,9 @@ function context(
   pathname = `/api/v1/servers/${serverId}/backups`,
 ): RequestContext {
   const url = new URL(pathname, "http://localhost");
-  const { token } = auth.createSession(user, new Request(url));
+  const { token } = auth.createSession(user, new Request(url.href));
   return {
-    request: new Request(url, { headers: { Cookie: `ludock_session=${token}` } }),
+    request: new Request(url.href, { headers: { Cookie: `ludock_session=${token}` } }),
     url,
     params: { id: serverId },
     body: undefined,
@@ -146,8 +148,8 @@ describe("backup preflight routes", () => {
       expect(await result.json()).toStrictEqual({ preflight });
     }
     expect(inspect.mock.calls.length).toBe(2);
-    expect(inspect.mock.calls[0][0].logical.id).toBe(serverId);
-    expect(database.getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
+    expect<string>(inspect.mock.calls[0][0].logical.id).toBe(serverId);
+    expect(database.getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
   });
 
   it("denies viewers and lifecycle-only operators before inspecting backup readiness", async () => {

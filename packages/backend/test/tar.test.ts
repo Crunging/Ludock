@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { concatBytes, decodeText, encodeText } from "../src/bytes.js";
 import { decodeTarHeader, encodeTarHeader, tarEnd, tarPadding, walkTar } from "../src/tar.js";
+import { streamFrom } from "./fixtures/web-streams.js";
 
-const stream = (bytes: Uint8Array, width = 65_536) => ReadableStream.from((function* () {
+const stream = (bytes: Uint8Array, width = 65_536) => streamFrom((function* () {
   for (let offset = 0; offset < bytes.length; offset += width) yield bytes.subarray(offset, offset + width);
 })());
 function recheck(header: Uint8Array) {

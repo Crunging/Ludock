@@ -5,6 +5,7 @@ import { StreamFixture } from "./fixtures/web-streams.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { expect, afterEach, describe, it, spyOn } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
+import type { DockerConnection } from "../src/docker-transport.js";
 import { serve, type Socket, type SocketHandler } from "bun";
 import {
   executeGameCommand,
@@ -85,7 +86,8 @@ describe("Source RCON transport", () => {
   it("reassembles fragmented packets and UTF-8 split between response packets", async () => {
     const expected = "Players: José 🐉";
     const bytes = fixtureBytes(expected);
-    const split = bytes.indexOf(fixtureBytes("🐉")) + 2;
+    // Split inside the four-byte dragon emoji.
+    const split = fixtureBytes(expected.slice(0, expected.indexOf("🐉"))).length + 2;
     const port = listenRcon((socket, { id, type }) => {
       if (type === 3) {
         const packet = encodePacket(id, 2, "");
@@ -894,7 +896,7 @@ describe("Docker exec console transport", () => {
   });
 });
 
-function endedStream(): Docker.DockerConnection {
+function endedStream(): DockerConnection {
   const stream = new StreamFixture();
   setImmediate(() => stream.close());
   return stream.connection;
@@ -909,7 +911,11 @@ function dockerFrame(type: 1 | 2, value: string | Uint8Array): Uint8Array {
 }
 
 function listen(socket: SocketHandler<undefined, "uint8array">): number {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { ...socket, binaryType: "uint8array" } });
+  // Bun's listener types only model the default Buffer binary type.
+  const server = Bun.listen({
+    hostname: "127.0.0.1", port: 0,
+    socket: { ...socket, binaryType: "uint8array" } as unknown as SocketHandler<undefined>,
+  });
   closers.push(async () => { server.stop(true); });
   return server.port;
 }
@@ -979,12 +985,12 @@ function controlledConnection(writeSizes: number[] = []) {
     timeout() {},
   } as unknown as Socket<undefined>;
   const connectSpy = spyOn(Bun, "connect").mockImplementation((options) => {
-    handlers = options.socket as SocketHandler<undefined, "uint8array">;
+    handlers = options.socket as unknown as SocketHandler<undefined, "uint8array">;
     return connected;
   });
   closers.push(async () => { connectSpy.mockRestore(); resolveConnection(socket); });
   const callbacks = () => {
-    expect(handlers, "The transport must initialize a native TCP connection").toBeTruthy();
+    if (!handlers) throw new Error("The transport must initialize a native TCP connection");
     return handlers;
   };
   return {
@@ -993,7 +999,7 @@ function controlledConnection(writeSizes: number[] = []) {
     get terminated() { return terminated; },
     open() { callbacks().open?.(socket); resolveConnection(socket); },
     drain() { callbacks().drain?.(socket); },
-    receive(data: Uint8Array) { callbacks().data?.(socket, data); },
+    receive(data: Uint8Array<ArrayBuffer>) { callbacks().data?.(socket, data); },
     end() { callbacks().end?.(socket); },
     error(error: Error) { callbacks().error?.(socket, error); },
   };
@@ -1002,15 +1008,17 @@ function controlledConnection(writeSizes: number[] = []) {
 function captureDeadline(delay: number): () => void {
   const originalSetTimeout = globalThis.setTimeout;
   let expire: (() => void) | undefined;
-  const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
-    if (milliseconds === delay) expire = () => { (callback as (...args: unknown[]) => void)(...args); };
+  const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]
+  ) => {
+    if (milliseconds === delay) expire = () => { callback(...args); };
     return originalSetTimeout(callback, milliseconds, ...args);
-  });
+  }) as typeof setTimeout);
   closers.push(async () => { timerSpy.mockRestore(); });
-  return () => { expect(expire, `Expected a ${delay}ms deadline`).toBeTruthy(); expire(); };
+  return () => { expect(expire, `Expected a ${delay}ms deadline`).toBeTruthy(); expire?.(); };
 }
 
-function encodePacket(id: number, type: number, body: string | Uint8Array): Uint8Array {
+function encodePacket(id: number, type: number, body: string | Uint8Array): Uint8Array<ArrayBuffer> {
   const payload = fixtureBytes(body);
   const packet = new Uint8Array(payload.length + 14);
   byteView(packet).setInt32(0, payload.length + 10, true);

@@ -7,6 +7,7 @@ import { startServer } from "../src/index.js";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import { docker } from "../src/docker-client.js";
 import { acquireLocks } from "../src/operation-locks.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "lifecycle-fixture-api-token-0123456789";
@@ -45,13 +46,13 @@ describe("native server shutdown", () => {
       const shutdown = runtime.shutdown("test").then(() => { stopped = true; });
       expect(await closing).toBe(1001);
       expect(stopped).toBe(false);
-      expect(database.prepare("SELECT 1 AS value").get()?.value).toBe(1);
+      expect(database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1 AS value").get()?.value).toBe(1);
       await expect(fetch(new URL("/api/v1/health", runtime.server.url), { signal: AbortSignal.timeout(1000) })).rejects.toThrow();
       releaseLock();
       releaseLock = undefined;
       await shutdown;
       expect(stopped).toBe(true);
-      expect(() => database.prepare("SELECT 1").get()).toThrow(/closed/i);
+      expect(() => database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1").get()).toThrow(/closed/i);
     } finally {
       client.terminate();
     }
@@ -78,7 +79,7 @@ describe("native server shutdown", () => {
         if (signals !== 2) return;
         setTimeout(() => {
           try {
-            if (database.prepare("SELECT 1 AS value").get()?.value !== 1)
+            if (database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1 AS value").get()?.value !== 1)
               throw new Error("Fixture query failed");
             console.log("Fixture database usable before release");
             release();
@@ -93,7 +94,7 @@ describe("native server shutdown", () => {
       });
       process.on("exit", () => {
         let databaseClosed = false;
-        try { database.prepare("SELECT 1").get(); }
+        try { database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1").get(); }
         catch { databaseClosed = true; }
         const lockReleased = released && !isServerBusy(key.slice("server:".length));
         console.log("Fixture exit " + JSON.stringify({ databaseClosed, lockReleased, signals }));

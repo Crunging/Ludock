@@ -1,4 +1,5 @@
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
@@ -45,7 +46,7 @@ beforeEach(async () => {
   process.env.LUDOCK_API_TOKEN = firstToken;
   serverId = reconcileServers([
     {
-      containerId: "api-token-container",
+      containerId: dockerId("api-token-container"),
       name: "api-token-world",
       displayName: "API token world",
       gameType: "minecraft",

@@ -197,7 +197,7 @@ describe("Docker log WebSocket", () => {
       viewerAuth(),
     );
 
-    expect(logOptions).toStrictEqual({
+    expect<unknown>(logOptions).toStrictEqual({
       follow: true,
       stdout: true,
       stderr: true,

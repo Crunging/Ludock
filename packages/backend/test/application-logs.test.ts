@@ -87,7 +87,7 @@ describe("application log buffer", () => {
       context: { detail: "password=context-secret" },
     });
     const first = listApplicationLogs({ limit: 10 });
-    const entry = first.entries.at(-1);
+    const entry = first.entries.at(-1)!;
     expect(entry).toBeTruthy();
     expect(entry.component).toBe("test");
     expect(entry.timestamp).toBe(123);

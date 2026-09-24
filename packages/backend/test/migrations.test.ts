@@ -27,6 +27,7 @@ import {
   DATABASE_APPLICATION_ID,
   DATABASE_MIGRATIONS,
 } from "../src/migrations.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 const migrationKey = new Uint8Array(32).fill(42);
 function applyMigrations(db: Database, migrations = DATABASE_MIGRATIONS): void {
@@ -57,10 +58,10 @@ after(() => {
 describe("application database ownership and schema migrations", () => {
   it("preserves foreign keys, busy timeout, and native result types", () => {
     const db = getDatabase();
-    expect(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
-    expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-    expect(db.prepare("SELECT id FROM users WHERE id = 'missing'").get()).toBe(null);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM users").get()?.count).toBe(0);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT id FROM users WHERE id = 'missing'").get()).toBe(null);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM users").get()?.count).toBe(0);
     expect(() => db.prepare(
       "INSERT INTO sessions (token_hash, session_id, user_id, created_at, expires_at, last_seen_at) VALUES ('token', 'session', 'missing', 1, 2, 1)",
     ).run()).toThrow(/FOREIGN KEY/i);
@@ -75,10 +76,10 @@ describe("application database ownership and schema migrations", () => {
     const db = getDatabase();
     const keyDirectory = `${fs.realpathSync(dbPath)}.identity-key`;
     const keyPath = path.join(keyDirectory, "key");
-    expect(db.prepare("PRAGMA application_id").get()?.application_id).toBe(DATABASE_APPLICATION_ID);
-    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA application_id").get()?.application_id).toBe(DATABASE_APPLICATION_ID);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
     expect(String(
-        db.prepare("SELECT value_json FROM settings WHERE key='identity.key-check'")
+        db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT value_json FROM settings WHERE key='identity.key-check'")
           .get()?.value_json,
       )).toMatch(/^"[a-f0-9]{64}"$/);
     db.prepare(
@@ -99,7 +100,7 @@ describe("application database ownership and schema migrations", () => {
     expect(fs.readdirSync(directory).some((entry) =>
         entry.startsWith("fresh.db.identity-key.stage-"))).toBe(false);
     closeDatabase();
-    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM docker_hosts").get()
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM docker_hosts").get()
         ?.count).toBe(1);
     expect(fs.readFileSync(keyPath)).toStrictEqual(key);
     expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
@@ -130,7 +131,7 @@ describe("application database ownership and schema migrations", () => {
     try {
       db.exec("CREATE TABLE users (id TEXT)");
       expect(() => applyMigrations(db)).toThrow(/incompatible with Ludock/);
-      expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
+      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
           .length).toBe(1);
     } finally {
       db.close(true);
@@ -181,11 +182,11 @@ describe("application database ownership and schema migrations", () => {
     const published = fs.readFileSync(keyPath);
     if (fs.statSync(durablePath).size > 0) {
       const uninitialized = new Database(durablePath, { readonly: true });
-      expect(uninitialized.prepare("PRAGMA user_version").get()?.user_version).toBe(0);
+      expect(uninitialized.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(0);
       uninitialized.close(true);
     }
     const db = getDatabase();
-    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
     expect(fs.readFileSync(keyPath)).toStrictEqual(published);
   });
 
@@ -295,10 +296,10 @@ describe("application database ownership and schema migrations", () => {
         },
       ];
       applyMigrations(db, migrations);
-      expect(db.prepare("SELECT username FROM users WHERE id = 'u'").get()?.username).toBe("player");
-      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(nextVersion);
+      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT username FROM users WHERE id = 'u'").get()?.username).toBe("player");
+      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(nextVersion);
       db.exec("INSERT INTO test_preferences VALUES ('u', 'preserved account')");
-      expect(db.prepare("SELECT note FROM test_preferences WHERE user_id = 'u'").get()?.note).toBe("preserved account");
+      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT note FROM test_preferences WHERE user_id = 'u'").get()?.note).toBe("preserved account");
       expect(() => applyMigrations(db, migrations)).not.toThrow();
     } finally {
       db.close(true);
@@ -318,9 +319,9 @@ describe("application database ownership and schema migrations", () => {
             sql: "CREATE TABLE should_rollback (id TEXT); INSERT INTO nonexistent VALUES (1);",
           },
         ])).toThrow();
-      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(currentVersion);
+      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(currentVersion);
       expect(db
-          .prepare(
+          .prepare<Record<string, unknown>, SQLQueryBindings[]>(
             "SELECT name FROM sqlite_schema WHERE name = 'should_rollback'",
           )
           .get()).toBe(null);

@@ -10,6 +10,7 @@ import { setServerGrant } from "./fixtures/grants.js";
 import { closeDatabase, createUser, deleteUser, getDatabase, updateUserAccess, type SessionUser } from "../src/database.js";
 import { listAuditHistory, listOperationHistory } from "../src/history.js";
 import { reconcileServers } from "../src/identity.js";
+import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin: SessionUser = { id: crypto.randomUUID(), username: "History Admin", role: "admin" };
@@ -28,7 +29,7 @@ beforeEach(() => {
     cookies.set(actor.id, `ludock_session=${createSession(actor, new Request("http://localhost")).token}`);
   }
   const logical = reconcileServers(["first", "second"].map((name) => ({
-    containerId: name, name, displayName: name, gameType: "minecraft", mounts: [],
+    containerId: dockerId(name), name, displayName: name, gameType: "minecraft", mounts: [],
   })));
   serverId = logical.find((server) => server.containerId === "first")!.id;
   otherServerId = logical.find((server) => server.containerId === "second")!.id;
@@ -98,10 +99,10 @@ describe("searchable operation history", () => {
     expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(5), operationId(4)]);
     expect(first.nextCursor).toBeTruthy();
     insertOperation(6, { createdAt: 101 });
-    const second = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`);
+    const second = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(first.nextCursor!)}`);
     expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(3), operationId(2)]);
     expect(second.nextCursor).toBeTruthy();
-    const final = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(second.nextCursor)}`);
+    const final = await operationPage(`/api/v1/operations?limit=2&cursor=${encodeURIComponent(second.nextCursor!)}`);
     expect(final.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
     expect(final.nextCursor).toBe(null);
   });
@@ -120,7 +121,7 @@ describe("searchable operation history", () => {
     const first = listOperationHistory(admin, query);
     expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(2)]);
     expect(first.nextCursor).toBeTruthy();
-    const second = listOperationHistory(admin, { ...query, cursor: first.nextCursor });
+    const second = listOperationHistory(admin, { ...query, cursor: first.nextCursor ?? undefined });
     expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
     expect(second.nextCursor).toBe(null);
     expect(listOperationHistory(admin, operationHistoryQuerySchema.parse({ actor: admin.id })).operations.length).toBe(6);
@@ -139,13 +140,13 @@ describe("searchable operation history", () => {
     const first = await operationPage("/api/v1/operations?limit=1", viewer);
     expect(first.operations.map((row) => row.id)).toStrictEqual([operationId(2)]);
     expect(first.nextCursor).toBeTruthy();
-    const second = await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`, viewer);
+    const second = await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor!)}`, viewer);
     expect(second.operations.map((row) => row.id)).toStrictEqual([operationId(1)]);
     expect(second.nextCursor).toBe(null);
     const hidden = await operationPage(`/api/v1/operations?serverId=${otherServerId}&limit=1`, viewer);
     expect(hidden).toStrictEqual({ operations: [], nextCursor: null });
     setServerGrant(viewer.id, serverId, [], admin);
-    expect(await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`, viewer)).toStrictEqual({
+    expect(await operationPage(`/api/v1/operations?limit=1&cursor=${encodeURIComponent(first.nextCursor!)}`, viewer)).toStrictEqual({
       operations: [], nextCursor: null,
     });
   });
@@ -218,7 +219,7 @@ describe("searchable audit history", () => {
     expect(first.entries[0].status, "audit outcome does not track the operation's later status").toBe("succeeded");
     expect(first.nextCursor).toBeTruthy();
     insertAudit({ ...match, createdAt: 200 });
-    const second = listAuditHistory({ ...query, cursor: first.nextCursor });
+    const second = listAuditHistory({ ...query, cursor: first.nextCursor ?? undefined });
     expect(second.entries.map((row) => row.id)).toStrictEqual([older]);
     expect(second.nextCursor).toBe(null);
     const tied = listAuditHistory(auditHistoryQuerySchema.parse({ from: 200, to: 200, limit: 1 }));
@@ -308,7 +309,7 @@ describe("history query validation", () => {
     insertOperation(2);
     const first = await operationPage("/api/v1/operations?limit=1");
     expect(first.nextCursor).toBeTruthy();
-    const cursor = encodeURIComponent(first.nextCursor);
+    const cursor = encodeURIComponent(first.nextCursor!);
     for (const path of [`/api/v1/operations?action=restore&cursor=${cursor}`, `/api/v1/audit?cursor=${cursor}`]) {
       const response = await request(path);
       expect(response.status).toBe(400);
@@ -321,7 +322,7 @@ describe("history query validation", () => {
     insertOperation(2);
     const first = await operationPage(`/api/v1/servers/${serverId}/operations?limit=1&action=backup`);
     expect(first.nextCursor).toBeTruthy();
-    const second = await operationPage(`/api/v1/servers/${serverId}/operations?serverId=${serverId}&action=backup&limit=1&cursor=${encodeURIComponent(first.nextCursor)}`);
+    const second = await operationPage(`/api/v1/servers/${serverId}/operations?serverId=${serverId}&action=backup&limit=1&cursor=${encodeURIComponent(first.nextCursor!)}`);
     expect(second.operations.map((operation) => operation.id)).toStrictEqual([operationId(1)]);
     expect(second.nextCursor).toBe(null);
   });

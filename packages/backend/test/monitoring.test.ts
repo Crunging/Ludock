@@ -13,6 +13,7 @@ import {
 import { configureNotifications } from "../src/notifications.js";
 import { enqueueOperation, stopOperationRunner } from "../src/operations.js";
 import { acquireLocks } from "../src/operation-locks.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const originals = {
@@ -25,7 +26,7 @@ let serverId: string,
   unavailable: boolean;
 function deliveries() {
   return getDatabase()
-    .prepare("SELECT * FROM notification_deliveries ORDER BY created_at")
+    .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM notification_deliveries ORDER BY created_at")
     .all();
 }
 beforeEach(async () => {

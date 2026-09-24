@@ -14,6 +14,7 @@ import {
   queueTestNotification,
 } from "../src/notifications.js";
 import type { HttpServer } from "../src/routes/request.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const webhook = "https://discord.com/api/webhooks/123456/route-fixture-secret";
@@ -59,7 +60,7 @@ async function failDelivery() {
     getDatabase().prepare("UPDATE notification_deliveries SET next_attempt_at=0 WHERE state='queued'").run();
     await deliverNotifications((async () => {
       throw new Error(`Private provider error: ${webhook}`);
-    }) as typeof fetch);
+    }));
   }
 }
 
@@ -80,7 +81,7 @@ describe("notification troubleshooting routes", () => {
         expect(await response.text()).not.toMatch(new RegExp(`${delivery.id}|route-fixture-secret`));
       }
     }
-    const stored = getDatabase().prepare("SELECT state,attempts FROM notification_deliveries").all();
+    const stored = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT state,attempts FROM notification_deliveries").all();
     expect(stored).toStrictEqual([{ state: "failed", attempts: 5 }]);
     expect(listAuditHistory({ limit: 10 }).entries).toStrictEqual([]);
   });
@@ -121,9 +122,9 @@ describe("notification troubleshooting routes", () => {
     notifyEvent("private-event-key", "Private server event payload");
     await failDelivery();
     const delivered = queueTestNotification();
-    await deliverNotifications((async () => new Response(null, { status: 204 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 204 })));
     const pending = queueTestNotification();
-    await deliverNotifications((async () => new Response("Private Discord response", { status: 429 })) as typeof fetch);
+    await deliverNotifications((async () => new Response("Private Discord response", { status: 429 })));
     const response = await request("/api/v1/notifications/deliveries");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -158,7 +159,7 @@ describe("notification troubleshooting routes", () => {
     const queued = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
     expect(queued.status).toBe(409);
     await queued.body?.cancel();
-    await deliverNotifications((async () => new Response(null, { status: 204 })) as typeof fetch);
+    await deliverNotifications((async () => new Response(null, { status: 204 })));
     const delivered = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
     expect(delivered.status).toBe(409);
     await delivered.body?.cancel();

@@ -3,6 +3,7 @@ import { expect, afterAll, afterEach, beforeAll, beforeEach, describe, it, spyOn
 import path from "node:path";
 import { auditResponseSchema, availabilityResponseSchema, scheduleResponseSchema, schedulesResponseSchema, type ServerGrantInput } from "@ludock/shared";
 import { DockerApiError } from "../src/docker-transport.js";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
@@ -52,7 +53,7 @@ const managedInfo = {
 };
 
 beforeAll(() => {
-  docker.ping = (async () => "OK") as typeof docker.ping;
+  docker.ping = async () => {};
   docker.listContainers = (async () => [
     managedInfo,
   ]) as unknown as typeof docker.listContainers;
@@ -476,7 +477,7 @@ describe("HTTP application", () => {
         headers: { Cookie: sessionCookie },
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
-    const admin = users.users.find((user) => user.username === "admin");
+    const admin = users.users.find((user) => user.username === "admin")!;
     expect(admin).toBeTruthy();
     const demote = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {
       method: "PATCH",
@@ -772,7 +773,7 @@ describe("HTTP application", () => {
     };
     runSchedules(due);
     expect((await readSchedule()).lastOperation).toBe(null);
-    expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
+    expect(getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
 
     const resumed = await fetch(`${baseUrl}${collection}/${original.id}`, {
       method: "PATCH", headers,
@@ -780,7 +781,7 @@ describe("HTTP application", () => {
     });
     expect(resumed.status).toBe(200);
     runSchedules(due);
-    const queued = await readSchedule();
+    const queued = await readSchedule() as { lastRunAt: number | null; lastOperation: { id: string; status: string; serverId: string } };
     expect(queued.lastRunAt).toBe(due);
     expect(queued.lastOperation?.status).toBe("queued");
     expect(queued.lastOperation?.serverId).toBe(managedServerId);
@@ -938,7 +939,7 @@ describe("HTTP application", () => {
     const marker = body.entries.find(
       (entry) =>
         entry.component === "http-test" && entry.message.includes("diagnostic"),
-    );
+    )!;
     expect(marker).toBeTruthy();
     expect(marker.level).toBe("warn");
     expect(marker.context?.apiToken).toBe("[REDACTED]");
@@ -1011,7 +1012,7 @@ describe("HTTP application", () => {
         headers: { Cookie: sessionCookie },
       })
     ).json()) as { users: Array<{ id: string; username: string }> };
-    const admin = users.users.find((user) => user.username === "admin");
+    const admin = users.users.find((user) => user.username === "admin")!;
     expect(admin).toBeTruthy();
 
     const selfDelete = await fetch(`${baseUrl}/api/v1/users/${admin.id}`, {

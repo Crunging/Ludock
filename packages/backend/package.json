@@ -10,7 +10,7 @@
     "test": "bun test --isolate ./test",
     "recover": "bun src/recovery.ts",
     "start": "bun dist/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.typechecks.json"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@ludock/shared": "workspace:*",

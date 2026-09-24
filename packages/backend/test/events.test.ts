@@ -105,8 +105,10 @@ describe("Docker event framing", () => {
   it("buffers split lines and accepts several events in a chunk", () => {
     const events: unknown[] = [];
     const decode = dockerEventDecoder((event) => events.push(event));
-    const content = fixtureBytes('{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n');
-    const split = content.indexOf(fixtureBytes("é")) + 1;
+    const text = '{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n';
+    const content = fixtureBytes(text);
+    // Split inside the two-byte "é".
+    const split = fixtureBytes(text.slice(0, text.indexOf("é"))).length + 1;
     decode(content.subarray(0, split));
     expect(events).toStrictEqual([]);
     decode(content.subarray(split));

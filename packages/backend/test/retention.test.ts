@@ -1,4 +1,5 @@
 import { expect, afterEach, describe, it } from "bun:test";
+import type { SQLQueryBindings } from "bun:sqlite";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.AUDIT_LOG_MAX_ROWS = "1000";
@@ -19,7 +20,7 @@ afterEach(() => closeDatabase());
 
 function auditCount(): number {
   return (
-    getDatabase().prepare("SELECT COUNT(*) AS count FROM audit_log").get() as {
+    getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM audit_log").get() as {
       count: number;
     }
   ).count;
@@ -28,7 +29,7 @@ function auditCount(): number {
 function attemptCount(): number {
   return (
     getDatabase()
-      .prepare("SELECT COUNT(*) AS count FROM login_attempts")
+      .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM login_attempts")
       .get() as { count: number }
   ).count;
 }

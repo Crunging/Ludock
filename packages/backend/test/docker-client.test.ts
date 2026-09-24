@@ -21,7 +21,7 @@ function socketPath(): string {
 
 function httpFixture(handler: (request: Request) => Response | Promise<Response>) {
   const path = socketPath();
-  const server = Bun.serve({ unix: path, idleTimeout: 0, fetch: handler });
+  const server = Bun.serve({ unix: path, fetch: handler });
   cleanup.push(() => server.stop(true));
   return new DockerClient({ socketPath: path });
 }
@@ -357,7 +357,7 @@ describe("Bun Docker duplex transport", () => {
   });
 
   it("finishes the request before accepting stdin after an early upgrade response", async () => {
-    let handlers: Bun.SocketHandler<undefined>;
+    let handlers: Bun.SocketHandler<undefined, "uint8array">;
     let written = "";
     let release!: () => void;
     let first = true;
@@ -371,7 +371,8 @@ describe("Bun Docker duplex transport", () => {
       terminate() {}, resume() {}, pause() {}, shutdown() {},
     } as unknown as Bun.Socket<undefined>;
     spyOn(Bun, "connect").mockImplementation(options => {
-      handlers = options.socket;
+      // Bun types model only the default Buffer binary type.
+      handlers = options.socket as unknown as Bun.SocketHandler<undefined, "uint8array">;
       queueMicrotask(() => {
         handlers.open!(socket);
         handlers.data!(socket, fixtureBytes(upgrade));
@@ -404,7 +405,7 @@ describe("Bun Docker duplex transport", () => {
   }
 
   it("resumes a partial native write at the exact byte offset before reporting completion", async () => {
-    let handlers: Bun.SocketHandler<undefined>;
+    let handlers: Bun.SocketHandler<undefined, "uint8array">;
     let written = new Uint8Array(0);
     let short = false;
     const socket = {
@@ -417,7 +418,8 @@ describe("Bun Docker duplex transport", () => {
       terminate() {}, resume() {}, pause() {}, shutdown() {},
     } as unknown as Bun.Socket<undefined>;
     spyOn(Bun, "connect").mockImplementation((options) => {
-      handlers = options.socket;
+      // Bun types model only the default Buffer binary type.
+      handlers = options.socket as unknown as Bun.SocketHandler<undefined, "uint8array">;
       queueMicrotask(() => { handlers.open!(socket); handlers.data!(socket, fixtureBytes(upgrade)); });
       return Promise.resolve(socket);
     });
