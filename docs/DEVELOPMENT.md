@@ -52,9 +52,11 @@ For just the production startup check, run
 together: its entry points share generated chunks and source maps.
 
 Every PR, including the release PR, runs the full CI suite on native AMD64 and
-ARM64. Release Please keeps a release PR open on `main`; merging it tags the
-version, publishes the GitHub release with its changelog, and pushes the
-multi-platform image to `ghcr.io` as `X.Y.Z`, `X.Y`, `X`, and `latest`. Release
+ARM64. Every push to `main` publishes the multi-platform image to `ghcr.io` as
+`nightly`. Release Please keeps a release PR open on `main`; merging it tags the
+version, publishes the GitHub release with its changelog, and also publishes
+`X.Y.Z`. Stable releases additionally move `X.Y`, `X`, and `latest`, so
+`latest` is always the newest stable release. Release
 Please owns versions, `CHANGELOG.md`, and the release manifest; preserve
 published tags. A weekly workflow audits dependencies and scans the latest
 published image.

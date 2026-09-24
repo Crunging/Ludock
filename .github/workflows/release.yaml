@@ -1,7 +1,8 @@
 name: Release
 
-# Release Please keeps a release PR up to date. Merging it tags the release,
-# publishes the GitHub release with its changelog, and triggers the image build.
+# Every push to main publishes :nightly. Release Please keeps a release PR up
+# to date; merging it tags the version, publishes the GitHub release with its
+# changelog, and also publishes the version tags and :latest.
 on:
   push:
     branches:
@@ -39,7 +40,6 @@ jobs:
   publish:
     name: Publish image
     needs: release-please
-    if: needs.release-please.outputs.created == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -48,7 +48,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.release-please.outputs.tag }}
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
@@ -62,15 +61,26 @@ jobs:
         id: image
         shell: bash
         env:
+          RELEASED: ${{ needs.release-please.outputs.created }}
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          IFS=. read -r major minor _ <<< "$VERSION"
+          tags=("nightly")
+          label=nightly
+          if [[ "$RELEASED" == "true" ]]; then
+            tags+=("$VERSION")
+            label="$VERSION"
+            # Only stable releases move the X.Y, X, and latest tags.
+            if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+              tags+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "${BASH_REMATCH[1]}" latest)
+            fi
+          fi
           {
             echo "tags<<EOF"
-            printf '%s:%s\n' "$image" "$VERSION" "$image" "$major.$minor" "$image" "$major" "$image" latest
+            printf "$image:%s\n" "${tags[@]}"
             echo "EOF"
+            echo "version=$label"
           } >> "$GITHUB_OUTPUT"
       - name: Build and publish image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -85,7 +95,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.release-please.outputs.version }}
+            org.opencontainers.image.version=${{ steps.image.outputs.version }}
             org.opencontainers.image.title=Ludock
             org.opencontainers.image.description=A self-hosted control panel for existing Docker game servers
             org.opencontainers.image.licenses=MIT

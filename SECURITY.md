@@ -2,7 +2,8 @@
 
 ## Supported releases
 
-Security fixes are provided for the latest published release.
+Security fixes are provided for the latest published release. Nightly images
+are development builds and are not supported.
 
 ## Reporting a vulnerability
 
