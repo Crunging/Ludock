@@ -116,7 +116,7 @@ export function createWebSocketGateway() {
       if (!auth) return new Response("Authentication required", { status: 401 });
       const kind = pathname === "/ws/v1/events" ? "events"
         : pathname.startsWith("/ws/v1/logs/") ? "logs"
-          : pathname.startsWith("/ws/v1/game-console/") || pathname.startsWith("/ws/v1/console/") ? "game"
+          : pathname.startsWith("/ws/v1/game-console/") ? "game"
             : pathname.startsWith("/ws/v1/shell/") ? "shell" : null;
       if (!kind) return new Response("Unknown WebSocket endpoint", { status: 404 });
       if (kind === "shell" && auth.user.role !== "admin")

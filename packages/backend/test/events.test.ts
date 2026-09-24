@@ -7,7 +7,7 @@ import {
   dockerEventDecoder,
   stopEventStream,
 } from "../src/events.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import {
   closeDatabase,
   createUser,
@@ -19,7 +19,6 @@ import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originals = {
   getEvents: docker.getEvents,
   getContainer: docker.getContainer,

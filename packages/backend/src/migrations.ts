@@ -4,9 +4,11 @@ import { initializeFingerprintKey } from "./fingerprints.js";
 // The "LUDK" marker identifies Ludock-owned SQLite files independently of the
 // schema version. Never infer ownership merely from a familiar table name.
 export const DATABASE_APPLICATION_ID = 0x4c55444b;
-export const DATABASE_BASE_SCHEMA_VERSION = 2;
+// Version 6 is the schema released in v0.3.0. Earlier development schemas have
+// no supported upgrade path; add later changes as consecutive migrations.
+export const DATABASE_BASE_SCHEMA_VERSION = 6;
 
-export interface DatabaseMigration {
+interface DatabaseMigration {
   version: number;
   sql: string;
   upgrade?(db: Database, fingerprintKey?: Uint8Array): void;
@@ -47,7 +49,12 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         ip_address TEXT,
         created_at INTEGER NOT NULL
       ) STRICT;
-      CREATE INDEX audit_log_created_at_idx ON audit_log(created_at DESC);
+      CREATE INDEX audit_log_history_idx ON audit_log(created_at DESC, id DESC);
+      CREATE INDEX audit_log_server_history_idx ON audit_log(target_type, target_id, created_at DESC, id DESC);
+      CREATE INDEX audit_log_operation_history_idx ON audit_log(
+        CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END,
+        created_at DESC, id DESC
+      );
       CREATE TABLE login_attempts (
         attempt_key TEXT PRIMARY KEY,
         failures INTEGER NOT NULL,
@@ -104,23 +111,21 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         error TEXT, result_json TEXT
       ) STRICT;
-      CREATE INDEX operations_server_idx ON operations(server_id, created_at DESC);
+      CREATE INDEX operations_history_idx ON operations(created_at DESC, id DESC);
+      CREATE INDEX operations_server_history_idx ON operations(server_id, created_at DESC, id DESC);
       CREATE TABLE backups (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         binding_fingerprint TEXT NOT NULL, destination TEXT NOT NULL,
         roots_json TEXT NOT NULL, size INTEGER NOT NULL, checksum TEXT NOT NULL,
         created_at INTEGER NOT NULL, state TEXT NOT NULL
       ) STRICT;
-      CREATE TABLE compose_projects (
-        id TEXT PRIMARY KEY, project_name TEXT NOT NULL UNIQUE,
-        registration_json TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
-        created_at INTEGER NOT NULL, disabled INTEGER NOT NULL DEFAULT 0
-      ) STRICT;
       CREATE TABLE schedules (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         input_json TEXT NOT NULL, binding_revision INTEGER NOT NULL,
-        last_slot TEXT, last_result TEXT, created_at INTEGER NOT NULL
+        last_slot TEXT, last_result TEXT, created_at INTEGER NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+        last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0)
       ) STRICT;
       CREATE TABLE availability (
         server_id TEXT PRIMARY KEY REFERENCES logical_servers(id), policy_json TEXT NOT NULL,
@@ -131,82 +136,17 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       CREATE TABLE notification_deliveries (
         id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
-        state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL
+        state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test')),
+        retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0),
+        last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+        delivered_at INTEGER CHECK (delivered_at >= 0),
+        failure_code TEXT
       ) STRICT;
-    `,
-    upgrade: initializeFingerprintKey,
-  },
-  {
-    version: 3,
-    sql: "ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0);",
-  },
-  {
-    version: 4,
-    sql: `
-      ALTER TABLE schedules ADD COLUMN last_operation_id TEXT;
-      ALTER TABLE schedules ADD COLUMN last_run_at INTEGER CHECK (last_run_at >= 0);
-    `,
-    upgrade(db) {
-      const candidates = db.prepare(`
-        SELECT schedules.id AS schedule_id, operations.id AS operation_id,
-          operations.input_json, operations.created_at
-        FROM schedules JOIN operations
-          ON schedules.last_result = 'Queued operation ' || operations.id
-          AND schedules.server_id = operations.server_id
-          AND schedules.owner_id = operations.actor_id
-        WHERE operations.created_at >= 0
-      `).all() as {
-        schedule_id: string;
-        operation_id: string;
-        input_json: string;
-        created_at: number;
-      }[];
-      const associate = db.prepare(`
-        UPDATE schedules SET last_operation_id = ?, last_run_at = ? WHERE id = ?
-      `);
-      for (const candidate of candidates) {
-        let input: unknown;
-        try {
-          input = JSON.parse(candidate.input_json);
-        } catch {
-          continue;
-        }
-        if (
-          input !== null && typeof input === "object" && !Array.isArray(input) &&
-          "scheduleId" in input && input.scheduleId === candidate.schedule_id
-        ) {
-          associate.run(candidate.operation_id, candidate.created_at, candidate.schedule_id);
-        }
-      }
-    },
-  },
-  {
-    version: 5,
-    sql: `
-      ALTER TABLE notification_deliveries ADD COLUMN kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test'));
-      ALTER TABLE notification_deliveries ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0);
-      ALTER TABLE notification_deliveries ADD COLUMN last_attempt_at INTEGER CHECK (last_attempt_at >= 0);
-      ALTER TABLE notification_deliveries ADD COLUMN delivered_at INTEGER CHECK (delivered_at >= 0);
-      ALTER TABLE notification_deliveries ADD COLUMN failure_code TEXT;
-      UPDATE notification_deliveries SET retry_attempts = attempts;
       CREATE INDEX notification_deliveries_recent_idx ON notification_deliveries(created_at DESC, id DESC);
       CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
     `,
-  },
-  {
-    version: 6,
-    sql: `
-      CREATE INDEX operations_history_idx ON operations(created_at DESC, id DESC);
-      CREATE INDEX operations_server_history_idx ON operations(server_id, created_at DESC, id DESC);
-      CREATE INDEX audit_log_history_idx ON audit_log(created_at DESC, id DESC);
-      CREATE INDEX audit_log_server_history_idx ON audit_log(target_type, target_id, created_at DESC, id DESC);
-      CREATE INDEX audit_log_operation_history_idx ON audit_log(
-        CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END,
-        created_at DESC, id DESC
-      );
-      DROP INDEX operations_server_idx;
-      DROP INDEX audit_log_created_at_idx;
-    `,
+    upgrade: initializeFingerprintKey,
   },
 ];
 

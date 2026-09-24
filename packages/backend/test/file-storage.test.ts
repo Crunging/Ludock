@@ -14,7 +14,8 @@ import {
   uploadFile,
   openDownload,
 } from "../src/file-storage.js";
-import { getDockerInstance, type ManagedContainer } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
+import type { ManagedContainer } from "../src/docker.js";
 import type * as Docker from "../src/docker-client.js";
 import { createMountProof } from "../src/mount-proof.js";
 const fixtureHelperImage = `example/helper@sha256:${"a".repeat(64)}`;
@@ -272,7 +273,6 @@ describe("container file storage", () => {
 });
 
 describe("scoped file helper projections", () => {
-  const docker = getDockerInstance();
   const originals = {
     getContainer: docker.getContainer,
     getVolume: docker.getVolume,

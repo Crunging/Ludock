@@ -10,7 +10,8 @@ import {
 } from "@ludock/shared";
 import { getDatabase } from "./database.js";
 import { getSetting } from "./settings.js";
-import { getDockerInstance, getManagedContainerObservation } from "./docker.js";
+import { docker } from "./docker-client.js";
+import { getManagedContainerObservation } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -230,7 +231,7 @@ export async function getBackupPreflight(context: ServerContext): Promise<Backup
       message: "Ludock could not verify that its backup destination is separate from game data. Ask an administrator to check the backup mount.",
     });
   await check(async () => {
-    const info = await getDockerInstance().getContainer(context.container.id).inspect();
+    const info = await docker.getContainer(context.container.id).inspect();
     assertDataOperationState(info.State.Status);
   }, {
     code: "SERVER_STATE_UNAVAILABLE",
@@ -271,7 +272,6 @@ async function assertNoOtherWriters(
   context: ServerContext,
   helperId?: string,
 ): Promise<void> {
-  const docker = getDockerInstance();
   const containers = await docker.listContainers({ all: true });
   const sources = context.observation.mounts.filter((mount) => mount.writable);
   for (const candidate of containers) {
@@ -316,7 +316,7 @@ async function assertSeparateDestination(
   let proven = false;
   if (selfId && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(selfId)) {
     try {
-      const self = await getDockerInstance().getContainer(selfId).inspect();
+      const self = await docker.getContainer(selfId).inspect();
       for (const mount of self.Mounts || []) {
         if (
           destination === mount.Destination ||
@@ -364,7 +364,7 @@ export async function stopForDataOperation(
   context: ServerContext,
   job: JobContext,
 ): Promise<void> {
-  const target = getDockerInstance().getContainer(context.container.id);
+  const target = docker.getContainer(context.container.id);
   const info = await target.inspect();
   assertDataOperationState(info.State.Status);
   assertDataOperationAuthority(context, job);
@@ -423,7 +423,7 @@ export async function assertDataOperationStopped(
     observed.observation,
     context.logical.bindingRevision,
   );
-  const info = await getDockerInstance()
+  const info = await docker
     .getContainer(context.container.id)
     .inspect();
   if (
@@ -463,7 +463,7 @@ export async function restoreInitialRunningState(
   );
   if (observed.container.state !== "running") {
     job.progress("restarting");
-    await getDockerInstance().getContainer(context.container.id).start();
+    await docker.getContainer(context.container.id).start();
   }
   job.progress("state_restored", { stateRestored: true });
   suppressMonitoring(context.logical.id);
@@ -928,7 +928,6 @@ export async function recoverRestore(job: JobContext): Promise<void> {
 }
 
 async function removeOperationHelpers(job: JobContext): Promise<void> {
-  const docker = getDockerInstance();
   const helpers = await docker.listContainers({
     all: true,
     filters: { label: [`ludock.operation=${job.job.id}`] },

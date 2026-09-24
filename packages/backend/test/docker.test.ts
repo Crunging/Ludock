@@ -1,17 +1,14 @@
 import { rejectedBy } from "./fixtures/errors.js";
 import { expect, afterEach, describe, it } from "bun:test";
+import { docker } from "../src/docker-client.js";
 import {
+  changeContainerState,
   getContainer,
-  getDockerInstance,
   getManagedContainerObservation,
   getDiscoveryDiagnostics,
   listManagedContainerObservations,
-  restartContainer,
-  startContainer,
-  stopContainer,
 } from "../src/docker.js";
 
-const docker = getDockerInstance();
 const originalGetContainer = docker.getContainer.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 
@@ -134,9 +131,9 @@ describe("automatic discovery boundary", () => {
       expect((await listManagedContainerObservations()).length).toBe(entry.included ? 1 : 0);
       for (const action of [
         getManagedContainerObservation,
-        startContainer,
-        stopContainer,
-        restartContainer,
+        (id: string) => changeContainerState(id, "start"),
+        (id: string) => changeContainerState(id, "stop"),
+        (id: string) => changeContainerState(id, "restart"),
       ]) {
         if (entry.included) await action("minecraft");
         else await expect(action("minecraft")).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -210,7 +207,7 @@ describe("automatic discovery boundary", () => {
     })) as unknown as typeof docker.getContainer;
     expect(await listManagedContainerObservations()).toStrictEqual([]);
     expect((await getDiscoveryDiagnostics())[0]?.code).toBe("INVALID_COMPOSE_IDENTITY");
-    await expect(startContainer("minecraft")).rejects.toMatchObject({
+    await expect(changeContainerState("minecraft", "start")).rejects.toMatchObject({
       code: "INVALID_COMPOSE_IDENTITY",
     });
   });
@@ -346,11 +343,8 @@ describe("automatic discovery boundary", () => {
 });
 
 describe("managed container lifecycle boundary", () => {
-  for (const [action, run] of [
-    ["start", startContainer],
-    ["stop", stopContainer],
-    ["restart", restartContainer],
-  ] as const) {
+  for (const action of ["start", "stop", "restart"] as const) {
+    const run = (id: string) => changeContainerState(id, action);
     it(`allows ${action} for an opted-in container`, async () => {
       let actionCalled = false;
       const container = {
@@ -456,7 +450,7 @@ describe("container identifier validation", () => {
 
       for (const run of [
         () => getManagedContainerObservation(id),
-        () => startContainer(id),
+        () => changeContainerState(id, "start"),
         async () => getContainer(id),
       ]) {
         await expect(await rejectedBy(run())).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {

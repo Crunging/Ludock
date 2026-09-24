@@ -20,7 +20,7 @@ import {
 } from "./approved-paths.js";
 import { AppError } from "./errors.js";
 import type { ServerContext } from "./servers.js";
-import { getDockerInstance } from "./docker.js";
+import { docker } from "./docker-client.js";
 import { isServerBusy } from "./operation-locks.js";
 import { COMPOSE_SOURCE_LABEL, discoverComposeSource } from "./compose-source.js";
 
@@ -489,7 +489,7 @@ export async function assertSingleServiceContainer(
       409,
       "Update this server through its original container manager",
     );
-  const containers = await getDockerInstance().listContainers({
+  const containers = await docker.listContainers({
     all: true,
     filters: {
       label: [

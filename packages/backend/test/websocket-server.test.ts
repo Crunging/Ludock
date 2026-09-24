@@ -2,7 +2,7 @@ import { serve } from "bun";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { createSession } from "../src/auth.js";
 import { closeDatabase, createUser, deleteUserSessions } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { stopEventStream } from "../src/events.js";
 import { NativeSocketChannel, MAX_SOCKET_BUFFER_BYTES } from "../src/socket-channel.js";
 import {
@@ -17,7 +17,6 @@ import {
 process.env.LUDOCK_DB_PATH = ":memory:";
 const apiToken = "native-websocket-fixture-token-0123456789";
 process.env.LUDOCK_API_TOKEN = apiToken;
-const docker = getDockerInstance();
 const originalEvents = docker.getEvents;
 const clients: WebSocket[] = [];
 let gateway: ReturnType<typeof createWebSocketGateway>;

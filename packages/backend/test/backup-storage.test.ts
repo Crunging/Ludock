@@ -33,7 +33,7 @@ import {
   removeArchive,
   availableBackupDestinationBytes,
 } from "../src/backup-storage.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
 import { AppError } from "../src/errors.js";
 
@@ -251,7 +251,6 @@ describe("backup storage boundaries", () => {
     it(`uses the ${helperImage ? "configured" : "deployment"} image for a scoped backup helper`, async () => {
       if (helperImage === undefined) delete process.env.FILE_HELPER_IMAGE;
       else process.env.FILE_HELPER_IMAGE = helperImage;
-      const docker = getDockerInstance();
       process.env.LUDOCK_SELF_CONTAINER = `fixture-${crypto.randomUUID()}`;
       spyOn(docker, "getContainer").mockReturnValue({
         inspect: async () => ({ Image: fixtureRuntimeImage }),

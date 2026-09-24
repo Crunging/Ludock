@@ -516,6 +516,7 @@ export function pruneAuditLogIfNeeded(): void {
   auditWritesSincePrune = 0;
 }
 
+/** API-token actors are not accounts; their events are recorded without a user. */
 export function writeAuditLog(input: {
   userId?: string;
   action: string;
@@ -531,7 +532,7 @@ export function writeAuditLog(input: {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      input.userId || null,
+      input.userId && !input.userId.startsWith("api-token") ? input.userId : null,
       input.action,
       input.targetType || null,
       input.targetId || null,

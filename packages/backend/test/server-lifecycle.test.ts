@@ -5,12 +5,11 @@ import { spawn } from "bun";
 import { expect, afterEach, describe, it } from "bun:test";
 import { startServer } from "../src/index.js";
 import { closeDatabase, getDatabase } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { acquireLocks } from "../src/operation-locks.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "lifecycle-fixture-api-token-0123456789";
-const docker = getDockerInstance();
 const originals = { listContainers: docker.listContainers, getEvents: docker.getEvents };
 let runtime: ReturnType<typeof startServer> | undefined;
 let releaseLock: (() => void) | undefined;

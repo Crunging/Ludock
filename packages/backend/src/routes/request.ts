@@ -39,17 +39,18 @@ export function administrator(handler: ApiHandler): ApiHandler {
 const identifier = z.string().uuid();
 export const id = (value: unknown): string => identifier.parse(value);
 export function audit(
-  user: SessionUser,
+  context: RequestContext,
   action: string,
   targetId?: string,
   details?: Record<string, unknown>,
 ): void {
   writeAuditLog({
-    userId: user.id === "api-token" ? undefined : user.id,
+    userId: requestUser(context).id,
     action,
     targetType: targetId ? "server" : "settings",
     targetId,
     details,
+    ipAddress: context.ipAddress,
   });
 }
 export function requestKey(value: string | undefined): string | undefined {

@@ -18,7 +18,7 @@ import {
   updateUserAccess,
   type SessionUser,
 } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { getLogicalServer, listLogicalServers } from "../src/identity.js";
 import { configureAvailability } from "../src/monitoring.js";
 import { acquireLocks } from "../src/operation-locks.js";
@@ -44,7 +44,6 @@ interface ContainerFixture {
   name: string;
   mounts?: Array<{ Type: string; Source: string; Destination: string; RW: boolean }>;
 }
-const docker = getDockerInstance();
 const originals = { listContainers: docker.listContainers, getContainer: docker.getContainer };
 let containers: ContainerFixture[];
 let unavailable: boolean;

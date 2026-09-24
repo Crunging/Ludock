@@ -45,7 +45,7 @@ export const settingsRoutes: ApiRoutes = {
     PUT: administrator((ctx) => {
       const input = notificationSettingsRequestSchema.parse(ctx.body);
       configureNotifications(input.enabled, input.webhookUrl);
-      audit(requestUser(ctx), "notifications.configured");
+      audit(ctx, "notifications.configured");
       return respond(notificationSettingsResponseSchema, notificationConfiguration());
     })
   },
@@ -57,14 +57,14 @@ export const settingsRoutes: ApiRoutes = {
   "/api/v1/notifications/test": {
     POST: administrator((ctx) => {
       const delivery = queueTestNotification();
-      audit(requestUser(ctx), "notifications.test_queued", undefined, { deliveryId: delivery.id });
+      audit(ctx, "notifications.test_queued", undefined, { deliveryId: delivery.id });
       return respond(notificationDeliveryResponseSchema, { delivery }, 202);
     }),
   },
   "/api/v1/notifications/deliveries/:id/retry": {
     POST: administrator((ctx) => {
       const delivery = retryNotificationDelivery(id(ctx.params.id));
-      audit(requestUser(ctx), "notifications.retry_queued", undefined, { deliveryId: delivery.id });
+      audit(ctx, "notifications.retry_queued", undefined, { deliveryId: delivery.id });
       return respond(notificationDeliveryResponseSchema, { delivery }, 202);
     }),
   },

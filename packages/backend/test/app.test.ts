@@ -7,13 +7,12 @@ import { DockerApiError } from "../src/docker-transport.js";
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "integration-api-secret-0123456789abcdef";
 process.env.MAX_UPLOAD_SIZE = "1.5 KiB";
-process.env.MAX_UPLOAD_BYTES = "1";
 process.env.LUDOCK_SETUP_CODE = "integration-setup-code-0123456789abcdef";
 
-const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }, { setIntentionalStop }] =
+const [{ createApp }, { docker }, { createLogger }, { closeDatabase, getDatabase }, { SetupWindow }, compose, { runSchedules }, { setIntentionalStop }] =
   await Promise.all([
     import("../src/app.js"),
-    import("../src/docker.js"),
+    import("../src/docker-client.js"),
     import("../src/logger.js"),
     import("../src/database.js"),
     import("../src/auth.js"),
@@ -22,7 +21,6 @@ const [{ createApp }, { getDockerInstance }, { createLogger }, { closeDatabase, 
     import("../src/monitoring.js"),
   ]);
 
-const docker = getDockerInstance();
 const testLogger = createLogger("http-test");
 const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
@@ -360,8 +358,7 @@ describe("HTTP application", () => {
       error: "File exceeds the upload size limit of 1.5 KiB",
     });
 
-    // The exact limit passes the size gate and reaches this fixture's missing
-    // file root, despite MAX_UPLOAD_BYTES being configured as only one byte.
+    // The exact limit passes the size gate and reaches this fixture's missing file root.
     const boundary = await upload(1536);
     expect(boundary.status).toBe(404);
     expect(await boundary.json()).toStrictEqual({ error: "File root not found", code: "ROOT_NOT_FOUND" });
@@ -503,9 +500,9 @@ describe("HTTP application", () => {
           method: "POST",
         });
         expect(response.status).toBe(statusCode === 304 ? 200 : 500);
-        expect(await response.json()).toStrictEqual(statusCode === 304
+        expect(await response.json()).toMatchObject(statusCode === 304
           ? { ok: true }
-          : { error: `Failed to ${action} container` });
+          : { error: "Internal server error" });
         expect(action === "start" ? managedStartCalled : managedStopCalled).toBe(true);
 
         const availability = await authorizedFetch(`/api/v1/servers/${managedServerId}/availability`);

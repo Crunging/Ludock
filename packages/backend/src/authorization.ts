@@ -195,7 +195,7 @@ function auditDenial(
   if (READ_CAPABILITIES.has(capability)) return;
   const current = currentActor(actor);
   writeAuditLog({
-    userId: current?.id === "api-token" ? undefined : current?.id,
+    userId: current?.id,
     action: "authorization.denied",
     targetType: "server",
     targetId: serverId,
@@ -287,7 +287,7 @@ export function setUserServerGrants(
       );
     }
     writeAuditLog({
-      userId: administrator.id === "api-token" ? undefined : administrator.id,
+      userId: administrator.id,
       action: "users.server_grants.updated",
       targetType: "user",
       targetId: userId,

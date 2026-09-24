@@ -5,12 +5,8 @@ import {
 } from "@ludock/shared";
 import { findUserById, getDatabase, type SessionUser } from "./database.js";
 import { assertServerCapability } from "./authorization.js";
-import {
-  getDockerInstance,
-  startContainer,
-  stopContainer,
-  restartContainer,
-} from "./docker.js";
+import { docker } from "./docker-client.js";
+import { changeContainerState, type ContainerAction } from "./docker.js";
 import { resolveAuthorizedServer, refreshServers } from "./servers.js";
 import { withLocks } from "./operation-locks.js";
 import { registerJobHandler, type JobContext } from "./operations.js";
@@ -65,11 +61,7 @@ export function jobActor(context: JobContext): SessionUser {
     if (
       !schedule ||
       schedule.owner_id !== id ||
-      // Pre-migration jobs have no revision. They remain valid only while the
-      // migrated schedule has never been edited, paused, or resumed.
-      (context.job.input.scheduleRevision === undefined
-        ? schedule.revision !== 1
-        : context.job.input.scheduleRevision !== schedule.revision) ||
+      context.job.input.scheduleRevision !== schedule.revision ||
       !settings?.enabled ||
       settings.action !== context.job.kind
     )
@@ -84,7 +76,7 @@ export function jobActor(context: JobContext): SessionUser {
 }
 async function lifecycle(
   context: JobContext,
-  action: "start" | "stop" | "restart",
+  action: ContainerAction,
 ) {
   const actor = jobActor(context);
   const server = await resolveAuthorizedServer(
@@ -103,11 +95,7 @@ async function lifecycle(
     context.progress(action);
     suppressMonitoring(server.logical.id);
     try {
-      await {
-        start: startContainer,
-        stop: stopContainer,
-        restart: restartContainer,
-      }[action](server.container.id, (observation) => {
+      await changeContainerState(server.container.id, action, (observation) => {
         assertServerCapability(
           jobActor(context),
           server.logical.id,
@@ -161,7 +149,6 @@ export async function runUpdate(
             "The Compose source changed after confirmation",
           );
         await assertSingleServiceContainer(server);
-        const docker = getDockerInstance();
         const current = await docker
           .getContainer(server.container.id)
           .inspect();

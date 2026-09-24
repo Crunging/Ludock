@@ -6,6 +6,7 @@ import {
 import { checkDatabase } from "./database.js";
 import { developmentInstance, matchesDevelopmentInstance } from "./development-instance.js";
 import { checkDockerConnection } from "./docker.js";
+import { DockerApiError } from "./docker-transport.js";
 import { AppError, errorResponse } from "./errors.js";
 import { createLogger, errorMessage } from "./logger.js";
 import { isExternalHttpsRequest, isSameOriginRequest } from "./request-security.js";
@@ -103,6 +104,9 @@ function requestError(error: unknown, context: RequestContext, requestId: string
   if (error instanceof z.ZodError)
     return Response.json({ error: "Invalid request", code: "INVALID_REQUEST" }, { status: 400 });
   if (error instanceof AppError) return errorResponse(error);
+  // A container can disappear between authorization and the Docker request.
+  if (error instanceof DockerApiError && error.statusCode === 404)
+    return Response.json({ error: "Container not found", code: "NOT_FOUND" }, { status: 404 });
   logger.error("Unhandled request error", {
     requestId, method: context.request.method, path: context.url.pathname,
     error: errorMessage(error),

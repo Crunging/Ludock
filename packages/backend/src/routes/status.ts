@@ -43,7 +43,7 @@ export const statusRoutes: ApiRoutes = {
       const serverId = id(ctx.params.id);
       assertServerCapability(requestUser(ctx), serverId, "server.view");
       const availability = configureAvailability(serverId, ctx.body);
-      audit(requestUser(ctx), "availability.configured", serverId);
+      audit(ctx, "availability.configured", serverId);
       return respond(availabilityResponseSchema, availability);
     })
   }

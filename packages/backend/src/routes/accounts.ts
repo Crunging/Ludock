@@ -386,7 +386,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
             LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
           );
           writeAuditLog({
-            userId: actor.id === "api-token" ? undefined : actor.id,
+            userId: actor.id,
             action: "auth.password.change-failed",
             targetType: "user",
             targetId: actor.id,
@@ -403,7 +403,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         const session = createSession(current, ctx.request, ctx.ipAddress);
         setSessionCookie(ctx.headers, ctx.request, session.token);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "auth.password.changed",
           targetType: "user",
           targetId: actor.id,
@@ -430,7 +430,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           return Response.json({ error: "Session not found" }, { status: 404 });
         }
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "auth.session.revoked",
           targetType: "session",
           targetId: sessionId,
@@ -478,7 +478,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           throw error;
         }
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.created",
           targetType: "user",
           targetId: id,
@@ -508,7 +508,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         updateUserAccess(target.id, parsed.data.role, parsed.data.disabled);
         const actor = requestUser(ctx);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.access.updated",
           targetType: "user",
           targetId: target.id,
@@ -535,7 +535,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         }
         deleteUser(target.id);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.deleted",
           targetType: "user",
           targetId: target.id,
@@ -577,7 +577,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         }
         updateUserPassword(target.id, passwordHash);
         writeAuditLog({
-          userId: actor.id === "api-token" ? undefined : actor.id,
+          userId: actor.id,
           action: "user.password.reset",
           targetType: "user",
           targetId: target.id,

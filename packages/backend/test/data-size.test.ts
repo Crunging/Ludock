@@ -44,32 +44,23 @@ describe("readable byte sizes", () => {
 });
 
 describe("upload size configuration", () => {
-  it("uses readable sizes first, then legacy integer bytes, then the default", () => {
-    for (const [env, expected] of [
-      [{}, 2_147_483_648],
-      [{ MAX_UPLOAD_SIZE: " ", MAX_UPLOAD_BYTES: "\t" }, 2_147_483_648],
-      [{ MAX_UPLOAD_SIZE: "500 MB" }, 500_000_000],
-      [{ MAX_UPLOAD_SIZE: "1.5 GiB", MAX_UPLOAD_BYTES: "1" }, 1_610_612_736],
-      [{ MAX_UPLOAD_SIZE: "2GiB", MAX_UPLOAD_BYTES: "invalid" }, 2_147_483_648],
-      [{ MAX_UPLOAD_BYTES: " 570 " }, 570],
-      [{ MAX_UPLOAD_SIZE: "", MAX_UPLOAD_BYTES: "1024" }, 1024],
+  it("uses the configured readable size or the default", () => {
+    for (const [configured, expected] of [
+      [undefined, 2_147_483_648],
+      [" ", 2_147_483_648],
+      ["500 MB", 500_000_000],
+      ["1.5 GiB", 1_610_612_736],
     ] as const) {
-      expect(getMaxUploadBytes(env)).toBe(expected);
+      expect(getMaxUploadBytes(configured)).toBe(expected);
     }
   });
 
-  it("rejects invalid configured limits with guidance that does not echo values", () => {
-    for (const variable of ["MAX_UPLOAD_SIZE", "MAX_UPLOAD_BYTES"] as const) {
-      const invalid = variable === "MAX_UPLOAD_SIZE"
-        ? ["0", "-1 GiB", "1.5 B", "9007199254740992", "secret-marker-value"]
-        : ["0", "-1", "1.5", "1e3", "1 KiB", "9007199254740992", "secret-marker-value"];
-      for (const value of invalid) {
-        expect(thrownBy(() => getMaxUploadBytes({ [variable]: value }))).toSatisfy((error) => error instanceof Error &&
-            error.message.startsWith(`Invalid ${variable}:`) &&
-            error.message.includes("500 MB") &&
-            !error.message.includes("secret-marker-value"));
-      }
+  it("rejects invalid limits with guidance that does not echo values", () => {
+    for (const value of ["0", "-1 GiB", "1.5 B", "9007199254740992", "secret-marker-value"]) {
+      expect(thrownBy(() => getMaxUploadBytes(value))).toSatisfy((error) => error instanceof Error &&
+          error.message.startsWith("Invalid MAX_UPLOAD_SIZE:") &&
+          error.message.includes("500 MB") &&
+          !error.message.includes("secret-marker-value"));
     }
-    expect(() => getMaxUploadBytes({ MAX_UPLOAD_SIZE: "invalid", MAX_UPLOAD_BYTES: "1024" })).toThrow(/^Invalid MAX_UPLOAD_SIZE:/);
   });
 });

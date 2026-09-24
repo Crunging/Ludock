@@ -7,12 +7,11 @@ import { backupPreflightResponseSchema, backupStorageResponseSchema } from "@lud
 import * as storage from "../src/backup-storage.js";
 import { getBackupPreflight, getBackupStorageStatus } from "../src/backups.js";
 import { closeDatabase, getDatabase } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { reconcileServers } from "../src/identity.js";
 import { setSetting } from "../src/settings.js";
 import type { ServerContext } from "../src/servers.js";
 
-const docker = getDockerInstance();
 let directory: string;
 let context: ServerContext;
 let oldRoots: string | undefined;

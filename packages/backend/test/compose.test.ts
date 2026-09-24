@@ -28,7 +28,7 @@ import {
   validatedProject,
 } from "../src/compose.js";
 import { COMPOSE_SOURCE_LABEL, COMPOSE_CONFIG_FILES_LABEL, COMPOSE_WORKING_DIR_LABEL } from "../src/compose-source.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
 import { closeDatabase } from "../src/database.js";
 import {
@@ -126,9 +126,9 @@ describe("Compose execution boundary", () => {
         composeSourceLabels: { [COMPOSE_WORKING_DIR_LABEL]: directory, [COMPOSE_CONFIG_FILES_LABEL]: filename } },
       container: { id: "a".repeat(64) },
     } as unknown as ServerContext;
-    spyOn(getDockerInstance(), "listContainers").mockResolvedValue([
+    spyOn(docker, "listContainers").mockResolvedValue([
       { Id: context.container.id, Labels: {} },
-    ] as Awaited<ReturnType<ReturnType<typeof getDockerInstance>["listContainers"]>>);
+    ] as Awaited<ReturnType<typeof docker["listContainers"]>>);
     const first = await validatedProject(context);
     const model = JSON.parse(await readFile(first.snapshot.configPath, "utf8"));
     const originalSource = model.services.game.labels[COMPOSE_SOURCE_LABEL].replaceAll("$$", "$");

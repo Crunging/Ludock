@@ -53,7 +53,7 @@ export async function handleContainerLogsConnection(
     role: user.role,
   });
   writeAuditLog({
-    userId: user.id === "api-token" ? undefined : user.id,
+    userId: user.id,
     action: "server.logs.opened",
     targetType: "server",
     targetId: serverId,

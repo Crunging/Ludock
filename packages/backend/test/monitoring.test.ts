@@ -1,6 +1,6 @@
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 import {
@@ -15,7 +15,6 @@ import { enqueueOperation, stopOperationRunner } from "../src/operations.js";
 import { acquireLocks } from "../src/operation-locks.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originals = {
   listContainers: docker.listContainers,
   getContainer: docker.getContainer,

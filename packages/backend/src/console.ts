@@ -81,7 +81,7 @@ export async function handleConsoleConnection(
       : "Administrator shell. Commands require the container's timeout utility and run for at most 60 seconds.",
   );
   writeAuditLog({
-    userId: auth.user.id === "api-token" ? undefined : auth.user.id,
+    userId: auth.user.id,
     action:
       mode === "game" ? "server.game-console.opened" : "server.shell.opened",
     targetType: "server",
@@ -151,7 +151,7 @@ export async function handleConsoleConnection(
             redactor.end();
           },
         };
-        const actorId = auth.user.id === "api-token" ? undefined : auth.user.id;
+        const actorId = auth.user.id;
         writeAuditLog({
           userId: actorId,
           action:

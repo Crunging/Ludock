@@ -2,7 +2,7 @@ import { fixtureBytes } from "./fixtures/bytes.js";
 import { SocketFixture } from "./fixtures/socket-channel.js";
 import { StreamFixture } from "./fixtures/web-streams.js";
 import { expect, afterAll as after, afterEach, beforeEach, describe, it } from "bun:test";
-import { getDockerInstance } from "../src/docker.js";
+import { docker } from "../src/docker-client.js";
 import { handleConsoleConnection } from "../src/console.js";
 import { handleContainerLogsConnection } from "../src/container-logs.js";
 import {
@@ -21,7 +21,6 @@ import {
 } from "../src/console-redaction.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
-const docker = getDockerInstance();
 const originalGetContainer = docker.getContainer.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
 const administrator: SessionUser = {
