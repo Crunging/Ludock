@@ -2,24 +2,11 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { imageTags, scanImage, TRIVY_IMAGE } from "../ci/containers.mjs";
+import { scanImage, TRIVY_IMAGE } from "../ci/containers.mjs";
 
 const root = new URL("../../", import.meta.url);
 
 describe("CI helpers", () => {
-  it("keeps nightly and stable tag ownership, including older hotfix releases", () => {
-    const base = { IMAGE_NAME: "ghcr.io/Crunging/Ludock", RELEASE_TAG: "v1.2.3" };
-    expect(imageTags(base)).toStrictEqual(["ghcr.io/crunging/ludock:nightly"]);
-    expect(imageTags({ ...base, SHOULD_RELEASE: "true", IS_MINOR_LATEST: "true" })).toStrictEqual([
-      "ghcr.io/crunging/ludock:nightly", "ghcr.io/crunging/ludock:1.2.3", "ghcr.io/crunging/ludock:1.2",
-    ]);
-    const latest = imageTags({ ...base, SHOULD_RELEASE: "true", IS_MINOR_LATEST: "true", IS_MAJOR_LATEST: "true", IS_LATEST: "true" });
-    expect(latest).toContain("ghcr.io/crunging/ludock:1");
-    expect(latest).toContain("ghcr.io/crunging/ludock:latest");
-    expect(() => imageTags({ ...base, SHOULD_RELEASE: "true", RELEASE_TAG: "v1.2.3-beta.1" })).toThrow();
-    expect(() => imageTags({ ...base, IMAGE_NAME: "invalid\nimage" })).toThrow();
-  });
-
   it("requires the exact Bun release and enforces the package minimum", async () => {
     const script = Bun.fileURLToPath(new URL("scripts/ci/check-bun.mjs", root));
     const check = (cwd) => Bun.spawnSync([process.execPath, script], { cwd, stdout: "pipe", stderr: "pipe" });

@@ -1,146 +1,55 @@
-name: Publish
+name: Release
+
+# Release Please keeps a release PR up to date. Merging it tags the release,
+# publishes the GitHub release with its changelog, and triggers the image build.
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**.md"
-      - LICENSE
+
 permissions:
   contents: read
+
 concurrency:
-  group: publish
+  group: release
   cancel-in-progress: false
-  # Ordinary main pushes must not replace a pending versioned release.
-  queue: max
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
 jobs:
-  validate:
-    name: Select release tags
+  release-please:
+    name: Release Please
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     outputs:
-      should_release: ${{ steps.version.outputs.should_release }}
-      tag: ${{ steps.version.outputs.tag }}
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: .bun-version
-      - name: Validate release version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
+          # A personal token lets the release PR trigger CI; see docs/DEVELOPMENT.md.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
-          package_version="$(bun -p "(await Bun.file('package.json').json()).version")"
-          tag="v$package_version"
-          previous_version="$(
-            git show "${GITHUB_SHA}^:package.json" |
-              bun -p "JSON.parse(await Bun.stdin.text()).version"
-          )"
-
-          if [[ "$package_version" == "$previous_version" ]]; then
-            echo "::notice::Root package version unchanged; publishing nightly only."
-            {
-              echo "should_release=false"
-              echo "tag=$tag"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Stable releases require a vMAJOR.MINOR.PATCH tag."
-            exit 1
-          fi
-
-          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
-            tagged_commit="$(git rev-list -n 1 "$tag")"
-            current_commit="$(git rev-parse HEAD)"
-            if [[ "$tagged_commit" != "$current_commit" ]]; then
-              echo "::error::Tag $tag already exists on a different commit."
-              exit 1
-            fi
-          fi
-
-          {
-            echo "should_release=true"
-            echo "tag=$tag"
-          } >> "$GITHUB_OUTPUT"
-  check:
-    uses: ./.github/workflows/checks.yaml
-  release:
-    name: Publish image and release
-    needs:
-      - validate
-      - check
+  publish:
+    name: Publish image
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
       packages: write
-      pull-requests: write
-    env:
-      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: .bun-version
-      - name: Generate release notes
-        if: needs.validate.outputs.should_release == 'true'
-        run: bun scripts/release-notes.mjs "$RELEASE_TAG" "$RUNNER_TEMP/release-notes.md"
-      - name: Create release tag
-        if: needs.validate.outputs.should_release == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Recheck after validation while this job still owns publishing.
-          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
-            if [[ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$(git rev-parse HEAD)" ]]; then
-              echo "::error::Tag $RELEASE_TAG already exists on a different commit."
-              exit 1
-            fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag --annotate "$RELEASE_TAG" --message "Ludock $RELEASE_TAG"
-            git push origin "$RELEASE_TAG"
-          fi
-      - name: Determine which moving tags this release owns
-        if: needs.validate.outputs.should_release == 'true'
-        id: rank
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          current="$RELEASE_TAG"
-          major="${current%%.*}"
-          minor="${current%.*}"
-
-          releases="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
-
-          newest_in() {
-            local prefix="${1//./\\.}"
-            printf '%s\n' "$releases" | grep -E "^${prefix}\." | sort -V | tail -n 1
-          }
-
-          highest="$(printf '%s\n' "$releases" | sort -V | tail -n 1)"
-          highest_major="$(newest_in "$major")"
-          highest_minor="$(newest_in "$minor")"
-
-          {
-            echo "is_latest=$([[ "$highest" == "$current" ]] && echo true || echo false)"
-            echo "is_major_latest=$([[ "$highest_major" == "$current" ]] && echo true || echo false)"
-            echo "is_minor_latest=$([[ "$highest_minor" == "$current" ]] && echo true || echo false)"
-          } >> "$GITHUB_OUTPUT"
+          ref: ${{ needs.release-please.outputs.tag }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
@@ -153,21 +62,15 @@ jobs:
         id: image
         shell: bash
         env:
-          SHOULD_RELEASE: ${{ needs.validate.outputs.should_release }}
-          IS_LATEST: ${{ steps.rank.outputs.is_latest }}
-          IS_MAJOR_LATEST: ${{ steps.rank.outputs.is_major_latest }}
-          IS_MINOR_LATEST: ${{ steps.rank.outputs.is_minor_latest }}
+          VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          IFS=. read -r major minor _ <<< "$VERSION"
           {
             echo "tags<<EOF"
-            bun scripts/ci/containers.mjs tags
+            printf '%s:%s\n' "$image" "$VERSION" "$image" "$major.$minor" "$image" "$major" "$image" latest
             echo "EOF"
-            if [[ "$SHOULD_RELEASE" == "true" ]]; then
-              echo "version=${RELEASE_TAG#v}"
-            else
-              echo "version=nightly"
-            fi
           } >> "$GITHUB_OUTPUT"
       - name: Build and publish image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -182,67 +85,10 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.image.outputs.version }}
+            org.opencontainers.image.version=${{ needs.release-please.outputs.version }}
             org.opencontainers.image.title=Ludock
             org.opencontainers.image.description=A self-hosted control panel for existing Docker game servers
             org.opencontainers.image.licenses=MIT
           cache-from: |
-            type=gha,scope=publish
-            type=gha,scope=ci-X64
-            type=gha,scope=ci-ARM64
-          cache-to: type=gha,mode=max,scope=publish
-      - name: Create GitHub release
-        if: needs.validate.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IS_LATEST: ${{ steps.rank.outputs.is_latest }}
-        shell: bash
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              --notes-file "$RUNNER_TEMP/release-notes.md" \
-              --latest="$IS_LATEST"
-          else
-            gh release create "$RELEASE_TAG" \
-              --verify-tag \
-              --title "$RELEASE_TAG" \
-              --notes-file "$RUNNER_TEMP/release-notes.md" \
-              --latest="$IS_LATEST"
-          fi
-      - name: Mark release PR as published
-        if: needs.validate.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # This workflow owns publication, so it also completes Release Please's
-          # pending state after both the image and GitHub release are available.
-          pull_number="$(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" |
-              jq -r --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
-                .[] |
-                select(.merged_at != null and .merge_commit_sha == $sha) |
-                select(.base.ref == "main" and .base.repo.full_name == $repo) |
-                select(any(.labels[]; .name == "autorelease: pending")) |
-                .number
-              '
-          )"
-
-          if [[ -z "$pull_number" ]]; then
-            echo "::notice::No pending release PR for this commit."
-            exit 0
-          fi
-          if [[ ! "$pull_number" =~ ^[0-9]+$ ]]; then
-            echo "::error::Expected exactly one pending release PR for this commit."
-            exit 1
-          fi
-
-          # Add first so an interrupted transition remains pending and retryable.
-          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$pull_number/labels" \
-            -f 'labels[]=autorelease: tagged' --silent
-          gh api --method DELETE \
-            "repos/$GITHUB_REPOSITORY/issues/$pull_number/labels/autorelease%3A%20pending" \
-            --silent
+            type=gha,scope=linux/amd64
+            type=gha,scope=linux/arm64

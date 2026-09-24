@@ -51,15 +51,18 @@ For just the production startup check, run
 `bun run build` builds the backend and frontend. Keep `packages/backend/dist`
 together: its entry points share generated chunks and source maps.
 
-Code PRs run the full CI suite. Release PRs validate the generated version,
-manifest, and changelog, then build and smoke-test the image. Publish runs the
-full suite on native AMD64 and ARM64 before publication. Release Please owns
-versions and the release manifest; preserve published tags.
+Every PR, including the release PR, runs the full CI suite on native AMD64 and
+ARM64. Release Please keeps a release PR open on `main`; merging it tags the
+version, publishes the GitHub release with its changelog, and pushes the
+multi-platform image to `ghcr.io` as `X.Y.Z`, `X.Y`, `X`, and `latest`. Release
+Please owns versions, `CHANGELOG.md`, and the release manifest; preserve
+published tags. A weekly workflow audits dependencies and scans the latest
+published image.
 
-For automatic release PR runs, set the Actions secret `RELEASE_PLEASE_TOKEN` to a
-fine-grained personal access token restricted to this repository, with Contents
-and Pull requests write permissions. Without it, GitHub requires run approval.
-Review the refreshed release PR and wait for its latest checks before merging.
+PRs opened with the default `GITHUB_TOKEN` do not trigger CI. For CI on release
+PRs, set the Actions secret `RELEASE_PLEASE_TOKEN` to a fine-grained personal
+access token restricted to this repository, with Contents, Issues, and Pull
+requests write permissions. Wait for the release PR's checks before merging.
 
 ## Tool updates
 
