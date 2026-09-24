@@ -896,4 +896,3 @@ export async function removeArchive(
   }
 }
 
-export const newBackupId = () => crypto.randomUUID();

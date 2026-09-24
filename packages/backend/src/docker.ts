@@ -8,7 +8,8 @@ import {
   resolveGameConsoleAdapter,
   type GameConsoleAdapterId,
 } from "./game-console.js";
-import { getFileRoots, type FileRoot } from "./file-storage.js";
+import type { FileRoot } from "@ludock/shared";
+import { getFileRoots } from "./file-storage.js";
 import { inferGameType } from "./server-presets.js";
 import {
   approvedConfigurationLabels,

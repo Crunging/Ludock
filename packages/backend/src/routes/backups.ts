@@ -2,7 +2,8 @@ import { backupPreflightResponseSchema, backupSettingsResponseSchema, backupSett
 import { managedReadable } from "../managed-readable.js";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
-import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload, validateBackupSettings, } from "../backups.js";
+import { deleteBackup, getBackup, getBackupPreflight, getBackupStorageStatus, listBackups, openBackupDownload } from "../backups.js";
+import { validateBackupSettings } from "../backup-storage.js";
 import { AppError } from "../errors.js";
 import { enqueueOperation } from "../operations.js";
 import { refreshServers, resolveAuthorizedServer } from "../servers.js";

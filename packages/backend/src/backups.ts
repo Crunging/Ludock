@@ -40,7 +40,6 @@ import {
   failBackup,
   helperExec,
   helperRoot,
-  newBackupId,
   planBackupRoots,
   removeArchive,
   removePartialArchive,
@@ -50,7 +49,6 @@ import {
   type BackupRoot,
   type DataHelper,
 } from "./backup-storage.js";
-export { validateBackupSettings } from "./backup-storage.js";
 
 interface BackupRow {
   id: string;
@@ -479,7 +477,7 @@ export async function createStoppedBackup(
   await assertDataOperationStopped(context, job);
   await assertDestinationSpace(settings.destination, settings.reserveBytes);
   const available = remainingArchiveBytes(settings, archiveUsageBytes());
-  const id = newBackupId();
+  const id = crypto.randomUUID();
   job.progress("backing_up", {
     backupId: id,
     backupDestination: settings.destination,
