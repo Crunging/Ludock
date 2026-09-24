@@ -1,7 +1,6 @@
 import { expect, describe, it } from "bun:test";
 import {
-  getServerImagePreset,
-  getGameCapabilityMatrix,
+  GAME_INTEGRATIONS,
   getGameIntegration,
   inferGameType,
   normalizeImageRepository,
@@ -17,9 +16,7 @@ describe("server image presets", () => {
   });
 
   it("recognizes repository suffixes under private mirror prefixes", () => {
-    expect(getServerImagePreset("hexlo/terraria-server-docker")).toStrictEqual({
-      gameType: "terraria",
-    });
+    expect(inferGameType("hexlo/terraria-server-docker")).toBe("terraria");
     for (const image of [
       "example/hexlo/terraria-server-docker",
       "registry.example.com:5000/proxy/hexlo/terraria-server-docker:latest",
@@ -48,11 +45,9 @@ describe("server image presets", () => {
       expect(inferGameType(image), image).toBe("unknown");
   });
 
-  it("keeps the capability matrix and console registry aligned", () => {
-    const matrix = getGameCapabilityMatrix();
-    expect(matrix.length).toBe(13);
+  it("keeps game aliases and repositories unambiguous", () => {
     const repositories = new Set<string>();
-    for (const game of matrix) {
+    for (const game of GAME_INTEGRATIONS) {
       expect(getGameIntegration(game.gameType)?.gameType).toBe(game.gameType);
       for (const alias of game.aliases || [])
         expect(getGameIntegration(alias)?.gameType).toBe(game.gameType);
@@ -61,11 +56,6 @@ describe("server image presets", () => {
         repositories.add(repository);
         expect(inferGameType(`mirror.example:5000/cache/${repository}:latest`)).toBe(game.gameType);
       }
-      expect(game.capabilities.recognition.status).toBe("supported");
-      expect(game.capabilities.platforms.status).toBe("unverified");
-      expect(game.capabilities.backup.status).toBe("unverified");
-      expect(game.capabilities.console.status).toBe(game.console ? "conditional" : "unsupported");
-      expect(game.capabilities.update.description).toMatch(/startup game-update behavior is unverified/);
     }
     expect(getGameIntegration("7dtd")?.console?.adapter).toBe("telnet-console");
   });

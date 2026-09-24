@@ -14,7 +14,6 @@ import {
   availabilityResponseSchema,
   composeSourceProjectSchema,
   dockerContainerIdSchema,
-  integrationsResponseSchema,
   logicalServerIdSchema,
   operationSchema,
   savedScheduleSchema,
@@ -22,24 +21,9 @@ import {
   serverEventSchema,
   serverGrantsResponseSchema,
 } from "@ludock/shared";
-import { getGameCapabilityMatrix } from "../src/server-presets.js";
 
 const serverId = "5b9dfbf4-59b0-4ae8-ad5f-4c755f7c02de";
 const ownerId = "eaa9292a-d218-4696-8c86-f3ebd176dbd4";
-
-test("game capability response projects the actual integration registry without adapter configuration", () => {
-  const raw = getGameCapabilityMatrix();
-  const { integrations } = integrationsResponseSchema.parse({
-    integrations: raw,
-  });
-  expect(integrations.length).toBe(raw.length);
-  expect(integrations.map((value) => value.gameType)).toStrictEqual(raw.map((value) => value.gameType));
-  expect(integrations[0]?.capabilities).toStrictEqual(raw[0]?.capabilities);
-  expect(integrations.every(
-      (value) =>
-        !Object.hasOwn(value, "console") && !Object.hasOwn(value, "aliases"),
-    )).toBeTruthy();
-});
 
 test("request defaults and required persisted response fields remain distinct", () => {
   const input = {

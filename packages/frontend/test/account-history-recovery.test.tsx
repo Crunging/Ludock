@@ -113,7 +113,7 @@ describe("account and history recovery", () => {
     await act(async () => { integrations.reject(new Error("Integrations unavailable")); });
     expect((await screen.findByRole("alert")).textContent).toContain("Integrations unavailable");
     expect(screen.queryByText("Connected")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Game capabilities" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Supported games" })).toBeNull();
 
     request.mockImplementation(async (url) =>
       String(url).endsWith("/integrations")
@@ -122,7 +122,7 @@ describe("account and history recovery", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("Connected");
-    expect(screen.getByRole("heading", { name: "Game capabilities" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Supported games" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -143,7 +143,7 @@ describe("account and history recovery", () => {
     });
     expect(events.mock.calls.some(([event]) => event.type === AUTH_REQUIRED_EVENT)).toBe(false);
     expect(screen.getByRole("alert").textContent).toContain("Integrations unavailable");
-    expect(screen.queryByRole("heading", { name: "Game capabilities" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Supported games" })).toBeNull();
   });
 
   it("offers connection recovery without claiming discovery succeeded while Docker is unavailable", async () => {

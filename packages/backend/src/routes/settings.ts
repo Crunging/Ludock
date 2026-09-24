@@ -1,30 +1,13 @@
-import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic, type GameCapability, type GameIntegration, } from "@ludock/shared";
+import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic } from "@ludock/shared";
 import path from "node:path";
 import { assertRequestUser, } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
 import { isComposeAvailable } from "../compose.js";
 import { getDiscoveryDiagnostics } from "../docker.js";
 import { configureNotifications, listNotificationDeliveries, notificationConfiguration, queueTestNotification, retryNotificationDelivery, } from "../notifications.js";
-import { getGameCapabilityMatrix, type GameCapability as RegistryCapability, } from "../server-presets.js";
+import { resolveGameConsoleAdapter } from "../game-console.js";
+import { GAME_INTEGRATIONS } from "../server-presets.js";
 import { administrator, audit, id, requestUser, respond, type ApiRoutes } from "./request.js";
-function publicCapability(capability: RegistryCapability): GameCapability {
-  return { ...capability, evidence: [...capability.evidence] };
-}
-function publicIntegration(integration: ReturnType<typeof getGameCapabilityMatrix>[number]): GameIntegration {
-  const { capabilities } = integration;
-  return {
-    gameType: integration.gameType,
-    repositories: [...integration.repositories],
-    capabilities: {
-      recognition: publicCapability(capabilities.recognition),
-      platforms: publicCapability(capabilities.platforms),
-      console: publicCapability(capabilities.console),
-      backup: publicCapability(capabilities.backup),
-      readiness: publicCapability(capabilities.readiness),
-      update: publicCapability(capabilities.update),
-    },
-  };
-}
 
 export const settingsRoutes: ApiRoutes = {
   "/api/v1/settings/deployment": {
@@ -89,7 +72,11 @@ export const settingsRoutes: ApiRoutes = {
   },
   "/api/v1/integrations": {
     GET: administrator(() => respond(integrationsResponseSchema, {
-      integrations: getGameCapabilityMatrix().map(publicIntegration),
+      integrations: GAME_INTEGRATIONS.map(({ gameType, repositories }) => ({
+        gameType,
+        repositories: [...repositories],
+        console: resolveGameConsoleAdapter({ gameType, labels: {} })?.name ?? null,
+      })),
     }))
   }
 };

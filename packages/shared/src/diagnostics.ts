@@ -12,23 +12,11 @@ export const diagnosticsResponseSchema = z.object({
   dockerConnected: z.boolean(),
   composeAvailable: z.boolean(),
 });
-export const gameCapabilitySchema = z.object({
-  status: z.enum(["supported", "conditional", "unsupported", "unverified"]),
-  description: z.string(),
-  evidence: z.array(z.string()),
-});
-export type GameCapability = z.infer<typeof gameCapabilitySchema>;
 export const gameIntegrationSchema = z.object({
   gameType: z.string(),
   repositories: z.array(z.string()),
-  capabilities: z.object({
-    recognition: gameCapabilitySchema,
-    platforms: gameCapabilitySchema,
-    console: gameCapabilitySchema,
-    backup: gameCapabilitySchema,
-    readiness: gameCapabilitySchema,
-    update: gameCapabilitySchema,
-  }),
+  /** Display name of the built-in console adapter, if any. */
+  console: z.string().nullable(),
 });
 export type GameIntegration = z.infer<typeof gameIntegrationSchema>;
 export const integrationsResponseSchema = z.object({
