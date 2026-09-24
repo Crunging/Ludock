@@ -146,7 +146,8 @@ export async function isComposeAvailable(): Promise<boolean> {
       configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length === 0
     ) return false;
     await runCompose(["version", "--short"], 5000);
-    return true;
+    // Configuration can change while the probe runs; report the current roots.
+    return configuredRoots(process.env.LUDOCK_COMPOSE_ROOTS).length > 0;
   } catch {
     return false;
   }
