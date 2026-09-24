@@ -246,9 +246,9 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
               LOGIN_ACCOUNT_SOURCE_MAX_FAILURES,
             );
           // A rotating source cannot avoid this account-wide slowdown. Keep
-          // the cooldown short: the old five-guess account lockout let anyone
-          // deny the owner access for fifteen minutes. Rejected retries do not
-          // extend this cooldown, and successful authentication clears it.
+          // the cooldown short so an attacker cannot lock the owner out for
+          // long. Rejected retries do not extend this cooldown, and successful
+          // authentication clears it.
           const accountFailures = getLoginThrottle(accountKey, failedAt, LOGIN_WINDOW_MS).failures + 1;
           const step = Math.max(0, Math.min(5, Math.floor(
             (accountFailures - LOGIN_ACCOUNT_COOLDOWN_THRESHOLD) / 5,
@@ -267,11 +267,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
           writeAuditLog({
             action: "auth.login.failed",
             targetType: "user",
-            details: {
-              username: typeof parsed.data.username === "string"
-                ? parsed.data.username.slice(0, 32)
-                : null,
-            },
+            details: { username: parsed.data.username.slice(0, 32) },
             ipAddress: ctx.ipAddress,
           });
           return Response.json({ error: "Invalid username or password" }, { status: 401 });

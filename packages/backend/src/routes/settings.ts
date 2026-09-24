@@ -1,6 +1,6 @@
 import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic } from "@ludock/shared";
-import path from "node:path";
-import { assertRequestUser, } from "../auth.js";
+import { rootList } from "../approved-paths.js";
+import { assertRequestUser } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
 import { isComposeAvailable } from "../compose.js";
 import { getDiscoveryDiagnostics } from "../docker.js";
@@ -15,10 +15,8 @@ export const settingsRoutes: ApiRoutes = {
       const composeAvailable = await isComposeAvailable();
       assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
       return respond(deploymentSettingsResponseSchema, {
-        backupRoots: [...new Set((process.env.LUDOCK_BACKUP_ROOTS || "")
-          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
-        composeRoots: [...new Set((process.env.LUDOCK_COMPOSE_ROOTS || "")
-          .split(path.delimiter).map((root) => root.trim()).filter(Boolean))],
+        backupRoots: rootList(process.env.LUDOCK_BACKUP_ROOTS),
+        composeRoots: rootList(process.env.LUDOCK_COMPOSE_ROOTS),
         composeAvailable,
       });
     })

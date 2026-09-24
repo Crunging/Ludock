@@ -229,23 +229,22 @@ export function createUser(user: UserRecord): void {
     );
 }
 
-export function findUserByUsername(username: string): UserRecord | null {
+interface UserRow {
+  id: string;
+  username: string;
+  password_hash: string;
+  role: UserRecord["role"];
+  disabled: number;
+  created_at: number;
+}
+
+function findUser(column: "id" | "username", value: string): UserRecord | null {
   const row = getDatabase()
     .query(
       `SELECT id, username, password_hash, role, disabled, created_at
-       FROM users WHERE username = ?`,
+       FROM users WHERE ${column} = ?`,
     )
-    .get(username) as
-    | {
-        id: string;
-        username: string;
-        password_hash: string;
-        role: UserRecord["role"];
-        disabled: number;
-        created_at: number;
-      }
-    | null;
-
+    .get(value) as UserRow | null;
   return row
     ? {
         id: row.id,
@@ -258,32 +257,12 @@ export function findUserByUsername(username: string): UserRecord | null {
     : null;
 }
 
+export function findUserByUsername(username: string): UserRecord | null {
+  return findUser("username", username);
+}
+
 export function findUserById(id: string): UserRecord | null {
-  const row = getDatabase()
-    .query(
-      `SELECT id, username, password_hash, role, disabled, created_at
-       FROM users WHERE id = ?`,
-    )
-    .get(id) as
-    | {
-        id: string;
-        username: string;
-        password_hash: string;
-        role: UserRecord["role"];
-        disabled: number;
-        created_at: number;
-      }
-    | null;
-  return row
-    ? {
-        id: row.id,
-        username: row.username,
-        passwordHash: row.password_hash,
-        role: row.role,
-        disabled: row.disabled === 1,
-        createdAt: row.created_at,
-      }
-    : null;
+  return findUser("id", id);
 }
 
 export function listUsers(): UserSummary[] {
