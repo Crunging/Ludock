@@ -26,23 +26,23 @@ describe("application log buffer", () => {
     expect(redacted).toMatch(/safe=value/);
   });
 
-  it("redacts development session cookies before buffering logs", () => {
+  it("redacts session cookies before buffering logs", () => {
     recordApplicationLog({
       timestamp: 122,
       level: "warn",
       component: "test",
       message:
-        "ludock_session_012345abcdef=development-secret; Path=/; HttpOnly",
+        "ludock_session=development-secret; Path=/; HttpOnly",
       context: {
-        detail: "theme=dark; ludock_session_fedcba543210=context-secret",
+        detail: "theme=dark; ludock_session=context-secret",
         apiKey: "unlabelled-key-secret",
       },
     });
     const entry = listApplicationLogs({ limit: 1 }).entries[0];
     expect(entry).toBeTruthy();
     expect(JSON.stringify(entry)).not.toMatch(/development-secret|context-secret|unlabelled-key-secret/);
-    expect(entry.message).toBe("ludock_session_012345abcdef=[REDACTED]; Path=/; HttpOnly");
-    expect(entry.context?.detail).toBe("theme=dark; ludock_session_fedcba543210=[REDACTED]");
+    expect(entry.message).toBe("ludock_session=[REDACTED]; Path=/; HttpOnly");
+    expect(entry.context?.detail).toBe("theme=dark; ludock_session=[REDACTED]");
     expect(entry.context?.apiKey).toBe("[REDACTED]");
   });
 

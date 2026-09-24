@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun ../../scripts/watch-backend.mjs",
+    "dev": "bun --watch src/index.ts",
     "build": "bun ../../scripts/build-backend.mjs",
     "lint": "oxlint .",
     "lint:scripts": "cd ../.. && oxlint --config scripts/.oxlintrc.json scripts",

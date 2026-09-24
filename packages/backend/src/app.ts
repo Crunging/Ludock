@@ -4,7 +4,6 @@ import {
   authenticateRequest, defaultSetupWindow, type SetupWindow,
 } from "./auth.js";
 import { checkDatabase } from "./database.js";
-import { developmentInstance, matchesDevelopmentInstance } from "./development-instance.js";
 import { checkDockerConnection } from "./docker.js";
 import { DockerApiError } from "./docker-transport.js";
 import { AppError, errorResponse } from "./errors.js";
@@ -52,7 +51,6 @@ function responseHeaders(request: Request, url: URL, requestId: string): Headers
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   });
-  if (developmentInstance) headers.set("X-Ludock-Dev-Instance", developmentInstance);
   if (url.pathname.toLowerCase().startsWith("/api/")) headers.set("Cache-Control", "no-store");
   if (isExternalHttpsRequest(request))
     headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -145,9 +143,7 @@ function requestHandler(handler: ApiHandler, publicEndpoint = false): RoutedHand
           throw new AppError("INVALID_PATH", 400, "Invalid request path");
         }
       }
-      if (!matchesDevelopmentInstance(request.headers.get("x-ludock-dev-instance") || undefined)) {
-        response = Response.json({ error: "This request belongs to a different development checkout." }, { status: 409 });
-      } else if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && (
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && (
         request.headers.get("sec-fetch-site") === "cross-site" ||
         (request.headers.has("origin") && !isSameOriginRequest(request))
       )) {

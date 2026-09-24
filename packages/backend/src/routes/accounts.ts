@@ -32,7 +32,6 @@ import {
   updateUserAccess, updateUserPassword, writeAuditLog,
   type UserRecord
 } from "../database.js";
-import { developmentInstance } from "../development-instance.js";
 import { AppError } from "../errors.js";
 import { listAuditHistory } from "../history.js";
 import {
@@ -290,11 +289,7 @@ export function accountRoutes(setupWindow: SetupWindow): ApiRoutes {
         const session = getRequestSession(ctx.request);
         deleteRequestSession(ctx.request);
         clearSessionCookie(ctx.headers);
-        // Cookie clearing is host-wide, so development checkouts on other ports
-        // must retain their sessions. clearSessionCookie removes this one's cookie.
-        ctx.headers.set("Clear-Site-Data", developmentInstance
-          ? '"cache", "storage"'
-          : '"cache", "cookies", "storage"');
+        ctx.headers.set("Clear-Site-Data", '"cache", "cookies", "storage"');
         if (session) {
           writeAuditLog({
             userId: session.user.id,

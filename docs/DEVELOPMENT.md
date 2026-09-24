@@ -9,9 +9,15 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Use the printed URLs and state path. `bun run dev --print-config` shows the
-configuration without starting a backend. Development has no Docker connection
-by default; use a dedicated test daemon with disposable game data.
+Open <http://127.0.0.1:3000> and use the setup code printed in the output.
+The frontend hot-reloads and forwards `/api` and `/ws` to the backend on port
+3001, which restarts when its source changes. Data lives in `data/dev/`
+(override with `LUDOCK_DB_PATH`); `LUDOCK_DEV_PORT` and `PORT` change the
+frontend and backend ports.
+
+Development has no Docker connection by default. To manage containers, set
+`DOCKER_SOCKET` to a dedicated test daemon with disposable game data, never one
+running real servers.
 
 Bun runs all JavaScript; TypeScript 7 and Oxlint use native executables. Keep
 `[run].bun = true` in `bunfig.toml`. Bun's built-in `node:fs`, `node:path`, and

@@ -3,7 +3,6 @@ import { authenticateWsRequest, type WebSocketAuth } from "./auth.js";
 import { handleConsoleConnection } from "./console.js";
 import { handleContainerLogsConnection } from "./container-logs.js";
 import { addEventClient } from "./events.js";
-import { matchesDevelopmentInstance } from "./development-instance.js";
 import { createLogger } from "./logger.js";
 import { MAX_SOCKET_BUFFER_BYTES, NativeSocketChannel } from "./socket-channel.js";
 
@@ -108,8 +107,6 @@ export function createWebSocketGateway() {
     websocket,
     get connectionCount() { return sessions.size; },
     upgrade(request: Request, server: Pick<Server<SocketSession>, "upgrade" | "requestIP">): Response | undefined {
-      if (!matchesDevelopmentInstance(request.headers.get("x-ludock-dev-instance") ?? undefined))
-        return new Response("Development instance mismatch", { status: 409 });
       if (stopping) return new Response("Server shutting down", { status: 503 });
       const pathname = new URL(request.url).pathname;
       const auth = authenticateWsRequest(request);

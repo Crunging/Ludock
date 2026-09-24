@@ -32,10 +32,7 @@ import {
   withPasswordWork,
 } from "./password.js";
 
-import { developmentInstance } from "./development-instance.js";
-const SESSION_COOKIE = developmentInstance
-  ? `ludock_session_${developmentInstance}`
-  : "ludock_session";
+const SESSION_COOKIE = "ludock_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_API_TOKEN_LENGTH = 32;
 export const SETUP_WINDOW_MS = 5 * 60 * 1000;

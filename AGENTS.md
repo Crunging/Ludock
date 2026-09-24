@@ -34,8 +34,7 @@ entries in `packages/backend/src/migrations.ts`.
 
 ```sh
 bun install --frozen-lockfile
-bun run dev                      # prints URLs and state path; no Docker unless DOCKER_SOCKET is set
-bun run dev --print-config
+bun run dev                      # http://127.0.0.1:3000; no Docker unless DOCKER_SOCKET is set
 bun run check                    # typecheck, lint, all unit tests, builds
 bun run --filter @ludock/backend test
 cd packages/backend && bun test --isolate test/<name>.test.ts

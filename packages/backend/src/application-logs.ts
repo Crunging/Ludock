@@ -14,7 +14,7 @@ let nextId = 1;
 const SECRET_KEY_PATTERN =
   /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(\s*[=:]\s*)[^\s,"';&}]+/gi;
 const BEARER_PATTERN = /\bBearer\s+[^\s,;]+/gi;
-const COOKIE_PATTERN = /\b(ludock_session(?:_[a-z0-9_-]+)?)=([^;\s]+)/gi;
+const COOKIE_PATTERN = /\b(ludock_session)=([^;\s]+)/gi;
 const SENSITIVE_QUERY_PATTERN =
   /([?&](?:token|api[-_]?key|password|secret|session)=)[^&#\s]+/gi;
 const QUOTED_SECRET_PATTERN =
