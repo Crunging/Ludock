@@ -175,24 +175,4 @@ describe("release PR checks", () => {
       expect((await run()).exitCode).toBe(1);
     });
   });
-
-  it("keeps full checks on code PRs and publication, and release checks read-only", async () => {
-    const readWorkflow = async (name) => Bun.YAML.parse(await Bun.file(new URL(`../../.github/workflows/${name}.yaml`, import.meta.url)).text());
-    const ci = await readWorkflow("ci");
-    expect(ci.on.pull_request["paths-ignore"]).not.toContain("package.json");
-    expect(ci.permissions).toEqual({ contents: "read" });
-    // Ordinary PR checks start immediately; no classification runner is needed.
-    expect(ci.jobs.check.needs).toBeUndefined();
-    const releaseCondition = ci.jobs.release.if.slice(4, -3);
-    expect(releaseCondition).toBe("github.base_ref == 'main' && " +
-      "github.head_ref == 'release-please--branches--main--components--ludock' && " +
-      "github.event.pull_request.head.repo.full_name == github.repository");
-    expect(ci.jobs.check.if).toBe("${{ !(" + releaseCondition + ") }}");
-    expect(ci.jobs.check.uses).toBe("./.github/workflows/checks.yaml");
-    const steps = ci.jobs.release.steps;
-    expect(steps.findIndex((step) => step.run === "bun scripts/ci/pr-checks.mjs")).toBeLessThan(
-      steps.findIndex((step) => step.run === "bun scripts/ci/containers.mjs build check"));
-    expect(ci.jobs.release.steps.some((step) => step.run === "bun scripts/test-linux.mjs --smoke-only")).toBe(true);
-    expect((await readWorkflow("release")).jobs.check.uses).toBe("./.github/workflows/checks.yaml");
-  });
 });

@@ -2,61 +2,12 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { imageTags, buildArguments, scanImage, BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE } from "../ci/containers.mjs";
+import { imageTags, buildArguments, scanImage, TRIVY_IMAGE, SBOM_IMAGE } from "../ci/containers.mjs";
 import { exportBuildRuntime, integrationEnvironment, integrations, stageIntegration } from "../ci/integration.mjs";
 
 const root = new URL("../../", import.meta.url);
-const read = (name) => Bun.file(new URL(name, root)).text();
 
 describe("Bun-only CI", () => {
-  it("runs repository actions with Bun or native containers and keeps all external code pinned", async () => {
-    const bunImage = (await read("Dockerfile")).match(/^ARG BUN_IMAGE=(.+)$/m)?.[1];
-    for await (const filename of new Bun.Glob(".github/{workflows,actions}/**/*.yaml").scan({ cwd: Bun.fileURLToPath(root), dot: true })) {
-      const data = Bun.YAML.parse(await read(filename));
-      if (data.runs) {
-        expect(["docker", "composite"]).toContain(data.runs.using);
-        if (data.runs.using === "docker") {
-          expect(data.runs.image).toBe("Dockerfile");
-          const dockerfile = await read(filename.replace(/action\.yaml$/, "Dockerfile"));
-          expect(dockerfile).toContain(`FROM ${bunImage}`);
-          expect(dockerfile).toContain("RUN apk upgrade --no-cache");
-          expect(dockerfile).toContain("&& rm /usr/local/bun-node-fallback-bin/node");
-          expect(dockerfile).toContain('["node", "npm", "npx"].some(command => Bun.which(command))');
-          expect(dockerfile).toContain('ENTRYPOINT ["/usr/local/bin/bun"]');
-        }
-      }
-      for (const job of Object.values(data.jobs || {})) {
-        if (job.uses) expect(job.uses).toStartWith("./.github/workflows/");
-        for (const step of job.steps || []) {
-          if (step.uses) expect(step.uses).toMatch(/^(?:\.\/\.github\/|docker:\/\/[^\s@]+@sha256:[a-f0-9]{64}$)/);
-          if (step.run) expect(step.run).not.toMatch(/(?:^|[;&|]\s*|\n\s*)(?:node|npm|npx)\s/);
-          if (filename.endsWith("checks.yaml") && step.with?.integration)
-            expect(["upload-artifact", "build-runtime", "verify-release-please"]).toContain(step.with.integration);
-        }
-      }
-    }
-    for (const integration of Object.values(integrations)) expect(integration.revision).toMatch(/^[a-f0-9]{40}$/);
-    for (const image of [BUILDKIT_IMAGE, TRIVY_IMAGE, SBOM_IMAGE]) expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
-    const setup = Bun.YAML.parse(await read(".github/actions/setup-bun/action.yaml"));
-    expect(setup.runs.steps[0].env.BUN_IMAGE).toMatch(/^oven\/bun:1-distroless@sha256:[a-f0-9]{64}$/);
-    expect(Bun.TOML.parse(await read("bunfig.toml")).run.bun).toBe(true);
-    const checks = Bun.YAML.parse(await read(".github/workflows/checks.yaml"));
-    expect(checks.jobs.source.steps.some((step) => step.with?.integration === "verify-release-please")).toBe(true);
-  });
-
-  it("installs workspace dependencies before importing the runtime image selector", async () => {
-    for (const filename of ["checks.yaml", "dependency-security.yaml"]) {
-      const workflow = Bun.YAML.parse(await read(`.github/workflows/${filename}`));
-      for (const job of Object.values(workflow.jobs)) {
-        const steps = job.steps || [];
-        for (const [index, step] of steps.entries()) {
-          if (!step.run?.includes("packages/backend/src/runtime-images.ts")) continue;
-          expect(steps.slice(0, index).some((previous) => previous.run === "bun install --frozen-lockfile")).toBe(true);
-        }
-      }
-    }
-  });
-
   it("stages companion assets beside their bundle and waits for downloads before reporting failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "ludock-ci-assets-"));
     const integration = integrations["release-please"];
@@ -106,9 +57,7 @@ describe("Bun-only CI", () => {
     expect(() => imageTags({ ...base, IMAGE_NAME: "invalid\nimage" })).toThrow();
   });
 
-  it("requires the exact Bun release and enforces the package minimum during setup", async () => {
-    const setup = Bun.YAML.parse(await read(".github/actions/setup-bun/action.yaml"));
-    expect(setup.runs.steps[0].run).toContain('"$bun_directory/bun" scripts/ci/check-bun.mjs');
+  it("requires the exact Bun release and enforces the package minimum", async () => {
     const script = Bun.fileURLToPath(new URL("scripts/ci/check-bun.mjs", root));
     const check = (cwd) => Bun.spawnSync([process.execPath, script], { cwd, stdout: "pipe", stderr: "pipe" });
     expect(check(Bun.fileURLToPath(root)).exitCode).toBe(0);

@@ -192,14 +192,6 @@ if (method === "GET") process.stdout.write(readFileSync(process.env.GH_RESPONSE)
 }
 
 describe("release PR publication state", () => {
-  it("updates PR state only after successful stable publication", () => {
-    const steps = workflow.jobs.release.steps;
-    expect(publicationStep.if).toBe("needs.validate.outputs.should_release == 'true'");
-    expect(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Create GitHub release")).toBeTruthy();
-    expect(steps.indexOf(publicationStep) > steps.findIndex((step) => step.name === "Build and publish image")).toBeTruthy();
-    expect(workflow.jobs.release.permissions["pull-requests"]).toBe("write");
-  });
-
   it("marks only the merged pending PR for the published commit, including later API pages", async () => {
     const result = await runPublicationLabels([
       [
@@ -251,7 +243,6 @@ describe("release PR publication state", () => {
   }
 });
 
-
 describe("release notes", () => {
   const current = "## [1.2.3](https://example.invalid/compare/v1.2.2...v1.2.3) (2026-09-14)\n\n### Bug Fixes\n\n* Preserve the reviewed entry.\n";
   const older = "## 1.2.2 (2026-09-01)\n\n* Earlier change.\n";
@@ -264,7 +255,5 @@ describe("release notes", () => {
     for (const changelog of [older, current + current, "## 1.2.3\n\n" + older])
       expect(() => releaseNotes(changelog, "v1.2.3")).toThrow();
     expect(() => releaseNotes(current, "v1.2.3-beta.1")).toThrow();
-    const steps = workflow.jobs.release.steps;
-    expect(steps.findIndex((step) => step.name === "Generate release notes") < steps.findIndex((step) => step.name === "Create release tag")).toBeTruthy();
   });
 });

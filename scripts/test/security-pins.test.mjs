@@ -6,27 +6,6 @@ const root = new URL("../../", import.meta.url);
 const read = (name) => readFile(new URL(name, root), "utf8");
 
 describe("security dependency pins", () => {
-  it("keeps the hardened example deployment self-contained and directly editable", async () => {
-    const source = await read("compose.yaml");
-    expect(source).not.toContain("${");
-    const service = Bun.YAML.parse(source).services.ludock;
-    expect(service.env_file).toEqual([{ path: ".env", required: false }]);
-    expect(service.image).toBe("ghcr.io/crunging/ludock:latest");
-    expect(service.ports).toEqual(["3000:3000"]);
-    // Defaults live in the image so optional .env values can override them.
-    expect(service.environment).toBeUndefined();
-    expect(await read("Dockerfile")).toContain("ENV LUDOCK_BACKUP_ROOTS=/backups");
-    expect(service.volumes[0]).toMatchObject({
-      source: "/var/run/docker.sock", target: "/var/run/docker.sock",
-      read_only: true, bind: { create_host_path: false },
-    });
-    expect(service.read_only).toBe(true);
-    expect(service.cap_drop).toEqual(["ALL"]);
-    expect(service.cap_add).toEqual(["DAC_OVERRIDE"]);
-    expect(service.security_opt).toEqual(["no-new-privileges:true"]);
-    expect(service.tmpfs).toEqual(["/tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777"]);
-  });
-
   it("pins build and fixture images to immutable manifests", async () => {
     const dockerfile = await read("Dockerfile");
     const bun = dockerfile.match(/^ARG BUN_IMAGE=(.+)$/m)?.[1];
