@@ -9,63 +9,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
       - name: Audit dependencies for vulnerabilities
         run: bun audit --audit-level=high
       - name: Type-check, lint, test, and build
         run: bun run check
-      - name: Prepare Bun integration receipt
-        run: |
-          bun -e 'await Bun.write("test-results/ci-integration/receipt.json", JSON.stringify({ bun: Bun.version, commit: process.env.GITHUB_SHA }))'
-      - name: Verify artifact upload under Bun
-        uses: ./.github/actions/bun-action
-        with:
-          integration: upload-artifact
-          name: bun-integration-receipt
-          path: test-results/ci-integration/receipt.json
-          retention-days: 7
-        env:
-          INPUT_IF-NO-FILES-FOUND: error
-      - name: Verify Release Please generation under Bun
-        uses: ./.github/actions/bun-action
-        with:
-          integration: verify-release-please
   browser:
     name: Browser
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
       - name: Build frontend
         run: bun run --filter @ludock/frontend build
       - name: Install Chromium headless shell
@@ -73,11 +39,10 @@ jobs:
         run: bun x --bun playwright install --with-deps --only-shell chromium
       - name: Check desktop and mobile browser workflows
         run: bun run --filter @ludock/frontend test:e2e
-      - name: Retain browser failure details
+      - name: Keep browser failure details
         if: failure()
-        uses: ./.github/actions/bun-action
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          integration: upload-artifact
           name: browser-failures
           path: |
             packages/frontend/test-results/
@@ -88,18 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Lint workflows
         uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
   container:
@@ -114,67 +70,42 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
+    env:
+      LUDOCK_TEST_IMAGE: ludock:ci
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-      - name: Expose BuildKit cache runtime
-        uses: ./.github/actions/bun-action
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          integration: build-runtime
-      - name: Set up Docker Buildx
-        run: bun scripts/ci/containers.mjs setup
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Build production image
-        run: bun scripts/ci/containers.mjs build check
-        env:
-          LUDOCK_PLATFORM: ${{ matrix.platform }}
-      - name: Install test harness dependencies
-        run: bun install --frozen-lockfile
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ludock:ci
+          cache-from: type=gha,scope=ci-${{ runner.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ runner.arch }}
+      - run: bun install --frozen-lockfile
       - name: Check Compose updates with disposable services
         run: bun scripts/test-compose.mjs
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Smoke-test production startup and run Linux backend suites
         run: bun scripts/test-linux.mjs
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check scoped file helpers with disposable data
         run: bun scripts/test-files.mjs
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check automatic fallback helpers with disposable data
         run: bun scripts/test-files.mjs --fallback-helper
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check backup and restore recovery with disposable data
         run: bun scripts/test-backups.mjs
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Check packaged file transfers and backup restore
         run: bun scripts/test-packaged.mjs
-        env:
-          LUDOCK_TEST_IMAGE: ludock:ci
       - name: Scan image for vulnerabilities
-        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
-        env:
-          SCAN_IMAGE: ludock:ci
+        run: bun scripts/ci/containers.mjs scan ludock:ci
       - name: Scan fallback helper for vulnerabilities
         run: bun scripts/ci/containers.mjs scan "$(bun -p '(await import("./packages/backend/src/runtime-images.ts")).FALLBACK_HELPER_IMAGE')"
-      - name: Build and scan CI action runtime
-        run: |
-          docker build --pull --tag ludock:ci-action .github/actions/bun-action
-          bun scripts/ci/containers.mjs scan ludock:ci-action
-      - name: Remove build instance
-        if: always()
-        run: docker buildx rm ludock

@@ -15,22 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Create or update release PR
-        uses: ./.github/actions/bun-action
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          integration: release-please
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

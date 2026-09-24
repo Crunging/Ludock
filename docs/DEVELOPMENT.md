@@ -68,11 +68,14 @@ bun outdated --recursive
 bun audit
 ```
 
-Update `.bun-version` and Bun image pins in the Dockerfile and local actions
-together. File and backup helpers reuse the running production image automatically.
-Native runs use the reviewed `FALLBACK_HELPER_IMAGE` pin in
-`packages/backend/src/runtime-images.ts`; update it when the Bun minimum changes.
-Keep [integration revisions](../scripts/ci/integration.mjs)
-and [CI images](../scripts/ci/containers.mjs) pinned and validate both architectures.
-Image checks reject fixable medium, high, and critical vulnerabilities in
-the production runtime, fallback helper, and CI action runtime.
+Update `.bun-version` and the Bun image pin in the Dockerfile together; CI
+installs the version in `.bun-version`. File and backup helpers reuse the running
+production image automatically. Native runs use the reviewed
+`FALLBACK_HELPER_IMAGE` pin in `packages/backend/src/runtime-images.ts`; update
+it when the Bun minimum changes.
+
+Workflows pin every action to a full commit SHA (with its release as a comment)
+and every image to a digest; `scripts/test/security-pins.test.mjs` enforces
+this. Image checks in [`scripts/ci/containers.mjs`](../scripts/ci/containers.mjs)
+reject fixable medium, high, and critical vulnerabilities in the production
+runtime and fallback helper.

@@ -15,20 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Audit dependencies for vulnerabilities
         run: bun audit --audit-level=high
   images:
@@ -44,37 +36,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-      - name: Install image selector dependencies
-        run: bun install --frozen-lockfile
-      - name: Select published runtime image
-        id: images
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          repository="$(bun --print 'process.env.GITHUB_REPOSITORY.toLowerCase()')"
-          echo "release=ghcr.io/${repository}:latest" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
       - name: Scan published release image
-        run: bun scripts/ci/containers.mjs scan "$SCAN_IMAGE"
-        env:
-          SCAN_IMAGE: ${{ steps.images.outputs.release }}
+        shell: bash
+        run: bun scripts/ci/containers.mjs scan "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
       - name: Scan fallback helper for vulnerabilities
         run: bun scripts/ci/containers.mjs scan "$(bun -p '(await import("./packages/backend/src/runtime-images.ts")).FALLBACK_HELPER_IMAGE')"
-      - name: Build and scan CI action runtime
-        run: |
-          docker build --pull --tag ludock:ci-action .github/actions/bun-action
-          bun scripts/ci/containers.mjs scan ludock:ci-action

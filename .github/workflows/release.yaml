@@ -24,20 +24,13 @@ jobs:
       should_release: ${{ steps.version.outputs.should_release }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Validate release version
         id: version
         shell: bash
@@ -94,20 +87,12 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
     steps:
-      - name: Check out repository with Git
-        shell: bash
-        env:
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |-
-          set -euo pipefail
-          git init .
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          authorization="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 -w0)"
-          echo "::add-mask::$authorization"
-          git -c "http.extraheader=AUTHORIZATION: basic $authorization" fetch --force --tags origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Generate release notes
         if: needs.validate.outputs.should_release == 'true'
         run: bun scripts/release-notes.mjs "$RELEASE_TAG" "$RUNNER_TEMP/release-notes.md"
@@ -127,12 +112,8 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag --annotate "$RELEASE_TAG" --message "Ludock $RELEASE_TAG"
-            authorization="$(printf 'x-access-token:%s' "$TAG_TOKEN" | base64 -w0)"
-            echo "::add-mask::$authorization"
-            git -c "http.extraheader=AUTHORIZATION: basic $authorization" push origin "$RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
           fi
-        env:
-          TAG_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Determine which moving tags this release owns
         if: needs.validate.outputs.should_release == 'true'
         id: rank
@@ -160,25 +141,56 @@ jobs:
             echo "is_major_latest=$([[ "$highest_major" == "$current" ]] && echo true || echo false)"
             echo "is_minor_latest=$([[ "$highest_minor" == "$current" ]] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
-      - name: Expose BuildKit cache runtime
-        uses: ./.github/actions/bun-action
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          integration: build-runtime
-      - name: Set up Docker Buildx
-        run: bun scripts/ci/containers.mjs setup
-      - name: Sign in to GitHub Container Registry
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Select image tags
+        id: image
         shell: bash
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REGISTRY_USER: ${{ github.actor }}
-        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
-      - name: Build and publish image
-        run: bun scripts/ci/containers.mjs build publish
         env:
           SHOULD_RELEASE: ${{ needs.validate.outputs.should_release }}
           IS_LATEST: ${{ steps.rank.outputs.is_latest }}
           IS_MAJOR_LATEST: ${{ steps.rank.outputs.is_major_latest }}
           IS_MINOR_LATEST: ${{ steps.rank.outputs.is_minor_latest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "tags<<EOF"
+            bun scripts/ci/containers.mjs tags
+            echo "EOF"
+            if [[ "$SHOULD_RELEASE" == "true" ]]; then
+              echo "version=${RELEASE_TAG#v}"
+            else
+              echo "version=nightly"
+            fi
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and publish image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          attests: type=sbom,generator=docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+          tags: ${{ steps.image.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.image.outputs.version }}
+            org.opencontainers.image.title=Ludock
+            org.opencontainers.image.description=A self-hosted control panel for existing Docker game servers
+            org.opencontainers.image.licenses=MIT
+          cache-from: |
+            type=gha,scope=publish
+            type=gha,scope=ci-X64
+            type=gha,scope=ci-ARM64
+          cache-to: type=gha,mode=max,scope=publish
       - name: Create GitHub release
         if: needs.validate.outputs.should_release == 'true'
         env:
@@ -234,9 +246,3 @@ jobs:
           gh api --method DELETE \
             "repos/$GITHUB_REPOSITORY/issues/$pull_number/labels/autorelease%3A%20pending" \
             --silent
-      - name: Remove build instance
-        if: always()
-        run: docker buildx rm ludock
-      - name: Clear registry credentials
-        if: always()
-        run: docker logout ghcr.io
