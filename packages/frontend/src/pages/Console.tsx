@@ -146,14 +146,15 @@ function ConsoleSession({ containerId, user }: {
   useEffect(() => {
     if (!termRef.current) return;
     const colors = getComputedStyle(document.documentElement);
+    const background = colors.getPropertyValue("--bg-terminal").trim() || "#0a0f16";
     const terminal = new Terminal({
       theme: {
-        background: "#0d1117",
-        foreground: "#c9d1d9",
+        background,
+        foreground: "#cdd7e3",
         cursor: colors.getPropertyValue("--accent").trim() || "#e68a3a",
-        cursorAccent: "#0d1117",
-        selectionBackground: colors.getPropertyValue("--accent-selection").trim() || "rgba(230, 138, 58, 0.25)",
-        black: "#0d1117",
+        cursorAccent: background,
+        selectionBackground: colors.getPropertyValue("--accent-selection").trim() || "rgba(230, 138, 58, 0.28)",
+        black: background,
         red: "#f87171",
         green: "#34d399",
         yellow: "#fbbf24",

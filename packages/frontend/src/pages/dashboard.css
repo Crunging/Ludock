@@ -13,10 +13,28 @@
   margin-top: 8px;
 }
 
+/* Same yard marking as the server rows: hatched yellow while anything waits
+   on someone, a plain steel edge when the yard is clear. */
 .needs-attention {
-  margin-bottom: 24px;
-  padding: 18px 0;
-  border-block: 1px solid var(--border);
+  position: relative;
+  margin-bottom: 28px;
+  padding: 16px 20px 16px 26px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.needs-attention::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 6px;
+  background: var(--border-light);
+}
+
+.needs-attention:has(.needs-attention__list, .needs-attention__warning, .needs-attention__error)::before {
+  background: var(--rail-busy);
 }
 
 .needs-attention__heading {
@@ -24,11 +42,13 @@
   align-items: baseline;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 
 .needs-attention h2 {
   font-size: 16px;
+  font-weight: 680;
+  font-stretch: 108%;
   margin: 0;
 }
 
@@ -65,6 +85,7 @@
 
 .needs-attention__server {
   grid-row: span 2;
+  font-weight: 600;
 }
 
 .needs-attention__action {

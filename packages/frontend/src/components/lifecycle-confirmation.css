@@ -4,18 +4,22 @@
   padding: 24px;
   color: var(--text);
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
 }
 
 .lifecycle-confirmation::backdrop {
-  background: rgb(0 0 0 / 60%);
+  background: rgb(5 9 14 / 72%);
+  backdrop-filter: blur(2px);
 }
 
 .lifecycle-confirmation h2 {
   margin-bottom: 10px;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
+  font-stretch: 110%;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 

@@ -9,9 +9,11 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 20px;
-  padding: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--border-light);
+  border-left: 4px solid var(--yellow);
   border-radius: var(--radius-sm);
+  background: var(--bg-card);
   font-size: 13px;
 }
 
@@ -33,13 +35,21 @@
 
 .search-field input,
 .state-filter select {
-  min-height: 38px;
-  padding: 8px 11px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
   background: var(--bg-input);
   font: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.search-field input:focus,
+.state-filter select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
 .search-field input {
@@ -51,7 +61,7 @@
   align-items: center;
   gap: 8px;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .state-filter select {
@@ -60,15 +70,18 @@
 
 .list-toolbar__count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
+/* Each server is a berth in the yard. The painted rail on its left edge
+   shows state by pattern as well as color: solid while it runs, hatched
+   while it is parked or changing. */
 .server-list {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 100px minmax(90px, 130px) max-content;
-  column-gap: 22px;
-  border-top: 1px solid var(--border);
+  grid-template-columns: minmax(180px, 1fr) 110px minmax(90px, 140px) max-content;
+  column-gap: 24px;
+  row-gap: 8px;
 }
 
 .server-list__header,
@@ -77,28 +90,53 @@
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
   align-items: center;
-  gap: 22px;
-  padding: 19px 8px;
-  border-bottom: 1px solid var(--border);
+  gap: 24px;
 }
 
 .server-list__header {
-  padding-block: 10px;
-  color: var(--text-dim);
+  padding: 0 18px 2px 26px;
+  color: var(--text-faint);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .server-list__header > :last-child {
   text-align: right;
 }
 
-.server-row:hover {
+.server-row {
+  position: relative;
+  padding: 18px 18px 18px 26px;
   background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.server-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 6px;
+  background: var(--rail-idle);
+}
+
+.server-row:has(.server-state--running)::before { background: var(--rail-running); }
+.server-row:has(.server-state--exited)::before,
+.server-row:has(.server-state--dead)::before { background: var(--rail-stopped); }
+.server-row:has(.server-state--restarting)::before,
+.server-row:has(.server-state--paused)::before,
+.server-row:has(.server-state--removing)::before { background: var(--rail-busy); }
+
+.server-row:hover {
+  background: #19232f;
+  border-color: var(--border-light);
 }
 
 .server-row__identity {
   display: grid;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -114,19 +152,29 @@
   justify-self: start;
   max-width: 100%;
   color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 680;
+  font-stretch: 110%;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
+.server-row__name.text-link:hover {
+  color: var(--accent-hover);
+}
+
 .server-row__game {
+  color: var(--text);
+  font-weight: 550;
   text-transform: capitalize;
 }
 
 .server-row__image {
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-stretch: var(--stretch-mono);
+  font-size: 11.5px;
   overflow-wrap: anywhere;
 }
 
@@ -137,17 +185,18 @@
 
 .server-row__backup {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
 .server-state {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--text-dim);
   text-transform: capitalize;
   font-size: 13px;
+  font-weight: 600;
 }
 
 .server-state--running { color: var(--green); }
@@ -163,8 +212,9 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  color: var(--text-dim);
-  font: 12px var(--font-mono);
+  color: var(--text);
+  font: 12.5px var(--font-mono);
+  font-stretch: var(--stretch-mono);
   overflow-wrap: anywhere;
 }
 
@@ -181,8 +231,8 @@
 
 .server-row__actions .secondary-btn {
   min-height: 34px;
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 
 .server-more { position: relative; }
@@ -194,12 +244,12 @@
   right: 0;
   top: calc(100% + 5px);
   z-index: 10;
-  min-width: 146px;
+  min-width: 160px;
   padding: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 18%);
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
 }
 
 .server-more__action {
@@ -219,18 +269,21 @@
   display: grid;
   justify-items: start;
   gap: 10px;
-  padding: 28px 8px;
+  padding: 28px 24px;
   color: var(--text-dim);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius);
 }
 
 @container (max-width: 760px) {
   .server-list { display: block; }
   .server-list__header { display: none; }
+  .server-row + .server-row { margin-top: 8px; }
   .server-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 14px 20px;
-    padding-inline: 0;
+    padding: 16px 16px 16px 22px;
   }
   .server-row__ports { grid-column: 1; grid-row: 2; }
   .server-row__ports-label { display: inline; font-family: var(--font-sans); }
