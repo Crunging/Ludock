@@ -5,9 +5,10 @@ import { docker, type Container } from "../src/docker-client.js";
 import { demuxDockerStream } from "../src/docker-stream.js";
 import { dockerEventDecoder } from "../src/events.js";
 import { resolveHelperImage } from "../src/runtime-images.js";
+import { executeShellCommand } from "../src/game-console-runtime.js";
 
 describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client acceptance", () => {
-  it("pulls a pinned image and preserves events, TTY logs, exec output, stdin, and lifecycle state", async () => {
+  it("preserves shell commands on a read-only root, events, logs, exec output, stdin, and lifecycle state", async () => {
     const containers: Container[] = [];
     let events: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
     let eventWork: Promise<void> | undefined;
@@ -23,7 +24,7 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
         OpenStdin: true,
         StdinOnce: false,
         Labels: { "ludock.enable": "false" },
-        HostConfig: { Init: true },
+        HostConfig: { Init: true, ReadonlyRootfs: true },
       });
       containers.push(container);
       const readLogs = async () => {
@@ -50,6 +51,12 @@ describe.skipIf(process.env.LUDOCK_DOCKER_TESTS !== "1")("Native Docker client a
       expect(info.State.Running).toBe(true);
       expect(info.Image).toBe((await docker.getImage(image).inspect()).Id);
       expect((await container.stats({ stream: false })).memory_stats.limit).toBeGreaterThan(0);
+
+      let shellOutput = "";
+      await executeShellCommand(container, "printf 'shell works without writable tmp'", {
+        stdout: value => { shellOutput += value; }, stderr: () => {}, system: () => {},
+      });
+      expect(shellOutput).toBe("shell works without writable tmp");
 
       const execution = await container.exec({
         Cmd: ["bun", "-e", "const input = await Bun.stdin.bytes(); console.log(input.length); console.error('stderr-marker');"],

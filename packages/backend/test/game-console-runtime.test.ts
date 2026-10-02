@@ -596,6 +596,7 @@ describe("Docker exec console transport", () => {
       controlPath,
       "1",
       "1",
+      "0",
       "/bin/sh",
       "-c",
       'trap "" TERM; exec sleep 30',
@@ -607,6 +608,14 @@ describe("Docker exec console transport", () => {
       clearTimeout(emergency);
       rmSync(controlPath, { force: true, recursive: true });
     }
+
+    // A command without its own deadline must still fail before execution if
+    // control storage cannot be created.
+    const unavailable = Bun.spawn([
+      ...(received?.Cmd?.slice(0, 4) ?? []), "/dev/null/control", "1", "1", "0",
+      "/bin/sh", "-c", "exit 0",
+    ], { stdout: "ignore", stderr: "ignore" });
+    expect(await unavailable.exited).toBe(126);
   });
   it("does not start a prepared exec after access is revoked", async () => {
     let allowed = true;

@@ -27,10 +27,13 @@ const DOCKER_EXEC_INSPECT_TIMEOUT_MS = 5_000;
 // the command really terminates even if Ludock disconnects or is interrupted.
 // User input remains a positional argument to "$@" and is never shell source.
 const BOUNDED_DOCKER_EXEC_SCRIPT = String.raw`
-control="$1"; deadline="$2"; grace="$3"; shift 3
+control="$1"; deadline="$2"; grace="$3"; independent_timeout="$4"; shift 4
 ready="$control/ready"; cancel="$control/cancel"; reason="$control/reason"
 umask 077
-if ! mkdir "$control"; then exit 126; fi
+if ! mkdir "$control" 2>/dev/null; then
+  if [ "$independent_timeout" = 1 ]; then exec "$@"; fi
+  exit 126
+fi
 cleanup() {
   rm -f "$ready" "$cancel" "$reason"
   rmdir "$control" 2>/dev/null || true
@@ -82,14 +85,15 @@ export async function executeShellCommand(
   assertAccess?: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  // timeout also signals the shell's process group. The outer watchdog leaves
-  // its five-second kill grace intact and provides cancellation on disconnect.
+  // timeout also signals the shell's process group. If control storage is
+  // unavailable, this deadline still bounds execution while we retain the lock
+  // until Docker confirms exit. Writable storage enables earlier cancellation.
   await executeInContainer(container, {
     Cmd: ["timeout", "-k", "5", "60", "/bin/sh", "-c", command],
     AttachStdout: true,
     AttachStderr: true,
     Tty: false,
-  }, output, assertAccess, signal, 65);
+  }, output, assertAccess, signal, { timeoutSeconds: 65, independentTimeout: true });
 }
 
 export async function executeGameCommand(
@@ -606,7 +610,11 @@ async function executeInContainer(
   output: GameCommandOutput,
   assertAccess?: () => void,
   signal?: AbortSignal,
-  timeoutSeconds = DOCKER_EXEC_TIMEOUT_SECONDS,
+  { timeoutSeconds = DOCKER_EXEC_TIMEOUT_SECONDS, independentTimeout = false }: {
+    timeoutSeconds?: number;
+    /** Only commands already bounded by timeout may run without control files. */
+    independentTimeout?: boolean;
+  } = {},
 ): Promise<void> {
   if (!options.Cmd?.length)
     throw new Error("The console adapter is missing its command configuration");
@@ -623,6 +631,7 @@ async function executeInContainer(
       controlPath,
       String(timeoutSeconds),
       String(DOCKER_EXEC_KILL_GRACE_SECONDS),
+      independentTimeout ? "1" : "0",
       ...options.Cmd,
     ],
   }, signal);

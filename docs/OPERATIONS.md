@@ -81,6 +81,12 @@ port. Its image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`, `rm`, and
 requires `stdin_open: true`, `StdinOnce` disabled, and an image that forwards
 input to the server process.
 
+Administrator shell commands require `/bin/sh` and `timeout`. They also work
+when `/tmp` is read-only: the command's 60-second timeout still applies, with
+up to five seconds for forced termination. Without writable temporary storage,
+disconnecting may wait for that deadline; Ludock keeps the server locked until
+Docker confirms the command has exited.
+
 | Label | Purpose |
 | --- | --- |
 | `ludock.enable` | Explicitly include/exclude a container |
