@@ -1690,6 +1690,15 @@ html select:not([multiple]) {
   background-size: 11px 8px;
 }
 
+/* The drawn arrow keeps its authored gray, so use the system arrow instead. */
+@media (forced-colors: active) {
+  html select:not([multiple]) {
+    appearance: auto;
+    padding-right: 10px;
+    background-image: none;
+  }
+}
+
 ::placeholder {
   color: var(--text-faint);
   opacity: 1;
