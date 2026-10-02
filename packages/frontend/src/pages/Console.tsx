@@ -147,6 +147,7 @@ function ConsoleSession({ containerId, user }: {
     if (!termRef.current) return;
     const colors = getComputedStyle(document.documentElement);
     const background = colors.getPropertyValue("--bg-terminal").trim() || "#0c0c0c";
+    const fontFamily = colors.getPropertyValue("--font-mono").trim() || "monospace";
     const terminal = new Terminal({
       theme: {
         background,
@@ -171,7 +172,8 @@ function ConsoleSession({ containerId, user }: {
         brightCyan: "#67e8f9",
         brightWhite: "#ededed",
       },
-      fontFamily: colors.getPropertyValue("--font-mono").trim() || "monospace",
+      // xterm measures glyph width once, so start on a font that is already present.
+      fontFamily: colors.getPropertyValue("--font-mono-system").trim() || "monospace",
       fontSize: 14,
       lineHeight: 1.4,
       cursorBlink: true,
@@ -191,8 +193,16 @@ function ConsoleSession({ containerId, user }: {
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
     observer?.observe(termRef.current);
     window.addEventListener("resize", fit);
+    // Switch to the bundled mono face after it loads; the option change re-measures.
+    let disposed = false;
+    document.fonts?.load(`14px ${fontFamily}`).then(() => {
+      if (disposed) return;
+      terminal.options.fontFamily = fontFamily;
+      fit();
+    }, () => undefined);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(initialFit);
       observer?.disconnect();
       window.removeEventListener("resize", fit);
