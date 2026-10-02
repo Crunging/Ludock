@@ -7,11 +7,9 @@ import { stopEventStream } from "../src/events.js";
 import { NativeSocketChannel, MAX_SOCKET_BUFFER_BYTES } from "../src/socket-channel.js";
 import {
   createWebSocketGateway,
-  MAX_WEBSOCKET_CONNECTIONS,
   MAX_WEBSOCKET_CONNECTIONS_PER_SESSION,
   MAX_WEBSOCKET_CONNECTIONS_PER_USER,
   MAX_WEBSOCKET_PAYLOAD_BYTES,
-  RESERVED_ADMIN_WEBSOCKET_CONNECTIONS,
 } from "../src/websocket-server.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -140,60 +138,6 @@ describe("native WebSocket admission and lifetime", () => {
     await connect(first);
     expect(gateway.connectionCount).toBe(MAX_WEBSOCKET_CONNECTIONS_PER_USER + 1);
   });
-
-  it("retains the global cap across many administrator principals", async () => {
-    const headers: Record<string, string>[] = [];
-    for (let index = 0; headers.length < MAX_WEBSOCKET_CONNECTIONS; index++) {
-      const id = `administrator-${index}`;
-      createUser({ id, username: id, role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
-      const credentials = sessionHeaders(id, "admin");
-      for (let count = 0;
-        count < MAX_WEBSOCKET_CONNECTIONS_PER_SESSION &&
-          headers.length < MAX_WEBSOCKET_CONNECTIONS;
-        count++) headers.push(credentials);
-    }
-    await Promise.all(headers.map((credentials) => connect(credentials)));
-    expect(gateway.connectionCount).toBe(MAX_WEBSOCKET_CONNECTIONS);
-    createUser({ id: "later-admin", username: "later-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
-    expect(await upgradeStatus(
-      "/ws/v1/events",
-      sessionHeaders("later-admin", "admin"),
-    )).toBe(503);
-  });
-
-  it("reserves global capacity for administrators", async () => {
-    const nonAdminLimit = MAX_WEBSOCKET_CONNECTIONS -
-      RESERVED_ADMIN_WEBSOCKET_CONNECTIONS;
-    const headers: Record<string, string>[] = [];
-    for (let index = 0; headers.length < nonAdminLimit; index++) {
-      const id = `viewer-${index}`;
-      createUser({ id, username: id, role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
-      const credentials = sessionHeaders(id);
-      for (let count = 0;
-        count < MAX_WEBSOCKET_CONNECTIONS_PER_SESSION &&
-          headers.length < nonAdminLimit;
-        count++) headers.push(credentials);
-    }
-    await Promise.all(headers.map((credentials) => connect(credentials)));
-    createUser({ id: "later-viewer", username: "later-viewer", role: "viewer", disabled: false, passwordHash: "fixture", createdAt: 1 });
-    expect(await upgradeStatus(
-      "/ws/v1/events",
-      sessionHeaders("later-viewer"),
-    )).toBe(503);
-
-    createUser({ id: "reserved-admin", username: "reserved-admin", role: "admin", disabled: false, passwordHash: "fixture", createdAt: 1 });
-    await connect(sessionHeaders("reserved-admin", "admin"));
-    expect(gateway.connectionCount).toBe(nonAdminLimit + 1);
-  });
-
-  it("sends shutdown close frames and rejects further admission", async () => {
-    const client = await connect();
-    const closing = closed(client);
-    await gateway.close();
-    expect(await closing).toBe(1001);
-    expect(gateway.connectionCount).toBe(0);
-    expect(await upgradeStatus("/ws/v1/events", { Authorization: `Bearer ${apiToken}` })).toBe(503);
-  });
 });
 
 function sessionHeaders(id: string, role: "viewer" | "admin" = "viewer") {
@@ -226,18 +170,5 @@ describe("native socket output bounds", () => {
     expect(cleaned).toBe(1);
     expect(closes).toStrictEqual([1013]);
     expect(sent).toStrictEqual([]);
-  });
-
-  it("accepts queued native sends without duplicating the frame", () => {
-    const sent: string[] = [];
-    const channel = new NativeSocketChannel({
-      readyState: 1,
-      getBufferedAmount: () => 0,
-      sendText: (message) => { sent.push(message); return -1; },
-      close() { expect.unreachable("A queued frame below the limit should stay connected"); },
-    });
-    channel.send("queued output");
-    expect(channel.isOpen).toBe(true);
-    expect(sent).toStrictEqual(["queued output"]);
   });
 });

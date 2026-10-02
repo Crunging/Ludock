@@ -18,6 +18,7 @@ export default defineConfig({
   use: {
     baseURL: origin,
     browserName: "chromium",
+    viewport: { width: 1360, height: 900 },
     serviceWorkers: "block",
     timezoneId: "UTC",
     locale: "en-US",
@@ -29,20 +30,6 @@ export default defineConfig({
         : {}),
     },
   },
-  projects: [
-    // Run behavior once; repeat only viewport-sensitive cases on mobile.
-    { name: "desktop", grepInvert: /@mobile\b/, use: { viewport: { width: 1360, height: 900 } } },
-    {
-      name: "mobile",
-      grep: /@(?:responsive|mobile)\b/,
-      use: {
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-        deviceScaleFactor: 1,
-      },
-    },
-  ],
   webServer: {
     command: "bun scripts/preview.ts",
     url: origin,

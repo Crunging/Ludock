@@ -135,12 +135,12 @@ function sameLocation(left: FileLocation, right: FileLocation): boolean {
   return left.root === right.root && left.path === right.path;
 }
 
-export default function Files({ containerId }: { containerId: string }) {
+export default function Files({ serverId }: { serverId: string }) {
   // Switching servers must discard that server's folder, dialogs, and requests.
-  return <FileBrowser key={containerId} containerId={containerId} />;
+  return <FileBrowser key={serverId} serverId={serverId} />;
 }
 
-function FileBrowser({ containerId }: { containerId: string }) {
+function FileBrowser({ serverId }: { serverId: string }) {
   const { user } = useAuth();
   const fileInput = useRef<HTMLInputElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
@@ -190,14 +190,16 @@ function FileBrowser({ containerId }: { containerId: string }) {
     setFileSort("name-asc");
 
     apiJson(
-      `/servers/${encodeURIComponent(containerId)}`,
+      `/servers/${encodeURIComponent(serverId)}`,
       serverResponseSchema,
       {
         signal: controller.signal,
       },
     )
-      .then(({ server: nextServer }) => {
+      .then(({ server: nextServer, discoveryUnavailable }) => {
         if (controller.signal.aborted) return;
+        if (discoveryUnavailable)
+          throw new Error("Unable to reach Docker to load server files. Try again when the connection is restored.");
         const readable = can(user, nextServer, "files.read");
         const root = readable ? nextServer.fileRoots[0] : undefined;
         setBrowser((current) => ({
@@ -222,7 +224,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
         }));
       });
     return () => controller.abort();
-  }, [containerId, serverReload, user]);
+  }, [serverId, serverReload, user]);
 
   const refresh = useCallback(
     async (target: FileLocation) => {
@@ -240,7 +242,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
       } satisfies FileLocationRequest);
       try {
         const next = await apiJson(
-          `/servers/${encodeURIComponent(containerId)}/files?${query}`,
+          `/servers/${encodeURIComponent(serverId)}/files?${query}`,
           fileListingSchema,
           { signal: controller.signal },
         );
@@ -287,7 +289,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
           listingRequest.current = null;
       }
     },
-    [containerId],
+    [serverId],
   );
 
   useEffect(() => {
@@ -357,7 +359,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
       work: { kind: "action" },
       dialog: current.dialog && { ...current.dialog, error: null },
     }));
-    const base = `/api/v1/servers/${encodeURIComponent(containerId)}/files`;
+    const base = `/api/v1/servers/${encodeURIComponent(serverId)}/files`;
     try {
       let response: Response;
       let success: string;
@@ -477,7 +479,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
           name: file.name,
         } satisfies UploadFileQuery);
         const response = await apiFetch(
-          `/api/v1/servers/${encodeURIComponent(containerId)}/files/upload?${query}`,
+          `/api/v1/servers/${encodeURIComponent(serverId)}/files/upload?${query}`,
           {
             method: "PUT",
             headers: { "Content-Type": "application/octet-stream" },
@@ -531,7 +533,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
       root: location!.root,
       path: joinPath(location!.path, entry.name),
     } satisfies FileLocationRequest);
-    return `/api/v1/servers/${encodeURIComponent(containerId)}/files/download?${query}`;
+    return `/api/v1/servers/${encodeURIComponent(serverId)}/files/download?${query}`;
   };
 
   const pathParts = location?.path ? location.path.split("/") : [];
@@ -545,7 +547,7 @@ function FileBrowser({ containerId }: { containerId: string }) {
         <div className="files-header__title">
           <NavLink
             className="secondary-btn files-back"
-            to={`/servers/${encodeURIComponent(containerId)}`}
+            to={`/servers/${encodeURIComponent(serverId)}`}
             aria-label="Back to server"
             aria-disabled={busy || undefined}
             tabIndex={busy ? -1 : undefined}

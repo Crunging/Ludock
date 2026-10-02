@@ -66,6 +66,14 @@ const restoreJournalsSchema = z.array(z.object({
   phase: z.enum(["staging", "moving_old", "old_moved", "replaced", "rolling_back", "rolled_back"]),
 })).max(8);
 type RestoreJournal = z.infer<typeof restoreJournalsSchema>[number];
+const restoreRecoverySchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.enum(["staging", "replacing", "rolling_back", "committed"]),
+    roots: restoreJournalsSchema.min(1),
+  }).strict(),
+  z.object({ status: z.enum(["cleaned", "rolled_back"]) }).strict(),
+]);
+type RestoreRecovery = z.infer<typeof restoreRecoverySchema>;
 const toBackup = (row: BackupRow): Backup => ({
   id: row.id,
   serverId: row.server_id,
@@ -447,9 +455,13 @@ export async function restoreInitialRunningState(
   context: ServerContext,
   job: JobContext,
 ): Promise<void> {
+  const restore = job.job.kind === "restore" ? restoreRecovery(job) : undefined;
+  const dataSafe = restore
+    ? restore.status !== "replacing" && restore.status !== "rolling_back"
+    : job.job.recovery.dataSafe !== false;
   if (
     !job.job.recovery.initialRunning ||
-    job.job.recovery.dataSafe === false ||
+    !dataSafe ||
     job.job.recovery.stateRestored === true
   )
     return;
@@ -666,14 +678,28 @@ export async function recoverBackup(job: JobContext): Promise<void> {
   });
 }
 
-function journals(job: JobContext): RestoreJournal[] {
-  const value = job.job.recovery.restoreRoots;
-  const parsed = restoreJournalsSchema.safeParse(value === undefined ? [] : value);
-  if (!parsed.success ||
-      new Set(parsed.data.map(({ root }) => root.id)).size !== parsed.data.length ||
-      (!parsed.data.length && (job.job.recovery.dataSafe === false || job.job.recovery.restoreCommitted === true)))
+function restoreRecovery(job: JobContext): RestoreRecovery | undefined {
+  const value = job.job.recovery.restore;
+  if (value === undefined && job.job.recovery.dataSafe !== false) return undefined;
+  const parsed = restoreRecoverySchema.safeParse(value);
+  if (!parsed.success)
+    throw failBackup("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.");
+  if ("roots" in parsed.data &&
+      (new Set(parsed.data.roots.map(({ root }) => root.id)).size !== parsed.data.roots.length ||
+       (parsed.data.status === "staging" && parsed.data.roots.some(({ phase }) => phase !== "staging")) ||
+       (parsed.data.status === "committed" && parsed.data.roots.some(({ phase }) => phase !== "replaced"))))
     throw failBackup("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.");
   return parsed.data;
+}
+function journals(job: JobContext): RestoreJournal[] {
+  const state = restoreRecovery(job);
+  return state && "roots" in state ? state.roots : [];
+}
+function saveRestoreRecovery(job: JobContext, restore: RestoreRecovery, phase = `restore_${restore.status}`): void {
+  job.progress(phase, {
+    restore,
+    dataSafe: restore.status !== "replacing" && restore.status !== "rolling_back",
+  });
 }
 function stageName(job: JobContext): string {
   return `.ludock-restore-${job.job.id}`;
@@ -683,10 +709,13 @@ function persistJournal(
   index: number,
   phase: RestoreJournal["phase"],
 ): void {
-  const roots = journals(job).map((entry, position) =>
+  const state = restoreRecovery(job);
+  if (!state || !("roots" in state))
+    throw failBackup("INVALID_RESTORE_JOURNAL", "Restore recovery records are invalid. Keep the server stopped and review its recovery state.");
+  const roots = state.roots.map((entry, position) =>
     position === index ? { ...entry, phase } : entry,
   );
-  job.progress(`restore_${phase}`, { restoreRoots: roots });
+  saveRestoreRecovery(job, { ...state, roots }, `restore_${phase}`);
 }
 async function restoreStep(
   helper: DataHelper,
@@ -709,6 +738,7 @@ async function rollbackRestore(
   job: JobContext,
   helper: DataHelper,
 ): Promise<void> {
+  saveRestoreRecovery(job, { status: "rolling_back", roots: journals(job) });
   for (const entry of [...journals(job)].reverse()) {
     await assertDataOperationStopped(context, job);
     const rootPath = helperRoot(context, entry.root);
@@ -736,15 +766,10 @@ async function rollbackRestore(
       );
     }
     await restoreStep(helper, rootPath, job, "cleanup");
-    const remaining = journals(job).filter(
-      (candidate) => candidate.root.id !== entry.root.id,
-    );
-    job.progress("restore_root_recovered", {
-      restoreRoots: remaining,
-      ...(remaining.length === 0 ? { dataSafe: true } : {}),
-    });
+    // Keep completed roots in the journal until all roots are safe. Recovery
+    // can validate the complete binding and repeat this optional cleanup.
   }
-  job.progress("restore_rolled_back", { dataSafe: true, restoreRoots: [] });
+  saveRestoreRecovery(job, { status: "rolled_back" });
 }
 async function cleanupRestore(
   context: ServerContext,
@@ -753,7 +778,7 @@ async function cleanupRestore(
 ): Promise<void> {
   for (const entry of journals(job))
     await restoreStep(helper, helperRoot(context, entry.root), job, "cleanup");
-  job.progress("restore_cleaned", { restoreRoots: [] });
+  saveRestoreRecovery(job, { status: "cleaned" });
 }
 
 export async function runRestore(
@@ -818,8 +843,8 @@ export async function runRestore(
       const safety = await createStoppedBackup(context, job);
       job.progress("restore_staging", {
         safetyBackupId: safety.id,
-        restoreRoots: roots.map((root) => ({ root, phase: "staging" })),
       });
+      saveRestoreRecovery(job, { status: "staging", roots: roots.map((root) => ({ root, phase: "staging" })) });
       assertDataOperationAuthority(context, job);
       helper = await createDataHelper(context, false, job.job.id);
       job.progress("restore_staging", { dataHelperId: helper.container.id });
@@ -859,7 +884,7 @@ export async function runRestore(
         );
       }
       assertDataOperationAuthority(context, job);
-      job.progress("restore_replacing", { dataSafe: false });
+      saveRestoreRecovery(job, { status: "replacing", roots: journals(job) });
       for (let index = 0; index < roots.length; index++) {
         await assertDataOperationStopped(context, job);
         assertDataOperationAuthority(context, job);
@@ -873,10 +898,7 @@ export async function runRestore(
       }
       await assertDataOperationStopped(context, job);
       assertDataOperationAuthority(context, job);
-      job.progress("restore_committed", {
-        restoreCommitted: true,
-        dataSafe: true,
-      });
+      saveRestoreRecovery(job, { status: "committed", roots: journals(job) });
       await cleanupRestore(context, job, helper);
       notifyEvent(
         `restore-result:${job.job.id}`,
@@ -884,7 +906,8 @@ export async function runRestore(
       );
       return { restoredBackupId: row.id, safetyBackupId: safety.id };
     } catch (error) {
-      if (helper && !job.job.recovery.restoreCommitted)
+      const restore = restoreRecovery(job);
+      if (helper && restore?.status !== "committed" && restore?.status !== "cleaned")
         await rollbackRestore(context, job, helper);
       notifyEvent(
         `restore-result:${job.job.id}`,
@@ -914,7 +937,7 @@ export async function recoverRestore(job: JobContext): Promise<void> {
       const helper = await createDataHelper(context, false, job.job.id);
       job.progress("recovering", { dataHelperId: helper.container.id });
       try {
-        if (job.job.recovery.restoreCommitted)
+        if (restoreRecovery(job)?.status === "committed")
           await cleanupRestore(context, job, helper);
         else await rollbackRestore(context, job, helper);
       } finally {

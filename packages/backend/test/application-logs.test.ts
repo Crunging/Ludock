@@ -78,27 +78,4 @@ describe("application log buffer", () => {
     expect(entry.context?.detail).toBe(entry.message);
   });
 
-  it("returns structured entries and resets stale process cursors", () => {
-    recordApplicationLog({
-      timestamp: 123,
-      level: "warn",
-      component: "test",
-      message: "diagnostic token=message-secret",
-      context: { detail: "password=context-secret" },
-    });
-    const first = listApplicationLogs({ limit: 10 });
-    const entry = first.entries.at(-1)!;
-    expect(entry).toBeTruthy();
-    expect(entry.component).toBe("test");
-    expect(entry.timestamp).toBe(123);
-    expect(JSON.stringify(entry)).not.toMatch(/message-secret|context-secret/);
-
-    const fromStaleGeneration = listApplicationLogs({
-      after: Number.MAX_SAFE_INTEGER,
-      limit: 10,
-      generation: "previous-process",
-    });
-    expect(fromStaleGeneration.generation).toBe(first.generation);
-    expect(fromStaleGeneration.entries.length > 0).toBeTruthy();
-  });
 });

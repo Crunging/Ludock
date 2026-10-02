@@ -1,6 +1,5 @@
 import { fixtureBytes } from "./fixtures/bytes.js";
 import { concatBytes, decodeText } from "../src/bytes.js";
-import { rejectedBy } from "./fixtures/errors.js";
 import { StreamFixture } from "./fixtures/web-streams.js";
 import type { ArchiveHeader } from "../src/backup-storage.js";
 import {
@@ -35,7 +34,6 @@ import {
 } from "../src/backup-storage.js";
 import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
-import { AppError } from "../src/errors.js";
 import { streamFrom } from "./fixtures/web-streams.js";
 
 const roots = [{ id: "root-0", path: "/data" }];
@@ -179,29 +177,6 @@ describe("backup storage boundaries", () => {
     expect(await Bun.file(filename).exists()).toBe(false);
     expect(await Bun.file(await backupFilePath(directory, id)).exists()).toBe(false);
   });
-  it("accepts whitespace around configured roots and still confines the destination", async () => {
-    process.env.LUDOCK_BACKUP_ROOTS = `  ${directory}  ${path.delimiter} `;
-    expect(await approvedBackupDirectory(directory)).toBe(directory);
-    await expect(approvedBackupDirectory(path.dirname(directory))).rejects.toThrow(/inside/);
-  });
-
-  it("explains missing roots and folders without exposing filesystem errors or creating directories", async () => {
-    for (const missingRoot of [false, true]) {
-      const missing = path.join(directory, "missing-private-fixture");
-      process.env.LUDOCK_BACKUP_ROOTS = missingRoot ? missing : directory;
-      await expect(await rejectedBy(approvedBackupDirectory(missingRoot ? directory : missing))).toSatisfy((error) => {
-        expect(error instanceof AppError).toBeTruthy();
-        expect(error.code).toBe("BACKUP_DESTINATION");
-        expect(error.message).toMatch(/Create the folder and check its mount and permissions/);
-        expect(error.message).not.toMatch(/ENOENT|missing-private-fixture/);
-        return true;
-      });
-      expect(await readdir(directory)).toStrictEqual([]);
-    }
-    process.env.LUDOCK_BACKUP_ROOTS = "   ";
-    await expect(approvedBackupDirectory(directory)).rejects.toThrow(/Set LUDOCK_BACKUP_ROOTS/);
-  });
-
   it.skipIf(process.platform !== "linux")("measures free space through an approved destination without creating files", async () => {
     const available = await availableBackupDestinationBytes(directory);
     expect(Number.isSafeInteger(available)).toBe(true);

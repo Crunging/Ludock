@@ -3,6 +3,7 @@ import type {
   ApplicationLogEntry,
   ApplicationLogContext,
 } from "@ludock/shared";
+import { isSensitiveKey, SENSITIVE_KEY_SOURCE } from "./sensitive-keys.js";
 
 const MAX_LOG_ENTRIES = 1_000;
 const MAX_MESSAGE_LENGTH = 16_384;
@@ -11,16 +12,17 @@ const generation = crypto.randomUUID();
 const entries: ApplicationLogEntry[] = [];
 let nextId = 1;
 
-const SECRET_KEY_PATTERN =
-  /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(\s*[=:]\s*)[^\s,"';&}]+/gi;
+const SECRET_KEY_PATTERN = new RegExp(
+  String.raw`(${SENSITIVE_KEY_SOURCE})(\s*[=:]\s*)[^\s,"';&}]+`, "gi",
+);
 const BEARER_PATTERN = /\bBearer\s+[^\s,;]+/gi;
 const COOKIE_PATTERN = /\b(ludock_session)=([^;\s]+)/gi;
-const SENSITIVE_QUERY_PATTERN =
-  /([?&](?:token|api[-_]?key|password|secret|session)=)[^&#\s]+/gi;
-const QUOTED_SECRET_PATTERN =
-  /(password|passwd|secret|token|authorization|cookie|api[-_]?key|session)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))/gi;
-const SENSITIVE_CONTEXT_KEY_PATTERN =
-  /(authorization|cookie|password|passwd|secret|token|api[-_]?key|session)/i;
+const SENSITIVE_QUERY_PATTERN = new RegExp(
+  String.raw`([?&](?:${SENSITIVE_KEY_SOURCE})=)[^&#\s]+`, "gi",
+);
+const QUOTED_SECRET_PATTERN = new RegExp(
+  String.raw`(${SENSITIVE_KEY_SOURCE})(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))`, "gi",
+);
 
 interface ApplicationLogInput {
   timestamp: number;
@@ -61,7 +63,7 @@ export function sanitizeApplicationLog(input: ApplicationLogInput): {
           )
           .map(([key, value]) => [
             key,
-            SENSITIVE_CONTEXT_KEY_PATTERN.test(key)
+            isSensitiveKey(key)
               ? "[REDACTED]"
               : typeof value === "string"
                 ? redactApplicationLog(value).slice(0, MAX_CONTEXT_VALUE_LENGTH)

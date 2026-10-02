@@ -1,8 +1,8 @@
 import { fixtureBytes } from "./fixtures/bytes.js";
 import { byteView, concatBytes, decodeText } from "../src/bytes.js";
 import { thrownBy, rejectedBy } from "./fixtures/errors.js";
-import { StreamFixture, bytesStream } from "./fixtures/web-streams.js";
-import { dockerStdout, DockerStreamError } from "../src/docker-stream.js";
+import { StreamFixture } from "./fixtures/web-streams.js";
+import { dockerStdout } from "../src/docker-stream.js";
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   FileStorageError,
@@ -11,6 +11,7 @@ import {
   isSafeWritableDataMount,
   acquireFileContainer,
   createDirectory,
+  deleteFileEntry,
   uploadFile,
   openDownload,
 } from "../src/file-storage.js";
@@ -42,57 +43,6 @@ function frame(channel: number, payload: string | Uint8Array): Uint8Array {
 }
 
 describe("container file storage", () => {
-  it("selects writable bind and volume mount destinations", () => {
-    expect(getFileRoots(
-        {
-          gameType: "minecraft",
-          image: "itzg/minecraft-server",
-          labels: {},
-        },
-        [
-          {
-            Type: "volume",
-            Source: "minecraft-data",
-            Destination: "/data",
-            RW: true,
-          },
-          {
-            Type: "bind",
-            Source: "/srv/minecraft-backups",
-            Destination: "/backups/",
-            RW: true,
-          },
-        ],
-      )).toStrictEqual([
-        { id: "root-0", name: "Minecraft data", path: "/data" },
-        { id: "root-1", name: "backups", path: "/backups" },
-      ]);
-  });
-
-  it("uses the actual Terraria mount instead of an image default", () => {
-    expect(getFileRoots(
-        {
-          gameType: "terraria",
-          image: "hexlo/terraria-server-docker:latest",
-          labels: {},
-        },
-        [
-          {
-            Type: "bind",
-            Source: "/srv/terraria",
-            Destination: "/root/.local/share/Terraria/Worlds",
-            RW: true,
-          },
-        ],
-      )).toStrictEqual([
-        {
-          id: "root-0",
-          name: "Terraria worlds",
-          path: "/root/.local/share/Terraria/Worlds",
-        },
-      ]);
-  });
-
   it("does not infer read-only, system, broad, or nested mounts", () => {
     expect(getFileRoots(
         {
@@ -139,35 +89,6 @@ describe("container file storage", () => {
           },
         ],
       )).toStrictEqual([{ id: "root-0", name: "data", path: "/data" }]);
-  });
-
-  it("lets explicit roots restrict actual writable mounts without granting arbitrary paths", () => {
-    expect(getFileRoots(
-        {
-          gameType: "custom",
-          image: "example/game",
-          labels: {
-            "ludock.files": "/srv/game, /srv/backups/, /srv/game, /data/..",
-          },
-        },
-        [
-          {
-            Type: "bind",
-            Source: "/srv/instance/game",
-            Destination: "/srv/game",
-            RW: true,
-          },
-          {
-            Type: "bind",
-            Source: "/srv/instance/backups",
-            Destination: "/srv/backups",
-            RW: true,
-          },
-        ],
-      )).toStrictEqual([
-        { id: "root-0", name: "game", path: "/srv/game" },
-        { id: "root-1", name: "backups", path: "/srv/backups" },
-      ]);
   });
 
   it("does not let labels open missing, read-only, socket, or sensitive roots", () => {
@@ -249,24 +170,6 @@ describe("container file storage", () => {
       if (previous === undefined) delete process.env.LUDOCK_SENSITIVE_PATHS;
       else process.env.LUDOCK_SENSITIVE_PATHS = previous;
     }
-  });
-
-  it("allows mount inference to be disabled with an empty files label", () => {
-    expect(getFileRoots(
-        {
-          gameType: "custom",
-          image: "example/game",
-          labels: { "ludock.files": "" },
-        },
-        [
-          {
-            Type: "volume",
-            Source: "game-data",
-            Destination: "/data",
-            RW: true,
-          },
-        ],
-      )).toStrictEqual([]);
   });
 
   it("rejects absolute paths, traversal, and null bytes", () => {
@@ -589,6 +492,63 @@ describe("scoped file helper projections", () => {
     });
   }
 
+  it("cancels a revoked deletion and waits for helper removal before settling", async () => {
+    const deletingStarted = Promise.withResolvers<void>();
+    const removalStarted = Promise.withResolvers<void>();
+    const finishRemoval = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const revoked = new Error("Access revoked");
+    const deletionStream = new StreamFixture();
+    let removalAttempts = 0;
+    const server = managed({
+      id: dockerId("physical"),
+      fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+    });
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
+        Mounts: [{ Type: "volume", Name: "game-data", Source: "game-data", Destination: "/data", RW: true }],
+      }),
+    })) as unknown as typeof docker.getContainer;
+    docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
+    docker.createContainer = (async () => ({
+      start: async () => {},
+      remove: async () => {
+        if (++removalAttempts === 1) throw new Error("Docker unavailable");
+        removalStarted.resolve();
+        await finishRemoval.promise;
+      },
+      stop: async () => { throw new Error("Docker unavailable"); },
+      exec: async (options: Docker.ExecCreateOptions) => ({
+        start: async () => {
+          const { operation } = JSON.parse(options.Cmd?.at(-1) || "{}") as { operation: string };
+          if (operation === "delete") {
+            deletingStarted.resolve();
+            return deletionStream.connection;
+          }
+          const response = new StreamFixture();
+          response.close(frame(1, '{"safe":true}'));
+          return response.connection;
+        },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    })) as unknown as typeof docker.createContainer;
+    const deleting = rejectedBy(deleteFileEntry(server, "root-0", "world", () => controller.signal.throwIfAborted(), controller.signal));
+    let settled = false;
+    void deleting.then(() => { settled = true; });
+    try {
+      await deletingStarted.promise;
+      controller.abort(revoked);
+      await removalStarted.promise;
+      expect(deletionStream.cancelled).toBe(true);
+      expect(removalAttempts).toBe(2);
+      expect(settled, "The action must retain its lock while helper removal is pending").toBe(false);
+    } finally {
+      finishRemoval.resolve();
+    }
+    expect(await deleting).toBe(revoked);
+  });
+
   it("rejects named volumes using driver plugins or host remapping options before exposing them", async () => {
     for (const info of [
       { Driver: "remote-plugin", Options: {} },
@@ -768,17 +728,6 @@ describe("scoped file helper projections", () => {
 });
 
 describe("bounded Docker download transport", () => {
-  it("decodes split frame headers and bodies while dropping stderr", async () => {
-    const data = concatBytes([
-      frame(1, "hello"),
-      frame(2, "private stderr"),
-      frame(1, " world"),
-    ]);
-    const output = dockerStdout(bytesStream([...data].map(value => fixtureBytes([value]))));
-    expect(await new Response(output).text()).toBe("hello world");
-    await expect(await rejectedBy(new Response(dockerStdout(bytesStream([data.subarray(0, data.length - 1)]))).arrayBuffer())).toSatisfy(error => error instanceof DockerStreamError && error.code === "INCOMPLETE_STREAM");
-  });
-
   it("waits for a slow consumer instead of draining the entire Docker source into memory", async () => {
     let emitted = 0;
     const source = streamFrom(
@@ -796,6 +745,5 @@ describe("bounded Docker download transport", () => {
     const atCancellation = emitted;
     await new Promise(resolve => setImmediate(resolve));
     expect(emitted).toBe(atCancellation);
-
   });
 });

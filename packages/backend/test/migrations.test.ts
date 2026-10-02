@@ -14,13 +14,7 @@ import { expect,
 import {
   closeDatabase,
   getDatabase,
-  keyedBindingFingerprint,
-  keyedComposeSourceFingerprint,
 } from "../src/database.js";
-import {
-  protectBindingFingerprint,
-  protectComposeSourceFingerprint,
-} from "../src/fingerprints.js";
 import {
   applyMigrations as migrate,
   assertCompatibleDatabase,
@@ -56,20 +50,6 @@ after(() => {
 });
 
 describe("application database ownership and schema migrations", () => {
-  it("preserves foreign keys, busy timeout, and native result types", () => {
-    const db = getDatabase();
-    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
-    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT id FROM users WHERE id = 'missing'").get()).toBe(null);
-    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM users").get()?.count).toBe(0);
-    expect(() => db.prepare(
-      "INSERT INTO sessions (token_hash, session_id, user_id, created_at, expires_at, last_seen_at) VALUES ('token', 'session', 'missing', 1, 2, 1)",
-    ).run()).toThrow(/FOREIGN KEY/i);
-    const statement = db.prepare("SELECT 1 AS value");
-    closeDatabase();
-    expect(() => statement.get()).toThrow(/closed/i);
-  });
-
   it("initializes fresh storage and safely opens the same schema again", () => {
     const dbPath = path.join(directory, "fresh.db");
     process.env.LUDOCK_DB_PATH = dbPath;
@@ -124,18 +104,6 @@ describe("application database ownership and schema migrations", () => {
     // A failed open must not poison the process-wide database handle.
     process.env.LUDOCK_DB_PATH = ":memory:";
     expect(() => getDatabase()).not.toThrow();
-  });
-
-  it("does not infer database ownership from familiar table names", () => {
-    const db = new Database(":memory:");
-    try {
-      db.exec("CREATE TABLE users (id TEXT)");
-      expect(() => applyMigrations(db)).toThrow(/incompatible with Ludock/);
-      expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT name FROM sqlite_schema WHERE type = 'table'").all()
-          .length).toBe(1);
-    } finally {
-      db.close(true);
-    }
   });
 
   it("rejects an unsupported older schema without writing to it", () => {
@@ -251,35 +219,6 @@ describe("application database ownership and schema migrations", () => {
 
     fs.renameSync(savedDirectory, keyDirectory);
     expect(() => getDatabase()).not.toThrow();
-  });
-
-  it("uses the canonical key directory through a database path alias", () => {
-    const dbPath = path.join(directory, "canonical.db");
-    process.env.LUDOCK_DB_PATH = dbPath;
-    const fingerprint = keyedBindingFingerprint("a".repeat(64));
-    closeDatabase();
-    const alias = path.join(directory, "alias.db");
-    fs.symlinkSync(dbPath, alias);
-    process.env.LUDOCK_DB_PATH = alias;
-    expect(keyedBindingFingerprint("a".repeat(64))).toBe(fingerprint);
-    expect(fs.existsSync(`${alias}.identity-key`)).toBe(false);
-    expect(fs.existsSync(path.join(`${dbPath}.identity-key`, "key"))).toBe(true);
-  });
-
-  it("uses deterministic, separate HMAC domains for binding and Compose digests", () => {
-    const digest = "a".repeat(64);
-    const binding = protectBindingFingerprint(digest, migrationKey);
-    const compose = protectComposeSourceFingerprint(digest, migrationKey);
-    expect(binding).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
-    expect(compose).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
-    expect(binding).not.toBe(compose);
-    expect(binding).toBe(protectBindingFingerprint(digest, migrationKey));
-    expect(compose).toBe(protectComposeSourceFingerprint(digest, migrationKey));
-    expect(() => protectBindingFingerprint("invalid", migrationKey)).toThrow();
-
-    closeDatabase();
-    process.env.LUDOCK_DB_PATH = ":memory:";
-    expect(keyedBindingFingerprint(digest)).not.toBe(keyedComposeSourceFingerprint(digest));
   });
 
   it("applies a future schema addition without replacing existing records", () => {

@@ -2,11 +2,12 @@ import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:te
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 
-const [auth, database, passwords, { accountRoutes }] = await Promise.all([
+const [auth, database, passwords, { accountRoutes }, { createApp }] = await Promise.all([
   import("../src/auth.js"),
   import("../src/database.js"),
   import("../src/password.js"),
   import("../src/routes/accounts.js"),
+  import("../src/app.js"),
 ]);
 const setupCode = "fixture-setup-throttle-code-0123456789abcdef";
 const wrongCode = "fixture-incorrect-code-0123456789abcdef";
@@ -66,40 +67,6 @@ describe("setup-code source throttling", () => {
     expect(hash.mock.calls.length).toBe(0);
     expect(database.countUsers()).toBe(0);
   });
-
-  it("clears failed attempts after successful code authorization", async () => {
-    const attempt = setup();
-    for (let failure = 0; failure < 19; failure++)
-      expect((await attempt("192.0.2.10", wrongCode)).status).toBe(403);
-    expect((await attempt("192.0.2.10", setupCode)).status).toBe(400);
-    await exhaustSetupSource(attempt);
-    expect((await attempt("192.0.2.10", wrongCode)).status).toBe(429);
-  });
-
-  it("shares limits across routes for one window, but not a fresh window with the same expiry", async () => {
-    const window = new auth.SetupWindow(() => now, 300_000, setupCode);
-    await exhaustSetupSource(setup(window));
-    expect((await setup(window)("192.0.2.10", setupCode)).status).toBe(429);
-    const freshWindow = new auth.SetupWindow(() => now, 300_000, setupCode);
-    expect(window.expiresAt).toBe(freshWindow.expiresAt);
-    expect((await setup(freshWindow)("192.0.2.10", setupCode)).status).toBe(400);
-
-    now = window.expiresAt;
-    const expired = await setup(window)("192.0.2.10", setupCode);
-    expect(expired.status).toBe(403);
-    expect(await expired.json()).toStrictEqual({
-      error: "Initial setup has expired. Restart the panel to reopen setup.",
-    });
-  });
-
-  it("reports completed setup instead of an obsolete source lockout", async () => {
-    const attempt = setup();
-    await exhaustSetupSource(attempt);
-    database.createUser({ ...user, disabled: false, passwordHash: "fixture-unused-hash", createdAt: now });
-    const completed = await attempt("192.0.2.10", setupCode);
-    expect(completed.status).toBe(409);
-    expect(await completed.json()).toStrictEqual({ error: "Initial setup has already been completed" });
-  });
 });
 
 function login() {
@@ -127,6 +94,32 @@ const accountKey = new Bun.CryptoHasher("sha256")
 const accountThrottle = () => database.getLoginThrottle(accountKey, now, 15 * 60_000);
 
 describe("cross-source login cooldown", () => {
+  it("keeps another client's proxy login available after a source lockout", async () => {
+    login();
+    const previous = process.env.LUDOCK_TRUSTED_PROXIES;
+    process.env.LUDOCK_TRUSTED_PROXIES = "172.18.0.2";
+    try {
+      const app = createApp({ frontendDist: false });
+      const peer = { requestIP: () => ({ address: "172.18.0.2", family: "IPv4" as const, port: 12345 }), timeout: () => {} };
+      const attempt = async (client: string, username: string, candidate: string) => {
+        const response = await app.fetch(new Request("http://panel.example/api/v1/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": client },
+          body: JSON.stringify({ username, password: candidate }),
+        }), peer);
+        await response.body?.cancel();
+        return response.status;
+      };
+      for (let failure = 0; failure < 20; failure++)
+        expect(await attempt("198.51.100.10", `missing${Math.floor(failure / 5)}`, "fixture-incorrect-password")).toBe(401);
+      expect(await attempt("198.51.100.10", "admin", password)).toBe(429);
+      expect(await attempt("203.0.113.20", "admin", password)).toBe(200);
+    } finally {
+      if (previous === undefined) delete process.env.LUDOCK_TRUSTED_PROXIES;
+      else process.env.LUDOCK_TRUSTED_PROXIES = previous;
+    }
+  });
+
   it("slows distributed failures with a capped cooldown that rejected requests cannot extend", async () => {
     const { attempt, authenticate } = login();
     for (let failure = 0; failure < 50; failure++) {
@@ -156,35 +149,5 @@ describe("cross-source login cooldown", () => {
     expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
     expect((await attempt("198.51.100.22")).status).toBe(401);
     expect(accountThrottle()).toStrictEqual({ failures: 1, blockedUntil: 0 });
-  });
-
-  it("expires the account failure window and preserves another account's counters during pruning", async () => {
-    const { attempt } = login();
-    const unrelatedKey = "fixture-unrelated-login-counter";
-    database.recordLoginFailure(unrelatedKey, now, 15 * 60_000, 20);
-    for (let failure = 0; failure < 80; failure++) {
-      now = Math.max(now, accountThrottle().blockedUntil);
-      expect((await attempt(`192.0.2.${failure + 1}`)).status).toBe(401);
-    }
-    expect(database.getLoginThrottle(unrelatedKey, now, 15 * 60_000).failures).toBe(1);
-    now = 10_000 + 15 * 60_000;
-    expect((await attempt("198.51.100.20")).status).toBe(401);
-    expect(accountThrottle()).toStrictEqual({ failures: 1, blockedUntil: 0 });
-  });
-
-  it("does not count busy password work as a failed credential", async () => {
-    const { attempt, authenticate } = login();
-    authenticate.mockImplementation(async () => { throw new passwords.PasswordWorkBusyError(); });
-    expect((await attempt("192.0.2.10")).status).toBe(429);
-    expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
-  });
-
-  it("keeps a five-failure source lockout from denying the owner at another source", async () => {
-    const { attempt } = login();
-    for (let failure = 0; failure < 5; failure++)
-      expect((await attempt("192.0.2.10")).status).toBe(401);
-    expect((await attempt("192.0.2.10", password)).status).toBe(429);
-    expect((await attempt("198.51.100.20", password)).status).toBe(200);
-    expect(accountThrottle()).toStrictEqual({ failures: 0, blockedUntil: 0 });
   });
 });

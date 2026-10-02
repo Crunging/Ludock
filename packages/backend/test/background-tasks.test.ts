@@ -44,6 +44,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     runtime = startServer({ port: 0, hostname: "127.0.0.1", frontendDist: false });
     await flush();
     expect(tick).toBeTruthy();
+    expect(discovery.mock.calls.length, "A tick shares one fleet snapshot with monitoring").toBe(1);
     expect(delivery.mock.calls.length).toBe(1);
     now += 60_000;
     tick?.();
@@ -52,6 +53,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
       .get(schedule.id) as { last_slot: string | null; last_operation_id: string | null };
     expect(row.last_slot).toBe("2026-09-15T08:00:UTC");
     expect(row.last_operation_id, "The due operation must queue while delivery is pending").toBeTruthy();
+    expect(discovery.mock.calls.length).toBe(2);
     expect(delivery.mock.calls.length, "Delivery batches must not overlap").toBe(1);
 
     let stopped = false;

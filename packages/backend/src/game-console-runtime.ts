@@ -1,7 +1,7 @@
 import { encodeText, concatBytes, byteView } from "./bytes.js";
 import { demuxDockerStream } from "./docker-stream.js";
 import type * as Docker from "./docker-client.js";
-import type { DockerConnection } from "./docker-transport.js";
+import { DockerApiError, DockerStreamOpenError, type DockerConnection } from "./docker-transport.js";
 import {
   LABEL_CONSOLE_PASSWORD_ENV,
   LABEL_CONSOLE_PORT,
@@ -71,6 +71,25 @@ export interface GameCommandOutput {
   stdout(data: string): void;
   stderr(data: string): void;
   system(data: string): void;
+  /** Flush redaction tails only after the entire output stream was received. */
+  complete?(): void;
+}
+
+export async function executeShellCommand(
+  container: Docker.Container,
+  command: string,
+  output: GameCommandOutput,
+  assertAccess?: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  // timeout also signals the shell's process group. The outer watchdog leaves
+  // its five-second kill grace intact and provides cancellation on disconnect.
+  await executeInContainer(container, {
+    Cmd: ["timeout", "-k", "5", "60", "/bin/sh", "-c", command],
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+  }, output, assertAccess, signal, 65);
 }
 
 export async function executeGameCommand(
@@ -103,7 +122,7 @@ export async function executeGameCommand(
     }
     case "container-stdin":
       await writeContainerStdin(container, command, output, assertAccess);
-      return;
+      break;
     case "source-rcon": {
       const target = await resolveNetworkTarget(container, server, adapter);
       const response = await executeSourceRcon(
@@ -114,7 +133,7 @@ export async function executeGameCommand(
         assertAccess,
       );
       output.stdout(response || "Command completed with no response");
-      return;
+      break;
     }
     case "rust-webrcon": {
       const target = await resolveNetworkTarget(container, server, adapter);
@@ -126,7 +145,7 @@ export async function executeGameCommand(
         assertAccess,
       );
       output.stdout(response || "Command completed with no response");
-      return;
+      break;
     }
     case "telnet": {
       const target = await resolveNetworkTarget(container, server, adapter);
@@ -140,6 +159,7 @@ export async function executeGameCommand(
       output.stdout(response || "Command completed with no response");
     }
   }
+  output.complete?.();
 }
 
 export async function executeSourceRcon(
@@ -586,6 +606,7 @@ async function executeInContainer(
   output: GameCommandOutput,
   assertAccess?: () => void,
   signal?: AbortSignal,
+  timeoutSeconds = DOCKER_EXEC_TIMEOUT_SECONDS,
 ): Promise<void> {
   if (!options.Cmd?.length)
     throw new Error("The console adapter is missing its command configuration");
@@ -600,7 +621,7 @@ async function executeInContainer(
       BOUNDED_DOCKER_EXEC_SCRIPT,
       "ludock-console",
       controlPath,
-      String(DOCKER_EXEC_TIMEOUT_SECONDS),
+      String(timeoutSeconds),
       String(DOCKER_EXEC_KILL_GRACE_SECONDS),
       ...options.Cmd,
     ],
@@ -609,7 +630,6 @@ async function executeInContainer(
   if (signal?.aborted) throw new Error("Console command cancelled");
   // Starting is a mutation: an HTTP timeout cannot prove Docker rejected it.
   // Keep the caller's lock until the outcome and subsequent cleanup are known.
-  const stream = await exec.start();
   let cancellationRequested = false;
   let cancelled = false;
   let outputLimited = false;
@@ -617,8 +637,24 @@ async function executeInContainer(
   const requestCancellation = () => {
     if (cancellationRequested) return;
     cancellationRequested = true;
-    void cancelDockerExec(container, controlPath, options.User).catch(() => {});
+    void cancelDockerExec(container, controlPath, options.User).catch(() => {
+      cancellationRequested = false;
+    });
   };
+  let stream: DockerConnection;
+  try {
+    stream = await exec.start();
+  } catch (error) {
+    // HTTP refusals precede process start; zero transmitted bytes also prove
+    // that Docker could not have accepted this request.
+    if (error instanceof DockerApiError ||
+        (error instanceof DockerStreamOpenError && !error.requestStarted)) throw error;
+    // A rejected start can still have reached Docker. Keep the server locked
+    // until the daemon confirms a terminal outcome, including delayed startup.
+    requestCancellation();
+    await waitForDockerExecExit(exec, requestCancellation);
+    throw error;
+  }
   const onAbort = () => {
     cancelled = true;
     requestCancellation();
@@ -646,6 +682,7 @@ async function executeInContainer(
       }
     },
     system: (value) => output.system(value),
+    complete: () => { if (!cancelled) output.complete?.(); },
   };
   const hardDeadline = setTimeout(() => {
     forcedDeadline = true;
@@ -654,37 +691,56 @@ async function executeInContainer(
       new Error("Game console command timed out"),
     );
   },
-  (DOCKER_EXEC_TIMEOUT_SECONDS + DOCKER_EXEC_KILL_GRACE_SECONDS) * 1000 +
+  (timeoutSeconds + DOCKER_EXEC_KILL_GRACE_SECONDS) * 1000 +
     DOCKER_EXEC_STREAM_GRACE_MS);
   hardDeadline.unref();
-  let streamFailure: unknown;
+  let streamFailure: Error | undefined;
   try {
     await streamExecOutput(stream.readable, guardedOutput, () => {
       outputLimited = true;
       requestCancellation();
     });
   } catch (error) {
-    streamFailure = error;
+    streamFailure = error instanceof Error ? error : new Error("Game console stream failed");
+    requestCancellation();
   } finally {
     clearTimeout(hardDeadline);
     signal?.removeEventListener("abort", onAbort);
   }
 
+  // Stream EOF/error does not prove the exec exited. Retain the caller's lock
+  // during cancellation and daemon outages until an inspect confirms exit.
+  const result = await waitForDockerExecExit(exec, requestCancellation);
   if (outputLimited)
     throw new Error("Game console output exceeded its limit");
   if (cancelled) throw new Error("Console command cancelled");
   if (forcedDeadline) throw new Error("Game console command timed out");
-  if (streamFailure !== undefined) {
-    if (streamFailure instanceof Error) throw streamFailure;
-    throw new Error("Game console stream failed");
-  }
-  const result = await inspectDockerExec(exec);
+  if (streamFailure) throw streamFailure;
+  if (!result) throw new Error("Game console process is no longer available");
   if (result.ExitCode === 124)
     throw new Error("Game console command timed out");
   if (result.ExitCode === 125)
     throw new Error("Console command cancelled");
   if (result.Running || result.ExitCode !== 0)
     throw new Error("Game console command failed");
+}
+
+async function waitForDockerExecExit(
+  exec: Docker.Exec,
+  requestCancellation: () => void,
+): Promise<Docker.ExecInspectInfo | null> {
+  while (true) {
+    try {
+      const result = await inspectDockerExec(exec);
+      // A newly prepared exec is also non-running, but has no exit code yet.
+      if (result.Running === false && Number.isInteger(result.ExitCode)) return result;
+    } catch (error) {
+      // Docker removes exec records when the container/daemon is replaced.
+      if (error instanceof DockerApiError && error.statusCode === 404) return null;
+    }
+    requestCancellation();
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 async function createDockerExec(
@@ -824,6 +880,7 @@ async function streamExecOutput(
     const finalStderr = decoders.stderr.decode();
     if (finalStdout) output.stdout(finalStdout);
     if (finalStderr) output.stderr(finalStderr);
+    output.complete?.();
   }
 }
 

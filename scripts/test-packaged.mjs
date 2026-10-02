@@ -3,13 +3,14 @@
 // Build ludock:test first. Run sequentially with the other Docker harnesses.
 import { expect } from "bun:test";
 import { hardenedContainerArguments } from "./test-container-options.mjs";
+import { createTestDocker, cleanupFixtures, waitForReady } from "./test-docker.mjs";
 
 const name = `ludock-packaged-${crypto.randomUUID()}`;
 const app = `${name}-app`;
 const game = `${name}-game`;
 const volumes = [`${name}-world`, `${name}-backups`];
 const token = `fixture-${crypto.randomUUID()}`;
-const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
+const { docker, run, image, socketArguments } = createTestDocker({ secrets: [token] });
 const expectedBun = (await Bun.file(new URL("../.bun-version", import.meta.url)).text()).trim();
 let base;
 let serverId;
@@ -18,11 +19,6 @@ let passed = false;
 const createdVolumes = [];
 const createdContainers = [];
 
-function docker(...args) {
-  const result = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error(`Docker ${args[0]} failed: ${result.stderr.toString().slice(-2000).replaceAll(token, "[redacted]")}`);
-  return result.stdout.toString().trim();
-}
 const inspect = (container) => JSON.parse(docker("inspect", container))[0];
 const running = () => inspect(game).State.Running;
 async function response(endpoint, options = {}) {
@@ -86,17 +82,11 @@ try {
     ...hardenedContainerArguments,
     "-e", `LUDOCK_API_TOKEN=${token}`,
     "-v", `${volumes[1]}:/backups`,
-    "-v", "/var/run/docker.sock:/var/run/docker.sock", image);
+    ...socketArguments, image);
   createdContainers.push(app);
   docker("start", app);
   base = `http://127.0.0.1:${inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort}`;
-  const deadline = Date.now() + 20_000;
-  let ready = false;
-  while (Date.now() < deadline) {
-    try { await json("/health"); ready = true; break; }
-    catch { await Bun.sleep(200); }
-  }
-  expect(ready, "Packaged API must become healthy").toBe(true);
+  await waitForReady(() => json("/health"), "Packaged API must become healthy");
   expect((await json("/settings/deployment")).backupRoots).toEqual(["/backups"]);
   const server = (await json("/servers")).servers.find((entry) => entry.displayName === game);
   expect(server, "Discover only the unique game fixture").toBeTruthy();
@@ -141,23 +131,16 @@ try {
   console.log(JSON.stringify({ result: "pass", packagedApi: true, fileRoundTrip: true, backupChecksum: true, restoreContents: true, safetyBackups: true, runningAndStoppedState: true }));
 } finally {
   if (!passed && createdContainers.includes(app)) {
-    const logs = Bun.spawnSync(["docker", "logs", "--tail", "100", app], { stdout: "pipe", stderr: "pipe" });
-    console.error((logs.stdout.toString() + logs.stderr.toString()).replaceAll(token, "[redacted]"));
+    await cleanupFixtures([() => {
+      const logs = run(["logs", "--tail", "100", app]);
+      console.error((new TextDecoder().decode(logs.stdout) + new TextDecoder().decode(logs.stderr)).replaceAll(token, "[redacted]"));
+    }]);
   }
   // Stop the app before removing its fixture data. All resource names are owned
   // by this invocation; cleanup failures must remain visible to CI.
-  const errors = [];
-  if (createdContainers.includes(app)) {
-    try { docker("stop", "--time", "15", app); } catch (error) { errors.push(error); }
-  }
-  for (const container of createdContainers.toReversed()) {
-    try { docker("rm", "-fv", container); } catch (error) { errors.push(error); }
-  }
-  for (const volume of createdVolumes.toReversed()) {
-    try { docker("volume", "rm", volume); } catch (error) { errors.push(error); }
-  }
-  if (errors.length) {
-    console.error(new AggregateError(errors, "Packaged fixture cleanup failed"));
-    process.exitCode = 1;
-  }
+  await cleanupFixtures([
+    ...(createdContainers.includes(app) ? [() => docker("stop", "--time", "15", app)] : []),
+    ...createdContainers.toReversed().map((container) => () => docker("rm", "-fv", container)),
+    ...createdVolumes.toReversed().map((volume) => () => docker("volume", "rm", volume)),
+  ]);
 }

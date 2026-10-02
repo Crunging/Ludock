@@ -6,14 +6,16 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { hardenedContainerArguments } from "./test-container-options.mjs";
+import { createTestDocker, cleanupFixtures, waitForReady } from "./test-docker.mjs";
 
 // The update API intentionally requires a pullable tag. Check its current
 // contents against the reviewed pin before creating any fixture services.
 const expectedFixtureImage = "alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6";
 const project = `ludock-compose-smoke-${crypto.randomUUID().slice(0, 8)}`;
-const root = await realpath(await mkdtemp(path.join(process.env.LUDOCK_TEST_DIRECTORY || tmpdir(), `${project}-`)));
 const app = `${project}-app`;
 const token = `test-only-${crypto.randomUUID()}`;
+const { docker, image, socketArguments, removeContainer } = createTestDocker({ secrets: [token] });
+const root = await realpath(await mkdtemp(path.join(process.env.LUDOCK_TEST_DIRECTORY || tmpdir(), `${project}-`)));
 const compose = path.join(root, "compose.yaml");
 let base;
 let serverId;
@@ -36,12 +38,6 @@ await Bun.write(compose, `services:
 
 await Bun.write(path.join(root, ".env"), "FIXTURE_WORLD=automatic-source\n");
 
-function docker(...args) {
-  const result = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0)
-    throw new Error(`Docker command failed: ${result.stderr.toString().slice(-1000).replaceAll(token, "[redacted]")}`);
-  return result.stdout.toString().trim();
-}
 const cli = (...args) => docker("compose", "--project-name", project, "--project-directory", root, "-f", compose, ...args);
 const inspect = (container) => JSON.parse(docker("inspect", container))[0];
 async function request(endpoint, body, method = body === undefined ? "GET" : "POST") {
@@ -98,16 +94,10 @@ try {
     ...hardenedContainerArguments,
     "-e", `LUDOCK_API_TOKEN=${token}`, "-e", `LUDOCK_COMPOSE_ROOTS=${root}`,
     "-e", "UNRELATED_LUDOCK_SECRET=must-not-be-inherited",
-    "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", `${root}:${root}:ro`,
-    process.env.LUDOCK_TEST_IMAGE || "ludock:test");
+    ...socketArguments, "-v", `${root}:${root}:ro`, image);
   const port = inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort;
   base = `http://127.0.0.1:${port}`;
-  let ready = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await request("/health"); ready = true; break; }
-    catch { await Bun.sleep(200); }
-  }
-  expect(ready, "Fixture API must become healthy").toBeTruthy();
+  await waitForReady(() => request("/health"), "Fixture API must become healthy");
   serverId = (await request("/servers")).servers.find((server) => server.displayName === "Compose Smoke").id;
   const { capability } = await request(`/servers/${serverId}/update-capability`);
   expect(capability.available, capability.unavailableReason).toBe(true);
@@ -127,12 +117,7 @@ try {
   // Discovery must survive both snapshot cleanup and an application restart.
   docker("restart", app);
   base = `http://127.0.0.1:${inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort}`;
-  let restarted = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await request("/health"); restarted = true; break; }
-    catch { await Bun.sleep(200); }
-  }
-  expect(restarted, "Fixture API must recover after restart").toBeTruthy();
+  await waitForReady(() => request("/health"), "Fixture API must recover after restart");
   await request(`/servers/${serverId}/stop`, {}, "POST");
   const stopped = await update(true);
   expect(stopped.status).toBe("succeeded");
@@ -165,7 +150,9 @@ try {
     literalDollarPreserved: true, defaultEnvPreserved: true, applicationRestartSurvived: true, sourceChangeAccepted: true, registrationRequired: false,
   }));
 } finally {
-  Bun.spawnSync(["docker", "rm", "-fv", app], { stdout: "ignore", stderr: "ignore" });
-  Bun.spawnSync(["docker", "compose", "--project-name", project, "-f", compose, "down", "--volumes", "--remove-orphans"], { stdout: "ignore", stderr: "ignore" });
-  await rm(root, { recursive: true, force: true });
+  await cleanupFixtures([
+    () => removeContainer(app),
+    () => cli("down", "--volumes", "--remove-orphans"),
+    () => rm(root, { recursive: true, force: true }),
+  ]);
 }

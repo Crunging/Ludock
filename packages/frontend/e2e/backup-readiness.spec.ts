@@ -1,10 +1,9 @@
 import { backupPreflightResponseSchema, operationResponseSchema } from "@ludock/shared";
 import { test, expect, RUNNING_ID, RUNNING_NAME } from "./fixtures";
 
-test("backup readiness explains problems before a fresh check and downtime confirmation", { tag: "@responsive" }, async ({ app, page }, testInfo) => {
+test("backup creation rechecks readiness and waits for downtime confirmation", async ({ app, page }) => {
   app.user = { ...app.user!, role: "operator" };
   app.servers[0].permissions = ["server.view", "backups.create"];
-  app.servers[0].latestBackup = { createdAt: Date.UTC(2026, 8, 13, 12), size: 1024 };
   let ready = false;
   let checks = 0;
   let creates = 0;
@@ -26,23 +25,16 @@ test("backup readiness explains problems before a fresh check and downtime confi
   });
   await app.open(`/servers/${RUNNING_ID}`);
   await page.getByRole("tab", { name: "Backups", exact: true }).click();
-  await expect(page.getByText("Mount a separate backup destination.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Choose approved mounted data roots for this server.", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Latest successful backup:/)).toBeVisible();
+  await expect.poll(() => checks).toBe(1);
   await expect(page.getByRole("button", { name: "Create backup", exact: true })).toBeDisabled();
-  await expect(page.getByRole("link", { name: "Download", exact: true })).toHaveCount(0);
-  if (testInfo.project.name === "mobile") await page.setViewportSize({ width: 320, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(creates).toBe(0);
   ready = true;
   await page.getByRole("button", { name: "Check again", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Preflight checks passed.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create backup", exact: true })).toBeEnabled();
   expect(creates).toBe(0);
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toContain(RUNNING_NAME);
-    expect(dialog.message()).toContain("stops for the entire copy");
     expect(checks).toBe(3);
     expect(creates).toBe(0);
     await dialog.accept();

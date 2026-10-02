@@ -34,7 +34,7 @@ export interface ContainerFileMount {
 export interface FileContainerAccess {
   container: Docker.Container;
   blockedPaths: string[];
-  cleanup: () => Promise<void>;
+  cleanup: (options?: { retryUntilRemoved?: boolean }) => Promise<void>;
   assertAccess?: () => void;
 }
 interface FileRequest extends FileHelperRequest {
@@ -224,18 +224,21 @@ export async function deleteFileEntry(
   rootId: string,
   relativePath: string,
   assertAccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const target = resolveTarget(server, rootId, relativePath);
   if (!target.relativePath) throw new FileStorageError("ROOT_MUTATION", 400);
   const access = await acquireFileContainer(server, target.root, { assertAccess });
+  let completed = false;
   try {
     await helperRequest(access, {
       operation: "delete",
       root: target.root.path,
       path: target.relativePath,
-    });
+    }, undefined, undefined, signal);
+    completed = true;
   } finally {
-    await access.cleanup();
+    await access.cleanup({ retryUntilRemoved: !completed });
   }
 }
 
@@ -541,10 +544,20 @@ export async function acquireFileContainer(
     throw error;
   }
   let removal: Promise<void> | undefined;
-  const cleanup = () => {
+  const cleanup = (cleanupOptions: { retryUntilRemoved?: boolean } = {}) => {
     removal ??= (async () => {
       try {
-        await removeHelperContainer(helper);
+        while (true) {
+          try {
+            await removeHelperContainer(helper);
+            break;
+          } catch (error) {
+            if (!cleanupOptions.retryUntilRemoved) throw error;
+            // A cancelled deletion may still be running when Docker is
+            // unavailable. Keep its action/locks pending until removal succeeds.
+            await Bun.sleep(1_000);
+          }
+        }
       } finally {
         await proof.cleanup();
       }
@@ -599,13 +612,16 @@ async function runExec(
   let size = 0;
   let inputFailure: Error | undefined;
   let cancellationTimeout: ReturnType<typeof setTimeout> | undefined;
-  const abortInput = () => {
+  const abortOperation = () => {
     inputFailure ??= signal!.reason instanceof Error ? signal!.reason : new FileStorageError("FILE_UPLOAD_FAILED", 400);
     void reader?.cancel().catch(() => {});
-    cancellationTimeout ??= setTimeout(() => stream.abort(inputFailure), 5_000);
+    if (input) cancellationTimeout ??= setTimeout(() => stream.abort(inputFailure), 5_000);
+    // Non-upload commands have no staging file to drain. Return to the
+    // caller's awaited helper removal immediately, stopping recursive deletion.
+    else stream.abort(inputFailure);
   };
-  signal?.addEventListener("abort", abortInput, { once: true });
-  if (signal?.aborted) abortInput();
+  signal?.addEventListener("abort", abortOperation, { once: true });
+  if (signal?.aborted) abortOperation();
   const timeout = setTimeout(() => {
     const error = new FileStorageError("FILE_OPERATION_TIMEOUT", 409);
     inputFailure ??= error;
@@ -649,7 +665,7 @@ async function runExec(
     return { stdout: decodeText(concatBytes(chunks)) };
   } finally {
     clearTimeout(timeout);
-    signal?.removeEventListener("abort", abortInput);
+    signal?.removeEventListener("abort", abortOperation);
     clearTimeout(cancellationTimeout);
     stream.abort();
     await reader?.cancel().catch(() => {});

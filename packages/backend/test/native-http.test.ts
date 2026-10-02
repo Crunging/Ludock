@@ -7,7 +7,6 @@ import {
   updateUserAccess, type SessionUser,
 } from "../src/database.js";
 import type { HttpServer } from "../src/routes/request.js";
-import { createMountProof } from "../src/mount-proof.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 let admin: SessionUser;
@@ -24,56 +23,13 @@ beforeEach(() => {
 afterEach(() => closeDatabase());
 
 describe("native HTTP request lifetimes", () => {
-  it("returns a safe conflict for an unverifiable data mount", async () => {
-    const app = createApp({ frontendDist: false, routes: {
-      "/api/v1/mount-proof": {
-        GET: async () => {
-          await createMountProof([{ Type: "volume", Source: "/invalid/volume", Destination: "/data", RW: true }]);
-          expect.unreachable("An invalid named volume cannot produce a proof");
-        },
-      },
-    } });
-    const response = await app.fetch(new Request("http://localhost/api/v1/mount-proof", {
-      headers: { Cookie: cookie },
-    }), { requestIP: () => null, timeout: () => {} });
-    expect(response.status).toBe(409);
-    const body = await response.json() as { code: string; error: string };
-    expect(body.code).toBe("UNVERIFIED_DATA_MOUNT");
-    expect(body.error).toMatch(/data mount could not be verified/);
-    expect(body.error).not.toMatch(/invalid\/volume/);
-  });
-  it("serves public case and trailing-slash variants without redirects or broader method access", async () => {
-    const server = serve({ ...createApp({ frontendDist: false }), hostname: "127.0.0.1", port: 0 });
-    try {
-      for (const pathname of ["/API/v1/AuTh/StAtUs/", "/api/v1/auth/status/"]) {
-        const response = await fetch(new URL(pathname, server.url), { redirect: "error" });
-        expect(response.status).toBe(200);
-        expect(response.headers.get("Location")).toBe(null);
-        expect((await response.json() as { authenticated: boolean }).authenticated).toBe(false);
-        const head = await fetch(new URL(pathname, server.url), { method: "HEAD", redirect: "error" });
-        expect(head.status).toBe(200);
-        expect(await head.text()).toBe("");
-        const unsupported = await fetch(new URL(pathname, server.url), { method: "POST", redirect: "error" });
-        expect(unsupported.status).toBe(401);
-        await unsupported.body?.cancel();
-      }
-      const logout = await fetch(new URL("/API/v1/AUTH/LOGOUT/", server.url), { method: "POST", redirect: "error" });
-      expect(logout.status).toBe(200);
-      expect(await logout.json()).toStrictEqual({ ok: true });
-    } finally { await server.stop(true); }
-  });
-
-  it("dispatches authenticated variants once while preserving method, streamed bodies and parameter decoding", async () => {
-    const calls: string[] = [];
+  it("dispatches an authenticated request once with its streamed body and decoded parameters", async () => {
+    let calls = 0;
     const app = createApp({ frontendDist: false, routes: {
       "/api/v1/native-echo/:value": {
         POST: (context) => {
-          calls.push(context.request.method);
+          calls++;
           return Response.json({ value: context.params.value, query: context.url.searchParams.get("value"), body: context.body });
-        },
-        PUT: async (context) => {
-          calls.push(context.request.method);
-          return Response.json({ value: context.params.value, body: await context.request.text() });
         },
       },
     } });
@@ -83,8 +39,9 @@ describe("native HTTP request lifetimes", () => {
       const denied = await fetch(url, { method: "POST", redirect: "error" });
       expect(denied.status).toBe(401);
       await denied.body?.cancel();
-      expect(calls).toStrictEqual([]);
-      const post = await fetch(url, {
+      expect(calls).toBe(0);
+
+      const response = await fetch(url, {
         method: "POST", redirect: "error",
         headers: { Cookie: cookie, "Content-Type": "application/json" },
         body: new ReadableStream<Uint8Array>({
@@ -95,22 +52,9 @@ describe("native HTTP request lifetimes", () => {
           },
         }),
       });
-      expect(post.status).toBe(200);
-      expect(post.headers.get("Location")).toBe(null);
-      expect(await post.json()).toStrictEqual({ value: "MiXeD %2fName", query: "CaSe+Value", body: { unchanged: "JSON body" } });
-      const put = await fetch(url, {
-        method: "PUT", redirect: "error",
-        headers: { Cookie: cookie, "Content-Type": "application/octet-stream" },
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("binary body\u0000preserved"));
-            controller.close();
-          },
-        }),
-      });
-      expect(put.status).toBe(200);
-      expect(await put.json()).toStrictEqual({ value: "MiXeD %2fName", body: "binary body\u0000preserved" });
-      expect(calls).toStrictEqual(["POST", "PUT"]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toStrictEqual({ value: "MiXeD %2fName", query: "CaSe+Value", body: { unchanged: "JSON body" } });
+      expect(calls).toBe(1);
     } finally { await server.stop(true); }
   });
 

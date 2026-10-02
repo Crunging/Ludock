@@ -65,8 +65,7 @@ export class DockerClient {
   }
 
   async ping(): Promise<void> {
-    const response = await this.transport.request("/_ping");
-    if ((await response.text()).trim() !== "OK") throw new Error("Invalid Docker ping response");
+    if ((await this.transport.text("/_ping")).trim() !== "OK") throw new Error("Invalid Docker ping response");
     await this.negotiate();
   }
 

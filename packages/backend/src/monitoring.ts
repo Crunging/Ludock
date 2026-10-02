@@ -3,7 +3,6 @@ import { availabilitySchema } from "@ludock/shared";
 import type { AvailabilityPolicy } from "@ludock/shared";
 import { getDatabase } from "./database.js";
 import { listLogicalServers } from "./identity.js";
-import { refreshServers } from "./servers.js";
 import { notifyEvent } from "./notifications.js";
 import { isServerBusy } from "./operation-locks.js";
 
@@ -91,20 +90,20 @@ export function getAvailabilityProblem(serverId: string, now = Date.now()) {
   };
 }
 
-export async function checkAvailability(now = Date.now()): Promise<void> {
+export function checkAvailability(
+  current: Map<string, ManagedContainer> | null,
+  now = Date.now(),
+): void {
   // A daemon outage is not evidence that containers vanished. Preserve their
   // bindings, but report that monitored availability cannot be verified.
-  let dockerUnavailable = false;
-  const current = await refreshServers().catch(() => {
-    dockerUnavailable = true;
-    return new Map<string, ManagedContainer>();
-  });
+  // The background tick supplies the same discovery result used by schedules.
+  const dockerUnavailable = current === null;
   for (const server of listLogicalServers()) {
     const row = rowFor(server.id);
     if (!row) continue;
     const policy = availabilitySchema.parse(JSON.parse(row.policy_json));
     if (monitoringSuppressed(server.id, policy, row.suppressed_until, now)) continue;
-    const container = current.get(server.containerId ?? "");
+    const container = current?.get(server.containerId ?? "");
     const healthy =
       server.status === "active" &&
       container?.state === "running" &&

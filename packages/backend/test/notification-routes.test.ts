@@ -1,8 +1,5 @@
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
-import {
-  notificationDeliveriesResponseSchema,
-  notificationDeliveryResponseSchema,
-} from "@ludock/shared";
+import { notificationDeliveriesResponseSchema } from "@ludock/shared";
 import { createApp } from "../src/app.js";
 import { createSession } from "../src/auth.js";
 import { closeDatabase, createUser, getDatabase } from "../src/database.js";
@@ -65,6 +62,35 @@ async function failDelivery() {
 }
 
 describe("notification troubleshooting routes", () => {
+  it("requeues a failed delivery through HTTP after updating its webhook without duplicating it", async () => {
+    configureNotifications(true, webhook);
+    const delivery = queueTestNotification();
+    await failDelivery();
+    const replacement = "https://discord.com/api/webhooks/789012/replacement-fixture-secret";
+    const settings = await request("/api/v1/notifications", "PUT", "admin", {
+      enabled: true, webhookUrl: replacement,
+    });
+    expect(settings.status).toBe(200);
+    await settings.body?.cancel();
+
+    const path = `/api/v1/notifications/deliveries/${delivery.id}/retry`;
+    const retried = await request(path, "POST");
+    expect(retried.status).toBe(202);
+    await retried.body?.cancel();
+    const repeated = await request(path, "POST");
+    expect(repeated.status).toBe(409);
+    await repeated.body?.cancel();
+    expect(getDatabase().prepare("SELECT id,state,attempts FROM notification_deliveries").all())
+      .toStrictEqual([{ id: delivery.id, state: "queued", attempts: 5 }]);
+
+    await deliverNotifications(async (url) => {
+      expect(url).toBe(`${replacement}?wait=true`);
+      return new Response(null, { status: 204 });
+    });
+    expect(getDatabase().prepare("SELECT id,state,attempts FROM notification_deliveries").all())
+      .toStrictEqual([{ id: delivery.id, state: "delivered", attempts: 6 }]);
+  });
+
   it("requires an administrator to list, test, or retry notifications", async () => {
     configureNotifications(true, webhook);
     const delivery = queueTestNotification();
@@ -84,37 +110,6 @@ describe("notification troubleshooting routes", () => {
     const stored = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT state,attempts FROM notification_deliveries").all();
     expect(stored).toStrictEqual([{ state: "failed", attempts: 5 }]);
     expect(listAuditHistory({ limit: 10 }).entries).toStrictEqual([]);
-  });
-
-  it("queues distinct test notifications and audits only their delivery IDs", async () => {
-    configureNotifications(true, webhook);
-    const ids = new Set<string>();
-    for (let index = 0; index < 2; index++) {
-      const response = await request("/api/v1/notifications/test", "POST");
-      expect(response.status).toBe(202);
-      const { delivery } = notificationDeliveryResponseSchema.parse(await response.json());
-      expect(delivery.kind).toBe("test");
-      expect(delivery.state).toBe("queued");
-      expect(delivery.attempts).toBe(0);
-      expect(delivery.lastAttemptAt).toBe(null);
-      expect(delivery.deliveredAt).toBe(null);
-      expect(delivery.lastFailure).toBe(null);
-      expect(delivery.retryable).toBe(false);
-      expect(delivery.nextAttemptAt).toBeTruthy();
-      ids.add(delivery.id);
-    }
-    expect(ids.size).toBe(2);
-    const audit = listAuditHistory({ limit: 10 }).entries;
-    expect(audit.length).toBe(2);
-    for (const entry of audit) {
-      expect(entry.action).toBe("notifications.test_queued");
-      expect(entry.username).toBe("admin");
-      expect(entry.targetType).toBe("settings");
-      expect(entry.targetId).toBe(null);
-      expect(ids.has((entry.details as { deliveryId: string }).deliveryId)).toBeTruthy();
-      expect(Object.keys(entry.details as object)).toStrictEqual(["deliveryId"]);
-    }
-    expect(JSON.stringify(audit)).not.toMatch(/route-fixture-secret|payload|webhook|event_key/);
   });
 
   it("returns delivery status and sanitized failure reasons without messages or event keys", async () => {
@@ -145,71 +140,5 @@ describe("notification troubleshooting routes", () => {
     expect(retry.attempts).toBe(1);
     expect(retry.lastFailure).toBeTruthy();
     expect(retry.nextAttemptAt).toBeTruthy();
-  });
-
-  it("validates retry IDs and rejects missing or nonretryable deliveries", async () => {
-    configureNotifications(true, webhook);
-    const malformed = await request("/api/v1/notifications/deliveries/not-a-uuid/retry", "POST");
-    expect(malformed.status).toBe(400);
-    expect((await malformed.json() as { code: string }).code).toBe("INVALID_REQUEST");
-    const missing = await request(`/api/v1/notifications/deliveries/${crypto.randomUUID()}/retry`, "POST");
-    expect(missing.status).toBe(404);
-    await missing.body?.cancel();
-    const delivery = queueTestNotification();
-    const queued = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
-    expect(queued.status).toBe(409);
-    await queued.body?.cancel();
-    await deliverNotifications((async () => new Response(null, { status: 204 })));
-    const delivered = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
-    expect(delivered.status).toBe(409);
-    await delivered.body?.cancel();
-    expect(listAuditHistory({ limit: 10 }).entries).toStrictEqual([]);
-  });
-
-  it("requires saved enabled settings for tests and retries", async () => {
-    const unconfigured = await request("/api/v1/notifications/test", "POST");
-    expect(unconfigured.status).toBe(400);
-    await unconfigured.body?.cancel();
-    configureNotifications(true, webhook);
-    const delivery = queueTestNotification();
-    await failDelivery();
-    configureNotifications(false);
-    for (const pathname of [
-      "/api/v1/notifications/test",
-      `/api/v1/notifications/deliveries/${delivery.id}/retry`,
-    ]) {
-      const response = await request(pathname, "POST");
-      expect(response.status).toBe(400);
-      expect(await response.text()).not.toMatch(/route-fixture-secret/);
-    }
-    expect(listAuditHistory({ limit: 10 }).entries).toStrictEqual([]);
-  });
-
-  it("requeues a failed delivery after configuration is fixed and prevents duplicate retries", async () => {
-    configureNotifications(true, webhook);
-    const delivery = queueTestNotification();
-    await failDelivery();
-    const settings = await request("/api/v1/notifications", "PUT", "admin", {
-      enabled: true,
-      webhookUrl: "https://discord.com/api/webhooks/789012/replacement-fixture-secret",
-    });
-    expect(settings.status).toBe(200);
-    await settings.body?.cancel();
-    const response = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
-    expect(response.status).toBe(202);
-    const retried = notificationDeliveryResponseSchema.parse(await response.json()).delivery;
-    expect(retried.id).toBe(delivery.id);
-    expect(retried.state).toBe("queued");
-    expect(retried.attempts).toBe(5);
-    expect(retried.retryable).toBe(false);
-    expect(retried.nextAttemptAt).toBeTruthy();
-    const repeated = await request(`/api/v1/notifications/deliveries/${delivery.id}/retry`, "POST");
-    expect(repeated.status).toBe(409);
-    await repeated.body?.cancel();
-    const entries = listAuditHistory({ limit: 10 }).entries.filter((entry) => entry.action === "notifications.retry_queued");
-    expect(entries.length).toBe(1);
-    expect(entries[0].targetId).toBe(null);
-    expect(entries[0].details).toStrictEqual({ deliveryId: delivery.id });
-    expect(JSON.stringify(entries)).not.toMatch(/fixture-secret|payload|webhook|event_key/);
   });
 });

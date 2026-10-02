@@ -15,6 +15,10 @@ The frontend hot-reloads and forwards `/api` and `/ws` to the backend on port
 (override with `LUDOCK_DB_PATH`); `LUDOCK_DEV_PORT` and `PORT` change the
 frontend and backend ports.
 
+To run them in separate terminals, use `bun run backend:dev` and
+`bun run frontend:dev`. The package-level `dev` commands use the same localhost,
+database, and disconnected-Docker defaults.
+
 Development has no Docker connection by default. To manage containers, set
 `DOCKER_SOCKET` to a dedicated test daemon with disposable game data, never one
 running real servers.
@@ -33,14 +37,22 @@ bun run --filter @ludock/frontend test:e2e
 
 Use `bun run lint:scripts` to lint repository scripts separately.
 
-Browser cases run on desktop by default. Use `@responsive` to also run on mobile,
-or `@mobile` for dedicated mobile cases.
+Keep a small set of tests proving major integrations work, alongside tests for
+access control, data safety, recovery, and races.
+Check rendering, copy, and layout during manual use. Browser tests exercise a
+small set of consequential workflows in Chromium.
 
 Docker acceptance uses `ludock:test`. Run the
 [Linux](../scripts/test-linux.mjs), [file](../scripts/test-files.mjs),
 [backup](../scripts/test-backups.mjs), [packaged](../scripts/test-packaged.mjs),
 and [Compose](../scripts/test-compose.mjs) harnesses sequentially against a
 dedicated daemon. Validate Linux AMD64 and ARM64 and report any emulation.
+Select that daemon with a local Unix-socket Docker context or `DOCKER_HOST`;
+`DOCKER_CONTEXT` takes precedence when both are set. Harnesses verify that their
+mounted socket belongs to the selected daemon before acceptance work starts.
+Docker Desktop uses its VM-side `/var/run/docker.sock`. For another socket mapping,
+set `LUDOCK_TEST_DOCKER_SOCKET` to its absolute path on the daemon host; it must
+pass the same identity check. Remote TCP/SSH contexts are unsupported.
 The harnesses apply the example deployment's filesystem and capability
 restrictions, including to packaged file, backup, and Compose operations.
 For just the production startup check, run

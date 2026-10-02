@@ -35,7 +35,7 @@ export const filesRoutes: ApiRoutes = {
       const location = fileLocation(ctx);
       if (!location.success) return invalid("Invalid file location");
       const { root, path } = location.data;
-      await deleteFileEntry(context.container, root, path, context.assertAccess);
+      await deleteFileEntry(context.container, root, path, context.assertAccess, context.signal);
       audit(ctx, "server.file.deleted", context.logical.id, location.data);
       return respond(okResponseSchema, { ok: true });
     }),

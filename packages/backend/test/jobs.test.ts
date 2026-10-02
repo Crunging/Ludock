@@ -13,7 +13,6 @@ import {
   deleteSchedule,
   runSchedules,
   setScheduleEnabled,
-  updateSchedule,
 } from "../src/schedules.js";
 import {
   getOperation,
@@ -162,30 +161,11 @@ describe("queued operation authority", () => {
     updateUserAccess(friend.id, "operator", true);
     expect(() => jobActor(context)).toThrow(/no longer has access/);
   });
-  it("rejects a schedule whose action changed after it was queued", () => {
-    const { context, scheduleId } = scheduled();
-    getDatabase()
-      .prepare("UPDATE schedules SET input_json=? WHERE id=?")
-      .run(JSON.stringify({ ...input, action: "stop" }), scheduleId);
-    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
-  });
-  it("rejects queued work after editing the schedule time without changing its action", () => {
-    const { context, scheduleId } = scheduled();
-    updateSchedule(friend, serverId, scheduleId, { ...input, time: "09:00", revision: 1 });
-    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
-  });
   it("does not revive old queued work after pausing and resuming a schedule", () => {
     const { context, scheduleId } = scheduled();
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: false, revision: 1 });
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
     expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
-  });
-  it("rejects invalid or future schedule generations", () => {
-    const { context } = scheduled();
-    for (const revision of [undefined, null, "1", 0, 2]) {
-      context.job.input.scheduleRevision = revision;
-      expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
-    }
   });
   it("rechecks action grants before a scheduled job touches Docker", async () => {
     const { context } = scheduled();

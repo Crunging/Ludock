@@ -15,16 +15,26 @@ export class DockerApiError extends Error {
   }
 }
 
-export class DockerTransport {
-  constructor(readonly socketPath: string) {}
+/** A failed stream opening may have already dispatched a mutation. Only false
+ * proves that no request bytes were handed to the socket. */
+export class DockerStreamOpenError extends Error {
+  constructor(readonly requestStarted: boolean) {
+    super("Docker stream connection failed");
+    this.name = "DockerStreamOpenError";
+  }
+}
 
-  async request(path: string, method = "GET", body?: unknown): Promise<Response> {
+export class DockerTransport {
+  constructor(readonly socketPath: string, private readonly readTimeoutMs = 15_000) {}
+
+  async request(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<Response> {
     const response = await fetch(`http://localhost${path}`, {
       unix: this.socketPath,
       proxy: "", // Ambient HTTP proxy settings must never redirect daemon traffic.
       method,
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
       redirect: "manual",
       // Logs, events, pulls, and stopped-state waits may be silent indefinitely.
       // Operation owners control deadlines and cleanup; never retry mutations.
@@ -38,9 +48,36 @@ export class DockerTransport {
   }
 
   async json<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-    const response = await this.request(path, method, body);
-    try { return await response.json() as T; }
-    catch { throw new Error("Docker returned invalid JSON"); }
+    const decode = async (response: Response): Promise<T> => {
+      try { return await response.json() as T; }
+      catch { throw new Error("Docker returned invalid JSON"); }
+    };
+    return method === "GET"
+      ? this.read(path, decode)
+      : decode(await this.request(path, method, body));
+  }
+
+  async text(path: string): Promise<string> {
+    return this.read(path, response => response.text());
+  }
+
+  /** Bound the complete read, including its body, so stalled discovery can be
+   * retried. Streams and mutations retain their caller-owned lifetimes. */
+  private async read<T>(path: string, decode: (response: Response) => Promise<T>): Promise<T> {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.readTimeoutMs);
+    timer.unref();
+    try {
+      return await decode(await this.request(path, "GET", undefined, deadline.signal));
+    } catch (error) {
+      if (deadline.signal.aborted) {
+        // oxlint-disable-next-line preserve-caught-error -- Transport diagnostics can contain host paths.
+        throw new Error("Docker read timed out");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async empty(path: string, method: string): Promise<void> {
@@ -66,6 +103,7 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
     let socket: Bun.Socket | undefined;
     let headers = new Uint8Array(0);
     let upgraded = false;
+    let requestStarted = false;
     let requestSent = false;
     let delivered = false;
     let ended = false;
@@ -83,7 +121,7 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       output.error(error);
       pending?.reject(error);
       pending = undefined;
-      if (!delivered) reject(error);
+      if (!delivered) reject(error instanceof DockerApiError ? error : new DockerStreamOpenError(requestStarted));
     };
     const readable = new ReadableStream<Uint8Array>({
       start(controller) { input = controller; },
@@ -121,6 +159,7 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       try {
         const count = socket.write(write.data, write.offset, write.data.length - write.offset);
         if (count < 0) { fail(); return; }
+        if (count > 0 && !delivered) requestStarted = true;
         write.offset += count;
         if (write.offset === write.data.length) {
           pending = undefined;

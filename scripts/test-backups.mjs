@@ -6,8 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { backendSourceMounts } from "./test-source-mounts.mjs";
 import { hardenedContainerArguments } from "./test-container-options.mjs";
+import { createTestDocker, cleanupFixtures } from "./test-docker.mjs";
 
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
+const { run, image, socketArguments, removeContainer } = createTestDocker();
 const folder = await realpath(
   await mkdtemp(path.join(os.tmpdir(), "ludock-backup-harness-")),
 );
@@ -15,26 +17,26 @@ const backups = path.join(folder, "backups");
 const name = "ludock-backup-harness-" + crypto.randomUUID();
 try {
   await mkdir(backups);
-  const result = Bun.spawnSync(
+  run(
     [
-      "docker",
       "run", "--rm", "--name", name,
       ...hardenedContainerArguments,
       "--label", "ludock.enable=false",
       "-e", "LUDOCK_DOCKER_TESTS=1",
       "-e", "LUDOCK_SELF_CONTAINER=" + name,
       "-e", "LUDOCK_TEST_BACKUP_DIRECTORY=/backup-fixtures",
-      "-v", "/var/run/docker.sock:/var/run/docker.sock",
+      ...socketArguments,
       ...backendSourceMounts(repository),
       "-v", backups + ":/backup-fixtures",
-      process.env.LUDOCK_TEST_IMAGE || "ludock:test",
+      image,
       "bun", "test", "--isolate",
       "./packages/backend/test/backup-docker.test.ts",
     ],
-    { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+    "inherit",
   );
-  process.exitCode = result.exitCode ?? 1;
 } finally {
-  Bun.spawnSync(["docker", "rm", "-fv", name], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-  await rm(folder, { recursive: true, force: true });
+  await cleanupFixtures([
+    () => removeContainer(name),
+    () => rm(folder, { recursive: true, force: true }),
+  ]);
 }

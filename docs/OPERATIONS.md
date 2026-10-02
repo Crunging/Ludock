@@ -27,6 +27,19 @@ WebSockets use same-origin session cookies. Configure the proxy to overwrite
 client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port`
 headers. Expose only the HTTPS proxy to untrusted networks.
 
+Set `LUDOCK_TRUSTED_PROXIES` to the proxy addresses or CIDRs that can connect
+to Ludock, separated by commas (for example `172.18.0.2,2001:db8::2`). This
+keeps login and setup limits separate for each client and records client
+addresses in HTTP and console audit events. Without this setting, Ludock uses
+the direct peer address, so clients behind one proxy share those limits.
+Trust only proxy addresses; avoid a subnet shared with untrusted containers.
+The edge proxy must overwrite client-supplied `X-Forwarded-For`. Additional
+trusted proxies can append their observed peer address. Ludock reads the chain
+from right to left and stops at the first untrusted address. Invalid forwarding
+metadata falls back to the direct peer; invalid trusted-proxy configuration
+prevents startup. IPv4, IPv6, and their CIDRs are supported; hostnames and
+addresses with ports are not.
+
 ## Discovery and console setup
 
 `ludock.enable` takes precedence: invalid values exclude with an administrator

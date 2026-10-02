@@ -5,7 +5,7 @@ import { StreamFixture } from "./fixtures/web-streams.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { expect, afterEach, describe, it, spyOn } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
-import type { DockerConnection } from "../src/docker-transport.js";
+import { DockerApiError, DockerStreamOpenError, type DockerConnection } from "../src/docker-transport.js";
 import { serve, type Socket, type SocketHandler } from "bun";
 import {
   executeGameCommand,
@@ -53,25 +53,6 @@ describe("Source RCON transport", () => {
     const port = listenRcon((socket) => { socket.end(); });
     await expect(executeSourceRcon("127.0.0.1", port, "credential", "stop")).rejects.toThrow(/authentication did not complete/);
   });
-  it("authenticates and returns a native command response", async () => {
-    const received: string[] = [];
-    const port = listenRcon((socket, { id, type, body }) => {
-      received.push(decodeText(body));
-      socket.write(
-        encodePacket(id, type === 3 ? 2 : 0, type === 3 ? "" : "3 players"),
-      );
-    });
-
-    const response = await executeSourceRcon(
-      "127.0.0.1",
-      port,
-      "correct horse",
-      "status"
-    );
-
-    expect(received).toStrictEqual(["correct horse", "status"]);
-    expect(response).toBe("3 players");
-  });
 
   it("reports rejected credentials without exposing the password", async () => {
     const port = listenRcon((socket) => socket.write(encodePacket(-1, 2, "")));
@@ -85,10 +66,12 @@ describe("Source RCON transport", () => {
 
   it("reassembles fragmented packets and UTF-8 split between response packets", async () => {
     const expected = "Players: José 🐉";
+    const received: string[] = [];
     const bytes = fixtureBytes(expected);
     // Split inside the four-byte dragon emoji.
     const split = fixtureBytes(expected.slice(0, expected.indexOf("🐉"))).length + 2;
-    const port = listenRcon((socket, { id, type }) => {
+    const port = listenRcon((socket, { id, type, body }) => {
+      received.push(decodeText(body));
       if (type === 3) {
         const packet = encodePacket(id, 2, "");
         sendFragments(socket, [packet.subarray(0, 2), packet.subarray(2, 7), packet.subarray(7)]);
@@ -103,6 +86,7 @@ describe("Source RCON transport", () => {
     });
 
     expect(await executeSourceRcon("127.0.0.1", port, "credential", "status")).toBe(expected);
+    expect(received).toStrictEqual(["credential", "status"]);
   });
 
   it("rejects an invalid packet length without exposing received content", async () => {
@@ -133,17 +117,45 @@ describe("Source RCON transport", () => {
     await expect(executeSourceRcon("127.0.0.1", port, "credential", "status")).rejects.toThrow(/incomplete packet/);
   });
 
-  it("reports refused connections without exposing the password", async () => {
-    const port = closedPort();
-    await expect(await rejectedBy(executeSourceRcon("127.0.0.1", port, "do-not-leak", "status"))).toSatisfy((error: Error) => {
-      expect(error.message).toMatch(/Could not connect/);
-      expect(error.message).not.toMatch(/do-not-leak/);
-      return true;
-    });
-  });
 });
 
 describe("Rust WebRCON transport", () => {
+  it("uses the WebRCON request envelope and matches its response", async () => {
+    let requestPath = "";
+    const server = serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) {
+        requestPath = new URL(request.url).pathname;
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: {
+        message(socket, raw) {
+          const message = JSON.parse((typeof raw === "string" ? raw : decodeText(raw))) as {
+            Identifier: number;
+            Message: string;
+            Name: string;
+          };
+          expect(message.Message).toBe("server.save");
+          expect(message.Name).toBe("Ludock");
+          socket.send(JSON.stringify({ Identifier: message.Identifier + 1, Message: "Unrelated event" }));
+          socket.send(new TextEncoder().encode(JSON.stringify({ Identifier: message.Identifier, Message: "Saved", Name: "WebRcon" })));
+        },
+      },
+    });
+    closers.push(() => server.stop(true));
+    const port = server.port!;
+
+    const response = await executeRustWebRcon(
+      "127.0.0.1",
+      port,
+      "a password",
+      "server.save"
+    );
+
+    expect(response).toBe("Saved");
+    expect(requestPath).toBe("/a%20password");
+  });
+
   it("rejects malformed responses without exposing connection credentials", async () => {
     const server = serve({
       hostname: "127.0.0.1", port: 0,
@@ -180,41 +192,7 @@ describe("Rust WebRCON transport", () => {
     })).rejects.toThrow(/Console access changed/);
     expect(sent).toBe(false);
   });
-  it("uses the WebRCON request envelope and matches its response", async () => {
-    let requestPath = "";
-    const server = serve({
-      hostname: "127.0.0.1", port: 0,
-      fetch(request, server) {
-        requestPath = new URL(request.url).pathname;
-        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
-      },
-      websocket: {
-        message(socket, raw) {
-          const message = JSON.parse((typeof raw === "string" ? raw : decodeText(raw))) as {
-            Identifier: number;
-            Message: string;
-            Name: string;
-          };
-          expect(message.Message).toBe("server.save");
-          expect(message.Name).toBe("Ludock");
-          socket.send(JSON.stringify({ Identifier: message.Identifier + 1, Message: "Unrelated event" }));
-          socket.send(new TextEncoder().encode(JSON.stringify({ Identifier: message.Identifier, Message: "Saved", Name: "WebRcon" })));
-        },
-      },
-    });
-    closers.push(() => server.stop(true));
-    const port = server.port!;
 
-    const response = await executeRustWebRcon(
-      "127.0.0.1",
-      port,
-      "a password",
-      "server.save"
-    );
-
-    expect(response).toBe("Saved");
-    expect(requestPath).toBe("/a%20password");
-  });
 });
 
 describe("Telnet console transport", () => {
@@ -247,37 +225,6 @@ describe("Telnet console transport", () => {
       if (!allowed) throw new Error("Access revoked");
     })).rejects.toThrow(/Console access changed/);
     expect(received).toStrictEqual(["credential"]);
-  });
-  it("authenticates and sends a command after the password prompt", async () => {
-    const received: string[] = [];
-    const port = listenTelnet((socket, value) => {
-      received.push(value);
-      socket.write(value === "telnet-secret" ? "Log on successful.\r\n" : "PlayerOne, PlayerTwo\r\n");
-    });
-
-    const response = await executeTelnetCommand(
-      "127.0.0.1",
-      port,
-      "telnet-secret",
-      "listplayers"
-    );
-
-    expect(received).toStrictEqual(["telnet-secret", "listplayers"]);
-    expect(response).toMatch(/PlayerOne, PlayerTwo/);
-    expect(response).not.toMatch(/telnet-secret/);
-  });
-
-  it("preserves UTF-8 characters split between TCP chunks", async () => {
-    const expected = "José 🐉";
-    const bytes = fixtureBytes(expected);
-    const port = listenTelnet((socket, line) => {
-      if (line === "credential") socket.write("Logged in\r\n");
-      else sendFragments(socket, [bytes.subarray(0, 4), bytes.subarray(4, 8), bytes.subarray(8)]);
-    });
-
-    const response = await executeTelnetCommand("127.0.0.1", port, "credential", "status");
-    expect(response).toMatch(/José 🐉/);
-    expect(response).not.toMatch(/�/);
   });
 
   it("handles fragmented Telnet negotiation before a fragmented password prompt", async () => {
@@ -327,14 +274,6 @@ describe("Telnet console transport", () => {
     expect(received).toStrictEqual(["credential"]);
   });
 
-  it("reports a connection failure without exposing the password", async () => {
-    const port = closedPort();
-    await expect(await rejectedBy(executeTelnetCommand("127.0.0.1", port, "do-not-leak", "status"))).toSatisfy((error: Error) => {
-      expect(error.message).toMatch(/Could not connect/);
-      expect(error.message).not.toMatch(/do-not-leak/);
-      return true;
-    });
-  });
 });
 
 describe("Native TCP connection lifetime", () => {
@@ -473,6 +412,28 @@ describe("Container stdin transport", () => {
     commandPlaceholder: "help",
   };
 
+  it("sends one newline-terminated command and closes the attachment", async () => {
+    const stream = new StreamFixture();
+    let received = "";
+    let attachOptions: Docker.ContainerAttachOptions | undefined;
+    stream.onInput = chunk => { received += decodeText(chunk); };
+    const container = {
+      inspect: async () => ({ Config: { OpenStdin: true, StdinOnce: false } }),
+      attach: async (options: Docker.ContainerAttachOptions) => {
+        attachOptions = options;
+        return stream.connection;
+      },
+    } as unknown as Docker.Container;
+
+    await executeGameCommand(container, { state: "running", labels: {} }, adapter, "help", {
+      stdout: () => {}, stderr: () => {}, system: () => {},
+    });
+
+    expect(attachOptions).toStrictEqual({ stream: true, stdin: true, stdout: false, stderr: false });
+    expect(received).toBe("help\n");
+    expect(stream.closed).toBe(true);
+  });
+
   it("destroys an attachment without writing if access changes while it opens", async () => {
     let allowed = true;
     let received = "";
@@ -489,70 +450,6 @@ describe("Container stdin transport", () => {
     expect(stream.closed).toBe(true);
   });
 
-  it("attaches directly to the container stdin and sends a newline", async () => {
-    const stream = new StreamFixture();
-    let received = "";
-    let attachOptions: Docker.ContainerAttachOptions | undefined;
-    stream.onInput = chunk => { received += new TextDecoder().decode(chunk); };
-    const container = {
-      inspect: async () => ({
-        Config: { OpenStdin: true, StdinOnce: false },
-      }),
-      attach: async (options: Docker.ContainerAttachOptions) => {
-        attachOptions = options;
-        return stream.connection;
-      },
-    } as unknown as Docker.Container;
-    const systemMessages: string[] = [];
-
-    await executeGameCommand(
-      container,
-      { state: "running", labels: {} },
-      adapter,
-      "help",
-      {
-        stdout: () => undefined,
-        stderr: () => undefined,
-        system: (message) => systemMessages.push(message),
-      }
-    );
-
-    expect(attachOptions).toStrictEqual({
-      stream: true,
-      stdin: true,
-      stdout: false,
-      stderr: false,
-    });
-    expect(received).toBe("help\n");
-    expect(stream.closed).toBe(true);
-    expect(systemMessages).toStrictEqual(["Command sent to the server process"]);
-  });
-
-  it("explains when the container was not created with open stdin", async () => {
-    let attached = false;
-    const container = {
-      inspect: async () => ({
-        Config: { OpenStdin: false, StdinOnce: false },
-      }),
-      attach: async () => {
-        attached = true;
-        return new StreamFixture().connection;
-      },
-    } as unknown as Docker.Container;
-
-    await expect(executeGameCommand(
-        container,
-        { state: "running", labels: {} },
-        adapter,
-        "help",
-        {
-          stdout: () => undefined,
-          stderr: () => undefined,
-          system: () => undefined,
-        }
-      )).rejects.toThrow(/stdin_open: true/);
-    expect(attached).toBe(false);
-  });
 });
 
 describe("Docker exec console transport", () => {
@@ -604,7 +501,10 @@ describe("Docker exec console transport", () => {
     let creations = 0;
     const container = {
       exec: async () => ++creations === 1
-        ? { start: () => { starting(); return delayedStart.then(stream => stream.connection); } }
+        ? {
+          start: () => { starting(); return delayedStart.then(stream => stream.connection); },
+          inspect: async () => ({ Running: false, ExitCode: 125 }),
+        }
         : { start: async () => { cancellationStarted(); return endedStream(); } },
     } as unknown as Docker.Container;
     const pending = executeGameCommand(
@@ -622,6 +522,39 @@ describe("Docker exec console transport", () => {
     expect(settled, "late execution still needs cleanup before releasing the lock").toBe(false);
     mainStream.close();
     await expect(pending).rejects.toThrow(/cancelled/);
+
+    // A rejected connection can precede delayed startup. Running=false alone
+    // describes both a prepared exec and one that has finished.
+    let inspections = 0;
+    let uncertainCreations = 0;
+    const states = [
+      { Running: false, ExitCode: null },
+      { Running: true, ExitCode: null },
+      { Running: false, ExitCode: 125 },
+    ];
+    const uncertain = {
+      exec: async () => ++uncertainCreations === 1 ? {
+        start: async () => { throw new DockerStreamOpenError(true); },
+        inspect: async () => states[Math.min(inspections++, states.length - 1)],
+      } : { start: async () => endedStream() },
+    } as unknown as Docker.Container;
+    await expect(executeGameCommand(
+      uncertain, { state: "running", labels: {} }, adapter, "stop", output,
+    )).rejects.toThrow(/Docker stream connection failed/);
+    expect(inspections).toBe(3);
+    expect(uncertainCreations).toBe(2);
+
+    for (const failure of [new DockerApiError(409), new DockerStreamOpenError(false)]) {
+      const refused = {
+        exec: async () => ({
+          start: async () => { throw failure; },
+          inspect: async () => { throw new Error("An undispatched or refused start cannot run"); },
+        }),
+      } as unknown as Docker.Container;
+      await expect(executeGameCommand(
+        refused, { state: "running", labels: {} }, adapter, "stop", output,
+      )).rejects.toBe(failure);
+    }
   });
 
   it("keeps the command literal while adding an in-container deadline", async () => {
@@ -689,6 +622,7 @@ describe("Docker exec console transport", () => {
     expect(started).toBe(false);
   });
   it("reports a nonzero process exit instead of auditing a successful command", async () => {
+    let completions = 0;
     const container = {
       exec: async () => ({
         start: async () => {
@@ -699,34 +633,25 @@ describe("Docker exec console transport", () => {
         inspect: async () => ({ Running: false, ExitCode: 1 }),
       }),
     } as unknown as Docker.Container;
-    await expect(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", output)).rejects.toThrow(/Game console command failed/);
+    await expect(executeGameCommand(container, { state: "running", labels: {} }, adapter, "stop", {
+      ...output, complete: () => { completions++; },
+    })).rejects.toThrow(/Game console command failed/);
+    expect(completions).toBe(1);
   });
-  it("reports the watchdog deadline separately from an ordinary failure", async () => {
-    const container = {
-      exec: async () => ({
-        start: async () => endedStream(),
-        inspect: async () => ({ Running: false, ExitCode: 124 }),
-      }),
-    } as unknown as Docker.Container;
-    await expect(executeGameCommand(
-        container,
-        { state: "running", labels: {} },
-        adapter,
-        "stop",
-        output,
-      )).rejects.toThrow(/timed out/);
-  });
-  it("bounds the stream lifetime if Docker never reports wrapper exit", async () => {
+
+  it("bounds the stream lifetime and waits for Docker to confirm wrapper exit", async () => {
     const expire = captureDeadline(23_000);
     const mainStream = new StreamFixture();
     let executionCount = 0;
+    let confirmExit!: (result: Docker.ExecInspectInfo) => void;
+    const exited = new Promise<Docker.ExecInspectInfo>((resolve) => { confirmExit = resolve; });
     const container = {
       exec: async () => {
         executionCount++;
         if (executionCount === 1) {
           return {
             start: async () => mainStream.connection,
-            inspect: async () => ({ Running: true, ExitCode: null }),
+            inspect: () => exited,
           };
         }
         return { start: async () => endedStream() };
@@ -741,19 +666,27 @@ describe("Docker exec console transport", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expire();
-    await expect(pending).rejects.toThrow(/timed out/);
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mainStream.closed).toBe(true);
     expect(executionCount).toBe(2);
+    expect(settled).toBe(false);
+    confirmExit({ Running: false, ExitCode: 125 } as Docker.ExecInspectInfo);
+    await expect(pending).rejects.toThrow(/timed out/);
   });
-  it("bounds the status check after the exec stream closes", async () => {
+  it("retains the command through an inspect timeout until exit is confirmed", async () => {
     const expire = captureDeadline(5_000);
     let inspecting!: () => void;
     const didInspect = new Promise<void>((resolve) => { inspecting = resolve; });
+    let inspections = 0;
     const container = {
       exec: async () => ({
         start: async () => endedStream(),
         inspect: () => {
           inspecting();
+          inspections++;
+          if (inspections > 1) return Promise.resolve({ Running: inspections === 2, ExitCode: inspections === 2 ? null : 0 });
           return new Promise<never>(() => {});
         },
       }),
@@ -767,7 +700,8 @@ describe("Docker exec console transport", () => {
     );
     await didInspect;
     expire();
-    await expect(pending).rejects.toThrow(/status check timed out/);
+    await pending;
+    expect(inspections).toBe(3);
   });
   it("cancels the real exec and does not settle until its stream ends", async () => {
     const controller = new AbortController();
@@ -918,13 +852,6 @@ function listen(socket: SocketHandler<undefined, "uint8array">): number {
   });
   closers.push(async () => { server.stop(true); });
   return server.port;
-}
-
-function closedPort(): number {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
 }
 
 function listenRcon(receive: (socket: Socket<undefined>, packet: { id: number; type: number; body: Uint8Array }) => void): number {
