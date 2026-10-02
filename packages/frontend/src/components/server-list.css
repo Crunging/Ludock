@@ -9,9 +9,10 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 20px;
-  padding: 12px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  border: 1px solid rgb(232 196 107 / 35%);
+  border-radius: var(--radius-lg);
+  background: rgb(232 196 107 / 6%);
   font-size: 13px;
 }
 
@@ -23,27 +24,32 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .search-field {
   flex: 1 1 220px;
-  max-width: 360px;
+  max-width: 380px;
 }
 
 .search-field input,
 .state-filter select {
-  min-height: 38px;
-  padding: 8px 11px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   font: inherit;
 }
 
 .search-field input {
   width: 100%;
+  padding-left: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='7' cy='7' r='4.75' fill='none' stroke='%238a8a8a' stroke-width='1.6'/%3E%3Cpath d='M10.5 10.5L14 14' stroke='%238a8a8a' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 12px center;
+  background-size: 15px;
 }
 
 .state-filter {
@@ -51,24 +57,29 @@
   align-items: center;
   gap: 8px;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .state-filter select {
-  min-width: 128px;
+  min-width: 140px;
 }
 
 .list-toolbar__count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
+/*
+ * Each server is a tile on the table. Running and changing servers are lit
+ * (filled); stopped ones sit unlit in outline. Columns use subgrid so the
+ * state and ports line up with the header at every width.
+ */
 .server-list {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 100px minmax(90px, 130px) max-content;
-  column-gap: 22px;
-  border-top: 1px solid var(--border);
+  grid-template-columns: minmax(180px, 1fr) 112px minmax(90px, 140px) max-content;
+  column-gap: 24px;
+  row-gap: 8px;
 }
 
 .server-list__header,
@@ -77,23 +88,40 @@
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
   align-items: center;
-  gap: 22px;
-  padding: 19px 8px;
-  border-bottom: 1px solid var(--border);
+  gap: 24px;
+  padding: 18px 20px;
 }
 
 .server-list__header {
-  padding-block: 10px;
-  color: var(--text-dim);
+  padding-block: 0 2px;
+  color: var(--text-faint);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .server-list__header > :last-child {
   text-align: right;
 }
 
-.server-row:hover {
+.server-row {
   background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.server-row:hover {
+  border-color: var(--border-light);
+}
+
+.server-row:has(.server-state--exited, .server-state--created, .server-state--dead) {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-light);
+}
+
+.server-row:has(.server-state--dead) {
+  border-color: rgb(243 155 146 / 35%);
 }
 
 .server-row__identity {
@@ -105,8 +133,9 @@
 .server-row__identity > .muted {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 8px;
-  font-size: 12px;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -114,19 +143,26 @@
   justify-self: start;
   max-width: 100%;
   color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 
+.server-row__name:hover {
+  color: var(--accent-hover);
+}
+
 .server-row__game {
+  color: var(--text-dim);
+  font-weight: 600;
   text-transform: capitalize;
 }
 
 .server-row__image {
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -136,7 +172,7 @@
 }
 
 .server-row__backup {
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -144,10 +180,11 @@
 .server-state {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--text-dim);
   text-transform: capitalize;
   font-size: 13px;
+  font-weight: 600;
 }
 
 .server-state--running { color: var(--green); }
@@ -156,15 +193,13 @@
 .server-state--paused,
 .server-state--removing { color: var(--yellow); }
 
-.server-state .status-dot { flex-shrink: 0; }
-
 .server-row__ports {
   display: flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
   color: var(--text-dim);
-  font: 12px var(--font-mono);
+  font: 12.5px var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -181,33 +216,33 @@
 
 .server-row__actions .secondary-btn {
   min-height: 34px;
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 
 .server-more { position: relative; }
 .server-more__trigger { display: flex; align-items: center; gap: 7px; }
-.server-more__trigger > span { font-size: 14px; line-height: 1; }
+.server-more__trigger > span { font-size: 14px; line-height: 1; transform: translateY(-3px); }
 
 .server-more__content {
   position: absolute;
   right: 0;
-  top: calc(100% + 5px);
+  top: calc(100% + 6px);
   z-index: 10;
-  min-width: 146px;
-  padding: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 18%);
+  min-width: 160px;
+  padding: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 40px -12px rgb(0 0 0 / 65%);
 }
 
 .server-more__action {
   display: block;
   width: 100%;
   min-height: 38px;
-  padding: 8px 11px;
-  border-radius: 3px;
+  padding: 8px 12px;
+  border-radius: 6px;
   font-size: 13px;
   text-align: left;
 }
@@ -219,18 +254,20 @@
   display: grid;
   justify-items: start;
   gap: 10px;
-  padding: 28px 8px;
+  padding: 28px 20px;
   color: var(--text-dim);
-  border-bottom: 1px solid var(--border);
+  border: 1.5px dashed var(--border-light);
+  border-radius: var(--radius);
 }
 
 @container (max-width: 760px) {
   .server-list { display: block; }
   .server-list__header { display: none; }
+  .server-list > * + * { margin-top: 8px; }
   .server-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 14px 20px;
-    padding-inline: 0;
+    padding: 16px;
   }
   .server-row__ports { grid-column: 1; grid-row: 2; }
   .server-row__ports-label { display: inline; font-family: var(--font-sans); }
