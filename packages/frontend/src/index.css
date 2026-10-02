@@ -162,11 +162,11 @@ input[type="radio"] {
 }
 
 .nav-link {
-  position: relative;
   display: flex;
   align-items: center;
+  gap: 11px;
   min-height: 38px;
-  padding: 8px 12px 8px 26px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-size: 14px;
@@ -174,23 +174,21 @@ input[type="radio"] {
   transition: background 0.15s, color 0.15s;
 }
 
-/* Each destination has a pip slot; the current page's pip is lit. */
-.nav-link::before {
-  content: "";
-  position: absolute;
-  left: 11px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  margin-top: -3px;
-  border-radius: 50%;
-  background: transparent;
-  transition: background 0.15s;
+.nav-link__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: color 0.15s;
 }
 
 .nav-link:hover {
   background: var(--bg-card);
   color: var(--text);
+}
+
+.nav-link:hover .nav-link__icon {
+  color: var(--text-dim);
 }
 
 .nav-link.nav-link--active,
@@ -200,10 +198,9 @@ input[type="radio"] {
   font-weight: 600;
 }
 
-.nav-link.nav-link--active::before,
-.nav-link.active::before {
-  background: var(--brand);
-  box-shadow: 0 0 0 3px rgb(230 138 58 / 18%);
+.nav-link.nav-link--active .nav-link__icon,
+.nav-link.active .nav-link__icon {
+  color: var(--brand);
 }
 
 .sidebar__group {
@@ -213,7 +210,7 @@ input[type="radio"] {
 }
 
 .sidebar__group-label {
-  padding: 0 12px 6px 26px;
+  padding: 0 12px 6px;
   color: var(--text-faint);
   font-size: 12px;
   font-weight: 600;
@@ -512,6 +509,23 @@ input[type="radio"] {
 ) .status-dot {
   background: linear-gradient(90deg, currentColor 50%, transparent 50%);
 }
+
+/* Pips beside status text in tables and history; same shapes as server state. */
+.status-pip {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  color: var(--text-faint);
+  vertical-align: -0.5px;
+}
+
+.status-pip--ok { color: var(--green); background: currentColor; }
+.status-pip--failed { color: var(--red); background: currentColor; }
+.status-pip--attention { color: var(--red); }
+.status-pip--active { color: var(--yellow); background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
 
 /* Console */
 .console-wrapper {

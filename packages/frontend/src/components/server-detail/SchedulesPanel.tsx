@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { nextScheduleRun, scheduleSchema, type Schedule, type ScheduleInput } from "@ludock/shared";
-import { operationStatusLabels } from "../../operations";
+import { operationStatusLabels, operationTones } from "../../operations";
+import StatusPip from "../StatusPip";
 
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const minuteStart = () => Math.floor(Date.now() / 60_000) * 60_000;
@@ -144,7 +145,9 @@ export default function SchedulesPanel(props: Props) {
                   )}
                 </td>
                 <td className="schedule-result">
-                  {item.lastOperation ? operationStatusLabels[item.lastOperation.status] : item.lastResult || "No runs yet"}
+                  {item.lastOperation
+                    ? <><StatusPip tone={operationTones[item.lastOperation.status]} />{operationStatusLabels[item.lastOperation.status]}</>
+                    : item.lastResult || "No runs yet"}
                   {item.lastRunAt !== null && <small className="table-detail"><time dateTime={new Date(item.lastRunAt).toISOString()}>{formatDate(item.lastRunAt, item.timezone)}</time></small>}
                   {item.lastOperation && (
                     <button type="button" className="text-link schedule-activity-link" onClick={() => onViewActivity(item)}>View activity</button>

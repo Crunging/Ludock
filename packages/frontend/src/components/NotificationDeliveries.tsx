@@ -5,12 +5,19 @@ import {
   type NotificationDelivery,
 } from "@ludock/shared";
 import { apiJson } from "../api";
+import StatusPip, { type PipTone } from "./StatusPip";
 
 function deliveryStatus(delivery: NotificationDelivery, enabled: boolean) {
   if (delivery.state === "delivered") return "Delivered";
   if (delivery.state === "failed") return "Failed";
   if (!enabled) return "Paused";
   return delivery.attempts > 0 ? "Pending retry" : "Queued";
+}
+
+function deliveryTone(delivery: NotificationDelivery, enabled: boolean): PipTone {
+  if (delivery.state === "delivered") return "ok";
+  if (delivery.state === "failed") return "failed";
+  return enabled ? "active" : "idle";
 }
 
 function timestamp(value: number) {
@@ -169,7 +176,7 @@ export default function NotificationDeliveries({
                     <span className="table-detail">Queued {timestamp(delivery.createdAt)}</span>
                   </td>
                   <td role="cell">
-                    <strong className={`notification-delivery-status notification-delivery-status--${delivery.state}`}>{deliveryStatus(delivery, enabled)}</strong>
+                    <strong className={`notification-delivery-status notification-delivery-status--${delivery.state}`}><StatusPip tone={deliveryTone(delivery, enabled)} />{deliveryStatus(delivery, enabled)}</strong>
                     <span className="table-detail">{delivery.attempts} {delivery.attempts === 1 ? "attempt" : "attempts"}</span>
                     {delivery.deliveredAt !== null && <span className="table-detail">Delivered {timestamp(delivery.deliveredAt)}</span>}
                     {delivery.lastAttemptAt !== null && delivery.deliveredAt === null && <span className="table-detail">Last attempt {timestamp(delivery.lastAttemptAt)}</span>}

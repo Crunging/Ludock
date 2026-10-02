@@ -1,4 +1,5 @@
 import type { Operation, OperationStatus } from "@ludock/shared";
+import type { PipTone } from "./components/StatusPip";
 
 export const operationStatusLabels: Record<OperationStatus, string> = {
   queued: "Queued",
@@ -7,6 +8,15 @@ export const operationStatusLabels: Record<OperationStatus, string> = {
   already_current: "Already current",
   failed: "Failed",
   interrupted: "Interrupted",
+};
+
+export const operationTones: Record<OperationStatus, PipTone> = {
+  queued: "active",
+  running: "active",
+  succeeded: "ok",
+  already_current: "ok",
+  failed: "failed",
+  interrupted: "attention",
 };
 
 export const operationActive = (operation: Operation) =>

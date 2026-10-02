@@ -1,5 +1,6 @@
 import { type Backup, type BackupPreflight, type Server, formatByteSize } from "@ludock/shared";
 import { NavLink } from "../../navigation";
+import StatusPip from "../StatusPip";
 
 export interface RestoreSelection {
   backup: Backup | null;
@@ -143,7 +144,7 @@ export default function BackupsPanel(props: Props) {
                 <tr key={backup.id}>
                   <td>{new Date(backup.createdAt).toLocaleString()}</td>
                   <td>{formatByteSize(backup.size)}</td>
-                  <td>{backup.state}</td>
+                  <td><StatusPip tone={backup.state === "complete" ? "ok" : "failed"} />{backup.state}</td>
                   <td>
                     <div className="inline-actions">
                       {backup.state === "complete" && (

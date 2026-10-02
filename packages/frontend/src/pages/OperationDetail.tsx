@@ -2,7 +2,8 @@ import { useAuth } from "../auth-context";
 import { useOperation } from "../hooks/useOperation";
 import { useHistoryServers } from "../hooks/useHistoryServers";
 import { NavLink } from "../navigation";
-import { historyActorLabel, operationStatusLabels } from "../operations";
+import StatusPip from "../components/StatusPip";
+import { historyActorLabel, operationStatusLabels, operationTones } from "../operations";
 import "./history.css";
 
 export default function OperationDetail({ operationId }: { operationId: string }) {
@@ -24,7 +25,7 @@ export default function OperationDetail({ operationId }: { operationId: string }
       {operation && <>
         <dl className="metadata-list operation-detail-summary">
           <dt>Action</dt><dd className="capitalize">{operation.kind.replaceAll("_", " ")}</dd>
-          <dt>Status</dt><dd role={running ? "status" : undefined}>{operationStatusLabels[operation.status]}</dd>
+          <dt>Status</dt><dd role={running ? "status" : undefined}><StatusPip tone={operationTones[operation.status]} />{operationStatusLabels[operation.status]}</dd>
           <dt>Server</dt><dd><NavLink className="text-link" to={`/servers/${encodeURIComponent(operation.serverId)}`}>{server?.displayName ?? operation.serverId}</NavLink></dd>
           <dt>Actor</dt><dd>{historyActorLabel(operation.actor)}</dd>
           <dt>Operation ID</dt><dd>{operation.id}</dd>
