@@ -8,6 +8,7 @@ import { useAuth } from "./auth-context";
 import { NavLink } from "./navigation";
 import { useLocation, useNavigate } from "./navigation-context";
 import LudockMark from "./components/LudockMark";
+import NavIcon from "./components/NavIcon";
 import PageBoundary from "./components/PageBoundary";
 import ViewPreferencesProvider from "./ViewPreferences";
 
@@ -139,27 +140,27 @@ function App() {
               className={`nav-link ${route?.serverTools ? "nav-link--active" : ""}`}
               aria-current={route?.serverTools ? "location" : undefined}
             >
-              Servers
+              <NavIcon name="servers" />Servers
             </NavLink>
-            <NavLink to="/operations" className="nav-link">Operations</NavLink>
+            <NavLink to="/operations" className="nav-link"><NavIcon name="operations" />Operations</NavLink>
             {user?.role === "admin" && (
               <>
                 <div className="sidebar__group" role="group" aria-labelledby="administration-label">
                   <p className="sidebar__group-label" id="administration-label">Administration</p>
-                  <NavLink to="/users" className="nav-link">Users</NavLink>
-                  <NavLink to="/settings" className="nav-link">Settings</NavLink>
-                  <NavLink to="/diagnostics" className="nav-link">Diagnostics</NavLink>
+                  <NavLink to="/users" className="nav-link"><NavIcon name="users" />Users</NavLink>
+                  <NavLink to="/settings" className="nav-link"><NavIcon name="settings" />Settings</NavLink>
+                  <NavLink to="/diagnostics" className="nav-link"><NavIcon name="diagnostics" />Diagnostics</NavLink>
                 </div>
                 <div className="sidebar__group" role="group" aria-labelledby="history-label">
                   <p className="sidebar__group-label" id="history-label">History</p>
-                  <NavLink to="/audit" className="nav-link">Audit log</NavLink>
-                  <NavLink to="/logs" className="nav-link">Ludock logs</NavLink>
+                  <NavLink to="/audit" className="nav-link"><NavIcon name="audit" />Audit log</NavLink>
+                  <NavLink to="/logs" className="nav-link"><NavIcon name="logs" />Ludock logs</NavLink>
                 </div>
               </>
             )}
           </nav>
           <div className="sidebar__footer">
-            <NavLink to="/account" className="nav-link sidebar__account">Account</NavLink>
+            <NavLink to="/account" className="nav-link sidebar__account"><NavIcon name="account" />Account</NavLink>
             <div className="sidebar__session">
               <div className="sidebar__identity">
                 <span className="sidebar__username" title={user?.username}>{user?.username}</span>

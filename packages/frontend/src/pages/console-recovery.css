@@ -7,12 +7,14 @@
 }
 
 .console-retry {
-  min-height: 34px;
-  padding: 6px 9px;
+  min-height: 40px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  background: var(--bg-card);
   color: var(--text-dim);
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -22,7 +24,7 @@
 }
 
 .console-recovery {
-  padding: 8px 14px;
+  padding: 8px 16px;
   color: var(--text-dim);
   background: var(--bg-card);
   border-top: 1px solid var(--border);
@@ -55,7 +57,7 @@
 .console-terminal--blocked > * { visibility: hidden; }
 
 .console-header .console-mode-tabs { flex-shrink: 0; }
-.console-mode-tabs button { min-height: 34px; }
+.console-mode-tabs button { min-height: 32px; }
 
 @media (max-width: 1100px) {
   .console-header { flex-wrap: wrap; gap: 12px; }

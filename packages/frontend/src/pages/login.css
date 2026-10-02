@@ -29,6 +29,10 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   font-size: 13px;
   line-height: 1.6;
 }

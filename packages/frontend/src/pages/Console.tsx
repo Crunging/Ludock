@@ -146,31 +146,34 @@ function ConsoleSession({ containerId, user }: {
   useEffect(() => {
     if (!termRef.current) return;
     const colors = getComputedStyle(document.documentElement);
+    const background = colors.getPropertyValue("--bg-terminal").trim() || "#0c0c0c";
+    const fontFamily = colors.getPropertyValue("--font-mono").trim() || "monospace";
     const terminal = new Terminal({
       theme: {
-        background: "#0d1117",
-        foreground: "#c9d1d9",
+        background,
+        foreground: colors.getPropertyValue("--text-terminal").trim() || "#d6d6d6",
         cursor: colors.getPropertyValue("--accent").trim() || "#e68a3a",
-        cursorAccent: "#0d1117",
+        cursorAccent: background,
         selectionBackground: colors.getPropertyValue("--accent-selection").trim() || "rgba(230, 138, 58, 0.25)",
-        black: "#0d1117",
-        red: "#f87171",
-        green: "#34d399",
-        yellow: "#fbbf24",
+        black: background,
+        red: "#f39b92",
+        green: "#92dba0",
+        yellow: "#e8c46b",
         blue: "#38bdf8",
         magenta: "#c084fc",
-        cyan: "#22d3ee",
-        white: "#c9d1d9",
-        brightBlack: "#6e7681",
+        cyan: "#7cc8e0",
+        white: "#d6d6d6",
+        brightBlack: "#767676",
         brightRed: "#fca5a5",
         brightGreen: "#6ee7b7",
         brightYellow: "#fde68a",
         brightBlue: "#7dd3fc",
         brightMagenta: "#d8b4fe",
         brightCyan: "#67e8f9",
-        brightWhite: "#f1f5f9",
+        brightWhite: "#ededed",
       },
-      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+      // xterm measures glyph width once, so start on a font that is already present.
+      fontFamily: colors.getPropertyValue("--font-mono-system").trim() || "monospace",
       fontSize: 14,
       lineHeight: 1.4,
       cursorBlink: true,
@@ -190,8 +193,16 @@ function ConsoleSession({ containerId, user }: {
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
     observer?.observe(termRef.current);
     window.addEventListener("resize", fit);
+    // Switch to the bundled mono face after it loads; the option change re-measures.
+    let disposed = false;
+    document.fonts?.load(`14px ${fontFamily}`).then(() => {
+      if (disposed) return;
+      terminal.options.fontFamily = fontFamily;
+      fit();
+    }, () => undefined);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(initialFit);
       observer?.disconnect();
       window.removeEventListener("resize", fit);

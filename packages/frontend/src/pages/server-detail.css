@@ -6,8 +6,23 @@
   font-size: 13px;
 }
 
+/* The server's own tile: lit while it runs, unlit when stopped. */
 .detail-header {
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  padding: 24px 24px 22px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.detail-header:has(.server-state--exited, .server-state--created, .server-state--dead) {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-light);
+}
+
+.detail-header:has(.server-state--dead) {
+  border-color: rgb(243 155 146 / 35%);
 }
 
 .detail-header__title {
@@ -23,6 +38,11 @@
 }
 
 .detail-header__title .server-state {
+  padding: 3px 11px 3px 9px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
   font-size: 13px;
 }
 
@@ -31,9 +51,9 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
@@ -44,9 +64,9 @@
 .detail-metadata {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 24px;
+  gap: 8px 28px;
   margin-top: 16px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .detail-metadata > div {
@@ -58,7 +78,7 @@
 }
 
 .detail-metadata dt {
-  color: var(--text-dim);
+  color: var(--text-faint);
 }
 
 .detail-metadata dd {
@@ -73,6 +93,8 @@
 
 .server-detail .detail-actions {
   margin: 20px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
   gap: 8px 16px;
 }
 
@@ -93,8 +115,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  padding: 6px 12px;
+  min-height: 36px;
+  padding: 6px 16px;
   font-size: 13px;
 }
 
@@ -122,9 +144,10 @@
   flex-wrap: wrap;
   gap: 8px 16px;
   margin-bottom: 20px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  border: 1px solid rgb(232 196 107 / 32%);
+  border-radius: var(--radius);
+  background: rgb(232 196 107 / 5%);
   font-size: 13px;
 }
 
@@ -156,6 +179,10 @@
   .detail-metadata {
     display: grid;
     gap: 8px;
+  }
+
+  .detail-header {
+    padding: 18px 16px;
   }
 }
 
@@ -210,9 +237,10 @@
 }
 
 .schedule-conflict {
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  border: 1px solid rgb(232 196 107 / 32%);
+  border-radius: var(--radius);
+  background: rgb(232 196 107 / 5%);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
@@ -245,8 +273,10 @@
 
 .backup-readiness {
   margin-bottom: 24px;
-  padding-block: 16px;
-  border-block: 1px solid var(--border);
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
   overflow-wrap: anywhere;
 }
 

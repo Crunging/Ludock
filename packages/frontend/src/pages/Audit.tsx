@@ -4,7 +4,8 @@ import HistoryPagination from "../components/HistoryPagination";
 import { useHistory } from "../hooks/useHistory";
 import { useHistoryServers } from "../hooks/useHistoryServers";
 import { NavLink } from "../navigation";
-import { historyActorLabel, operationStatusLabels } from "../operations";
+import StatusPip from "../components/StatusPip";
+import { historyActorLabel, operationStatusLabels, operationTones } from "../operations";
 import "./history.css";
 
 export default function Audit() {
@@ -35,7 +36,7 @@ export default function Audit() {
             <div>
               <strong>{entry.action}</strong>
               <span>{historyActorLabel(entry.actor ?? (entry.username ? { id: null, name: entry.username } : null))}</span>
-              {entry.status && <span>{operationStatusLabels[entry.status]}</span>}
+              {entry.status && <span><StatusPip tone={operationTones[entry.status]} />{operationStatusLabels[entry.status]}</span>}
             </div>
             <div>
               {entry.targetType === "server" && entry.targetId ? (

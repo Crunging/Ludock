@@ -1,7 +1,8 @@
 import type { Operation } from "@ludock/shared";
 
-import { historyActorLabel, operationActive, operationLabel } from "../operations";
+import { historyActorLabel, operationActive, operationLabel, operationTones } from "../operations";
 import { NavLink } from "../navigation";
+import StatusPip from "./StatusPip";
 
 export default function OperationList({
   operations,
@@ -49,6 +50,7 @@ export default function OperationList({
               <td>{new Date(operation.createdAt).toLocaleString()}</td>
               <td>
                 <span role={operationActive(operation) ? "status" : undefined}>
+                  <StatusPip tone={operationTones[operation.status]} />
                   {operationLabel(operation)}
                 </span>
                 {operation.error && (

@@ -1,20 +1,23 @@
 .file-action-dialog {
   width: min(460px, calc(100% - 32px));
   margin: auto;
-  padding: 24px;
+  padding: 28px;
   color: var(--text);
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 30px 80px -20px rgb(0 0 0 / 70%);
 }
 
 .file-action-dialog::backdrop {
-  background: rgb(0 0 0 / 60%);
+  background: rgb(0 0 0 / 70%);
+  backdrop-filter: blur(2px);
 }
 
 .file-action-dialog h2 {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 
@@ -66,14 +69,14 @@
 }
 
 .file-action-dialog .secondary-btn--danger {
-  color: #2b1216;
+  color: var(--on-danger);
   background: var(--red);
   border-color: var(--red);
 }
 
 .file-action-dialog .secondary-btn--danger:hover:not(:disabled) {
-  background: #ffb1b6;
-  border-color: #ffb1b6;
+  background: #f8b6ae;
+  border-color: #f8b6ae;
 }
 
 .files-page .alert .text-link {

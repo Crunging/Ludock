@@ -1,4 +1,5 @@
-import { operationStatusLabels } from "../../operations";
+import { operationStatusLabels, operationTones } from "../../operations";
+import StatusPip from "../StatusPip";
 import { NavLink } from "../../navigation";
 import { useOperation } from "../../hooks/useOperation";
 
@@ -28,7 +29,7 @@ export default function ScheduledOperationPanel({ operationId, serverId, onClose
         <p><NavLink className="text-link" to={`/operations/${encodeURIComponent(operationId)}`}>Open operation details</NavLink></p>
         <dl className="metadata-list">
           <dt>Action</dt><dd className="capitalize">{operation.kind.replaceAll("_", " ")}</dd>
-          <dt>Status</dt><dd role={running ? "status" : undefined}>{operationStatusLabels[operation.status]}</dd>
+          <dt>Status</dt><dd role={running ? "status" : undefined}><StatusPip tone={operationTones[operation.status]} />{operationStatusLabels[operation.status]}</dd>
           <dt>Queued at</dt><dd><time dateTime={new Date(operation.createdAt).toISOString()}>{new Date(operation.createdAt).toLocaleString()}</time></dd>
           <dt>Last updated</dt><dd><time dateTime={new Date(operation.updatedAt).toISOString()}>{new Date(operation.updatedAt).toLocaleString()}</time></dd>
           <dt>Progress</dt><dd>{operation.phase.replaceAll("_", " ")}</dd>
