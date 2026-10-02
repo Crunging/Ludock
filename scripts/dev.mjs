@@ -24,8 +24,10 @@ if (import.meta.main) {
     throw new Error("Usage: bun scripts/dev.mjs [--backend|--frontend]");
   }
   const env = developmentEnvironment();
-  console.log(`Database: ${env.LUDOCK_DB_PATH}`);
-  console.log(`Docker: ${process.env.DOCKER_SOCKET || "disconnected (set DOCKER_SOCKET to a test daemon)"}`);
+  console.log(process.env.LUDOCK_DB_PATH ? "Database: custom development path" : "Database: data/dev/ludock.db");
+  console.log(process.env.DOCKER_SOCKET
+    ? "Docker: explicit socket configured"
+    : "Docker: disconnected (set DOCKER_SOCKET to a test daemon)");
 
   const commands = [
     ["backend", [process.execPath, "--watch", "src/index.ts"]],
