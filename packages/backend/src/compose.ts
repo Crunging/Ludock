@@ -200,11 +200,16 @@ export async function createComposeSnapshot(
   const cleanup = () => rm(directory, { recursive: true, force: true });
   const hash = new Bun.CryptoHasher("sha256").update(JSON.stringify({ project, loadDefaultEnv }));
   let inputCount = 0;
-  const snapshotFile = async (original: string) => {
-    const data = await readApprovedFile(original, roots);
-    hash.update(original).update("\0").update(data);
+  const snapshotFile = async (original: string, required = true) => {
+    const data = required
+      ? await readApprovedFile(original, roots)
+      : await readOptionalApprovedFile(original, roots);
+    hash.update(JSON.stringify({ original, present: data !== undefined })).update("\0");
+    if (data !== undefined) hash.update(data);
     const filename = path.join(directory, `input-${inputCount++}`);
-    await writeFile(filename, data, { mode: 0o600 });
+    // A missing optional env_file contributes no values. An empty private
+    // snapshot preserves that result without reopening its mutable source.
+    await writeFile(filename, data ?? new Uint8Array(), { mode: 0o600 });
     return filename;
   };
   try {
@@ -304,7 +309,7 @@ export async function createComposeSnapshot(
               );
             snapshots.push({
               ...record,
-              path: await snapshotFile(inputPath(record.path, base)),
+              path: await snapshotFile(inputPath(record.path, base), record.required !== false),
             });
           }
           service.env_file = snapshots;

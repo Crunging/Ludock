@@ -45,8 +45,8 @@ const pages = [
 
 const detailPages = [
   { prefix: "servers", render: (id: string) => <ServerDetail key={id} serverId={id} />, serverTools: true },
-  { prefix: "files", render: (id: string) => <Files containerId={id} />, serverTools: true },
-  { prefix: "console", render: (id: string) => <Console containerId={id} />, console: true },
+  { prefix: "files", render: (id: string) => <Files serverId={id} />, serverTools: true },
+  { prefix: "console", render: (id: string) => <Console serverId={id} />, console: true },
   { prefix: "operations", render: (id: string) => <OperationDetail key={id} operationId={id} /> },
 ];
 

@@ -283,7 +283,10 @@ async function main() {
   }
   const { parent, name } = await parentOf(root, relative);
   if (request.operation === "mkdir") {
+    const owner = await parent.stat();
     await fsp.mkdir(link(parent, name));
+    const directory = await pin(link(parent, name), directoryFlags);
+    await directory.chown(owner.uid, owner.gid);
     return json({ ok: true });
   }
   if (request.operation === "delete") {
@@ -318,6 +321,7 @@ async function main() {
       ? encoder.encode(request.uploadId)
       : new Uint8Array(0);
     const original = await uploadTarget(parent, name);
+    const owner = original || await parent.stat();
     const file = await pin(
       link(parent, temporary),
       C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK,
@@ -357,7 +361,7 @@ async function main() {
       await file.chmod(
         original ? original.mode & 0o777 : 0o666 & ~process.umask(),
       );
-      if (original) await file.chown(original.uid, original.gid);
+      await file.chown(owner.uid, owner.gid);
       await file.sync();
       const current = await uploadTarget(parent, name);
       /** @type {(keyof Stats)[]} */

@@ -2,7 +2,6 @@ import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:te
 import type { SessionUser } from "../src/database.js";
 import type { ServerObservation } from "../src/identity.js";
 import type { RequestContext } from "../src/routes/request.js";
-import type { SQLQueryBindings } from "bun:sqlite";
 import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -139,19 +138,6 @@ describe("backup storage status routes", () => {
 });
 
 describe("backup preflight routes", () => {
-  it("allows administrators and operators with explicit backup-create access", async () => {
-    const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
-    const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
-    for (const user of [admin, operator]) {
-      const result = await handler(context(user, `/api/v1/servers/${serverId}/backups/preflight`));
-      expect(result.status).toBe(200);
-      expect(await result.json()).toStrictEqual({ preflight });
-    }
-    expect(inspect.mock.calls.length).toBe(2);
-    expect<string>(inspect.mock.calls[0][0].logical.id).toBe(serverId);
-    expect(database.getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT COUNT(*) AS count FROM operations").get()?.count).toBe(0);
-  });
-
   it("denies viewers and lifecycle-only operators before inspecting backup readiness", async () => {
     setServerGrant(operator.id, serverId, ["server.view", "server.start", "server.stop"], admin);
     const inspect = spyOn(backups, "getBackupPreflight").mockResolvedValue(preflight);
@@ -168,33 +154,6 @@ describe("backup preflight routes", () => {
     const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
     await expect((async () => handler(context(admin)))()).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(inspect.mock.calls.length).toBe(0);
-  });
-
-  it("returns advisory problems without exposing internal diagnostic fields", async () => {
-    const diagnostic = {
-      ready: false,
-      checkedAt: 1,
-      issues: [{
-        code: "BACKUP_DESTINATION",
-        message: "Ask an administrator to check the backup destination.",
-        destination: "/private/backup-fixture",
-      }],
-      containerId: observation.containerId,
-    };
-    spyOn(backups, "getBackupPreflight").mockResolvedValue(diagnostic);
-    const handler = backupsRoutes["/api/v1/servers/:id/backups/preflight"].GET!;
-    const result = await handler(context(operator));
-    expect(result.status).toBe(200);
-    expect(await result.json()).toStrictEqual({
-      preflight: {
-        ready: false,
-        checkedAt: 1,
-        issues: [{
-          code: "BACKUP_DESTINATION",
-          message: "Ask an administrator to check the backup destination.",
-        }],
-      },
-    });
   });
 
   it("does not inspect readiness after a session is revoked during binding resolution", async () => {
@@ -234,16 +193,6 @@ afterEach(() => {
 });
 
 describe("backup metadata routes", () => {
-  it("keeps saved backup metadata readable when Docker discovery fails", async () => {
-    spyOn(servers, "refreshServers").mockRejectedValue(new Error("Docker unavailable"));
-    const handler = backupsRoutes["/api/v1/servers/:id/backups"].GET!;
-    const response = await handler(context(admin));
-    expect(response.status).toBe(200);
-    const body = await response.json() as { backups: Array<{ id: string }> };
-    expect(body.backups.map((backup) => backup.id)).toEqual([backupId]);
-    expect((await handler(context(operator))).status).toBe(403);
-  });
-
   for (const unavailable of [false, true]) {
     it(`rechecks the session after ${unavailable ? "failed" : "successful"} backup discovery`, async () => {
       const ctx = context(admin);

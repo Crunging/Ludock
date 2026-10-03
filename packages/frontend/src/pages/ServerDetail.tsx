@@ -5,19 +5,15 @@ import {
   bindingReviewResponseSchema,
   okResponseSchema,
   operationResponseSchema,
-  operationsResponseSchema,
   scheduleResponseSchema,
   scheduleSchema,
   schedulesResponseSchema,
-  serverResponseSchema,
   updateCapabilityResponseSchema,
   type AvailabilityPolicy,
   type AvailabilityState,
-  type Operation,
   type Schedule,
   type ScheduleInput,
   type UpdateCapability,
-  type Server,
 } from "@ludock/shared";
 import { ApiRequestError, apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
@@ -44,6 +40,7 @@ import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
 import { useBackupPreflight } from "../hooks/useBackupPreflight";
 import { usePageRead } from "../hooks/usePageRead";
+import { useServerDetail, type ServerMutationOptions } from "../hooks/useServerDetail";
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
@@ -79,8 +76,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const requestedOperation = requestedTab === "activity" ? parameters.get("operation") : null;
   const requestedSchedule = requestedTab === "schedules" ? parameters.get("schedule") : null;
   const admin = user?.role === "admin";
-  const [server, setServer] = useState<Server | null>(null);
-  const [operations, setOperations] = useState<Operation[]>([]);
+  const path = `/servers/${encodeURIComponent(serverId)}`;
+  const {
+    server, operations, loading, busy, snapshotReady, liveReady,
+    discoveryUnavailable, error, notice, setError, refresh,
+    perform: performMutation, pageActive, mutationPending,
+  } = useServerDetail(path);
   const [capability, setCapability] = useState<UpdateCapability | null>(null);
   const [availability, setAvailability] = useState<AvailabilityDraft>({
     enabled: false,
@@ -93,10 +94,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   } | null>(null);
   const availabilityRequest = useRef<AbortController | null>(null);
   const availabilityLoaded = useRef(false);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [snapshotReady, setSnapshotReady] = useState(false);
-  const [discoveryUnavailable, setDiscoveryUnavailable] = useState(false);
   const [settingsState, setSettingsState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -107,19 +104,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const [capabilityAttempt, setCapabilityAttempt] = useState(0);
   const capabilityFocusPending = useRef(false);
   const detailRoot = useRef<HTMLDivElement>(null);
-  const refreshRequest = useRef<AbortController | null>(null);
-  const mutationPending = useRef(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const { serverTabs, rememberServerTab } = useViewPreferences();
-  const pageActive = useRef(false);
-  useEffect(() => {
-    pageActive.current = true;
-    return () => {
-      pageActive.current = false;
-      refreshRequest.current?.abort();
-    };
-  }, []);
   const tab = requestedTab || serverTabs[serverId] || "activity";
   const setTab = (next: string, selection?: { operation: string }) => {
     // Remembered tabs outlive this page. A completed request from a previous
@@ -152,18 +137,18 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     confirmation: "",
   });
   const [bindingConfirmation, setBindingConfirmation] = useState("");
-  const path = `/servers/${encodeURIComponent(serverId)}`;
   const blocked = server?.bindingStatus !== "active";
   const startable = Boolean(server && lifecycleActionForState(server.state) === "start");
   const activeOperation = operations.find(operationActive);
   const backupReadiness = useBackupPreflight(
     path,
-    tab === "backups" && can(user, server, "backups.create") && !blocked && !activeOperation,
+    tab === "backups" && can(user, server, "backups.create") && !blocked && !discoveryUnavailable && !activeOperation,
     `${server?.shortId}:${server?.state}:${server?.bindingStatus}`,
   );
   const canReadAvailability = admin || can(user, server, "server.view");
   const canCreateBackup = can(user, server, "backups.create");
-  const canManageSchedules = can(user, server, "schedules.manage");
+  const canManageSchedules = can(user, server, "schedules.manage") ||
+    (admin && can(user, server, "server.view"));
   const tabs = [
     { id: "activity", label: "Activity" },
     ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
@@ -198,14 +183,14 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const focusedSchedule = useRef<string | null>(null);
   useEffect(() => {
     if (!requestedSchedule) focusedSchedule.current = null;
-    if (!requestedSchedule || tab !== "schedules" || !schedulesReady || !can(user, server, "schedules.manage")) return;
+    if (!requestedSchedule || tab !== "schedules" || !schedulesReady || !canManageSchedules) return;
     if (focusedSchedule.current === search) return;
     const row = document.getElementById(`schedule-${requestedSchedule}`);
     if (row) {
       row.focus();
       focusedSchedule.current = search;
     }
-  }, [requestedSchedule, tab, schedulesReady, server, user, search]);
+  }, [requestedSchedule, tab, schedulesReady, canManageSchedules, search]);
 
   useEffect(() => {
     if (scheduleEdit || busy || !snapshotReady || !schedulesReady || tab !== "schedules" || !scheduleFocusTarget.current) return;
@@ -229,54 +214,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       detailRoot.current?.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')?.focus();
   }, [capabilityState, tab]);
 
-  const refresh = useCallback(async (replacePending = true, afterMutation = false) => {
-    if (
-      !pageActive.current ||
-      (mutationPending.current && !afterMutation) ||
-      (!replacePending && refreshRequest.current)
-    ) return;
-    refreshRequest.current?.abort();
-    const controller = new AbortController();
-    refreshRequest.current = controller;
-    setSnapshotReady(false);
-    const ownsRequest = () =>
-      pageActive.current &&
-      refreshRequest.current === controller &&
-      !controller.signal.aborted;
-    const init = { signal: controller.signal };
-    try {
-      const { server: next, discoveryUnavailable: unavailable } = await apiJson(path, serverResponseSchema, init);
-      if (!ownsRequest()) return;
-      setServer(next);
-      setDiscoveryUnavailable(unavailable);
-      const activity = await apiJson(`${path}/operations`, operationsResponseSchema, init);
-      if (!ownsRequest()) return;
-      setOperations(activity.operations);
-      setSnapshotReady(!unavailable);
-      setError(null);
-    } catch (reason) {
-      if (!ownsRequest()) return;
-      setSnapshotReady(false);
-      if (
-        reason instanceof ApiRequestError &&
-        (reason.status < 400 || [401, 403, 404].includes(reason.status))
-      ) {
-        setServer(null);
-        setOperations([]);
-      }
-      setError(
-        reason instanceof Error ? reason.message : "Unable to refresh server.",
-      );
-    } finally {
-      if (ownsRequest()) {
-        refreshRequest.current = null;
-        setLoading(false);
-      }
-    }
-  }, [path]);
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
   useEffect(() => {
     if (!admin) return;
     const controller = new AbortController();
@@ -339,7 +276,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       window.clearInterval(interval);
       availabilityRequest.current?.abort();
     };
-  }, [tab, canReadAvailability, settingsState, path]);
+  }, [tab, canReadAvailability, settingsState, path, mutationPending]);
   const hasActiveOperation = Boolean(activeOperation);
   const refreshBackups = backupHistory.refresh;
   const refreshSchedules = scheduleHistory.refresh;
@@ -355,42 +292,19 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       hasActiveOperation ? 2000 : 10000,
     );
     return () => window.clearInterval(interval);
-  }, [hasActiveOperation, refresh, refreshBackups, refreshSchedules]);
+  }, [hasActiveOperation, refresh, refreshBackups, refreshSchedules, mutationPending]);
 
   async function perform(
     action: () => Promise<unknown>,
     success: string,
-    onFailure?: (reason: unknown) => Promise<void>,
+    options?: ServerMutationOptions,
   ) {
-    if (
-      mutationPending.current ||
-      refreshRequest.current ||
-      !snapshotReady ||
-      !pageActive.current
-    ) return false;
-    mutationPending.current = true;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await action();
-      if (result === false) return false;
-      if (!pageActive.current) return false;
-      setNotice(success);
-      await refresh(true, true);
+    const succeeded = await performMutation(action, success, options);
+    if (succeeded) {
       void backupHistory.refresh();
       void scheduleHistory.refresh();
-      // The action succeeded even if reading its updated state failed.
-      return pageActive.current;
-    } catch (reason) {
-      if (pageActive.current) await onFailure?.(reason);
-      if (pageActive.current)
-        setError(reason instanceof Error ? reason.message : "Request failed.");
-      return false;
-    } finally {
-      mutationPending.current = false;
-      if (pageActive.current) setBusy(false);
     }
+    return succeeded;
   }
 
   async function reconcileScheduleFailure(reason: unknown) {
@@ -410,7 +324,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const draft = scheduleEdit?.draft ?? schedule;
     const current = scheduleEdit ? schedules.find((item) => item.id === scheduleEdit.id) : undefined;
     if (
-      !schedulesReady || blocked || !can(user, server, "schedules.manage") ||
+      !schedulesReady || !liveReady || blocked || !can(user, server, "schedules.manage") ||
       !can(user, server, draft.action === "backup" ? "backups.create" : `server.${draft.action}`) ||
       !scheduleSchema.safeParse(draft).success ||
       (scheduleEdit && (!current || current.revision !== scheduleEdit.revision))
@@ -422,7 +336,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         jsonBody(scheduleEdit ? "PUT" : "POST", scheduleEdit ? { ...draft, revision: scheduleEdit.revision } : draft),
       ),
       scheduleEdit ? "Schedule saved." : "Schedule created.",
-      reconcileScheduleFailure,
+      { onFailure: reconcileScheduleFailure },
     ) && scheduleEdit) {
       scheduleFocusTarget.current = scheduleEdit.id;
       setScheduleEdit(null);
@@ -432,14 +346,14 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   async function toggleSchedule(item: Schedule) {
     const current = schedules.find((candidate) => candidate.id === item.id);
     if (
-      !schedulesReady || scheduleEdit || !can(user, server, "schedules.manage") || !current || current.revision !== item.revision ||
-      (!item.enabled && (blocked || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`)))
+      !schedulesReady || scheduleEdit || !canManageSchedules || !current || current.revision !== item.revision ||
+      (!item.enabled && (!liveReady || blocked || !can(user, server, "schedules.manage") || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`)))
     ) return;
     await perform(
       () => apiJson(`${path}/schedules/${encodeURIComponent(item.id)}`, scheduleResponseSchema,
         jsonBody("PATCH", { enabled: !item.enabled, revision: item.revision })),
       item.enabled ? "Schedule paused." : "Schedule resumed.",
-      reconcileScheduleFailure,
+      { requiresLive: !item.enabled, onFailure: reconcileScheduleFailure },
     );
   }
   async function requestBackup() {
@@ -448,7 +362,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       blocked ||
       activeOperation ||
       mutationPending.current ||
-      !snapshotReady
+      !liveReady
     ) return;
     if (
       await perform(
@@ -671,7 +585,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                     type="button"
                     className={`secondary-btn${action === "stop" ? " secondary-btn--danger" : ""}`}
                     key={action}
-                    disabled={loading || busy || !snapshotReady || blocked || Boolean(activeOperation)}
+                    disabled={loading || busy || !liveReady || blocked || Boolean(activeOperation)}
                     onClick={() => {
                       if (action === "start") void requestLifecycle(action);
                       else setConfirmLifecycle(action);
@@ -716,7 +630,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       {admin && server.bindingStatus === "review_required" && (
         <BindingReviewPanel
           serverName={server.displayName}
-          busy={busy || !snapshotReady}
+          busy={busy || !liveReady}
           confirmation={bindingConfirmation}
           onConfirmationChange={setBindingConfirmation}
           onAccept={() => {
@@ -816,7 +730,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             canDelete={can(user, server, "backups.delete")}
             canCreate={canCreateBackup}
             busy={busy || !snapshotReady}
-            blocked={blocked}
+            blocked={blocked || discoveryUnavailable}
             hasActiveOperation={Boolean(activeOperation)}
             onCreate={() => void requestBackup()}
             onRestore={() => void requestRestore()}
@@ -834,6 +748,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                     { method: "DELETE" },
                   ),
                 "Backup deleted.",
+                { requiresLive: false },
               );
             }}
           />
@@ -858,10 +773,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             scheduleActions={scheduleActions}
             busy={busy || !snapshotReady || !schedulesReady}
             saving={busy}
-            blocked={blocked}
+            blocked={blocked || discoveryUnavailable}
             onSave={() => void saveSchedule()}
             onEdit={(item) => {
-              if (busy || !snapshotReady || !schedulesReady || blocked || scheduleEdit || scheduleActions.length === 0) return;
+              if (busy || !liveReady || !schedulesReady || blocked || scheduleEdit || scheduleActions.length === 0) return;
               setScheduleEdit({ id: item.id, revision: item.revision, draft: scheduleInput(item) });
             }}
             onCancelEdit={cancelScheduleEdit}
@@ -894,6 +809,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                     { method: "DELETE" },
                   ),
                 "Schedule deleted.",
+                { requiresLive: false },
               );
             }}
           />
@@ -925,7 +841,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             capability={capability}
             value={update}
             onChange={setUpdate}
-            busy={busy || !snapshotReady || !can(
+            busy={busy || !liveReady || !can(
               user,
               server,
               update.forceRecreate ? "server.recreate" : "server.update",
@@ -965,6 +881,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                   if (pageActive.current) setAvailabilitySnapshot(monitor);
                 },
                 "Availability settings saved.",
+                { requiresLive: false },
               );
             }}
           />

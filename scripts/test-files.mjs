@@ -6,6 +6,7 @@ import path from "node:path";
 import { backendSourceMounts } from "./test-source-mounts.mjs";
 import { hardenedContainerArguments } from "./test-container-options.mjs";
 import { FALLBACK_HELPER_IMAGE } from "../packages/backend/src/runtime-images.ts";
+import { createTestDocker, cleanupFixtures } from "./test-docker.mjs";
 
 const args = process.argv.slice(2);
 if (args.length && (args.length !== 1 || args[0] !== "--fallback-helper")) {
@@ -15,34 +16,32 @@ const fallback = args.length === 1;
 
 const repository = await realpath(path.resolve(import.meta.dir, ".."));
 const name = "ludock-file-harness-" + crypto.randomUUID();
+const { docker, run, image, socketArguments, removeContainer } = createTestDocker();
 try {
   if (fallback) {
-    const pull = Bun.spawnSync(["docker", "pull", FALLBACK_HELPER_IMAGE], { stdout: "inherit", stderr: "inherit" });
-    if (pull.exitCode !== 0) throw new Error("Fallback helper pull failed");
-    const version = Bun.spawnSync(["docker", "run", "--rm", "--network", "none", "--entrypoint", "bun", FALLBACK_HELPER_IMAGE, "--version"], { stdout: "pipe", stderr: "inherit" });
+    run(["pull", FALLBACK_HELPER_IMAGE], "inherit");
+    const version = docker("run", "--rm", "--network", "none", "--entrypoint", "bun", FALLBACK_HELPER_IMAGE, "--version");
     const required = (await Bun.file(new URL("../package.json", import.meta.url)).json()).engines.bun;
-    if (version.exitCode !== 0 || !Bun.semver.satisfies(version.stdout.toString().trim(), required)) {
+    if (!Bun.semver.satisfies(version, required)) {
       throw new Error("Fallback helper does not meet the required Bun version");
     }
   }
-  const result = Bun.spawnSync(
+  run(
     [
-      "docker",
       "run", "--rm", "--name", name,
       ...(fallback ? ["--hostname", `${name}-custom`] : []),
       ...hardenedContainerArguments,
       "--label", "ludock.enable=false",
       "-e", "LUDOCK_DOCKER_TESTS=1",
-      "-v", "/var/run/docker.sock:/var/run/docker.sock",
+      ...socketArguments,
       ...backendSourceMounts(repository),
-      process.env.LUDOCK_TEST_IMAGE || "ludock:test",
+      image,
       "bun", "test", "--isolate",
       "./packages/backend/test/docker-client.integration.ts",
       "./packages/backend/test/docker-storage.integration.ts",
     ],
-    { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+    "inherit",
   );
-  process.exitCode = result.exitCode ?? 1;
 } finally {
-  Bun.spawnSync(["docker", "rm", "-fv", name], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  await cleanupFixtures([() => removeContainer(name)]);
 }

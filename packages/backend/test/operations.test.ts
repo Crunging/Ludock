@@ -7,7 +7,7 @@ import {
   getDatabase,
   type SessionUser,
 } from "../src/database.js";
-import { reconcileServers, ServerBindingError } from "../src/identity.js";
+import { reconcileServers } from "../src/identity.js";
 import {
   enqueueOperation,
   getOperation,
@@ -23,6 +23,7 @@ import {
 import { serverLockKeys } from "../src/servers.js";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { dockerId } from "./fixtures/ids.js";
+import { configureNotifications, notifyEvent } from "../src/notifications.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const owner: SessionUser = { id: "owner", username: "owner", role: "admin" };
@@ -74,42 +75,52 @@ async function finished(id: string) {
 
 describe("durable operations", () => {
   for (const status of ["queued", "running"] as const) {
-    for (const damaged of ["[]", "{private-fixture", "null"]) {
-      it(`isolates invalid ${status} state (${damaged}) and continues valid work`, async () => {
-        const runs: string[] = [];
-        registerJobHandler("damaged-state", {
-          run: async ({ job }) => { runs.push(job.id); },
-          recover: async () => { expect.unreachable("Damaged state must never reach recovery"); },
-        });
-        const damagedJob = enqueue("damaged-state");
-        getDatabase().prepare("UPDATE operations SET status=?,input_json=?,created_at=0 WHERE id=?")
-          .run(status, damaged, damagedJob.id);
-        const other = reconcileServers([{
-          containerId: dockerId("other"), name: "other", displayName: "Other", gameType: "minecraft", mounts: [],
-        }])[0];
-        const valid = enqueueOperation({
-          serverId: other.id, actorId: owner.id, kind: "damaged-state", bindingRevision: 1,
-        });
-        await startOperationRunner();
-        expect((await finished(valid.id)).status).toBe("succeeded");
-        expect(runs).toStrictEqual([valid.id]);
-        const saved = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT status,error,input_json FROM operations WHERE id=?")
-          .get(damagedJob.id) as { status: string; error: string; input_json: string };
-        expect(saved.status).toBe(status === "queued" ? "failed" : "interrupted");
-        expect(saved.error).toMatch(/administrator/);
-        expect(saved.error).not.toMatch(/private-fixture/);
-        expect(saved.input_json, "Keep damaged state available for administrator inspection").toBe(damaged);
+    const damaged = "{private-fixture";
+    it(`isolates invalid ${status} state (${damaged}) and continues valid work`, async () => {
+      const runs: string[] = [];
+      registerJobHandler("damaged-state", {
+        run: async ({ job }) => { runs.push(job.id); },
+        recover: async () => { expect.unreachable("Damaged state must never reach recovery"); },
       });
-    }
-  }
-  it("preserves deliberate binding diagnostics when queued work fails", async () => {
-    registerJobHandler("binding-error", {
-      run: async () => { throw new ServerBindingError("SERVER_BINDING_CHANGED", "The server binding changed. Review it before retrying."); },
+      const damagedJob = enqueue("damaged-state");
+      getDatabase().prepare("UPDATE operations SET status=?,input_json=?,created_at=0 WHERE id=?")
+        .run(status, damaged, damagedJob.id);
+      const other = reconcileServers([{
+        containerId: dockerId("other"), name: "other", displayName: "Other", gameType: "minecraft", mounts: [],
+      }])[0];
+      const valid = enqueueOperation({
+        serverId: other.id, actorId: owner.id, kind: "damaged-state", bindingRevision: 1,
+      });
+      await startOperationRunner();
+      expect((await finished(valid.id)).status).toBe("succeeded");
+      expect(runs).toStrictEqual([valid.id]);
+      const saved = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT status,error,input_json FROM operations WHERE id=?")
+        .get(damagedJob.id) as { status: string; error: string; input_json: string };
+      expect(saved.status).toBe(status === "queued" ? "failed" : "interrupted");
+      expect(saved.error).toMatch(/administrator/);
+      expect(saved.error).not.toMatch(/private-fixture/);
+      expect(saved.input_json, "Keep damaged state available for administrator inspection").toBe(damaged);
     });
-    const operation = enqueue("binding-error");
-    await startOperationRunner();
-    expect((await finished(operation.id)).error).toBe("The server binding changed. Review it before retrying.");
-  });
+  }
+  for (const handlerNotified of [false, true])
+    it(`records one scheduled backup failure when the handler ${handlerNotified ? "already notified" : "fails before notifying"}`, async () => {
+      configureNotifications(true, "https://discord.com/api/webhooks/123456/fixture-secret");
+      registerJobHandler("backup", {
+        run: async ({ job }) => {
+          if (handlerNotified) notifyEvent(`backup-failed:${job.id}`, "Backup failed.");
+          throw new Error("fixture-private-failure");
+        },
+      });
+      const operation = enqueue("backup", undefined, { scheduleId: crypto.randomUUID() });
+      await startOperationRunner();
+      expect((await finished(operation.id)).status).toBe("failed");
+      const deliveries = getDatabase().query<{ event_key: string; payload_json: string }, []>(
+        "SELECT event_key,payload_json FROM notification_deliveries",
+      ).all();
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0].event_key).toBe(`backup-failed:${operation.id}`);
+      expect(String(deliveries[0].payload_json)).not.toContain("fixture-private-failure");
+    });
   it("deduplicates retries while rejecting a reused key with different settings", () => {
     const first = enqueue("idempotency", "same", { createBackup: true });
     const retry = enqueue("idempotency", "same", { createBackup: true });

@@ -32,19 +32,19 @@ function initialMode(modes: ConsoleMode[]): ConsoleMode {
   return modes.includes("game") ? "game" : modes.includes("logs") ? "logs" : "shell";
 }
 
-export default function Console({ containerId }: { containerId: string }) {
+export default function Console({ serverId }: { serverId: string }) {
   const { user } = useAuth();
   return (
     <ConsoleSession
-      key={`${containerId}:${user?.id}:${user?.role}`}
-      containerId={containerId}
+      key={`${serverId}:${user?.id}:${user?.role}`}
+      serverId={serverId}
       user={user}
     />
   );
 }
 
-function ConsoleSession({ containerId, user }: {
-  containerId: string;
+function ConsoleSession({ serverId, user }: {
+  serverId: string;
   user: AuthUser | null;
 }) {
   const [mode, setMode] = useState<ConsoleMode>("logs");
@@ -81,7 +81,7 @@ function ConsoleSession({ containerId, user }: {
     Boolean(serverInfo && lifecycleActionForState(serverInfo.state) === "start");
   const stateGuidance = serverInfo && lifecycleStateGuidance(serverInfo.state);
   const bindingActive = serverInfo?.bindingStatus === "active";
-  const detailsPath = `/servers/${encodeURIComponent(containerId)}`;
+  const detailsPath = `/servers/${encodeURIComponent(serverId)}`;
 
   const resetOutput = useCallback(() => {
     terminalRef.current?.reset();
@@ -116,7 +116,7 @@ function ConsoleSession({ containerId, user }: {
     setVerifiedUrl(null);
     try {
       const { server } = await apiJson(
-        `/servers/${encodeURIComponent(containerId)}`, serverResponseSchema,
+        `/servers/${encodeURIComponent(serverId)}`, serverResponseSchema,
       );
       if (request !== detailsRequestRef.current) return;
       const nextModes = allowedModes(user, server);
@@ -134,7 +134,7 @@ function ConsoleSession({ containerId, user }: {
       setServerInfo(null);
       setServerState("error");
     }
-  }, [containerId, user, denyAccess, resetOutput, selectMode]);
+  }, [serverId, user, denyAccess, resetOutput, selectMode]);
 
   useEffect(() => {
     setDrafts({ game: "", shell: "" });
@@ -256,13 +256,13 @@ function ConsoleSession({ containerId, user }: {
     setPaused(!paused);
   }, [paused, writeMessage]);
 
-  const wsUrl = serverState !== "loaded" || serverInfo?.id !== containerId || !bindingActive ||
+  const wsUrl = serverState !== "loaded" || serverInfo?.id !== serverId || !bindingActive ||
     (mode === "logs" ? !canReadLogs : !canSendCommand || !isRunning)
     ? ""
     : authenticatedWebSocketUrl(
-      mode === "logs" ? `/ws/v1/logs/${encodeURIComponent(containerId)}`
-        : mode === "game" ? `/ws/v1/game-console/${encodeURIComponent(containerId)}`
-          : `/ws/v1/shell/${encodeURIComponent(containerId)}`,
+      mode === "logs" ? `/ws/v1/logs/${encodeURIComponent(serverId)}`
+        : mode === "game" ? `/ws/v1/game-console/${encodeURIComponent(serverId)}`
+          : `/ws/v1/shell/${encodeURIComponent(serverId)}`,
     );
 
   const verifyConnection = useCallback(() => {
@@ -270,7 +270,7 @@ function ConsoleSession({ containerId, user }: {
     setVerifiedUrl(null);
     // Socket authorization remains authoritative. This fresh read also keeps
     // controls honest when grants or running state changed while disconnected.
-    void apiJson(`/servers/${encodeURIComponent(containerId)}`, serverResponseSchema)
+    void apiJson(`/servers/${encodeURIComponent(serverId)}`, serverResponseSchema)
       .then(({ server }) => {
         if (request !== detailsRequestRef.current) return;
         const nextModes = allowedModes(user, server);
@@ -286,7 +286,7 @@ function ConsoleSession({ containerId, user }: {
         setServerInfo(null);
         setServerState("error");
       });
-  }, [containerId, user, wsUrl, denyAccess, resetOutput, selectMode]);
+  }, [serverId, user, wsUrl, denyAccess, resetOutput, selectMode]);
 
   const { status, send, retry, canRetry, accessDenied, error: connectionError } = useWebSocket({
     url: wsUrl,
@@ -347,7 +347,7 @@ function ConsoleSession({ containerId, user }: {
           </NavLink>
           <div>
             <div className="console-header__name">
-              {accessUnavailable ? "Console unavailable" : serverInfo?.displayName || containerId.substring(0, 12)}
+              {accessUnavailable ? "Console unavailable" : serverInfo?.displayName || serverId.substring(0, 12)}
             </div>
             <div className="console-header__status">
               {accessUnavailable ? "Reload details to check your access"

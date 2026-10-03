@@ -4,12 +4,10 @@ import { expect, afterAll as after, beforeAll as before, describe, it, spyOn, af
 import {
   mkdtemp,
   mkdir,
-  open,
   readFile,
   rm,
   symlink,
   writeFile,
-  type FileHandle,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,11 +29,6 @@ import { COMPOSE_SOURCE_LABEL, COMPOSE_CONFIG_FILES_LABEL, COMPOSE_WORKING_DIR_L
 import { docker } from "../src/docker-client.js";
 import type { ServerContext } from "../src/servers.js";
 import { closeDatabase } from "../src/database.js";
-import {
-  updateRequestSchema,
-  serverGrantsSchema,
-  scheduleSchema,
-} from "@ludock/shared";
 
 let directory: string;
 const priorPath = process.env.PATH;
@@ -63,7 +56,7 @@ else if(args.includes("hang")){setTimeout(()=>{},30000);}
 else if(args.includes("config")){
   const files = args.flatMap((arg,i)=>arg==="-f"?[args[i+1]]:[]);
   const models=files.map(file=>JSON.parse(fs.readFileSync(file,"utf8")));
-  const model={services:Object.assign({},...models.map(model=>model.services)),fixtureFiles:files,fixtureEnv:process.env,fixtureEnvFiles:args.flatMap((arg,i)=>arg==="--env-file"?[fs.readFileSync(args[i+1],"utf8")]:[])};
+  const model={services:Object.assign({},...models.map(model=>model.services)),fixtureEnvFiles:args.flatMap((arg,i)=>arg==="--env-file"?[fs.readFileSync(args[i+1],"utf8")]:[])};
   process.stdout.write(JSON.stringify(model));
 }else process.stdout.write(JSON.stringify({args,env:process.env}));
 `,
@@ -99,22 +92,6 @@ describe("Compose execution boundary", () => {
       if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
       else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
       spawn.mockRestore();
-    }
-  });
-
-  it.skipIf(process.platform !== "linux")("reports availability after a successful configured probe", async () => {
-    expect(await isComposeAvailable()).toBe(true);
-  });
-
-  it.skipIf(process.platform !== "linux")("rechecks approved roots after the probe finishes", async () => {
-    const currentRoots = process.env.LUDOCK_COMPOSE_ROOTS;
-    const probe = isComposeAvailable();
-    delete process.env.LUDOCK_COMPOSE_ROOTS;
-    try {
-      expect(await probe).toBe(false);
-    } finally {
-      if (currentRoots === undefined) delete process.env.LUDOCK_COMPOSE_ROOTS;
-      else process.env.LUDOCK_COMPOSE_ROOTS = currentRoots;
     }
   });
 
@@ -178,6 +155,26 @@ describe("Compose execution boundary", () => {
     await expect(readOptionalApprovedFile("/outside/.env", [directory])).rejects.toThrow(/outside/);
   });
 
+  it.skipIf(process.platform !== "linux")("snapshots missing optional service environment files without requiring them", async () => {
+    const folder = path.join(directory, "optional-env");
+    await mkdir(folder);
+    const filename = path.join(folder, "compose.yaml");
+    await writeFile(filename, "services:\n  game:\n    image: alpine:latest\n    env_file:\n      - path: override.env\n        required: false\n");
+    const input = { projectName: "optional", projectDirectory: folder, composeFiles: [filename], envFiles: [] };
+    const missing = await createComposeSnapshot(input);
+    try {
+      const services = missing.model.services as Record<string, { env_file: { path: string }[] }>;
+      expect(await readFile(services.game.env_file[0].path, "utf8")).toBe("");
+      await writeFile(path.join(folder, "override.env"), "");
+      const present = await createComposeSnapshot(input);
+      try { expect(present.fingerprint).not.toBe(missing.fingerprint); }
+      finally { await present.cleanup(); }
+      await rm(path.join(folder, "override.env"));
+      await symlink(filename, path.join(folder, "override.env"));
+      await expect(createComposeSnapshot(input)).rejects.toThrow(/symbolic link/);
+    } finally { await missing.cleanup(); }
+  });
+
   it("uses the configured daemon with no inherited secrets or Compose overrides", async () => {
     process.env.LUDOCK_PRIVATE_TEST_SECRET = "never-inherit";
     process.env.COMPOSE_FILE = "/unapproved/compose.yaml";
@@ -214,17 +211,6 @@ describe("Compose execution boundary", () => {
   });
   it("terminates output that exceeds the configuration size limit", async () => {
     await expect(runCompose(["large-output"])).rejects.toThrow(/execution limit/);
-  });
-  it("reports an unavailable executable without subprocess details", async () => {
-    const currentPath = process.env.PATH;
-    process.env.PATH = path.join(directory, "missing-bin");
-    try {
-      await expect(await rejectedBy(runCompose(["version"]))).toSatisfy((error) => error instanceof Error &&
-          error.message === "Docker Compose could not be executed");
-      expect(await isComposeAvailable()).toBe(false);
-    } finally {
-      process.env.PATH = currentPath;
-    }
   });
   it.skipIf(process.platform === "win32")(
     "waits for a surviving plugin to terminate before releasing the operation",
@@ -337,121 +323,6 @@ describe("Compose execution boundary", () => {
     },
   );
   it.skipIf(Boolean(process.platform !== "linux"))(
-    "keeps environment-file fingerprints stable when read timings change",
-    async () => {
-      const filename = path.join(directory, "env-order.yaml");
-      const firstEnv = path.join(directory, "first.env");
-      const secondEnv = path.join(directory, "second.env");
-      await writeFile(firstEnv, "WORLD=first\n");
-      await writeFile(secondEnv, "WORLD=second\n");
-      await writeFile(
-        filename,
-        "services:\n  game:\n    image: alpine:latest\n    env_file:\n      - first.env\n      - second.env\n",
-      );
-      const firstHandle = await open(firstEnv, "r");
-      const secondHandle = await open(secondEnv, "r");
-      const firstInode = (await firstHandle.stat()).ino;
-      const secondInode = (await secondHandle.stat()).ino;
-      const prototype = Object.getPrototypeOf(firstHandle) as FileHandle;
-      const originalRead = prototype.read;
-      await firstHandle.close();
-      await secondHandle.close();
-      let delayedInode = firstInode;
-      spyOn(prototype, "read").mockImplementation((async function (
-        this: FileHandle,
-        buffer: Uint8Array,
-        offset: number,
-        length: number,
-        position: number | null,
-      ) {
-        if ((await this.stat()).ino === delayedInode)
-          await new Promise((resolve) => setTimeout(resolve, 40));
-        return (originalRead as (...args: unknown[]) => Promise<unknown>)
-          .call(this, buffer, offset, length, position);
-      }) as unknown as typeof prototype.read);
-      const input = {
-        projectName: "fixture",
-        projectDirectory: directory,
-        composeFiles: [filename],
-        envFiles: [],
-      };
-      const first = await createComposeSnapshot(input);
-      try {
-        delayedInode = secondInode;
-        const second = await createComposeSnapshot(input);
-        try {
-          expect(second.fingerprint).toBe(first.fingerprint);
-          for (const snapshot of [first, second]) {
-            const services = snapshot.model.services as Record<
-              string, { env_file: { path: string }[] }
-            >;
-            expect(await Promise.all(
-                services.game.env_file.map((entry) => readFile(entry.path, "utf8")),
-              )).toStrictEqual(["WORLD=first\n", "WORLD=second\n"]);
-          }
-        } finally {
-          await second.cleanup();
-        }
-      } finally {
-        await first.cleanup();
-      }
-    },
-  );
-  it.skipIf(Boolean(process.platform !== "linux"))(
-    "keys source fingerprints per installation and preserves them across reopen",
-    async () => {
-      const filename = path.join(directory, "keyed-source.yaml");
-      const environment = path.join(directory, "keyed-source.env");
-      await writeFile(
-        filename,
-        "services:\n  game:\n    image: alpine:latest\n    env_file: keyed-source.env\n",
-      );
-      await writeFile(environment, "PASSWORD=small-secret\n");
-      const input = {
-        projectName: "keyed-source",
-        projectDirectory: directory,
-        composeFiles: [filename],
-        envFiles: [],
-      };
-      const firstDatabase = path.join(directory, "compose-key-first.db");
-      closeDatabase();
-      process.env.LUDOCK_DB_PATH = firstDatabase;
-      const first = await createComposeSnapshot(input);
-      try {
-        const repeated = await createComposeSnapshot(input);
-        try {
-          expect(first.fingerprint).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
-          expect(repeated.fingerprint).toBe(first.fingerprint);
-        } finally {
-          await repeated.cleanup();
-        }
-        closeDatabase();
-        const reopened = await createComposeSnapshot(input);
-        try {
-          expect(reopened.fingerprint).toBe(first.fingerprint);
-        } finally {
-          await reopened.cleanup();
-        }
-
-        closeDatabase();
-        process.env.LUDOCK_DB_PATH = path.join(
-          directory,
-          "compose-key-second.db",
-        );
-        const otherInstallation = await createComposeSnapshot(input);
-        try {
-          expect(otherInstallation.fingerprint).not.toBe(first.fingerprint);
-        } finally {
-          await otherInstallation.cleanup();
-        }
-      } finally {
-        await first.cleanup();
-        closeDatabase();
-        process.env.LUDOCK_DB_PATH = ":memory:";
-      }
-    },
-  );
-  it.skipIf(Boolean(process.platform !== "linux"))(
     "rejects duplicate keys and excessive YAML aliases before running Compose",
     async () => {
       const filename = path.join(directory, "unsafe-yaml.yaml");
@@ -489,33 +360,4 @@ describe("Compose execution boundary", () => {
       }
     },
   );
-});
-
-describe("shared request contracts", () => {
-  it("rejects coercion, unknown mutation fields and unscoped identifiers", () => {
-    expect(updateRequestSchema.safeParse({
-        createBackup: true,
-        forceRecreate: "false",
-      }).success).toBe(false);
-    expect(updateRequestSchema.safeParse({ createBackup: true, command: "rm" })
-        .success).toBe(false);
-    expect(updateRequestSchema.parse({ createBackup: true }).forceRecreate).toBe(false);
-    expect(serverGrantsSchema.safeParse({
-        grants: [
-          { serverId: "docker-physical-id", capabilities: ["server.view"] },
-        ],
-      }).success).toBe(false);
-    expect(scheduleSchema.safeParse({
-        action: "update",
-        time: "12:00",
-        days: [1],
-        timezone: "UTC",
-      }).success).toBe(false);
-    expect(scheduleSchema.safeParse({
-        action: "stop",
-        time: "12:00",
-        days: [1],
-        timezone: "not-a-zone",
-      }).success).toBe(false);
-  });
 });

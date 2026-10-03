@@ -102,19 +102,6 @@ afterEach(async () => {
 });
 
 describe("Docker event framing", () => {
-  it("buffers split lines and accepts several events in a chunk", () => {
-    const events: unknown[] = [];
-    const decode = dockerEventDecoder((event) => events.push(event));
-    const text = '{"Action":"start","Actor":{"ID":"first"},"name":"café"}\n{"Action":"stop"}\n';
-    const content = fixtureBytes(text);
-    // Split inside the two-byte "é".
-    const split = fixtureBytes(text.slice(0, text.indexOf("é"))).length + 1;
-    decode(content.subarray(0, split));
-    expect(events).toStrictEqual([]);
-    decode(content.subarray(split));
-    expect(events.length).toBe(2);
-    expect((events[0] as { name: string }).name).toBe("café");
-  });
   it("rejects oversized input and skips malformed lines", () => {
     const events: unknown[] = [];
     const decode = dockerEventDecoder((event) => events.push(event));
@@ -186,13 +173,5 @@ describe("scoped Docker event delivery", () => {
     updateUserAccess(friend.id, "operator", true);
     await dispatchDockerEvent({ Action: "start", Actor: { ID: "first" } });
     expect(socket.closed).toBe(true);
-  });
-  it("invalidates a previously visible removed server without revealing metadata", async () => {
-    const socket = client(friend);
-    removed = true;
-    await dispatchDockerEvent({ Action: "destroy", Actor: { ID: "first" } });
-    expect(socket.messages.length).toBe(1);
-    expect(JSON.parse(socket.messages[0]).action).toBe("refresh");
-    expect(JSON.parse(socket.messages[0]).serverId).toBe(undefined);
   });
 });

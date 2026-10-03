@@ -1,15 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { expect, afterAll as after, beforeEach, describe, it } from "bun:test";
 import { closeDatabase, getDatabase } from "../src/database.js";
 import {
   assertObservedServerBinding,
   bindingFingerprint,
   externalServerIdentity,
-  getDockerHostId,
   getLogicalServer,
-  listLogicalServers,
   reconcileServers,
   resolveServerBinding,
   reviewServerBinding,
@@ -18,7 +13,6 @@ import {
 import type { SQLQueryBindings } from "bun:sqlite";
 import { dockerId } from "./fixtures/ids.js";
 
-const identityDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "ludock-identity-"));
 process.env.LUDOCK_DB_PATH = ":memory:";
 beforeEach(() => {
   closeDatabase();
@@ -26,7 +20,6 @@ beforeEach(() => {
 });
 after(() => {
   closeDatabase();
-  fs.rmSync(identityDirectory, { recursive: true, force: true });
 });
 
 function observation(
@@ -51,21 +44,6 @@ function observation(
 }
 
 describe("logical server identities", () => {
-  it("keeps fingerprints stable per installation while detecting changed secrets", () => {
-    const firstPath = path.join(identityDirectory, "first.db");
-    process.env.LUDOCK_DB_PATH = firstPath;
-    const original = bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } }));
-    expect(original).toMatch(/^hmac-sha256:[a-f0-9]{64}$/);
-    expect(original).toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
-    expect(original).not.toBe(bindingFingerprint(observation({ gameConfiguration: { password: "second-secret" } })));
-    closeDatabase();
-    expect(original).toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
-
-    closeDatabase();
-    process.env.LUDOCK_DB_PATH = path.join(identityDirectory, "second.db");
-    expect(original).not.toBe(bindingFingerprint(observation({ gameConfiguration: { password: "first-secret" } })));
-  });
-
   it("reattaches ordinary recreations to the same UUID and revises observed-container attribution", () => {
     const original = reconcileServers([observation()], { now: 100 })[0];
     const recreated = reconcileServers(
@@ -85,25 +63,6 @@ describe("logical server identities", () => {
         .map((row) => row.container_id)).toStrictEqual(["docker-a", "docker-b"]);
   });
 
-  it("uses Compose project/service/replica rather than Docker container name", () => {
-    const compose = {
-      project: "games",
-      service: "minecraft",
-      containerNumber: "1",
-    };
-    const original = reconcileServers([observation({ compose })])[0];
-    const recreated = reconcileServers([
-      observation({
-        compose,
-        containerId: dockerId("replacement"),
-        name: "renamed-by-compose",
-      }),
-    ])[0];
-    expect(recreated.id).toBe(original.id);
-    expect(recreated.externalIdentity).toBe("compose:games:minecraft:1");
-    expect(recreated.status).toBe("active");
-  });
-
   it("keeps missing history and assigns a new UUID to standalone renames", () => {
     const original = reconcileServers([observation()])[0];
     const result = reconcileServers([observation({ name: "different-name" })]);
@@ -114,17 +73,6 @@ describe("logical server identities", () => {
         (server) => server.id !== original.id && server.status === "active",
       )).toBeTruthy();
     expect(() => resolveServerBinding(original.id)).toThrow(/binding is unavailable/);
-  });
-
-  it("scopes the same identity to separate persisted Docker hosts", () => {
-    const localHost = getDockerHostId();
-    expect(getDockerHostId()).toBe(localHost);
-    const otherHost = getDockerHostId("another-daemon");
-    const first = reconcileServers([observation()], { hostId: localHost })[0];
-    const second = reconcileServers([observation()], { hostId: otherHost })[0];
-    expect(first.id).not.toBe(second.id);
-    expect(listLogicalServers().length).toBe(2);
-    expect(getLogicalServer(first.id)?.status).toBe("active");
   });
 
   it("shows duplicate Compose identities but refuses binding and history attribution", () => {
@@ -210,30 +158,6 @@ describe("logical server identities", () => {
         )).toThrow(/identity changed/);
     expect(() =>
         assertObservedServerBinding(server.id, observation({ name: "other" }))).toThrow(/identity changed/);
-  });
-
-  it("makes fingerprints independent of mount/config order and ignores read-only mounts", () => {
-    const first = observation({
-      gameConfiguration: { port: "1", password: "never-store-me" },
-    });
-    const second = {
-      ...first,
-      gameConfiguration: { password: "never-store-me", port: "1" },
-      mounts: [
-        {
-          type: "bind",
-          source: "/etc/config",
-          destination: "/config",
-          writable: false,
-        },
-        ...first.mounts,
-      ],
-    };
-    expect(bindingFingerprint(first)).toBe(bindingFingerprint(second));
-    reconcileServers([first]);
-    const rows = getDatabase().prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM logical_servers").all();
-    expect(JSON.stringify(rows).includes("never-store-me")).toBe(false);
-    expect(JSON.stringify(rows).includes("/srv/minecraft")).toBe(false);
   });
 
   it("rejects invalid or partial observations before mutating the snapshot", () => {

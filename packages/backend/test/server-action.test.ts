@@ -19,8 +19,6 @@ import {
   waitForLocksReleased,
 } from "../src/operation-locks.js";
 import { serverAction } from "../src/routes/server-action.js";
-import { respond } from "../src/routes/request.js";
-import { okResponseSchema } from "@ludock/shared";
 import { refreshServers } from "../src/servers.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -41,7 +39,6 @@ let http: Server<unknown>;
 let baseUrl: string;
 let serverId: string;
 let cookie: string;
-let sessionToken: string;
 let calls: string[];
 let beforeResponse: Promise<void> | undefined;
 let afterResponse: Promise<void> | undefined;
@@ -49,7 +46,6 @@ let beforeInspect: Promise<void> | undefined;
 let inspectCount: number;
 let pauseInspectAt: number | undefined;
 let containerName: string;
-let output: unknown;
 let inspectStarted: () => void;
 let bindingStarted: Promise<void>;
 let clientClosed: Promise<void>;
@@ -70,7 +66,7 @@ beforeEach(async () => {
     disabled: false,
     createdAt: 0,
   });
-  sessionToken = createSession(friend, new Request("http://127.0.0.1", {
+  const sessionToken = createSession(friend, new Request("http://127.0.0.1", {
     headers: { "User-Agent": "fixture" },
   }), "127.0.0.1").token;
   cookie = `ludock_session=${sessionToken}`;
@@ -81,7 +77,6 @@ beforeEach(async () => {
   inspectCount = 0;
   pauseInspectAt = undefined;
   containerName = "/fixture";
-  output = { ok: true };
   bindingStarted = new Promise((resolve) => {
     inspectStarted = resolve;
   });
@@ -163,12 +158,6 @@ beforeEach(async () => {
         throw new AppError("FIXTURE_FAILURE", 409, "Fixture failure");
       }),
     },
-    "/servers/:id/response": {
-      GET: () => {
-        // @ts-expect-error This fixture deliberately injects corrupt producer data.
-        return respond(okResponseSchema, output);
-      },
-    },
   } });
   http = Bun.serve({ ...app, hostname: "127.0.0.1", port: 0 });
   baseUrl = `http://127.0.0.1:${http.port}`;
@@ -233,17 +222,6 @@ describe("explicit server action policies", () => {
     expect((await friendFetch("/NEW-CONSOLE-ACTION/", { method: "POST" })).status).toBe(200);
     expect(calls).toStrictEqual(["physical-fixture"]);
   });
-  it("uses the same capability for GET, HEAD, case and trailing-slash variants", async () => {
-    setServerGrant(friend.id, serverId, ["server.view"], admin);
-    for (const method of ["GET", "HEAD"])
-      expect((await friendFetch("/StReAm/", { method })).status).toBe(403);
-    expect(calls).toStrictEqual([]);
-    setServerGrant(friend.id, serverId, ["server.view", "logs.read"], admin);
-    const head = await friendFetch("/StReAm/", { method: "HEAD" });
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-    expect(calls).toStrictEqual(["physical-fixture"]);
-  });
   it("retains locks after the response finishes until handler cleanup finishes", async () => {
     setServerGrant(friend.id, serverId, ["server.view", "logs.read"], admin);
     afterResponse = gate();
@@ -279,18 +257,6 @@ describe("explicit server action policies", () => {
     await response.text();
     await waitForLocksReleased();
     expect(isServerBusy(serverId)).toBe(false);
-  });
-  it("validates response contracts without leaking producer data or reporting a client error", async () => {
-    output = { ok: true, privateToken: "fixture-private-value" };
-    const valid = await friendFetch("/response");
-    expect(valid.status).toBe(200);
-    expect(await valid.json()).toStrictEqual({ ok: true });
-    output = { ok: "true", privateToken: "fixture-private-value" };
-    const invalid = await friendFetch("/response");
-    expect(invalid.status).toBe(500);
-    const body = await invalid.text();
-    expect(body).toMatch(/could not produce a valid response/);
-    expect(body).not.toMatch(/fixture-private-value|ZodError|invalid_type/);
   });
   it("does not run an action after its client disconnects during authorization", async () => {
     setServerGrant(

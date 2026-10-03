@@ -356,9 +356,8 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
           { ROOT: rootPath, STAGE: stage },
         );
         interrupted.progress("restore_rolling_back", {
-          dataSafe: false,
           dataHelperId: helper.container.id,
-          restoreRoots: [{ root, phase: "rolling_back" }],
+          restore: { status: "rolling_back", roots: [{ root, phase: "rolling_back" }] },
         });
         // Leave the helper alive as a crashed Ludock process would; recovery must
         // remove this known operation helper before shared-writer validation.
@@ -366,7 +365,7 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         expect((await source.inspect()).State.Running).toBe(true);
         expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"])).toBe("original-world");
         expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/settings/server.cfg'))"])).toBe("original-config");
-        expect(interrupted.job.recovery.dataSafe).toBe(true);
+        expect(interrupted.job.recovery.restore).toStrictEqual({ status: "rolled_back" });
         expect(await helperExec(
             source,
             ["bun", "-e", "if (require('node:fs').existsSync(process.env.STAGE)) process.exit(1); process.stdout.write('clean');"],
@@ -387,13 +386,12 @@ describe.skipIf(Boolean(!enabled || process.platform !== "linux"))(
         );
         await stopForDataOperation(state, cleaned);
         cleaned.progress("restore_rolled_back", {
-          dataSafe: false,
-          restoreRoots: [{ root, phase: "rolled_back" }],
+          restore: { status: "rolling_back", roots: [{ root, phase: "rolled_back" }] },
         });
         await recoverRestore(cleaned);
         expect((await source.inspect()).State.Running).toBe(true);
         expect(await helperExec(source, ["bun", "-e", "process.stdout.write(require('node:fs').readFileSync('/data/world.txt'))"])).toBe("original-world");
-        expect(cleaned.job.recovery.restoreRoots).toStrictEqual([]);
+        expect(cleaned.job.recovery.restore).toStrictEqual({ status: "rolled_back" });
         // Recovery is also idempotent after the restart was already completed.
         await recoverRestore(cleaned);
         expect((await source.inspect()).State.Running).toBe(true);

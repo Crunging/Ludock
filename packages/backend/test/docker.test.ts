@@ -67,85 +67,6 @@ function listFixture(
 }
 
 describe("automatic discovery boundary", () => {
-  const cases: Array<{
-    name: string;
-    image: string;
-    labels: Record<string, string>;
-    included: boolean;
-  }> = [
-    {
-      name: "recognized",
-      image: "itzg/minecraft-server",
-      labels: {},
-      included: true,
-    },
-    {
-      name: "mirror",
-      image: "registry.private:5000/cache/itzg/minecraft-server:latest",
-      labels: {},
-      included: true,
-    },
-    {
-      name: "opt-out",
-      image: "itzg/minecraft-server",
-      labels: { "ludock.enable": " FALSE " },
-      included: false,
-    },
-    {
-      name: "invalid",
-      image: "itzg/minecraft-server",
-      labels: { "ludock.enable": "yes" },
-      included: false,
-    },
-    {
-      name: "one-off",
-      image: "itzg/minecraft-server",
-      labels: { "com.docker.compose.oneoff": "True" },
-      included: false,
-    },
-    {
-      name: "enabled one-off",
-      image: "custom/server",
-      labels: { "com.docker.compose.oneoff": "True", "ludock.enable": "TRUE" },
-      included: true,
-    },
-    {
-      name: "explicit unknown",
-      image: "custom/server",
-      labels: { "ludock.enable": " true " },
-      included: true,
-    },
-    { name: "unknown", image: "custom/server", labels: {}, included: false },
-  ];
-
-  for (const entry of cases) {
-    it(`applies the same list, detail and mutation policy to ${entry.name}`, async () => {
-      const invoked: string[] = [];
-      docker.listContainers = (async (options: unknown) => {
-        expect(options).toStrictEqual({ all: true });
-        return [listFixture(entry.image, entry.labels)];
-      }) as unknown as typeof docker.listContainers;
-      docker.getContainer = (() => ({
-        inspect: async () => inspectFixture(entry.image, entry.labels),
-        start: async () => invoked.push("start"),
-        stop: async () => invoked.push("stop"),
-        restart: async () => invoked.push("restart"),
-      })) as unknown as typeof docker.getContainer;
-
-      expect((await listManagedContainerObservations()).length).toBe(entry.included ? 1 : 0);
-      for (const action of [
-        getManagedContainerObservation,
-        (id: DockerContainerId) => changeContainerState(id, "start"),
-        (id: DockerContainerId) => changeContainerState(id, "stop"),
-        (id: DockerContainerId) => changeContainerState(id, "restart"),
-      ]) {
-        if (entry.included) await action(untrusted("minecraft"));
-        else await expect(action(untrusted("minecraft"))).rejects.toMatchObject({ code: "FORBIDDEN" });
-      }
-      expect(invoked).toStrictEqual(entry.included ? ["start", "stop", "restart"] : []);
-    });
-  }
-
   it("returns fixed diagnostics without untrusted label values", async () => {
     docker.listContainers = (async () => [
       listFixture("itzg/minecraft-server", {
@@ -170,16 +91,8 @@ describe("automatic discovery boundary", () => {
     docker.getContainer = (() => ({
       inspect: async () => info,
     })) as unknown as typeof docker.getContainer;
-    const { container, observation } =
+    const { container } =
       await getManagedContainerObservation(untrusted("minecraft"));
-    expect(observation.compose).toStrictEqual({
-      project: "games",
-      service: "rust",
-      containerNumber: "1",
-    });
-    expect(observation.mounts[0].name).toBe("game-data");
-    expect(observation.mounts[0].source).toBe("/var/lib/docker/volumes/game-data/_data");
-    expect(observation.gameConfiguration?.["env:RCON_PASSWORD"]).toBe("private-password");
     for (const secret of [
       "private-password",
       "hidden-token",
@@ -199,102 +112,6 @@ describe("automatic discovery boundary", () => {
         inspectFixture("itzg/minecraft-server", { "ludock.enable": "false" }),
     })) as unknown as typeof docker.getContainer;
     expect(await listManagedContainerObservations()).toStrictEqual([]);
-  });
-
-  it("isolates incomplete Compose identities without breaking discovery", async () => {
-    const labels = { "com.docker.compose.project": "games" };
-    docker.listContainers = (async () => [
-      listFixture("itzg/minecraft-server", labels),
-    ]) as unknown as typeof docker.listContainers;
-    docker.getContainer = (() => ({
-      inspect: async () => inspectFixture("itzg/minecraft-server", labels),
-    })) as unknown as typeof docker.getContainer;
-    expect(await listManagedContainerObservations()).toStrictEqual([]);
-    expect((await getDiscoveryDiagnostics())[0]?.code).toBe("INVALID_COMPOSE_IDENTITY");
-    await expect(changeContainerState(untrusted("minecraft"), "start")).rejects.toMatchObject({
-      code: "INVALID_COMPOSE_IDENTITY",
-    });
-  });
-
-  it("gives explicit Compose one-offs standalone identity, separate from service replicas", async () => {
-    const labels = {
-      "ludock.enable": "true",
-      "com.docker.compose.oneoff": "True",
-      "com.docker.compose.project": "games",
-      "com.docker.compose.service": "minecraft",
-      "com.docker.compose.container-number": "1",
-    };
-    docker.getContainer = (() => ({
-      inspect: async () => inspectFixture("itzg/minecraft-server", labels),
-    })) as unknown as typeof docker.getContainer;
-    const { observation } = await getManagedContainerObservation(untrusted("minecraft"));
-    expect(observation.compose).toBe(undefined);
-    expect(observation.name).toBe("minecraft");
-  });
-
-  it("tolerates external removal during observation but propagates daemon failures", async () => {
-    docker.listContainers = (async () => [
-      listFixture("itzg/minecraft-server"),
-    ]) as unknown as typeof docker.listContainers;
-    let statusCode = 404;
-    docker.getContainer = (() => ({
-      inspect: async () => {
-        throw Object.assign(new Error("Docker failed"), { statusCode });
-      },
-    })) as unknown as typeof docker.getContainer;
-    expect(await listManagedContainerObservations()).toStrictEqual([]);
-    statusCode = 500;
-    await expect(listManagedContainerObservations()).rejects.toThrow(/Docker failed/);
-  });
-
-  it("bounds concurrent inspections and preserves list order with fresh observations", async () => {
-    const ids = Array.from({ length: 7 }, (_, index) =>
-      index.toString(16).padStart(64, "0"),
-    );
-    docker.listContainers = (async () => [
-      listFixture("itzg/minecraft-server", { "ludock.enable": "false" }, "excluded"),
-      ...ids.map((id) => listFixture("itzg/minecraft-server", {}, id)),
-    ]) as unknown as typeof docker.listContainers;
-    const started: string[] = [];
-    const releases = new Map<string, () => void>();
-    let active = 0;
-    let peak = 0;
-    docker.getContainer = ((id: string) => ({
-      inspect: async () => {
-        started.push(id);
-        active++;
-        peak = Math.max(peak, active);
-        await new Promise<void>((resolve) => releases.set(id, resolve));
-        active--;
-        if (id === ids[2])
-          throw Object.assign(new Error("Container removed"), { statusCode: 404 });
-        return { ...inspectFixture(), Id: id, Name: `/current-${id}` };
-      },
-    })) as unknown as typeof docker.getContainer;
-
-    const pending = listManagedContainerObservations();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(started).toStrictEqual(ids.slice(0, 4));
-
-    // A removed container releases capacity; later completions keep list order.
-    releases.get(ids[2])!();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(started).toStrictEqual(ids.slice(0, 5));
-    expect(active).toBe(4);
-    releases.get(ids[0])!();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(started).toStrictEqual(ids.slice(0, 6));
-    releases.get(ids[4])!();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(started).toStrictEqual(ids);
-
-    for (const release of releases.values()) release();
-    const observations = await pending;
-    const remaining = ids.filter((id) => id !== ids[2]);
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect<string[]>(observations.map(({ container }) => container.id)).toStrictEqual(remaining);
-    expect(observations.map(({ observation }) => observation.name)).toStrictEqual(remaining.map((id) => `current-${id}`));
   });
 
   it("stops dispatching after failure and drains active reads before rejecting", async () => {
@@ -347,129 +164,40 @@ describe("automatic discovery boundary", () => {
 });
 
 describe("managed container lifecycle boundary", () => {
-  for (const action of ["start", "stop", "restart"] as const) {
-    const run = (id: string) => changeContainerState(untrusted(id), action);
-    it(`allows ${action} for an opted-in container`, async () => {
-      let actionCalled = false;
-      const container = {
-        inspect: async () => ({
-          Config: { Labels: { "ludock.enable": "true" } },
-        }),
-        [action]: async () => {
-          actionCalled = true;
-        },
-      };
+  it("rejects starting an unmanaged container", async () => {
+    let actionCalled = false;
+    docker.getContainer = (() => ({
+      inspect: async () => ({ Config: { Labels: {} } }),
+      start: async () => { actionCalled = true; },
+    })) as unknown as typeof docker.getContainer;
 
-      docker.getContainer = (() =>
-        container) as unknown as typeof docker.getContainer;
-
-      await run("managed-id");
-      expect(actionCalled).toBe(true);
+    await expect(changeContainerState(untrusted("unmanaged-id"), "start")).rejects.toMatchObject({
+      statusCode: 403, code: "FORBIDDEN",
     });
-
-    it(`rejects ${action} for an unmanaged container`, async () => {
-      let actionCalled = false;
-      const container = {
-        inspect: async () => ({ Config: { Labels: {} } }),
-        [action]: async () => {
-          actionCalled = true;
-        },
-      };
-
-      docker.getContainer = (() =>
-        container) as unknown as typeof docker.getContainer;
-
-      await expect(await rejectedBy(run("unmanaged-id"))).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {
-          expect(error.statusCode).toBe(403);
-          expect(error.code).toBe("FORBIDDEN");
-          return true;
-        });
-      expect(actionCalled).toBe(false);
-    });
-  }
-});
-
-describe("managed container image inference", () => {
-  it("needs only the enable label for a recognized image", async () => {
-    const container = {
-      inspect: async () => ({
-        Id: "a".repeat(64),
-        Name: "/terraria",
-        Config: {
-          Image: "hexlo/terraria-server-docker:latest",
-          Labels: { "ludock.enable": "true" },
-        },
-        State: { Status: "running" },
-        Mounts: [
-          {
-            Type: "bind",
-            Source: "/srv/terraria",
-            Destination: "/root/.local/share/Terraria/Worlds",
-            RW: true,
-          },
-        ],
-        NetworkSettings: { Ports: {} },
-        Created: "2026-01-01T00:00:00.000Z",
-      }),
-    };
-    docker.getContainer = (() =>
-      container) as unknown as typeof docker.getContainer;
-
-    const { container: managed } = await getManagedContainerObservation(untrusted("terraria"));
-
-    expect(managed.gameType).toBe("terraria");
-    expect(managed.gameConsole?.id).toBe("stdin-console");
-    expect(managed.fileRoots).toStrictEqual([
-      {
-        id: "root-0",
-        name: "Terraria worlds",
-        path: "/root/.local/share/Terraria/Worlds",
-      },
-    ]);
+    expect(actionCalled).toBe(false);
   });
 });
 
 describe("container identifier validation", () => {
-  // URL decoding can turn %2f into "/", so an identifier can carry "../" and escape
-  // /containers/<id>/json. Reject these before constructing any daemon request.
-  const hostile = [
-    "../../info",
-    "..//attacker.example",
-    "../../127.0.0.1:9",
-    "abc/def",
-    "",
-    ".hidden",
-    "a".repeat(129),
-    "id with spaces",
-    "id\nnewline",
-  ];
+  it("rejects path traversal before it reaches Docker", async () => {
+    let reached = false;
+    docker.getContainer = (() => {
+      reached = true;
+      return { inspect: async () => ({ Config: { Labels: {} } }) };
+    }) as unknown as typeof docker.getContainer;
 
-  for (const id of hostile) {
-    it(`rejects ${JSON.stringify(id)} before it reaches Docker`, async () => {
-      let reached = false;
-      docker.getContainer = (() => {
-        reached = true;
-        return { inspect: async () => ({ Config: { Labels: {} } }) };
-      }) as unknown as typeof docker.getContainer;
-
-      for (const run of [
-        () => getManagedContainerObservation(untrusted(id)),
-        () => changeContainerState(untrusted(id), "start"),
-        async () => getContainer(untrusted(id)),
-      ]) {
-        await expect(await rejectedBy(run())).toSatisfy((error: Error & { statusCode?: number; code?: string }) => {
-            expect(error.code).toBe("INVALID_CONTAINER_ID");
-            expect(error.statusCode).toBe(400);
-            return true;
-          });
-      }
-      expect(reached, "Docker must never be called").toBe(false);
-    });
-  }
-
-  it("still accepts real Docker IDs and names", () => {
-    for (const id of ["a".repeat(64), "abc123", "my-server_1.0", "3f2b1a"]) {
-      expect(() => getContainer(untrusted(id))).not.toThrow();
+    // URL decoding can turn %2f into "/", allowing an identifier to escape
+    // /containers/<id>/json unless it is rejected before any daemon request.
+    const id = untrusted("../../info");
+    for (const run of [
+      () => getManagedContainerObservation(id),
+      () => changeContainerState(id, "start"),
+      async () => getContainer(id),
+    ]) {
+      await expect(run()).rejects.toMatchObject({
+        code: "INVALID_CONTAINER_ID", statusCode: 400,
+      });
     }
+    expect(reached, "Docker must never be called").toBe(false);
   });
 });

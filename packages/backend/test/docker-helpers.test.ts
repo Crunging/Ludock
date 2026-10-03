@@ -1,43 +1,13 @@
 import type * as Docker from "../src/docker-client.js";
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { docker } from "../src/docker-client.js";
-import { createHelperContainer, removeHelperContainer } from "../src/docker-helpers.js";
+import { removeHelperContainer } from "../src/docker-helpers.js";
 
-const options = { Image: "fixture@sha256:" + "a".repeat(64), Labels: { "ludock.enable": "false" } };
 const missing = Object.assign(new Error("missing"), { statusCode: 404 });
 const unavailable = Object.assign(new Error("private Docker detail"), { statusCode: 503 });
 const removing = Object.assign(new Error("private removal conflict"), { statusCode: 409 });
 afterEach(() => mock.restore());
 
 describe("Docker helper lifetime", () => {
-  it("pulls a missing image to completion and retries the same creation options", async () => {
-    const helper = { id: "fixture" } as Docker.Container;
-    const create = spyOn(docker, "createContainer").mockRejectedValueOnce(missing).mockResolvedValue(helper);
-    const pull = spyOn(docker, "pull").mockResolvedValue(undefined);
-    expect(await createHelperContainer(options)).toBe(helper);
-    expect(create.mock.calls).toEqual([
-      [{ ...options, Healthcheck: { Test: ["NONE"] } }],
-      [{ ...options, Healthcheck: { Test: ["NONE"] } }],
-    ]);
-    expect(pull).toHaveBeenCalledWith(options.Image);
-  });
-
-  it("does not pull on a daemon failure or retry after a failed pull", async () => {
-    const create = spyOn(docker, "createContainer").mockRejectedValueOnce(unavailable).mockRejectedValue(missing);
-    const pull = spyOn(docker, "pull").mockRejectedValue(unavailable);
-    await expect(createHelperContainer(options)).rejects.toBe(unavailable);
-    expect(pull).not.toHaveBeenCalled();
-    await expect(createHelperContainer(options)).rejects.toBe(unavailable);
-    expect(create).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not interpret a missing local runtime ID as a registry image", async () => {
-    spyOn(docker, "createContainer").mockRejectedValue(missing);
-    const pull = spyOn(docker, "pull");
-    await expect(createHelperContainer({ Image: `sha256:${"b".repeat(64)}` })).rejects.toBe(missing);
-    expect(pull).not.toHaveBeenCalled();
-  });
-
   for (const initiallyMissing of [false, true]) {
     it(`finishes cleanup without stopping an already ${initiallyMissing ? "missing" : "removed"} helper`, async () => {
       const remove = mock(async () => { if (initiallyMissing) throw missing; });

@@ -4,6 +4,7 @@ import {
   authenticateRequest, defaultSetupWindow, type SetupWindow,
 } from "./auth.js";
 import { checkDatabase } from "./database.js";
+import { createClientIpResolver } from "./client-ip.js";
 import { checkDockerConnection } from "./docker.js";
 import { DockerApiError } from "./docker-transport.js";
 import { AppError, errorResponse } from "./errors.js";
@@ -120,7 +121,11 @@ type RoutedHandler = (
   encodedParams?: Record<string, string>,
 ) => ReturnType<NativeHandler>;
 
-function requestHandler(handler: ApiHandler, publicEndpoint = false): RoutedHandler {
+function requestHandler(
+  handler: ApiHandler,
+  clientIp: ReturnType<typeof createClientIpResolver>,
+  publicEndpoint = false,
+): RoutedHandler {
   return async (request, server, encodedParams) => {
     // Bound incoming JSON before allowing long operations or file transfers.
     server.timeout(request, 30);
@@ -130,7 +135,7 @@ function requestHandler(handler: ApiHandler, publicEndpoint = false): RoutedHand
     const context: RequestContext = {
       request, url, params: request.params || {}, body: undefined,
       headers: responseHeaders(request, url, requestId),
-      ipAddress: server.requestIP(request)?.address,
+      ipAddress: clientIp(request, server.requestIP(request)?.address),
       user: null,
     };
     let response: Response;
@@ -214,6 +219,7 @@ export function createApp(options: CreateAppOptions = {}): {
   fetch: NativeHandler;
   maxRequestBodySize: number;
 } {
+  const clientIp = createClientIpResolver();
   let healthCache: { checkedAt: number; healthy: boolean; } | null = null;
   let healthProbe: Promise<boolean> | null = null;
   const health: ApiHandler = async () => {
@@ -243,14 +249,14 @@ export function createApp(options: CreateAppOptions = {}): {
   for (const [pathname, methods] of Object.entries(handlers)) {
     const native: Partial<Record<HttpMethod, RoutedHandler>> = {};
     for (const [method, handler] of Object.entries(methods)) {
-      native[method as HttpMethod] = requestHandler(handler, publicEndpoints.has(`${method} ${pathname}`));
+      native[method as HttpMethod] = requestHandler(handler, clientIp, publicEndpoints.has(`${method} ${pathname}`));
     }
     // Bun suppresses a HEAD body, but explicit cancellation also releases file
     // helper and authorization lifetimes created by the GET handler.
     if (native.GET && !native.HEAD) native.HEAD = native.GET;
     native.OPTIONS ||= requestHandler(() => new Response(null, {
       status: 204, headers: { Allow: Object.keys(native).join(", ") },
-    }));
+    }), clientIp);
     routes[pathname] = native;
   }
   const frontendDist = options.frontendDist === undefined
@@ -262,8 +268,8 @@ export function createApp(options: CreateAppOptions = {}): {
       return Response.json({ error: "API endpoint not found" }, { status: 404 });
     return serveStatic(context.request);
   };
-  const publicFallback = requestHandler(fallback, true);
-  const apiFallback = requestHandler(fallback);
+  const publicFallback = requestHandler(fallback, clientIp, true);
+  const apiFallback = requestHandler(fallback, clientIp);
   const patterns = Object.keys(routes);
   return {
     routes,

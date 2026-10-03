@@ -1,10 +1,9 @@
-import { demuxDockerStream } from "./docker-stream.js";
-import type * as Docker from "./docker-client.js";
 import { socketMessageText, type SocketChannel } from "./socket-channel.js";
 import { getContainer } from "./docker.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
 import {
   executeGameCommand,
+  executeShellCommand,
   type GameCommandOutput,
 } from "./game-console-runtime.js";
 import type { WebSocketAuth } from "./auth.js";
@@ -81,14 +80,16 @@ export async function handleConsoleConnection(
 
   const execute = async (raw: string): Promise<void> => {
     if (!access.allowed()) return;
-    let message: { type?: unknown; data?: unknown };
+    let message: unknown;
     try {
-      message = JSON.parse(raw) as { type?: unknown; data?: unknown };
+      message = JSON.parse(raw);
     } catch {
       send("error", "Invalid message format (expected JSON)");
       return;
     }
-    if (message.type !== "input" || typeof message.data !== "string") {
+    if (!message || typeof message !== "object" ||
+        !("type" in message) || message.type !== "input" ||
+        !("data" in message) || typeof message.data !== "string") {
       send("error", 'Expected { type: "input", data: "..." }');
       return;
     }
@@ -117,6 +118,10 @@ export async function handleConsoleConnection(
         const output: GameCommandOutput = {
           stdout: (value) => stdout.push(value),
           stderr: (value) => stderr.push(value),
+          complete: () => {
+            stdout.end();
+            stderr.end();
+          },
           system: (value) => {
             const redactor = new ConsoleOutputRedactor(secrets, (safe) =>
               send("system", safe),
@@ -151,7 +156,7 @@ export async function handleConsoleConnection(
               assertAccess,
               commandLifetime.signal,
             );
-          else await executeShell(getContainer(containerId), command, output, assertAccess);
+          else await executeShellCommand(getContainer(containerId), command, output, assertAccess, commandLifetime.signal);
           writeAuditLog({
             userId: actorId,
             action:
@@ -172,9 +177,6 @@ export async function handleConsoleConnection(
             targetId: serverId,
           });
           throw new Error("Console command failed");
-        } finally {
-          stdout.end();
-          stderr.end();
         }
       });
     } catch {
@@ -204,7 +206,10 @@ export async function handleConsoleConnection(
       return;
     }
     pendingMessages.push(socketMessageText(raw));
-    void drain();
+    void drain().catch(() => {
+      logger.warn("Console message processing failed", { serverId, mode });
+      ws.close(1011, "Console message processing failed");
+    });
   });
 
   // A console command grant never grants general log reading, including the
@@ -223,36 +228,4 @@ export async function handleConsoleConnection(
       endedMessage: "Log stream ended",
     });
   }
-}
-
-async function executeShell(
-  container: Docker.Container,
-  command: string,
-  output: GameCommandOutput,
-  assertAccess: () => void,
-): Promise<void> {
-  // Run the timeout inside the managed container. Closing a Docker exec stream
-  // alone does not terminate its process and must never be used as a substitute.
-  const exec = await container.exec({
-    Cmd: ["timeout", "-k", "5", "60", "/bin/sh", "-c", command],
-    AttachStdout: true,
-    AttachStderr: true,
-    Tty: false,
-  });
-  assertAccess();
-  const stream = await exec.start();
-  const stdout = new TextDecoder("utf-8", { ignoreBOM: true });
-  const stderr = new TextDecoder("utf-8", { ignoreBOM: true });
-  try {
-    await demuxDockerStream(stream.readable,
-      chunk => output.stdout(stdout.decode(chunk, { stream: true })),
-      chunk => output.stderr(stderr.decode(chunk, { stream: true })),
-    );
-    const out = stdout.decode(), err = stderr.decode();
-    if (out) output.stdout(out);
-    if (err) output.stderr(err);
-  } finally { stream.abort(); }
-  const result = await exec.inspect();
-  if (result.Running || result.ExitCode !== 0)
-    throw new Error("Shell command failed or timed out");
 }

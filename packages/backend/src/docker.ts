@@ -21,6 +21,7 @@ import {
   LABEL_GAME,
 } from "./discovery.js";
 import type { ServerObservation } from "./identity.js";
+import { isSensitiveKey } from "./sensitive-keys.js";
 import {
   dockerContainerIdSchema,
   type DockerContainerId,
@@ -210,7 +211,7 @@ function toServerObservation(
     const key = entry.slice(0, split);
     if (
       credentialNames.has(key) ||
-      /password|passwd|secret|token|credential|rconpw/i.test(key) ||
+      isSensitiveKey(key) ||
       key === "RCON_PORT" ||
       key === "ENABLE_RCON"
     )

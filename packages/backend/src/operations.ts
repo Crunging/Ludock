@@ -2,6 +2,7 @@ import type { Operation } from "@ludock/shared";
 import { getDatabase, findUserById, writeAuditLog } from "./database.js";
 import { publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
+import { notifyEvent } from "./notifications.js";
 
 interface OperationRow {
   id: string;
@@ -240,6 +241,21 @@ function schedule() {
     settled = runNext();
   }, 0);
 }
+function notifyScheduledFailure(row: OperationRow): void {
+  let input: Record<string, unknown>;
+  try {
+    input = parseObject(row.input_json);
+  } catch {
+    return;
+  }
+  if (typeof input.scheduleId !== "string") return;
+  // The backup handler may already have recorded its failure. Share that event
+  // key while covering failures before the handler reaches its notification.
+  notifyEvent(
+    row.kind === "backup" ? `backup-failed:${row.id}` : `schedule-failed:${row.id}`,
+    "A scheduled Ludock action failed. Review its operation details.",
+  );
+}
 async function runNext() {
   if (!enabled || running) return;
   const row = getDatabase()
@@ -273,6 +289,7 @@ async function runNext() {
     );
   } catch (error) {
     finish(jobIdentity(row), "failed", null, publicError(error).error);
+    notifyScheduledFailure(row);
   } finally {
     running = false;
     schedule();

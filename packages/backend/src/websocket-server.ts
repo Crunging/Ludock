@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { authenticateWsRequest, type WebSocketAuth } from "./auth.js";
+import { createClientIpResolver } from "./client-ip.js";
 import { handleConsoleConnection } from "./console.js";
 import { handleContainerLogsConnection } from "./container-logs.js";
 import { addEventClient } from "./events.js";
@@ -24,6 +25,7 @@ export interface SocketSession {
 }
 
 export function createWebSocketGateway() {
+  const clientIp = createClientIpResolver();
   const sessions = new Set<SocketSession>();
   const opening = new Set<Promise<void>>();
   let stopping = false;
@@ -132,7 +134,7 @@ export function createWebSocketGateway() {
           MAX_WEBSOCKET_CONNECTIONS - RESERVED_ADMIN_WEBSOCKET_CONNECTIONS)
         return new Response("WebSocket capacity reserved for administrators", { status: 503 });
       const session: SocketSession = {
-        request, auth, kind, remoteAddress: server.requestIP(request)?.address,
+        request, auth, kind, remoteAddress: clientIp(request, server.requestIP(request)?.address),
       };
       // Count an accepted upgrade before its open callback so concurrent
       // handshakes cannot pass the connection cap together.

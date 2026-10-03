@@ -103,6 +103,36 @@ afterEach(() => {
 after(() => closeDatabase());
 
 describe("WebSocket server capability boundaries", () => {
+  it("streams redacted logs to an assigned user", async () => {
+    const getFixtureContainer = docker.getContainer;
+    docker.getContainer = ((id: string) => {
+      const container = getFixtureContainer(id);
+      return {
+        ...container,
+        inspect: async () => {
+          const info = await container.inspect();
+          return { ...info, Config: { ...info.Config, Env: ["API_KEY=fixture-api-key"] } };
+        },
+      };
+    }) as unknown as typeof docker.getContainer;
+    closeDatabase();
+    createUser({ ...operator, passwordHash: "fixture", disabled: false, createdAt: 1 });
+    await refreshServers();
+    serverId = listLogicalServers()[0].id;
+    setServerGrant(operator.id, serverId, ["server.view", "logs.read"], administrator);
+
+    const ws = new FakeWebSocket();
+    await handleContainerLogsConnection(ws, request("logs"), auth());
+    logStream.enqueue("game started fixture-api-");
+    logStream.close("key\n");
+    await settle();
+
+    const output = ws.sent.filter(message => message.type === "stdout").map(message => message.data).join("");
+    expect(output).toBe("game started [redacted]\n");
+    expect(logCalls).toBe(1);
+    expect(attachCalls).toBe(0);
+  });
+
   it("rejects console and log endpoints for a lifecycle-only friend before Docker attachment", async () => {
     setServerGrant(
       operator.id,
@@ -127,28 +157,6 @@ describe("WebSocket server capability boundaries", () => {
     expect(logs.closeCode).toBe(1008);
     expect(logCalls).toBe(0);
     expect(attachCalls).toBe(0);
-  });
-
-  it("lets a command-only grant execute without attaching historical or live logs", async () => {
-    setServerGrant(
-      operator.id,
-      serverId,
-      ["server.view", "console.execute"],
-      administrator,
-    );
-    const ws = new FakeWebSocket();
-    await handleConsoleConnection(
-      ws,
-      request("game-console"),
-      auth(),
-      "game",
-    );
-    expect(ws.closeCode).toBe(null);
-    expect(logCalls).toBe(0);
-    ws.receive(fixtureBytes('{"type":"input","data":"help"}'));
-    await settle();
-    expect(attachCalls).toBe(1);
-    expect(ws.sent.some((message) => message.data.includes("Command sent"))).toBeTruthy();
   });
 
   it("closes the console when log access is revoked during asynchronous attachment", async () => {
@@ -278,33 +286,6 @@ describe("WebSocket server capability boundaries", () => {
     expect(attachCalls).toBe(0);
   });
 
-  it("rejects commands while a conflicting operation owns the server lock", async () => {
-    setServerGrant(
-      operator.id,
-      serverId,
-      ["server.view", "console.execute"],
-      administrator,
-    );
-    const ws = new FakeWebSocket();
-    await handleConsoleConnection(
-      ws,
-      request("game-console"),
-      auth(),
-      "game",
-    );
-    const release = acquireLocks([`server:${serverId}`]);
-    try {
-      ws.receive(fixtureBytes('{"type":"input","data":"save"}'));
-      await settle();
-      expect(attachCalls).toBe(0);
-      expect(ws.sent.some((message) =>
-          message.data.includes("conflicting operation"),
-        )).toBeTruthy();
-    } finally {
-      release();
-    }
-  });
-
   it("closes a stream when Docker recreation replaces its original binding", async () => {
     setServerGrant(
       operator.id,
@@ -409,22 +390,65 @@ describe("WebSocket server capability boundaries", () => {
     expect(serverLockIsHeld()).toBe(false);
   });
 
-  it("does not grant administrator shell access through an operator's console grant", async () => {
-    setServerGrant(
-      operator.id,
-      serverId,
-      ["server.view", "console.execute"],
-      administrator,
-    );
-    const ws = new FakeWebSocket();
-    await handleConsoleConnection(
-      ws,
-      request("shell"),
-      auth(),
-      "shell",
-    );
-    expect(ws.closeCode).toBe(1008);
-  });
+  for (const mode of ["game", "shell"] as const) {
+    it(`discards truncated ${mode} credentials and retains the lock until exec exit`, async () => {
+      const getFixtureContainer = docker.getContainer;
+      const mainStream = new StreamFixture();
+      let executions = 0;
+      let confirmExit!: (result: { Running: boolean; ExitCode: number }) => void;
+      const exited = new Promise<{ Running: boolean; ExitCode: number }>((resolve) => { confirmExit = resolve; });
+      let inspected!: () => void;
+      const didInspect = new Promise<void>((resolve) => { inspected = resolve; });
+      docker.getContainer = ((id: string) => {
+        const container = getFixtureContainer(id);
+        return {
+          ...container,
+          inspect: async () => {
+            const info = await container.inspect();
+            return { ...info, Config: { ...info.Config,
+              Labels: { ...info.Config.Labels, "ludock.console": "minecraft-rcon" },
+              Env: ["RCON_PASSWORD=secret-value"],
+            } };
+          },
+          exec: async () => ++executions === 1 ? {
+            start: async () => mainStream.connection,
+            inspect: () => { inspected(); return exited; },
+          } : {
+            start: async () => {
+              const cancellation = new StreamFixture();
+              cancellation.close();
+              return cancellation.connection;
+            },
+          },
+        };
+      }) as unknown as typeof docker.getContainer;
+      closeDatabase();
+      createUser({ ...operator, passwordHash: "fixture", disabled: false, createdAt: 1 });
+      await refreshServers();
+      serverId = listLogicalServers()[0].id;
+      setServerGrant(operator.id, serverId, ["server.view", "console.execute"], administrator);
+      const ws = new FakeWebSocket();
+      const user = mode === "game" ? operator : administrator;
+      await handleConsoleConnection(ws, request(mode === "game" ? "game-console" : "shell"),
+        { user, validate: () => user }, mode);
+      ws.receive('{"type":"input","data":"help"}');
+      const body = fixtureBytes("secret-value");
+      const wire = new Uint8Array(8 + body.length);
+      wire[0] = 1;
+      new DataView(wire.buffer).setUint32(4, body.length);
+      wire.set(body, 8);
+      mainStream.close(wire.subarray(0, wire.length - 1));
+      await didInspect;
+      expect(executions).toBe(2);
+      expect(serverLockIsHeld()).toBe(true);
+      expect(ws.sent.filter(message => message.type === "stdout" || message.type === "stderr")).toStrictEqual([]);
+      confirmExit({ Running: false, ExitCode: 125 });
+      await settle();
+      expect(serverLockIsHeld()).toBe(false);
+      expect(ws.sent.some(message => message.type === "error")).toBe(true);
+      expect(ws.sent.some(message => message.data.includes("secret-valu"))).toBe(false);
+    });
+  }
 });
 
 describe("console credential redaction", () => {

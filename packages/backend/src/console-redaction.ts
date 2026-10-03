@@ -1,4 +1,5 @@
 import type { ServerObservation } from "./identity.js";
+import { isSensitiveKey } from "./sensitive-keys.js";
 
 export function observationSecrets(observation: ServerObservation): string[] {
   const configuration = observation.gameConfiguration ?? {};
@@ -8,7 +9,7 @@ export function observationSecrets(observation: ServerObservation): string[] {
       Object.entries(configuration)
         .filter(
           ([key]) =>
-            /password|passwd|secret|token|credential|rconpw/i.test(key) ||
+            isSensitiveKey(key) ||
             key === `env:${customPasswordVariable}` ||
             key === customPasswordVariable,
         )

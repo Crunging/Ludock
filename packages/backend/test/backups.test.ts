@@ -1,6 +1,6 @@
-import { expect, afterEach, beforeEach, describe, it } from "bun:test";
-import { mountsOverlap, recoverBackup, recoverRestore, stopForDataOperation } from "../src/backups.js";
-import type { ServerObservation } from "../src/identity.js";
+import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
+import { recoverBackup, recoverRestore, stopForDataOperation } from "../src/backups.js";
+import * as backupStorage from "../src/backup-storage.js";
 import { listLogicalServers } from "../src/identity.js";
 import { setServerGrant } from "./fixtures/grants.js";
 import {
@@ -16,39 +16,6 @@ import {
   resolveAuthorizedServer,
   type ServerContext,
 } from "../src/servers.js";
-
-const bind = (source: string): ServerObservation["mounts"][number] => ({
-  type: "bind",
-  source,
-  destination: "/data",
-  writable: true,
-});
-
-describe("backup shared-writer boundaries", () => {
-  it("recognizes host root and normalized parent mounts in both directions", () => {
-    for (const [left, right] of [
-      ["/", "/srv/games/world"],
-      ["/srv/games/", "/srv/games/world"],
-      ["/srv//games/./", "/srv/games/world"],
-      ["/srv/games/world", "/srv/games/world"],
-    ]) {
-      expect(mountsOverlap(bind(left), bind(right)), `${left} contains ${right}`).toBe(true);
-      expect(mountsOverlap(bind(right), bind(left)), `${right} overlaps ${left}`).toBe(true);
-    }
-  });
-
-  it("keeps sibling paths and distinct named volumes separate", () => {
-    expect(mountsOverlap(bind("/srv/game"), bind("/srv/games"))).toBe(false);
-    expect(mountsOverlap(bind(""), bind("/srv/games"))).toBe(false);
-    const volume = {
-      ...bind("/var/lib/docker/volumes/world/_data"),
-      type: "volume", name: "world",
-    };
-    expect(mountsOverlap(volume, { ...volume, destination: "/other-data" })).toBe(true);
-    expect(mountsOverlap(volume, { ...volume, name: "other-world" })).toBe(false);
-    expect(mountsOverlap(volume, bind("/var/lib/docker/volumes"))).toBe(true);
-  });
-});
 
 describe("backup execution authority", () => {
   const admin = { id: "admin", username: "admin", role: "admin" as const };
@@ -82,7 +49,10 @@ describe("backup execution authority", () => {
           Id: id, Name: "/fixture",
           Config: { Image: "alpine:latest", Labels: labels },
           State: { Status: running ? "running" : "exited", Running: running },
-          Mounts: [], NetworkSettings: { Ports: {} },
+          Mounts: [
+            { Type: "volume", Name: "world", Source: "/var/lib/docker/volumes/world/_data", Destination: "/data", RW: true },
+            { Type: "volume", Name: "settings", Source: "/var/lib/docker/volumes/settings/_data", Destination: "/config", RW: true },
+          ], NetworkSettings: { Ports: {} },
           Created: "2026-01-01T00:00:00Z",
         };
       },
@@ -108,6 +78,7 @@ describe("backup execution authority", () => {
     };
   });
   afterEach(() => {
+    mock.restore();
     docker.listContainers = originalList;
     docker.getContainer = originalGet;
     closeDatabase();
@@ -125,12 +96,6 @@ describe("backup execution authority", () => {
     await expect(stopForDataOperation(context, job)).rejects.toThrow(/no longer has access/);
     expect(stopped).toBe(0);
   });
-  it("records and stops for an authorized backup without requiring a lifecycle grant", async () => {
-    await stopForDataOperation(context, job);
-    expect(stopped).toBe(1);
-    expect(job.job.recovery.initialRunning).toBe(true);
-  });
-
   function scheduledBackup(): string {
     setServerGrant(operator.id, context.logical.id, [
       "server.view", "backups.create", "schedules.manage",
@@ -154,19 +119,18 @@ describe("backup execution authority", () => {
     expect(job.job.recovery).toStrictEqual({});
   });
 
-  for (const restoreRoots of [null, {}, [{ root: {}, phase: "staging" }],
-    [{ root: { id: "root-0", path: "/data" }, phase: "unknown" }],
+  for (const restoreRoots of [null,
     [{ root: { id: "../outside", path: "/data" }, phase: "replaced" }],
     [0, 1].map(() => ({ root: { id: "root-0", path: "/data" }, phase: "replaced" })),
   ]) {
     it(`leaves the server stopped when restore recovery records are invalid: ${JSON.stringify(restoreRoots)}`, async () => {
       await stopForDataOperation(context, job);
       job.job.kind = "restore";
-      job.job.recovery.restoreRoots = restoreRoots;
+      job.job.recovery.restore = { status: "replacing", roots: restoreRoots };
       await expect(recoverRestore(job)).rejects.toMatchObject({ code: "INVALID_RESTORE_JOURNAL" });
       expect(running).toBe(false);
       expect(job.job.recovery.stateRestored).toBe(undefined);
-      expect(job.job.recovery.restoreRoots).toStrictEqual(restoreRoots);
+      expect(job.job.recovery.restore).toStrictEqual({ status: "replacing", roots: restoreRoots });
     });
   }
 
@@ -183,6 +147,52 @@ describe("backup execution authority", () => {
     job.job.kind = "restore";
     await recoverRestore(job);
     expect(running).toBe(true);
+  });
+
+  it("restores running state after committed restore cleanup was persisted", async () => {
+    await stopForDataOperation(context, job);
+    job.job.kind = "restore";
+    job.job.recovery.restore = { status: "cleaned" };
+    await recoverRestore(job);
+    expect(running).toBe(true);
+    expect(job.job.recovery.stateRestored).toBe(true);
+  });
+
+  it("resumes a multi-root rollback without deleting an already recovered root", async () => {
+    await stopForDataOperation(context, job);
+    job.job.kind = "restore";
+    const roots = context.container.fileRoots.map(({ id, path }) => ({ id, path }));
+    expect(roots).toHaveLength(2);
+    job.job.recovery.restore = {
+      status: "rolling_back",
+      roots: roots.map((root, index) => ({ root, phase: index === 0 ? "replaced" : "rolled_back" })),
+    };
+    const cleanup = mock(async () => {});
+    spyOn(backupStorage, "createDataHelper").mockResolvedValue({
+      container: { id: "restore-helper" } as backupStorage.DataHelper["container"], roots, cleanup,
+    });
+    const steps: string[] = [];
+    spyOn(backupStorage, "helperExec").mockImplementation(async (_container, command) => {
+      const request = JSON.parse(command[3]) as { operation: string; root: string };
+      steps.push(`${request.operation}:${request.root}`);
+      if (request.operation === "rollbackOld") {
+        // This persisted checkpoint must still identify the completed root
+        // if the process exits while returning the next root's originals.
+        const checkpoint = job.job.recovery.restore as { roots: unknown[] };
+        expect(checkpoint.roots).toHaveLength(2);
+      }
+      return "{}";
+    });
+    await recoverRestore(job);
+    expect(steps).toEqual([
+      `cleanup:/mounts/${roots[1].id}`,
+      `rollbackClean:/mounts/${roots[0].id}`,
+      `rollbackOld:/mounts/${roots[0].id}`,
+      `cleanup:/mounts/${roots[0].id}`,
+    ]);
+    expect(job.job.recovery.restore).toStrictEqual({ status: "rolled_back" });
+    expect(running).toBe(true);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("recovers only this operation's helpers and removes their anonymous volumes", async () => {

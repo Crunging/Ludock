@@ -37,14 +37,15 @@ export function startServer(options: {
     if (backgroundTask || shuttingDown)
       return backgroundTask ?? Promise.resolve();
     backgroundTask = (async () => {
+      let current: Awaited<ReturnType<typeof refreshServers>> | null = null;
       try {
-        await refreshServers();
+        current = await refreshServers();
         runSchedules();
       } catch {
         logger.warn("Discovery and schedules are temporarily unavailable");
       }
       try {
-        await checkAvailability();
+        checkAvailability(current);
       } catch {
         logger.warn("Availability checks are temporarily unavailable");
       }

@@ -70,8 +70,15 @@ describe.skipIf(Boolean(process.platform !== "linux"))(
     }
 
     it("lists, reads, writes, renames, and deletes files without a shell or archive mutation", async () => {
+      if (process.getuid!() === 0) fs.chownSync(root, 1234, 2345);
+      const owner = fs.statSync(root);
       expect((await run("mkdir", "world")).exitCode).toBe(0);
       expect((await run("upload", "world/config.txt", { size: 12 }, "hello world!")).exitCode).toBe(0);
+      for (const relative of ["world", "world/config.txt"]) {
+        const created = fs.statSync(path.join(root, relative));
+        expect(created.uid).toBe(owner.uid);
+        expect(created.gid).toBe(owner.gid);
+      }
       expect((await run("download", "world/config.txt")).stdout).toBe("hello world!");
       const listing = JSON.parse((await run("list", "world")).stdout) as Array<{
         name: string;

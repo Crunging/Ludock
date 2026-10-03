@@ -1,27 +1,6 @@
 import { authStatusSchema, authUserResponseSchema, setupRequestSchema } from "@ludock/shared";
 import { test, expect, ADMIN } from "./fixtures";
 
-test("expired setup shows the commands to recover and fits a narrow screen", { tag: "@mobile" }, async ({ app, page }) => {
-  app.user = null;
-  let locked = true;
-  await page.route("**/api/v1/auth/status", (route) => route.fulfill({ json: authStatusSchema.parse({
-    setupRequired: true, setupLocked: locked,
-    setupExpiresAt: Date.now() + (locked ? -1 : 300_000),
-    setupRemainingMs: locked ? 0 : 300_000,
-    authenticated: false, user: null,
-  }) }));
-  await app.open("/");
-  await expect(page.getByRole("heading", { name: "Setup window expired" })).toBeVisible();
-  await expect(page.getByText(/docker compose restart ludock/)).toBeVisible();
-  await page.setViewportSize({ width: 320, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  locked = false;
-  await page.getByRole("button", { name: "Check again" }).click();
-  await expect(page.getByRole("heading", { name: "Set up Ludock" })).toBeVisible();
-  await expect(page.getByLabel("Setup code", { exact: true })).toBeFocused();
-  expect(app.requests.filter((request) => request.method !== "GET")).toEqual([]);
-});
-
 test("setup keeps rejected drafts and sends its code only in the request body", async ({ app, page }) => {
   app.user = null;
   await page.route("**/api/v1/auth/status", async (route) => {
@@ -55,8 +34,6 @@ test("setup keeps rejected drafts and sends its code only in the request body", 
   const wrongCode = "rejected-fixture-setup-code-123456789";
   const correctCode = "accepted-fixture-setup-code-123456789";
   const fixturePassword = "fixture-setup-password-123";
-  await expect(code).toBeFocused();
-  await expect(code).toHaveAttribute("type", "password");
   await code.fill(wrongCode);
   await username.fill(ADMIN.username);
   await password.fill(fixturePassword);

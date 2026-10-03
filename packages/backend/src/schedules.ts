@@ -185,9 +185,17 @@ function publicSchedule(
     nextRunUnavailableReason,
   };
 }
+function scheduleManager(actor: SessionUser, serverId: string, allowUnavailable = false) {
+  const current = currentActor(actor);
+  // Administrators must be able to inspect and remove saved automation while
+  // its container is missing or awaiting review. Enabling work still requires
+  // the normal live-binding capability checks.
+  assertServerCapability(actor, serverId,
+    allowUnavailable && current?.role === "admin" ? "server.view" : "schedules.manage");
+  return current!;
+}
 export function listSchedules(actor: SessionUser, serverId: string) {
-  assertServerCapability(actor, serverId, "schedules.manage");
-  const current = currentActor(actor)!;
+  const current = scheduleManager(actor, serverId, true);
   const query = current.role === "admin"
     ? "SELECT * FROM schedules WHERE server_id=? ORDER BY created_at,id LIMIT ?"
     : "SELECT * FROM schedules WHERE server_id=? AND owner_id=? ORDER BY created_at,id LIMIT ?";
@@ -292,11 +300,10 @@ export function deleteSchedule(
   serverId: string,
   id: string,
 ): void {
-  assertServerCapability(actor, serverId, "schedules.manage");
+  const current = scheduleManager(actor, serverId, true);
   const row = getDatabase()
     .query("SELECT * FROM schedules WHERE id=? AND server_id=?")
     .get(id, serverId) as ScheduleRow | null;
-  const current = currentActor(actor)!;
   if (!row || (current.role !== "admin" && row.owner_id !== current.id))
     throw new AppError("NOT_FOUND", 404, "Schedule not found");
   getDatabase().query("DELETE FROM schedules WHERE id=?").run(id);
@@ -316,8 +323,7 @@ function mutateSchedule(
   expectedRevision: number,
   update: ScheduleInput | boolean,
 ) {
-  assertServerCapability(actor, serverId, "schedules.manage");
-  const current = currentActor(actor)!;
+  const current = scheduleManager(actor, serverId, update === false);
   const db = getDatabase();
   let result: ScheduleRow;
   let changed: boolean;

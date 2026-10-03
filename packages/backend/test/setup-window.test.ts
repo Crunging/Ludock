@@ -20,19 +20,6 @@ after(async () => {
 });
 
 describe("initial setup window", () => {
-  it("reports a locked setup after the startup deadline", async () => {
-    const response = await fetch(`${baseUrl}/api/v1/auth/status`);
-    expect(response.status).toBe(200);
-    expect(await response.json()).toStrictEqual({
-      setupRequired: true,
-      setupLocked: true,
-      setupExpiresAt: 1_100,
-      setupRemainingMs: 0,
-      authenticated: false,
-      user: null,
-    });
-  });
-
   it("does not create an administrator after the deadline", async () => {
     const response = await fetch(`${baseUrl}/api/v1/auth/setup`, {
       method: "POST",

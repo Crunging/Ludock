@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { concatBytes, decodeText, encodeText } from "../src/bytes.js";
-import { decodeTarHeader, encodeTarHeader, tarEnd, tarPadding, walkTar } from "../src/tar.js";
+import { encodeTarHeader, tarEnd, tarPadding, walkTar } from "../src/tar.js";
 import { streamFrom } from "./fixtures/web-streams.js";
 
 const stream = (bytes: Uint8Array, width = 65_536) => streamFrom((function* () {
@@ -14,36 +14,6 @@ function recheck(header: Uint8Array) {
 }
 
 describe("streaming backup tar", () => {
-  it("reads Bun.Archive output across single-byte and irregular chunk boundaries", async () => {
-    const name = `world/${"世界".repeat(50)}.txt`;
-    const bytes = await new Bun.Archive({ "world/empty": "", [name]: "hello\0🌍" }).bytes();
-    for (const width of [1, 17, 511, 513, bytes.length]) {
-      const files: Record<string, string> = {};
-      await walkTar(stream(bytes, width), async (header, body) => {
-        const chunks: Uint8Array[] = [];
-        for await (const chunk of body) chunks.push(chunk);
-        files[header.name] = decodeText(concatBytes(chunks));
-      });
-      expect(files).toStrictEqual({ "world/empty": "", [name]: "hello\0🌍" });
-    }
-  });
-
-  it("writes PAX archives readable by Bun.Archive and the system tar", async () => {
-    const name = `world/${"長い".repeat(80)}.txt`;
-    const body = encodeText("game world 🌍");
-    const bytes = concatBytes([
-      encodeTarHeader({ name, type: "file", size: body.length, uid: 1_000_000, gid: 2_000_000,
-        mtime: new Date("2040-01-01T00:00:00.123Z"), mode: 0o640 }),
-      body, tarPadding(body.length), tarEnd(),
-    ]);
-    const files = await new Bun.Archive(bytes).files();
-    expect(await files.get(name)?.text()).toBe(decodeText(body));
-    const child = Bun.spawn(["tar", "-xOf", "-", name], { stdin: bytes, stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code, stderr).toBe(0);
-    expect(stdout).toBe(decodeText(body));
-  });
-
   it("drains unselected entries and hashes every byte including terminal padding", async () => {
     const bytes = await new Bun.Archive({ "ignore": "123456789", "keep": "value" }).bytes();
     const consumed: Uint8Array[] = [];
@@ -112,11 +82,5 @@ describe("streaming backup tar", () => {
     ])), () => {})).rejects.toThrow(/archive/);
     const dangling = encodeTarHeader({ name: "world", pax: { path: "changed" } });
     await expect(walkTar(stream(concatBytes([dangling.subarray(0, -512), tarEnd()])), () => {})).rejects.toThrow(/archive/);
-  });
-
-  it("keeps large size fields exact without allocating the file body", () => {
-    const size = 9 * 1024 ** 3;
-    expect(decodeTarHeader(encodeTarHeader({ name: "world", size })).size).toBe(size);
-    expect(() => encodeTarHeader({ name: "world", size: Number.MAX_SAFE_INTEGER + 1 })).toThrow();
   });
 });

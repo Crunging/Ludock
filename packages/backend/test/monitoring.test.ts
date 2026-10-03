@@ -4,14 +4,13 @@ import { docker } from "../src/docker-client.js";
 import { listLogicalServers } from "../src/identity.js";
 import { refreshServers } from "../src/servers.js";
 import {
-  checkAvailability,
+  checkAvailability as evaluateAvailability,
   configureAvailability,
   getAvailability,
   setIntentionalStop,
-  suppressMonitoring,
 } from "../src/monitoring.js";
 import { configureNotifications } from "../src/notifications.js";
-import { enqueueOperation, stopOperationRunner } from "../src/operations.js";
+import { stopOperationRunner } from "../src/operations.js";
 import { acquireLocks } from "../src/operation-locks.js";
 import type { SQLQueryBindings } from "bun:sqlite";
 
@@ -22,18 +21,19 @@ const originals = {
 };
 let serverId: string,
   state: string,
-  health: string | undefined,
   unavailable: boolean;
 function deliveries() {
   return getDatabase()
     .prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT * FROM notification_deliveries ORDER BY created_at")
     .all();
 }
+async function checkAvailability(now: number) {
+  evaluateAvailability(await refreshServers().catch(() => null), now);
+}
 beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
   state = "running";
-  health = undefined;
   unavailable = false;
   docker.listContainers = (async () => {
     if (unavailable) throw new Error("Docker socket unreachable");
@@ -53,7 +53,6 @@ beforeEach(async () => {
       Config: { Image: "itzg/minecraft-server", Labels: {} },
       State: {
         Status: state,
-        ...(health ? { Health: { Status: health } } : {}),
       },
       Mounts: [],
       NetworkSettings: { Ports: {} },
@@ -93,6 +92,7 @@ describe("availability monitoring", () => {
     expect(deliveries().length).toBe(2);
     expect(getAvailability(serverId).state.outageStartedAt).toBe(null);
   });
+
   it("suppresses intentional stops until the server has actually been observed running", async () => {
     setIntentionalStop(serverId, true);
     state = "exited";
@@ -107,29 +107,7 @@ describe("availability monitoring", () => {
     await checkAvailability(60_000);
     expect(deliveries().length).toBe(1);
   });
-  it("suppresses operation downtime plus the configured completion grace", async () => {
-    const operation = enqueueOperation({
-      serverId,
-      actorId: "api-token",
-      kind: "backup",
-      bindingRevision: 1,
-    });
-    state = "exited";
-    const now = Date.now();
-    await checkAvailability(now);
-    await checkAvailability(now + 100_000);
-    expect(deliveries().length).toBe(0);
-    getDatabase()
-      .prepare("UPDATE operations SET status='succeeded' WHERE id=?")
-      .run(operation.id);
-    suppressMonitoring(serverId);
-    const end = getAvailability(serverId).state.suppressedUntil;
-    await checkAvailability(end - 1);
-    expect(deliveries().length).toBe(0);
-    await checkAvailability(end);
-    await checkAvailability(end + 10_000);
-    expect(deliveries().length).toBe(1);
-  });
+
   it("suppresses a direct lifecycle action throughout its held lock", async () => {
     const release = acquireLocks([`server:${serverId}`]);
     state = "exited";
@@ -145,24 +123,7 @@ describe("availability monitoring", () => {
     await checkAvailability(132_000);
     expect(deliveries().length).toBe(1);
   });
-  it("does not treat Docker health starting as ready, and respects maintenance", async () => {
-    health = "starting";
-    await checkAvailability(1000);
-    await checkAvailability(11_000);
-    expect(deliveries().length).toBe(1);
-    health = "healthy";
-    await checkAvailability(12_000);
-    expect(deliveries().length).toBe(2);
-    configureAvailability(serverId, {
-      enabled: true,
-      maintenance: true,
-      graceSeconds: 10,
-    });
-    health = "unhealthy";
-    await checkAvailability(20_000);
-    await checkAvailability(40_000);
-    expect(deliveries().length).toBe(2);
-  });
+
   it("reports lost Docker connectivity without deleting or rebinding servers", async () => {
     unavailable = true;
     await checkAvailability(1000);

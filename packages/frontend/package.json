@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun scripts/dev.ts",
+    "dev": "bun ../../scripts/dev.mjs --frontend",
     "build": "bun run typecheck && bun run build:assets",
     "build:assets": "bun scripts/build.ts",
     "typecheck": "tsc -b",

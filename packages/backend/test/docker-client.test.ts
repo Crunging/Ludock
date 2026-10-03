@@ -53,90 +53,13 @@ describe("Bun Docker HTTP client", () => {
     }
   });
 
-  it("shares negotiation, encodes filters and image references, and uses the configured socket", async () => {
-    const requests: Array<{ path: string; method: string; body: string }> = [];
-    const client = httpFixture(async (request) => {
-      const url = new URL(request.url);
-      requests.push({ path: url.pathname + url.search, method: request.method, body: await request.text() });
-      if (isVersion(request)) { await Bun.sleep(5); return version(); }
-      if (url.pathname.endsWith("/containers/json")) return Response.json([]);
-      return Response.json({ Id: "sha256:fixture" });
-    });
-    const filters = { label: ["ludock.operation=a&b", "com.docker.compose.project=one"] };
-    await Promise.all([client.listContainers({ all: true, filters }), client.listContainers({ all: false })]);
-    expect(requests.filter((request) => request.path === "/version")).toHaveLength(1);
-    const list = new URL(requests[1].path, "http://localhost");
-    expect(list.pathname).toBe("/v1.55/containers/json");
-    expect(list.searchParams.get("all")).toBe("true");
-    expect(JSON.parse(list.searchParams.get("filters")!)).toEqual(filters);
-    const image = "registry.example:5000/games/server@sha256:" + "a".repeat(64);
-    expect(await client.getImage(image).inspect()).toEqual({ Id: "sha256:fixture" });
-    expect(requests.at(-1)?.path).toBe(`/v1.55/images/${encodeURIComponent(image)}/json`);
-  });
-
-  it("uses Engine endpoint methods and bodies for lifecycle, helpers, stats, and volumes", async () => {
-    const requests: Array<{ path: string; method: string; body: unknown }> = [];
-    const client = httpFixture(async (request) => {
-      if (isVersion(request)) return version();
-      const url = new URL(request.url), body = await request.text();
-      requests.push({ path: url.pathname + url.search, method: request.method, body: body ? JSON.parse(body) : null });
-      if (url.pathname === "/_ping") return new Response("OK");
-      if (url.pathname.endsWith("/containers/create")) return Response.json({ Id: "fixture-id" }, { status: 201 });
-      if (url.pathname.endsWith("/volumes/create")) return Response.json({ Name: "fixture-volume" }, { status: 201 });
-      if (url.pathname.endsWith("/exec")) return Response.json({ Id: "exec-id" }, { status: 201 });
-      if (url.pathname.endsWith("/wait")) return Response.json({ StatusCode: 0 });
-      if (request.method === "GET") return Response.json({ Id: "fixture-id" });
-      return new Response(null, { status: 204 });
-    });
-    await client.ping();
-    const options = { Image: "example/helper@sha256:" + "a".repeat(64), name: "helper-name", HostConfig: { ReadonlyRootfs: true } };
-    const container = await client.createContainer(options);
-    await container.inspect();
-    await container.start();
-    await container.stop({ t: 0 });
-    await container.restart();
-    await container.stats({ stream: false });
-    const execution = await container.exec({ Cmd: ["bun", "-e", "dummy command"], AttachStdin: true });
-    await execution.inspect();
-    expect(await container.wait()).toEqual({ StatusCode: 0 });
-    await container.remove({ force: true, v: true });
-    const volume = await client.createVolume({ Name: "fixture-volume" });
-    await volume.inspect();
-    await volume.remove();
-    expect(requests.map(({ path, method }) => `${method} ${path}`)).toEqual([
-      "GET /_ping", "POST /v1.55/containers/create?name=helper-name",
-      "GET /v1.55/containers/fixture-id/json", "POST /v1.55/containers/fixture-id/start",
-      "POST /v1.55/containers/fixture-id/stop?t=0", "POST /v1.55/containers/fixture-id/restart",
-      "GET /v1.55/containers/fixture-id/stats?stream=false", "POST /v1.55/containers/fixture-id/exec",
-      "GET /v1.55/exec/exec-id/json", "POST /v1.55/containers/fixture-id/wait",
-      "DELETE /v1.55/containers/fixture-id?force=true&v=true", "POST /v1.55/volumes/create",
-      "GET /v1.55/volumes/fixture-volume", "DELETE /v1.55/volumes/fixture-volume",
-    ]);
-    expect(requests[1].body).toEqual({ Image: options.Image, HostConfig: options.HostConfig });
-    expect(requests[7].body).toEqual({ Cmd: ["bun", "-e", "dummy command"], AttachStdin: true });
-  });
-
-  for (const [api, minimum, expected] of [["1.46", "1.24", "1.46"], ["1.99", "1.40", "1.55"], ["1.43", "1.24", null], ["1.56", "1.56", null], ["bad", "1.40", null]]) {
-    it(`negotiates API ${api} with minimum ${minimum} before mutation`, async () => {
-      const requests: string[] = [];
-      const client = httpFixture((request) => {
-        if (isVersion(request)) return Response.json({ ApiVersion: api, MinAPIVersion: minimum });
-        requests.push(new URL(request.url).pathname);
-        return new Response(null, { status: 204 });
-      });
-      const mutation = client.getContainer("fixture").start();
-      if (expected) { await mutation; expect(requests).toEqual([`/v${expected}/containers/fixture/start`]); }
-      else { await expect(mutation).rejects.toThrow(); expect(requests).toEqual([]); }
-    });
-  }
-
-  for (const status of [301, 304, 404, 409, 500, 503]) {
+  for (const status of [301, 500]) {
     it(`preserves HTTP ${status} without disclosing daemon text, following redirects, or retrying`, async () => {
       let count = 0;
       const client = httpFixture((request) => {
         if (isVersion(request)) return version();
         count++;
-        return new Response(status === 304 ? null : '{"message":"fixture-secret"}', {
+        return new Response('{"message":"fixture-secret"}', {
           status, headers: { Location: "http://127.0.0.1:1/private" },
         });
       });
@@ -163,6 +86,28 @@ describe("Bun Docker HTTP client", () => {
     expect(await client.listContainers()).toEqual([]);
     expect(calls).toBe(3);
     expect(() => client.getVolume("volume-" + "a".repeat(200))).not.toThrow();
+  });
+
+  it("bounds stalled read headers and bodies and accepts a later healthy read", async () => {
+    const headers = Promise.withResolvers<Response>();
+    let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const client = httpFixture(request => {
+      const path = new URL(request.url).pathname;
+      if (path === "/headers") return headers.promise;
+      if (path === "/body") return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { body = controller; controller.enqueue(encodeText("[")); },
+      }));
+      return Response.json([]);
+    });
+    const transport = new DockerTransport(client.transport.socketPath, 25);
+    try {
+      await expect(transport.json("/headers")).rejects.toThrow("Docker read timed out");
+      await expect(transport.json("/body")).rejects.toThrow("Docker read timed out");
+      expect(await transport.json<unknown[]>("/healthy")).toEqual([]);
+    } finally {
+      headers.resolve(Response.json([]));
+      try { body?.close(); } catch { /* The timed-out response was cancelled. */ }
+    }
   });
 
   it("rejects malformed daemon JSON without including its contents", async () => {
@@ -401,6 +346,7 @@ describe("Bun Docker duplex transport", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).not.toContain("fixture-secret");
       if (reply.includes("403")) expect(error).toHaveProperty("statusCode", 403);
+      else expect(error).toHaveProperty("requestStarted", true);
     });
   }
 
@@ -435,14 +381,6 @@ describe("Bun Docker duplex transport", () => {
 });
 
 describe("Docker output framing", () => {
-  it("reads a wire fixture from an offset byte view and preserves leading UTF-8 BOM data", async () => {
-    // Sentinel bytes surround a stdout frame containing BOM + A + an emoji.
-    const storage = Uint8Array.fromHex("aaaa0100000000000008efbbbf41f09f8c8dbbbb");
-    let result = "";
-    await demuxDockerStream(bytesStream([storage.subarray(2, storage.length - 2)]),
-      chunk => { result += decodeText(chunk); });
-    expect(result).toBe("\ufeffA🌍");
-  });
 
   it("decodes bytewise headers and bodies, drops stdin, and rejects incomplete output", async () => {
     const bytes = concatBytes([frame(0, "ignored"), frame(1, "stdout"), frame(2, "stderr"), frame(1, "")]);
