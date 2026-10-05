@@ -26,7 +26,8 @@ import { streamFrom } from "./fixtures/web-streams.js";
 function managed(fields: Partial<ManagedContainer> & Pick<ManagedContainer, "id">): ManagedContainer {
   return {
     shortId: fields.id.slice(0, 12), name: "game", displayName: "game", image: "example/game",
-    state: "running", status: "running", gameType: "unknown", gameConsole: null,
+    state: "running", status: "running", health: null, stateSince: null, exit: null,
+    gameType: "unknown", gameName: "Other game", connectPort: null, gameConsole: null,
     fileRoots: [], ports: [], created: 0, labels: { "ludock.enable": "true" },
     ...fields,
   };

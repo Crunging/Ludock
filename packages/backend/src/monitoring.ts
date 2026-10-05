@@ -107,7 +107,7 @@ export function checkAvailability(
     const healthy =
       server.status === "active" &&
       container?.state === "running" &&
-      !/\((?:unhealthy|starting)\)/i.test(container.status);
+      container.health !== "unhealthy" && container.health !== "starting";
     if (healthy) {
       if (row.notified)
         notifyEvent(

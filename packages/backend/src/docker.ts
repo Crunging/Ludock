@@ -7,10 +7,11 @@ import {
   getGameConsoleAdapterSummary,
   resolveGameConsoleAdapter,
   type GameConsoleAdapterId,
+  type QuickCommand,
 } from "./game-console.js";
 import type { FileRoot } from "@ludock/shared";
 import { getFileRoots } from "./file-storage.js";
-import { inferGameType } from "./server-presets.js";
+import { gameDisplayName, getGameIntegration, inferGameType } from "./server-presets.js";
 import {
   approvedConfigurationLabels,
   composeIdentityLabels,
@@ -24,6 +25,7 @@ import type { ServerObservation } from "./identity.js";
 import { isSensitiveKey } from "./sensitive-keys.js";
 import {
   dockerContainerIdSchema,
+  type ContainerHealth,
   type DockerContainerId,
 } from "@ludock/shared";
 
@@ -43,11 +45,18 @@ export interface ManagedContainer {
   image: string;
   state: string;
   status: string;
+  health: ContainerHealth | null;
+  stateSince: number | null;
+  exit: { code: number; oomKilled: boolean } | null;
   gameType: string;
+  gameName: string;
+  /** Published host port for the game's own port, or the first published port. */
+  connectPort: number | null;
   gameConsole: {
     id: GameConsoleAdapterId;
     name: string;
     commandPlaceholder: string;
+    commands: QuickCommand[];
   } | null;
   fileRoots: FileRoot[];
   ports: Array<{ private: number; public: number; type: string }>;
@@ -155,10 +164,32 @@ export async function getManagedContainerObservation(
   };
 }
 
+function containerHealth(info: Docker.ContainerInspectInfo): ContainerHealth | null {
+  const status = info.State.Health?.Status;
+  return status === "starting" || status === "healthy" || status === "unhealthy"
+    ? status
+    : null;
+}
+
+/** Docker reports never-set times as year 0001. */
+function dockerTime(value: string | undefined): number | null {
+  const time = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(time) && time > 0 ? time : null;
+}
+
+function connectPort(
+  ports: ManagedContainer["ports"],
+  gamePort: number | undefined,
+): number | null {
+  const published = ports.filter((port) => port.public > 0);
+  return (published.find((port) => port.private === gamePort) ?? published[0])?.public ?? null;
+}
+
 function toInspectedManagedContainer(
   info: Docker.ContainerInspectInfo,
 ): ManagedContainer {
   const labels = info.Config.Labels || {};
+  const gameType = labels[LABEL_GAME]?.trim() || inferGameType(info.Config.Image);
   const managed = {
     id: assertValidContainerId(info.Id),
     shortId: info.Id.substring(0, 12),
@@ -167,7 +198,18 @@ function toInspectedManagedContainer(
     image: info.Config.Image,
     state: info.State.Status,
     status: `${info.State.Status}${info.State.Health ? ` (${info.State.Health.Status})` : ""}`,
-    gameType: labels[LABEL_GAME]?.trim() || inferGameType(info.Config.Image),
+    health: containerHealth(info),
+    stateSince: info.State.Status === "running"
+      ? dockerTime(info.State.StartedAt)
+      : info.State.Status === "exited" || info.State.Status === "dead"
+        ? dockerTime(info.State.FinishedAt)
+        : null,
+    exit: (info.State.Status === "exited" || info.State.Status === "dead") &&
+      Number.isInteger(info.State.ExitCode)
+      ? { code: info.State.ExitCode, oomKilled: info.State.OOMKilled === true }
+      : null,
+    gameType,
+    gameName: gameDisplayName(gameType),
     ports: Object.entries(info.NetworkSettings.Ports || {}).flatMap(
       ([containerPort, bindings]) => {
         if (!bindings) return [];
@@ -184,6 +226,7 @@ function toInspectedManagedContainer(
   };
   return {
     ...managed,
+    connectPort: connectPort(managed.ports, getGameIntegration(gameType)?.gamePort),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, info.Mounts || []),
   };

@@ -39,7 +39,13 @@ mock.module("../src/api", () => ({
 const { default: Console } = await import("../src/pages/Console");
 
 const server = serverFixture({
-  gameConsole: { id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "help" },
+  gameConsole: {
+    id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "help",
+    commands: [
+      { label: "List players", command: "list" },
+      { label: "Message players", command: "say " },
+    ],
+  },
   permissions: [...SERVER_CAPABILITIES],
 });
 let transport: ReturnType<typeof useWebSocket>;
@@ -84,6 +90,39 @@ async function openConnection() {
   await waitFor(() => expect(socketOptions.url).toContain("/ws/v1/"));
   await act(async () => { socketOptions.onOpen?.(); });
 }
+
+describe("console shortcuts", () => {
+  it("sends complete common commands at once and prefills ones that need a message", async () => {
+    consolePage();
+    await openConnection();
+    const input = screen.getByRole("textbox", { name: "Game command" }) as HTMLInputElement;
+    await userEvent.type(input, "whitelist add Steve");
+    await userEvent.click(screen.getByRole("button", { name: "List players" }));
+    expect(transport.send).toHaveBeenCalledWith(JSON.stringify({ type: "input", data: "list" }));
+    expect(input.value).toBe("whitelist add Steve");
+    await userEvent.click(screen.getByRole("button", { name: "Message players" }));
+    expect(input.value).toBe("say ");
+    expect(transport.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("steps through sent commands with the arrow keys and restores the unsent draft", async () => {
+    consolePage();
+    await openConnection();
+    const input = screen.getByRole("textbox", { name: "Game command" }) as HTMLInputElement;
+    await userEvent.type(input, "time set day{Enter}");
+    await userEvent.type(input, "weather clear{Enter}");
+    await userEvent.type(input, "difficulty");
+    await userEvent.keyboard("{ArrowUp}");
+    expect(input.value).toBe("weather clear");
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(input.value).toBe("time set day");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(input.value).toBe("weather clear");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(input.value).toBe("difficulty");
+    expect(transport.send).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("console recovery", () => {
   it("retains an editable disconnected draft and never resends it on recovery", async () => {

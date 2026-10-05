@@ -19,6 +19,7 @@ test("folder creation and deletion require explicit confirmation", async ({ app,
     path: `/servers/${RUNNING_ID}/files/directory`,
     body: { root: "data", path: "", name: "plugins" },
   });
+  await row.getByRole("button", { name: "Actions for plugins", exact: true }).click();
   await row.getByRole("button", { name: "Delete", exact: true }).click();
   const deletion = page.getByRole("dialog", { name: "Delete “plugins”?", exact: true });
   expect(app.requests.filter((request) => request.method === "DELETE")).toEqual([]);

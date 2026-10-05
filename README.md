@@ -18,7 +18,7 @@ provision servers or edit their definitions.
 
 The current interface, shown with demo servers and data.
 
-**Servers** — status, ports, recent backups, and everyday controls.
+**Servers** — state, the address players connect to, recent backups, and everyday controls.
 
 ![Ludock server list with Minecraft, Factorio, and Valheim demo servers](./docs/screenshots/servers.png)
 

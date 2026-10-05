@@ -27,6 +27,8 @@ import {
   currentActor,
   getEffectiveCapabilities,
 } from "./authorization.js";
+import { gameDisplayName } from "./server-presets.js";
+import { connectionHost } from "./settings.js";
 
 let refreshing: Promise<Map<string, ManagedContainer>> | null = null;
 export async function refreshServers(): Promise<Map<string, ManagedContainer>> {
@@ -55,7 +57,12 @@ function toPublicServer(
       image: "",
       state: logical.status,
       status: logical.status.replaceAll("_", " "),
+      health: null,
+      stateSince: null,
+      exit: null,
       gameType: logical.gameType,
+      gameName: gameDisplayName(logical.gameType),
+      connectPort: null,
       gameConsole: null,
       fileRoots: [],
       ports: [],
@@ -63,6 +70,9 @@ function toPublicServer(
       labels: {},
     }),
     id: logical.id,
+    connection: container?.connectPort
+      ? { host: connectionHost(), port: container.connectPort }
+      : null,
     bindingStatus: logical.status,
     permissions,
     // Administrators retain durable backup history when a container binding is
@@ -154,6 +164,9 @@ export async function getServerSnapshot(
       ...server,
       state: "unknown",
       status: "Live status unavailable",
+      health: null,
+      stateSince: null,
+      exit: null,
     } : server,
     stats: discoveryUnavailable ? null : stats,
     discoveryUnavailable,

@@ -14,6 +14,7 @@ export const diagnosticsResponseSchema = z.object({
 });
 export const gameIntegrationSchema = z.object({
   gameType: z.string(),
+  name: z.string(),
   repositories: z.array(z.string()),
   /** Display name of the built-in console adapter, if any. */
   console: z.string().nullable(),

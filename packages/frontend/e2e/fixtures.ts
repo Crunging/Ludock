@@ -46,11 +46,21 @@ export function makeServers(): Server[] {
     image: "itzg/minecraft-server:java21",
     state: "running",
     status: "Up 2 days",
+    health: "healthy",
+    stateSince: CREATED_AT,
+    exit: null,
     gameType: "minecraft",
+    gameName: "Minecraft",
+    connection: { host: "play.example.com", port: 25565 },
     gameConsole: {
       id: "minecraft-rcon",
       name: "Minecraft RCON",
       commandPlaceholder: "help",
+      commands: [
+        { label: "List players", command: "list" },
+        { label: "Save world", command: "save-all" },
+        { label: "Message players", command: "say " },
+      ],
     },
     fileRoots: [
       { id: "data", name: "Data", path: "/data" },
@@ -72,10 +82,14 @@ export function makeServers(): Server[] {
       displayName: "Factorio weekend",
       image: "factoriotools/factorio:stable",
       gameType: "factorio",
+      gameName: "Factorio",
       state: "exited",
       status: "Exited (0)",
+      health: null,
+      exit: { code: 0, oomKilled: false },
       gameConsole: null,
       ports: [{ private: 34197, public: 34197, type: "udp" }],
+      connection: { host: "play.example.com", port: 34197 },
     }),
   ];
 }

@@ -147,6 +147,7 @@ describe("file mutation safety", () => {
     );
     expect(screen.queryByText("old.txt")).toBeNull();
     const row = fileRow("mod.jar");
+    await userEvent.click(within(row).getByRole("button", { name: "Actions for mod.jar" }));
     expect(
       within(row).getByRole("link", { name: "Download" }).getAttribute("href"),
     ).toContain("root=mods&path=mod.jar");
@@ -321,6 +322,7 @@ describe("file mutation safety", () => {
       },
     });
     await screen.findByText(config.name);
+    await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: `Actions for ${config.name}` }));
     await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: "Delete" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete file" }));
 
@@ -358,6 +360,7 @@ describe("file mutation safety", () => {
       },
     });
     await screen.findByText(config.name);
+    await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: `Actions for ${config.name}` }));
     await userEvent.click(within(fileRow(config.name)).getByRole("button", { name: "Delete" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete file", exact: true }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

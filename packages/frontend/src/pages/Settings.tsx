@@ -3,6 +3,7 @@ import { apiJson } from "../api";
 import { usePageRead } from "../hooks/usePageRead";
 import DeploymentGuidance from "../components/DeploymentGuidance";
 import BackupSettings from "../components/settings/BackupSettings";
+import ConnectionSettings from "../components/settings/ConnectionSettings";
 import NotificationSettings from "../components/settings/NotificationSettings";
 import "../styles/admin-setup.css";
 
@@ -19,14 +20,11 @@ export default function Settings() {
       <div className="page__header">
         <h1 className="page__title">Settings</h1>
         <p className="page__subtitle">
-          Optional backups, server updates, and Discord notifications.
+          Server controls work without any setup. Changes here take effect when saved.
         </p>
       </div>
-      <p className="section-note">
-        Existing server controls need no setup here. Browser settings take effect
-        when saved; deployment changes use the commands below.
-      </p>
       <nav className="settings-jump-links" aria-label="Settings sections">
+        <a className="text-link" href="#connection-settings-title">Server address</a>
         <a className="text-link" href="#backup-settings-title">Backup storage</a>
         <a className="text-link" href="#compose-settings-title">Compose updates</a>
         <a className="text-link" href="#notification-settings-title">Discord notifications</a>
@@ -50,6 +48,7 @@ export default function Settings() {
           </button>
         </div>
       )}
+      <ConnectionSettings />
       <BackupSettings deployment={deployment.data} />
       <section
         className="settings-section settings-section--divided"

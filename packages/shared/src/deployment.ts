@@ -8,3 +8,11 @@ export const deploymentSettingsResponseSchema = z.object({
   composeAvailable: z.boolean(),
 });
 export type DeploymentSettings = z.infer<typeof deploymentSettingsResponseSchema>;
+
+/** The public name or IP address players use to reach this Docker host. */
+export const connectionHostSchema = z.string().trim().toLowerCase().max(253)
+  .pipe(z.union([z.hostname(), z.ipv4(), z.ipv6()]));
+export const connectionSettingsSchema = z.object({
+  host: connectionHostSchema.nullable(),
+}).strict();
+export type ConnectionSettings = z.infer<typeof connectionSettingsSchema>;

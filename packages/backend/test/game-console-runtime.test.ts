@@ -410,6 +410,7 @@ describe("Container stdin transport", () => {
     name: "Server console",
     transport: "container-stdin",
     commandPlaceholder: "help",
+    commands: [],
   };
 
   it("sends one newline-terminated command and closes the attachment", async () => {
@@ -455,7 +456,7 @@ describe("Container stdin transport", () => {
 describe("Docker exec console transport", () => {
   const adapter: GameConsoleAdapter = {
     id: "minecraft-rcon", name: "Fixture", transport: "docker-exec",
-    commandPlaceholder: "help", createExecOptions: (command) => ({ Cmd: ["fixture", command] }),
+    commandPlaceholder: "help", commands: [], createExecOptions: (command) => ({ Cmd: ["fixture", command] }),
   };
   const output = { stdout: () => {}, stderr: () => {}, system: () => {} };
   it("times out exec creation without starting a late result", async () => {

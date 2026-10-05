@@ -22,8 +22,8 @@
     "packages/frontend": {
       "name": "@ludock/frontend",
       "dependencies": {
-        "@fontsource-variable/ibm-plex-sans": "^5.3.0",
-        "@fontsource/ibm-plex-mono": "^5.3.0",
+        "@fontsource-variable/atkinson-hyperlegible-mono": "^5.3.0",
+        "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
         "@ludock/shared": "workspace:*",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/addon-web-links": "^0.12.0",
@@ -82,9 +82,9 @@
 
     "@exodus/bytes": ["@exodus/bytes@1.15.1", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q=="],
 
-    "@fontsource-variable/ibm-plex-sans": ["@fontsource-variable/ibm-plex-sans@5.3.0", "", {}, "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ=="],
+    "@fontsource-variable/atkinson-hyperlegible-mono": ["@fontsource-variable/atkinson-hyperlegible-mono@5.3.0", "", {}, "sha512-0IbthhO18EEpLe69h+cmrsxCkl4yk80gMk+fAN3+9M5zQvoR1JlkzoJRR6U9/UXLYpVBGEXu+Md2LO8TIp30dw=="],
 
-    "@fontsource/ibm-plex-mono": ["@fontsource/ibm-plex-mono@5.3.0", "", {}, "sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q=="],
+    "@fontsource-variable/atkinson-hyperlegible-next": ["@fontsource-variable/atkinson-hyperlegible-next@5.3.0", "", {}, "sha512-UnLzNUy1RWoLDfydAatP4NaRm99X/WbQEph7q/PymJnCFIOOwKOx3pBmp5ys8trO0dM+CKGuJgeZP9fAR4mQpA=="],
 
     "@ludock/backend": ["@ludock/backend@workspace:packages/backend"],
 

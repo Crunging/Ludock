@@ -139,7 +139,7 @@ export default function Diagnostics() {
                 <tbody>
                   {data.integrations.map((game) => (
                     <tr key={game.gameType}>
-                      <td>{game.gameType}</td>
+                      <td>{game.name}</td>
                       <td>{game.repositories.join(", ")}</td>
                       <td>{game.console ?? "—"}</td>
                     </tr>

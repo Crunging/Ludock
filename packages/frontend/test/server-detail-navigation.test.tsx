@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
 import { apiJson } from "../src/api";
 import TestProviders from "./TestProviders";
-import { operationFixture, serverDetailResponse, serverFixture } from "./fixtures";
+import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 import ServerDetail from "../src/pages/ServerDetail";
 
 const originalApi = { ...await import("../src/api") };
@@ -40,6 +40,30 @@ function detail({
     returnToDetail: () => view.rerender(content(true)),
   };
 }
+
+describe("server overview", () => {
+  it("opens on an overview with the address, resources, and next schedule", async () => {
+    const nextRunAt = Date.now() + 2 * 3_600_000;
+    detail({
+      onRequest: (path) => {
+        if (path === `/servers/${server.id}`) return {
+          server: { ...server, connection: { host: "play.example.com", port: 25565 } },
+          stats: { cpuPercent: 42.25, memUsageMB: 2048, memLimitMB: 8192 },
+        };
+        if (path.endsWith("/schedules"))
+          return { schedules: [scheduleFixture(server.id, { action: "restart", nextRunAt })] };
+      },
+    });
+    expect((await screen.findByRole("tab", { name: "Overview" })).getAttribute("aria-selected")).toBe("true");
+    await screen.findByText("play.example.com:25565");
+    expect(screen.getByRole("button", { name: `Copy address for ${server.displayName}` })).toBeTruthy();
+    expect(screen.getByText("42.3%")).toBeTruthy();
+    expect(screen.getByText("2 GiB")).toBeTruthy();
+    expect(screen.getByText("of 8 GiB")).toBeTruthy();
+    await screen.findByText("in 2 hours");
+    expect(screen.getByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  });
+});
 
 describe("server detail navigation", () => {
   it("keeps the new visit's selected tab when an old update request completes", async () => {

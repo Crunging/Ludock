@@ -109,6 +109,28 @@ labels:
   ludock.name: "Terraria with friends"
 ```
 
+## Server list and status
+
+The server list shows each server's state, the address players connect to, and
+its latest backup. The address combines the public name or IP in **Settings →
+Server address** with the published host port for the game's own port, or the
+first published port for other images. Until an administrator sets one, Ludock
+uses the host name from the browser's address bar; set it when players connect
+through a different name than the one you use for Ludock.
+
+States follow Docker. A running server with a health check shows **Starting**
+until the check passes and **Unhealthy** while it fails. A stopped server shows
+**Crashed** when it exited with an error code, **Out of memory** when the kernel
+killed it, and **Force-stopped** when Docker killed it (exit 137), usually
+because it did not shut down within its stop grace period, so recent progress
+may not have been saved. **Server → Overview** adds uptime, CPU and memory use,
+the next scheduled action, and availability monitoring.
+
+The game console offers shortcuts for common commands, such as listing players
+or saving the world. Shortcuts that need more input, such as a message, fill the
+command line instead of sending. Up and Down step through commands sent during
+the current visit; nothing is stored.
+
 ## Access and identity
 
 Administrators see all eligible servers. Operators and viewers need explicit
@@ -291,8 +313,9 @@ zone. **Every day**, **Weekdays**, and **Weekends** select days together, and
 individual days remain editable. Review the action’s effect, then **Add schedule**
 or **Save changes**. **Create paused** saves a schedule without enabling runs.
 
-Availability monitoring is disabled by default. An administrator can enable it per
-server for a 24/7 expectation, with a default two-minute failure grace period.
+Availability monitoring is disabled by default. An administrator can enable it on
+a server's **Overview** for a 24/7 expectation, with a default two-minute failure
+grace period.
 It checks Docker health or running state, not player connectivity. Maintenance and
 Ludock operations suppress alerts; intentionally stopped servers stay suppressed
 until observed running again. Docker outages report unknown availability.

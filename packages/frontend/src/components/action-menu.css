@@ -1,0 +1,55 @@
+.action-menu { position: relative; }
+.action-menu__trigger { display: flex; align-items: center; gap: 7px; }
+.action-menu__trigger > span { font-size: 14px; line-height: 1; transform: translateY(-3px); }
+
+.action-menu__trigger--compact {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--text-dim);
+  background: transparent;
+  border-color: transparent;
+}
+
+.action-menu__trigger--compact svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.action-menu__trigger--compact:hover:not(:disabled),
+.action-menu__trigger--compact[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.action-menu__content {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 170px;
+  padding: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.action-menu__action {
+  display: block;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  text-align: left;
+}
+
+.action-menu__action--danger { color: var(--red); }
+.action-menu__action:hover:not(:disabled) { background: var(--bg-hover); }
+
+@media (pointer: coarse) {
+  .action-menu__action { min-height: 44px; }
+}

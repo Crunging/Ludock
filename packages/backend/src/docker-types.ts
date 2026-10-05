@@ -31,6 +31,7 @@ export interface ContainerInspectInfo {
     OOMKilled: boolean;
     ExitCode: number;
     StartedAt: string;
+    FinishedAt: string;
     Health?: { Status: string };
   };
   Mounts: Array<{

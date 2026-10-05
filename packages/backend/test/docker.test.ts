@@ -103,6 +103,44 @@ describe("automatic discovery boundary", () => {
     }
   });
 
+  it("reports health, uptime, exits, and the port players connect to", async () => {
+    const startedAt = "2026-09-15T10:00:00.000Z";
+    const running = {
+      ...inspectFixture(),
+      State: { Status: "running", StartedAt: startedAt, FinishedAt: "0001-01-01T00:00:00Z", ExitCode: 0, OOMKilled: false, Health: { Status: "starting" } },
+      NetworkSettings: { Ports: {
+        "25575/tcp": [{ HostIp: "0.0.0.0", HostPort: "25575" }],
+        "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: "25566" }],
+      } },
+    };
+    docker.getContainer = (() => ({ inspect: async () => running })) as unknown as typeof docker.getContainer;
+    const { container } = await getManagedContainerObservation(untrusted("minecraft"));
+    expect(container).toMatchObject({
+      health: "starting",
+      stateSince: Date.parse(startedAt),
+      exit: null,
+      gameName: "Minecraft",
+      connectPort: 25566,
+    });
+    expect(container.gameConsole?.commands).toContainEqual({ label: "List players", command: "list" });
+
+    const finishedAt = "2026-09-15T12:00:00.000Z";
+    const crashed = {
+      ...inspectFixture("example/custom-game", { "ludock.enable": "true" }),
+      State: { Status: "exited", StartedAt: startedAt, FinishedAt: finishedAt, ExitCode: 1, OOMKilled: false },
+      NetworkSettings: { Ports: { "7777/udp": [{ HostIp: "0.0.0.0", HostPort: "7777" }] } },
+    };
+    docker.getContainer = (() => ({ inspect: async () => crashed })) as unknown as typeof docker.getContainer;
+    const { container: stopped } = await getManagedContainerObservation(untrusted("custom"));
+    expect(stopped).toMatchObject({
+      health: null,
+      stateSince: Date.parse(finishedAt),
+      exit: { code: 1, oomKilled: false },
+      gameName: "Other game",
+      connectPort: 7777,
+    });
+  });
+
   it("rechecks eligibility on inspection after listing", async () => {
     docker.listContainers = (async () => [
       listFixture("itzg/minecraft-server"),

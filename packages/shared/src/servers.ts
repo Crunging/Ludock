@@ -9,6 +9,9 @@ export const bindingStatusSchema = z.enum([
   "review_required",
 ]);
 
+export const containerHealthSchema = z.enum(["starting", "healthy", "unhealthy"]);
+export type ContainerHealth = z.infer<typeof containerHealthSchema>;
+
 export const serverSchema = z.object({
   id: z.string().uuid(),
   shortId: z.string(),
@@ -17,7 +20,19 @@ export const serverSchema = z.object({
   image: z.string(),
   state: z.string(),
   status: z.string(),
+  /** Docker health check result; null when the image defines no check. */
+  health: containerHealthSchema.nullable(),
+  /** When the container started (running) or stopped (exited); null if unknown. */
+  stateSince: z.number().int().nonnegative().nullable(),
+  /** How an exited container ended, so a crash reads differently from a stop. */
+  exit: z.object({ code: z.number().int(), oomKilled: z.boolean() }).nullable(),
   gameType: z.string(),
+  gameName: z.string(),
+  /** The published game port players connect to; host is null until an administrator sets one. */
+  connection: z.object({
+    host: z.string().nullable(),
+    port: z.number().int().positive(),
+  }).nullable(),
   gameConsole: z
     .object({
       id: z.enum([
@@ -29,6 +44,7 @@ export const serverSchema = z.object({
       ]),
       name: z.string(),
       commandPlaceholder: z.string(),
+      commands: z.array(z.object({ label: z.string(), command: z.string() })),
     })
     .nullable(),
   fileRoots: z.array(fileRootSchema),

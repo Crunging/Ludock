@@ -7,7 +7,28 @@ import { apiJson } from "../api";
 import { useAuth } from "../auth-context";
 import { useViewPreferences } from "../view-preferences-context";
 import { NavLink } from "../navigation";
+import { canReadBackupSummary } from "../permissions";
+import { serverStatus } from "../server-lifecycle";
 import "./dashboard.css";
+
+function DiscoveryHelp() {
+  return (
+    <section className="help-panel" id="server-discovery-help" aria-labelledby="server-discovery-title">
+      <h2 id="server-discovery-title">Add a missing server</h2>
+      <p>
+        Ludock lists game containers on its Docker host. Images from
+        {" "}<NavLink to="/diagnostics" className="text-link">supported games</NavLink>{" "}
+        appear automatically. For any other image, add this label in the
+        manager that owns the container, then recreate it:
+      </p>
+      <pre>{'labels:\n  ludock.enable: "true"'}</pre>
+      <p className="muted">
+        New servers are visible only to administrators until you
+        {" "}<NavLink to="/users" className="text-link">share them</NavLink>.
+      </p>
+    </section>
+  );
+}
 
 export default function Dashboard() {
   const {
@@ -15,6 +36,7 @@ export default function Dashboard() {
     connectionStatus, connectionError, canRetry, retry, accessDenied,
   } = useServers();
   const { user } = useAuth();
+  const admin = user?.role === "admin";
   const [actionError, setActionError] = useState<string | null>(null);
   const { dashboardFilters, setDashboardFilters } = useViewPreferences();
   const { search, stateFilter } = dashboardFilters;
@@ -46,7 +68,7 @@ export default function Dashboard() {
   );
   const filtered = servers.filter((server) =>
     (stateFilter === "all" || server.state === stateFilter) &&
-    `${server.displayName} ${server.gameType} ${server.image}`
+    `${server.displayName} ${server.gameName} ${server.gameType} ${server.image}`
       .toLowerCase()
       .includes(search.trim().toLowerCase()),
   );
@@ -56,61 +78,23 @@ export default function Dashboard() {
     ...servers.map((server) => server.state),
     ...(stateFilter === "all" ? [] : [stateFilter]),
   ])].sort();
+  const showBackup = servers.some((server) => canReadBackupSummary(user, server));
 
   return (
     <div className="page dashboard-page">
       <div className="page__header page__header--actions">
         <div>
           <h1 className="page__title">Servers</h1>
-          <p className="page__subtitle">
-            {user?.role === "admin"
-              ? "Recognized game servers are discovered automatically."
-              : "Servers shared with your account."}
-            {servers.length > 0 && " Select a server name to open its details."}
-          </p>
+          {!admin && <p className="page__subtitle">Servers shared with your account.</p>}
         </div>
-        <div className="inline-actions">
-          <button
-            className="secondary-btn"
-            onClick={() => { setAttentionRefresh((current) => current + 1); void refresh(); }}
-            disabled={loading}
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-          {user?.role === "admin" && (
-            <button
-              className="secondary-btn"
-              onClick={() => setShowHelp(!showHelp)}
-              aria-expanded={showHelp}
-              aria-controls="server-discovery-help"
-            >
-              Game not shown?
-            </button>
-          )}
-        </div>
+        <button
+          className="secondary-btn"
+          onClick={() => { setAttentionRefresh((current) => current + 1); void refresh(); }}
+          disabled={loading}
+        >
+          {loading ? "Refreshing…" : "Refresh"}
+        </button>
       </div>
-      {showHelp && user?.role === "admin" && (
-        <section className="help-panel" id="server-discovery-help" aria-labelledby="server-discovery-title">
-          <h2 id="server-discovery-title">Find your game servers</h2>
-          <p>
-            Ludock discovers existing game containers on its connected Docker host.
-            First, <NavLink to="/diagnostics" className="text-link">check Docker connectivity and supported images</NavLink>.
-          </p>
-          <h3>Using an unrecognized image?</h3>
-          <p>
-            Add this label through the manager that owns the container, then
-            recreate it:
-          </p>
-          <pre>{'labels:\n  ludock.enable: "true"'}</pre>
-          <p>
-            Recognized images appear automatically. A{" "}
-            <code>ludock.enable: "false"</code> label excludes a container.
-            Invalid values exclude a container. Compose one-off containers need
-            an explicit true label. Newly discovered servers are visible to
-            administrators; <NavLink to="/users" className="text-link">share servers on the Users page</NavLink>.
-          </p>
-        </section>
-      )}
       {actionError && (
         <div className="alert alert--error" role="alert">
           <span>{actionError}</span>
@@ -126,7 +110,7 @@ export default function Dashboard() {
         <div className="alert alert--error" role="alert">
           <div>
             <p>Unable to load servers: {error}</p>
-            {user?.role === "admin" && (
+            {admin && (
               <NavLink to="/diagnostics" className="text-link">Open diagnostics</NavLink>
             )}
           </div>
@@ -179,7 +163,7 @@ export default function Dashboard() {
               <option value="all">All states</option>
               {states.map((state) => (
                 <option key={state} value={state}>
-                  {state.charAt(0).toUpperCase() + state.slice(1)}
+                  {serverStatus({ state, health: null }).label}
                 </option>
               ))}
             </select>
@@ -197,34 +181,40 @@ export default function Dashboard() {
       {!loading && !error && !accessDenied && servers.length === 0 && (
         <div className="empty-state">
           <h2 className="empty-state__title">
-            {user?.role === "admin"
-              ? "No game servers found"
-              : "No servers assigned"}
+            {admin ? "No game servers found" : "No servers shared with you yet"}
           </h2>
           <p className="empty-state__description">
-            {user?.role === "admin"
-              ? "Ludock looks for existing game containers on the connected Docker host. Check the connection and supported images to find out why a server is missing."
-              : `You’re signed in as ${user?.username || "a limited user"}. Ask an administrator to share the servers and actions you need.`}
+            {admin
+              ? "Ludock looks for game containers on the Docker host it’s connected to."
+              : `You’re signed in as ${user?.username || "a limited user"}. Ask an administrator to share the servers you need.`}
           </p>
-          {user?.role === "admin" && (
-            <NavLink to="/diagnostics" className="secondary-btn dashboard-empty-action">
-              Check Docker and image support
-            </NavLink>
+          {admin && (
+            <>
+              <NavLink to="/diagnostics" className="secondary-btn dashboard-empty-action">
+                Check the Docker connection
+              </NavLink>
+              <DiscoveryHelp />
+            </>
           )}
         </div>
       )}
       {servers.length > 0 && (
-        <section className="server-list" aria-label="Game servers">
+        <section
+          className={`server-list${showBackup ? " server-list--backups" : ""}`}
+          aria-label="Game servers"
+        >
           <div className="server-list__header">
             <span>Server</span>
             <span>State</span>
-            <span>Ports</span>
-            <span>Actions</span>
+            <span>Connect</span>
+            {showBackup && <span>Last backup</span>}
+            <span><span className="sr-only">Actions</span></span>
           </div>
           {filtered.map((server) => (
             <ServerCard
               key={server.id}
               server={server}
+              showBackup={showBackup}
               actionsDisabled={stale || loading}
               onAction={handleAction}
             />
@@ -241,6 +231,19 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+      )}
+      {admin && servers.length > 0 && (
+        <div className="dashboard-help">
+          <button
+            className="text-link"
+            onClick={() => setShowHelp(!showHelp)}
+            aria-expanded={showHelp}
+            aria-controls="server-discovery-help"
+          >
+            Missing a server?
+          </button>
+          {showHelp && <DiscoveryHelp />}
+        </div>
       )}
     </div>
   );

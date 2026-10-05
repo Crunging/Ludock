@@ -12,13 +12,17 @@ test("capture README screenshots", async ({ app, page }) => {
   await mkdir(directory, { recursive: true });
   await page.clock.setFixedTime(now);
   app.servers[0].latestBackup = latestBackup;
+  app.servers[0].stateSince = now - 3 * 3_600_000;
   app.servers[1].latestBackup = { createdAt: now - 86_400_000, size: 87_031_808 };
+  app.servers[1].stateSince = now - 20 * 3_600_000;
   app.servers.push({
     ...app.servers[0],
     id: "33333333-3333-4333-8333-333333333333",
     name: "valheim", displayName: "Valheim co-op",
-    image: "ghcr.io/lloesche/valheim-server:latest", gameType: "valheim", gameConsole: null,
+    image: "ghcr.io/lloesche/valheim-server:latest", gameType: "valheim", gameName: "Valheim", gameConsole: null,
     ports: [{ private: 2456, public: 2456, type: "udp" }],
+    connection: { host: "play.example.com", port: 2456 },
+    health: null, stateSince: now - 26 * 3_600_000,
     latestBackup: { createdAt: now - 4 * 3_600_000, size: 451_936_256 },
   });
   await app.open();
