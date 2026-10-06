@@ -17,9 +17,11 @@ import {
   composeIdentityLabels,
   evaluateContainerEligibility,
   hasInvalidComposeIdentity,
+  LABEL_ADDRESS,
   LABEL_ENABLE,
   LABEL_NAME,
   LABEL_GAME,
+  parseAddressLabel,
 } from "./discovery.js";
 import type { ServerObservation } from "./identity.js";
 import { isSensitiveKey } from "./sensitive-keys.js";
@@ -50,6 +52,8 @@ export interface ManagedContainer {
   exit: { code: number; oomKilled: boolean } | null;
   gameType: string;
   gameName: string;
+  /** The owner's ludock.address, which replaces port detection when valid. */
+  addressLabel: { host: string; port: number | null } | null;
   /** Published host port for the game's own port, or the first published port. */
   connectPort: number | null;
   gameConsole: {
@@ -67,7 +71,7 @@ export interface ManagedContainer {
 interface DiscoveryDiagnostic {
   containerId: string;
   name: string;
-  code: "INVALID_ENABLE_LABEL" | "INVALID_COMPOSE_IDENTITY";
+  code: "INVALID_ENABLE_LABEL" | "INVALID_COMPOSE_IDENTITY" | "INVALID_ADDRESS_LABEL";
   message: string;
 }
 
@@ -81,22 +85,28 @@ export async function getDiscoveryDiagnostics(): Promise<
       container.Image,
       container.Labels || {},
     );
+    const labels = container.Labels || {};
     const invalidLabel = eligibility.reason === "invalid-enable-label";
     const invalidIdentity =
-      eligibility.eligible && hasInvalidComposeIdentity(container.Labels || {});
-    if (!invalidLabel && !invalidIdentity) return [];
-    return [
-      {
-        containerId: container.Id,
-        name: (container.Names[0] || "").replace(/^\//, ""),
-        code: invalidLabel
-          ? "INVALID_ENABLE_LABEL"
-          : "INVALID_COMPOSE_IDENTITY",
-        message: invalidLabel
-          ? "Container excluded: ludock.enable must be true or false (case-insensitive; surrounding spaces are allowed)."
-          : "Container excluded: Compose project, service, and replica number must form a complete identity. Correct the owning manager's metadata before managing this container.",
-      },
-    ];
+      eligibility.eligible && hasInvalidComposeIdentity(labels);
+    const invalidAddress = eligibility.eligible && !invalidIdentity &&
+      Object.hasOwn(labels, LABEL_ADDRESS) && parseAddressLabel(labels[LABEL_ADDRESS]) === null;
+    const diagnostic = (code: DiscoveryDiagnostic["code"], message: string): DiscoveryDiagnostic => ({
+      containerId: container.Id,
+      name: (container.Names[0] || "").replace(/^\//, ""),
+      code,
+      message,
+    });
+    if (invalidLabel)
+      return [diagnostic("INVALID_ENABLE_LABEL",
+        "Container excluded: ludock.enable must be true or false (case-insensitive; surrounding spaces are allowed).")];
+    if (invalidIdentity)
+      return [diagnostic("INVALID_COMPOSE_IDENTITY",
+        "Container excluded: Compose project, service, and replica number must form a complete identity. Correct the owning manager's metadata before managing this container.")];
+    if (invalidAddress)
+      return [diagnostic("INVALID_ADDRESS_LABEL",
+        "ludock.address is ignored: use a host name or IP address with an optional port, such as play.example.com:25565 or [2001:db8::1]:2456. The detected address is shown instead.")];
+    return [];
   });
 }
 
@@ -257,6 +267,7 @@ function toInspectedManagedContainer(
   };
   return {
     ...managed,
+    addressLabel: parseAddressLabel(labels[LABEL_ADDRESS]),
     connectPort: connectPort(bindings, getGameIntegration(gameType)?.gamePort),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, info.Mounts || []),
@@ -276,7 +287,8 @@ function toServerObservation(
     credentialNames.add(labels["ludock.console.password-env"]);
   const gameConfiguration = Object.fromEntries(
     Object.entries(server.labels).filter(
-      ([key]) => key !== LABEL_ENABLE && key !== LABEL_NAME,
+      // Presentation labels can change without a review of the server's identity.
+      ([key]) => key !== LABEL_ENABLE && key !== LABEL_NAME && key !== LABEL_ADDRESS,
     ),
   );
   for (const entry of info.Config.Env || []) {

@@ -27,7 +27,7 @@ function managed(fields: Partial<ManagedContainer> & Pick<ManagedContainer, "id"
   return {
     shortId: fields.id.slice(0, 12), name: "game", displayName: "game", image: "example/game",
     state: "running", status: "running", health: null, stateSince: null, exit: null,
-    gameType: "unknown", gameName: "Other game", connectPort: null, gameConsole: null,
+    gameType: "unknown", gameName: "Other game", addressLabel: null, connectPort: null, gameConsole: null,
     fileRoots: [], ports: [], created: 0, labels: { "ludock.enable": "true" },
     ...fields,
   };

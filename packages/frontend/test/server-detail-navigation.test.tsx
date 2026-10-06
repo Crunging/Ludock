@@ -47,7 +47,7 @@ describe("server overview", () => {
     detail({
       onRequest: (path) => {
         if (path === `/servers/${server.id}`) return {
-          server: { ...server, connection: { host: "play.example.com", port: 25565 } },
+          server: { ...server, connection: { host: "play.example.com", port: 25565, source: "detected" } },
           stats: { cpuPercent: 42.25, memUsageMB: 2048, memLimitMB: 8192 },
         };
         if (path.endsWith("/schedules"))
@@ -62,6 +62,19 @@ describe("server overview", () => {
     expect(screen.getByText("of 8 GiB")).toBeTruthy();
     await screen.findByText("in 2 hours");
     expect(screen.getByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  });
+
+  it("shows an owner's ludock.address exactly and says where it came from", async () => {
+    detail({
+      onRequest: (path) => {
+        if (path === `/servers/${server.id}`) return {
+          server: { ...server, connection: { host: "mc.example.com", port: null, source: "label" } },
+          stats: null,
+        };
+      },
+    });
+    await screen.findByText("mc.example.com");
+    expect(screen.getByText("Set by the ludock.address label")).toBeTruthy();
   });
 
   it("drops CPU and memory readings when a later refresh fails", async () => {

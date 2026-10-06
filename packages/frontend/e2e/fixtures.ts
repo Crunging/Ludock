@@ -51,7 +51,7 @@ export function makeServers(): Server[] {
     exit: null,
     gameType: "minecraft",
     gameName: "Minecraft",
-    connection: { host: "play.example.com", port: 25565 },
+    connection: { host: "play.example.com", port: 25565, source: "detected" },
     gameConsole: {
       id: "minecraft-rcon",
       name: "Minecraft RCON",
@@ -89,7 +89,7 @@ export function makeServers(): Server[] {
       exit: { code: 0, oomKilled: false },
       gameConsole: null,
       ports: [{ private: 34197, public: 34197, type: "udp" }],
-      connection: { host: "play.example.com", port: 34197 },
+      connection: { host: "play.example.com", port: 34197, source: "detected" },
     }),
   ];
 }

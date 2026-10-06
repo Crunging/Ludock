@@ -99,6 +99,7 @@ beforeEach(() => {
       exit: null,
       gameType: "minecraft",
       gameName: "Minecraft",
+      addressLabel: null,
       connectPort: null,
       gameConsole: null,
       fileRoots: [],

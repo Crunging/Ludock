@@ -28,10 +28,15 @@ export const serverSchema = z.object({
   exit: z.object({ code: z.number().int(), oomKilled: z.boolean() }).nullable(),
   gameType: z.string(),
   gameName: z.string(),
-  /** The published game port players connect to; host is null until an administrator sets one. */
+  /**
+   * The address players connect to. A `label` source is the owner's exact
+   * ludock.address value, where the port may be omitted. A `detected` source
+   * uses the published game port, with a null host until an administrator sets one.
+   */
   connection: z.object({
     host: z.string().nullable(),
-    port: z.number().int().positive(),
+    port: z.number().int().min(1).max(65535).nullable(),
+    source: z.enum(["label", "detected"]),
   }).nullable(),
   gameConsole: z
     .object({

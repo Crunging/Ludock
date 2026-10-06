@@ -96,6 +96,7 @@ Docker confirms the command has exited.
 | `ludock.console.host` / `ludock.console.port` | Console address override |
 | `ludock.console.password-env` | **Name** of the game-container environment variable containing the password, never its value |
 | `ludock.files` | Comma-separated container data paths; empty disables file and derived backup roots |
+| `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
 
 Console adapters are `minecraft-rcon`, `source-rcon`, `rust-webrcon`,
 `telnet-console`, and `stdin-console`. For example, enroll a custom image by
@@ -119,6 +120,13 @@ loopback (such as `127.0.0.1:25565:25565`) are never offered, because players
 on other machines cannot reach them. Until an administrator sets a name, Ludock
 uses the host name from the browser's address bar; set it when players connect
 through a different name than the one you use for Ludock.
+
+When detection can't know the address, such as a router forwarding a different
+port, a tunnel service, a separate domain per game, or a Minecraft SRV record,
+add a `ludock.address` label with exactly what players type. It replaces the
+detected address for that server, the port is optional, and changing it does not
+require a binding review. Invalid values are ignored and reported in
+**Diagnostics**.
 
 States follow Docker. A running server with a health check shows **Starting**
 until the check passes and **Unhealthy** while it fails. A stopped server shows

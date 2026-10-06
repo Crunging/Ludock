@@ -21,7 +21,7 @@ test("capture README screenshots", async ({ app, page }) => {
     name: "valheim", displayName: "Valheim co-op",
     image: "ghcr.io/lloesche/valheim-server:latest", gameType: "valheim", gameName: "Valheim", gameConsole: null,
     ports: [{ private: 2456, public: 2456, type: "udp" }],
-    connection: { host: "play.example.com", port: 2456 },
+    connection: { host: "play.example.com", port: 2456, source: "detected" },
     health: null, stateSince: now - 26 * 3_600_000,
     latestBackup: { createdAt: now - 4 * 3_600_000, size: 451_936_256 },
   });

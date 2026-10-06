@@ -33,11 +33,13 @@ describe("server status words", () => {
 
   it("builds the address players type, bracketing IPv6 hosts", () => {
     expect(connectAddress({ connection: null })).toBeNull();
-    expect(connectAddress({ connection: { host: "play.example.com", port: 25565 } })).toBe("play.example.com:25565");
-    expect(connectAddress({ connection: { host: "2001:db8::1", port: 2456 } })).toBe("[2001:db8::1]:2456");
-    expect(connectAddress({ connection: { host: null, port: 7777 } })).toBe(`${window.location.hostname}:7777`);
+    expect(connectAddress({ connection: { host: "play.example.com", port: 25565, source: "detected" } })).toBe("play.example.com:25565");
+    expect(connectAddress({ connection: { host: "2001:db8::1", port: 2456, source: "detected" } })).toBe("[2001:db8::1]:2456");
+    expect(connectAddress({ connection: { host: null, port: 7777, source: "detected" } })).toBe(`${window.location.hostname}:7777`);
+    expect(connectAddress({ connection: { host: "mc.example.com", port: null, source: "label" } })).toBe("mc.example.com");
+    expect(connectAddress({ connection: { host: "2001:db8::1", port: null, source: "label" } })).toBe("2001:db8::1");
     // A page opened over IPv6 reports its host with brackets already.
-    expect(connectAddress({ connection: { host: "[2001:db8::1]", port: 2456 } })).toBe("[2001:db8::1]:2456");
+    expect(connectAddress({ connection: { host: "[2001:db8::1]", port: 2456, source: "detected" } })).toBe("[2001:db8::1]:2456");
   });
 
   it("phrases recent times relative to now", () => {

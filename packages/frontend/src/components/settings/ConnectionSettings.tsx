@@ -83,7 +83,8 @@ function ConnectionSettingsForm({ initial }: { initial: string | null }) {
       </label>
       <p className="muted" id="connection-host-help">
         For example, play.example.com or 203.0.113.10. Leave it empty to use the
-        address you opened Ludock with ({window.location.hostname}).
+        address you opened Ludock with ({window.location.hostname}). To give one
+        server its own address, add a <code>ludock.address</code> label to it.
       </p>
       {error && <div className="alert alert--error" role="alert">{error}</div>}
       {notice && <div className="alert alert--success" role="status">{notice}</div>}

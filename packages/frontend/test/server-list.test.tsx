@@ -20,7 +20,7 @@ const server: Server = {
   exit: null,
   gameType: "minecraft",
   gameName: "Minecraft",
-  connection: { host: "play.example.com", port: 25565 },
+  connection: { host: "play.example.com", port: 25565, source: "detected" },
   created: 0,
   gameConsole: {
     id: "minecraft-rcon",

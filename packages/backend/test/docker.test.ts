@@ -2,6 +2,7 @@ import { rejectedBy } from "./fixtures/errors.js";
 import { expect, afterEach, describe, it } from "bun:test";
 import type { DockerContainerId } from "@ludock/shared";
 import { docker } from "../src/docker-client.js";
+import { parseAddressLabel } from "../src/discovery.js";
 import {
   changeContainerState,
   getContainer,
@@ -80,6 +81,16 @@ describe("automatic discovery boundary", () => {
     expect(JSON.stringify(diagnostics).includes("private-token")).toBe(false);
   });
 
+  it("reports an invalid address label without echoing its value", async () => {
+    docker.listContainers = (async () => [
+      listFixture("itzg/minecraft-server", { "ludock.address": "https://private-token.example" }),
+      listFixture("itzg/minecraft-server", { "ludock.address": "play.example.com:25565" }, "b".repeat(64)),
+    ]) as unknown as typeof docker.listContainers;
+    const diagnostics = await getDiscoveryDiagnostics();
+    expect(diagnostics.map((item) => item.code)).toEqual(["INVALID_ADDRESS_LABEL"]);
+    expect(JSON.stringify(diagnostics).includes("private-token")).toBe(false);
+  });
+
   it("keeps host mounts, Compose identity and environment out of public metadata", async () => {
     const info = inspectFixture("didstopia/rust-server", {
       "ludock.console": "rust-webrcon",
@@ -101,6 +112,34 @@ describe("automatic discovery boundary", () => {
     ]) {
       expect(JSON.stringify(container).includes(secret), secret).toBe(false);
     }
+  });
+
+  it("parses ludock.address as the exact address players type", () => {
+    expect(parseAddressLabel(" Play.Example.com ")).toEqual({ host: "play.example.com", port: null });
+    expect(parseAddressLabel("203.0.113.10:30000")).toEqual({ host: "203.0.113.10", port: 30000 });
+    expect(parseAddressLabel("[2001:db8::1]:2456")).toEqual({ host: "2001:db8::1", port: 2456 });
+    expect(parseAddressLabel("[2001:db8::1]")).toEqual({ host: "2001:db8::1", port: null });
+    expect(parseAddressLabel("2001:db8::1")).toEqual({ host: "2001:db8::1", port: null });
+    for (const invalid of [
+      undefined, "", "https://play.example.com", "play.example.com:0", "play.example.com:65536",
+      "play.example.com:25565/udp", "[play.example.com]:25565", "two words", "host:port:1",
+    ]) expect(parseAddressLabel(invalid), String(invalid)).toBeNull();
+  });
+
+  it("uses a valid ludock.address instead of detection, without affecting identity", async () => {
+    const info = {
+      ...inspectFixture("itzg/minecraft-server", { "ludock.address": "mc.example.com" }),
+      NetworkSettings: { Ports: { "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: "25565" }] } },
+    };
+    docker.getContainer = (() => ({ inspect: async () => info })) as unknown as typeof docker.getContainer;
+    const { container, observation } = await getManagedContainerObservation(untrusted("minecraft"));
+    expect(container.addressLabel).toEqual({ host: "mc.example.com", port: null });
+    expect(container.connectPort).toBe(25565);
+    expect(JSON.stringify(observation).includes("ludock.address")).toBe(false);
+
+    const invalid = { ...info, Config: { ...info.Config, Labels: { "ludock.address": "not an address" } } };
+    docker.getContainer = (() => ({ inspect: async () => invalid })) as unknown as typeof docker.getContainer;
+    expect((await getManagedContainerObservation(untrusted("minecraft"))).container.addressLabel).toBeNull();
   });
 
   it("offers the game's own port by protocol and never a loopback-only binding", async () => {

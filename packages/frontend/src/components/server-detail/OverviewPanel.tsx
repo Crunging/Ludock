@@ -76,7 +76,9 @@ export default function OverviewPanel(props: Props) {
             {address ? (
               <>
                 <CopyAddress address={address} serverName={server.displayName} />
-                {server.connection?.host === null && (
+                {server.connection?.source === "label" ? (
+                  <span className="muted">Set by the ludock.address label</span>
+                ) : server.connection?.host === null && (
                   <span className="muted">Using this page’s address</span>
                 )}
               </>

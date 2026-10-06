@@ -62,6 +62,7 @@ function toPublicServer(
       exit: null,
       gameType: logical.gameType,
       gameName: gameDisplayName(logical.gameType),
+      addressLabel: null,
       connectPort: null,
       gameConsole: null,
       fileRoots: [],
@@ -70,9 +71,11 @@ function toPublicServer(
       labels: {},
     }),
     id: logical.id,
-    connection: container?.connectPort
-      ? { host: connectionHost(), port: container.connectPort }
-      : null,
+    connection: container?.addressLabel
+      ? { ...container.addressLabel, source: "label" }
+      : container?.connectPort
+        ? { host: connectionHost(), port: container.connectPort, source: "detected" }
+        : null,
     bindingStatus: logical.status,
     permissions,
     // Administrators retain durable backup history when a container binding is
