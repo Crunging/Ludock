@@ -201,18 +201,17 @@ function loopbackOnly(binding: PortBinding): boolean {
   return /^127\./.test(binding.hostIp) || binding.hostIp === "::1";
 }
 
-/** Picks the host port players use. When a game's own port is published, only a
- * reachable mapping with the game's protocol counts: TCP and UDP mappings are
- * independent, and a loopback-only mapping is unreachable for players. Without
- * one, no address is offered rather than another protocol or port such as RCON.
- * Other images, and games whose port is not published, use their first
- * reachable port. */
+/** Picks the host port players use. A recognized game counts only a reachable
+ * mapping of its own port and protocol: TCP and UDP mappings are independent,
+ * and a loopback-only mapping is unreachable for players. Without one, no
+ * address is offered rather than another port such as RCON; ludock.address
+ * covers unusual setups. Other images use their first reachable port. */
 function connectPort(
   bindings: PortBinding[],
   gamePort: { port: number; protocol: string } | undefined,
 ): number | null {
   const reachable = bindings.filter((binding) => binding.public > 0 && !loopbackOnly(binding));
-  if (gamePort && bindings.some((binding) => binding.public > 0 && binding.private === gamePort.port)) {
+  if (gamePort) {
     return reachable.find((binding) =>
       binding.private === gamePort.port && binding.type === gamePort.protocol)?.public ?? null;
   }

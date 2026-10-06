@@ -158,6 +158,10 @@ describe("automatic discovery boundary", () => {
       "34197/udp": [{ HostIp: "127.0.0.1", HostPort: "34197" }],
       "34197/tcp": [{ HostIp: "0.0.0.0", HostPort: "34197" }],
     })).toBeNull();
+    // A recognized game that publishes only another port, such as RCON, offers no address.
+    expect(await connectPortFor("itzg/minecraft-server", {}, {
+      "25575/tcp": [{ HostIp: "0.0.0.0", HostPort: "25575" }],
+    })).toBeNull();
     // A game port reachable only from the Docker host offers no address, not the RCON port.
     expect(await connectPortFor("itzg/minecraft-server", {}, {
       "25565/tcp": [{ HostIp: "127.0.0.1", HostPort: "25565" }, { HostIp: "::1", HostPort: "25565" }],

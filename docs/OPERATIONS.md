@@ -128,8 +128,9 @@ until the check passes and **Unhealthy** while it fails. A stopped server shows:
 ### Addresses
 
 Ludock combines the name or IP in **Settings → Server address** with the host
-port published for the game's own port and protocol. Images without a known game
-port use their first published port. Until an administrator sets a name, Ludock
+port published for the game's own port and protocol. A supported game that
+doesn't publish its own port shows no address; other images use their first
+published port. Until an administrator sets a name, Ludock
 uses the host name from your browser's address bar.
 
 Ports published only on loopback (such as `127.0.0.1:25565:25565`) are never
