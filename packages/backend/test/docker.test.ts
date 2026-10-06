@@ -127,7 +127,10 @@ describe("automatic discovery boundary", () => {
     const finishedAt = "2026-09-15T12:00:00.000Z";
     const crashed = {
       ...inspectFixture("example/custom-game", { "ludock.enable": "true" }),
-      State: { Status: "exited", StartedAt: startedAt, FinishedAt: finishedAt, ExitCode: 1, OOMKilled: false },
+      State: {
+        Status: "exited", StartedAt: startedAt, FinishedAt: finishedAt, ExitCode: 1, OOMKilled: false,
+        Health: { Status: "unhealthy" },
+      },
       NetworkSettings: { Ports: { "7777/udp": [{ HostIp: "0.0.0.0", HostPort: "7777" }] } },
     };
     docker.getContainer = (() => ({ inspect: async () => crashed })) as unknown as typeof docker.getContainer;

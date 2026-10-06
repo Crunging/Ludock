@@ -60,7 +60,9 @@ export default function OverviewPanel(props: Props) {
                 {stateSinceText(server)}
               </time>
             )}
-            {server.health && <span className="muted">{healthNotes[server.health]}</span>}
+            {server.state === "running" && server.health && (
+              <span className="muted">{healthNotes[server.health]}</span>
+            )}
             {exitDetail(server) && <span className="muted">{exitDetail(server)}</span>}
           </dd>
         </div>

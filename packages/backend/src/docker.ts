@@ -164,7 +164,9 @@ export async function getManagedContainerObservation(
   };
 }
 
+/** Docker keeps the last check result after a container stops; only a running one is current. */
 function containerHealth(info: Docker.ContainerInspectInfo): ContainerHealth | null {
+  if (info.State.Status !== "running") return null;
   const status = info.State.Health?.Status;
   return status === "starting" || status === "healthy" || status === "unhealthy"
     ? status
