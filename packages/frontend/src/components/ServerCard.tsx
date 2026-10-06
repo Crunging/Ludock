@@ -5,6 +5,7 @@ import { useNavigate } from "../navigation-context";
 import { NavLink } from "../navigation";
 import { can, canReadBackupSummary } from "../permissions";
 import { formatDateTime, formatRelativeTimeSentence } from "../format";
+import { useNow } from "../hooks/useNow";
 import LifecycleConfirmation from "./LifecycleConfirmation";
 import ActionMenu from "./ActionMenu";
 import ServerState from "./ServerState";
@@ -29,6 +30,7 @@ interface ServerCardProps {
 export default function ServerCard({ server, onAction, actionsDisabled = false, showBackup = false }: ServerCardProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const now = useNow();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<"stop" | "restart" | null>(
     null,
@@ -107,7 +109,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
             dateTime={new Date(server.stateSince).toISOString()}
             title={formatDateTime(server.stateSince)}
           >
-            {stateSinceText(server, { standalone: true })}
+            {stateSinceText(server, { standalone: true, now })}
           </time>
         )}
       </div>
@@ -127,7 +129,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
               dateTime={new Date(server.latestBackup.createdAt).toISOString()}
               title={formatDateTime(server.latestBackup.createdAt)}
             >
-              {formatRelativeTimeSentence(server.latestBackup.createdAt)}
+              {formatRelativeTimeSentence(server.latestBackup.createdAt, now)}
             </time>
           ) : (
             <span className="server-row__never">Never</span>

@@ -1,6 +1,7 @@
 import { formatByteSize, type Schedule, type Server, type ServerStats } from "@ludock/shared";
 import type { ReactNode } from "react";
 import { formatDateTime, formatRelativeTime, formatRelativeTimeSentence } from "../../format";
+import { useNow } from "../../hooks/useNow";
 import { connectAddress, exitDetail, stateSinceText } from "../../server-lifecycle";
 import CopyAddress from "../CopyAddress";
 import ServerState from "../ServerState";
@@ -24,16 +25,17 @@ interface Props {
   children?: ReactNode;
 }
 
-function Timestamp({ value, standalone = false }: { value: number; standalone?: boolean }) {
+function Timestamp({ value, now, standalone = false }: { value: number; now: number; standalone?: boolean }) {
   return (
     <time dateTime={new Date(value).toISOString()} title={formatDateTime(value)}>
-      {standalone ? formatRelativeTimeSentence(value) : formatRelativeTime(value)}
+      {standalone ? formatRelativeTimeSentence(value, now) : formatRelativeTime(value, now)}
     </time>
   );
 }
 
 export default function OverviewPanel(props: Props) {
   const { server, stats, liveUnavailable, showBackup, nextSchedule, children } = props;
+  const now = useNow();
   const ports = server.ports.filter((port) => port.public > 0);
   const address = connectAddress(server);
   const memoryShare = stats && stats.memLimitMB > 0
@@ -59,7 +61,7 @@ export default function OverviewPanel(props: Props) {
                 dateTime={new Date(server.stateSince).toISOString()}
                 title={formatDateTime(server.stateSince)}
               >
-                {stateSinceText(server)}
+                {stateSinceText(server, { now })}
               </time>
             )}
             {server.state === "running" && server.health && (
@@ -135,7 +137,7 @@ export default function OverviewPanel(props: Props) {
             <dd>
               {server.latestBackup ? (
                 <>
-                  <Timestamp value={server.latestBackup.createdAt} standalone />
+                  <Timestamp value={server.latestBackup.createdAt} now={now} standalone />
                   <span className="muted">{formatByteSize(server.latestBackup.size)}</span>
                 </>
               ) : "Never"}
@@ -152,7 +154,7 @@ export default function OverviewPanel(props: Props) {
               {nextSchedule?.nextRunAt ? (
                 <>
                   <span className="capitalize">{nextSchedule.action}</span>
-                  <Timestamp value={nextSchedule.nextRunAt} />
+                  <Timestamp value={nextSchedule.nextRunAt} now={now} />
                 </>
               ) : "Nothing scheduled"}
               {props.onOpenSchedules && (

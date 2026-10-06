@@ -1,6 +1,7 @@
 import { type Backup, type BackupPreflight, type Server, formatByteSize } from "@ludock/shared";
 import { NavLink } from "../../navigation";
 import { formatDateTime, formatRelativeTime, formatRelativeTimeSentence } from "../../format";
+import { useNow } from "../../hooks/useNow";
 import StatusPip from "../StatusPip";
 
 export interface RestoreSelection {
@@ -59,6 +60,7 @@ export default function BackupsPanel(props: Props) {
     onRestore,
   } = props;
   const historyReady = !props.historyLoading && !props.historyUnavailable;
+  const now = useNow();
   const { backup: restoreBackup, confirmation: restoreConfirmation } = restore;
   return (
     <>
@@ -109,7 +111,7 @@ export default function BackupsPanel(props: Props) {
           Last backup:{" "}
           {latestBackup ? <>
             <time dateTime={new Date(latestBackup.createdAt).toISOString()} title={formatDateTime(latestBackup.createdAt)}>
-              {formatRelativeTime(latestBackup.createdAt)}
+              {formatRelativeTime(latestBackup.createdAt, now)}
             </time>{" ("}{formatByteSize(latestBackup.size)}{")"}
           </> : "never"}
         </p>
@@ -156,7 +158,7 @@ export default function BackupsPanel(props: Props) {
                 <tr key={backup.id}>
                   <td>
                     <time dateTime={new Date(backup.createdAt).toISOString()}>{formatDateTime(backup.createdAt)}</time>
-                    <small className="table-detail">{formatRelativeTimeSentence(backup.createdAt)}</small>
+                    <small className="table-detail">{formatRelativeTimeSentence(backup.createdAt, now)}</small>
                   </td>
                   <td>{formatByteSize(backup.size)}</td>
                   <td><StatusPip tone={backup.state === "complete" ? "ok" : "failed"} />{backup.state}</td>
