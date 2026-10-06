@@ -41,7 +41,9 @@ export default function OverviewPanel(props: Props) {
     : null;
   const resourcesUnavailable = liveUnavailable
     ? "Unavailable until Docker can be reached"
-    : "Shown while the server is running";
+    : server.state === "running"
+      ? "Not available right now"
+      : "Shown while the server is running";
 
   return (
     <>

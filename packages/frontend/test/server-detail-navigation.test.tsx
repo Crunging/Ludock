@@ -2,7 +2,7 @@ import { describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
-import { apiJson } from "../src/api";
+import { ApiRequestError, apiJson } from "../src/api";
 import TestProviders from "./TestProviders";
 import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 import ServerDetail from "../src/pages/ServerDetail";
@@ -62,6 +62,25 @@ describe("server overview", () => {
     expect(screen.getByText("of 8 GiB")).toBeTruthy();
     await screen.findByText("in 2 hours");
     expect(screen.getByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  });
+
+  it("drops CPU and memory readings when a later refresh fails", async () => {
+    let reads = 0;
+    detail({
+      onRequest: (path) => {
+        if (path !== `/servers/${server.id}`) return;
+        reads += 1;
+        if (reads > 1) throw new ApiRequestError("Docker request failed", 500);
+        return { server, stats: { cpuPercent: 42.25, memUsageMB: 2048, memLimitMB: 8192 } };
+      },
+    });
+    await screen.findByText("42.3%");
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Docker request failed");
+    await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.queryByText("42.3%")).toBeNull();
+    expect(screen.getAllByText("Not available right now")).toHaveLength(2);
   });
 });
 

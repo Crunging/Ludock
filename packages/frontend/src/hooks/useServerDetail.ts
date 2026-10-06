@@ -58,12 +58,13 @@ export function useServerDetail(path: string) {
     } catch (reason) {
       if (!ownsRequest()) return;
       setSnapshotReady(false);
+      // Resource readings are only meaningful as of a successful refresh.
+      setStats(null);
       if (
         reason instanceof ApiRequestError &&
         (reason.status < 400 || [401, 403, 404].includes(reason.status))
       ) {
         setServer(null);
-        setStats(null);
         setOperations([]);
       }
       setError(reason instanceof Error ? reason.message : "Unable to refresh server.");
