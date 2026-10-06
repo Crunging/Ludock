@@ -191,22 +191,22 @@ function loopbackOnly(binding: PortBinding): boolean {
   return /^127\./.test(binding.hostIp) || binding.hostIp === "::1";
 }
 
-/** Picks the host port players use. A game's own port wins when it is reachable,
- * preferring its protocol, since TCP and UDP mappings are independent. If that
- * port is published only on loopback, no address is offered rather than another
- * port such as RCON. Other images use their first reachable port. */
+/** Picks the host port players use. When a game's own port is published, only a
+ * reachable mapping with the game's protocol counts: TCP and UDP mappings are
+ * independent, and a loopback-only mapping is unreachable for players. Without
+ * one, no address is offered rather than another protocol or port such as RCON.
+ * Other images, and games whose port is not published, use their first
+ * reachable port. */
 function connectPort(
   bindings: PortBinding[],
   gamePort: { port: number; protocol: string } | undefined,
 ): number | null {
-  const published = bindings.filter((binding) => binding.public > 0);
-  const game = gamePort
-    ? published.filter((binding) => binding.private === gamePort.port)
-    : [];
-  const candidates = (game.length > 0 ? game : published).filter((binding) => !loopbackOnly(binding));
-  return (
-    candidates.find((binding) => binding.type === gamePort?.protocol) ?? candidates[0]
-  )?.public ?? null;
+  const reachable = bindings.filter((binding) => binding.public > 0 && !loopbackOnly(binding));
+  if (gamePort && bindings.some((binding) => binding.public > 0 && binding.private === gamePort.port)) {
+    return reachable.find((binding) =>
+      binding.private === gamePort.port && binding.type === gamePort.protocol)?.public ?? null;
+  }
+  return reachable[0]?.public ?? null;
 }
 
 function toInspectedManagedContainer(
