@@ -86,9 +86,8 @@ Compose update access needs a read-only source mount; see
 
 - [Operations](./docs/OPERATIONS.md): game images and labels, deployment settings,
   permissions, files, backups, Compose updates, schedules, alerts, and recovery.
-- [Development instructions](./AGENTS.md): local setup, code boundaries, tests,
-  and dependency/image updates.
-- [Development and CI](./docs/DEVELOPMENT.md): Bun execution, checks, and release tooling.
+- [Development and CI](./docs/DEVELOPMENT.md): local setup, Bun execution, checks,
+  dependency updates, and release tooling.
 - [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
 
 Licensed under the [MIT License](./LICENSE).
