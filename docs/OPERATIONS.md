@@ -1,62 +1,101 @@
 # Operations
 
+How to deploy and run Ludock day to day. For a first install, start with the
+[README's quick start](../README.md#quick-start).
+
 ## Deployment
 
-Start with the [README](../README.md#run-with-docker) and
-[`compose.yaml`](../compose.yaml). Run one Ludock backend per Docker host.
-The example keeps application data at `/data` and game backup archives at
-`/backups` in separate volumes. Keep both private. Unrelated databases and
-unsupported schemas are rejected without modification; retain their data
-before choosing a fresh application volume.
+Run one Ludock per Docker host, using [`compose.yaml`](../compose.yaml). It keeps
+Ludock's data in `/data` and game backups in `/backups`, in separate volumes;
+keep both private.
 
-Optional deployment settings are listed in [`.env.example`](../.env.example).
-Copy it to `.env` and uncomment the values you need. Recreate after changes:
+- **Docker:** Ludock talks to Docker through the mounted Unix socket and needs
+  Engine API 1.44 or later. Remote Docker connections aren't supported. For
+  [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/), mount
+  its socket at `/var/run/docker.sock`.
+- **Settings:** optional deployment settings are listed in
+  [`.env.example`](../.env.example). Copy it to `.env`, uncomment what you need,
+  and recreate Ludock:
 
-```bash
-docker compose up -d --force-recreate ludock
+  ```bash
+  docker compose up -d --force-recreate ludock
+  ```
+
+- **Existing data:** Ludock refuses to start on an unrelated database or an
+  unsupported schema, and leaves it unchanged. Keep that data before switching
+  to a fresh volume.
+
+### Remote access
+
+Access to the Docker socket gives control of the whole host, even when it's
+mounted read-only. For remote access, put an HTTPS reverse proxy in front of
+Ludock and expose only the proxy. The proxy must:
+
+- Keep the public host name and forward the original protocol.
+- Support WebSocket upgrades. API requests and WebSockets use same-origin
+  session cookies.
+- Overwrite any client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`,
+  `X-Forwarded-Port`, and `X-Forwarded-For` headers.
+
+Set `LUDOCK_TRUSTED_PROXIES` to your proxies' IP addresses or CIDRs, separated by
+commas (for example `172.18.0.2,2001:db8::2`). Ludock then reads each client's
+address from `X-Forwarded-For`, so login and setup limits apply per client and
+audit events record the client's address. Without it, everyone behind the proxy
+shares one limit.
+
+- Trust only proxy addresses, never a subnet shared with untrusted containers.
+- Additional trusted proxies may append the peer address they saw. Ludock reads
+  the chain from right to left and stops at the first untrusted address.
+- IPv4, IPv6, and CIDRs are accepted; host names and addresses with ports are
+  not. An invalid setting prevents startup. Invalid forwarding headers fall back
+  to the direct peer address.
+
+## Adding servers
+
+Ludock decides which containers to manage in this order:
+
+1. **`ludock.enable`:** `"true"` adds the container and `"false"` leaves it out.
+   Values are trimmed and case-insensitive. Any other value leaves it out and is
+   reported in **Diagnostics**.
+2. **Compose one-off containers** are left out unless labeled.
+3. **Supported game images** are added; any other image is left out. A
+   `ludock.game` label alone doesn't add an unsupported image.
+
+Recognition ignores tags, digests, and registry prefixes and matches the end of
+the repository name, so private mirrors work. It picks the console integration;
+it doesn't verify the image or the game version. To add a custom image, set
+labels in the Compose service that owns it:
+
+```yaml
+stdin_open: true
+labels:
+  ludock.enable: "true"
+  ludock.game: "terraria"
+  ludock.name: "Terraria with friends"
 ```
 
-Ludock connects through the mounted Unix socket and requires Engine API 1.44+.
-For [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/),
-mount its socket at `/var/run/docker.sock`. Remote Docker connections are unsupported.
+### Labels
 
-Docker socket access grants host-level power even with a read-only mount.
-Use HTTPS for remote access; the proxy must preserve the public host, forward
-the external protocol, and support WebSocket upgrades. API requests and
-WebSockets use same-origin session cookies. Configure the proxy to overwrite
-client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port`
-headers. Expose only the HTTPS proxy to untrusted networks.
+| Label | Purpose |
+| --- | --- |
+| `ludock.enable` | Add (`true`) or leave out (`false`) a container |
+| `ludock.name` | Display name; defaults to the container name |
+| `ludock.game` | Game integration, such as `minecraft` or `terraria` |
+| `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
+| `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
+| `ludock.console.host` / `ludock.console.port` | Console address, when the default isn't right |
+| `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
+| `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
-Set `LUDOCK_TRUSTED_PROXIES` to the proxy addresses or CIDRs that can connect
-to Ludock, separated by commas (for example `172.18.0.2,2001:db8::2`). This
-keeps login and setup limits separate for each client and records client
-addresses in HTTP and console audit events. Without this setting, Ludock uses
-the direct peer address, so clients behind one proxy share those limits.
-Trust only proxy addresses; avoid a subnet shared with untrusted containers.
-The edge proxy must overwrite client-supplied `X-Forwarded-For`. Additional
-trusted proxies can append their observed peer address. Ludock reads the chain
-from right to left and stops at the first untrusted address. Invalid forwarding
-metadata falls back to the direct peer; invalid trusted-proxy configuration
-prevents startup. IPv4, IPv6, and their CIDRs are supported; hostnames and
-addresses with ports are not.
+### Supported games
 
-## Discovery and console setup
+**Diagnostics → Supported games** shows the same list, defined in
+[`server-presets.ts`](../packages/backend/src/server-presets.ts). The console
+port is where Ludock sends commands, not the port players use.
 
-`ludock.enable` takes precedence: invalid values exclude with an administrator
-diagnostic, `false` excludes, and `true` includes. Values are trimmed and
-case-insensitive. Without that label, Compose one-offs are excluded, recognized
-images are included, and other images are excluded. A game label alone does
-not make an unknown image eligible.
-
-Recognition strips tags, digests, and registry prefixes and matches repository
-suffixes, so private mirrors can work. This selects a console adapter; it does
-not verify image provenance or a game release's compatibility. **Diagnostics →
-Supported games** lists the registry in
-[`server-presets.ts`](../packages/backend/src/server-presets.ts).
-
-| Game | Recognized repository suffixes | Console | Default port |
+| Game | Recognized images (repository suffix) | Console | Console port |
 | --- | --- | --- | --- |
-| Minecraft | `itzg/minecraft-server` | In-container `rcon-cli` | Internal configuration |
+| Minecraft | `itzg/minecraft-server` | `rcon-cli` in the container | Set inside the container |
 | Factorio | `factoriotools/factorio` | Source RCON | 27015 |
 | Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Source RCON | 25575 |
 | ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | Source RCON | 27020 |
@@ -70,140 +109,121 @@ Supported games** lists the registry in
 | Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | None | — |
 | Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Process stdin | — |
 
-These are console ports, not player ports. Network consoles require a reachable
-address, enabled protocol, and credentials. Their native transports are plaintext;
-use a trusted Docker network or a separately managed authenticated TLS tunnel.
-Ludock sends console credentials to `ludock.console.host`, so trust that endpoint.
-
-Minecraft runs `rcon-cli` inside the game container and needs no published RCON
-port. Its image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`, `rm`, and
-`rmdir` for command execution and timeout cleanup. Terraria's stdin adapter
-requires `stdin_open: true`, `StdinOnce` disabled, and an image that forwards
-input to the server process.
-
-Administrator shell commands require `/bin/sh` and `timeout`. They also work
-when `/tmp` is read-only: the command's 60-second timeout still applies, with
-up to five seconds for forced termination. Without writable temporary storage,
-disconnecting may wait for that deadline; Ludock keeps the server locked until
-Docker confirms the command has exited.
-
-| Label | Purpose |
-| --- | --- |
-| `ludock.enable` | Explicitly include/exclude a container |
-| `ludock.name` | Display name; defaults to the container name |
-| `ludock.game` | Integration override, such as `minecraft` or `terraria` |
-| `ludock.console` | Adapter override; `disabled` or `none` disables commands |
-| `ludock.console.host` / `ludock.console.port` | Console address override |
-| `ludock.console.password-env` | **Name** of the game-container environment variable containing the password, never its value |
-| `ludock.files` | Comma-separated container data paths; empty disables file and derived backup roots |
-| `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
-
-Console adapters are `minecraft-rcon`, `source-rcon`, `rust-webrcon`,
-`telnet-console`, and `stdin-console`. For example, enroll a custom image by
-adding these settings to its owning Compose service:
-
-```yaml
-stdin_open: true
-labels:
-  ludock.enable: "true"
-  ludock.game: "terraria"
-  ludock.name: "Terraria with friends"
-```
-
-## Server list and status
+## Server list and addresses
 
 The server list shows each server's state, the address players connect to, and
-its latest backup. The address combines the public name or IP in **Settings →
-Server address** with the host port published for the game's own port and
-protocol, or the first published port for other images. Ports published only on
-loopback (such as `127.0.0.1:25565:25565`) are never offered, because players
-on other machines cannot reach them. Until an administrator sets a name, Ludock
-uses the host name from the browser's address bar; set it when players connect
-through a different name than the one you use for Ludock.
+its latest backup. **Server → Overview** adds uptime, CPU and memory use, the
+next scheduled action, and availability monitoring.
 
-When detection can't know the address, such as a router forwarding a different
-port, a tunnel service, a separate domain per game, or a Minecraft SRV record,
-add a `ludock.address` label with exactly what players type. It replaces the
-detected address for that server, the port is optional, and changing it does not
-require a binding review. Invalid values are ignored and reported in
-**Diagnostics**.
+### States
 
 States follow Docker. A running server with a health check shows **Starting**
-until the check passes and **Unhealthy** while it fails. A stopped server shows
-**Crashed** when it exited with an error code, **Out of memory** when the kernel
-killed it, and **Force-stopped** when Docker killed it (exit 137), usually
-because it did not shut down within its stop grace period, so recent progress
-may not have been saved. **Server → Overview** adds uptime, CPU and memory use,
-the next scheduled action, and availability monitoring.
+until the check passes and **Unhealthy** while it fails. A stopped server shows:
 
-The game console offers shortcuts for common commands, such as listing players
-or saving the world. Shortcuts that need more input, such as a message, fill the
-command line instead of sending. Up and Down step through commands sent during
-the current visit; nothing is stored.
+- **Crashed** when it exited with an error code.
+- **Out of memory** when the kernel killed it.
+- **Force-stopped** when Docker killed it (exit 137), usually because it didn't
+  shut down within its stop grace period. Recent progress may not have been saved.
 
-## Access and identity
+### Addresses
 
-Administrators see all eligible servers. Operators and viewers need explicit
-per-server grants, including `server.view`. Viewers can receive logs and file
-read/download access. Operators can additionally receive individual lifecycle,
-console, file-write, backup-create, and schedule-management grants. File writes
-also require file-read access. Console and logs are independent grants.
-Restore, archive download/delete, update/recreate, shell, and system configuration
-remain administrator-only.
+Ludock combines the name or IP in **Settings → Server address** with the host
+port published for the game's own port and protocol. Images without a known game
+port use their first published port. Until an administrator sets a name, Ludock
+uses the host name from your browser's address bar.
 
-A backup grant includes its required temporary stop/restart, without granting
-general lifecycle access. Scheduled work uses its owner's current rights;
-revocation blocks queued actions and closes affected streams.
+Ports published only on loopback (such as `127.0.0.1:25565:25565`) are never
+offered, because players on other machines can't reach them.
 
-Server IDs are Ludock UUIDs. Compose identity uses project/service/replica;
-standalone identity uses the container name. Verified recreation preserves history
-and grants; a standalone rename creates a new identity. Material game, mount,
-or project changes suspend non-administrator access until **Accept binding**.
-Schedules whose data binding changed must be reviewed and recreated separately;
-old backups must still match the accepted data binding.
+When detection can't know the address, add a `ludock.address` label with exactly
+what players type. Use it for a router that forwards a different port, a tunnel
+service, a separate domain per game, or a Minecraft SRV record. The port is
+optional, and changing the label doesn't require a binding review. Invalid values
+are ignored and reported in **Diagnostics**.
 
-Docker outages leave saved history readable and controls disabled until live state
-can be verified. **Needs attention** includes historical failures from each server's
-latest 100 operations; a later successful run does not remove the earlier failure.
+## Consoles
 
-## File access
+Open a server's console for its Docker logs, its game console, and, for
+administrators, a shell inside the container.
 
-Safe writable bind mounts and local named volumes become roots automatically,
-including while stopped. Ludock exposes container paths, not host paths or the
-container's writable layer. Restrict a root with, for example,
-`ludock.files: "/data/worlds,/data/config"`; labels cannot expand approved mounts.
+- **Shortcuts:** buttons for common commands, such as listing players or saving
+  the world. Shortcuts that need more input, such as a message, fill in the
+  command line instead of sending.
+- **History:** Up and Down step through commands sent during the current visit.
+  Nothing is stored.
 
-Read-only/system/sensitive paths, Docker sockets, symlink traversal, and root
-deletion are blocked. Approved nested mounts remain accessible; excluded nested
-mounts are hidden and block downloading, deleting, or renaming their ancestors.
-Downloads and overwrites reject hard links; directory downloads also reject
-symlinks and special files. Deleting a symlink removes only the link.
+Network consoles (RCON, WebRCON, and Telnet) need a reachable address, the
+console enabled in the game, and credentials. These protocols aren't encrypted,
+so keep them on a trusted Docker network or behind an authenticated TLS tunnel.
+Ludock sends console credentials to `ludock.console.host`, so point it only at an
+endpoint you trust.
 
-Helpers mount approved data, run as UID 0, and have no network. Stop a game
-before manually replacing active worlds or configuration. Bind access requires
-validated host paths and recursive read-only bind support; symlinked sources or
-Docker Desktop aliases can make it unavailable. Named volumes must use the local
-driver without host-remapping options.
+- **Minecraft** runs `rcon-cli` inside the game container and needs no published
+  RCON port. The image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`,
+  `rm`, and `rmdir`.
+- **Terraria** reads commands from the process's input. It needs
+  `stdin_open: true`, `StdinOnce` turned off, and an image that forwards input
+  to the server.
+- **Administrator shell** commands need `/bin/sh` and `timeout` in the image.
+  Each command has 60 seconds, plus up to five to force it to stop. They work
+  even when `/tmp` is read-only, but disconnecting may then wait for that
+  deadline. The server stays locked until Docker confirms the command exited.
 
-Uploads stage a temporary sibling and replace the destination only after the
-complete transfer is validated. Allow space for both files; canceling a batch
-does not undo completed uploads. The default upload limit is 2 GiB; configure
-`MAX_UPLOAD_SIZE` using decimal units (`MB`) or binary units (`MiB`).
-Listings allow 10,000 entries. Transfers have a 30-minute limit; uploads also
-stop after 60 seconds without input. Ordinary commands have a 55-second limit.
-Helpers are removed after use and expire after 35 minutes if Ludock is interrupted.
+## Files
 
-Helper overrides and custom hostnames are covered in [`.env.example`](../.env.example).
+Writable bind mounts and local named volumes that are safe to expose become file
+folders automatically, even while the server is stopped. Ludock shows container
+paths, never host paths or the container's own writable layer. To narrow access,
+list folders in a label, such as `ludock.files: "/data/worlds,/data/config"`;
+labels can't add mounts.
 
-## Configure backups
+Ludock blocks:
 
-With the example deployment, open **Settings → Backup storage**. The single
-configured root, `/backups`, is suggested automatically; review the defaults
-(10 backups per server, 100 GiB combined limit, 5 GiB minimum free space) and
-save to enable backups. Adjust these for your disk and world sizes. If multiple
-roots are configured, choose one explicitly. Selecting a path never enables
-backups until you save. For another disk,
-replace the existing `/backups` volume mount with a host directory:
+- Read-only, system, and sensitive paths, and Docker sockets.
+- Following symlinks, and deleting a top-level folder. Deleting a symlink removes
+  only the link.
+- Hard links in downloads and overwrites, and symlinks or special files in
+  folder downloads.
+- Nested mounts you've excluded. They're hidden, and their parent folders can't
+  be downloaded, deleted, or renamed.
+
+Stop a game before replacing a world or configuration it has open. Uploads go to
+a temporary file and replace the destination only after the whole transfer
+succeeds, so allow space for both. Canceling a batch doesn't undo files that
+already finished.
+
+| Limit | Value |
+| --- | --- |
+| Upload size | 2 GiB; set `MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
+| Text preview | 512 KiB; larger or binary files are downloaded instead |
+| Folder listing | 10,000 entries |
+| Upload or download | 30 minutes; uploads also stop after 60 seconds without data |
+| Other file actions | 55 seconds |
+
+File work runs in short-lived helper containers that mount only approved data,
+run as UID 0, and have no network. They're removed afterward, or expire after 35
+minutes if Ludock is interrupted. Bind mounts need validated host paths and
+recursive read-only bind support; symlinked sources or Docker Desktop path
+aliases can prevent access. Named volumes must use the `local` driver without
+options that remap the host path. Helper image overrides and custom host names
+are covered in [`.env.example`](../.env.example).
+
+## Backups
+
+### Set up storage
+
+With the example deployment, open **Settings → Backup storage**. Ludock suggests
+the `/backups` folder; review the defaults and save to turn backups on. Nothing
+is enabled until you save. If several folders are configured, pick one.
+
+| Setting | Default |
+| --- | --- |
+| Backups kept per server | 10 |
+| Combined size limit | 100 GiB |
+| Minimum free disk space | 5 GiB |
+
+To keep backups on another disk, create a host folder and replace the `/backups`
+volume mount with it, keeping the socket and data mounts:
 
 ```yaml
 services:
@@ -212,57 +232,55 @@ services:
       - /srv/ludock-backups:/backups
 ```
 
-Merge this fragment into the deployment, retaining its socket and application-data
-mounts. Create the host directory first. The destination must be mounted, writable,
-and separate from game roots. Set `LUDOCK_SELF_CONTAINER` if a custom hostname
-prevents mount verification.
+The folder must be mounted, writable, and separate from game data. If a custom
+container host name prevents Ludock from verifying the mount, set
+`LUDOCK_SELF_CONTAINER`.
 
-Storage limits and reserves use GiB. Space for a new archive is required **before**
-retention removes old archives; a full limit can require deletion or a higher limit.
-The disk reserve applies during copying and to restore staging on game-data disks.
-The storage summary reports saved limits, not unsaved form edits.
+### How backups work
 
-Use **Server → Backups** to check readiness. Preflight identifies configuration,
-space, and shared-writer problems without stopping or copying. It reserves no space;
-execution repeats validation for manual, scheduled, and nested backups.
+- **Downtime:** a backup stops the server for the whole copy, then returns it to
+  its previous state. A server that was already stopped stays stopped. Live
+  backups aren't supported.
+- **Readiness:** **Server → Backups** checks configuration, space, and other
+  programs writing the same data, without stopping or copying anything. It
+  doesn't reserve space, so every backup checks again before it runs.
+- **Space:** a new archive needs room *before* old ones are removed, so a full
+  limit may mean deleting backups or raising the limit. The free-space minimum
+  applies while copying and while staging a restore on the game data's disk.
+- **Invalid copies:** a forced stop (exit 137 or out of memory), a start from
+  another tool, a replaced container, or another running program writing the
+  same data cancels the copy. Ludock can't lock other managers, so check that the
+  game shuts down cleanly and its worlds are intact.
+- **Contents:** data folders must be separate directories without nested mounts.
+  Links, special files, single-file mounts, and overlapping folders are rejected.
+  Archives are limited to 100,000 entries and 64 path levels; use `ludock.files`
+  to pick smaller folders. Permissions, owners, and modification times are kept;
+  ACLs, extended attributes, and sparse files aren't.
+- **Restoring needs Ludock's database:** each archive's records live there, so
+  back up archives and the database together. Importing other archives isn't
+  supported.
 
-Backups keep the server stopped throughout copying, then restore its initial running
-state after success or recoverable failure. Initially stopped servers remain stopped.
-Live backups are unsupported. Forced termination (exit 137/OOM), external starts,
-replacement, and known running shared writers invalidate copying. Ludock cannot
-lock external managers; verify the game's graceful shutdown and world integrity.
+### Restore
 
-Roots must be physically distinct directories without nested mounts. Backups reject
-links, special files, individual file mounts, and overlapping data roots. Archives
-are limited to 100,000 entries and 64 path components, including archive prefixes.
-Use `ludock.files` to select suitable subdirectories. Archives preserve ordinary
-permissions, UID/GID, and modification times, but not ACLs, extended attributes,
-or sparse layout. Protect archives and Ludock's database together: restore requires
-the database's binding/root/checksum metadata; arbitrary archive import is unsupported.
+An administrator picks a backup and types the server's name to confirm. Ludock
+checks the archive, stops the server, and takes a safety backup; if that backup
+fails, nothing is replaced. Each folder is staged and then swapped in, with a
+journal so interrupted work can be finished or rolled back. Replacing several
+mounts is **not atomic**.
 
-## Restore and interrupted work
+The server returns to its previous state only once the data is known to be safe.
+If recovery fails or the server's identity can't be confirmed, leave it stopped and check **Server → Activity**, the
+container in Docker, and its owning manager's logs.
 
-An administrator selects a backup and types the server name to confirm replacement.
-Ludock validates the archive/binding, stops the server, and takes a safety backup.
-Failure of that backup aborts replacement. Restore stages each root and persists a
-replacement journal; replacement across mounts is **not atomic**.
-
-After interruption, recovery uses the journal to finish cleanup or roll back moved
-roots. The server returns to its initial running state only when data is known safe.
-If recovery or identity validation fails, leave it stopped and inspect **Server →
-Activity**, actual Docker state, and owning-manager logs. Do not delete
-`.ludock-restore-*` directories or operation records: they may be needed to recover
-previous game data. Stopping Ludock is not an operation-cancel mechanism.
-
-**Operations** searches persisted work; administrators can follow related events
-in **Audit log**. Filters never unlock active controls. Audit entries record the
-event's outcome at that time, so an old queued event does not become succeeded.
-Audit retention can remove events before their operation record disappears.
+> [!WARNING]
+> Don't delete `.ludock-restore-*` folders or operation records after a failed
+> restore; they may be needed to recover the previous game data. Stopping Ludock
+> doesn't cancel an operation.
 
 ## Compose updates
 
-Updates require the Linux Ludock image, administrator access, and trusted source
-directories mounted read-only at their **original absolute Docker-host paths**:
+Updates need the Linux Ludock image, an administrator, and the Compose source
+folders mounted read-only at their **original absolute paths on the Docker host**:
 
 ```yaml
 services:
@@ -273,91 +291,139 @@ services:
       - /srv/game-stacks:/srv/game-stacks:ro
 ```
 
-**Server → Update** discovers the project directory, ordered Compose files, and
-CLI environment files from Docker labels. With no recorded CLI environment files,
-it loads the project's `.env` if present. All transitive reads must remain within
-approved roots and reject symlinks; each source file is limited to 2 MiB.
-Shell-only interpolation variables must be supplied through the source files.
+**Server → Update** finds the project folder, its Compose files in order, and any
+environment files from Docker's labels. Without recorded environment files, it
+uses the project's `.env` if there is one. Every file it reads must stay inside
+approved folders, can't be a symlink, and must be under 2 MiB. Variables that
+only exist in your shell must be added to those files.
 
-- Local Compose and literal service `env_file` inputs are snapshotted before use.
-- `include`, `extends`, secrets/configs, `label_file`, credential specs, lifecycle
-  hooks, providers, development configuration, and `volumes_from` are rejected.
-- Build-only services, digest-pinned updates, multiple replicas, and service
-  namespace dependencies such as `network_mode: service:...` are unsupported.
-- Source changes after confirmation or during execution abort the operation.
-  Retry against current sources. Owner configuration is never rewritten.
+- **Update server** pulls the configured image, optionally takes a backup first,
+  and recreates only that service, without building or pulling again.
+- **Recreate anyway** does the same when the image hasn't changed, for example
+  to pick up a game update that installs on startup.
+- Skipping the backup requires typing the server's name. A server that was
+  stopped stays stopped.
 
-For private registries, mount a dedicated read-only `LUDOCK_DOCKER_CONFIG`
-directory outside game file roots. If source metadata or original paths are
-unavailable, update through the owning manager.
+Not supported:
 
-**Update server** pulls the configured image, optionally takes a stopped-server
-backup, and recreates only that service, without builds or another pull.
-**Recreate anyway** does the same when the image is unchanged. Skipping a backup
-requires typing the server name. Initially stopped servers remain stopped.
-Image currency does not establish the game version downloaded by startup scripts.
+- `include`, `extends`, secrets, configs, `label_file`, credential specs,
+  lifecycle hooks, providers, development settings, and `volumes_from`.
+- Build-only services, images pinned by digest, multiple replicas, and services
+  that share another service's namespace, such as `network_mode: service:…`.
+- Containers not started by Compose, or whose Compose labels or original paths
+  aren't available. Update those through the tool that created them.
 
-Pull failure leaves the existing container unchanged. After recreation failure,
-inspect and recover the service through its owning manager. A data backup cannot
-roll back the image or Compose definition; redeployment can replace runtime changes
-not saved in that definition. Standalone containers use their original manager.
+Ludock snapshots the files before it starts and stops if they change; retry
+against the current files. It never rewrites your configuration. For private
+registries, mount a dedicated read-only `LUDOCK_DOCKER_CONFIG` folder outside game
+file folders.
 
-## Schedules and alerts
+If the pull fails, the existing container is unchanged. If recreation fails,
+recover the service with its owning manager. A data backup can't roll back the
+image or Compose file, and redeploying replaces changes that were never saved in
+the Compose file. An up-to-date image doesn't mean the game itself is current,
+because many images download the game when they start.
 
-Schedules run start/stop/restart/backup at a local time on selected weekdays.
-Operators manage their own schedules; administrators manage all eligible-server
-schedules. Editing/resuming requires both schedule management and the action's
-grant, including the owner's current access. Pausing remains possible after losing
-an action grant. Changed data bindings require recreating the schedule.
+## Schedules
 
-Missed times and spring-forward gaps are skipped; a repeated fall-back time runs
-once. Resuming does not replay missed runs. Pausing/editing blocks queued work under
-old settings but does not undo dispatched actions. Check **Last result → View
-activity** for the actual operation outcome. Limits are 100 schedules per server
-and 1,000 per installation, including paused schedules. Invalid configurations are
-suspended; logs identify affected schedules.
+Schedules start, stop, restart, or back up a server at a set time on chosen days.
+New schedules use your browser's time zone; search for another by city or choose
+**Use my time zone**. **Every day**, **Weekdays**, and **Weekends** select days
+in one click, and **Create paused** saves a schedule without running it.
 
-New schedules start with the browser’s time zone. Search the time-zone field
-by city or choose **Use my time zone**; the next-run preview shows the selected
-zone. **Every day**, **Weekdays**, and **Weekends** select days together, and
-individual days remain editable. Review the action’s effect, then **Add schedule**
-or **Save changes**. **Create paused** saves a schedule without enabling runs.
+- **Who:** operators manage their own schedules and administrators manage all of
+  them. A schedule runs with its owner's current access. Editing or resuming
+  needs both schedule access and access to the action; pausing doesn't.
+- **Timing:** missed times and skipped daylight-saving hours don't run, and a
+  repeated hour runs once. Resuming doesn't replay missed runs. Pausing or editing
+  stops queued work under the old settings but doesn't undo work already
+  started.
+- **Results:** **Last result → View activity** shows what actually happened.
+- **Limits:** 100 schedules per server and 1,000 in total, including paused ones.
+  A schedule with an invalid setup is suspended, and the logs say which.
+- **Server changes:** when a server's data binding changes, recreate its schedules.
 
-Availability monitoring is disabled by default. An administrator can enable it on
-a server's **Overview** for a 24/7 expectation, with a default two-minute failure
-grace period.
-It checks Docker health or running state, not player connectivity. Maintenance and
-Ludock operations suppress alerts; intentionally stopped servers stay suppressed
-until observed running again. Docker outages report unknown availability.
-The grace period is the wait before reporting an outage; 120 seconds means two
-minutes. **Maintenance mode** pauses monitoring until you turn it off and save;
-it does not stop the server or pause its schedules.
+## Availability alerts
 
-Administrators configure Discord in Settings. In Discord’s **Server Settings →
-Integrations**, create a webhook for the channel that should receive alerts and
-copy its URL. Paste it in Ludock, enable delivery, and save. The
-[Discord webhook guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
-shows the Discord steps. Ludock never displays the saved URL; blank replacement
-input preserves it. Choose **Send test
-notification**. The queue checks every 15 seconds and persists across restarts.
-Events cover outages/recoveries, backup/schedule failures, and restore/update results.
+Monitoring is off by default. An administrator turns it on from a server's
+**Overview** when the server should be up around the clock. It checks Docker's
+running state and health check, not whether players can connect.
 
-**Recent deliveries** shows sanitized status and failure reasons. Delivery retries
-with bounded backoff up to five attempts. After correcting configuration, **Retry**
-uses the saved webhook and permits five more attempts while retaining the total
-count. Disabling Discord pauses the queue, tests, and retries. Interruption after
-delivery but before acknowledgement can cause a repeated message.
+- **Grace period:** how long to wait before reporting an outage. The default is
+  120 seconds.
+- **Quiet times:** stops and operations started through Ludock don't alert, and
+  a stopped server stays quiet until it's running again. **Maintenance mode**
+  pauses alerts until you turn it off; it doesn't stop the server or its
+  schedules.
+- **Docker outages** report availability as unknown.
 
-## Application backup and account recovery
+### Discord
 
-### Back up application data
+In Discord, open **Server Settings → Integrations**, create a webhook for the
+channel that should get alerts, and copy its URL
+([Discord's guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
+In Ludock, paste it in **Settings**, turn delivery on, save, and choose
+**Send test notification**.
 
-Stop Ludock and copy all of `/data`, including the `.identity-key` directory beside
+Alerts cover outages and recoveries, failed backups and schedules, and restore
+and update results. Ludock never shows the saved URL; leaving the field blank
+keeps it.
+
+The queue checks every 15 seconds and survives restarts. Failed deliveries retry
+up to five times; after fixing the setup, **Retry** allows five more. Turning
+Discord off pauses the queue, tests, and retries. **Recent deliveries** shows each
+attempt's status without secrets. A restart right after delivery can send a
+message twice.
+
+## Users and access
+
+| Role | Access |
+| --- | --- |
+| Administrator | Every server and setting |
+| Operator | Shared servers, with any of: logs, file downloads, start, stop, restart, console, changing files, creating backups, and managing their own schedules |
+| Viewer | Shared servers, with logs and file downloads if shared |
+
+Operators and viewers need a server shared with them (`server.view`) before they
+can see it. Changing files also needs file read access, and console and logs are
+shared separately. A backup permission includes the temporary stop it needs, but
+not general start and stop. Restoring, downloading or deleting archives,
+updating, the container shell, and system settings are administrator-only.
+Removing access also blocks the user's queued work and closes their open consoles
+and log streams.
+
+### Server identity
+
+Each server has its own Ludock ID. A Compose server is identified by its project,
+service, and replica; a standalone container by its name. Recreating a container
+keeps its history and sharing, but renaming a standalone container creates a new
+server.
+
+If a server's game, mounts, or project change, non-administrators lose access
+until an administrator chooses **Accept binding**. Its schedules then need to be
+recreated, and older backups can only be restored if they match the accepted
+data.
+
+### Activity and history
+
+- **Operations** lists past and current work. Administrators can follow related
+  events in **Audit log**. Filters never unlock controls.
+- Audit entries record the outcome at the time, so an old "queued" entry doesn't
+  change to "succeeded". Old audit entries can expire before their operation.
+- **Needs attention** includes failures from each server's latest 100
+  operations, even if a later run succeeded.
+- During a Docker outage, history stays readable and controls are disabled until
+  Ludock can check live state again.
+
+## Maintenance
+
+### Back up Ludock
+
+Stop Ludock and copy all of `/data`, including the identity key folder next to
 the database (normally `/data/ludock.db.identity-key/`). Restore the database and
-key together. The key protects identity/source fingerprints and queued API-token
-credentials; missing, unsafe, or mismatched keys prevent startup. Recover a lost
-key from an earlier backup instead of generating a replacement. Game archives
-remain separate: copying `/data` does not back up game worlds.
+key together: a missing, unsafe, or mismatched key prevents startup, so recover a
+lost key from an earlier backup instead of creating a new one. The key protects
+server and Compose source fingerprints and queued API-token credentials. Copying
+`/data` doesn't back up game worlds.
 
 ```bash
 docker compose stop ludock
@@ -365,15 +431,16 @@ docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data.back
 docker compose start ludock
 ```
 
-### Inspect logs
+### Logs
 
-Use administrator **Diagnostics**, **Audit log**, and **Ludock logs**, or
-`docker compose logs --follow --tail 200 ludock`. Enable `LOG_LEVEL=debug`
-temporarily if needed; exclude credentials and command contents from reports.
+Administrators can use **Diagnostics**, **Audit log**, and **Ludock logs**, or
+run `docker compose logs --follow --tail 200 ludock`. Set `LOG_LEVEL=debug`
+temporarily for more detail, and leave credentials and command contents out of
+anything you share.
 
 ### Recover an administrator account
 
-Securely set/export `LUDOCK_RECOVERY_PASSWORD` without putting it in shell history:
+Export `LUDOCK_RECOVERY_PASSWORD` without saving it in your shell history, then:
 
 ```bash
 docker compose stop ludock
@@ -383,24 +450,23 @@ unset LUDOCK_RECOVERY_PASSWORD
 docker compose start ludock
 ```
 
-Replace `admin` with the existing username. Recovery revokes its sessions;
-it does not create an account or reset game data.
+Replace `admin` with the existing username. This signs the account out
+everywhere; it doesn't create accounts or change game data.
 
 ## API
 
-HTTP routes use `/api/v1`; WebSockets use `/ws/v1`. Server IDs are logical UUIDs.
-Browser clients use session cookies; the optional administrator token uses
-`Authorization: Bearer …`. Never place credentials in URLs.
+HTTP routes live under `/api/v1` and WebSockets under `/ws/v1`. Server IDs are
+Ludock's IDs, not Docker container IDs. Browsers use session cookies; the optional
+administrator token uses `Authorization: Bearer …`. Never put credentials in URLs.
 
-Long-running mutations return an operation. Poll `/operations/:id` for its outcome
-or `/servers/:id/operations` for recent server history. `GET /operations` searches
-accessible servers; administrator-only `GET /audit` searches audit history.
-Both accept `limit` (up to 250), `cursor`, `serverId`, `actor`, `action`, `status`,
-`from`, and `to`. Dates are inclusive Unix milliseconds. `actor` matches an account
-name or recorded actor identifier; `action` searches the operation kind/audit action.
-Audit also accepts `operationId`. Pass `nextCursor` with unchanged filters until
-it is null. Every page and operation detail rechecks current access.
-
-`GET /attention` returns authorized summaries and `discoveryUnavailable` when
-current Docker state cannot be checked. `GET /integrations` lists the supported
-games shown in Diagnostics.
+- **Long-running actions** return an operation. Poll `/operations/:id` for its
+  result, or `/servers/:id/operations` for a server's recent work.
+- **History:** `GET /operations` searches servers you can access, and
+  administrator-only `GET /audit` searches the audit log. Both accept `limit`
+  (up to 250), `cursor`, `serverId`, `actor`, `action`, `status`, `from`, and
+  `to`; audit also accepts `operationId`. Dates are inclusive Unix milliseconds.
+  `actor` matches an account name or recorded actor ID, and `action` matches the
+  operation kind or audit action. Pass `nextCursor` with the same filters until
+  it's null. Every page rechecks your access.
+- `GET /attention` returns what needs attention, with `discoveryUnavailable`
+  when Docker can't be checked. `GET /integrations` lists the supported games.
