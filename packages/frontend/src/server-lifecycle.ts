@@ -69,6 +69,7 @@ export function stateSinceText(
 /** The address players type, with IPv6 hosts bracketed. Unset hosts use the address of this page. */
 export function connectAddress(server: Pick<Server, "connection">): string | null {
   if (!server.connection) return null;
-  const host = server.connection.host ?? window.location.hostname;
+  // Browsers report an IPv6 page host already bracketed, such as "[2001:db8::1]".
+  const host = (server.connection.host ?? window.location.hostname).replace(/^\[(.*)\]$/, "$1");
   return `${host.includes(":") ? `[${host}]` : host}:${server.connection.port}`;
 }

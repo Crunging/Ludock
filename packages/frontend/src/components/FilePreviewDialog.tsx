@@ -7,6 +7,31 @@ import "./file-action-dialog.css";
 /** Larger or binary files are downloaded instead of shown. */
 const PREVIEW_LIMIT = 512 * 1024;
 
+/** Reads at most `limit` bytes, canceling the transfer if the file has grown since it was listed. */
+async function readWithin(response: Response, limit: number): Promise<Uint8Array | null> {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 type Preview =
   | { state: "loading" }
   | { state: "ready"; text: string }
@@ -51,9 +76,13 @@ export default function FilePreviewDialog({ entry, path, downloadUrl, onClose }:
           const error = apiErrorSchema.safeParse(await response.json().catch(() => undefined));
           throw new Error(error.success ? error.data.error : `Unable to open this file (HTTP ${response.status}).`);
         }
-        const bytes = new Uint8Array(await response.arrayBuffer());
+        const bytes = await readWithin(response, PREVIEW_LIMIT);
         if (controller.signal.aborted) return;
-        if (bytes.byteLength > PREVIEW_LIMIT || bytes.includes(0)) {
+        if (bytes === null) {
+          setPreview({ state: "large" });
+          return;
+        }
+        if (bytes.includes(0)) {
           setPreview({ state: "binary" });
           return;
         }

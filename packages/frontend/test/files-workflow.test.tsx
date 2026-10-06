@@ -120,6 +120,43 @@ function fileRow(name: string): HTMLElement {
   return row;
 }
 
+describe("file preview", () => {
+  it("shows a small text file", async () => {
+    filesPage({
+      write: (path) => path.includes("/files/download?")
+        ? new Response("motd=Friends world\nmax-players=10\n")
+        : response(),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: config.name, exact: true }));
+    const contents = await screen.findByLabelText(`Contents of ${config.name}`);
+    expect(contents.textContent).toContain("max-players=10");
+  });
+
+  it("stops reading a file that grew past the preview limit after it was listed", async () => {
+    let pulls = 0;
+    let canceled = false;
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    filesPage({
+      write: (path) => path.includes("/files/download?")
+        ? new Response(new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pulls += 1;
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              canceled = true;
+            },
+          }))
+        : response(),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: config.name, exact: true }));
+    await screen.findByText(/aren’t shown here/);
+    expect(canceled).toBe(true);
+    // 512 KiB is eight chunks; a ninth crosses the limit, plus at most a little read-ahead.
+    expect(pulls).toBeLessThan(12);
+  });
+});
+
 describe("file mutation safety", () => {
   it("ignores an older root response and uses the visible root for actions", async () => {
     const oldRoot = Promise.withResolvers<FileListing>();

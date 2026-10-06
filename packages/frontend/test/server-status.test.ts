@@ -36,6 +36,8 @@ describe("server status words", () => {
     expect(connectAddress({ connection: { host: "play.example.com", port: 25565 } })).toBe("play.example.com:25565");
     expect(connectAddress({ connection: { host: "2001:db8::1", port: 2456 } })).toBe("[2001:db8::1]:2456");
     expect(connectAddress({ connection: { host: null, port: 7777 } })).toBe(`${window.location.hostname}:7777`);
+    // A page opened over IPv6 reports its host with brackets already.
+    expect(connectAddress({ connection: { host: "[2001:db8::1]", port: 2456 } })).toBe("[2001:db8::1]:2456");
   });
 
   it("phrases recent times relative to now", () => {
