@@ -1,0 +1,12 @@
+import { useEffect, useState } from "react";
+
+/** The current time, refreshed on an interval so relative labels such as
+ * "5 minutes ago" stay accurate on a page that receives no other updates. */
+export function useNow(intervalMs = 30_000): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}

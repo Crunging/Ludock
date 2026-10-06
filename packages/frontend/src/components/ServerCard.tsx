@@ -3,21 +3,34 @@ import { useState } from "react";
 import { useAuth } from "../auth-context";
 import { useNavigate } from "../navigation-context";
 import { NavLink } from "../navigation";
-import { can } from "../permissions";
+import { can, canReadBackupSummary } from "../permissions";
+import { formatDateTime, formatRelativeTimeSentence } from "../format";
+import { useNow } from "../hooks/useNow";
 import LifecycleConfirmation from "./LifecycleConfirmation";
-import ServerMoreActions from "./ServerMoreActions";
-import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
+import ActionMenu from "./ActionMenu";
+import ServerState from "./ServerState";
+import CopyAddress from "./CopyAddress";
+import {
+  connectAddress,
+  lifecycleActionForState,
+  lifecycleStateGuidance,
+  serverStatus,
+  stateSinceText,
+} from "../server-lifecycle";
 import "./server-list.css";
 
 interface ServerCardProps {
   server: Server;
   actionsDisabled?: boolean;
+  /** The list shows a backup column when any listed server has a backup summary. */
+  showBackup?: boolean;
   onAction: (id: string, action: "start" | "stop" | "restart") => Promise<void>;
 }
 
-export default function ServerCard({ server, onAction, actionsDisabled = false }: ServerCardProps) {
+export default function ServerCard({ server, onAction, actionsDisabled = false, showBackup = false }: ServerCardProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const now = useNow();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<"stop" | "restart" | null>(
     null,
@@ -49,10 +62,6 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
     can(user, server, "console.shell");
   const canOpenConsole =
     consoleAvailable || can(user, server, "logs.read");
-  const canReadBackupSummary =
-    user?.role === "admin" ||
-    can(user, server, "backups.read") ||
-    can(user, server, "backups.create");
   const secondaryActions = [
     ...(can(user, server, "files.read") && server.fileRoots.length > 0
       ? [{ label: "Files", onSelect: () => navigate(`/files/${server.id}`) }]
@@ -67,53 +76,66 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
         ]
       : []),
   ];
+  const address = connectAddress(server);
+  const stopped = lifecycleAction === "start";
+  const failed = serverStatus(server).tone === "failed";
 
   return (
-    <article className="server-row" aria-labelledby={`server-${server.id}`}>
+    <article
+      className={`server-row${stopped ? " server-row--stopped" : ""}${failed ? " server-row--failed" : ""}`}
+      aria-labelledby={`server-${server.id}`}
+    >
       <div className="server-row__identity">
         <NavLink
-          className="text-link server-row__name"
+          className="server-row__name"
           id={`server-${server.id}`}
           to={`/servers/${server.id}`}
         >
           {server.displayName}
         </NavLink>
-        <span className="muted">
-          <span className="server-row__game">{server.gameType}</span>
-          <span className="server-row__image">{server.image}</span>
-        </span>
-        {canReadBackupSummary && (
-          <p className="server-row__backup">
-            {server.latestBackup ? (
-              <>
-                Latest successful backup:{" "}
-                <time dateTime={new Date(server.latestBackup.createdAt).toISOString()}>
-                  {new Date(server.latestBackup.createdAt).toLocaleString()}
-                </time>
-              </>
-            ) : "No successful backup retained"}
+        <span className="server-row__game">{server.gameName}</span>
+        {stateGuidance && <p className="server-row__note">{stateGuidance}</p>}
+        {bindingBlocked && (
+          <p className="server-row__warning">
+            {`Binding ${server.bindingStatus.replaceAll("_", " ")}. Administrator review required.`}
           </p>
         )}
-        {stateGuidance && <p className="muted">{stateGuidance}</p>}
-        {bindingBlocked && (
-          <span className="server-row__warning">
-            {`Binding ${server.bindingStatus.replaceAll("_", " ")}. Administrator review required.`}
-          </span>
+      </div>
+      <div className="server-row__state">
+        <ServerState server={server} />
+        {server.stateSince !== null && (
+          <time
+            className="server-row__since"
+            dateTime={new Date(server.stateSince).toISOString()}
+            title={formatDateTime(server.stateSince)}
+          >
+            {stateSinceText(server, { standalone: true, now })}
+          </time>
         )}
       </div>
-      <div className={`server-state server-state--${server.state}`}>
-        <span className="status-dot" aria-hidden="true" />
-        {server.state}
+      <div className="server-row__address">
+        <span className="server-row__label">Connect</span>
+        {address
+          ? <CopyAddress address={address} serverName={server.displayName} />
+          : <span className="muted">No public port</span>}
       </div>
-      <div className="server-row__ports">
-        <span className="server-row__ports-label">Ports</span>
-        <span>
-          {server.ports
-            .filter((p) => p.public > 0)
-            .map((p) => `${p.public}/${p.type}`)
-            .join(", ") || "None published"}
-        </span>
-      </div>
+      {showBackup && (
+        <div className="server-row__backup">
+          <span className="server-row__label">Last backup</span>
+          {!canReadBackupSummary(user, server) ? (
+            <span className="muted">—</span>
+          ) : server.latestBackup ? (
+            <time
+              dateTime={new Date(server.latestBackup.createdAt).toISOString()}
+              title={formatDateTime(server.latestBackup.createdAt)}
+            >
+              {formatRelativeTimeSentence(server.latestBackup.createdAt, now)}
+            </time>
+          ) : (
+            <span className="server-row__never">Never</span>
+          )}
+        </div>
+      )}
       <div className="server-row__actions">
         {canOpenConsole && (
           <NavLink
@@ -139,8 +161,8 @@ export default function ServerCard({ server, onAction, actionsDisabled = false }
           </button>
         )}
         {secondaryActions.length > 0 && (
-          <ServerMoreActions
-            serverName={server.displayName}
+          <ActionMenu
+            label={`More actions for ${server.displayName}`}
             actions={secondaryActions}
           />
         )}

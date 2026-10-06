@@ -19,10 +19,11 @@ import { ApiRequestError, apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
 import { NavLink } from "../navigation";
 import { useLocation, useNavigate } from "../navigation-context";
-import { can } from "../permissions";
+import { can, canReadBackupSummary } from "../permissions";
 import { operationActive } from "../operations";
-import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
+import { lifecycleActionForState, lifecycleStateGuidance, serverStatus } from "../server-lifecycle";
 import SectionTabs from "../components/SectionTabs";
+import ServerState from "../components/ServerState";
 import LifecycleConfirmation from "../components/LifecycleConfirmation";
 import ActivityPanel, { type ActivityFilters } from "../components/server-detail/ActivityPanel";
 import BackupsPanel, {
@@ -36,6 +37,7 @@ import AvailabilityPanel, {
   type AvailabilityDraft,
 } from "../components/server-detail/AvailabilityPanel";
 import BindingReviewPanel from "../components/server-detail/BindingReviewPanel";
+import OverviewPanel from "../components/server-detail/OverviewPanel";
 import "./server-detail.css";
 import { useViewPreferences } from "../view-preferences-context";
 import { useBackupPreflight } from "../hooks/useBackupPreflight";
@@ -49,6 +51,23 @@ const defaultSchedule: ScheduleInput = {
   days: [0, 1, 2, 3, 4, 5, 6],
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 };
+
+function SettingsLoadState({ state, onReload }: {
+  state: "loading" | "ready" | "error";
+  onReload: () => void;
+}) {
+  if (state === "loading") return <p role="status">Loading server settings…</p>;
+  return (
+    <div>
+      <p role="alert">
+        Unable to load server settings. Reload them before making changes.
+      </p>
+      <button className="secondary-btn" onClick={onReload}>
+        Reload server settings
+      </button>
+    </div>
+  );
+}
 
 function scheduleInput(item: Schedule): ScheduleInput {
   return {
@@ -78,7 +97,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const admin = user?.role === "admin";
   const path = `/servers/${encodeURIComponent(serverId)}`;
   const {
-    server, operations, loading, busy, snapshotReady, liveReady,
+    server, stats, operations, loading, busy, snapshotReady, liveReady,
     discoveryUnavailable, error, notice, setError, refresh,
     perform: performMutation, pageActive, mutationPending,
   } = useServerDetail(path);
@@ -105,7 +124,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const capabilityFocusPending = useRef(false);
   const detailRoot = useRef<HTMLDivElement>(null);
   const { serverTabs, rememberServerTab } = useViewPreferences();
-  const tab = requestedTab || serverTabs[serverId] || "activity";
+  const tab = requestedTab || serverTabs[serverId] || "overview";
   const setTab = (next: string, selection?: { operation: string }) => {
     // Remembered tabs outlive this page. A completed request from a previous
     // visit must not change the tab chosen during a later visit.
@@ -150,13 +169,13 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const canManageSchedules = can(user, server, "schedules.manage") ||
     (admin && can(user, server, "server.view"));
   const tabs = [
+    { id: "overview", label: "Overview" },
     { id: "activity", label: "Activity" },
     ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
     ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
     ...(admin ? [{ id: "update", label: "Update" }] : []),
-    { id: "availability", label: "Availability" },
   ];
-  const activeTab = tabs.some((item) => item.id === tab) ? tab : "activity";
+  const activeTab = tabs.some((item) => item.id === tab) ? tab : "overview";
   const readBackups = useCallback((signal: AbortSignal) => apiJson(`${path}/backups`, backupsResponseSchema, { signal }), [path]);
   const readSchedules = useCallback((signal: AbortSignal) => apiJson(`${path}/schedules`, schedulesResponseSchema, { signal }), [path]);
   const backupHistory = usePageRead(
@@ -164,11 +183,15 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     "Unable to load backups.", { retainWhileRefreshing: true },
   );
   const scheduleHistory = usePageRead(
-    activeTab === "schedules" && canManageSchedules ? readSchedules : null,
+    (activeTab === "schedules" || activeTab === "overview") && canManageSchedules ? readSchedules : null,
     "Unable to load schedules.", { retainWhileRefreshing: true },
   );
   const backups = backupHistory.data?.backups ?? [];
   const schedules = scheduleHistory.data?.schedules ?? [];
+  const nextSchedule = schedules
+    .filter((item) => item.enabled && item.nextRunAt !== null)
+    .reduce<Schedule | null>((soonest, item) =>
+      soonest === null || item.nextRunAt! < soonest.nextRunAt! ? item : soonest, null);
   const backupsReady = Boolean(backupHistory.data && !backupHistory.loading && !backupHistory.error);
   const schedulesReady = Boolean(scheduleHistory.data && !scheduleHistory.loading && !scheduleHistory.error);
 
@@ -256,7 +279,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     return () => controller.abort();
   }, [canReadAvailability, path, settingsAttempt]);
   useEffect(() => {
-    if (tab !== "availability" || !canReadAvailability || settingsState !== "ready") return;
+    if (activeTab !== "overview" || !canReadAvailability || settingsState !== "ready") return;
     let pending = false;
     const interval = window.setInterval(() => {
       if (pending || mutationPending.current) return;
@@ -276,7 +299,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       window.clearInterval(interval);
       availabilityRequest.current?.abort();
     };
-  }, [tab, canReadAvailability, settingsState, path, mutationPending]);
+  }, [activeTab, canReadAvailability, settingsState, path, mutationPending]);
   const hasActiveOperation = Boolean(activeOperation);
   const refreshBackups = backupHistory.refresh;
   const refreshSchedules = scheduleHistory.refresh;
@@ -491,7 +514,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         </button>
       </div>
     );
-  const activeSettingsState = activeTab === "update" ? capabilityState : settingsState;
   const stateGuidance = lifecycleStateGuidance(server.state);
   const consoleAvailable =
     (can(user, server, "console.execute") && Boolean(server.gameConsole)) ||
@@ -506,10 +528,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         ? startable
         : server.state === "running"),
   );
-  const publishedPorts = server.ports
-    .filter((port) => port.public > 0)
-    .map((port) => `${port.public}/${port.type}`)
-    .join(", ");
   const scheduleActions = (
     ["start", "stop", "restart", "backup"] as const
   ).filter((action) =>
@@ -525,37 +543,19 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
       <NavLink className="text-link back-link" to="/" end>
         <span aria-hidden="true">←</span> All servers
       </NavLink>
-      <header className="detail-header">
+      <header className={`detail-header${startable ? " detail-header--stopped" : ""}${serverStatus(server).tone === "failed" ? " detail-header--failed" : ""}`}>
         <div className="detail-header__title">
           <h1 className="page__title" id="server-detail-title" tabIndex={-1}>
             {server.displayName}
           </h1>
-          <div className={`server-state server-state--${server.state}`}>
-            <span className="status-dot" aria-hidden="true" />
-            {server.state}
-          </div>
+          <p className="detail-header__identity">
+            <ServerState server={server} />
+            <span className="detail-header__game">{server.gameName}</span>
+            {server.name !== server.displayName && (
+              <span title="Docker container name"><code>{server.name}</code></span>
+            )}
+          </p>
         </div>
-        <p className="detail-header__identity">
-          <span className="detail-header__game">{server.gameType}</span>
-          {server.name !== server.displayName && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{server.name}</span>
-            </>
-          )}
-        </p>
-        <dl className="detail-metadata">
-          <div>
-            <dt>Image</dt>
-            <dd>
-              <code>{server.image}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Published ports</dt>
-            <dd>{publishedPorts ? <code>{publishedPorts}</code> : "None"}</dd>
-          </div>
-        </dl>
         {(canOpenConsole || canOpenFiles || lifecycleActions.length > 0) && (
           <div className="inline-actions detail-actions">
             {(canOpenConsole || canOpenFiles) && (
@@ -684,6 +684,55 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         activeId={activeTab}
         onChange={setTab}
       >
+        {activeTab === "overview" && (
+          <OverviewPanel
+            server={server}
+            stats={stats}
+            liveUnavailable={discoveryUnavailable}
+            showBackup={canReadBackupSummary(user, server)}
+            onOpenBackups={tabs.some((item) => item.id === "backups") ? () => setTab("backups") : undefined}
+            nextSchedule={canManageSchedules && schedulesReady ? nextSchedule : undefined}
+            onOpenSchedules={canManageSchedules ? () => setTab("schedules") : undefined}
+          >
+            {canReadAvailability && settingsState !== "ready" && (
+              <SettingsLoadState
+                state={settingsState}
+                onReload={() => setSettingsAttempt((value) => value + 1)}
+              />
+            )}
+            {canReadAvailability && settingsState === "ready" && availabilitySnapshot && (
+              <AvailabilityPanel
+                admin={admin}
+                policy={availabilitySnapshot.policy}
+                state={availabilitySnapshot.state}
+                monitoringPaused={Boolean(activeOperation)}
+                value={availability}
+                onChange={setAvailability}
+                busy={busy || !snapshotReady}
+                onSave={() => {
+                  if (!admin) return;
+                  void perform(
+                    async () => {
+                      availabilityRequest.current?.abort();
+                      const monitor = await apiJson(
+                        `${path}/availability`,
+                        availabilityResponseSchema,
+                        jsonBody("PUT", {
+                          enabled: availability.enabled,
+                          maintenance: availability.maintenance,
+                          graceSeconds: Number(availability.graceSeconds),
+                        }),
+                      );
+                      if (pageActive.current) setAvailabilitySnapshot(monitor);
+                    },
+                    "Monitoring settings saved.",
+                    { requiresLive: false },
+                  );
+                }}
+              />
+            )}
+          </OverviewPanel>
+        )}
         {activeTab === "activity" && (
           <ActivityPanel
             serverId={serverId}
@@ -814,27 +863,12 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
           />
         </>}
-        {((admin && activeTab === "update") || activeTab === "availability") &&
-          activeSettingsState !== "ready" && (
-            activeSettingsState === "loading" ? (
-              <p role="status">Loading server settings…</p>
-            ) : (
-              <div>
-                <p role="alert">
-                  Unable to load server settings. Reload them before making changes.
-                </p>
-                <button
-                  className="secondary-btn"
-                  onClick={() => {
-                    if (activeTab === "update") setCapabilityAttempt((value) => value + 1);
-                    else setSettingsAttempt((value) => value + 1);
-                  }}
-                >
-                  Reload server settings
-                </button>
-              </div>
-            )
-          )}
+        {admin && activeTab === "update" && capabilityState !== "ready" && (
+          <SettingsLoadState
+            state={capabilityState}
+            onReload={() => setCapabilityAttempt((value) => value + 1)}
+          />
+        )}
         {activeTab === "update" && admin && capabilityState === "ready" && (
           <UpdatePanel
             serverName={server.displayName}
@@ -853,37 +887,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               setCapabilityAttempt((value) => value + 1);
             }}
             onSubmit={() => void requestUpdate()}
-          />
-        )}
-        {activeTab === "availability" && settingsState === "ready" && availabilitySnapshot && (
-          <AvailabilityPanel
-            admin={admin}
-            policy={availabilitySnapshot.policy}
-            state={availabilitySnapshot.state}
-            monitoringPaused={Boolean(activeOperation)}
-            value={availability}
-            onChange={setAvailability}
-            busy={busy || !snapshotReady}
-            onSave={() => {
-              if (!admin) return;
-              void perform(
-                async () => {
-                  availabilityRequest.current?.abort();
-                  const monitor = await apiJson(
-                    `${path}/availability`,
-                    availabilityResponseSchema,
-                    jsonBody("PUT", {
-                      enabled: availability.enabled,
-                      maintenance: availability.maintenance,
-                      graceSeconds: Number(availability.graceSeconds),
-                    }),
-                  );
-                  if (pageActive.current) setAvailabilitySnapshot(monitor);
-                },
-                "Availability settings saved.",
-                { requiresLive: false },
-              );
-            }}
           />
         )}
       </SectionTabs>

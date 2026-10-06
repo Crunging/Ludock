@@ -188,15 +188,15 @@ function App() {
           <NavLink to="/" end className={route?.serverTools ? "nav-link--active" : undefined} aria-current={route?.serverTools ? "location" : undefined}>
             Servers
           </NavLink>
-          <NavLink to="/account">Account</NavLink>
           <NavLink to="/operations">Operations</NavLink>
+          {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
           {user?.role === "admin" && <NavLink to="/settings">Settings</NavLink>}
           {user?.role === "admin" && (
             <NavLink to="/diagnostics">Diagnostics</NavLink>
           )}
-          {user?.role === "admin" && <NavLink to="/users">Users</NavLink>}
           {user?.role === "admin" && <NavLink to="/audit">Audit</NavLink>}
           {user?.role === "admin" && <NavLink to="/logs">Logs</NavLink>}
+          <NavLink to="/account">Account</NavLink>
         </nav>
       )}
       <main

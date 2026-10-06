@@ -103,7 +103,7 @@ function NotificationSettingsForm({
         <p>
           Receive outage and recovery alerts, backup or schedule failures, and
           restore and update results. Enable availability monitoring separately
-          in each server’s Availability tab for outage alerts.
+          on each server’s Overview for outage alerts.
         </p>
         {!notificationConfigured && (
           <p className="muted" id="discord-webhook-setup">

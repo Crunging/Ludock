@@ -4,6 +4,7 @@ import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src
 import { setServerGrant } from "./fixtures/grants.js";
 import * as docker from "../src/docker.js";
 import { getServer, listServers } from "../src/servers.js";
+import { setConnectionHost } from "../src/settings.js";
 import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -22,7 +23,13 @@ function observation(name: string): docker.ManagedContainerObservation {
       image: "itzg/minecraft-server",
       state: "running",
       status: "Up",
+      health: null,
+      stateSince: null,
+      exit: null,
       gameType: "minecraft",
+      gameName: "Minecraft",
+      addressLabel: null,
+      connectPort: null,
       gameConsole: null,
       fileRoots: [],
       ports: [],
@@ -87,5 +94,24 @@ describe("server backup summaries", () => {
     expect((await getServer(viewer, serverId)).latestBackup).toBe(null);
     expect(await listServers(operator)).toStrictEqual([]);
     await expect(getServer(operator, serverId)).rejects.toThrow(/Server not found/);
+  });
+});
+
+describe("server connection address", () => {
+  it("prefers the owner's ludock.address, then the detected port with the configured host", async () => {
+    const entry = observation("backup-summary-fixture");
+    spyOn(docker, "listManagedContainerObservations").mockImplementation(async () => [entry]);
+    expect((await getServer(admin, serverId)).connection).toBeNull();
+
+    entry.container.connectPort = 25565;
+    expect((await getServer(admin, serverId)).connection)
+      .toStrictEqual({ host: null, port: 25565, source: "detected" });
+    setConnectionHost("play.example.com");
+    expect((await getServer(admin, serverId)).connection)
+      .toStrictEqual({ host: "play.example.com", port: 25565, source: "detected" });
+
+    entry.container.addressLabel = { host: "mc.example.com", port: null };
+    expect((await getServer(admin, serverId)).connection)
+      .toStrictEqual({ host: "mc.example.com", port: null, source: "label" });
   });
 });

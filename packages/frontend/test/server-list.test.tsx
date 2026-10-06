@@ -1,5 +1,5 @@
 import type { Server } from "@ludock/shared";
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, jest, mock } from "bun:test";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../src/auth-context";
@@ -15,12 +15,18 @@ const server: Server = {
   image: "itzg/minecraft-server",
   state: "running",
   status: "Up",
+  health: null,
+  stateSince: null,
+  exit: null,
   gameType: "minecraft",
+  gameName: "Minecraft",
+  connection: { host: "play.example.com", port: 25565, source: "detected" },
   created: 0,
   gameConsole: {
     id: "minecraft-rcon",
     name: "Minecraft RCON",
     commandPlaceholder: "help",
+    commands: [],
   },
   fileRoots: [{ id: "data", name: "Data", path: "/data" }],
   ports: [{ private: 25565, public: 25565, type: "tcp" }],
@@ -46,6 +52,37 @@ function card() {
 }
 
 describe("server list", () => {
+  it("keeps relative times current on an idle page", () => {
+    const start = Date.UTC(2026, 8, 15, 12);
+    jest.useFakeTimers({ now: start });
+    try {
+      render(
+        <AuthContext.Provider value={{ user } as AuthContextValue}>
+          <NavigationContext.Provider value={{ pathname: "/", navigate: mock() }}>
+            <ServerCard
+              server={{
+                ...server,
+                permissions: [...server.permissions, "backups.create"],
+                stateSince: start,
+                latestBackup: { createdAt: start - 3_600_000, size: 1 },
+              }}
+              showBackup
+              onAction={mock()}
+            />
+          </NavigationContext.Provider>
+        </AuthContext.Provider>,
+      );
+      expect(screen.getByText("Started just now")).toBeTruthy();
+      expect(screen.getByText("1 hour ago")).toBeTruthy();
+      act(() => jest.advanceTimersByTime(5 * 60_000));
+      expect(screen.getByText("Started 5 minutes ago")).toBeTruthy();
+      act(() => jest.advanceTimersByTime(60 * 60_000));
+      expect(screen.getByText("2 hours ago")).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("rechecks authorization and binding if they change during confirmation", async () => {
     const { action, update } = card();
     await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));

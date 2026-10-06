@@ -6,7 +6,7 @@
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  box-shadow: 0 30px 80px -20px rgb(0 0 0 / 70%);
+  box-shadow: var(--shadow-pop);
 }
 
 .file-action-dialog::backdrop {
@@ -15,9 +15,8 @@
 }
 
 .file-action-dialog h2 {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 21px;
+  font-weight: 750;
   overflow-wrap: anywhere;
 }
 
@@ -75,8 +74,39 @@
 }
 
 .file-action-dialog .secondary-btn--danger:hover:not(:disabled) {
-  background: #f8b6ae;
-  border-color: #f8b6ae;
+  background: color-mix(in srgb, var(--red) 80%, white);
+  border-color: color-mix(in srgb, var(--red) 80%, white);
+}
+
+.file-preview {
+  width: min(900px, calc(100% - 32px));
+}
+
+.file-preview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.file-preview__body {
+  margin-top: 18px;
+}
+
+.file-preview__body pre {
+  max-height: min(60vh, 640px);
+  overflow: auto;
+  padding: 14px 16px;
+  color: var(--text-terminal);
+  background: var(--bg-terminal);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  line-height: 1.55;
+  tab-size: 4;
 }
 
 .files-page .alert .text-link {
@@ -122,11 +152,11 @@
   .files-root select,
   .file-breadcrumbs button,
   .file-row__name button,
-  .file-row__actions .secondary-btn,
+  .action-menu__trigger--compact,
   .file-action-dialog__field input {
     min-height: 44px;
   }
   .file-breadcrumbs button,
-  .file-row__name button { min-width: 44px; }
-  .file-row__actions .secondary-btn { font-size: 12px; }
+  .file-row__name button,
+  .action-menu__trigger--compact { min-width: 44px; }
 }

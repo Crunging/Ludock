@@ -21,11 +21,18 @@ export type GameConsoleTransport =
   | "telnet"
   | "container-stdin";
 
+export interface QuickCommand {
+  label: string;
+  command: string;
+}
+
 export interface GameConsoleAdapter {
   id: GameConsoleAdapterId;
   name: string;
   transport: GameConsoleTransport;
   commandPlaceholder: string;
+  /** Common commands offered as shortcuts; a trailing space expects more input. */
+  commands: readonly QuickCommand[];
   defaultPort?: number;
   passwordEnvCandidates?: readonly string[];
   createExecOptions?(command: string): Docker.ExecCreateOptions;
@@ -36,6 +43,11 @@ const minecraftRconAdapter: GameConsoleAdapter = {
   name: "Minecraft RCON",
   transport: "docker-exec",
   commandPlaceholder: "difficulty hard, whitelist add PlayerName, say Hello",
+  commands: [
+    { label: "List players", command: "list" },
+    { label: "Save world", command: "save-all" },
+    { label: "Message players", command: "say " },
+  ],
   createExecOptions(command) {
     const normalized = command.startsWith("/") ? command.slice(1) : command;
     return {
@@ -52,6 +64,7 @@ const sourceRconAdapter: GameConsoleAdapter = {
   name: "RCON",
   transport: "source-rcon",
   commandPlaceholder: "status, save, broadcast Hello",
+  commands: [],
   passwordEnvCandidates: [
     "RCON_PASSWORD",
     "ADMIN_PASSWORD",
@@ -67,6 +80,11 @@ const rustWebRconAdapter: GameConsoleAdapter = {
   transport: "rust-webrcon",
   defaultPort: 28016,
   commandPlaceholder: "status, say Hello, server.save",
+  commands: [
+    { label: "Server status", command: "status" },
+    { label: "Save world", command: "server.save" },
+    { label: "Message players", command: "say " },
+  ],
   passwordEnvCandidates: ["RCON_PASSWORD"],
 };
 
@@ -75,6 +93,7 @@ const stdinConsoleAdapter: GameConsoleAdapter = {
   name: "Server console",
   transport: "container-stdin",
   commandPlaceholder: "help, playing, save",
+  commands: [],
 };
 
 const telnetConsoleAdapter: GameConsoleAdapter = {
@@ -82,6 +101,7 @@ const telnetConsoleAdapter: GameConsoleAdapter = {
   name: "Telnet console",
   transport: "telnet",
   commandPlaceholder: "help, listplayers, say Hello",
+  commands: [],
   passwordEnvCandidates: ["TELNET_PASSWORD"],
 };
 
@@ -107,6 +127,7 @@ export function resolveGameConsoleAdapter(
     ...adapter,
     name: preset.name || adapter.name,
     commandPlaceholder: preset.placeholder || adapter.commandPlaceholder,
+    commands: preset.commands ?? adapter.commands,
     defaultPort: preset.defaultPort ?? adapter.defaultPort,
     passwordEnvCandidates:
       preset.passwordEnvCandidates || adapter.passwordEnvCandidates,
@@ -119,6 +140,7 @@ export function getGameConsoleAdapterSummary(
   id: GameConsoleAdapterId;
   name: string;
   commandPlaceholder: string;
+  commands: QuickCommand[];
 } | null {
   const adapter = resolveGameConsoleAdapter(server);
   return adapter
@@ -126,6 +148,7 @@ export function getGameConsoleAdapterSummary(
         id: adapter.id,
         name: adapter.name,
         commandPlaceholder: adapter.commandPlaceholder,
+        commands: adapter.commands.map((command) => ({ ...command })),
       }
     : null;
 }

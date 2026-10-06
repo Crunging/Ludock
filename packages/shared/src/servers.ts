@@ -9,6 +9,9 @@ export const bindingStatusSchema = z.enum([
   "review_required",
 ]);
 
+export const containerHealthSchema = z.enum(["starting", "healthy", "unhealthy"]);
+export type ContainerHealth = z.infer<typeof containerHealthSchema>;
+
 export const serverSchema = z.object({
   id: z.string().uuid(),
   shortId: z.string(),
@@ -17,7 +20,24 @@ export const serverSchema = z.object({
   image: z.string(),
   state: z.string(),
   status: z.string(),
+  /** Docker health check result; null when the image defines no check. */
+  health: containerHealthSchema.nullable(),
+  /** When the container started (running) or stopped (exited); null if unknown. */
+  stateSince: z.number().int().nonnegative().nullable(),
+  /** How an exited container ended, so a crash reads differently from a stop. */
+  exit: z.object({ code: z.number().int(), oomKilled: z.boolean() }).nullable(),
   gameType: z.string(),
+  gameName: z.string(),
+  /**
+   * The address players connect to. A `label` source is the owner's exact
+   * ludock.address value, where the port may be omitted. A `detected` source
+   * uses the published game port, with a null host until an administrator sets one.
+   */
+  connection: z.object({
+    host: z.string().nullable(),
+    port: z.number().int().min(1).max(65535).nullable(),
+    source: z.enum(["label", "detected"]),
+  }).nullable(),
   gameConsole: z
     .object({
       id: z.enum([
@@ -29,6 +49,7 @@ export const serverSchema = z.object({
       ]),
       name: z.string(),
       commandPlaceholder: z.string(),
+      commands: z.array(z.object({ label: z.string(), command: z.string() })),
     })
     .nullable(),
   fileRoots: z.array(fileRootSchema),

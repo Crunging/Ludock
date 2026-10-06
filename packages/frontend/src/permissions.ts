@@ -35,6 +35,13 @@ export function can(
   return user.role !== "viewer" || VIEWER_CAPABILITIES.includes(capability);
 }
 
+/** A create grant shows the latest backup's time and size, never the archives. */
+export function canReadBackupSummary(user: AuthUser | null, server: Server | null): boolean {
+  return (user?.role === "admin" && Boolean(server?.permissions.includes("server.view"))) ||
+    can(user, server, "backups.read") ||
+    can(user, server, "backups.create");
+}
+
 export function toggleGrant(
   current: ServerCapability[],
   capability: ServerCapability,

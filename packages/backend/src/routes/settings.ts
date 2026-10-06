@@ -1,4 +1,4 @@
-import { deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic } from "@ludock/shared";
+import { connectionSettingsSchema, deploymentSettingsResponseSchema, diagnosticsResponseSchema, integrationsResponseSchema, notificationDeliveriesResponseSchema, notificationDeliveryResponseSchema, notificationSettingsRequestSchema, notificationSettingsResponseSchema, type DiscoveryDiagnostic } from "@ludock/shared";
 import { rootList } from "../approved-paths.js";
 import { assertRequestUser } from "../auth.js";
 import { assertAdministrator } from "../authorization.js";
@@ -7,6 +7,7 @@ import { getDiscoveryDiagnostics } from "../docker.js";
 import { configureNotifications, listNotificationDeliveries, notificationConfiguration, queueTestNotification, retryNotificationDelivery, } from "../notifications.js";
 import { resolveGameConsoleAdapter } from "../game-console.js";
 import { GAME_INTEGRATIONS } from "../server-presets.js";
+import { connectionHost, setConnectionHost } from "../settings.js";
 import { administrator, audit, id, requestUser, respond, type ApiRoutes } from "./request.js";
 
 export const settingsRoutes: ApiRoutes = {
@@ -20,6 +21,15 @@ export const settingsRoutes: ApiRoutes = {
         composeAvailable,
       });
     })
+  },
+  "/api/v1/settings/connection": {
+    GET: administrator(() => respond(connectionSettingsSchema, { host: connectionHost() })),
+    PUT: administrator((ctx) => {
+      const input = connectionSettingsSchema.parse(ctx.body);
+      setConnectionHost(input.host);
+      audit(ctx, "settings.connection_updated");
+      return respond(connectionSettingsSchema, { host: connectionHost() });
+    }),
   },
   "/api/v1/notifications": {
     GET: administrator(() => respond(notificationSettingsResponseSchema, notificationConfiguration())),
@@ -70,8 +80,9 @@ export const settingsRoutes: ApiRoutes = {
   },
   "/api/v1/integrations": {
     GET: administrator(() => respond(integrationsResponseSchema, {
-      integrations: GAME_INTEGRATIONS.map(({ gameType, repositories }) => ({
+      integrations: GAME_INTEGRATIONS.map(({ gameType, name, repositories }) => ({
         gameType,
+        name,
         repositories: [...repositories],
         console: resolveGameConsoleAdapter({ gameType, labels: {} })?.name ?? null,
       })),

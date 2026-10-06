@@ -4,6 +4,7 @@ import {
   serverResponseSchema,
   type Operation,
   type Server,
+  type ServerStats,
 } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../api";
 
@@ -16,6 +17,7 @@ export interface ServerMutationOptions {
  * settings remain manageable when Docker cannot provide a live snapshot. */
 export function useServerDetail(path: string) {
   const [server, setServer] = useState<Server | null>(null);
+  const [stats, setStats] = useState<ServerStats | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -43,9 +45,10 @@ export function useServerDetail(path: string) {
       !controller.signal.aborted;
     const init = { signal: controller.signal };
     try {
-      const { server: next, discoveryUnavailable: unavailable } = await apiJson(path, serverResponseSchema, init);
+      const { server: next, stats: nextStats, discoveryUnavailable: unavailable } = await apiJson(path, serverResponseSchema, init);
       if (!ownsRequest()) return;
       setServer(next);
+      setStats(nextStats);
       setDiscoveryUnavailable(unavailable);
       const activity = await apiJson(`${path}/operations`, operationsResponseSchema, init);
       if (!ownsRequest()) return;
@@ -55,6 +58,8 @@ export function useServerDetail(path: string) {
     } catch (reason) {
       if (!ownsRequest()) return;
       setSnapshotReady(false);
+      // Resource readings are only meaningful as of a successful refresh.
+      setStats(null);
       if (
         reason instanceof ApiRequestError &&
         (reason.status < 400 || [401, 403, 404].includes(reason.status))
@@ -116,7 +121,7 @@ export function useServerDetail(path: string) {
   }
 
   return {
-    server, operations, loading, busy, snapshotReady, liveReady,
+    server, stats, operations, loading, busy, snapshotReady, liveReady,
     discoveryUnavailable, error, notice, setError, refresh, perform,
     pageActive, mutationPending,
   };

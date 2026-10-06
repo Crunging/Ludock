@@ -21,6 +21,7 @@ const originals = {
 };
 let serverId: string,
   state: string,
+  health: string | null,
   unavailable: boolean;
 function deliveries() {
   return getDatabase()
@@ -34,6 +35,7 @@ beforeEach(async () => {
   await stopOperationRunner();
   closeDatabase();
   state = "running";
+  health = null;
   unavailable = false;
   docker.listContainers = (async () => {
     if (unavailable) throw new Error("Docker socket unreachable");
@@ -53,6 +55,7 @@ beforeEach(async () => {
       Config: { Image: "itzg/minecraft-server", Labels: {} },
       State: {
         Status: state,
+        ...(health ? { Health: { Status: health } } : {}),
       },
       Mounts: [],
       NetworkSettings: { Ports: {} },
@@ -91,6 +94,19 @@ describe("availability monitoring", () => {
     await checkAvailability(32_000);
     expect(deliveries().length).toBe(2);
     expect(getAvailability(serverId).state.outageStartedAt).toBe(null);
+  });
+
+  it("treats a running server with a failing or starting health check as unavailable", async () => {
+    health = "unhealthy";
+    await checkAvailability(1000);
+    await checkAvailability(11_000);
+    expect(deliveries().length).toBe(1);
+    health = "starting";
+    await checkAvailability(12_000);
+    expect(deliveries().length).toBe(1);
+    health = "healthy";
+    await checkAvailability(13_000);
+    expect(deliveries().length).toBe(2);
   });
 
   it("suppresses intentional stops until the server has actually been observed running", async () => {

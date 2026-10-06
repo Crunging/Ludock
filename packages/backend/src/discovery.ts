@@ -1,8 +1,10 @@
+import { connectionHostSchema } from "@ludock/shared";
 import { inferGameType } from "./server-presets.js";
 
 export const LABEL_ENABLE = "ludock.enable";
 export const LABEL_NAME = "ludock.name";
 export const LABEL_GAME = "ludock.game";
+export const LABEL_ADDRESS = "ludock.address";
 const LABEL_COMPOSE_ONEOFF = "com.docker.compose.oneoff";
 
 type EligibilityReason =
@@ -56,12 +58,41 @@ export function evaluateContainerEligibility(
     : { eligible: true, reason: "recognized-image", recognizedGameType };
 }
 
+/**
+ * The exact address players type: a host name or IP address with an optional
+ * port, such as `mc.example.com`, `203.0.113.10:30000`, or `[2001:db8::1]:2456`.
+ * Returns null for a missing or invalid value, which falls back to detection.
+ */
+export function parseAddressLabel(
+  value: string | undefined,
+): { host: string; port: number | null } | null {
+  const text = value?.trim() ?? "";
+  if (!text || text.length > 300) return null;
+  const bracketed = /^\[([^\]]+)\](?::([0-9]+))?$/.exec(text);
+  const hostAndPort = /^([^:[\]]+):([0-9]+)$/.exec(text);
+  const [host, port] = bracketed
+    ? [bracketed[1], bracketed[2]]
+    : hostAndPort
+      ? [hostAndPort[1], hostAndPort[2]]
+      : [text, undefined];
+  // Brackets only ever wrap IPv6 addresses.
+  if (bracketed && !host.includes(":")) return null;
+  const parsedHost = connectionHostSchema.safeParse(host);
+  if (!parsedHost.success) return null;
+  if (port === undefined) return { host: parsedHost.data, port: null };
+  const number = Number(port);
+  return Number.isInteger(number) && number >= 1 && number <= 65_535
+    ? { host: parsedHost.data, port: number }
+    : null;
+}
+
 // Do not pass arbitrary ludock.* labels to clients: labels are often used to
 // store third-party integration secrets, and are not a safe metadata bag.
 const CONFIGURATION_LABELS = new Set([
   LABEL_ENABLE,
   LABEL_NAME,
   LABEL_GAME,
+  LABEL_ADDRESS,
   "ludock.files",
   "ludock.console",
   "ludock.console.port",

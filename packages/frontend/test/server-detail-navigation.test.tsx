@@ -2,9 +2,9 @@ import { describe, expect, it, mock } from "bun:test";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES } from "@ludock/shared";
-import { apiJson } from "../src/api";
+import { ApiRequestError, apiJson } from "../src/api";
 import TestProviders from "./TestProviders";
-import { operationFixture, serverDetailResponse, serverFixture } from "./fixtures";
+import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 import ServerDetail from "../src/pages/ServerDetail";
 
 const originalApi = { ...await import("../src/api") };
@@ -40,6 +40,62 @@ function detail({
     returnToDetail: () => view.rerender(content(true)),
   };
 }
+
+describe("server overview", () => {
+  it("opens on an overview with the address, resources, and next schedule", async () => {
+    const nextRunAt = Date.now() + 2 * 3_600_000;
+    detail({
+      onRequest: (path) => {
+        if (path === `/servers/${server.id}`) return {
+          server: { ...server, connection: { host: "play.example.com", port: 25565, source: "detected" } },
+          stats: { cpuPercent: 42.25, memUsageMB: 2048, memLimitMB: 8192 },
+        };
+        if (path.endsWith("/schedules"))
+          return { schedules: [scheduleFixture(server.id, { action: "restart", nextRunAt })] };
+      },
+    });
+    expect((await screen.findByRole("tab", { name: "Overview" })).getAttribute("aria-selected")).toBe("true");
+    await screen.findByText("play.example.com:25565");
+    expect(screen.getByRole("button", { name: `Copy address for ${server.displayName}` })).toBeTruthy();
+    expect(screen.getByText("42.3%")).toBeTruthy();
+    expect(screen.getByText("2 GiB")).toBeTruthy();
+    expect(screen.getByText("of 8 GiB")).toBeTruthy();
+    await screen.findByText("in 2 hours");
+    expect(screen.getByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  });
+
+  it("shows an owner's ludock.address exactly and says where it came from", async () => {
+    detail({
+      onRequest: (path) => {
+        if (path === `/servers/${server.id}`) return {
+          server: { ...server, connection: { host: "mc.example.com", port: null, source: "label" } },
+          stats: null,
+        };
+      },
+    });
+    await screen.findByText("mc.example.com");
+    expect(screen.getByText("Set by the ludock.address label")).toBeTruthy();
+  });
+
+  it("drops CPU and memory readings when a later refresh fails", async () => {
+    let reads = 0;
+    detail({
+      onRequest: (path) => {
+        if (path !== `/servers/${server.id}`) return;
+        reads += 1;
+        if (reads > 1) throw new ApiRequestError("Docker request failed", 500);
+        return { server, stats: { cpuPercent: 42.25, memUsageMB: 2048, memLimitMB: 8192 } };
+      },
+    });
+    await screen.findByText("42.3%");
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Docker request failed");
+    await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.queryByText("42.3%")).toBeNull();
+    expect(screen.getAllByText("Not available right now")).toHaveLength(2);
+  });
+});
 
 describe("server detail navigation", () => {
   it("keeps the new visit's selected tab when an old update request completes", async () => {

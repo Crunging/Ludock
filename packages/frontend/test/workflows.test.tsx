@@ -69,7 +69,7 @@ describe("server detail request ownership", () => {
       if (reads === 2) return older;
       if (reads >= 3) return { server: { ...server, bindingStatus: "review_required", permissions: ["server.view"] } };
     } });
-    await screen.findByRole("button", { name: "Refresh" });
+    await userEvent.click(await screen.findByRole("tab", { name: "Activity" }));
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText(/This server’s binding is review required/);

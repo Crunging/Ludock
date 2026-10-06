@@ -10,10 +10,13 @@ import { useAuth, type AuthUser } from "../auth-context";
 import { can } from "../permissions";
 import { NavLink } from "../navigation";
 import { lifecycleActionForState, lifecycleStateGuidance } from "../server-lifecycle";
+import ServerState from "../components/ServerState";
+import StatusPip from "../components/StatusPip";
 import "./console-recovery.css";
 
 type ConsoleMode = "logs" | "game" | "shell";
 type ServerLoadState = "loading" | "loaded" | "error";
+const HISTORY_LIMIT = 50;
 const MODE_LABELS: Record<ConsoleMode, string> = {
   logs: "Docker Logs",
   game: "Game Console",
@@ -59,8 +62,11 @@ function ConsoleSession({ serverId, user }: {
   const hasLoadedRef = useRef(false);
   const tabButtonsRef = useRef(new Map<ConsoleMode, HTMLButtonElement>());
   const tabsId = useId();
-  // Drafts are local to this mounted console and never written to storage.
+  // Drafts and history are local to this mounted console and never written to storage.
   const [drafts, setDrafts] = useState({ game: "", shell: "" });
+  const historyRef = useRef<Record<"game" | "shell", string[]>>({ game: [], shell: [] });
+  const historyCursorRef = useRef<{ index: number; draft: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [commandFeedback, setCommandFeedback] = useState<{
     error: boolean;
     message: string;
@@ -95,6 +101,7 @@ function ConsoleSession({ serverId, user }: {
   const selectMode = useCallback((nextMode: ConsoleMode, announce = true) => {
     if (modeRef.current === nextMode) return;
     modeRef.current = nextMode;
+    historyCursorRef.current = null;
     setMode(nextMode);
     setVerifiedUrl(null);
     resetOutput();
@@ -304,8 +311,8 @@ function ConsoleSession({ serverId, user }: {
   const readyToSend = status === "connected" && verifiedUrl === wsUrl &&
     Boolean(wsUrl) && !accessUnavailable && canSendCommand && isRunning && bindingActive;
 
-  const sendCommand = () => {
-    const cmd = command.trim();
+  const sendCommand = (text = command, fromDraft = true) => {
+    const cmd = text.trim();
     if (!cmd || !readyToSend || mode === "logs") return;
     if (!send(JSON.stringify({ type: "input", data: cmd }))) {
       setCommandFeedback({
@@ -315,9 +322,46 @@ function ConsoleSession({ serverId, user }: {
       return;
     }
     terminalRef.current?.write(`\x1b[33m> ${cmd}\x1b[0m\r\n`);
-    setDrafts((current) => ({ ...current, [mode]: current[mode] === command ? "" : current[mode] }));
+    const history = historyRef.current[mode];
+    if (history.at(-1) !== cmd) history.push(cmd);
+    if (history.length > HISTORY_LIMIT) history.shift();
+    historyCursorRef.current = null;
+    if (fromDraft)
+      setDrafts((current) => ({ ...current, [mode]: current[mode] === command ? "" : current[mode] }));
     setCommandFeedback({ error: false, message: "Command sent. Check the output for its result." });
   };
+
+  /** Up and Down step through commands sent in this mode, keeping the unsent draft. */
+  const browseHistory = (direction: -1 | 1) => {
+    if (mode === "logs") return false;
+    const history = historyRef.current[mode];
+    const cursor = historyCursorRef.current;
+    if (history.length === 0 || (!cursor && direction === 1)) return false;
+    const index = cursor ? cursor.index + direction : history.length - 1;
+    if (index < 0) return true;
+    const draft = cursor?.draft ?? command;
+    const next = index >= history.length ? draft : history[index];
+    historyCursorRef.current = index >= history.length ? null : { index, draft };
+    setDrafts((current) => ({ ...current, [mode]: next }));
+    return true;
+  };
+
+  const runQuickCommand = (quick: string) => {
+    // A trailing space means the command needs more input, such as a message.
+    if (quick.endsWith(" ")) {
+      setDrafts((current) => ({ ...current, game: quick }));
+      historyCursorRef.current = null;
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(quick.length, quick.length);
+      });
+      return;
+    }
+    sendCommand(quick, false);
+  };
+  const quickCommands = mode === "game" ? serverInfo?.gameConsole?.commands ?? [] : [];
 
   const switchMode = (nextMode: ConsoleMode) => {
     if (mode === nextMode) return;
@@ -348,13 +392,13 @@ function ConsoleSession({ serverId, user }: {
           <div>
             <div className="console-header__name">
               {accessUnavailable ? "Console unavailable" : serverInfo?.displayName || serverId.substring(0, 12)}
+              {!accessUnavailable && serverInfo && <ServerState server={serverInfo} />}
             </div>
             <div className="console-header__status">
               {accessUnavailable ? "Reload details to check your access"
                 : mode === "logs" ? "Docker stdout and stderr"
                 : mode === "game" ? serverInfo?.gameConsole?.name || "Game console"
                   : "Administrator container shell"}
-              {!accessUnavailable && serverInfo?.image && ` · ${serverInfo.image}`}
             </div>
           </div>
         </div>
@@ -412,7 +456,7 @@ function ConsoleSession({ serverId, user }: {
             <button className="console-retry" onClick={() => { setVerifiedUrl(null); retry(); }}>Retry connection</button>
           )}
           <div className={`connection-status connection-status--${status}`} role="status">
-            <span className="status-dot" aria-hidden="true" />
+            <StatusPip tone={status === "connected" ? "ok" : status === "connecting" ? "active" : "attention"} />
             {statusLabel}
           </div>
         </div>
@@ -503,16 +547,37 @@ function ConsoleSession({ serverId, user }: {
               {commandFeedback.message}
             </div>
           )}
+          {quickCommands.length > 0 && (
+            <div className="console-quick" role="group" aria-label="Common commands">
+              {quickCommands.map((quick) => (
+                <button
+                  type="button"
+                  key={quick.command}
+                  title={quick.command.trim()}
+                  disabled={quick.command.endsWith(" ") ? !canSendCommand || !isRunning : !readyToSend}
+                  onClick={() => runQuickCommand(quick.command)}
+                >
+                  {quick.label}
+                </button>
+              ))}
+            </div>
+          )}
           <form className="console-input" onSubmit={(event) => { event.preventDefault(); sendCommand(); }}>
             <span className="console-input__prompt" aria-hidden="true">{">"}</span>
             <input
               className="console-input__field"
               type="text"
               value={command}
+              ref={inputRef}
               onChange={(event) => {
                 const value = event.target.value;
+                historyCursorRef.current = null;
                 setDrafts((current) => ({ ...current, [mode]: value }));
                 setCommandFeedback(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                if (browseHistory(event.key === "ArrowUp" ? -1 : 1)) event.preventDefault();
               }}
               aria-label={mode === "game" ? "Game command" : "Shell command"}
               placeholder={mode === "game"

@@ -1,5 +1,7 @@
 import { type Backup, type BackupPreflight, type Server, formatByteSize } from "@ludock/shared";
 import { NavLink } from "../../navigation";
+import { formatDateTime, formatRelativeTime, formatRelativeTimeSentence } from "../../format";
+import { useNow } from "../../hooks/useNow";
 import StatusPip from "../StatusPip";
 
 export interface RestoreSelection {
@@ -58,6 +60,7 @@ export default function BackupsPanel(props: Props) {
     onRestore,
   } = props;
   const historyReady = !props.historyLoading && !props.historyUnavailable;
+  const now = useNow();
   const { backup: restoreBackup, confirmation: restoreConfirmation } = restore;
   return (
     <>
@@ -73,52 +76,63 @@ export default function BackupsPanel(props: Props) {
           </button>
         )}
       </div>
-      <p className="section-note">
-        Backups stop the server throughout copying, then restore its previous
-        running state. Initially stopped servers stay stopped.
-        {admin && (
-          <>
-            {" "}Manage the destination and storage limits in{" "}
-            <NavLink className="text-link" to="/settings">backup settings</NavLink>.
-          </>
-        )}
+      <p className="section-lede">
+        The server stops while a backup copies, then goes back to how it was.
       </p>
-      {(admin || canRead || canCreate) && (
-        <p className="section-note">
-          <strong>Latest successful backup: </strong>
-          {latestBackup ? <>
-            <time dateTime={new Date(latestBackup.createdAt).toISOString()}>
-              {new Date(latestBackup.createdAt).toLocaleString()}
-            </time>{" · "}{formatByteSize(latestBackup.size)}
-          </> : "No successful backup retained."}
-        </p>
-      )}
       {canCreate && !blocked && !hasActiveOperation && (
-        <section className="backup-readiness" aria-labelledby="backup-readiness-title">
-          <div className="section-heading">
-            <h3 id="backup-readiness-title">Backup readiness</h3>
-            <button className="secondary-btn" disabled={checking || busy} onClick={onCheck}>
+        <section
+          className={`backup-readiness${preflight && !checking ? (preflight.ready ? " backup-readiness--ready" : " backup-readiness--blocked") : ""}`}
+          aria-labelledby="backup-readiness-title"
+        >
+          <div className="backup-readiness__status">
+            <h3 id="backup-readiness-title" className="sr-only">Backup readiness</h3>
+            {checking ? (
+              <p role="status"><StatusPip tone="active" />Checking backup destination and data roots…</p>
+            ) : preflight ? (
+              <p><StatusPip tone={preflight.ready ? "ok" : "attention"} /><strong>
+                {preflight.ready ? "Ready to back up." : "Not ready to back up."}
+              </strong></p>
+            ) : null}
+            <button className="text-link" disabled={checking || busy} onClick={onCheck}>
               Check again
             </button>
           </div>
-          {checking && <p role="status">Checking backup destination and data roots…</p>}
           {preflightError && <p className="alert alert--error" role="alert">{preflightError}</p>}
-          {preflight && <>
-            <p><strong>{preflight.ready ? "Preflight checks passed." : "Resolve these problems before creating a backup:"}</strong></p>
-            {preflight.issues.length > 0 && <ul>
-              {preflight.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}
-            </ul>}
-            {!preflight.ready && <p className="section-note">
-              {admin ? "Review backup settings and this server’s mounted data roots, then check again." : "Ask an administrator to resolve these problems, then check again."}
-            </p>}
-          </>}
-          <p className="section-note">
-            This check does not copy data or stop the server. Available space and
-            data can change; Ludock validates them again when the backup runs.
-            The full data check happens during copying.
-          </p>
+          {preflight && !checking && preflight.issues.length > 0 && <ul>
+            {preflight.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}
+          </ul>}
+          {preflight && !checking && !preflight.ready && <p className="muted">
+            {admin ? <>Fix these in <NavLink className="text-link" to="/settings">backup settings</NavLink> or the server’s mounts, then check again.</> : "Ask an administrator to fix these, then check again."}
+          </p>}
         </section>
       )}
+      {!(admin && canRead) && (
+        <p className="section-note">
+          Last backup:{" "}
+          {latestBackup ? <>
+            <time dateTime={new Date(latestBackup.createdAt).toISOString()} title={formatDateTime(latestBackup.createdAt)}>
+              {formatRelativeTime(latestBackup.createdAt, now)}
+            </time>{" ("}{formatByteSize(latestBackup.size)}{")"}
+          </> : "never"}
+        </p>
+      )}
+      <details className="disclosure">
+        <summary>How backups work</summary>
+        <p>
+          A backup stops the server for the whole copy, then restores its previous
+          running state. A server that was already stopped stays stopped.
+        </p>
+        <p>
+          The readiness check doesn’t copy anything or stop the server. Space and
+          data can change before the backup runs, so Ludock checks them again then.
+        </p>
+        {admin && (
+          <p>
+            Choose where backups go and how many to keep in
+            {" "}<NavLink className="text-link" to="/settings">backup settings</NavLink>.
+          </p>
+        )}
+      </details>
       {admin && canRead ? (
         <div className="table-scroll">
           <table className="data-table">
@@ -136,13 +150,16 @@ export default function BackupsPanel(props: Props) {
                   <td colSpan={4} className="muted">
                     {props.historyLoading ? "Loading backups…" : props.historyUnavailable
                       ? "Backup history is unavailable."
-                      : "No backups yet. Configure backup settings if needed, then create a backup to save this server’s game data."}
+                      : "No backups yet."}
                   </td>
                 </tr>
               )}
               {backups.map((backup) => (
                 <tr key={backup.id}>
-                  <td>{new Date(backup.createdAt).toLocaleString()}</td>
+                  <td>
+                    <time dateTime={new Date(backup.createdAt).toISOString()}>{formatDateTime(backup.createdAt)}</time>
+                    <small className="table-detail">{formatRelativeTimeSentence(backup.createdAt, now)}</small>
+                  </td>
                   <td>{formatByteSize(backup.size)}</td>
                   <td><StatusPip tone={backup.state === "complete" ? "ok" : "failed"} />{backup.state}</td>
                   <td>
@@ -208,17 +225,22 @@ export default function BackupsPanel(props: Props) {
           }}
         >
           <h3>
-            Restore backup from{" "}
-            {new Date(restoreBackup.createdAt).toLocaleString()}
+            Restore backup from {formatDateTime(restoreBackup.createdAt)}
           </h3>
           <p>
-            Current game data will be replaced. Ludock stops the server,
-            validates the backup, and creates a safety backup before
-            replacement. If that backup cannot complete, restoration aborts
-            without replacing game data. It returns to its previous running
-            state only after the data is safe. A data backup does not roll back
-            the container image or Compose settings.
+            This replaces the server’s current game data. Ludock stops the
+            server and takes a safety backup first; if that fails, nothing is
+            replaced.
           </p>
+          <details className="disclosure">
+            <summary>More about restoring</summary>
+            <p>
+              Ludock checks the backup before replacing anything. The server
+              returns to its previous running state only after the data is safe.
+              Restoring game data doesn’t roll back the container image or
+              Compose settings.
+            </p>
+          </details>
           <label>
             <span>
               Type <strong>{serverName}</strong> to confirm

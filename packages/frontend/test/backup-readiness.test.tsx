@@ -37,7 +37,7 @@ describe("backup readiness", () => {
     const confirm = spyOn(window, "confirm").mockReturnValue(true);
     detail((path) => path.endsWith("/preflight") ? { preflight: ++checks === 1 ? ready : blocked } : undefined);
     await userEvent.click(await screen.findByRole("tab", { name: "Backups" }));
-    await screen.findByText("Preflight checks passed.");
+    await screen.findByText("Ready to back up.");
     await userEvent.click(screen.getByRole("button", { name: "Create backup" }));
     await screen.findByText("Mount a separate backup destination.");
     expect(confirm).not.toHaveBeenCalled();
@@ -56,7 +56,7 @@ describe("backup readiness", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Backups" }));
     await screen.findByText("Mount a separate backup destination.");
     await act(async () => resolveOld({ preflight: ready }));
-    expect(screen.queryByText("Preflight checks passed.")).toBeNull();
+    expect(screen.queryByText("Ready to back up.")).toBeNull();
     expect((screen.getByRole("button", { name: "Create backup" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

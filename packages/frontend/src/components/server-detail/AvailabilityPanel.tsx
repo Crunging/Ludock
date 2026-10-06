@@ -41,9 +41,9 @@ export default function AvailabilityPanel(props: Props) {
   } else if (state.lastState === null) status = "Waiting for the first availability observation.";
   return (
     <section className="stack-form" aria-labelledby="availability-title">
-      <h2 id="availability-title">Availability monitoring</h2>
+      <h2 id="availability-title">Monitoring</h2>
       <p role="status">{status}</p>
-      {state && <dl className="metadata-list">
+      {state && policy.enabled && <dl className="metadata-list">
         {outageStartedAt !== null && <>
           <dt>Outage since</dt>
           <dd><time dateTime={new Date(outageStartedAt).toISOString()}>{new Date(outageStartedAt).toLocaleString()}</time></dd>
@@ -68,10 +68,9 @@ export default function AvailabilityPanel(props: Props) {
           onSave();
         }}
       >
-        <p>
-          When enabled, this server is expected to be available 24/7. Ludock uses
-          Docker health and running state. Stops initiated
-          by Ludock and active operations suppress outage alerts.
+        <p className="muted">
+          Alert when this server is down. Ludock checks Docker’s running state
+          and health check, and ignores stops made through Ludock.
         </p>
         <label className="check-label">
           <input
@@ -87,7 +86,8 @@ export default function AvailabilityPanel(props: Props) {
           />
           Monitor this server
         </label>
-        <label>
+        {availability.enabled && <>
+        <label className="narrow-field">
           Failure grace period (seconds)
           <input
             type="number"
@@ -107,8 +107,8 @@ export default function AvailabilityPanel(props: Props) {
           />
         </label>
         <p className="muted" id="monitoring-grace-help">
-          Wait this long before reporting an outage. The default is 120 seconds
-          (2 minutes), allowing brief restarts to finish. Use 10–86,400 seconds.
+          How long to wait before reporting an outage, so quick restarts don’t
+          alert. Default 120 seconds.
         </p>
         <label className="check-label">
           <input
@@ -122,17 +122,17 @@ export default function AvailabilityPanel(props: Props) {
               })
             }
           />
-          Maintenance mode — pause monitoring
+          Maintenance mode
         </label>
-        <p className="muted">
-          Maintenance pauses outage alerts until you turn it off and save again; it
-          does not stop the server or its schedules.
+        <p className="muted check-help">
+          Pauses alerts until you turn it off. The server and its schedules keep running.
         </p>
+        </>}
         <p className="muted">
-          To receive one notification for an outage and one for recovery,{" "}
+          Alerts go to Discord.{" "}
           <NavLink className="text-link" to="/settings">
-            configure Discord delivery in Settings
-          </NavLink>.
+            Set up Discord in Settings
+          </NavLink>
         </p>
         <button className="primary-btn" disabled={busy}>
           Save monitoring

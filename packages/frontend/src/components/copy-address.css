@@ -1,0 +1,53 @@
+.copy-address {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Hyperlegible Next already tells 0 from O and 1 from l, so addresses stay in the text face. */
+.copy-address code {
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.copy-address__button {
+  display: inline-grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--text-faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.copy-address__button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.copy-address__button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.copy-address__button--done {
+  color: var(--green);
+}
+
+@media (pointer: coarse) {
+  .copy-address__button { width: 44px; height: 44px; }
+}

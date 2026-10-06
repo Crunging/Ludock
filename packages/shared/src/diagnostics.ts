@@ -3,7 +3,7 @@ import { z } from "zod";
 export const discoveryDiagnosticSchema = z.object({
   containerId: z.string(),
   name: z.string(),
-  code: z.enum(["INVALID_ENABLE_LABEL", "INVALID_COMPOSE_IDENTITY"]),
+  code: z.enum(["INVALID_ENABLE_LABEL", "INVALID_COMPOSE_IDENTITY", "INVALID_ADDRESS_LABEL"]),
   message: z.string(),
 });
 export type DiscoveryDiagnostic = z.infer<typeof discoveryDiagnosticSchema>;
@@ -14,6 +14,7 @@ export const diagnosticsResponseSchema = z.object({
 });
 export const gameIntegrationSchema = z.object({
   gameType: z.string(),
+  name: z.string(),
   repositories: z.array(z.string()),
   /** Display name of the built-in console adapter, if any. */
   console: z.string().nullable(),

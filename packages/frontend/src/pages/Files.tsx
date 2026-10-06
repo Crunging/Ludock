@@ -20,6 +20,10 @@ import { NavLink } from "../navigation";
 import FileActionDialog, {
   type FileAction,
 } from "../components/FileActionDialog";
+import FilePreviewDialog from "../components/FilePreviewDialog";
+import ActionMenu from "../components/ActionMenu";
+import ServerState from "../components/ServerState";
+import { formatDateTime } from "../format";
 import {
   type FileEntry,
   type FileLocationRequest,
@@ -127,6 +131,23 @@ const initialBrowserState: BrowserState = {
   dragging: false,
 };
 
+function FileIcon({ type }: { type: FileEntry["type"] }) {
+  return (
+    <svg className={`file-row__icon file-row__icon--${type}`} viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      {type === "directory" ? (
+        <path d="M2.5 5.5a1 1 0 0 1 1-1h4l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z" />
+      ) : type === "symlink" ? (
+        <>
+          <path d="M5 2.5h7l3.5 3.5v11a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z" />
+          <path d="M8 13l4-4m-3 0h3v3" />
+        </>
+      ) : (
+        <path d="M5 2.5h7l3.5 3.5v11a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zM12 2.5V6h3.5" />
+      )}
+    </svg>
+  );
+}
+
 function joinPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
 }
@@ -150,6 +171,7 @@ function FileBrowser({ serverId }: { serverId: string }) {
   const [serverReload, setServerReload] = useState(0);
   const [filenameFilter, setFilenameFilter] = useState("");
   const [fileSort, setFileSort] = useState<FileSort>("name-asc");
+  const [previewEntry, setPreviewEntry] = useState<FileEntry | null>(null);
   const { server, state: serverState, error: serverError } = browser.access;
   const { folder, dialog: selectedAction, actionDraft, feedback, dragging } = browser;
   const location = folder?.location;
@@ -562,12 +584,7 @@ function FileBrowser({ serverId }: { serverId: string }) {
               <h1 className="page__title" id="files-page-title" tabIndex={-1}>
                 {server?.displayName || "Server files"}
               </h1>
-              {server && (
-                <span className={`status-badge status-badge--${server.state}`}>
-                  <span className="status-dot" aria-hidden="true" />
-                  {server.state}
-                </span>
-              )}
+              {server && <ServerState server={server} />}
             </div>
             <p className="page__subtitle">
               Worlds, configuration, backups, and mods
@@ -836,13 +853,7 @@ function FileBrowser({ serverId }: { serverId: string }) {
               visibleEntries.map((entry) => (
                 <div className="file-row" key={entry.name}>
                   <div className="file-row__name">
-                    <span className="file-row__icon" aria-hidden="true">
-                      {entry.type === "directory"
-                        ? "DIR"
-                        : entry.type === "symlink"
-                          ? "LINK"
-                          : "FILE"}
-                    </span>
+                    <FileIcon type={entry.type} />
                     {entry.type === "directory" ? (
                       <button
                         disabled={busy}
@@ -852,6 +863,13 @@ function FileBrowser({ serverId }: { serverId: string }) {
                             path: joinPath(location.path, entry.name),
                           })
                         }
+                      >
+                        {entry.name}
+                      </button>
+                    ) : entry.type === "file" ? (
+                      <button
+                        className="file-row__file"
+                        onClick={() => setPreviewEntry(entry)}
                       >
                         {entry.name}
                       </button>
@@ -868,42 +886,37 @@ function FileBrowser({ serverId }: { serverId: string }) {
                     {entry.type === "file" ? formatByteSize(entry.size) : "—"}
                   </span>
                   <span>
-                    {entry.modifiedAt
-                      ? new Date(entry.modifiedAt).toLocaleString()
-                      : "—"}
+                    {entry.modifiedAt ? (
+                      <time dateTime={new Date(entry.modifiedAt).toISOString()}>
+                        {formatDateTime(entry.modifiedAt)}
+                      </time>
+                    ) : "—"}
                   </span>
                   <div className="file-row__actions">
-                    {entry.type !== "symlink" && (
-                      <a
-                        className="secondary-btn"
-                        href={downloadUrl(entry)}
-                        download
-                      >
-                        Download
-                      </a>
-                    )}
-                    {canManage && (
-                      <>
-                        {entry.type !== "symlink" && (
-                          <button
-                            className="secondary-btn"
-                            onClick={() =>
-                              openAction({ kind: "rename", entry })
-                            }
-                            disabled={!canChangeFiles}
-                          >
-                            Rename
-                          </button>
-                        )}
-                        <button
-                          className="secondary-btn secondary-btn--danger"
-                          onClick={() => openAction({ kind: "delete", entry })}
-                          disabled={!canChangeFiles}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
+                    <ActionMenu
+                      compact
+                      label={`Actions for ${entry.name}`}
+                      actions={[
+                        ...(entry.type !== "symlink"
+                          ? [{ label: "Download", href: downloadUrl(entry) }]
+                          : []),
+                        ...(canManage && entry.type !== "symlink"
+                          ? [{
+                              label: "Rename",
+                              disabled: !canChangeFiles,
+                              onSelect: () => openAction({ kind: "rename", entry }),
+                            }]
+                          : []),
+                        ...(canManage
+                          ? [{
+                              label: "Delete",
+                              danger: true,
+                              disabled: !canChangeFiles,
+                              onSelect: () => openAction({ kind: "delete", entry }),
+                            }]
+                          : []),
+                      ]}
+                    />
                   </div>
                 </div>
               ))
@@ -915,6 +928,14 @@ function FileBrowser({ serverId }: { serverId: string }) {
             </p>
           )}
         </section>
+      )}
+      {previewEntry && location && (
+        <FilePreviewDialog
+          entry={previewEntry}
+          path={`${(selectedRoot?.path ?? "").replace(/\/$/, "")}/${joinPath(location.path, previewEntry.name)}`}
+          downloadUrl={downloadUrl(previewEntry)}
+          onClose={() => setPreviewEntry(null)}
+        />
       )}
       {selectedAction && (
         <FileActionDialog

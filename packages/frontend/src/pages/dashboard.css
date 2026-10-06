@@ -3,9 +3,12 @@
   min-height: 44px;
 }
 
-.dashboard-page .help-panel h3 {
-  margin-top: 18px;
-  font-size: 13px;
+.dashboard-help {
+  margin-top: 20px;
+}
+
+.dashboard-help .help-panel {
+  margin-top: 12px;
 }
 
 .dashboard-page .alert .text-link {
@@ -18,14 +21,33 @@
   padding: 16px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* Only a panel with open items earns the warm highlight. */
 .needs-attention:has(.needs-attention__list) {
   padding-bottom: 8px;
-  border-color: rgb(232 196 107 / 32%);
-  background: rgb(232 196 107 / 5%);
+  border-color: color-mix(in srgb, var(--yellow) 32%, transparent);
+  background: color-mix(in srgb, var(--yellow) 5%, transparent);
+}
+
+/* With nothing to do, the panel shrinks to one quiet line. */
+.needs-attention--clear {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 20px;
+  padding: 0;
+  border: 0;
+}
+
+.needs-attention--clear .needs-attention__heading {
+  margin: 0;
+}
+
+.needs-attention--clear h2 {
+  font-size: 15px;
 }
 
 .needs-attention__heading {
@@ -37,18 +59,18 @@
 }
 
 .needs-attention h2 {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 750;
   margin: 0;
 }
 
 .needs-attention__heading .muted {
-  padding: 1px 9px;
-  border-radius: 999px;
-  background: rgb(232 196 107 / 14%);
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
   color: var(--yellow);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .needs-attention__list {
@@ -66,7 +88,7 @@
 }
 
 .needs-attention__list li + li {
-  border-top: 1px solid rgb(232 196 107 / 16%);
+  border-top: 1px solid color-mix(in srgb, var(--yellow) 16%, transparent);
 }
 
 .needs-attention__description {
@@ -75,7 +97,7 @@
   gap: 2px 16px;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .needs-attention__description strong {
@@ -97,8 +119,8 @@
   gap: 5px;
   min-height: 44px;
   flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .needs-attention__warning {
@@ -108,7 +130,7 @@
 
 .needs-attention__error,
 .needs-attention__note {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .needs-attention__error button,
@@ -120,9 +142,9 @@
 .needs-attention__note {
   padding-top: 10px;
   margin-bottom: 8px;
-  border-top: 1px solid rgb(232 196 107 / 16%);
+  border-top: 1px solid color-mix(in srgb, var(--yellow) 16%, transparent);
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 @media (max-width: 640px) {

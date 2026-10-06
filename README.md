@@ -4,91 +4,81 @@
 > Keep independent backups of important game data, and
 > [report issues](https://github.com/Crunging/Ludock/issues).
 
-Ludock is a self-hosted control panel for existing Docker game servers. It
-starts and stops servers, provides game consoles and file access, and handles
-backups, schedules, availability alerts, and updates through existing Compose
-projects.
-
-Recognized game images appear automatically unless explicitly opted out.
-Unrecognized images require `ludock.enable: "true"`. Docker Compose, Portainer,
-Dockge, or the Docker CLI remains the configuration owner: Ludock does not
-provision servers or edit their definitions.
+Ludock is a self-hosted web panel for the Docker game servers you already run.
+Start and stop them, use their consoles, manage their files, take backups,
+schedule restarts, get outage alerts, and update Compose services from your
+browser. Compose, Portainer, Dockge, or the Docker CLI stays in charge of each
+server's configuration; Ludock never creates or edits it.
 
 ## Screenshots
 
-The current interface, shown with demo servers and data.
-
-**Servers** — status, ports, recent backups, and everyday controls.
+**Servers**: state, the address players connect to, the latest backup, and
+everyday controls.
 
 ![Ludock server list with Minecraft, Factorio, and Valheim demo servers](./docs/screenshots/servers.png)
 
 <details>
 <summary>Backups and file access</summary>
 
-**Backups** — readiness checks and retained archives for a server.
+**Backups**: readiness checks and retained archives for a server.
 
 ![Ludock server backup page showing readiness checks and three retained backups](./docs/screenshots/backups.png)
 
-**Files** — browse and manage files inside approved server data roots.
+**Files**: browse and manage files inside a server's data folders.
 
 ![Ludock file browser showing the demo Minecraft server's folders and configuration files](./docs/screenshots/files.png)
 
 </details>
 
-## Run with Docker
+## Quick start
 
-Use Docker with [Compose 2.24.0 or later](https://docs.docker.com/reference/compose-file/services/#required).
-Save [`compose.yaml`](./compose.yaml) on your game-server host and run:
+You need Docker with [Compose 2.24.0 or later](https://docs.docker.com/reference/compose-file/services/#required).
+Ludock's image supports Linux on AMD64 and ARM64; some game images support fewer
+platforms.
 
-```bash
-docker compose up -d
-```
+1. Save [`compose.yaml`](./compose.yaml) on the host that runs your game
+   servers, then start Ludock:
 
-No `.env` file or extra game labels are needed for recognized images.
-Open `http://<docker-host>:3000` and retrieve the one-time setup code:
+   ```bash
+   docker compose up -d
+   ```
 
-```bash
-docker compose logs ludock
-```
+2. Open `http://<docker-host>:3000`. Print the one-time setup code and use it to
+   create the first administrator within five minutes. If it expires,
+   `docker compose restart ludock` prints a new one.
 
-Use the code to create the first administrator within five minutes. If it expires,
-run `docker compose restart ludock` for a new code.
+   ```bash
+   docker compose logs ludock
+   ```
 
-The example creates separate volumes for Ludock application data and backups.
-Existing game containers and game-data volumes stay in place.
+3. Servers using [supported game images](./docs/OPERATIONS.md#supported-games)
+   appear automatically. For any other image, add the label
+   `ludock.enable: "true"` to its container.
 
-Recognized servers appear automatically. Enable backups in **Settings → Backup
-storage**; the default storage is already mounted.
+4. To turn on backups, open **Settings → Backup storage** and save. The example
+   already mounts a `backups` volume. Backups stop the server while they copy.
 
-Ludock images target **Linux AMD64 and ARM64**; individual game images may
-support fewer platforms. Backups require downtime. Compose updates require
-read-only access to the owner's source files; standalone containers are updated
-through their original manager.
+Ludock keeps its own data and your backups in separate volumes; your game
+containers and their data stay where they are.
 
-Docker socket access grants host-level power, even with a read-only socket
-mount. Run one Ludock instance per Docker host, keep it on a trusted network,
-and use an HTTPS reverse proxy for remote access.
+Most settings live in the browser. For deployment options, copy
+[`.env.example`](./.env.example) to `.env`, uncomment what you need, and run
+`docker compose up -d --force-recreate ludock`. Updating servers through Compose
+also needs a read-only mount of their Compose files; see
+[Compose updates](./docs/OPERATIONS.md#compose-updates).
 
-## Optional configuration
+## Security
 
-Most configuration happens in the browser. For deployment settings, copy
-[`.env.example`](./.env.example) to `.env` beside `compose.yaml`, uncomment only
-the values you need, and recreate Ludock:
-
-```bash
-docker compose up -d --force-recreate ludock
-```
-
-Compose update access needs a read-only source mount; see
-[Operations](./docs/OPERATIONS.md#compose-updates) for that setup.
+Access to the Docker socket gives control of the whole host, even when it's
+mounted read-only. Run one Ludock per Docker host, keep it on a trusted network,
+and use an HTTPS reverse proxy for remote access. See [SECURITY.md](./SECURITY.md).
 
 ## Documentation
 
-- [Operations](./docs/OPERATIONS.md): game images and labels, deployment settings,
-  permissions, files, backups, Compose updates, schedules, alerts, and recovery.
-- [Development instructions](./AGENTS.md): local setup, code boundaries, tests,
-  and dependency/image updates.
-- [Development and CI](./docs/DEVELOPMENT.md): Bun execution, checks, and release tooling.
-- [Security](./SECURITY.md): deployment boundary and vulnerability reporting.
+- [Operations](./docs/OPERATIONS.md): deployment, adding servers, labels,
+  consoles, files, backups, updates, schedules, alerts, access, and recovery.
+- [Development](./docs/DEVELOPMENT.md): local setup, checks, releases, and
+  dependency updates.
+- [Security](./SECURITY.md): reporting vulnerabilities and deploying safely.
 
 Licensed under the [MIT License](./LICENSE).

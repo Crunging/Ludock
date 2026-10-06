@@ -46,7 +46,7 @@ function describe(item: AttentionItem): { title: string; detail: string; link: s
         title: item.state === "docker_unavailable" ? "Availability cannot be verified" : "Server unavailable",
         detail: item.state === "docker_unavailable" ? "Ludock cannot reach Docker."
           : `Monitoring detected a problem since ${new Date(item.outageStartedAt).toLocaleString()}.`,
-        link: `${path}?tab=availability`,
+        link: `${path}?tab=overview`,
         action: "Check availability",
       };
   }
@@ -71,9 +71,10 @@ export default function NeedsAttention({ refreshKey }: { refreshKey: string }) {
         : Boolean(user),
   );
   const visible = expanded ? items : items.slice(0, 10);
+  const clear = Boolean(data && items.length === 0 && !data.discoveryUnavailable && !error);
 
   return (
-    <section className="needs-attention" aria-labelledby="needs-attention-title" aria-busy={loading}>
+    <section className={`needs-attention${clear ? " needs-attention--clear" : ""}`} aria-labelledby="needs-attention-title" aria-busy={loading}>
       <div className="needs-attention__heading">
         <h2 id="needs-attention-title">Needs attention</h2>
         {data && items.length > 0 && <span className="muted">{items.length} {items.length === 1 ? "item" : "items"}</span>}
@@ -95,7 +96,7 @@ export default function NeedsAttention({ refreshKey }: { refreshKey: string }) {
       {data && items.length === 0 && (
         <p className="muted">{data.discoveryUnavailable
           ? "No attention items in the saved state you can access."
-          : "No issues need attention in the servers and schedules you can access."}</p>
+          : "Nothing right now."}</p>
       )}
       {visible.length > 0 && (
         <ul className="needs-attention__list">

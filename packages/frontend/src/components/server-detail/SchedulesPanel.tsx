@@ -74,7 +74,9 @@ function formatRun(timestamp: number, timezone: string, now: number) {
 }
 
 function when(schedule: ScheduleInput) {
-  return `${schedule.time} · ${schedule.days.map((day) => weekdays[day]).join(", ")}`;
+  const preset = dayPresets.find(({ days }) =>
+    days.length === schedule.days.length && days.every((day) => schedule.days.includes(day)));
+  return `${schedule.time}, ${preset ? preset.label.toLowerCase() : schedule.days.map((day) => weekdays[day]).join(", ")}`;
 }
 
 export default function SchedulesPanel(props: Props) {
@@ -106,11 +108,16 @@ export default function SchedulesPanel(props: Props) {
   return (
     <>
       <h2>Schedules</h2>
-      <p className="section-note">
-        Schedules run in their selected time zone while their owner has the required access.
-        Missed times and daylight-saving gaps are skipped; repeated times run once.
-        Pausing prevents future runs and does not undo work already started.
-      </p>
+      <p className="section-lede">Start, stop, restart, or back up this server at set times.</p>
+      <details className="disclosure">
+        <summary>How schedules run</summary>
+        <p>
+          Each schedule runs in its own time zone, and only while its owner still
+          has access to the action. Missed times and daylight-saving gaps are
+          skipped; a repeated hour runs once.
+        </p>
+        <p>Pausing stops future runs. It doesn’t undo work that already started.</p>
+      </details>
       {props.selectedScheduleId && props.snapshotReady && !schedules.some((item) => item.id === props.selectedScheduleId) && (
         <p role="status" className="section-note">This schedule is no longer available or you no longer have access.</p>
       )}

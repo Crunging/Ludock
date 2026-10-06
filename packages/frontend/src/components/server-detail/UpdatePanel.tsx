@@ -63,10 +63,9 @@ export default function UpdatePanel(props: Props) {
             onSubmit();
           }}
         >
-          <p>
-            Pull the latest version of this service’s configured image and
-            recreate it through Docker Compose. The image’s normal startup
-            process may update the game software.
+          <p className="section-lede">
+            Pull the newest image for this service and recreate it with Docker
+            Compose. Many game images also update the game when they start.
           </p>
           <dl className="metadata-list">
             <dt>Project</dt>
@@ -76,11 +75,15 @@ export default function UpdatePanel(props: Props) {
             <dt>Configured image</dt>
             <dd>{capability.image}</dd>
           </dl>
-          <p className="section-note">
-            Compose source is authoritative. Redeployment can replace runtime
-            changes that were never saved in that source. Other services and
-            dependencies are not recreated.
-          </p>
+          <details className="disclosure">
+            <summary>What gets replaced</summary>
+            <p>
+              Ludock follows your Compose files exactly. Changes made to the
+              running container that aren’t saved in those files are lost. Only
+              this service is recreated; other services and dependencies aren’t
+              touched.
+            </p>
+          </details>
           <label className="check-label">
             <input
               type="checkbox"
@@ -95,9 +98,9 @@ export default function UpdatePanel(props: Props) {
             />
             Create a stopped-server backup before recreation
           </label>
-          <p className="muted">
-            The server remains stopped between backup and recreation. A
-            previously stopped server stays stopped.
+          <p className="muted check-help">
+            The server stays stopped until it’s recreated. If it was stopped
+            before, it stays stopped after.
           </p>
           <label className="check-label">
             <input
@@ -114,9 +117,8 @@ export default function UpdatePanel(props: Props) {
             Recreate anyway, even if the configured image is current
           </label>
           {forceRecreate && (
-            <p className="muted">
-              The service will be replaced even when its image is unchanged.
-              Startup-based game updates wait until the server is started.
+            <p className="muted check-help">
+              Use this to pick up a game update that installs on startup.
             </p>
           )}
           {!createBackup && (
