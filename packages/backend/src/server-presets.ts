@@ -13,8 +13,8 @@ interface GameConsolePreset {
 interface GameIntegration {
   gameType: string;
   name: string;
-  /** The container port players connect to, used to pick the address to share. */
-  gamePort?: number;
+  /** The container port and protocol players connect with, used to pick the address to share. */
+  gamePort?: { port: number; protocol: "tcp" | "udp" };
   repositories: readonly string[];
   aliases?: readonly string[];
   console?: GameConsolePreset;
@@ -26,14 +26,14 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "minecraft",
     name: "Minecraft",
-    gamePort: 25565,
+    gamePort: { port: 25565, protocol: "tcp" },
     repositories: ["itzg/minecraft-server"],
     console: { adapter: "minecraft-rcon" },
   },
   {
     gameType: "factorio",
     name: "Factorio",
-    gamePort: 34197,
+    gamePort: { port: 34197, protocol: "udp" },
     repositories: ["factoriotools/factorio"],
     console: {
       adapter: "source-rcon",
@@ -49,7 +49,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "palworld",
     name: "Palworld",
-    gamePort: 8211,
+    gamePort: { port: 8211, protocol: "udp" },
     repositories: [
       "thijsvanloef/palworld-server-docker",
       "jammsen/palworld-dedicated-server",
@@ -69,7 +69,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "ark-survival-evolved",
     name: "ARK: Survival Evolved",
-    gamePort: 7777,
+    gamePort: { port: 7777, protocol: "udp" },
     repositories: [
       "hermsi/ark-server",
       "hermsi1337/ark-server",
@@ -91,7 +91,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "ark-survival-ascended",
     name: "ARK: Survival Ascended",
-    gamePort: 7777,
+    gamePort: { port: 7777, protocol: "udp" },
     repositories: ["sknnr/ark-ascended-server", "mschnitzer/asa-linux-server"],
     aliases: ["asa"],
     console: {
@@ -109,7 +109,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "cs2",
     name: "Counter-Strike 2",
-    gamePort: 27015,
+    gamePort: { port: 27015, protocol: "udp" },
     repositories: ["joedwards32/cs2"],
     aliases: ["csgo", "counter-strike-2"],
     console: {
@@ -127,7 +127,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "project-zomboid",
     name: "Project Zomboid",
-    gamePort: 16261,
+    gamePort: { port: 16261, protocol: "udp" },
     repositories: [
       "renegademaster/zomboid-dedicated-server",
       "renegade-master/zomboid-dedicated-server",
@@ -149,7 +149,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "conan-exiles",
     name: "Conan Exiles",
-    gamePort: 7777,
+    gamePort: { port: 7777, protocol: "udp" },
     repositories: ["indifferentbroccoli/conan-exiles-enhanced-server-docker"],
     console: {
       adapter: "source-rcon",
@@ -164,7 +164,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "v-rising",
     name: "V Rising",
-    gamePort: 9876,
+    gamePort: { port: 9876, protocol: "udp" },
     repositories: ["trueosiris/vrising"],
     console: {
       adapter: "source-rcon",
@@ -176,7 +176,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "rust",
     name: "Rust",
-    gamePort: 28015,
+    gamePort: { port: 28015, protocol: "udp" },
     repositories: ["didstopia/rust-server"],
     console: {
       adapter: "rust-webrcon",
@@ -186,7 +186,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "7-days-to-die",
     name: "7 Days to Die",
-    gamePort: 26900,
+    gamePort: { port: 26900, protocol: "tcp" },
     repositories: ["vinanrra/7dtd-server"],
     aliases: ["7dtd"],
     console: {
@@ -204,7 +204,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "valheim",
     name: "Valheim",
-    gamePort: 2456,
+    gamePort: { port: 2456, protocol: "udp" },
     repositories: [
       "community-valheim-tools/valheim-server",
       "lloesche/valheim-server",
@@ -213,7 +213,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   {
     gameType: "terraria",
     name: "Terraria",
-    gamePort: 7777,
+    gamePort: { port: 7777, protocol: "tcp" },
     repositories: [
       "hexlo/terraria-server-docker",
       "beardedio/terraria",

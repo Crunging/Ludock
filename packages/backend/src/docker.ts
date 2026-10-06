@@ -179,12 +179,34 @@ function dockerTime(value: string | undefined): number | null {
   return Number.isFinite(time) && time > 0 ? time : null;
 }
 
+interface PortBinding {
+  private: number;
+  public: number;
+  type: string;
+  hostIp: string;
+}
+
+/** Docker limits a loopback-bound mapping to the Docker host itself. */
+function loopbackOnly(binding: PortBinding): boolean {
+  return /^127\./.test(binding.hostIp) || binding.hostIp === "::1";
+}
+
+/** Picks the host port players use. A game's own port wins when it is reachable,
+ * preferring its protocol, since TCP and UDP mappings are independent. If that
+ * port is published only on loopback, no address is offered rather than another
+ * port such as RCON. Other images use their first reachable port. */
 function connectPort(
-  ports: ManagedContainer["ports"],
-  gamePort: number | undefined,
+  bindings: PortBinding[],
+  gamePort: { port: number; protocol: string } | undefined,
 ): number | null {
-  const published = ports.filter((port) => port.public > 0);
-  return (published.find((port) => port.private === gamePort) ?? published[0])?.public ?? null;
+  const published = bindings.filter((binding) => binding.public > 0);
+  const game = gamePort
+    ? published.filter((binding) => binding.private === gamePort.port)
+    : [];
+  const candidates = (game.length > 0 ? game : published).filter((binding) => !loopbackOnly(binding));
+  return (
+    candidates.find((binding) => binding.type === gamePort?.protocol) ?? candidates[0]
+  )?.public ?? null;
 }
 
 function toInspectedManagedContainer(
@@ -192,6 +214,18 @@ function toInspectedManagedContainer(
 ): ManagedContainer {
   const labels = info.Config.Labels || {};
   const gameType = labels[LABEL_GAME]?.trim() || inferGameType(info.Config.Image);
+  const bindings = Object.entries(info.NetworkSettings.Ports || {}).flatMap(
+    ([containerPort, published]): PortBinding[] => {
+      if (!published) return [];
+      const [port, type] = containerPort.split("/");
+      return published.map((binding) => ({
+        private: parseInt(port, 10),
+        public: parseInt(binding.HostPort, 10),
+        type: type || "tcp",
+        hostIp: binding.HostIp || "",
+      }));
+    },
+  );
   const managed = {
     id: assertValidContainerId(info.Id),
     shortId: info.Id.substring(0, 12),
@@ -212,23 +246,18 @@ function toInspectedManagedContainer(
       : null,
     gameType,
     gameName: gameDisplayName(gameType),
-    ports: Object.entries(info.NetworkSettings.Ports || {}).flatMap(
-      ([containerPort, bindings]) => {
-        if (!bindings) return [];
-        const [port, type] = containerPort.split("/");
-        return bindings.map((binding) => ({
-          private: parseInt(port, 10),
-          public: parseInt(binding.HostPort, 10),
-          type: type || "tcp",
-        }));
-      },
-    ),
+    // Host addresses stay internal; the public contract lists ports only.
+    ports: bindings.map((binding) => ({
+      private: binding.private,
+      public: binding.public,
+      type: binding.type,
+    })),
     created: new Date(info.Created).getTime(),
     labels: approvedConfigurationLabels(labels),
   };
   return {
     ...managed,
-    connectPort: connectPort(managed.ports, getGameIntegration(gameType)?.gamePort),
+    connectPort: connectPort(bindings, getGameIntegration(gameType)?.gamePort),
     gameConsole: getGameConsoleAdapterSummary(managed),
     fileRoots: getFileRoots(managed, info.Mounts || []),
   };

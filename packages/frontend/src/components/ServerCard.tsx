@@ -117,7 +117,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
         <span className="server-row__label">Connect</span>
         {address
           ? <CopyAddress address={address} serverName={server.displayName} />
-          : <span className="muted">No published port</span>}
+          : <span className="muted">No public port</span>}
       </div>
       {showBackup && (
         <div className="server-row__backup">

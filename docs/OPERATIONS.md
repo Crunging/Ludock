@@ -113,8 +113,10 @@ labels:
 
 The server list shows each server's state, the address players connect to, and
 its latest backup. The address combines the public name or IP in **Settings →
-Server address** with the published host port for the game's own port, or the
-first published port for other images. Until an administrator sets one, Ludock
+Server address** with the host port published for the game's own port and
+protocol, or the first published port for other images. Ports published only on
+loopback (such as `127.0.0.1:25565:25565`) are never offered, because players
+on other machines cannot reach them. Until an administrator sets a name, Ludock
 uses the host name from the browser's address bar; set it when players connect
 through a different name than the one you use for Ludock.
 

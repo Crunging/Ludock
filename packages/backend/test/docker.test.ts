@@ -103,6 +103,29 @@ describe("automatic discovery boundary", () => {
     }
   });
 
+  it("offers the game's own port by protocol and never a loopback-only binding", async () => {
+    const connectPortFor = async (image: string, labels: Record<string, string>, ports: Record<string, Array<{ HostIp: string; HostPort: string }>>) => {
+      const info = { ...inspectFixture(image, labels), NetworkSettings: { Ports: ports } };
+      docker.getContainer = (() => ({ inspect: async () => info })) as unknown as typeof docker.getContainer;
+      return (await getManagedContainerObservation(untrusted("game"))).container.connectPort;
+    };
+    // TCP and UDP mappings of one container port are independent; Factorio uses UDP.
+    expect(await connectPortFor("factoriotools/factorio", {}, {
+      "34197/tcp": [{ HostIp: "0.0.0.0", HostPort: "30000" }],
+      "34197/udp": [{ HostIp: "0.0.0.0", HostPort: "34197" }],
+    })).toBe(34197);
+    // A game port reachable only from the Docker host offers no address, not the RCON port.
+    expect(await connectPortFor("itzg/minecraft-server", {}, {
+      "25565/tcp": [{ HostIp: "127.0.0.1", HostPort: "25565" }, { HostIp: "::1", HostPort: "25565" }],
+      "25575/tcp": [{ HostIp: "0.0.0.0", HostPort: "25575" }],
+    })).toBeNull();
+    // Other images skip loopback-only bindings when choosing their first port.
+    expect(await connectPortFor("example/custom-game", { "ludock.enable": "true" }, {
+      "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "8080" }],
+      "7777/udp": [{ HostIp: "", HostPort: "7777" }],
+    })).toBe(7777);
+  });
+
   it("reports health, uptime, exits, and the port players connect to", async () => {
     const startedAt = "2026-09-15T10:00:00.000Z";
     const running = {

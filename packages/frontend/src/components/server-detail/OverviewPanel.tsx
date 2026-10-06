@@ -80,7 +80,7 @@ export default function OverviewPanel(props: Props) {
                   <span className="muted">Using this page’s address</span>
                 )}
               </>
-            ) : "No published port"}
+            ) : "No public port"}
           </dd>
         </div>
         <div>
