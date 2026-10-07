@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.4.0](https://github.com/Crunging/Ludock/compare/v0.3.0...v0.4.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* Password authentication accepts Argon2id hashes only; legacy scrypt hashes no longer authenticate.
+
+### Features
+
+* **frontend:** restyle the panel with pip states, sidebar icons, and IBM Plex ([#30](https://github.com/Crunging/Ludock/issues/30)) ([f11628b](https://github.com/Crunging/Ludock/commit/f11628b7f229d90b5fda386f282d0c8c03ee5ab6))
+* redesign the panel around server status, addresses, and everyday tasks ([#32](https://github.com/Crunging/Ludock/issues/32)) ([f8cf1b0](https://github.com/Crunging/Ludock/commit/f8cf1b0e8ea1bb7a0d069e12c3453d68ea1bf3aa))
+
+
+### Bug Fixes
+
+* **ci:** stage Release Please assets under Bun ([#21](https://github.com/Crunging/Ludock/issues/21)) ([07246ef](https://github.com/Crunging/Ludock/commit/07246eff2c785cbc39022046caf975e351756845))
+* handle log redaction and recovery edge cases ([#25](https://github.com/Crunging/Ludock/issues/25)) ([1f58d21](https://github.com/Crunging/Ludock/commit/1f58d216a4cae3097aa277744db7ec60717c1a7c))
+* harden runtimes without adding setup requirements ([#27](https://github.com/Crunging/Ludock/issues/27)) ([20aa79e](https://github.com/Crunging/Ludock/commit/20aa79e64c4ecbc595a04277c5dc3276798af4f0))
+* harden server recovery and focus regression coverage ([#31](https://github.com/Crunging/Ludock/issues/31)) ([b4a40c7](https://github.com/Crunging/Ludock/commit/b4a40c778890c8e414afe19332f9a4cda2c83d52))
+
+
+### Performance Improvements
+
+* reduce database and stream processing overhead ([#23](https://github.com/Crunging/Ludock/issues/23)) ([d67b6aa](https://github.com/Crunging/Ludock/commit/d67b6aa111224f28961d6af0b5c025b8a5f47e82))
+
+
+### Code Refactoring
+
+* remove dead code, simplify dev tooling and CI, type-check backend tests ([#28](https://github.com/Crunging/Ludock/issues/28)) ([c4830a4](https://github.com/Crunging/Ludock/commit/c4830a4d86326f9b0bb2be04e88146b812c6989f))
+* use native Bun I/O and Bun-only tooling ([#20](https://github.com/Crunging/Ludock/issues/20)) ([85b673f](https://github.com/Crunging/Ludock/commit/85b673f686770c175322c88592118ab11c55b1e9))
+
 ## [0.3.0](https://github.com/Crunging/Ludock/compare/v0.2.1...v0.3.0) (2026-09-15)
 
 
