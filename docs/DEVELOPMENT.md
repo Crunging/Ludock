@@ -22,8 +22,8 @@ which restarts when its source changes.
   running real servers.
 
 Bun runs all JavaScript, including Bun's built-in `node:fs`, `node:path`, and
-`node:os`. TypeScript 7 and Oxlint run as native executables. Keep
-`[run].bun = true` in `bunfig.toml`.
+`node:os`. `bun check` type-checks with TypeScript 7 semantics, and Oxlint runs
+as a native executable. Keep `[run].bun = true` in `bunfig.toml`.
 
 ## Checks
 

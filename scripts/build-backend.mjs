@@ -60,6 +60,8 @@ export async function buildBackend(output = join(backend, "dist")) {
       entrypoints: [join(backend, "src/index.ts"), join(backend, "src/recovery.ts")],
       outdir: staging, target: "bun", format: "esm", packages: "bundle",
       splitting: true, sourcemap: "linked", metafile: true,
+      // Image builds bundle without a separate typecheck step.
+      check: true,
       // An unresolved dynamic import could quietly reintroduce node_modules.
       allowUnresolved: [],
     });

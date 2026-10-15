@@ -1,5 +1,5 @@
 ARG ALPINE_IMAGE=alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-ARG BUN_IMAGE=oven/bun:1-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f
+ARG BUN_IMAGE=oven/bun:1-alpine@sha256:629e17411f1f129dbec3af78d5af9c9f2a937435c80349437206c6b0b7422373
 
 # Build JavaScript artifacts on the native build platform.
 FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS deps
@@ -26,6 +26,9 @@ FROM deps AS build-backend
 # Published attestations also record the installed inputs to the bundled code.
 ARG BUILDKIT_SBOM_SCAN_STAGE=true
 COPY packages/backend/src/ packages/backend/src/
+# The bundle step type-checks against the backend's compiler settings.
+COPY tsconfig.base.json ./
+COPY packages/backend/tsconfig.json packages/backend/
 COPY scripts/build-backend.mjs scripts/build-backend.mjs
 RUN bun run --filter @ludock/backend build
 
@@ -52,4 +55,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q --spider http://localhost:3000/api/v1/health || exit 1
 
-CMD ["bun", "packages/backend/dist/index.js"]
+# The server never turns strings into code. Helper containers reuse this image
+# and run `bun -e`, so the flag stays on this command instead of BUN_OPTIONS.
+CMD ["bun", "--disallow-code-generation-from-strings=strict", "packages/backend/dist/index.js"]

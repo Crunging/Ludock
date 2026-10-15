@@ -25,12 +25,16 @@ export class DockerStreamOpenError extends Error {
 }
 
 export class DockerTransport {
-  constructor(readonly socketPath: string, private readonly readTimeoutMs = 15_000) {}
+  /** Daemon requests keep their own connection pool, never shared with other
+   * fetch() traffic. Ambient HTTP proxy settings must never redirect them. */
+  private readonly session: Bun.FetchSession;
+
+  constructor(readonly socketPath: string, private readonly readTimeoutMs = 15_000) {
+    this.session = new Bun.FetchSession({ unix: socketPath, proxy: false });
+  }
 
   async request(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<Response> {
-    const response = await fetch(`http://localhost${path}`, {
-      unix: this.socketPath,
-      proxy: "", // Ambient HTTP proxy settings must never redirect daemon traffic.
+    const response = await this.session.fetch(`http://localhost${path}`, {
       method,
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -137,7 +141,7 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       start(controller) { output = controller; },
       write,
       close() {
-        // Bun 1.4.2 shutdown() sends FIN on the write side; shutdown(true)
+        // Bun's shutdown() sends FIN on the write side; shutdown(true)
         // shuts down reads, and end() closes the socket. The upload socket
         // tests exercise the runtime behavior rather than relying on typings.
         // Bun uses the same call in src/js/node/net.ts's endNT implementation.

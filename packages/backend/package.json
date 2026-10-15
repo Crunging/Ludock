@@ -9,18 +9,17 @@
     "lint:scripts": "cd ../.. && oxlint --config scripts/.oxlintrc.json scripts",
     "test": "bun test --isolate ./test",
     "recover": "bun src/recovery.ts",
-    "start": "bun dist/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
+    "start": "bun --disallow-code-generation-from-strings=strict dist/index.js",
+    "typecheck": "bun check && bun check -p tsconfig.test.json"
   },
   "dependencies": {
     "@ludock/shared": "workspace:*",
     "yaml": "^2.9.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2",
-    "oxlint": "^1.87.0",
-    "oxlint-tsgolint": "^7.0.2003",
-    "typescript": "^7.0.2"
+    "@types/bun": "^1.4.3",
+    "oxlint": "^1.88.0",
+    "oxlint-tsgolint": "^7.0.2004"
   }
 }

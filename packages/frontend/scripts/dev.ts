@@ -40,6 +40,8 @@ async function proxy(request: Request, server: Server<Bridge>): Promise<Response
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     try {
       return await fetch(target, {
+        // Ambient proxy settings must not receive this browser's session cookie.
+        proxy: false,
         method: request.method,
         headers: forwardedHeaders(request),
         body: request.body,
