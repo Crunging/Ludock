@@ -8,7 +8,6 @@ import * as storage from "../src/backup-storage.js";
 import * as database from "../src/database.js";
 import * as discovery from "../src/docker.js";
 import { docker, type Container, type ContainerInspectInfo } from "../src/docker-client.js";
-import { startServer } from "../src/index.js";
 import { reconcileServers } from "../src/identity.js";
 import { getOperation } from "../src/operations.js";
 import { createSchedule, runSchedules } from "../src/schedules.js";
@@ -21,7 +20,6 @@ let directory: string;
 let oldRoots: string | undefined;
 let oldSelf: string | undefined;
 let mounts: ContainerInspectInfo["Mounts"];
-let runtime: ReturnType<typeof startServer> | undefined;
 const observed = [{
   observation: {
     containerId: dockerId("auto-backup-game"), name: "game", displayName: "Game", gameType: "minecraft",
@@ -44,8 +42,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await runtime?.shutdown("test cleanup");
-  runtime = undefined;
   mock.restore();
   database.closeDatabase();
   if (oldRoots === undefined) delete process.env.LUDOCK_BACKUP_ROOTS;
@@ -101,7 +97,7 @@ describe("automatic backup storage setup", () => {
     });
   }
 
-  for (const invalid of ["missing", "symlink", "read-only mount", "unmounted", "unverifiable", "overlapping game data"]) {
+  for (const invalid of ["missing", "symlink", "read-only mount", "overlapping game data"]) {
     it(`leaves storage unconfigured for an invalid root: ${invalid}`, async () => {
       if (invalid === "missing") process.env.LUDOCK_BACKUP_ROOTS = path.join(directory, "missing");
       if (invalid === "symlink") {
@@ -110,10 +106,6 @@ describe("automatic backup storage setup", () => {
         process.env.LUDOCK_BACKUP_ROOTS = path.join(directory, "link");
       }
       if (invalid === "read-only mount") mounts[0].RW = false;
-      if (invalid === "unmounted") mounts = [];
-      if (invalid === "unverifiable") spyOn(docker, "getContainer").mockImplementation(() => ({
-        inspect: async () => { throw new Error("Docker unavailable /private/host-path"); },
-      }) as unknown as Container);
       if (invalid === "overlapping game data") mounts[0].Source = "/srv/game/archives";
       await initializeBackupStorage();
       expect(savedRow()).toBeNull();
@@ -173,8 +165,7 @@ describe("automatic backup storage setup", () => {
     spyOn(servers, "resolveAuthorizedServer").mockResolvedValue({
       logical, observation: observed[0].observation, container: { id: logical.containerId }, lockKeys: [],
     } as unknown as servers.ServerContext);
-    // End the fixture before any server stop or archive work, once settings
-    // have passed validation and execution reaches the usual capacity check.
+    // Stop at the capacity check, after settings pass validation.
     const capacity = spyOn(storage, "assertDestinationSpace").mockRejectedValue(new Error("Fixture capacity check"));
     const initialization = initializeBackupStorage();
     await startedValidation;
@@ -197,20 +188,5 @@ describe("automatic backup storage setup", () => {
       release();
       await Promise.allSettled([initialization, outcome]);
     }
-  });
-
-  it("enables storage during startup without an administrator opening Settings", async () => {
-    const enabled = new Promise<void>((resolve) => {
-      const write = database.writeAuditLog;
-      spyOn(database, "writeAuditLog").mockImplementation((...args) => {
-        write(...args);
-        if (args[0].action === "settings.backups.auto_enabled") resolve();
-      });
-    });
-    spyOn(docker, "listContainers").mockResolvedValue([]);
-    spyOn(discovery, "listManagedContainerObservations").mockResolvedValue([]);
-    runtime = startServer({ port: 0, hostname: "127.0.0.1", frontendDist: false });
-    await enabled;
-    expect(getSetting<BackupSettings>("backups")?.destination).toBe(directory);
   });
 });

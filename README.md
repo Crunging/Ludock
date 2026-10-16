@@ -56,10 +56,9 @@ platforms.
    `ludock.enable: "true"` to its container.
 
 Ludock keeps its own data and your backups in separate volumes; your game
-containers and their data stay where they are. With the example deployment,
-backup storage enables automatically after validation. Change the limits in
-**Settings → Backup storage**. Backups run only when started manually or by a
-schedule, and stop the server while they copy.
+containers and their data stay where they are. The example's `backups` volume
+is turned on automatically; adjust limits in **Settings → Backup storage**.
+Backups stop the server while they copy.
 
 Most settings live in the browser. For deployment options, copy
 [`.env.example`](./.env.example) to `.env`, uncomment what you need, and run

@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 import {
   backupSettingsSchema,
+  DEFAULT_BACKUP_LIMITS,
   type Backup,
   type BackupPreflight,
   type BackupReadinessIssue,
@@ -127,8 +128,7 @@ export async function deleteBackup(
 async function settingsForBackup(): Promise<BackupSettings> {
   let settings = getSetting<BackupSettings>("backups");
   if (!settings) {
-    // A due schedule or manual request can reach execution during startup.
-    // Await automatic setup before treating storage as unconfigured.
+    // A backup due at startup can run before the first background tick.
     await initializeBackupStorage();
     settings = getSetting<BackupSettings>("backups");
   }
@@ -140,40 +140,33 @@ async function settingsForBackup(): Promise<BackupSettings> {
   return validateBackupSettings(settings);
 }
 
-/** Enable storage only when no administrator decision has ever been saved.
- * This validates storage without starting any backup or creating a schedule. */
+let backupStorageInitialization: Promise<void> | undefined;
+
+/** Enables the single approved root with default limits, unless an
+ * administrator has ever saved backup settings. */
 export function initializeBackupStorage(): Promise<void> {
   backupStorageInitialization ??= initializeBackupStorageOnce()
     .finally(() => { backupStorageInitialization = undefined; });
   return backupStorageInitialization;
 }
 
-let backupStorageInitialization: Promise<void> | undefined;
-
 async function initializeBackupStorageOnce(): Promise<void> {
   const db = getDatabase();
-  // A saved null (or any other disabled/cleared value) is still a decision.
+  // Any saved value, including null, is an administrator decision.
   if (db.query("SELECT 1 FROM settings WHERE key='backups'").get()) return;
   const roots = rootList(process.env.LUDOCK_BACKUP_ROOTS);
   if (roots.length !== 1) return;
-  const settings: BackupSettings = {
-    destination: roots[0],
-    retentionCount: 10,
-    maxBytes: 100 * 1024 ** 3,
-    reserveBytes: 5 * 1024 ** 3,
-  };
+  const settings: BackupSettings = { destination: roots[0], ...DEFAULT_BACKUP_LIMITS };
   try {
     await validateBackupSettings(settings);
-    // Reuse the runtime overlap check against fresh game-container mounts.
     for (const observed of await listManagedContainerObservations())
       await assertSeparateDestination(observed, settings);
   } catch {
-    // Keep storage unset and the existing setup/readiness guidance available.
     return;
   }
   db.exec("BEGIN IMMEDIATE");
   try {
-    // Validation awaited filesystem/Docker reads; a saved decision wins races.
+    // A decision saved while validation awaited I/O wins.
     const inserted = db.query(
       "INSERT INTO settings(key,value_json) VALUES('backups',?) ON CONFLICT(key) DO NOTHING",
     ).run(JSON.stringify(settings));

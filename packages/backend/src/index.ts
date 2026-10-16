@@ -58,8 +58,7 @@ export function startServer(options: {
   function tick(): void {
     if (shuttingDown) return;
     void backgroundTick();
-    // Storage validation can wait on mounts or Docker. Keep it independent of
-    // schedules, prevent overlapping attempts, and drain it before closing SQLite.
+    // Storage validation can wait on Docker; keep it off the schedule path.
     backupStorageTask ??= initializeBackupStorage()
       .catch(() => logger.warn("Automatic backup storage setup is temporarily unavailable"))
       .finally(() => { backupStorageTask = undefined; });

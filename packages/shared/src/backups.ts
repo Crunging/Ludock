@@ -9,6 +9,11 @@ export const backupSettingsSchema = z
   })
   .strict();
 export type BackupSettings = z.infer<typeof backupSettingsSchema>;
+export const DEFAULT_BACKUP_LIMITS = {
+  retentionCount: 10,
+  maxBytes: 100 * 1024 ** 3,
+  reserveBytes: 5 * 1024 ** 3,
+} as const satisfies Omit<BackupSettings, "destination">;
 
 export const backupSchema = z.object({
   id: z.string().uuid(),

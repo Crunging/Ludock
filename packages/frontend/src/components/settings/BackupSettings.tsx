@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   backupSettingsSchema,
   backupSettingsResponseSchema,
+  DEFAULT_BACKUP_LIMITS,
   type BackupSettings,
   type DeploymentSettings,
 } from "@ludock/shared";
@@ -78,10 +79,8 @@ function BackupSettingsForm({
 }) {
   const [backup, setBackup] = useState<BackupDraft>(() =>
     settings ? backupDraft(settings) : {
+      ...backupDraft({ destination: "", ...DEFAULT_BACKUP_LIMITS }),
       destination: null,
-      retentionCount: "10",
-      maxGiB: "100",
-      reserveGiB: "5",
     },
   );
   const destination = backup.destination ??
