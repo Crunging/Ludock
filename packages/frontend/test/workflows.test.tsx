@@ -106,13 +106,13 @@ describe("server detail request ownership", () => {
       if (path === `/servers/${server.id}` && queued) throw new Error("Unable to read updated server");
     } });
     await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
-    await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /selected service will be recreated/ }));
     await userEvent.click(screen.getByRole("button", { name: "Update server", exact: true }));
     await screen.findByText("Update queued.");
     await screen.findByText("Unable to read updated server");
     await waitFor(() => expect(screen.getByRole("tab", { name: "Activity", selected: true })).toBeTruthy());
     await userEvent.click(screen.getByRole("tab", { name: "Update", exact: true }));
-    expect((screen.getByRole("checkbox", { name: /I understand/ }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("checkbox", { name: /selected service will be recreated/ }) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByRole("button", { name: "Update server", exact: true }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

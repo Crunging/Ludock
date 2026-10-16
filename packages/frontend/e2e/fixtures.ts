@@ -248,6 +248,7 @@ export const test = base.extend<{ app: AppFixture }>({
             capability: {
               available: true,
               actionLabel: "Update server",
+              updatesOnStart: server.gameType === "minecraft",
               manager: "compose",
               projectName: "fixture-games",
               serviceName: server.name,

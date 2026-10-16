@@ -109,7 +109,7 @@ describe("server detail navigation", () => {
       },
     });
     await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
-    await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /selected service will be recreated/ }));
     await userEvent.click(screen.getByRole("button", { name: "Update server", exact: true }));
     await waitFor(() => expect(apiJsonMock.mock.calls.some(
       ([path, , init]) => path.endsWith("/updates") && init?.method === "POST",

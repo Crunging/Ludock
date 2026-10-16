@@ -16,6 +16,8 @@ interface GameIntegration {
   /** The container port and protocol players connect with, used to pick the address to share. */
   gamePort?: { port: number; protocol: "tcp" | "udp" };
   repositories: readonly string[];
+  /** Every listed image downloads game updates on startup by default. */
+  updatesOnStart?: boolean;
   aliases?: readonly string[];
   console?: GameConsolePreset;
 }
@@ -28,6 +30,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     name: "Minecraft",
     gamePort: { port: 25565, protocol: "tcp" },
     repositories: ["itzg/minecraft-server"],
+    updatesOnStart: true,
     console: { adapter: "minecraft-rcon" },
   },
   {
@@ -54,6 +57,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
       "thijsvanloef/palworld-server-docker",
       "jammsen/palworld-dedicated-server",
     ],
+    updatesOnStart: true,
     console: {
       adapter: "source-rcon",
       name: "Palworld RCON",
@@ -111,6 +115,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     name: "Counter-Strike 2",
     gamePort: { port: 27015, protocol: "udp" },
     repositories: ["joedwards32/cs2"],
+    updatesOnStart: true,
     aliases: ["csgo", "counter-strike-2"],
     console: {
       adapter: "source-rcon",
@@ -151,6 +156,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     name: "Conan Exiles",
     gamePort: { port: 7777, protocol: "udp" },
     repositories: ["indifferentbroccoli/conan-exiles-enhanced-server-docker"],
+    updatesOnStart: true,
     console: {
       adapter: "source-rcon",
       name: "Conan Exiles RCON",
@@ -178,6 +184,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     name: "Rust",
     gamePort: { port: 28015, protocol: "udp" },
     repositories: ["didstopia/rust-server"],
+    updatesOnStart: true,
     console: {
       adapter: "rust-webrcon",
       passwordEnvCandidates: ["RUST_RCON_PASSWORD", "RCON_PASSWORD"],
@@ -209,6 +216,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
       "community-valheim-tools/valheim-server",
       "lloesche/valheim-server",
     ],
+    updatesOnStart: true,
   },
   {
     gameType: "terraria",
@@ -233,13 +241,17 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
 ];
 
 export function inferGameType(image: string): string {
+  return getImageIntegration(image)?.gameType ?? "unknown";
+}
+
+/** Startup behavior belongs to the recognized image, never a game label. */
+export function getImageIntegration(image: string): GameIntegration | undefined {
   const repository = normalizeImageRepository(image);
-  const integration = GAME_INTEGRATIONS.find(({ repositories }) =>
+  return GAME_INTEGRATIONS.find(({ repositories }) =>
     repositories.some(
       (known) => repository === known || repository.endsWith(`/${known}`),
     ),
   );
-  return integration?.gameType ?? "unknown";
 }
 
 /** Recognized games use their published name; label overrides keep their own text. */

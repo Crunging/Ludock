@@ -32,6 +32,7 @@ import BackupsPanel, {
 import SchedulesPanel, { type ScheduleEdit } from "../components/server-detail/SchedulesPanel";
 import UpdatePanel, {
   type UpdateOptions,
+  type RestartUpdateOptions,
 } from "../components/server-detail/UpdatePanel";
 import AvailabilityPanel, {
   type AvailabilityDraft,
@@ -151,6 +152,9 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     confirmed: false,
     skipConfirmation: "",
   });
+  const [restartUpdate, setRestartUpdate] = useState<RestartUpdateOptions>({
+    createBackup: true, confirmed: false, skipConfirmation: "",
+  });
   const [restore, setRestore] = useState<RestoreSelection>({
     backup: null,
     confirmation: "",
@@ -168,12 +172,14 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   const canCreateBackup = can(user, server, "backups.create");
   const canManageSchedules = can(user, server, "schedules.manage") ||
     (admin && can(user, server, "server.view"));
+  const canRestartServer = can(user, server, "server.restart");
+  const canReadUpdate = admin || canRestartServer;
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "activity", label: "Activity" },
     ...(admin || canCreateBackup ? [{ id: "backups", label: "Backups" }] : []),
     ...(canManageSchedules ? [{ id: "schedules", label: "Schedules" }] : []),
-    ...(admin ? [{ id: "update", label: "Update" }] : []),
+    ...(canReadUpdate ? [{ id: "update", label: "Update" }] : []),
   ];
   const activeTab = tabs.some((item) => item.id === tab) ? tab : "overview";
   const readBackups = useCallback((signal: AbortSignal) => apiJson(`${path}/backups`, backupsResponseSchema, { signal }), [path]);
@@ -238,7 +244,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   }, [capabilityState, tab]);
 
   useEffect(() => {
-    if (!admin) return;
+    if (!canReadUpdate) return;
     const controller = new AbortController();
     setCapabilityState("loading");
     apiJson(`${path}/update-capability`, updateCapabilityResponseSchema, {
@@ -253,7 +259,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         if (!controller.signal.aborted) setCapabilityState("error");
       });
     return () => controller.abort();
-  }, [admin, path, capabilityAttempt]);
+  }, [canReadUpdate, path, capabilityAttempt]);
   useEffect(() => {
     if (!canReadAvailability) return;
     const controller = new AbortController();
@@ -460,6 +466,24 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         confirmed: false,
         skipConfirmation: "",
       }));
+    }
+  }
+  async function requestRestartUpdate() {
+    const createBackup = canCreateBackup && restartUpdate.createBackup;
+    if (
+      !canRestartServer || !capability?.updatesOnStart || capabilityState !== "ready" ||
+      blocked || activeOperation || !restartUpdate.confirmed ||
+      (!createBackup && restartUpdate.skipConfirmation !== server?.displayName)
+    ) return;
+    if (await perform(
+      () => apiJson(`${path}/restart-update`, operationResponseSchema, jsonBody("POST", {
+        createBackup,
+        ...(createBackup ? {} : { skipBackupConfirmation: restartUpdate.skipConfirmation }),
+      })),
+      "Restart to update queued.",
+    )) {
+      setTab("activity");
+      setRestartUpdate((current) => ({ ...current, confirmed: false, skipConfirmation: "" }));
     }
   }
   async function requestRestore() {
@@ -863,23 +887,25 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
           />
         </>}
-        {admin && activeTab === "update" && capabilityState !== "ready" && (
+        {activeTab === "update" && canReadUpdate && capabilityState !== "ready" && (
           <SettingsLoadState
             state={capabilityState}
             onReload={() => setCapabilityAttempt((value) => value + 1)}
           />
         )}
-        {activeTab === "update" && admin && capabilityState === "ready" && (
+        {activeTab === "update" && canReadUpdate && capabilityState === "ready" && (
           <UpdatePanel
             serverName={server.displayName}
+            canRestart={canRestartServer}
+            canUpdateImage={admin}
+            restartValue={restartUpdate}
+            onRestartChange={setRestartUpdate}
+            canBackup={can(user, server, "backups.create")}
+            onRestartUpdate={() => void requestRestartUpdate()}
             capability={capability}
             value={update}
             onChange={setUpdate}
-            busy={busy || !liveReady || !can(
-              user,
-              server,
-              update.forceRecreate ? "server.recreate" : "server.update",
-            )}
+            busy={busy || !liveReady}
             blocked={blocked}
             hasActiveOperation={Boolean(activeOperation)}
             onRecheck={() => {

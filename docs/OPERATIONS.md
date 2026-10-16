@@ -292,8 +292,18 @@ container in Docker, and its owning manager's logs.
 
 ## Compose updates
 
-Updates need the Linux Ludock image, an administrator, and the Compose source
-folders mounted read-only at their **original absolute paths on the Docker host**:
+**Server → Update** offers **Restart to update** for recognized images that
+download the latest game files on startup by default (Minecraft, Palworld, CS2,
+Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
+permission to restart the server. Ludock can take a backup first, keeping the
+server stopped until it finishes; skipping the backup requires typing the
+server's name. Version pins in the image's settings still apply, and the
+operation finishes when Docker restarts the container, not when the game is
+ready.
+
+Pulling a new image and recreating the service needs the Linux Ludock image, an
+administrator, and the Compose source folders mounted read-only at their
+**original absolute paths on the Docker host**:
 
 ```yaml
 services:
@@ -304,16 +314,15 @@ services:
       - /srv/game-stacks:/srv/game-stacks:ro
 ```
 
-**Server → Update** finds the project folder, its Compose files in order, and any
-environment files from Docker's labels. Without recorded environment files, it
-uses the project's `.env` if there is one. Every file it reads must stay inside
-approved folders, can't be a symlink, and must be under 2 MiB. Variables that
-only exist in your shell must be added to those files.
+Ludock finds the project folder, its Compose files in order, and any environment
+files from Docker's labels. Without recorded environment files, it uses the
+project's `.env` if there is one. Every file it reads must stay inside approved
+folders, can't be a symlink, and must be under 2 MiB. Variables that only exist
+in your shell must be added to those files.
 
 - **Update server** pulls the configured image, optionally takes a backup first,
   and recreates only that service, without building or pulling again.
-- **Recreate anyway** does the same when the image hasn't changed, for example
-  to pick up a game update that installs on startup.
+- **Recreate anyway** does the same when the image hasn't changed.
 - Skipping the backup requires typing the server's name. A server that was
   stopped stays stopped.
 

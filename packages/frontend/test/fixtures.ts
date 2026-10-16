@@ -91,6 +91,7 @@ export function serverDetailResponse(path: string, server: Server, data: ServerD
     case `${base}/update-capability`: return {
       capability: {
         available: true,
+        updatesOnStart: true,
         actionLabel: "Update server",
         projectName: "games",
         serviceName: "minecraft",
