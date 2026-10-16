@@ -10,7 +10,7 @@ import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src
 import { docker } from "../src/docker-client.js";
 import { listLogicalServers, reviewServerBinding } from "../src/identity.js";
 import { registerBackgroundJobs } from "../src/jobs.js";
-import { configureAvailability, getAvailability, getAvailabilityProblem } from "../src/monitoring.js";
+import { checkAvailability, configureAvailability, getAvailability, getAvailabilityProblem } from "../src/monitoring.js";
 import { isServerBusy } from "../src/operation-locks.js";
 import { enqueueOperation, getOperation, startOperationRunner, stopOperationRunner } from "../src/operations.js";
 import { listServers, refreshServers } from "../src/servers.js";
@@ -26,6 +26,7 @@ const clock = spyOn(globalThis, "setTimeout");
 let serverId: string;
 let name: string;
 let state: string;
+let startedAt: string;
 let exitCode: number;
 let labels: Record<string, string>;
 let commands: string[];
@@ -38,6 +39,30 @@ let streamsClosed: number;
 
 function queue(kind: "stop" | "restart" = "stop") {
   return enqueueOperation({ serverId, actorId: friend.id, kind, bindingRevision: 1 });
+}
+function interrupted(kind: "stop" | "restart", recovery: Record<string, unknown> = {}) {
+  const operation = queue(kind);
+  getDatabase().query("UPDATE operations SET status='running',phase='stopping',recovery_json=? WHERE id=?")
+    .run(JSON.stringify({
+      containerId: "fixture", stopStarted: true,
+      stopInitialStartedAt: Date.parse(startedAt), stopRecoveryDeadlineAt: Date.now() + 300_000,
+      ...recovery,
+    }), operation.id);
+  return operation;
+}
+function pauseRecoveryPolls() {
+  const polls: Array<() => void> = [];
+  clock.mockImplementation(((callback: Parameters<typeof setTimeout>[0], delay?: number, ...args: unknown[]) => {
+    if (delay === 1000) {
+      polls.push(() => callback(...args));
+      return realTimeout(() => {}, 1);
+    }
+    return realTimeout(callback, delay, ...args);
+  }) as typeof setTimeout);
+  return {
+    pending: () => until(() => polls.length > 0),
+    resume: async () => { await until(() => polls.length > 0); polls.shift()!(); },
+  };
 }
 async function until(check: () => boolean) {
   for (let attempt = 0; attempt < 200 && !check(); attempt++)
@@ -56,6 +81,7 @@ beforeEach(async () => {
   for (const actor of [admin, friend]) createUser({ ...actor, passwordHash: "fake", disabled: false, createdAt: 0 });
   name = "world";
   state = "running";
+  startedAt = "2026-01-01T00:00:00Z";
   exitCode = 0;
   stopExitCode = 0;
   commands = [];
@@ -72,7 +98,7 @@ beforeEach(async () => {
       inspect: async () => ({
         Id: id, Name: `/${name}`, Image: "image-id", Created: "2026-01-01T00:00:00Z",
         Config: { Image: "beardedio/terraria", Labels: labels, OpenStdin: true, StdinOnce: false, Tty: false },
-        State: { Status: state, Running: state === "running", ExitCode: exitCode, OOMKilled: false },
+        State: { Status: state, StartedAt: startedAt, Running: state === "running", ExitCode: exitCode, OOMKilled: false },
         Mounts: [], NetworkSettings: { Ports: {} },
       }),
       attach: async () => {
@@ -94,12 +120,14 @@ beforeEach(async () => {
         const operation = getDatabase().query<{ phase: string; recovery_json: string }, []>("SELECT phase,recovery_json FROM operations WHERE status='running'").get();
         expect(operation?.phase).toBe("stopping");
         expect(JSON.parse(operation!.recovery_json).containerId).toBe("fixture");
+        expect(JSON.parse(operation!.recovery_json).stopRecoveryDeadlineAt).toBeGreaterThan(Date.now());
+        expect(JSON.parse(operation!.recovery_json).stopInitialStartedAt).toBe(state === "running" ? Date.parse(startedAt) : null);
         mutations.push("stop");
         await stopGate;
         state = "exited";
         exitCode = stopExitCode;
       },
-      start: async () => { mutations.push("start"); state = "running"; exitCode = 0; },
+      start: async () => { mutations.push("start"); state = "running"; startedAt = new Date().toISOString(); exitCode = 0; },
     };
   }) as unknown as typeof docker.getContainer;
   await refreshServers();
@@ -255,6 +283,147 @@ describe("graceful lifecycle operations", () => {
     await startOperationRunner();
     expect((await finished(operation.id)).result?.forceStopped).toBeUndefined();
     expect((await listAttention(friend)).items).toEqual([]);
+  });
+  for (const action of ["stop", "restart"] as const) {
+    it(`waits for an in-flight ${action} to exit before releasing recovery locks`, async () => {
+      configureAvailability(serverId, { enabled: true, graceSeconds: 10 });
+      const operation = interrupted(action);
+      const polls = pauseRecoveryPolls();
+      let settled = false;
+      const starting = startOperationRunner().finally(() => { settled = true; });
+      try {
+        await polls.pending();
+        expect(settled).toBe(false);
+        expect(getOperation(operation.id)).toMatchObject({ status: "running", phase: "reconciling_stop" });
+        expect(isServerBusy(serverId)).toBe(true);
+        expect(getAvailabilityProblem(serverId, Date.now() + 600_000)).toBeNull();
+        expect(() => queue()).toThrow(/already queued or running/);
+        expect(mutations).toEqual([]);
+        state = "exited";
+        exitCode = 137;
+        await polls.resume();
+        await starting;
+        expect(getOperation(operation.id)).toMatchObject({ status: "interrupted", result: { forceStopped: true } });
+        expect(getAvailability(serverId).state.intentionallyStopped).toBe(action === "stop");
+        expect(isServerBusy(serverId)).toBe(false);
+        expect(mutations).toEqual([]);
+        expect(commands).toEqual([]);
+        expect((await listAttention(friend)).items).toContainEqual(expect.objectContaining({ forceStopped: true }));
+        if (action === "stop") {
+          const now = Date.now() + 600_000;
+          checkAvailability(await refreshServers(), now);
+          expect(getAvailabilityProblem(serverId, now + 20_000)).toBeNull();
+        }
+      } finally {
+        if (!settled) {
+          state = "exited";
+          await polls.resume();
+          await starting;
+        }
+      }
+    });
+  }
+  it("bounds an unconfirmed stop by its persisted deadline without extending it on recovery", async () => {
+    const deadline = Date.now() - 1;
+    const operation = interrupted("stop", { stopRecoveryDeadlineAt: deadline });
+    await startOperationRunner();
+    expect(getOperation(operation.id)).toMatchObject({
+      status: "interrupted", recovery: { stopRecoveryDeadlineAt: deadline },
+      result: { stopRecoveryTimedOut: true, guidance: expect.stringContaining("Review the server state") },
+    });
+    expect(state).toBe("running");
+    expect(isServerBusy(serverId)).toBe(false);
+    expect(mutations).toEqual([]);
+    expect(commands).toEqual([]);
+  });
+  it("releases recovery locks with explicit guidance when a pending stop exceeds its deadline", async () => {
+    const now = Date.now();
+    const operation = interrupted("stop", { stopRecoveryDeadlineAt: now + 300_000 });
+    const polls = pauseRecoveryPolls();
+    let settled = false;
+    const starting = startOperationRunner().finally(() => { settled = true; });
+    const time = spyOn(Date, "now");
+    try {
+      await polls.pending();
+      expect(isServerBusy(serverId)).toBe(true);
+      time.mockReturnValue(now + 300_001);
+      await polls.resume();
+      await starting;
+      expect(getOperation(operation.id)).toMatchObject({ status: "interrupted", result: { stopRecoveryTimedOut: true } });
+      expect(isServerBusy(serverId)).toBe(false);
+      expect(state).toBe("running");
+      expect(mutations).toEqual([]);
+    } finally {
+      time.mockRestore();
+      if (!settled) {
+        state = "exited";
+        await polls.resume();
+        await starting;
+      }
+    }
+  });
+  it("does not wait on the running server after the recorded restart stop already settled", async () => {
+    const operation = interrupted("restart", { stopSettled: true, forceStopped: true, stopRecoveryDeadlineAt: 0 });
+    await startOperationRunner();
+    expect(getOperation(operation.id)).toMatchObject({ status: "interrupted", result: { forceStopped: true } });
+    expect(getOperation(operation.id)?.result?.stopRecoveryTimedOut).toBeUndefined();
+    expect(mutations).toEqual([]);
+  });
+  it("recognizes an externally restarted container without waiting on its new running instance", async () => {
+    const operation = interrupted("restart", { stopRecoveryDeadlineAt: 0 });
+    startedAt = "2026-01-02T00:00:00Z";
+    await startOperationRunner();
+    expect(getOperation(operation.id)?.status).toBe("interrupted");
+    expect(getOperation(operation.id)?.result?.stopRecoveryTimedOut).toBeUndefined();
+    expect(mutations).toEqual([]);
+  });
+  for (const change of ["permission", "binding"] as const) {
+    it(`rechecks ${change} while reconciling an in-flight stop`, async () => {
+      const operation = interrupted("stop");
+      const polls = pauseRecoveryPolls();
+      const starting = startOperationRunner();
+      await polls.pending();
+      if (change === "permission") setServerGrant(friend.id, serverId, ["server.view"], admin);
+      else name = "different-world";
+      await polls.resume();
+      await starting;
+      expect(getOperation(operation.id)?.status).toBe("interrupted");
+      expect(isServerBusy(serverId)).toBe(false);
+      expect(mutations).toEqual([]);
+    });
+  }
+  it("retains recovery locks across a transient daemon failure and observes the eventual exit", async () => {
+    const operation = interrupted("stop");
+    const polls = pauseRecoveryPolls();
+    let settled = false;
+    const starting = startOperationRunner().finally(() => { settled = true; });
+    try {
+      await polls.pending();
+      const listContainers = docker.listContainers;
+      let failed = false;
+      docker.listContainers = (async () => {
+        if (!failed) { failed = true; throw new Error("private daemon failure"); }
+        return listContainers();
+      }) as typeof docker.listContainers;
+      await polls.resume();
+      await polls.pending();
+      expect(failed).toBe(true);
+      expect(getOperation(operation.id)?.status).toBe("running");
+      expect(isServerBusy(serverId)).toBe(true);
+      state = "exited";
+      exitCode = 137;
+      await polls.resume();
+      await starting;
+      expect(getOperation(operation.id)).toMatchObject({ status: "interrupted", result: { forceStopped: true } });
+      expect(JSON.stringify(getOperation(operation.id)?.result)).not.toContain("private daemon failure");
+      expect(mutations).toEqual([]);
+    } finally {
+      if (!settled) {
+        state = "exited";
+        await polls.resume();
+        await starting;
+      }
+    }
   });
   it("reopens persisted lifecycle state from disk and reconciles it without replay", async () => {
     const directory = await mkdtemp(join(tmpdir(), "ludock-lifecycle-"));

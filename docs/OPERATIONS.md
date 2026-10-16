@@ -136,8 +136,10 @@ When a console offers **Save world**, Ludock sends that command and waits five
 seconds before stopping. An unavailable console or timed-out command is recorded
 as skipped in **Activity**, and shutdown continues. Stop and Restart run as
 tracked operations; progress survives page reloads. If Ludock restarts during
-an operation, it checks the server state and marks the operation interrupted
-without replaying it. Review that state before retrying.
+an operation, it checks the server state without replaying it. An unfinished
+stop retains its locks while Ludock waits for shutdown, up to a deadline recorded
+five minutes after the stop request. Recovery marks the operation interrupted;
+if the deadline expires, Activity asks you to review the actual server state.
 
 A Ludock stop that ends with exit 137 appears in **Needs attention** as
 **Force-stopped, recent progress may not have been saved.** The warning remains

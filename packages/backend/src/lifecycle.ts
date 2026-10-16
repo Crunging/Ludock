@@ -12,6 +12,9 @@ import type { JobContext } from "./operations.js";
 import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
 
 const SAVE_SETTLE_MS = 5_000;
+// Bound startup recovery even if Docker was never sent the request, or the
+// owner configured an indefinite stop. The persisted deadline survives retries.
+const STOP_RECOVERY_TIMEOUT_MS = 5 * 60_000;
 const FORCE_STOP_GUIDANCE = "Force-stopped, recent progress may not have been saved.";
 
 function capability(action: string): ServerCapability {
@@ -25,6 +28,10 @@ function lifecycleResult(context: JobContext, updates?: Record<string, unknown>)
     action: context.job.kind,
     ...(typeof recovery.saveStatus === "string"
       ? { saveStatus: recovery.saveStatus, saveReason: recovery.saveReason } : {}),
+    ...(recovery.stopRecoveryTimedOut === true ? {
+      stopRecoveryTimedOut: true,
+      guidance: "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.",
+    } : {}),
     ...(recovery.forceStopped === true
       ? { forceStopped: true, guidance: FORCE_STOP_GUIDANCE } : {}),
   };
@@ -96,7 +103,11 @@ export async function runLifecycle(context: JobContext, action: ContainerAction)
       assertAccess();
       record(context, mutation === "start" ? "starting" : "stopping", {
         containerId: server.container.id,
-        ...(mutation === "stop" ? { stopStarted: server.container.state === "running" } : {}),
+        ...(mutation === "stop" ? {
+          stopStarted: server.container.state === "running",
+          stopInitialStartedAt: server.container.stateSince,
+          stopRecoveryDeadlineAt: Date.now() + STOP_RECOVERY_TIMEOUT_MS,
+        } : {}),
       });
       await changeContainerState(server.container.id, mutation, (observation) => {
         assertServerCapability(jobActor(context), server.logical.id, permission);
@@ -112,6 +123,7 @@ export async function runLifecycle(context: JobContext, action: ContainerAction)
         setIntentionalStop(server.logical.id, action === "stop");
         server = await resolve();
         record(context, "verifying_stop", {
+          stopSettled: true,
           forceStopped: context.job.recovery.stopStarted === true && server.container.exit?.code === 137,
         });
       }
@@ -134,16 +146,52 @@ export async function recoverLifecycle(context: JobContext) {
   const resolve = () => resolveAuthorizedServer(jobActor(context), context.job.serverId, permission, context.job.bindingRevision);
   const initial = await resolve();
   return withLocks(initial.lockKeys, async () => {
-    const server = await resolve();
-    // Observe only. An interrupted restart must never start or stop again.
-    if (context.job.recovery.stopStarted === true &&
-        context.job.recovery.containerId === server.container.id && server.container.exit) {
-      setIntentionalStop(server.logical.id, context.job.kind === "stop");
-      record(context, "reconciling", {
-        forceStopped: context.job.recovery.forceStopped === true || server.container.exit.code === 137,
-      });
+    let server = await resolve();
+    try {
+      // Observe only. Docker may still be handling the original stop request;
+      // retain the lock until it settles, without starting or stopping again.
+      if (context.job.recovery.stopStarted === true &&
+          context.job.recovery.stopSettled !== true &&
+          context.job.recovery.containerId === server.container.id) {
+        const deadline = context.job.recovery.stopRecoveryDeadlineAt;
+        const initialStartedAt = context.job.recovery.stopInitialStartedAt;
+        record(context, "reconciling_stop");
+        while (!server.container.exit) {
+          // A different running instance proves the old shutdown is over. Do
+          // not wait on, or later attribute another exit to, that new instance.
+          if (server.container.state === "running" && typeof initialStartedAt === "number" &&
+              server.container.stateSince !== null && server.container.stateSince !== initialStartedAt) {
+            setIntentionalStop(server.logical.id, false);
+            break;
+          }
+          if (typeof deadline !== "number" || !Number.isFinite(deadline))
+            throw new AppError("INVALID_OPERATION_STATE", 409, "Saved stop recovery deadline is invalid");
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            record(context, "reconciliation_timed_out", { stopRecoveryTimedOut: true });
+            break;
+          }
+          assertServerCapability(jobActor(context), server.logical.id, permission);
+          assertObservedServerBinding(server.logical.id, server.observation, context.job.bindingRevision);
+          await new Promise<void>((done) => setTimeout(done, Math.min(1000, remaining)));
+          try { server = await resolve(); }
+          catch (error) {
+            // Retry transient daemon failures within the same deadline. Changes
+            // to authority or the binding still stop reconciliation immediately.
+            if (error instanceof AppError) throw error;
+          }
+        }
+        if (server.container.exit) {
+          setIntentionalStop(server.logical.id, context.job.kind === "stop");
+          record(context, "reconciling", {
+            stopSettled: true,
+            forceStopped: context.job.recovery.forceStopped === true || server.container.exit.code === 137,
+          });
+        }
+      }
+      return lifecycleResult(context);
+    } finally {
+      suppressMonitoring(server.logical.id);
     }
-    suppressMonitoring(server.logical.id);
-    return lifecycleResult(context);
   });
 }
