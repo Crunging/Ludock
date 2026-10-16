@@ -1,21 +1,50 @@
-import { operationResponseSchema, updateCapabilityResponseSchema, updateRequestSchema, } from "@ludock/shared";
+import { operationResponseSchema, restartUpdateRequestSchema, updateCapabilityResponseSchema, updateRequestSchema } from "@ludock/shared";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertAdministrator, assertServerCapability } from "../authorization.js";
 import { updateCapability, validatedProject, } from "../compose.js";
 import { AppError } from "../errors.js";
 import { enqueueOperation } from "../operations.js";
+import { getImageIntegration } from "../server-presets.js";
 import { resolveAuthorizedServer } from "../servers.js";
 import { administrator, audit, id, requestKey, requestUser, respond, type ApiRoutes } from "./request.js";
 export const composeRoutes: ApiRoutes = {
+  "/api/v1/servers/:id/restart-update": {
+    POST: async (ctx) => {
+      const user = requestUser(ctx);
+      const serverId = id(ctx.params.id);
+      const request = restartUpdateRequestSchema.parse(ctx.body);
+      const context = await resolveAuthorizedServer(user, serverId, "server.restart");
+      if (!getImageIntegration(context.container.image)?.updatesOnStart)
+        throw new AppError("RESTART_UPDATE_UNAVAILABLE", 409, "This image is not known to update the game on startup");
+      if (!request.createBackup && request.skipBackupConfirmation !== context.container.displayName)
+        throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
+      if (request.createBackup) assertServerCapability(assertRequestUser(ctx.request, user), serverId, "backups.create");
+      assertServerCapability(assertRequestUser(ctx.request, user), serverId, "server.restart");
+      return respond(operationResponseSchema, {
+        operation: enqueueOperation({
+          serverId,
+          actorId: operationActorId(ctx.request, user),
+          kind: "restart_to_update",
+          bindingRevision: context.logical.bindingRevision,
+          input: { request },
+          idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
+        }),
+      }, 202);
+    },
+  },
   "/api/v1/servers/:id/update-capability": {
-    GET: administrator(async (ctx) => {
-      const context = await resolveAuthorizedServer(requestUser(ctx), id(ctx.params.id), "server.update");
-      const capability = await updateCapability(context);
-      assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
+    GET: async (ctx) => {
+      const user = requestUser(ctx);
+      const serverId = id(ctx.params.id);
+      const canUpdate = user.role === "admin";
+      const context = await resolveAuthorizedServer(user, serverId, canUpdate ? "server.update" : "server.restart");
+      const capability = await updateCapability(context, canUpdate);
+      if (canUpdate) assertAdministrator(assertRequestUser(ctx.request, user));
+      else assertServerCapability(assertRequestUser(ctx.request, user), serverId, "server.restart");
       return respond(updateCapabilityResponseSchema, {
         capability,
       });
-    })
+    }
   },
   "/api/v1/servers/:id/updates": {
     POST: administrator(async (ctx) => {

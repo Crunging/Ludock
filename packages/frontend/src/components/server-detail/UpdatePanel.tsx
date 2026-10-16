@@ -7,8 +7,16 @@ export interface UpdateOptions {
   skipConfirmation: string;
 }
 
+export type RestartUpdateOptions = Pick<UpdateOptions, "createBackup" | "confirmed" | "skipConfirmation">;
+
 interface Props {
   serverName: string;
+  canRestart: boolean;
+  canBackup: boolean;
+  canUpdateImage: boolean;
+  restartValue: RestartUpdateOptions;
+  onRestartChange: (value: RestartUpdateOptions) => void;
+  onRestartUpdate: () => void;
   capability: UpdateCapability | null;
   value: UpdateOptions;
   onChange: (value: UpdateOptions) => void;
@@ -22,6 +30,12 @@ interface Props {
 export default function UpdatePanel(props: Props) {
   const {
     serverName,
+    canRestart,
+    canBackup,
+    canUpdateImage,
+    restartValue,
+    onRestartChange,
+    onRestartUpdate,
     capability,
     value,
     onChange,
@@ -40,7 +54,46 @@ export default function UpdatePanel(props: Props) {
   return (
     <>
       <h2>{capability?.actionLabel || "Update server"}</h2>
-      {!capability?.available ? (
+      {capability?.updatesOnStart && (
+        <form className="stack-form restart-update-form" onSubmit={(event) => {
+          event.preventDefault();
+          onRestartUpdate();
+        }}>
+          <h3>Restart to update</h3>
+          <p className="section-lede">This image downloads the latest game version when it starts.</p>
+          <p className="muted">Uses the image’s configured version and startup update settings.</p>
+          {canBackup && <label className="check-label">
+            <input type="checkbox" checked={restartValue.createBackup} onChange={(event) =>
+              onRestartChange({ ...restartValue, createBackup: event.target.checked, confirmed: false })
+            } />
+            Take a backup first
+          </label>}
+          {canBackup && restartValue.createBackup && <p className="muted check-help">
+            The server stays stopped during the backup, then starts to update.
+          </p>}
+          {(!canBackup || !restartValue.createBackup) && <label>
+            <span>Type <strong>{serverName}</strong> to skip the backup</span>
+            <input value={restartValue.skipConfirmation} autoComplete="off" onChange={(event) =>
+              onRestartChange({ ...restartValue, skipConfirmation: event.target.value })
+            } />
+          </label>}
+          <label className="check-label">
+            <input type="checkbox" checked={restartValue.confirmed} onChange={(event) =>
+              onRestartChange({ ...restartValue, confirmed: event.target.checked })
+            } />
+            I understand that connected players will be disconnected and the server will start again.
+          </label>
+          <button className="primary-btn" disabled={
+            !canRestart || busy || blocked || hasActiveOperation || !restartValue.confirmed ||
+            ((!canBackup || !restartValue.createBackup) && restartValue.skipConfirmation !== serverName)
+          }>Restart to update</button>
+        </form>
+      )}
+      {!canUpdateImage && !capability?.updatesOnStart && (
+        <p className="section-note">This image is not known to update the game on startup. Update it through its owning manager.</p>
+      )}
+      {canUpdateImage && <h3>Update container image</h3>}
+      {canUpdateImage && (!capability?.available ? (
         <>
           <p className="section-note">
             {capability?.unavailableReason ||
@@ -65,7 +118,7 @@ export default function UpdatePanel(props: Props) {
         >
           <p className="section-lede">
             Pull the newest image for this service and recreate it with Docker
-            Compose. Many game images also update the game when they start.
+            Compose.
           </p>
           <dl className="metadata-list">
             <dt>Project</dt>
@@ -150,6 +203,7 @@ export default function UpdatePanel(props: Props) {
             className="primary-btn"
             disabled={
               busy ||
+              (!canBackup && createBackup) ||
               blocked ||
               hasActiveOperation ||
               !updateConfirm ||
@@ -159,7 +213,7 @@ export default function UpdatePanel(props: Props) {
             {forceRecreate ? "Recreate service" : capability.actionLabel}
           </button>
         </form>
-      )}
+      ))}
     </>
   );
 }

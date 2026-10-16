@@ -19,6 +19,7 @@ import {
   readOptionalApprovedFile,
 } from "./approved-paths.js";
 import { AppError } from "./errors.js";
+import { getImageIntegration } from "./server-presets.js";
 import type { ServerContext } from "./servers.js";
 import { docker } from "./docker-client.js";
 import { isServerBusy } from "./operation-locks.js";
@@ -420,6 +421,7 @@ export function composeSnapshotArgs(snapshot: ComposeSnapshot): string[] {
 }
 export async function updateCapability(
   context: ServerContext,
+  allowCompose: boolean,
 ): Promise<UpdateCapability> {
   const common: Pick<UpdateCapability, "actionLabel" | "manager"> = {
     actionLabel:
@@ -428,7 +430,10 @@ export async function updateCapability(
         : "Update server",
     manager: context.observation.compose ? "compose" : "external",
   };
+  const updatesOnStart = getImageIntegration(context.container.image)?.updatesOnStart ?? false;
   try {
+    if (!allowCompose)
+      throw new AppError("FORBIDDEN", 403, "Administrator permission is required to pull and recreate the image with Compose.");
     if (
       isServerBusy(context.logical.id) ||
       getDatabase()
@@ -446,6 +451,7 @@ export async function updateCapability(
     try {
       return {
         ...common,
+        updatesOnStart,
         available: true,
         projectName: snapshot.project.projectName,
         serviceName: service,
@@ -457,6 +463,7 @@ export async function updateCapability(
   } catch (error) {
     return {
       ...common,
+      updatesOnStart,
       available: false,
       unavailableReason:
         error instanceof AppError

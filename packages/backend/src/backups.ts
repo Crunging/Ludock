@@ -403,6 +403,8 @@ function assertDataOperationAuthority(
   context: ServerContext,
   job: JobContext,
 ): void {
+  if (job.job.kind === "restart_to_update")
+    assertServerCapability(jobActor(job), context.logical.id, "server.restart");
   assertServerCapability(
     jobActor(job),
     context.logical.id,
@@ -410,7 +412,9 @@ function assertDataOperationAuthority(
       ? "backups.create"
       : job.job.kind === "restore"
         ? "backups.restore"
-        : "server.update",
+        : job.job.kind === "restart_to_update"
+          ? "backups.create"
+          : "server.update",
   );
   assertObservedServerBinding(
     context.logical.id,

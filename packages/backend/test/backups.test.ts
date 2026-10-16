@@ -96,6 +96,17 @@ describe("backup execution authority", () => {
     await expect(stopForDataOperation(context, job)).rejects.toThrow(/no longer has access/);
     expect(stopped).toBe(0);
   });
+  for (const capability of ["server.restart", "backups.create"] as const)
+    it(`rechecks ${capability} before a restart update stops for backup`, async () => {
+      job.job.kind = "restart_to_update";
+      setServerGrant(operator.id, context.logical.id,
+        ["server.view", "server.restart", "backups.create"], admin);
+      onInspect = () => setServerGrant(operator.id, context.logical.id,
+        ["server.view", capability === "server.restart" ? "backups.create" : "server.restart"], admin);
+      await expect(stopForDataOperation(context, job)).rejects.toThrow(/permission/);
+      expect(stopped).toBe(0);
+      expect(job.job.recovery).toEqual({});
+    });
   function scheduledBackup(): string {
     setServerGrant(operator.id, context.logical.id, [
       "server.view", "backups.create", "schedules.manage",

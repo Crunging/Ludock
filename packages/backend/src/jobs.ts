@@ -1,6 +1,7 @@
 import {
   type ServerCapability,
   updateRequestSchema,
+  restartUpdateRequestSchema,
   scheduleSchema,
 } from "@ludock/shared";
 import { findUserById, getDatabase, type SessionUser } from "./database.js";
@@ -26,6 +27,7 @@ import {
   assertSingleServiceContainer,
 } from "./compose.js";
 import { AppError } from "./errors.js";
+import { getImageIntegration } from "./server-presets.js";
 import { notifyEvent } from "./notifications.js";
 import { suppressMonitoring, setIntentionalStop } from "./monitoring.js";
 import {
@@ -113,6 +115,69 @@ async function lifecycle(
       suppressMonitoring(server.logical.id);
     }
   });
+}
+async function runRestartUpdate(context: JobContext): Promise<Record<string, unknown>> {
+  const request = restartUpdateRequestSchema.parse(context.job.input.request);
+  const server = await resolveAuthorizedServer(
+    jobActor(context), context.job.serverId, "server.restart", context.job.bindingRevision,
+  );
+  const assertAccess = () => {
+    const actor = jobActor(context);
+    assertServerCapability(actor, server.logical.id, "server.restart");
+    if (request.createBackup)
+      assertServerCapability(actor, server.logical.id, "backups.create");
+  };
+  return withLocks(
+    [...server.lockKeys, ...(request.createBackup ? ["backups:storage"] : [])],
+    async () => {
+      const current = await resolveAuthorizedServer(
+        jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
+      );
+      if (!getImageIntegration(current.container.image)?.updatesOnStart)
+        throw new AppError("RESTART_UPDATE_UNAVAILABLE", 409, "This image is not known to update the game on startup");
+      assertAccess();
+      if (!request.createBackup && request.skipBackupConfirmation !== current.container.displayName)
+        throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
+      suppressMonitoring(server.logical.id);
+      try {
+        if (request.createBackup) {
+          await stopForDataOperation(current, context);
+          const backup = await createStoppedBackup(current, context);
+          context.progress("backup_complete", { backupId: backup.id });
+        }
+        const selected = await resolveAuthorizedServer(
+          jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
+        );
+        assertAccess();
+        // Persist before dispatch. Interrupted restarts are never replayed.
+        context.progress("restarting", { restartRequested: true });
+        await changeContainerState(selected.container.id, "restart", (observation) => {
+          assertAccess();
+          assertObservedServerBinding(server.logical.id, observation, context.job.bindingRevision);
+        });
+        context.progress("restarted", { stateRestored: true });
+        setIntentionalStop(server.logical.id, false);
+        notifyEvent(`operation:${context.job.id}`, `${selected.container.displayName}: restarted to update.`);
+        return {
+          action: "restart",
+          backupId: context.job.recovery.backupId ?? null,
+        };
+      } finally {
+        // The backup keeps the game stopped until restart. On failure, return
+        // it to its initial state only after the data helper has been removed.
+        if (request.createBackup && !context.job.recovery.dataHelperId)
+          await restoreInitialRunningState(current, context);
+        suppressMonitoring(server.logical.id);
+      }
+    },
+  );
+}
+export async function recoverRestartUpdate(context: JobContext): Promise<void> {
+  // Recovery can complete a stopped backup, but must not repeat a dispatched
+  // restart (including one interrupted before Docker acknowledged it).
+  if (context.job.recovery.restartRequested) return;
+  if (typeof context.job.recovery.initialRunning === "boolean")
+    await recoverBackup(context);
 }
 export async function recoverUpdate(context: JobContext): Promise<void> {
   if (context.job.recovery.mutationStarted) return;
@@ -311,4 +376,5 @@ export function registerBackgroundJobs(): void {
   registerJobHandler("backup", { run: runBackup, recover: recoverBackup });
   registerJobHandler("restore", { run: runRestore, recover: recoverRestore });
   registerJobHandler("update", { run: runUpdate, recover: recoverUpdate });
+  registerJobHandler("restart_to_update", { run: runRestartUpdate, recover: recoverRestartUpdate });
 }
