@@ -19,6 +19,7 @@ import {
   createStoppedBackup,
   stopForDataOperation,
   restoreInitialRunningState,
+  keepStoppedAfterFailedBackup,
 } from "./backups.js";
 import {
   composeSnapshotArgs,
@@ -103,7 +104,8 @@ async function runBackupRestart(context: JobContext): Promise<Record<string, unk
         jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
       );
       assertAccess();
-      context.progress("starting");
+      // Persist before dispatch. Recovery never repeats a start that reached Docker.
+      context.progress("starting", { startRequested: true });
       await changeContainerState(selected.container.id, "start", (observation) => {
         assertAccess();
         assertObservedServerBinding(server.logical.id, observation, context.job.bindingRevision);
@@ -113,13 +115,9 @@ async function runBackupRestart(context: JobContext): Promise<Record<string, unk
       const { backupId, saveStatus, saveReason } = context.job.recovery;
       return { action: "restart", backupId: backupId ?? null, saveStatus, saveReason };
     } catch (error) {
-      if (context.job.recovery.stopSettled === true && context.job.recovery.backupComplete !== true) {
-        setIntentionalStop(server.logical.id, true);
-        notifyEvent(
-          `operation:${context.job.id}`,
-          `${current.container.displayName}: the backup failed, so the server was left stopped. Review the operation, then start it.`,
-        );
-      }
+      // Report the original failure even if the server state can't be checked.
+      if (context.job.recovery.stopSettled === true && context.job.recovery.backupComplete !== true)
+        await keepStoppedAfterFailedBackup(current, context).catch(() => {});
       throw error;
     } finally {
       // Starting can update the game and change the world, so start only after

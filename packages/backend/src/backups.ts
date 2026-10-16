@@ -29,7 +29,7 @@ import {
 } from "./servers.js";
 import { withLocks } from "./operation-locks.js";
 import type { JobContext } from "./operations.js";
-import { suppressMonitoring } from "./monitoring.js";
+import { setIntentionalStop, suppressMonitoring } from "./monitoring.js";
 import { notifyEvent } from "./notifications.js";
 import { RESTORE_HELPER_SCRIPT } from "./helper-scripts.js";
 import { AppError } from "./errors.js";
@@ -521,25 +521,18 @@ export async function restoreInitialRunningState(
     job.job.recovery.stateRestored === true
   )
     return;
-  let observed = await observeDuringStop(job, context.container.id, context.logical);
-  if (stopPending(job)) {
-    // A disconnected stop request may still be executing in Docker. A running
-    // snapshot is not evidence that recovery is complete: wait for that stop
-    // before restoring the server, without dispatching it a second time.
-    job.progress("reconciling_stop");
-    while (!["exited", "dead", "created"].includes(observed.container.state)) {
-      const initialStartedAt = job.job.recovery.stopInitialStartedAt;
-      if (observed.container.state === "running" && typeof initialStartedAt === "number" &&
-          observed.container.stateSince !== null && observed.container.stateSince !== initialStartedAt) {
-        job.progress("state_restored", { stateRestored: true, stopSettled: true });
-        return;
-      }
-      await waitForStopDeadline(job);
-      observed = await observeDuringStop(job, context.container.id, context.logical);
-    }
-    job.progress("stop_reconciled", { stopSettled: true });
+  const observed = await settleInterruptedStop(context, job);
+  if (!observed) {
+    job.progress("state_restored", { stateRestored: true });
+    return;
   }
   if (observed.container.state !== "running") {
+    // Never repeat a start that reached Docker. One that did leaves the
+    // container started since the backup stopped it, even if it exited again.
+    if (job.job.recovery.startRequested === true &&
+        ((await docker.getContainer(context.container.id).inspect()).State.StartedAt || "") !==
+          job.job.recovery.stoppedStartedAt)
+      return;
     job.progress("restarting");
     await changeContainerState(context.container.id, "start", (observation) => {
       assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
@@ -547,6 +540,44 @@ export async function restoreInitialRunningState(
   }
   job.progress("state_restored", { stateRestored: true });
   suppressMonitoring(context.logical.id);
+}
+
+/** A failed backup keeps the server stopped, since starting could update the
+ * game and change the world. Report that only once the server is stopped. */
+export async function keepStoppedAfterFailedBackup(
+  context: ServerContext,
+  job: JobContext,
+): Promise<void> {
+  const observed = await settleInterruptedStop(context, job);
+  if (!observed || !STOPPED_STATES.includes(observed.container.state)) return;
+  setIntentionalStop(context.logical.id, true);
+  notifyEvent(
+    `operation:${job.job.id}`,
+    `${observed.container.displayName}: the backup failed, so the server was left stopped. Review the operation, then start it.`,
+  );
+}
+
+const STOPPED_STATES = ["exited", "dead", "created"];
+
+/** A disconnected stop request may still be executing in Docker, so a running
+ * snapshot is not evidence that it is over. Wait for that stop without
+ * dispatching it again. Returns null if another manager started the server. */
+async function settleInterruptedStop(context: ServerContext, job: JobContext) {
+  let observed = await observeDuringStop(job, context.container.id, context.logical);
+  if (!stopPending(job)) return observed;
+  job.progress("reconciling_stop");
+  while (!STOPPED_STATES.includes(observed.container.state)) {
+    const initialStartedAt = job.job.recovery.stopInitialStartedAt;
+    if (observed.container.state === "running" && typeof initialStartedAt === "number" &&
+        observed.container.stateSince !== null && observed.container.stateSince !== initialStartedAt) {
+      job.progress("stop_reconciled", { stopSettled: true });
+      return null;
+    }
+    await waitForStopDeadline(job);
+    observed = await observeDuringStop(job, context.container.id, context.logical);
+  }
+  job.progress("stop_reconciled", { stopSettled: true });
+  return observed;
 }
 
 function stopPending(job: JobContext): boolean {
@@ -775,14 +806,15 @@ function recoveryLockKeys(job: JobContext): string[] {
   return [`server:${job.job.serverId}`, "backups:storage", ...saved.data];
 }
 
-export async function recoverBackup(job: JobContext, restoreRunning = true): Promise<void> {
+export async function recoverBackup(job: JobContext, startServer = true): Promise<void> {
   const held = recoveryLockKeys(job);
   await withLocks(held, async () => {
     const context = await recoveryContext(job);
     if (!context) return;
     await withLocks(context.lockKeys.filter((key) => !held.includes(key)), async () => {
       await removeUnpublishedBackup(job);
-      if (restoreRunning) await restoreInitialRunningState(context, job);
+      if (startServer) await restoreInitialRunningState(context, job);
+      else await keepStoppedAfterFailedBackup(context, job);
     });
   });
 }
