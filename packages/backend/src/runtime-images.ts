@@ -2,7 +2,7 @@ import { docker } from "./docker-client.js";
 import { AppError } from "./errors.js";
 
 // Reviewed multi-platform Ludock runtime for native runs and custom hostnames.
-export const FALLBACK_HELPER_IMAGE = "ghcr.io/crunging/ludock@sha256:87806cbb9082cae6f2ce55d6c26e35f1cd28d97a6a2acd92da483f96ffdeeb67";
+export const FALLBACK_HELPER_IMAGE = "ghcr.io/crunging/ludock@sha256:b1f63ff89a5d6b665ac17f6b285f6bd429de4dd4876a965f71b190b0f41af0d5";
 
 let selfImage: { container: string; result: Promise<string> } | undefined;
 
