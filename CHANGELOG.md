@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.0](https://github.com/Crunging/Ludock/compare/v0.3.0...v0.4.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* Password authentication accepts Argon2id hashes only; legacy scrypt hashes no longer authenticate.
+
+### Features
+
+* automatically enable validated backup storage ([#33](https://github.com/Crunging/Ludock/issues/33)) ([3d2807f](https://github.com/Crunging/Ludock/commit/3d2807f4745216ad6e02c895beffce658f773d08))
+* **frontend:** restyle the panel with pip states, sidebar icons, and IBM Plex ([#30](https://github.com/Crunging/Ludock/issues/30)) ([f11628b](https://github.com/Crunging/Ludock/commit/f11628b7f229d90b5fda386f282d0c8c03ee5ab6))
+* redesign the panel around server status, addresses, and everyday tasks ([#32](https://github.com/Crunging/Ludock/issues/32)) ([f8cf1b0](https://github.com/Crunging/Ludock/commit/f8cf1b0e8ea1bb7a0d069e12c3453d68ea1bf3aa))
+* **servers:** offer a backup before any restart, replacing Restart to update ([#39](https://github.com/Crunging/Ludock/issues/39)) ([264f230](https://github.com/Crunging/Ludock/commit/264f2302f9f1f988a4cfc5330813950b5adbc117))
+* **updates:** add zero-setup restart-to-update support ([#34](https://github.com/Crunging/Ludock/issues/34)) ([9849097](https://github.com/Crunging/Ludock/commit/984909747f86d79fb879e48bb579591bc5f4eead))
+
+
+### Bug Fixes
+
+* address review findings and run lifecycle operations concurrently ([#40](https://github.com/Crunging/Ludock/issues/40)) ([c484d00](https://github.com/Crunging/Ludock/commit/c484d0085dd0b5be142e48591e700fc438d7a322))
+* **ci:** stage Release Please assets under Bun ([#21](https://github.com/Crunging/Ludock/issues/21)) ([07246ef](https://github.com/Crunging/Ludock/commit/07246eff2c785cbc39022046caf975e351756845))
+* **console:** run network commands in the game network namespace ([#35](https://github.com/Crunging/Ludock/issues/35)) ([8973b68](https://github.com/Crunging/Ludock/commit/8973b68f80d6eb812b85a8cf9c65282cd01c5797))
+* handle log redaction and recovery edge cases ([#25](https://github.com/Crunging/Ludock/issues/25)) ([1f58d21](https://github.com/Crunging/Ludock/commit/1f58d216a4cae3097aa277744db7ec60717c1a7c))
+* harden data operations against Docker failures before 0.4.0 ([#38](https://github.com/Crunging/Ludock/issues/38)) ([4364064](https://github.com/Crunging/Ludock/commit/43640644ed44b0e5dcd601c5ca9a79f50e8146af))
+* harden runtimes without adding setup requirements ([#27](https://github.com/Crunging/Ludock/issues/27)) ([20aa79e](https://github.com/Crunging/Ludock/commit/20aa79e64c4ecbc595a04277c5dc3276798af4f0))
+* harden server recovery and focus regression coverage ([#31](https://github.com/Crunging/Ludock/issues/31)) ([b4a40c7](https://github.com/Crunging/Ludock/commit/b4a40c778890c8e414afe19332f9a4cda2c83d52))
+* make game server stops and restarts graceful ([#36](https://github.com/Crunging/Ludock/issues/36)) ([8bd3bf9](https://github.com/Crunging/Ludock/commit/8bd3bf92450c2110314750baa0f2edb7e250caef))
+* **updates:** save the world before restart updates and use game stop grace periods for backups ([#37](https://github.com/Crunging/Ludock/issues/37)) ([0e52e4b](https://github.com/Crunging/Ludock/commit/0e52e4b7f1c38b44da1ffc821647824fae51cd90))
+
+
+### Performance Improvements
+
+* reduce database and stream processing overhead ([#23](https://github.com/Crunging/Ludock/issues/23)) ([d67b6aa](https://github.com/Crunging/Ludock/commit/d67b6aa111224f28961d6af0b5c025b8a5f47e82))
+
+
+### Code Refactoring
+
+* remove dead code, simplify dev tooling and CI, type-check backend tests ([#28](https://github.com/Crunging/Ludock/issues/28)) ([c4830a4](https://github.com/Crunging/Ludock/commit/c4830a4d86326f9b0bb2be04e88146b812c6989f))
+* use native Bun I/O and Bun-only tooling ([#20](https://github.com/Crunging/Ludock/issues/20)) ([85b673f](https://github.com/Crunging/Ludock/commit/85b673f686770c175322c88592118ab11c55b1e9))
+
 ## [0.3.0](https://github.com/Crunging/Ludock/compare/v0.2.1...v0.3.0) (2026-09-15)
 
 
