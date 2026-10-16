@@ -8,10 +8,11 @@ import {
   type BackupSettings,
   type BackupStorageStatus,
 } from "@ludock/shared";
-import { getDatabase } from "./database.js";
+import { getDatabase, writeAuditLog } from "./database.js";
 import { getSetting } from "./settings.js";
+import { rootList } from "./approved-paths.js";
 import { docker } from "./docker-client.js";
-import { getManagedContainerObservation } from "./docker.js";
+import { getManagedContainerObservation, listManagedContainerObservations } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -131,6 +132,44 @@ async function settingsForBackup(): Promise<BackupSettings> {
       "An administrator must configure a backup destination, retention, and capacity before creating backups.",
     );
   return validateBackupSettings(settings);
+}
+
+/** Enable storage only when no administrator decision has ever been saved.
+ * This validates storage without starting any backup or creating a schedule. */
+export async function initializeBackupStorage(): Promise<void> {
+  const db = getDatabase();
+  // A saved null (or any other disabled/cleared value) is still a decision.
+  if (db.query("SELECT 1 FROM settings WHERE key='backups'").get()) return;
+  const roots = rootList(process.env.LUDOCK_BACKUP_ROOTS);
+  if (roots.length !== 1) return;
+  const settings: BackupSettings = {
+    destination: roots[0],
+    retentionCount: 10,
+    maxBytes: 100 * 1024 ** 3,
+    reserveBytes: 5 * 1024 ** 3,
+  };
+  try {
+    await validateBackupSettings(settings);
+    // Reuse the runtime overlap check against fresh game-container mounts.
+    for (const observed of await listManagedContainerObservations())
+      await assertSeparateDestination(observed, settings);
+  } catch {
+    // Keep storage unset and the existing setup/readiness guidance available.
+    return;
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Validation awaited filesystem/Docker reads; a saved decision wins races.
+    const inserted = db.query(
+      "INSERT INTO settings(key,value_json) VALUES('backups',?) ON CONFLICT(key) DO NOTHING",
+    ).run(JSON.stringify(settings));
+    if (inserted.changes)
+      writeAuditLog({ action: "settings.backups.auto_enabled", targetType: "settings" });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function archiveUsageBytes(): number {
@@ -311,7 +350,7 @@ async function assertNoOtherWriters(
   }
 }
 async function assertSeparateDestination(
-  context: ServerContext,
+  context: Pick<ServerContext, "observation">,
   settings: BackupSettings,
 ): Promise<void> {
   const destination = await approvedBackupDirectory(settings.destination);

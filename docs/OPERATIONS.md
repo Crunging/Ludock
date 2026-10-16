@@ -213,15 +213,27 @@ are covered in [`.env.example`](../.env.example).
 
 ### Set up storage
 
-With the example deployment, open **Settings → Backup storage**. Ludock suggests
-the `/backups` folder; review the defaults and save to turn backups on. Nothing
-is enabled until you save. If several folders are configured, pick one.
+With the example deployment, Ludock automatically enables backup storage when
+storage has never been configured and `/backups` is the only approved root in
+`LUDOCK_BACKUP_ROOTS`. The folder must pass the same directory and mount
+validation as a manual save and be separate from game data. Automatic setup uses
+these defaults and records an audit event:
 
 | Setting | Default |
 | --- | --- |
 | Backups kept per server | 10 |
 | Combined size limit | 100 GiB |
 | Minimum free disk space | 5 GiB |
+
+Open **Settings → Backup storage** to change the destination or limits. Saved
+settings are always preserved, including storage deliberately disabled or
+cleared. If several roots are configured, choose one and save. If validation
+fails, storage stays off and the existing setup guidance and readiness problems
+remain visible; Ludock retries automatic setup in the background while storage
+is still unconfigured.
+
+Enabling storage does not create backups or schedules. Backups run only when
+someone starts one or an existing schedule does.
 
 To keep backups on another disk, create a host folder and replace the `/backups`
 volume mount with it, keeping the socket and data mounts:

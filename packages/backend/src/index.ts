@@ -9,6 +9,7 @@ import { checkAvailability } from "./monitoring.js";
 import { runSchedules } from "./schedules.js";
 import { deliverNotifications } from "./notifications.js";
 import { refreshServers } from "./servers.js";
+import { initializeBackupStorage } from "./backups.js";
 import { waitForLocksReleased } from "./operation-locks.js";
 import { createWebSocketGateway } from "./websocket-server.js";
 import {
@@ -39,6 +40,7 @@ export function startServer(options: {
     backgroundTask = (async () => {
       let current: Awaited<ReturnType<typeof refreshServers>> | null = null;
       try {
+        await initializeBackupStorage();
         current = await refreshServers();
         runSchedules();
       } catch {

@@ -55,11 +55,11 @@ platforms.
    appear automatically. For any other image, add the label
    `ludock.enable: "true"` to its container.
 
-4. To turn on backups, open **Settings → Backup storage** and save. The example
-   already mounts a `backups` volume. Backups stop the server while they copy.
-
 Ludock keeps its own data and your backups in separate volumes; your game
-containers and their data stay where they are.
+containers and their data stay where they are. With the example deployment,
+backup storage enables automatically after validation. Change the limits in
+**Settings → Backup storage**. Backups run only when started manually or by a
+schedule, and stop the server while they copy.
 
 Most settings live in the browser. For deployment options, copy
 [`.env.example`](./.env.example) to `.env`, uncomment what you need, and run

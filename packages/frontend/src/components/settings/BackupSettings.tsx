@@ -167,9 +167,10 @@ function BackupSettingsForm({
     <form className="stack-form" onSubmit={saveBackup}>
       <p>
         {backupConfigured
-          ? "Backups use the configured destination and limits."
+          ? "Backups are on. You can change the destination and limits below."
           : "Review the destination and limits, then save to enable backups."}{" "}
-        Every backup stops its server for the entire copy.
+        Backups run only when started manually or by a schedule. Every backup
+        stops its server for the entire copy.
       </p>
       {backupConfigured && <BackupStorageSummary key={backupStorageRevision} />}
       {deployment && (
