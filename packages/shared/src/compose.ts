@@ -8,7 +8,6 @@ export const updateRequestSchema = z
   })
   .strict();
 export type CreateServerUpdateRequest = z.input<typeof updateRequestSchema>;
-export const restartUpdateRequestSchema = updateRequestSchema.omit({ forceRecreate: true });
 
 export const composeSourceProjectSchema = z
   .object({

@@ -32,7 +32,6 @@ import BackupsPanel, {
 import SchedulesPanel, { type ScheduleEdit } from "../components/server-detail/SchedulesPanel";
 import UpdatePanel, {
   type UpdateOptions,
-  type RestartUpdateOptions,
 } from "../components/server-detail/UpdatePanel";
 import AvailabilityPanel, {
   type AvailabilityDraft,
@@ -151,9 +150,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     forceRecreate: false,
     confirmed: false,
     skipConfirmation: "",
-  });
-  const [restartUpdate, setRestartUpdate] = useState<RestartUpdateOptions>({
-    createBackup: true, confirmed: false, skipConfirmation: "",
   });
   const [restore, setRestore] = useState<RestoreSelection>({
     backup: null,
@@ -412,10 +408,11 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     )
       setTab("activity");
   }
-  async function requestLifecycle(action: "start" | "stop" | "restart") {
+  async function requestLifecycle(action: "start" | "stop" | "restart", createBackup = false) {
     setConfirmLifecycle(null);
     if (
       !can(user, server, `server.${action}`) ||
+      (createBackup && !canCreateBackup) ||
       blocked ||
       loading ||
       busy ||
@@ -430,7 +427,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const accepted = await perform(
       async () => {
         if (action === "start") return apiJson(`${path}/${action}`, okResponseSchema, { method: "POST" });
-        const { operation } = await apiJson(`${path}/${action}`, operationResponseSchema, { method: "POST" });
+        const { operation } = await apiJson(`${path}/${action}`, operationResponseSchema,
+          createBackup ? jsonBody("POST", { createBackup }) : { method: "POST" });
         operationId = operation.id;
       },
       action === "start" ? "Server started." : `${action === "stop" ? "Stop" : "Restart"} queued. Follow progress in Activity.`,
@@ -472,24 +470,6 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         confirmed: false,
         skipConfirmation: "",
       }));
-    }
-  }
-  async function requestRestartUpdate() {
-    const createBackup = canCreateBackup && restartUpdate.createBackup;
-    if (
-      !canRestartServer || !capability?.updatesOnStart || capabilityState !== "ready" ||
-      blocked || activeOperation || !restartUpdate.confirmed ||
-      (!createBackup && restartUpdate.skipConfirmation !== server?.displayName)
-    ) return;
-    if (await perform(
-      () => apiJson(`${path}/restart-update`, operationResponseSchema, jsonBody("POST", {
-        createBackup,
-        ...(createBackup ? {} : { skipBackupConfirmation: restartUpdate.skipConfirmation }),
-      })),
-      "Restart to update queued.",
-    )) {
-      setTab("activity");
-      setRestartUpdate((current) => ({ ...current, confirmed: false, skipConfirmation: "" }));
     }
   }
   async function requestRestore() {
@@ -646,9 +626,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         <LifecycleConfirmation
           action={confirmLifecycle}
           serverName={server.displayName}
+          backupOption={canCreateBackup}
           fallbackFocusId="server-detail-title"
           onCancel={() => setConfirmLifecycle(null)}
-          onConfirm={() => void requestLifecycle(confirmLifecycle)}
+          onConfirm={({ createBackup }) => void requestLifecycle(confirmLifecycle, createBackup)}
         />
       )}
       {blocked && (
@@ -902,12 +883,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         {activeTab === "update" && canReadUpdate && capabilityState === "ready" && (
           <UpdatePanel
             serverName={server.displayName}
-            canRestart={canRestartServer}
             canUpdateImage={admin}
-            restartValue={restartUpdate}
-            onRestartChange={setRestartUpdate}
-            canBackup={can(user, server, "backups.create")}
-            onRestartUpdate={() => void requestRestartUpdate()}
+            canBackup={canCreateBackup}
             capability={capability}
             value={update}
             onChange={setUpdate}

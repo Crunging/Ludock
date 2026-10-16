@@ -29,7 +29,7 @@ import {
 } from "./servers.js";
 import { withLocks } from "./operation-locks.js";
 import type { JobContext } from "./operations.js";
-import { suppressMonitoring } from "./monitoring.js";
+import { setIntentionalStop, suppressMonitoring } from "./monitoring.js";
 import { notifyEvent } from "./notifications.js";
 import { RESTORE_HELPER_SCRIPT } from "./helper-scripts.js";
 import { AppError } from "./errors.js";
@@ -455,7 +455,7 @@ function assertDataOperationAuthority(
   context: ServerContext,
   job: JobContext,
 ): void {
-  if (job.job.kind === "restart_to_update")
+  if (job.job.kind === "restart")
     assertServerCapability(jobActor(job), context.logical.id, "server.restart");
   assertServerCapability(
     jobActor(job),
@@ -464,7 +464,7 @@ function assertDataOperationAuthority(
       ? "backups.create"
       : job.job.kind === "restore"
         ? "backups.restore"
-        : job.job.kind === "restart_to_update"
+        : job.job.kind === "restart"
           ? "backups.create"
           : "server.update",
   );
@@ -521,25 +521,18 @@ export async function restoreInitialRunningState(
     job.job.recovery.stateRestored === true
   )
     return;
-  let observed = await observeDuringStop(job, context.container.id, context.logical);
-  if (stopPending(job)) {
-    // A disconnected stop request may still be executing in Docker. A running
-    // snapshot is not evidence that recovery is complete: wait for that stop
-    // before restoring the server, without dispatching it a second time.
-    job.progress("reconciling_stop");
-    while (!["exited", "dead", "created"].includes(observed.container.state)) {
-      const initialStartedAt = job.job.recovery.stopInitialStartedAt;
-      if (observed.container.state === "running" && typeof initialStartedAt === "number" &&
-          observed.container.stateSince !== null && observed.container.stateSince !== initialStartedAt) {
-        job.progress("state_restored", { stateRestored: true, stopSettled: true });
-        return;
-      }
-      await waitForStopDeadline(job);
-      observed = await observeDuringStop(job, context.container.id, context.logical);
-    }
-    job.progress("stop_reconciled", { stopSettled: true });
+  const observed = await settleInterruptedStop(context, job);
+  if (!observed) {
+    job.progress("state_restored", { stateRestored: true });
+    return;
   }
   if (observed.container.state !== "running") {
+    // Never repeat a start that reached Docker. One that did leaves the
+    // container started since the backup stopped it, even if it exited again.
+    if (job.job.recovery.startRequested === true &&
+        ((await docker.getContainer(context.container.id).inspect()).State.StartedAt || "") !==
+          job.job.recovery.stoppedStartedAt)
+      return;
     job.progress("restarting");
     await changeContainerState(context.container.id, "start", (observation) => {
       assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
@@ -547,6 +540,44 @@ export async function restoreInitialRunningState(
   }
   job.progress("state_restored", { stateRestored: true });
   suppressMonitoring(context.logical.id);
+}
+
+/** A failed backup keeps the server stopped, since starting could update the
+ * game and change the world. Report that only once the server is stopped. */
+export async function keepStoppedAfterFailedBackup(
+  context: ServerContext,
+  job: JobContext,
+): Promise<void> {
+  const observed = await settleInterruptedStop(context, job);
+  if (!observed || !STOPPED_STATES.includes(observed.container.state)) return;
+  setIntentionalStop(context.logical.id, true);
+  notifyEvent(
+    `operation:${job.job.id}`,
+    `${observed.container.displayName}: the backup failed, so the server was left stopped. Review the operation, then start it.`,
+  );
+}
+
+const STOPPED_STATES = ["exited", "dead", "created"];
+
+/** A disconnected stop request may still be executing in Docker, so a running
+ * snapshot is not evidence that it is over. Wait for that stop without
+ * dispatching it again. Returns null if another manager started the server. */
+async function settleInterruptedStop(context: ServerContext, job: JobContext) {
+  let observed = await observeDuringStop(job, context.container.id, context.logical);
+  if (!stopPending(job)) return observed;
+  job.progress("reconciling_stop");
+  while (!STOPPED_STATES.includes(observed.container.state)) {
+    const initialStartedAt = job.job.recovery.stopInitialStartedAt;
+    if (observed.container.state === "running" && typeof initialStartedAt === "number" &&
+        observed.container.stateSince !== null && observed.container.stateSince !== initialStartedAt) {
+      job.progress("stop_reconciled", { stopSettled: true });
+      return null;
+    }
+    await waitForStopDeadline(job);
+    observed = await observeDuringStop(job, context.container.id, context.logical);
+  }
+  job.progress("stop_reconciled", { stopSettled: true });
+  return observed;
 }
 
 function stopPending(job: JobContext): boolean {
@@ -696,6 +727,15 @@ export async function createStoppedBackup(
   }
 }
 
+/** Checks that need no stop, so a backup that can't succeed never takes the
+ * server offline. The caller holds the server and backup storage locks. */
+export async function assertBackupReady(context: ServerContext): Promise<void> {
+  const settings = await settingsForBackup();
+  await assertSeparateDestination(context, settings);
+  await assertDestinationSpace(settings.destination, settings.reserveBytes);
+  await assertNoOtherWriters(context);
+}
+
 export async function runBackup(
   job: JobContext,
 ): Promise<Record<string, unknown>> {
@@ -708,10 +748,7 @@ export async function runBackup(
   );
   return withLocks([...context.lockKeys, "backups:storage"], async () => {
     assertServerCapability(jobActor(job), context.logical.id, "backups.create");
-    const settings = await settingsForBackup();
-    await assertSeparateDestination(context, settings);
-    await assertDestinationSpace(settings.destination, settings.reserveBytes);
-    await assertNoOtherWriters(context);
+    await assertBackupReady(context);
     try {
       await stopForDataOperation(context, job);
       const backup = await createStoppedBackup(context, job);
@@ -754,6 +791,13 @@ async function recoveryContext(job: JobContext): Promise<ServerContext | null> {
     lockKeys: serverLockKeys(logical.id, observed.observation),
   };
 }
+/** The backup row is committed before its completion marker, so a crash
+ * between the two still leaves a complete backup. */
+export function backupCompleted(job: JobContext): boolean {
+  const id = job.job.recovery.backupId;
+  return job.job.recovery.backupComplete === true || (typeof id === "string" &&
+    Boolean(getDatabase().query("SELECT id FROM backups WHERE id=? AND state='complete'").get(id)));
+}
 async function removeUnpublishedBackup(job: JobContext): Promise<void> {
   const id = job.job.recovery.backupId,
     destination = job.job.recovery.backupDestination;
@@ -775,14 +819,15 @@ function recoveryLockKeys(job: JobContext): string[] {
   return [`server:${job.job.serverId}`, "backups:storage", ...saved.data];
 }
 
-export async function recoverBackup(job: JobContext): Promise<void> {
+export async function recoverBackup(job: JobContext, startServer = true): Promise<void> {
   const held = recoveryLockKeys(job);
   await withLocks(held, async () => {
     const context = await recoveryContext(job);
     if (!context) return;
     await withLocks(context.lockKeys.filter((key) => !held.includes(key)), async () => {
       await removeUnpublishedBackup(job);
-      await restoreInitialRunningState(context, job);
+      if (startServer) await restoreInitialRunningState(context, job);
+      else await keepStoppedAfterFailedBackup(context, job);
     });
   });
 }

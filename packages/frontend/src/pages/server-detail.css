@@ -397,13 +397,13 @@
   }
 }
 
-.restart-update-form {
+
+.startup-update-note {
   margin: 12px 0 28px;
   padding-bottom: 28px;
   border-bottom: 1px solid var(--border);
 }
 
-.restart-update-form > .section-lede,
-.restart-update-form > .muted:not(.check-help) {
+.startup-update-note > p {
   margin: 0;
 }

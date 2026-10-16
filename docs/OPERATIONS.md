@@ -137,6 +137,14 @@ If Ludock restarts mid-operation, it waits up to five minutes for a pending stop
 to finish without sending it again. A server that had to be killed (exit 137)
 shows **Force-stopped** in **Needs attention**.
 
+With permission to create backups, the Restart dialog offers **Take a backup
+first**. Ludock checks the backup destination first, so a backup that can't
+run never stops the server. The server stays stopped while the backup runs, then
+starts once.
+Starting can update the game and change the world, so if the backup fails,
+including when the game had to be killed, the server stays stopped and Ludock
+sends a notification. Review the operation, then start the server yourself.
+
 ### Addresses
 
 Ludock combines the name or IP in **Settings → Server address** with the host
@@ -310,14 +318,14 @@ container in Docker, and its owning manager's logs.
 
 ## Compose updates
 
-**Server → Update** offers **Restart to update** for recognized images that
-download the latest game files on startup by default (Minecraft, Palworld, CS2,
-Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
-permission to restart the server. Like **Restart**, it saves the world first.
-Ludock can also take a backup, keeping the server stopped until it finishes;
-skipping the backup requires typing the server's name. Version pins in the image's settings still apply, and the
-operation finishes when Docker restarts the container, not when the game is
-ready.
+Recognized images that download the latest game files on startup by default
+(Minecraft, Palworld, CS2, Conan Exiles, Rust, and Valheim) update the game on
+every **Restart**, and **Server → Update** says so. The image itself doesn't
+change, and version pins in its settings still apply. Choose **Take a backup
+first** when you restart to back up before the update.
+
+To get a newer image, with its system packages and startup scripts, use
+**Update server**, which pulls the image and recreates the service.
 
 Pulling a new image and recreating the service needs the Linux Ludock image, an
 administrator, and the Compose source folders mounted read-only at their

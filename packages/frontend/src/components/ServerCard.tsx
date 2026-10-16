@@ -25,7 +25,7 @@ interface ServerCardProps {
   actionsDisabled?: boolean;
   /** The list shows a backup column when any listed server has a backup summary. */
   showBackup?: boolean;
-  onAction: (id: string, action: "start" | "stop" | "restart") => Promise<void>;
+  onAction: (id: string, action: "start" | "stop" | "restart", options?: { createBackup: boolean }) => Promise<void>;
 }
 
 export default function ServerCard({ server, onAction, actionsDisabled = false, showBackup = false }: ServerCardProps) {
@@ -44,9 +44,10 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
   const bindingBlocked = Boolean(
     server.bindingStatus && server.bindingStatus !== "active",
   );
-  const handleAction = async (action: "start" | "stop" | "restart") => {
+  const handleAction = async (action: "start" | "stop" | "restart", createBackup = false) => {
     if (
       !can(user, server, `server.${action}`) ||
+      (createBackup && !can(user, server, "backups.create")) ||
       bindingBlocked ||
       actionLoading ||
       controlsDisabled ||
@@ -55,7 +56,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
       return;
     setActionLoading(action);
     try {
-      await onAction(server.id, action);
+      await onAction(server.id, action, { createBackup });
     } finally {
       setActionLoading(null);
     }
@@ -181,11 +182,12 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
         <LifecycleConfirmation
           action={confirmation}
           serverName={server.displayName}
+          backupOption={can(user, server, "backups.create")}
           fallbackFocusId={`server-${server.id}`}
           onCancel={() => setConfirmation(null)}
-          onConfirm={() => {
+          onConfirm={({ createBackup }) => {
             setConfirmation(null);
-            void handleAction(confirmation);
+            void handleAction(confirmation, createBackup);
           }}
         />
       )}
