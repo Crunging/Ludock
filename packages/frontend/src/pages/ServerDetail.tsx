@@ -20,7 +20,7 @@ import { useAuth } from "../auth-context";
 import { NavLink } from "../navigation";
 import { useLocation, useNavigate } from "../navigation-context";
 import { can, canReadBackupSummary } from "../permissions";
-import { operationActive } from "../operations";
+import { operationActive, operationLabel } from "../operations";
 import { lifecycleActionForState, lifecycleStateGuidance, serverStatus } from "../server-lifecycle";
 import SectionTabs from "../components/SectionTabs";
 import ServerState from "../components/ServerState";
@@ -420,10 +420,16 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     )
       return;
     setLifecycleAction(action);
-    await perform(
-      () => apiJson(`${path}/${action}`, okResponseSchema, { method: "POST" }),
-      `Server ${action === "start" ? "started" : action === "stop" ? "stopped" : "restarted"}.`,
+    let operationId: string | undefined;
+    const accepted = await perform(
+      async () => {
+        if (action === "start") return apiJson(`${path}/${action}`, okResponseSchema, { method: "POST" });
+        const { operation } = await apiJson(`${path}/${action}`, operationResponseSchema, { method: "POST" });
+        operationId = operation.id;
+      },
+      action === "start" ? "Server started." : `${action === "stop" ? "Stop" : "Restart"} queued. Follow progress in Activity.`,
     );
+    if (accepted && operationId) setTab("activity", { operation: operationId });
     setLifecycleAction(null);
   }
   async function requestUpdate() {
@@ -667,7 +673,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         <div className="detail-operation-notice">
           <p role="status">
             <strong className="capitalize">{activeOperation.kind.replaceAll("_", " ")}</strong>
-            {activeOperation.status === "queued" ? " queued. " : " in progress. "}
+            {": "}{operationLabel(activeOperation)}{". "}
             Server controls, backups, and updates are paused until it finishes.
           </p>
           <button className="text-link" onClick={() => {

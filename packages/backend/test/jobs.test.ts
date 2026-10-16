@@ -194,7 +194,7 @@ describe("queued operation authority", () => {
       const inspect = container.inspect;
       container.inspect = (async () => {
         const info = await inspect.call(container);
-        if (getOperation(context.job.id)?.phase === "start") {
+        if (getOperation(context.job.id)?.phase === "starting") {
           dispatchInspected = true;
           if (change === "grant revocation")
             setServerGrant(

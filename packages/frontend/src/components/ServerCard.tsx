@@ -1,6 +1,7 @@
 import type { Server } from "@ludock/shared";
 import { useState } from "react";
 import { useAuth } from "../auth-context";
+import { operationLabel } from "../operations";
 import { useNavigate } from "../navigation-context";
 import { NavLink } from "../navigation";
 import { can, canReadBackupSummary } from "../permissions";
@@ -35,6 +36,8 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
   const [confirmation, setConfirmation] = useState<"stop" | "restart" | null>(
     null,
   );
+  const operation = server.activeOperation;
+  actionsDisabled = actionsDisabled || Boolean(operation);
   const isRunning = server.state === "running";
   const lifecycleAction = lifecycleActionForState(server.state);
   const stateGuidance = lifecycleStateGuidance(server.state);
@@ -103,6 +106,13 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
       </div>
       <div className="server-row__state">
         <ServerState server={server} />
+        {operation && (
+          <span role="status">
+            <NavLink className="text-link" to={`/servers/${server.id}?tab=activity&operation=${operation.id}`}>
+              {operation.kind === "restart" ? "Restart" : operation.kind === "stop" ? "Stop" : operation.kind}: {operationLabel(operation)}
+            </NavLink>
+          </span>
+        )}
         {server.stateSince !== null && (
           <time
             className="server-row__since"

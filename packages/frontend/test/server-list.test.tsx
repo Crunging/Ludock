@@ -52,6 +52,17 @@ function card() {
 }
 
 describe("server list", () => {
+  it("shows persisted operation progress and blocks repeat lifecycle actions", async () => {
+    const { action, update } = card();
+    update({ ...server, activeOperation: {
+      id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df0", kind: "restart", status: "running", phase: "waiting_for_save",
+    } });
+    expect(screen.getByText("Restart: Waiting for save")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Stop", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+    expect(action.mock.calls).toHaveLength(0);
+  });
+
   it("keeps relative times current on an idle page", () => {
     const start = Date.UTC(2026, 8, 15, 12);
     jest.useFakeTimers({ now: start });

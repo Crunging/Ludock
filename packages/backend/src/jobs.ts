@@ -1,3 +1,4 @@
+import { runLifecycle, recoverLifecycle } from "./lifecycle.js";
 import {
   type ServerCapability,
   updateRequestSchema,
@@ -6,7 +7,6 @@ import {
 import { findUserById, getDatabase, type SessionUser } from "./database.js";
 import { assertServerCapability } from "./authorization.js";
 import { docker } from "./docker-client.js";
-import { changeContainerState, type ContainerAction } from "./docker.js";
 import { resolveAuthorizedServer, refreshServers } from "./servers.js";
 import { withLocks } from "./operation-locks.js";
 import { registerJobHandler, type JobContext } from "./operations.js";
@@ -32,7 +32,6 @@ import {
   isApiTokenOperationActor,
   isCurrentApiTokenOperationActor,
 } from "./auth.js";
-import { assertObservedServerBinding } from "./identity.js";
 
 export function jobActor(context: JobContext): SessionUser {
   const id = context.job.actorId;
@@ -73,46 +72,6 @@ export function jobActor(context: JobContext): SessionUser {
     assertServerCapability(actor, context.job.serverId, "schedules.manage");
   }
   return actor;
-}
-async function lifecycle(
-  context: JobContext,
-  action: ContainerAction,
-) {
-  const actor = jobActor(context);
-  const server = await resolveAuthorizedServer(
-    actor,
-    context.job.serverId,
-    `server.${action}`,
-    context.job.bindingRevision,
-  );
-  return withLocks(server.lockKeys, async () => {
-    await resolveAuthorizedServer(
-      actor,
-      server.logical.id,
-      `server.${action}`,
-      context.job.bindingRevision,
-    );
-    context.progress(action);
-    suppressMonitoring(server.logical.id);
-    try {
-      await changeContainerState(server.container.id, action, (observation) => {
-        assertServerCapability(
-          jobActor(context),
-          server.logical.id,
-          `server.${action}`,
-        );
-        assertObservedServerBinding(
-          server.logical.id,
-          observation,
-          context.job.bindingRevision,
-        );
-      });
-      setIntentionalStop(server.logical.id, action === "stop");
-      return { action };
-    } finally {
-      suppressMonitoring(server.logical.id);
-    }
-  });
 }
 export async function recoverUpdate(context: JobContext): Promise<void> {
   if (context.job.recovery.mutationStarted) return;
@@ -306,7 +265,8 @@ async function runUpdate(
 export function registerBackgroundJobs(): void {
   for (const action of ["start", "stop", "restart"] as const)
     registerJobHandler(action, {
-      run: (context) => lifecycle(context, action),
+      run: (context) => runLifecycle(context, action),
+      recover: recoverLifecycle,
     });
   registerJobHandler("backup", { run: runBackup, recover: recoverBackup });
   registerJobHandler("restore", { run: runRestore, recover: recoverRestore });

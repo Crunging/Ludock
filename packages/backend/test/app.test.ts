@@ -17,6 +17,9 @@ const [{ createApp }, { docker }, { createLogger }, { closeDatabase }, { SetupWi
     import("../src/compose.js"),
   ]);
 
+const { registerBackgroundJobs } = await import("../src/jobs.js");
+const { startOperationRunner, stopOperationRunner } = await import("../src/operations.js");
+
 const testLogger = createLogger("http-test");
 const originalPing = docker.ping.bind(docker);
 const originalListContainers = docker.listContainers.bind(docker);
@@ -90,9 +93,12 @@ beforeEach(async () => {
   const listed = await authorizedFetch("/api/v1/servers");
   const body = (await listed.json()) as { servers: Array<{ id: string }> };
   managedServerId = body.servers[0].id;
+  registerBackgroundJobs();
+  await startOperationRunner();
 });
 
 afterEach(async () => {
+  await stopOperationRunner();
   await server?.stop(true);
   server = undefined;
   closeDatabase();
@@ -467,7 +473,7 @@ describe("HTTP application", () => {
         await authorizedFetch(`/api/v1/servers/${managedServerId}/stop`, {
           method: "POST",
         })
-      ).status).toBe(200);
+      ).status).toBe(202);
   });
 
   it("serves structured redacted Ludock logs to administrators", async () => {

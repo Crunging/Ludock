@@ -37,6 +37,18 @@ function frame(channel: number, value: string | Uint8Array): Uint8Array {
 }
 
 describe("Bun Docker HTTP client", () => {
+  it("sends stop and restart grace periods to Docker", async () => {
+    const requests: string[] = [];
+    const client = httpFixture(request => {
+      if (isVersion(request)) return version();
+      expect(request.method).toBe("POST");
+      requests.push(new URL(request.url).pathname + new URL(request.url).search);
+      return new Response(null, { status: 204 });
+    });
+    await client.getContainer("fixture").stop({ t: 180 });
+    await client.getContainer("fixture").restart({ t: 300 });
+    expect(requests).toEqual(["/v1.55/containers/fixture/stop?t=180", "/v1.55/containers/fixture/restart?t=300"]);
+  });
   it("keeps daemon commands on the Unix socket when proxy environment variables are set", async () => {
     const keys = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"];
     const previous = keys.map((key) => process.env[key]);

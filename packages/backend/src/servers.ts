@@ -78,6 +78,10 @@ function toPublicServer(
         : null,
     bindingStatus: logical.status,
     permissions,
+    activeOperation: getDatabase().query(`
+      SELECT id,kind,status,phase FROM operations
+      WHERE server_id=? AND status IN ('queued','running') LIMIT 1
+    `).get(logical.id) ?? undefined,
     // Administrators retain durable backup history when a container binding is
     // unavailable. A create grant exposes only this summary, never archive data.
     latestBackup:

@@ -27,8 +27,9 @@ export const attentionItemSchema = z.discriminatedUnion("kind", [
     kind: z.literal("operation"),
     operationId: z.string().uuid(),
     operationKind: z.string(),
-    status: z.enum(["failed", "interrupted"]),
+    status: z.enum(["failed", "interrupted", "succeeded"]),
     updatedAt: z.number().int().nonnegative(),
+    forceStopped: z.boolean().optional(),
   }),
 ]);
 export type AttentionItem = z.infer<typeof attentionItemSchema>;

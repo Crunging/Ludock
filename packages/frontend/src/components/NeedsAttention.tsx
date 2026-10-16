@@ -20,7 +20,7 @@ function describe(item: AttentionItem): { title: string; detail: string; link: s
   switch (item.kind) {
     case "operation":
       return {
-        title: `${capitalize(item.operationKind)} ${item.status}`,
+        title: item.forceStopped ? "Force-stopped, recent progress may not have been saved." : `${capitalize(item.operationKind)} ${item.status}`,
         detail: new Date(item.updatedAt).toLocaleString(),
         link: `${path}?tab=activity&operation=${encodeURIComponent(item.operationId)}`,
         action: "Review activity",
@@ -124,7 +124,7 @@ export default function NeedsAttention({ refreshKey }: { refreshKey: string }) {
           {expanded ? "Show fewer items" : `Show all ${items.length} items`}
         </button>
       )}
-      {items.some((item) => item.kind === "operation") && <p className="muted needs-attention__note">Includes failures from each server’s most recent 100 operations.</p>}
+      {items.some((item) => item.kind === "operation") && <p className="muted needs-attention__note">Includes issues from each server’s most recent 100 operations.</p>}
     </section>
   );
 }
