@@ -791,6 +791,13 @@ async function recoveryContext(job: JobContext): Promise<ServerContext | null> {
     lockKeys: serverLockKeys(logical.id, observed.observation),
   };
 }
+/** The backup row is committed before its completion marker, so a crash
+ * between the two still leaves a complete backup. */
+export function backupCompleted(job: JobContext): boolean {
+  const id = job.job.recovery.backupId;
+  return job.job.recovery.backupComplete === true || (typeof id === "string" &&
+    Boolean(getDatabase().query("SELECT id FROM backups WHERE id=? AND state='complete'").get(id)));
+}
 async function removeUnpublishedBackup(job: JobContext): Promise<void> {
   const id = job.job.recovery.backupId,
     destination = job.job.recovery.backupDestination;

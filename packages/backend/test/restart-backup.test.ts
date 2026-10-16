@@ -31,6 +31,7 @@ let serverId: string;
 let image: string;
 let running: boolean;
 let startedAt: string;
+let stopError: Error | null;
 let labels: Record<string, string>;
 let name: string;
 let calls: string[];
@@ -45,6 +46,7 @@ beforeEach(async () => {
   image = "itzg/minecraft-server:latest";
   running = true;
   startedAt = "2026-01-01T00:00:00Z";
+  stopError = null;
   name = "/world";
   labels = { "ludock.enable": "true", "ludock.game": "minecraft" };
   calls = [];
@@ -68,7 +70,7 @@ beforeEach(async () => {
           Mounts: [], NetworkSettings: { Ports: {} }, Created: "2026-01-01T00:00:00Z",
         };
       },
-      stop: async () => { calls.push("stop"); running = false; },
+      stop: async () => { calls.push("stop"); running = false; if (stopError) throw stopError; },
       start: async () => { calls.push("start"); running = true; startedAt = "2026-01-02T00:00:00Z"; },
     } as unknown as ReturnType<typeof docker.getContainer>;
   });
@@ -227,6 +229,19 @@ describe("restarts with a backup", () => {
     expect(getOperation(operation.id)?.error).toContain("needs a running server");
     expect(calls).toEqual([]);
   });
+  it("reconciles a stop that reached Docker before its result was lost", async () => {
+    const notify = spyOn(notifications, "notifyEvent");
+    const backup = spyOn(backups, "createStoppedBackup");
+    stopError = new Error("connection reset");
+    const operation = enqueue();
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("failed");
+    expect(backup).not.toHaveBeenCalled();
+    expect(calls).toEqual(["save", "stop"]);
+    expect(getOperation(operation.id)?.recovery.stopSettled).toBe(true);
+    expect(getAvailability(serverId).state.intentionallyStopped).toBe(true);
+    expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(true);
+  });
   it("leaves the server stopped and says so when the backup fails", async () => {
     const notify = spyOn(notifications, "notifyEvent");
     spyOn(backups, "createStoppedBackup").mockRejectedValue(new Error("private-fixture"));
@@ -287,6 +302,23 @@ describe("restarts with a backup", () => {
       expect(getAvailability(serverId).state.intentionallyStopped).toBe(leftStopped);
       expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(leftStopped);
     });
+  it("starts the server when the backup was saved before its completion was recorded", async () => {
+    const notify = spyOn(notifications, "notifyEvent");
+    const server = await resolveAuthorizedServer(operator, serverId, "server.restart");
+    const operation = enqueue();
+    running = false;
+    getDatabase().query("INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state) VALUES(?,?,?,?,?,?,?,?,'complete')")
+      .run("backup-fixture", serverId, server.logical.bindingFingerprint, "/backups", "[]", 1, "checksum", 0);
+    getDatabase().query("UPDATE operations SET status='running',recovery_json=? WHERE id=?").run(JSON.stringify({
+      initialRunning: true, dataSafe: true, containerId, fingerprint: server.logical.bindingFingerprint,
+      bindingRevision: 1, stopSettled: true, stoppedStartedAt: startedAt,
+      backupId: "backup-fixture", backupDestination: "/backups", backupComplete: false,
+    }), operation.id);
+    await startOperationRunner();
+    expect(getOperation(operation.id)?.status).toBe("interrupted");
+    expect(calls).toEqual(["start"]);
+    expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(false);
+  });
   for (const startedSinceStop of [false, true])
     it(`never repeats a start that reached Docker (started since the backup's stop: ${startedSinceStop})`, async () => {
       const server = await resolveAuthorizedServer(operator, serverId, "server.restart");
