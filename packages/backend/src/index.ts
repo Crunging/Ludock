@@ -29,6 +29,7 @@ export function startServer(options: {
   const app = createApp({ frontendDist: options.frontendDist });
   const sockets = createWebSocketGateway();
   let backgroundTask: Promise<void> | undefined;
+  let backupStorageTask: Promise<void> | undefined;
   let notificationTask: Promise<void> | undefined;
   let shuttingDown = false;
   let shutdownTask: Promise<void> | undefined;
@@ -40,7 +41,6 @@ export function startServer(options: {
     backgroundTask = (async () => {
       let current: Awaited<ReturnType<typeof refreshServers>> | null = null;
       try {
-        await initializeBackupStorage();
         current = await refreshServers();
         runSchedules();
       } catch {
@@ -58,6 +58,11 @@ export function startServer(options: {
   function tick(): void {
     if (shuttingDown) return;
     void backgroundTick();
+    // Storage validation can wait on mounts or Docker. Keep it independent of
+    // schedules, prevent overlapping attempts, and drain it before closing SQLite.
+    backupStorageTask ??= initializeBackupStorage()
+      .catch(() => logger.warn("Automatic backup storage setup is temporarily unavailable"))
+      .finally(() => { backupStorageTask = undefined; });
     // A delivery batch can take longer than a scheduled minute. Keep it from
     // delaying discovery, schedules, and monitoring, but retain its shutdown lifetime.
     notificationTask ??= deliverNotifications()
@@ -114,7 +119,7 @@ export function startServer(options: {
     const operationsStopped = stopOperationRunner();
     shutdownTask = (async () => {
       const results = await Promise.allSettled([
-        backgroundTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
+        backgroundTask, backupStorageTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
       ]);
       // A console command or streamed file request can outlive its connection.
       // Its lock and cleanup must settle before the shared database is closed.

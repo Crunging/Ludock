@@ -5,13 +5,14 @@ import { reconcileServers } from "../src/identity.js";
 import { createSchedule } from "../src/schedules.js";
 import * as servers from "../src/servers.js";
 import * as notifications from "../src/notifications.js";
+import * as backups from "../src/backups.js";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 process.env.LUDOCK_API_TOKEN = "background-fixture-token-0123456789";
 
-it("evaluates due schedules during slow notifications and drains both tasks on shutdown", async () => {
+it("evaluates due schedules during slow notifications and backup setup, then drains all tasks on shutdown", async () => {
   closeDatabase();
   let now = Date.parse("2026-09-15T07:59:00Z");
   spyOn(Date, "now").mockImplementation(() => now);
@@ -25,6 +26,12 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
   });
   const database = getDatabase();
   const discovery = spyOn(servers, "refreshServers").mockResolvedValue(new Map());
+  let releaseStorage!: () => void;
+  const storageGate = new Promise<void>((resolve) => { releaseStorage = resolve; });
+  const storage = spyOn(backups, "initializeBackupStorage").mockImplementation(async () => {
+    await storageGate;
+    expect(database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1 AS value").get()?.value).toBe(1);
+  });
   let releaseDelivery!: () => void;
   const gate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
   const delivery = spyOn(notifications, "deliverNotifications").mockImplementation(async () => {
@@ -46,6 +53,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     expect(tick).toBeTruthy();
     expect(discovery.mock.calls.length, "A tick shares one fleet snapshot with monitoring").toBe(1);
     expect(delivery.mock.calls.length).toBe(1);
+    expect(storage.mock.calls.length).toBe(1);
     now += 60_000;
     tick?.();
     await flush();
@@ -55,6 +63,7 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     expect(row.last_operation_id, "The due operation must queue while delivery is pending").toBeTruthy();
     expect(discovery.mock.calls.length).toBe(2);
     expect(delivery.mock.calls.length, "Delivery batches must not overlap").toBe(1);
+    expect(storage.mock.calls.length, "Backup setup attempts must not overlap").toBe(1);
 
     let stopped = false;
     const shutdown = runtime.shutdown("test").then(() => { stopped = true; });
@@ -65,12 +74,17 @@ it("evaluates due schedules during slow notifications and drains both tasks on s
     await flush();
     expect(discovery.mock.calls.length, "Shutdown prevents new discovery").toBe(discoveries);
     expect(delivery.mock.calls.length).toBe(1);
+    expect(storage.mock.calls.length, "Shutdown prevents new backup setup").toBe(1);
     releaseDelivery();
+    await flush();
+    expect(stopped, "Shutdown must also drain backup setup before closing storage").toBe(false);
+    releaseStorage();
     await shutdown;
     expect(stopped).toBe(true);
     expect(() => database.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT 1").get()).toThrow(/closed/i);
   } finally {
     releaseDelivery();
+    releaseStorage();
     await runtime?.shutdown("test cleanup");
     mock.restore();
     closeDatabase();
