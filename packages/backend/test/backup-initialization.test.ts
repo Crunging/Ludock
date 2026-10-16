@@ -3,11 +3,16 @@ import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BackupSettings } from "@ludock/shared";
-import { getBackupStorageStatus, initializeBackupStorage } from "../src/backups.js";
+import { getBackupStorageStatus, initializeBackupStorage, runBackup } from "../src/backups.js";
+import * as storage from "../src/backup-storage.js";
 import * as database from "../src/database.js";
 import * as discovery from "../src/docker.js";
 import { docker, type Container, type ContainerInspectInfo } from "../src/docker-client.js";
 import { startServer } from "../src/index.js";
+import { reconcileServers } from "../src/identity.js";
+import { getOperation } from "../src/operations.js";
+import { createSchedule, runSchedules } from "../src/schedules.js";
+import * as servers from "../src/servers.js";
 import { getSetting, setSetting } from "../src/settings.js";
 import { dockerId } from "./fixtures/ids.js";
 
@@ -142,6 +147,56 @@ describe("automatic backup storage setup", () => {
     spyOn(database, "writeAuditLog").mockImplementation(() => { throw new Error("Audit unavailable"); });
     await expect(initializeBackupStorage()).rejects.toThrow("Audit unavailable");
     expect(savedRow()).toBeNull();
+  });
+
+  it("waits for startup storage initialization before executing a due backup schedule", async () => {
+    const actor = { id: "scheduler", username: "scheduler", role: "admin" as const };
+    database.createUser({ ...actor, passwordHash: "fixture", disabled: false, createdAt: 1 });
+    const logical = reconcileServers([observed[0].observation])[0];
+    const schedule = createSchedule(actor, logical.id, {
+      action: "backup", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
+    });
+    runSchedules(Date.parse("2026-09-15T08:00:00Z"));
+    const attempt = database.getDatabase().query(
+      "SELECT last_operation_id AS id FROM schedules WHERE id=?",
+    ).get(schedule.id) as { id: string };
+    const job = getOperation(attempt.id)!;
+    let started!: () => void;
+    let release!: () => void;
+    const startedValidation = new Promise<void>((resolve) => { started = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    spyOn(discovery, "listManagedContainerObservations").mockImplementation(async () => {
+      started();
+      await gate;
+      return observed;
+    });
+    spyOn(servers, "resolveAuthorizedServer").mockResolvedValue({
+      logical, observation: observed[0].observation, container: { id: logical.containerId }, lockKeys: [],
+    } as unknown as servers.ServerContext);
+    // End the fixture before any server stop or archive work, once settings
+    // have passed validation and execution reaches the usual capacity check.
+    const capacity = spyOn(storage, "assertDestinationSpace").mockRejectedValue(new Error("Fixture capacity check"));
+    const initialization = initializeBackupStorage();
+    await startedValidation;
+    let settled = false;
+    const outcome = runBackup({ job, progress() {} }).then(
+      () => { settled = true; return null; },
+      (error: unknown) => { settled = true; return error; },
+    );
+    try {
+      for (let index = 0; index < 30; index++) await Promise.resolve();
+      expect(settled, "A due backup must wait instead of failing with unconfigured storage").toBe(false);
+      expect(discovery.listManagedContainerObservations).toHaveBeenCalledTimes(1);
+      expect(capacity).not.toHaveBeenCalled();
+      release();
+      await initialization;
+      expect(await outcome).toMatchObject({ message: "Fixture capacity check" });
+      expect(getSetting<BackupSettings>("backups")?.destination).toBe(directory);
+      expect(capacity).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.allSettled([initialization, outcome]);
+    }
   });
 
   it("enables storage during startup without an administrator opening Settings", async () => {

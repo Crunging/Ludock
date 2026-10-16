@@ -125,7 +125,13 @@ export async function deleteBackup(
   });
 }
 async function settingsForBackup(): Promise<BackupSettings> {
-  const settings = getSetting<BackupSettings>("backups");
+  let settings = getSetting<BackupSettings>("backups");
+  if (!settings) {
+    // A due schedule or manual request can reach execution during startup.
+    // Await automatic setup before treating storage as unconfigured.
+    await initializeBackupStorage();
+    settings = getSetting<BackupSettings>("backups");
+  }
   if (!settings)
     throw failBackup(
       "BACKUPS_NOT_CONFIGURED",
@@ -136,7 +142,15 @@ async function settingsForBackup(): Promise<BackupSettings> {
 
 /** Enable storage only when no administrator decision has ever been saved.
  * This validates storage without starting any backup or creating a schedule. */
-export async function initializeBackupStorage(): Promise<void> {
+export function initializeBackupStorage(): Promise<void> {
+  backupStorageInitialization ??= initializeBackupStorageOnce()
+    .finally(() => { backupStorageInitialization = undefined; });
+  return backupStorageInitialization;
+}
+
+let backupStorageInitialization: Promise<void> | undefined;
+
+async function initializeBackupStorageOnce(): Promise<void> {
   const db = getDatabase();
   // A saved null (or any other disabled/cleared value) is still a decision.
   if (db.query("SELECT 1 FROM settings WHERE key='backups'").get()) return;
