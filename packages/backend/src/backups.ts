@@ -13,7 +13,7 @@ import { getDatabase, writeAuditLog } from "./database.js";
 import { getSetting } from "./settings.js";
 import { rootList } from "./approved-paths.js";
 import { docker } from "./docker-client.js";
-import { getManagedContainerObservation, listManagedContainerObservations } from "./docker.js";
+import { getManagedContainerObservation, listManagedContainerObservations, stopTimeoutSeconds } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -430,7 +430,7 @@ export async function stopForDataOperation(
     });
   suppressMonitoring(context.logical.id);
   if (info.State.Running || info.State.Status === "running")
-    await target.stop({ t: 120 });
+    await target.stop({ t: stopTimeoutSeconds(info) });
   const stopped = await target.inspect();
   if (stopped.State.Running || stopped.State.Status === "running")
     throw failBackup(

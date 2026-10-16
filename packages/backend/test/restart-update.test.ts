@@ -9,6 +9,7 @@ import { refreshServers, resolveAuthorizedServer } from "../src/servers.js";
 import { createSession, deleteRequestSession } from "../src/auth.js";
 import { updateCapability } from "../src/compose.js";
 import * as backups from "../src/backups.js";
+import * as lifecycle from "../src/lifecycle.js";
 import { registerBackgroundJobs } from "../src/jobs.js";
 import { enqueueOperation, getOperation, startOperationRunner, stopOperationRunner } from "../src/operations.js";
 import { listOperationHistory } from "../src/history.js";
@@ -69,6 +70,10 @@ beforeEach(async () => {
   serverId = listLogicalServers()[0].id;
   grants();
   registerBackgroundJobs();
+  spyOn(lifecycle, "saveWorld").mockImplementation(async (context) => {
+    calls.push("save");
+    context.progress("waiting_for_save", { saveStatus: "sent", saveReason: null });
+  });
 });
 afterEach(async () => {
   await stopOperationRunner();
@@ -159,7 +164,7 @@ describe("tracked restart updates", () => {
       const operation = enqueue();
       await startOperationRunner();
       expect((await finished(operation.id)).status).toBe("succeeded");
-      expect(calls).toEqual(["restart"]);
+      expect(calls).toEqual(["save", "restart"]);
       expect(spawn).not.toHaveBeenCalled();
       expect(getOperation(operation.id)?.recovery.restartRequested).toBe(true);
     });
@@ -173,8 +178,8 @@ describe("tracked restart updates", () => {
     const operation = enqueue(true);
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("succeeded");
-    expect(calls).toEqual(["stop", "backup", "restart"]);
-    expect(getOperation(operation.id)?.result?.backupId).toBe("backup-fixture");
+    expect(calls).toEqual(["save", "stop", "backup", "restart"]);
+    expect(getOperation(operation.id)?.result).toMatchObject({ backupId: "backup-fixture", saveStatus: "sent" });
     expect(isServerBusy(serverId)).toBe(false);
   });
   it("restores the initial running state after a backup failure without restarting to update", async () => {
@@ -182,7 +187,7 @@ describe("tracked restart updates", () => {
     const operation = enqueue(true);
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("failed");
-    expect(calls).toEqual(["stop", "start"]);
+    expect(calls).toEqual(["save", "stop", "start"]);
     expect(getOperation(operation.id)?.error).not.toContain("private-fixture");
   });
   it("rechecks backup and restart access after the backup", async () => {
@@ -193,7 +198,7 @@ describe("tracked restart updates", () => {
     const operation = enqueue(true);
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("failed");
-    expect(calls).toEqual(["stop", "start"]);
+    expect(calls).toEqual(["save", "stop", "start"]);
   });
   for (const change of ["revoke", "rename"])
     it(`rechecks authority at the final Docker inspection (${change})`, async () => {
@@ -205,7 +210,7 @@ describe("tracked restart updates", () => {
       };
       await startOperationRunner();
       expect((await finished(operation.id)).status).toBe("failed");
-      expect(calls).toEqual([]);
+      expect(calls).toEqual(["save"]);
     });
   for (const restartRequested of [false, true])
     it(`reconciles interruption without replaying a restart (dispatched: ${restartRequested})`, async () => {
