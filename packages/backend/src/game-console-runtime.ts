@@ -10,7 +10,6 @@ import {
 import type { ManagedContainer } from "./docker.js";
 import { executeSourceRcon, executeRustWebRcon, executeTelnetCommand } from "./helpers/network-console.js";
 import { executeNetworkConsoleHelper } from "./network-console-helper.js";
-export { executeSourceRcon, executeRustWebRcon, executeTelnetCommand } from "./helpers/network-console.js";
 
 export const MAX_DOCKER_EXEC_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DOCKER_EXEC_TIMEOUT_SECONDS = 15;

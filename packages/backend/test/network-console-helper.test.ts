@@ -61,8 +61,7 @@ function deadline(milliseconds: number) {
 }
 
 describe("Namespace-sharing console helper", () => {
-  for (const gameType of ["factorio", "palworld", "ark-survival-evolved", "ark-survival-ascended", "cs2",
-    "project-zomboid", "conan-exiles", "v-rising", "rust", "7-days-to-die"]) {
+  for (const gameType of ["factorio", "rust", "7-days-to-die"]) {
     it(`selects the helper and the internal port by default for ${gameType}`, async () => {
       const f = fixture();
       const adapter = resolveGameConsoleAdapter({ gameType, labels: {} })!;

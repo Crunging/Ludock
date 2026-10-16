@@ -17,5 +17,5 @@ export const MOUNT_IDENTITIES_SCRIPT = mountIdentities as string;
 export const MOUNT_PROOF_SCRIPT = mountProof as string;
 export const RESTORE_EXTRACT_SCRIPT = restoreExtract as string;
 export const RESTORE_HELPER_SCRIPT = restoreHelper as string;
-// Serialize the self-contained clients so direct and helper protocols stay equal.
+// The helper runs the same protocol clients as direct connections.
 export const NETWORK_CONSOLE_SCRIPT = `await (${createNetworkConsoleRuntime.toString()})().runNetworkConsoleHelper();`;

@@ -7,19 +7,17 @@ import { expect, afterEach, describe, it, spyOn } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
 import { DockerApiError, DockerStreamOpenError, type DockerConnection } from "../src/docker-transport.js";
 import { serve, type Socket, type SocketHandler } from "bun";
+import { executeGameCommand, MAX_DOCKER_EXEC_OUTPUT_BYTES } from "../src/game-console-runtime.js";
+import { resolveGameConsoleAdapter, type GameConsoleAdapter } from "../src/game-console.js";
+import { NETWORK_CONSOLE_SCRIPT } from "../src/helper-scripts.js";
 import {
-  executeGameCommand,
   executeRustWebRcon,
   executeSourceRcon,
   executeTelnetCommand,
-  MAX_DOCKER_EXEC_OUTPUT_BYTES,
-} from "../src/game-console-runtime.js";
-import type { GameConsoleAdapter } from "../src/game-console.js";
-import { NETWORK_CONSOLE_SCRIPT } from "../src/helper-scripts.js";
-import type { NetworkConsoleRequest } from "../src/helpers/network-console.js";
+  type NetworkConsoleRequest,
+} from "../src/helpers/network-console.js";
 import { JsonLineDecoder } from "../src/json-lines.js";
 import { docker } from "../src/docker-client.js";
-import { resolveGameConsoleAdapter } from "../src/game-console.js";
 
 const closers: Array<() => Promise<void>> = [];
 

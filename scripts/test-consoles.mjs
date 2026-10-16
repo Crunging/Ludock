@@ -166,12 +166,7 @@ try {
     await waitForReady(() => expect(helpers()).toEqual([]), "Timeout/disconnect must remove the helper");
   }
   expect(JSON.stringify(factorio.messages)).not.toContain(password);
-  console.log(JSON.stringify({ result: "pass", realFactorio: true, separateComposeNetworks: true,
-    loopbackOnly: true, webRcon: true, telnet: true, redacted: true, stdinCredentials: true,
-    timeoutCleanup: true, disconnectCleanup: true,
-    architecture: docker("info", "--format", "{{.Architecture}}"),
-    factorioArm64Emulation: "Box64 when running the ARM64 image",
-  }));
+  console.log(JSON.stringify({ result: "pass", architecture: docker("info", "--format", "{{.Architecture}}") }));
 } finally {
   for (const socket of sockets) socket.terminate();
   await cleanupFixtures([
