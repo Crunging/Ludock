@@ -17,6 +17,9 @@ import { composeRoutes } from "../src/routes/compose.js";
 import { serversRoutes } from "../src/routes/servers.js";
 import type { RequestContext } from "../src/routes/request.js";
 import { isServerBusy } from "../src/operation-locks.js";
+import * as notifications from "../src/notifications.js";
+import { getAvailability } from "../src/monitoring.js";
+import type { JobContext } from "../src/operations.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin = { id: "admin", username: "admin", role: "admin" as const };
@@ -88,6 +91,11 @@ function routeContext(path: string, body: unknown, actor = operator): RequestCon
   const { token } = createSession(actor, new Request(url.href));
   return { request: new Request(url.href, { headers: { Cookie: `ludock_session=${token}` } }),
     user: actor, params: { id: serverId }, url, body, headers: new Headers() };
+}
+/** Mirrors the real backup's completion record, which allows the server to start. */
+function completedBackup(job: JobContext) {
+  job.progress("backup_complete", { backupId: "backup-fixture", backupComplete: true });
+  return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
 }
 function enqueue() {
   return enqueueOperation({ serverId, actorId: operator.id, kind: "restart", bindingRevision: 1,
@@ -165,11 +173,11 @@ describe("restart requests", () => {
 
 describe("restarts with a backup", () => {
   it("holds the locks, keeps the server stopped during the backup, and starts it once", async () => {
-    spyOn(backups, "createStoppedBackup").mockImplementation(async () => {
+    spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
       expect(running).toBe(false);
       expect(isServerBusy(serverId)).toBe(true);
       calls.push("backup");
-      return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
+      return completedBackup(job);
     });
     const operation = enqueue();
     await startOperationRunner();
@@ -178,31 +186,35 @@ describe("restarts with a backup", () => {
     expect(getOperation(operation.id)?.result).toMatchObject({ action: "restart", backupId: "backup-fixture", saveStatus: "sent" });
     expect(isServerBusy(serverId)).toBe(false);
   });
-  it("restores the initial running state after a backup failure", async () => {
+  it("leaves the server stopped and says so when the backup fails", async () => {
+    const notify = spyOn(notifications, "notifyEvent");
     spyOn(backups, "createStoppedBackup").mockRejectedValue(new Error("private-fixture"));
     const operation = enqueue();
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("failed");
-    expect(calls).toEqual(["save", "stop", "start"]);
+    expect(calls).toEqual(["save", "stop"]);
+    expect(running).toBe(false);
     expect(getOperation(operation.id)?.error).not.toContain("private-fixture");
+    expect(getAvailability(serverId).state.intentionallyStopped).toBe(true);
+    expect(notify).toHaveBeenCalledWith(`operation:${operation.id}`,
+      "world: the backup failed, so the server was left stopped. Review the operation, then start it.");
   });
   for (const revoked of ["server.restart", "backups.create"] as const)
     it(`rechecks ${revoked} after the backup`, async () => {
-      spyOn(backups, "createStoppedBackup").mockImplementation(async () => {
+      spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
         setServerGrant(operator.id, serverId,
           ["server.view", revoked === "server.restart" ? "backups.create" : "server.restart"], admin);
-        return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
+        return completedBackup(job);
       });
       const operation = enqueue();
       await startOperationRunner();
       expect((await finished(operation.id)).status).toBe("failed");
-      // The only start returns the server to its initial running state.
+      // With a completed backup, the only start returns the server to its initial running state.
       expect(calls).toEqual(["save", "stop", "start"]);
       expect(getOperation(operation.id)?.phase).not.toBe("started");
     });
   it("rechecks the binding at the final Docker inspection", async () => {
-    spyOn(backups, "createStoppedBackup").mockResolvedValue(
-      { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>);
+    spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => completedBackup(job));
     const operation = enqueue();
     onInspect = () => {
       if (getOperation(operation.id)?.phase === "starting") name = "/different";
@@ -211,18 +223,19 @@ describe("restarts with a backup", () => {
     expect((await finished(operation.id)).status).toBe("failed");
     expect(calls).toEqual(["save", "stop"]);
   });
-  for (const [recovery, docker, expected] of [
-    [true, "stopped", ["start"]],
-    [true, "running", []],
-    [false, "running", []],
+  for (const [recovery, backupComplete, docker, expected] of [
+    [true, true, "stopped", ["start"]],
+    [true, false, "stopped", []],
+    [true, true, "running", []],
+    [false, false, "running", []],
   ] as const)
-    it(`reconciles interruption by restoring the initial state (stop recorded: ${recovery}, Docker: ${docker})`, async () => {
+    it(`reconciles interruption, starting only after a completed backup (stop recorded: ${recovery}, backup complete: ${backupComplete}, Docker: ${docker})`, async () => {
       const server = await resolveAuthorizedServer(operator, serverId, "server.restart");
       const operation = enqueue();
       running = docker === "running";
       getDatabase().query("UPDATE operations SET status='running',recovery_json=? WHERE id=?").run(JSON.stringify(recovery ? {
         initialRunning: true, dataSafe: true, containerId, fingerprint: server.logical.bindingFingerprint,
-        bindingRevision: 1, stopSettled: true, stoppedStartedAt: "fixture",
+        bindingRevision: 1, stopSettled: true, stoppedStartedAt: "fixture", backupComplete,
       } : {}), operation.id);
       await startOperationRunner();
       expect(getOperation(operation.id)?.status).toBe("interrupted");

@@ -125,7 +125,7 @@ describe("server list", () => {
       if (option) {
         expect(option.checked).toBe(false);
         await userEvent.click(option);
-        expect(screen.getByText("The server stays stopped while the backup runs, then starts again.")).toBeTruthy();
+        expect(screen.getByText("The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped.")).toBeTruthy();
       }
       await userEvent.click(screen.getByRole("button", { name: "Restart server" }));
       expect(action).toHaveBeenCalledWith(server.id, "restart", { createBackup: backup });

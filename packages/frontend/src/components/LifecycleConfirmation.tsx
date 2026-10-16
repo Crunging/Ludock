@@ -80,7 +80,8 @@ export default function LifecycleConfirmation({
       )}
       {offerBackup && createBackup && (
         <p className="lifecycle-confirmation__help">
-          The server stays stopped while the backup runs, then starts again.
+          The server stays stopped while the backup runs, then starts again. If
+          the backup fails, it stays stopped.
         </p>
       )}
       <div className="lifecycle-confirmation__actions">

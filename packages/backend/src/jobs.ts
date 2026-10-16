@@ -112,19 +112,29 @@ async function runBackupRestart(context: JobContext): Promise<Record<string, unk
       setIntentionalStop(server.logical.id, false);
       const { backupId, saveStatus, saveReason } = context.job.recovery;
       return { action: "restart", backupId: backupId ?? null, saveStatus, saveReason };
+    } catch (error) {
+      if (context.job.recovery.stopSettled === true && context.job.recovery.backupComplete !== true) {
+        setIntentionalStop(server.logical.id, true);
+        notifyEvent(
+          `operation:${context.job.id}`,
+          `${current.container.displayName}: the backup failed, so the server was left stopped. Review the operation, then start it.`,
+        );
+      }
+      throw error;
     } finally {
-      // The backup keeps the game stopped until it starts. On failure, return
-      // it to its initial state only after the data helper has been removed.
-      if (!context.job.recovery.dataHelperId)
+      // Starting can update the game and change the world, so start only after
+      // a completed backup, and only once the data helper has been removed.
+      if (context.job.recovery.backupComplete === true && !context.job.recovery.dataHelperId)
         await restoreInitialRunningState(current, context);
       suppressMonitoring(server.logical.id);
     }
   });
 }
 async function recoverBackupRestart(context: JobContext): Promise<void> {
-  // Starting is safe to reconcile: a server that is already running is left alone.
+  // Starting is safe to reconcile, since a running server is left alone, but
+  // only once the backup has completed.
   if (typeof context.job.recovery.initialRunning === "boolean")
-    await recoverBackup(context);
+    await recoverBackup(context, context.job.recovery.backupComplete === true);
 }
 export async function recoverUpdate(context: JobContext): Promise<void> {
   if (context.job.recovery.mutationStarted) return;

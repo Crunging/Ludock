@@ -775,14 +775,14 @@ function recoveryLockKeys(job: JobContext): string[] {
   return [`server:${job.job.serverId}`, "backups:storage", ...saved.data];
 }
 
-export async function recoverBackup(job: JobContext): Promise<void> {
+export async function recoverBackup(job: JobContext, restoreRunning = true): Promise<void> {
   const held = recoveryLockKeys(job);
   await withLocks(held, async () => {
     const context = await recoveryContext(job);
     if (!context) return;
     await withLocks(context.lockKeys.filter((key) => !held.includes(key)), async () => {
       await removeUnpublishedBackup(job);
-      await restoreInitialRunningState(context, job);
+      if (restoreRunning) await restoreInitialRunningState(context, job);
     });
   });
 }
