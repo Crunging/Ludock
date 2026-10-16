@@ -9,6 +9,7 @@ import { checkAvailability } from "./monitoring.js";
 import { runSchedules } from "./schedules.js";
 import { deliverNotifications } from "./notifications.js";
 import { refreshServers } from "./servers.js";
+import { initializeBackupStorage } from "./backups.js";
 import { waitForLocksReleased } from "./operation-locks.js";
 import { createWebSocketGateway } from "./websocket-server.js";
 import {
@@ -28,6 +29,7 @@ export function startServer(options: {
   const app = createApp({ frontendDist: options.frontendDist });
   const sockets = createWebSocketGateway();
   let backgroundTask: Promise<void> | undefined;
+  let backupStorageTask: Promise<void> | undefined;
   let notificationTask: Promise<void> | undefined;
   let shuttingDown = false;
   let shutdownTask: Promise<void> | undefined;
@@ -56,6 +58,10 @@ export function startServer(options: {
   function tick(): void {
     if (shuttingDown) return;
     void backgroundTick();
+    // Storage validation can wait on Docker; keep it off the schedule path.
+    backupStorageTask ??= initializeBackupStorage()
+      .catch(() => logger.warn("Automatic backup storage setup is temporarily unavailable"))
+      .finally(() => { backupStorageTask = undefined; });
     // A delivery batch can take longer than a scheduled minute. Keep it from
     // delaying discovery, schedules, and monitoring, but retain its shutdown lifetime.
     notificationTask ??= deliverNotifications()
@@ -112,7 +118,7 @@ export function startServer(options: {
     const operationsStopped = stopOperationRunner();
     shutdownTask = (async () => {
       const results = await Promise.allSettled([
-        backgroundTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
+        backgroundTask, backupStorageTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
       ]);
       // A console command or streamed file request can outlive its connection.
       // Its lock and cleanup must settle before the shared database is closed.

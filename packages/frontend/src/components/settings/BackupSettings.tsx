@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   backupSettingsSchema,
   backupSettingsResponseSchema,
+  DEFAULT_BACKUP_LIMITS,
   type BackupSettings,
   type DeploymentSettings,
 } from "@ludock/shared";
@@ -78,10 +79,8 @@ function BackupSettingsForm({
 }) {
   const [backup, setBackup] = useState<BackupDraft>(() =>
     settings ? backupDraft(settings) : {
+      ...backupDraft({ destination: "", ...DEFAULT_BACKUP_LIMITS }),
       destination: null,
-      retentionCount: "10",
-      maxGiB: "100",
-      reserveGiB: "5",
     },
   );
   const destination = backup.destination ??
@@ -167,9 +166,10 @@ function BackupSettingsForm({
     <form className="stack-form" onSubmit={saveBackup}>
       <p>
         {backupConfigured
-          ? "Backups use the configured destination and limits."
+          ? "Backups are on. You can change the destination and limits below."
           : "Review the destination and limits, then save to enable backups."}{" "}
-        Every backup stops its server for the entire copy.
+        Backups run only when started manually or by a schedule. Every backup
+        stops its server for the entire copy.
       </p>
       {backupConfigured && <BackupStorageSummary key={backupStorageRevision} />}
       {deployment && (
