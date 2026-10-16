@@ -19,6 +19,8 @@ interface GameIntegration {
   /** Every listed image downloads game updates on startup by default. */
   updatesOnStart?: boolean;
   aliases?: readonly string[];
+  /** Docker stop grace period Ludock uses, in seconds. */
+  stopTimeoutSeconds?: number;
   console?: GameConsolePreset;
 }
 
@@ -57,6 +59,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
       "thijsvanloef/palworld-server-docker",
       "jammsen/palworld-dedicated-server",
     ],
+    stopTimeoutSeconds: 180,
     updatesOnStart: true,
     console: {
       adapter: "source-rcon",
@@ -79,6 +82,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
       "hermsi1337/ark-server",
       "indifferentbroccoli/ark-server-docker",
     ],
+    stopTimeoutSeconds: 180,
     aliases: ["ark"],
     console: {
       adapter: "source-rcon",
@@ -97,6 +101,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     name: "ARK: Survival Ascended",
     gamePort: { port: 7777, protocol: "udp" },
     repositories: ["sknnr/ark-ascended-server", "mschnitzer/asa-linux-server"],
+    stopTimeoutSeconds: 180,
     aliases: ["asa"],
     console: {
       adapter: "source-rcon",
@@ -192,6 +197,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   },
   {
     gameType: "7-days-to-die",
+    stopTimeoutSeconds: 180,
     name: "7 Days to Die",
     gamePort: { port: 26900, protocol: "tcp" },
     repositories: ["vinanrra/7dtd-server"],
@@ -210,6 +216,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
   },
   {
     gameType: "valheim",
+    stopTimeoutSeconds: 180,
     name: "Valheim",
     gamePort: { port: 2456, protocol: "udp" },
     repositories: [

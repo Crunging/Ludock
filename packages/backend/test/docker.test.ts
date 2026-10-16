@@ -276,6 +276,26 @@ describe("automatic discovery boundary", () => {
 });
 
 describe("managed container lifecycle boundary", () => {
+  for (const [image, configured, expected] of [
+    ["itzg/minecraft-server", 10, 120],
+    ["itzg/minecraft-server", 300, 300],
+    ["itzg/minecraft-server", -1, -1],
+    ["lloesche/valheim-server", undefined, 180],
+    ["example/custom", null, 120],
+  ] as const) {
+    it(`uses ${expected}s for ${image} with owner timeout ${configured}`, async () => {
+      const fixture = inspectFixture(image, { "ludock.enable": "true" });
+      const calls: Array<unknown> = [];
+      docker.getContainer = (() => ({
+        inspect: async () => ({ ...fixture, Config: { ...fixture.Config, StopTimeout: configured } }),
+        stop: async (options: unknown) => { calls.push(options); },
+        restart: async (options: unknown) => { calls.push(options); },
+      })) as unknown as typeof docker.getContainer;
+      await changeContainerState(untrusted("fixture"), "stop");
+      await changeContainerState(untrusted("fixture"), "restart");
+      expect(calls).toEqual([{ t: expected }, { t: expected }]);
+    });
+  }
   it("rejects starting an unmanaged container", async () => {
     let actionCalled = false;
     docker.getContainer = (() => ({

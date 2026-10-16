@@ -167,8 +167,8 @@ export class Container {
     await this.client.transport.empty(await this.client.path(query(`${this.endpoint}/stop`, options)), "POST");
   }
 
-  async restart(): Promise<void> {
-    await this.client.transport.empty(await this.client.path(`${this.endpoint}/restart`), "POST");
+  async restart(options: { t?: number } = {}): Promise<void> {
+    await this.client.transport.empty(await this.client.path(query(`${this.endpoint}/restart`, options)), "POST");
   }
 
   async remove(options: { force?: boolean; v?: boolean } = {}): Promise<void> {

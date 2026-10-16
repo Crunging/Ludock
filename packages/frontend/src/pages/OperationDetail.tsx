@@ -3,7 +3,7 @@ import { useOperation } from "../hooks/useOperation";
 import { useHistoryServers } from "../hooks/useHistoryServers";
 import { NavLink } from "../navigation";
 import StatusPip from "../components/StatusPip";
-import { historyActorLabel, operationStatusLabels, operationTones } from "../operations";
+import { historyActorLabel, operationLabel, operationSaveDetail, operationStatusLabels, operationTones } from "../operations";
 import "./history.css";
 
 export default function OperationDetail({ operationId }: { operationId: string }) {
@@ -31,9 +31,10 @@ export default function OperationDetail({ operationId }: { operationId: string }
           <dt>Operation ID</dt><dd>{operation.id}</dd>
           <dt>Queued at</dt><dd><time dateTime={new Date(operation.createdAt).toISOString()}>{new Date(operation.createdAt).toLocaleString()}</time></dd>
           <dt>Last updated</dt><dd><time dateTime={new Date(operation.updatedAt).toISOString()}>{new Date(operation.updatedAt).toLocaleString()}</time></dd>
-          <dt>Progress</dt><dd>{operation.phase.replaceAll("_", " ")}</dd>
+          <dt>Progress</dt><dd>{operationLabel(operation)}</dd>
         </dl>
         {operation.error && <p className="operation-error">{operation.error}</p>}
+        {operationSaveDetail(operation) && <p className="section-note">{operationSaveDetail(operation)}</p>}
         {operation.result && typeof operation.result.guidance === "string" && <p className="section-note">{operation.result.guidance}</p>}
         <div className="inline-actions operation-detail-actions history-entry-links">
           <NavLink className="text-link" to={`/operations?serverId=${encodeURIComponent(operation.serverId)}`}>Server operation history</NavLink>

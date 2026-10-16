@@ -1,6 +1,6 @@
 import type { Operation } from "@ludock/shared";
 
-import { historyActorLabel, operationActive, operationLabel, operationTones } from "../operations";
+import { historyActorLabel, operationActive, operationLabel, operationSaveDetail, operationTones } from "../operations";
 import { NavLink } from "../navigation";
 import StatusPip from "./StatusPip";
 
@@ -56,6 +56,7 @@ export default function OperationList({
                 {operation.error && (
                   <p className="operation-error">{operation.error}</p>
                 )}
+                {operationSaveDetail(operation) && <p className="muted">{operationSaveDetail(operation)}</p>}
                 {operation.result &&
                   typeof operation.result.guidance === "string" && (
                     <p className="muted">{operation.result.guidance}</p>

@@ -17,6 +17,7 @@ const DOCKER_EXEC_KILL_GRACE_SECONDS = 3;
 const DOCKER_EXEC_STREAM_GRACE_MS = 5_000;
 const DOCKER_EXEC_CREATE_TIMEOUT_MS = 5_000;
 const DOCKER_EXEC_INSPECT_TIMEOUT_MS = 5_000;
+const STDIN_COMMAND_TIMEOUT_MS = 10_000;
 
 // Docker has no API for signaling an individual exec process, and closing its
 // hijacked stream does not stop it. Keep the watchdog inside the container so
@@ -444,31 +445,40 @@ async function writeContainerStdin(
   output: GameCommandOutput,
   assertAccess?: () => void,
 ): Promise<void> {
-  const info = await container.inspect();
-  if (!info.Config.OpenStdin) {
-    throw new Error(
-      "Container standard input is closed; recreate it with stdin_open: true"
-    );
-  }
-  if (info.Config.StdinOnce) {
-    throw new Error(
-      "Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled"
-    );
-  }
-
-  const stream = await container.attach({
-    stream: true,
-    stdin: true,
-    stdout: false,
-    stderr: false,
-  });
-  try {
+  let stream: DockerConnection | undefined;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const assertReady = () => {
+    if (timedOut) throw new Error("Game console command timed out");
     assertAccess?.();
-    await writeAttachedInput(stream, `${command}\n`);
+  };
+  try {
+    await Promise.race([
+      (async () => {
+        const info = await container.inspect();
+        assertReady();
+        if (!info.Config.OpenStdin)
+          throw new Error("Container standard input is closed; recreate it with stdin_open: true");
+        if (info.Config.StdinOnce)
+          throw new Error("Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled");
+        stream = await container.attach({ stream: true, stdin: true, stdout: false, stderr: false });
+        try {
+          assertReady();
+          await writeAttachedInput(stream, `${command}\n`);
+          output.system("Command sent to the server process");
+        } finally { stream.abort(); }
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          stream?.abort();
+          reject(new Error("Game console command timed out"));
+        }, STDIN_COMMAND_TIMEOUT_MS);
+      }),
+    ]);
   } finally {
-    stream.abort();
+    if (timer) clearTimeout(timer);
   }
-  output.system("Command sent to the server process");
 }
 
 async function writeAttachedInput(stream: DockerConnection, data: string): Promise<void> {

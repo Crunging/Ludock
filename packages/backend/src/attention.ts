@@ -59,17 +59,22 @@ export async function listAttention(
         });
       }
     }
-    // Authority was checked above. Limit recent work before filtering failures,
+    // Authority was checked above. Limit recent work before filtering issues,
     // and read only summary fields; history payloads and cursors are unnecessary.
-    const failures = getDatabase().query(`
-      SELECT id,kind,status,updated_at AS updatedAt FROM (
-        SELECT id,kind,status,updated_at FROM operations
+    const issues = getDatabase().query(`
+      SELECT id,kind,status,updated_at AS updatedAt,
+        CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 ELSE 0 END AS forceStopped
+      FROM (
+        SELECT id,kind,status,updated_at,result_json FROM operations
         WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100
-      ) WHERE status IN ('failed','interrupted')
+      ) WHERE status IN ('failed','interrupted') OR (
+        status='succeeded' AND kind IN ('stop','restart') AND
+        CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.forceStopped') = 1 ELSE 0 END
+      )
     `).all(server.id) as Array<{
-      id: string; kind: string; status: "failed" | "interrupted"; updatedAt: number;
+      id: string; kind: string; status: "failed" | "interrupted" | "succeeded"; updatedAt: number; forceStopped: number;
     }>;
-    for (const operation of failures) {
+    for (const operation of issues) {
       items.push({
         ...base,
         id: `operation:${operation.id}`,
@@ -78,6 +83,7 @@ export async function listAttention(
         operationKind: operation.kind,
         status: operation.status,
         updatedAt: operation.updatedAt,
+        ...(operation.forceStopped ? { forceStopped: true } : {}),
       });
     }
   }

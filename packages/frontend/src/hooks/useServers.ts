@@ -40,14 +40,14 @@ export function useServers(): UseServersResult {
   const requestRef = useRef<SnapshotRequest | null>(null);
   const activeRef = useRef(false);
 
-  const fetchServers = useCallback(async () => {
+  const fetchServers = useCallback(async (background = false) => {
     if (!activeRef.current) return;
     requestRef.current?.controller.abort();
     const request: SnapshotRequest = { controller: new AbortController(), invalidated: false };
     requestRef.current = request;
     setSnapshot((previous) => ({
       ...(previous.actor === actor ? previous : { actor, servers: [], lastUpdated: null }),
-      loading: true,
+      loading: !background,
       error: null,
     }));
     try {
@@ -108,6 +108,15 @@ export function useServers(): UseServersResult {
       requestRef.current?.controller.abort();
       requestRef.current = null;
     };
+  }, [fetchServers]);
+
+  useEffect(() => {
+    // Schedules and operation phases need no Docker event to change. Refresh
+    // summaries so queued work and completion also survive reloads/reconnects.
+    const interval = window.setInterval(() => {
+      if (!requestRef.current) void fetchServers(true);
+    }, 3000);
+    return () => window.clearInterval(interval);
   }, [fetchServers]);
 
   useEffect(() => {

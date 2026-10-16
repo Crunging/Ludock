@@ -15,6 +15,7 @@ import {
   fileLocationSchema,
   okResponseSchema,
   operationsResponseSchema,
+  operationResponseSchema,
   renameFileRequestSchema,
   schedulesResponseSchema,
   serverResponseSchema,
@@ -22,6 +23,7 @@ import {
   serversResponseSchema,
   updateCapabilityResponseSchema,
   type AuthUser,
+  type Operation,
   type FileEntry,
   type ResponseSchema,
   type Server,
@@ -110,6 +112,7 @@ interface FixtureSocket {
 export interface AppFixture {
   user: AuthUser | null;
   servers: Server[];
+  operations: Operation[];
   requests: ApiRequest[];
   sockets: FixtureSocket[];
   files: Map<string, FileEntry[]>;
@@ -127,6 +130,7 @@ export const test = base.extend<{ app: AppFixture }>({
     const state: AppFixture = {
       user: { ...ADMIN },
       servers: makeServers(),
+      operations: [],
       requests: [],
       sockets: [],
       files: new Map([
@@ -202,6 +206,12 @@ export const test = base.extend<{ app: AppFixture }>({
         await respond(route, serversResponseSchema, { servers: state.servers });
         return;
       }
+      if (path.startsWith("/operations/") && method === "GET") {
+        const operation = state.operations.find((item) => item.id === path.slice("/operations/".length));
+        if (operation) await respond(route, operationResponseSchema, { operation });
+        else await respond(route, apiErrorSchema, { error: "Operation unavailable" }, 404);
+        return;
+      }
       if (path === "/settings/backups/status" && method === "GET") {
         await respond(route, backupStorageResponseSchema, { storage: {
           configured: false, archiveBytes: 0, maxBytes: null, reserveBytes: null, availableBytes: null,
@@ -226,7 +236,7 @@ export const test = base.extend<{ app: AppFixture }>({
           return;
         }
         if (resource === "/operations") {
-          await respond(route, operationsResponseSchema, { operations: [] });
+          await respond(route, operationsResponseSchema, { operations: state.operations.filter((operation) => operation.serverId === server.id) });
           return;
         }
         if (resource === "/backups") {
@@ -278,7 +288,16 @@ export const test = base.extend<{ app: AppFixture }>({
       }
       if (server && method === "POST" && /^\/(start|stop|restart)$/.test(resource)) {
         server.state = resource === "/stop" ? "exited" : "running";
-        await respond(route, okResponseSchema, { ok: true });
+        if (resource === "/start") await respond(route, okResponseSchema, { ok: true });
+        else {
+          const operation: Operation = {
+            id: crypto.randomUUID(), serverId: server.id, kind: resource.slice(1),
+            status: "succeeded", phase: "succeeded", createdAt: Date.now(), updatedAt: Date.now(),
+            error: null, result: { saveStatus: "sent" },
+          };
+          state.operations.push(operation);
+          await respond(route, operationResponseSchema, { operation }, 202);
+        }
         return;
       }
       if (server && resource === "/files/directory" && method === "POST") {

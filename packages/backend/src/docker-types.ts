@@ -22,6 +22,7 @@ export interface ContainerInspectInfo {
     OpenStdin: boolean;
     StdinOnce: boolean;
     Tty: boolean;
+    StopTimeout?: number | null;
   };
   State: {
     Status: string;

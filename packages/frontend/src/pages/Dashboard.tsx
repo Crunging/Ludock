@@ -1,4 +1,4 @@
-import { okResponseSchema } from "@ludock/shared";
+import { okResponseSchema, operationResponseSchema } from "@ludock/shared";
 import { useCallback, useState } from "react";
 import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
@@ -49,11 +49,9 @@ export default function Dashboard() {
       if (stale || loading) return;
       try {
         setActionError(null);
-        await apiJson(
-          `/servers/${encodeURIComponent(id)}/${action}`,
-          okResponseSchema,
-          { method: "POST" },
-        );
+        const path = `/servers/${encodeURIComponent(id)}/${action}`;
+        if (action === "start") await apiJson(path, okResponseSchema, { method: "POST" });
+        else await apiJson(path, operationResponseSchema, { method: "POST" });
         refresh();
       } catch (reason) {
         setActionError(

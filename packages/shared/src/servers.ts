@@ -66,6 +66,13 @@ export const serverSchema = z.object({
     .nullable(),
   permissions: z.array(serverCapabilitySchema),
   bindingStatus: bindingStatusSchema,
+  /** Present while persisted work owns this server's controls. */
+  activeOperation: z.object({
+    id: z.string().uuid(),
+    kind: z.string(),
+    status: z.enum(["queued", "running"]),
+    phase: z.string(),
+  }).optional(),
 });
 export type Server = z.infer<typeof serverSchema>;
 

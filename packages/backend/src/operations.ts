@@ -27,11 +27,12 @@ export interface Job extends Operation {
 }
 export interface JobContext {
   job: Job;
-  progress: (phase: string, recovery?: Record<string, unknown>) => void;
+  /** Persist recovery and an optional public result atomically with the phase. */
+  progress: (phase: string, recovery?: Record<string, unknown>, result?: Record<string, unknown>) => void;
 }
 interface JobHandler {
   run: (context: JobContext) => Promise<Record<string, unknown> | void>;
-  recover?: (context: JobContext) => Promise<void>;
+  recover?: (context: JobContext) => Promise<Record<string, unknown> | void>;
 }
 const handlers = new Map<string, JobHandler>();
 let running = false;
@@ -192,14 +193,15 @@ export function enqueueOperation(options: {
 function context(job: Job): JobContext {
   return {
     job,
-    progress: (phase, recovery) => {
+    progress: (phase, recovery, result) => {
       if (recovery) job.recovery = { ...job.recovery, ...recovery };
+      if (result) job.result = result;
       job.phase = phase;
       getDatabase()
         .query(
-          "UPDATE operations SET phase=?, recovery_json=?, updated_at=? WHERE id=?",
+          "UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=?",
         )
-        .run(phase, JSON.stringify(job.recovery), Date.now(), job.id);
+        .run(phase, JSON.stringify(job.recovery), job.result ? JSON.stringify(job.result) : null, Date.now(), job.id);
     },
   };
 }
@@ -211,7 +213,7 @@ function finish(
 ) {
   getDatabase()
     .query(
-      "UPDATE operations SET status=?,phase=?,result_json=?,error=?,updated_at=? WHERE id=?",
+      "UPDATE operations SET status=?,phase=?,result_json=COALESCE(?,result_json),error=?,updated_at=? WHERE id=?",
     )
     .run(
       status,
@@ -318,11 +320,11 @@ async function recoverInterruptedOperations(): Promise<void> {
   for (const row of rows) {
     try {
       const job = toJob(row);
-      await handlers.get(job.kind)?.recover?.(context(job));
+      const result = await handlers.get(job.kind)?.recover?.(context(job));
       finish(
         job,
         "interrupted",
-        null,
+        result ?? null,
         "Ludock restarted during this operation. Review the server state before retrying.",
       );
     } catch {

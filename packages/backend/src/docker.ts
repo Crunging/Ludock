@@ -360,8 +360,13 @@ export async function changeContainerState(
   assertAccess?: (observation: ServerObservation) => void,
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
-  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
-  await container[action]().catch((error: unknown) => {
+  const managed = toInspectedManagedContainer(info);
+  assertAccess?.(toServerObservation(info, managed));
+  const configured = info.Config.StopTimeout;
+  const preset = getGameIntegration(managed.gameType)?.stopTimeoutSeconds ?? 120;
+  // Docker's -1 explicitly means to wait indefinitely. Preserve that choice.
+  const timeout = configured === -1 ? -1 : Math.max(preset, configured ?? 0);
+  await container[action](action === "start" ? undefined : { t: timeout }).catch((error: unknown) => {
     if (action === "restart" || !(error instanceof DockerApiError) || error.statusCode !== 304)
       throw error;
   });

@@ -125,6 +125,18 @@ until the check passes and **Unhealthy** while it fails. A stopped server shows:
 - **Force-stopped** when Docker killed it (exit 137), usually because it didn't
   shut down within its stop grace period. Recent progress may not have been saved.
 
+### Stop and Restart
+
+Stop and Restart run as tracked operations in **Activity**. When the game's
+console has a **Save world** shortcut, Ludock sends it and waits five seconds
+first; if the console isn't available, the stop goes ahead. Docker then allows
+120 seconds for shutdown, or 180 seconds for ARK, Palworld, Valheim, and 7 Days
+to Die. A longer `stop_grace_period` on the container wins.
+
+If Ludock restarts mid-operation, it waits up to five minutes for a pending stop
+to finish without sending it again. A server that had to be killed (exit 137)
+shows **Force-stopped** in **Needs attention**.
+
 ### Addresses
 
 Ludock combines the name or IP in **Settings → Server address** with the host
