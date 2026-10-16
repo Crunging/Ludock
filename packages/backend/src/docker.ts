@@ -375,6 +375,21 @@ export function stopTimeoutSeconds(info: Docker.ContainerInspectInfo): number {
   return configured === -1 ? -1 : Math.max(preset, configured ?? 0);
 }
 
+// Bound startup recovery even if Docker was never sent the request, or the
+// owner configured an indefinite stop. The persisted deadline survives retries.
+const STOP_RECOVERY_MIN_MS = 5 * 60_000;
+
+/** Persist from the final inspection immediately before dispatching a stop.
+ * Recovery waits through the full grace period plus time to kill the process. */
+export function stopRecoveryState(info: Docker.ContainerInspectInfo, now = Date.now()) {
+  const running = info.State.Running || info.State.Status === "running";
+  return {
+    stopStarted: running,
+    stopInitialStartedAt: running ? dockerTime(info.State.StartedAt) : null,
+    stopRecoveryDeadlineAt: now + Math.max(STOP_RECOVERY_MIN_MS, (stopTimeoutSeconds(info) + 60) * 1000),
+  };
+}
+
 export async function checkDockerConnection(): Promise<void> {
   await docker.ping();
 }

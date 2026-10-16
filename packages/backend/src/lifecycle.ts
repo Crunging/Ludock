@@ -1,6 +1,6 @@
 import type { ServerCapability } from "@ludock/shared";
 import { assertServerCapability } from "./authorization.js";
-import { changeContainerState, getContainer, type ContainerAction } from "./docker.js";
+import { changeContainerState, getContainer, stopRecoveryState, type ContainerAction } from "./docker.js";
 import { AppError } from "./errors.js";
 import { resolveGameConsoleAdapter } from "./game-console.js";
 import { executeGameCommand } from "./game-console-runtime.js";
@@ -12,9 +12,6 @@ import type { JobContext } from "./operations.js";
 import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
 
 const SAVE_SETTLE_MS = 5_000;
-// Bound startup recovery even if Docker was never sent the request, or the
-// owner configured an indefinite stop. The persisted deadline survives retries.
-const STOP_RECOVERY_TIMEOUT_MS = 5 * 60_000;
 const FORCE_STOP_GUIDANCE = "Force-stopped, recent progress may not have been saved.";
 
 function capability(action: string): ServerCapability {
@@ -101,17 +98,11 @@ export async function runLifecycle(context: JobContext, action: ContainerAction)
       assertAccess();
       server = await resolve();
       assertAccess();
-      record(context, mutation === "start" ? "starting" : "stopping", {
-        containerId: server.container.id,
-        ...(mutation === "stop" ? {
-          stopStarted: server.container.state === "running",
-          stopInitialStartedAt: server.container.stateSince,
-          stopRecoveryDeadlineAt: Date.now() + STOP_RECOVERY_TIMEOUT_MS,
-        } : {}),
-      });
-      await changeContainerState(server.container.id, mutation, (observation) => {
+      record(context, mutation === "start" ? "starting" : "stopping", { containerId: server.container.id });
+      await changeContainerState(server.container.id, mutation, (observation, info) => {
         assertServerCapability(jobActor(context), server.logical.id, permission);
         assertObservedServerBinding(server.logical.id, observation, context.job.bindingRevision);
+        if (mutation === "stop") record(context, "stopping", stopRecoveryState(info));
       });
     };
     suppressMonitoring(server.logical.id);

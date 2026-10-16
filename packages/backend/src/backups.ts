@@ -14,7 +14,7 @@ import { getSetting } from "./settings.js";
 import { rootList } from "./approved-paths.js";
 import { docker } from "./docker-client.js";
 import { removeOperationHelper } from "./docker-helpers.js";
-import { changeContainerState, getManagedContainerObservation, listManagedContainerObservations } from "./docker.js";
+import { changeContainerState, getManagedContainerObservation, listManagedContainerObservations, stopRecoveryState } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -64,7 +64,6 @@ interface BackupRow {
   created_at: number;
   state: "complete" | "failed";
 }
-const STOP_RECOVERY_TIMEOUT_MS = 5 * 60_000;
 const restoreJournalsSchema = z.array(z.object({
   root: z.object({ id: z.string(), path: z.string() }),
   phase: z.enum(["staging", "moving_old", "old_moved", "replaced", "rolling_back", "rolled_back"]),
@@ -424,13 +423,10 @@ export async function stopForDataOperation(
     assertDataOperationAuthority(context, job);
     assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
     if (job.job.recovery.initialRunning === undefined) {
-      const running = info.State.Running || info.State.Status === "running";
-      const startedAt = Date.parse(info.State.StartedAt || "");
+      const stop = stopRecoveryState(info);
       job.progress("stopping", {
-        initialRunning: running,
-        stopStarted: running,
-        stopInitialStartedAt: Number.isFinite(startedAt) ? startedAt : null,
-        stopRecoveryDeadlineAt: Date.now() + STOP_RECOVERY_TIMEOUT_MS,
+        initialRunning: stop.stopStarted,
+        ...stop,
         containerId: context.container.id,
         fingerprint: context.logical.bindingFingerprint,
         bindingRevision: context.logical.bindingRevision,
@@ -524,13 +520,8 @@ export async function restoreInitialRunningState(
     job.job.recovery.stateRestored === true
   )
     return;
-  const observe = async () => {
-    const observed = await getManagedContainerObservation(context.container.id);
-    assertObservedServerBinding(context.logical.id, observed.observation, context.logical.bindingRevision);
-    return observed;
-  };
-  let observed = await observe();
-  if (job.job.recovery.stopStarted === true && job.job.recovery.stopSettled !== true) {
+  let observed = await observeDuringStop(job, context.container.id, context.logical);
+  if (stopPending(job)) {
     // A disconnected stop request may still be executing in Docker. A running
     // snapshot is not evidence that recovery is complete: wait for that stop
     // before restoring the server, without dispatching it a second time.
@@ -542,17 +533,8 @@ export async function restoreInitialRunningState(
         job.progress("state_restored", { stateRestored: true, stopSettled: true });
         return;
       }
-      const deadline = job.job.recovery.stopRecoveryDeadlineAt;
-      if (typeof deadline !== "number" || !Number.isFinite(deadline) || deadline <= Date.now())
-        throw failBackup("STOP_RECOVERY_REQUIRED",
-          "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.");
-      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, deadline - Date.now())));
-      try { observed = await observe(); }
-      catch (error) {
-        // Retain locks across transient daemon failures, but never across an
-        // identity mismatch. The original deadline still bounds this wait.
-        if (error instanceof AppError) throw error;
-      }
+      await waitForStopDeadline(job);
+      observed = await observeDuringStop(job, context.container.id, context.logical);
     }
     job.progress("stop_reconciled", { stopSettled: true });
   }
@@ -564,6 +546,38 @@ export async function restoreInitialRunningState(
   }
   job.progress("state_restored", { stateRestored: true });
   suppressMonitoring(context.logical.id);
+}
+
+function stopPending(job: JobContext): boolean {
+  return job.job.recovery.stopStarted === true && job.job.recovery.stopSettled !== true;
+}
+
+async function waitForStopDeadline(job: JobContext): Promise<void> {
+  const deadline = job.job.recovery.stopRecoveryDeadlineAt;
+  if (typeof deadline !== "number" || !Number.isFinite(deadline) || deadline <= Date.now())
+    throw failBackup("STOP_RECOVERY_REQUIRED",
+      "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.");
+  await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, deadline - Date.now())));
+}
+
+/** Observe and confirm the binding. While an interrupted stop may still be
+ * running, a daemon failure is not evidence that it settled: retain locks and
+ * retry until the saved deadline, but never across an identity mismatch. */
+async function observeDuringStop(
+  job: JobContext,
+  containerId: ServerContext["container"]["id"],
+  logical: { id: string; bindingRevision: number },
+) {
+  for (;;) {
+    try {
+      const observed = await getManagedContainerObservation(containerId);
+      assertObservedServerBinding(logical.id, observed.observation, logical.bindingRevision);
+      return observed;
+    } catch (error) {
+      if (!stopPending(job) || error instanceof AppError) throw error;
+      await waitForStopDeadline(job);
+    }
+  }
 }
 
 /** Parent holds all data/storage locks and owns restoring running state. */
@@ -732,12 +746,7 @@ async function recoveryContext(job: JobContext): Promise<ServerContext | null> {
       "RECOVERY_BINDING_CHANGED",
       "Recovery requires review because the server binding changed.",
     );
-  const observed = await getManagedContainerObservation(logical.containerId);
-  assertObservedServerBinding(
-    logical.id,
-    observed.observation,
-    logical.bindingRevision,
-  );
+  const observed = await observeDuringStop(job, logical.containerId, logical);
   return {
     logical: { ...logical, containerId: logical.containerId },
     ...observed,

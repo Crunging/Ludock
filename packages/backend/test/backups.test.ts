@@ -321,6 +321,33 @@ describe("backup execution authority", () => {
     expect(isServerBusy(context.logical.id)).toBe(false);
   });
 
+  for (const [timeout, waitMs] of [[900, 960_000], [-1, 300_000]] as const)
+    it(`bounds interrupted stop recovery by a ${timeout} second stop grace period`, async () => {
+      stopTimeout = timeout;
+      const before = Date.now();
+      await stopForDataOperation(context, job);
+      const deadline = job.job.recovery.stopRecoveryDeadlineAt as number;
+      expect(deadline).toBeGreaterThanOrEqual(before + waitMs);
+      expect(deadline).toBeLessThanOrEqual(Date.now() + waitMs);
+    });
+
+  it("retains recovery locks when Docker fails the first stop reconciliation inspections", async () => {
+    await stopForDataOperation(context, job);
+    job.job.recovery.stopSettled = false;
+    docker.listContainers = (async () => []) as unknown as typeof docker.listContainers;
+    let failures = 2;
+    onInspect = () => {
+      if (failures <= 0) return;
+      failures--;
+      expect(isServerBusy(context.logical.id)).toBe(true);
+      throw new Error("Fixture daemon unavailable");
+    };
+    await recoverBackup(job);
+    expect(failures).toBe(0);
+    expect(running).toBe(true);
+    expect(job.job.recovery.stateRestored).toBe(true);
+  });
+
   it("recognizes an external restart without waiting on or stopping the new instance", async () => {
     await stopForDataOperation(context, job);
     running = true;
