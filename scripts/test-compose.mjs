@@ -50,10 +50,7 @@ async function request(endpoint, body, method = body === undefined ? "GET" : "PO
   if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
   return response.json();
 }
-async function update(forceRecreate) {
-  let { operation } = await request(`/servers/${serverId}/updates`, {
-    createBackup: false, skipBackupConfirmation: "Compose Smoke", forceRecreate,
-  });
+async function waitForOperation(operation) {
   const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
     ({ operation } = await request(`/operations/${operation.id}`));
@@ -61,6 +58,12 @@ async function update(forceRecreate) {
     await Bun.sleep(500);
   }
   throw new Error("Operation timeout");
+}
+async function update(forceRecreate) {
+  const { operation } = await request(`/servers/${serverId}/updates`, {
+    createBackup: false, skipBackupConfirmation: "Compose Smoke", forceRecreate,
+  });
+  return waitForOperation(operation);
 }
 
 try {
@@ -118,7 +121,9 @@ try {
   docker("restart", app);
   base = `http://127.0.0.1:${inspect(app).NetworkSettings.Ports["3000/tcp"][0].HostPort}`;
   await waitForReady(() => request("/health"), "Fixture API must recover after restart");
-  await request(`/servers/${serverId}/stop`, {}, "POST");
+  const { operation: stopOperation } = await request(`/servers/${serverId}/stop`, {}, "POST");
+  expect((await waitForOperation(stopOperation)).status).toBe("succeeded");
+  expect(inspect(after).State.Running).toBe(false);
   const stopped = await update(true);
   expect(stopped.status).toBe("succeeded");
   const final = cli("ps", "-a", "-q", "game");
