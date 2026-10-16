@@ -648,12 +648,12 @@ async function waitForHelperExit(
   }
 }
 
-async function startHelperExec(container: Docker.Container, execution: Docker.Exec, expired: () => boolean) {
-  try { return await execution.start(); }
+async function startHelperExec(container: Docker.Container, execution: Docker.Exec, deadline: AbortSignal) {
+  try { return await execution.start(deadline); }
   catch (error) {
     if (error instanceof DockerStreamOpenError && error.requestStarted)
-      await waitForHelperExit(container, execution, expired);
-    throw error;
+      await waitForHelperExit(container, execution, () => deadline.aborted);
+    throw deadline.aborted ? deadline.reason : error;
   }
 }
 
@@ -676,14 +676,16 @@ export async function helperExec(
   });
   assertAccess?.();
   let stream: DockerConnection | undefined;
-  let expired = false;
-  // The limit also bounds waiting for the process after its stream ends.
+  // The limit also bounds opening the stream and waiting for the process after it ends.
+  const deadline = new AbortController();
+  const expired = () => deadline.signal.aborted;
   const timeout = setTimeout(() => {
-    expired = true;
-    stream?.abort(failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state."));
+    const error = failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.");
+    deadline.abort(error);
+    stream?.abort(error);
   }, 120_000);
   try {
-    stream = await startHelperExec(container, execution, () => expired);
+    stream = await startHelperExec(container, execution, deadline.signal);
     const chunks: Uint8Array[] = [];
     let size = 0;
     let failure: { error: unknown } | undefined;
@@ -698,7 +700,7 @@ export async function helperExec(
     } finally {
       stream.abort();
     }
-    const result = await waitForHelperExit(container, execution, () => expired);
+    const result = await waitForHelperExit(container, execution, expired);
     if (failure) throw failure.error;
     if (!result || result.ExitCode !== 0)
       throw failBackup(
@@ -867,17 +869,18 @@ export async function extractRootToStage(
   });
   assertAccess?.();
   let started: DockerConnection | undefined;
-  let expired = false;
-  const hasExpired = () => expired;
+  const deadline = new AbortController();
+  const hasExpired = () => deadline.signal.aborted;
   const timeout = setTimeout(() => {
-    expired = true;
-    started?.abort(failBackup(
+    const error = failBackup(
       "RESTORE_TIMEOUT",
       "Restore extraction exceeded its 30 minute execution limit.",
-    ));
+    );
+    deadline.abort(error);
+    started?.abort(error);
   }, 30 * 60_000);
   try {
-    started = await startHelperExec(helper, execution, hasExpired);
+    started = await startHelperExec(helper, execution, deadline.signal);
   } catch (error) {
     clearTimeout(timeout);
     throw error;

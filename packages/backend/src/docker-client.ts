@@ -202,8 +202,8 @@ export class Exec {
     this.endpoint = `/exec/${resource(id)}`;
   }
 
-  async start(): Promise<DockerConnection> {
-    return this.client.transport.hijack(await this.client.path(`${this.endpoint}/start`), { Detach: false, Tty: false });
+  async start(signal?: AbortSignal): Promise<DockerConnection> {
+    return this.client.transport.hijack(await this.client.path(`${this.endpoint}/start`), { Detach: false, Tty: false }, signal);
   }
 
   async inspect(): Promise<ExecInspectInfo> {

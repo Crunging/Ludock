@@ -313,6 +313,22 @@ describe("Bun Docker duplex transport", () => {
     writer.releaseLock();
   });
 
+  it("ends an opening Docker accepted but never answered when its caller's deadline aborts", async () => {
+    const received = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const transport = await upgradeFixture((socket) => {
+      socket.onEnd = () => closed.resolve();
+      received.resolve();
+    });
+    const deadline = new AbortController();
+    const opening = transport.hijack("/exec/fixture/start", {}, deadline.signal);
+    void opening.catch(() => {});
+    await received.promise;
+    deadline.abort(new Error("Fixture deadline"));
+    await expect(opening).rejects.toMatchObject({ name: "DockerStreamOpenError", requestStarted: true });
+    await closed.promise;
+  });
+
   it("finishes the request before accepting stdin after an early upgrade response", async () => {
     let handlers: Bun.SocketHandler<undefined, "uint8array">;
     let written = "";
