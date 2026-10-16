@@ -550,6 +550,50 @@ describe("scoped file helper projections", () => {
     expect(await deleting).toBe(revoked);
   });
 
+  it("cancels a revoked deletion while Docker has not answered the exec connection", async () => {
+    const openingStarted = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const revoked = new Error("Access revoked");
+    let removed = false;
+    const server = managed({
+      id: dockerId("physical"),
+      fileRoots: [{ id: "root-0", name: "data", path: "/data" }],
+    });
+    docker.getContainer = (() => ({
+      inspect: async () => ({
+        Id: server.id, Name: "/game", Config: { Image: server.image, Labels: server.labels },
+        Mounts: [{ Type: "volume", Name: "game-data", Source: "game-data", Destination: "/data", RW: true }],
+      }),
+    })) as unknown as typeof docker.getContainer;
+    docker.getVolume = (() => ({ inspect: async () => ({ Driver: "local", Options: {} }) })) as unknown as typeof docker.getVolume;
+    docker.createContainer = (async () => ({
+      start: async () => {},
+      remove: async () => { removed = true; },
+      stop: async () => {},
+      exec: async (options: Docker.ExecCreateOptions) => ({
+        start: async (signal?: AbortSignal) => {
+          const { operation } = JSON.parse(options.Cmd?.at(-1) || "{}") as { operation: string };
+          if (operation === "delete") {
+            openingStarted.resolve();
+            // A stalled daemon answers only when the opening is cancelled.
+            return new Promise((_, reject) => {
+              signal?.addEventListener("abort", () => reject(new Error("Docker stream cancelled")), { once: true });
+            });
+          }
+          const response = new StreamFixture();
+          response.close(frame(1, '{"safe":true}'));
+          return response.connection;
+        },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    })) as unknown as typeof docker.createContainer;
+    const deleting = rejectedBy(deleteFileEntry(server, "root-0", "world", () => controller.signal.throwIfAborted(), controller.signal));
+    await openingStarted.promise;
+    controller.abort(revoked);
+    expect(await deleting).toBe(revoked);
+    expect(removed).toBe(true);
+  });
+
   it("rejects named volumes using driver plugins or host remapping options before exposing them", async () => {
     for (const info of [
       { Driver: "remote-plugin", Options: {} },

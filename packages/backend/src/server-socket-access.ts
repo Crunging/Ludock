@@ -3,7 +3,7 @@ import type { WebSocketAuth } from "./auth.js";
 import type { ServerCapability } from "@ludock/shared";
 import { hasServerCapability } from "./authorization.js";
 import { getLogicalServer } from "./identity.js";
-import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
+import { resolveAuthorizedServer, verifyAuthorizedServer, type ServerContext } from "./servers.js";
 
 export type SocketOutput = "stdout" | "stderr" | "system" | "error";
 
@@ -37,8 +37,8 @@ export async function openServerSocket(
 }
 
 /** A stream stays attached to the exact reviewed binding used when it opened.
- * Check local revocation before every output frame, and refresh Docker while
- * idle so external recreation also closes an otherwise silent connection. */
+ * Check local revocation before every output frame, and inspect its container
+ * while idle so external recreation also closes an otherwise silent connection. */
 export async function authorizeServerSocket(
   ws: SocketChannel,
   auth: WebSocketAuth,
@@ -73,10 +73,14 @@ export async function authorizeServerSocket(
     return true;
   };
 
-  const refresh = async (): Promise<ServerContext> => {
+  // Commands rediscover the fleet before they run. The idle check inspects only
+  // this container, so open sockets don't each repeat fleet discovery.
+  const revalidate = async (
+    resolve: typeof resolveAuthorizedServer,
+  ): Promise<ServerContext> => {
     if (!allowed()) throw new Error("Server access unavailable");
     try {
-      const refreshed = await resolveAuthorizedServer(
+      const refreshed = await resolve(
         auth.user,
         serverId,
         capability,
@@ -89,12 +93,13 @@ export async function authorizeServerSocket(
       throw new Error("Server access unavailable");
     }
   };
+  const refresh = () => revalidate(resolveAuthorizedServer);
 
   let checking = false;
   const interval = setInterval(() => {
     if (checking || !allowed()) return;
     checking = true;
-    void refresh()
+    void revalidate(verifyAuthorizedServer)
       .catch(() => undefined)
       .finally(() => {
         checking = false;

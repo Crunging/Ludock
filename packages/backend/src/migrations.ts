@@ -148,6 +148,19 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     `,
     upgrade: initializeFingerprintKey,
   },
+  {
+    // Server lists and the operation runner read active work and the latest
+    // backup on every refresh. Keep those reads off the growing history.
+    version: 7,
+    sql: `
+      CREATE INDEX operations_active_server_idx ON operations(server_id)
+        WHERE status IN ('queued','running');
+      CREATE INDEX operations_queued_idx ON operations(created_at, id)
+        WHERE status = 'queued';
+      CREATE INDEX backups_server_idx ON backups(server_id, created_at DESC, id);
+      CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
+    `,
+  },
 ];
 
 function schemaVersion(db: Database): number {

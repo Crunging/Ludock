@@ -35,9 +35,11 @@ export const accessRoutes: ApiRoutes = {
         throw new AppError("NO_REVIEW", 409, "This server has no pending binding review");
       if (input.confirmation !== server.displayName)
         throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to accept the changed binding");
+      if (input.bindingRevision !== server.bindingRevision)
+        throw new AppError("SERVER_REVIEW_CHANGED", 409, "The pending server binding changed; reload the review");
       await withLocks([`server:${serverId}`], () => {
         assertAdministrator(assertRequestUser(ctx.request, requestUser(ctx)));
-        reviewServerBinding(serverId, server.pendingFingerprint!);
+        reviewServerBinding(serverId, server.pendingFingerprint!, input.bindingRevision);
       });
       audit(ctx, "server.binding.reviewed", serverId);
       return respond(bindingReviewResponseSchema, {

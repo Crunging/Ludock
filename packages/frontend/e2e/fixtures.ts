@@ -73,6 +73,7 @@ export function makeServers(): Server[] {
     labels: {},
     latestBackup: null,
     bindingStatus: "active",
+    bindingRevision: 1,
     permissions: [...SERVER_CAPABILITIES],
   });
   return [

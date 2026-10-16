@@ -424,10 +424,12 @@ function recordBinding(
 }
 
 /** The caller must authorize an administrator and freshly reconcile Docker
- * before presenting/accepting this exact pending fingerprint. */
+ * before presenting/accepting this exact pending fingerprint. A revision pins
+ * the binding the administrator reviewed, including a replaced container. */
 export function reviewServerBinding(
   serverId: string,
   expectedFingerprint: string,
+  expectedRevision?: number,
 ): LogicalServer {
   const server = getLogicalServer(serverId);
   if (!server)
@@ -436,7 +438,8 @@ export function reviewServerBinding(
     server.status !== "review_required" ||
     !server.containerId ||
     !server.pendingFingerprint ||
-    server.pendingFingerprint !== expectedFingerprint
+    server.pendingFingerprint !== expectedFingerprint ||
+    (expectedRevision !== undefined && server.bindingRevision !== expectedRevision)
   ) {
     throw new ServerBindingError(
       "SERVER_REVIEW_CHANGED",

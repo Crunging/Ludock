@@ -77,6 +77,7 @@ function toPublicServer(
         ? { host: connectionHost(), port: container.connectPort, source: "detected" }
         : null,
     bindingStatus: logical.status,
+    bindingRevision: logical.bindingRevision,
     permissions,
     activeOperation: getDatabase().query(`
       SELECT id,kind,status,phase FROM operations
@@ -193,6 +194,17 @@ export async function resolveAuthorizedServer(
   expectedRevision?: number,
 ): Promise<ServerContext> {
   await refreshServers();
+  return verifyAuthorizedServer(actor, id, capability, expectedRevision);
+}
+/** Confirm one saved binding against its own container without discovering
+ * the fleet. Docker events and the background tick still reconcile
+ * replacements and ambiguity into the saved binding. */
+export async function verifyAuthorizedServer(
+  actor: SessionUser,
+  id: string,
+  capability: ServerCapability,
+  expectedRevision?: number,
+): Promise<ServerContext> {
   assertServerCapability(actor, id, capability);
   const logical = resolveServerBinding(id, expectedRevision);
   const observed = await getManagedContainerObservation(logical.containerId);
