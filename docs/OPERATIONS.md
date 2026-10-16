@@ -83,7 +83,7 @@ labels:
 | `ludock.game` | Game integration, such as `minecraft` or `terraria` |
 | `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
 | `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
-| `ludock.console.host` / `ludock.console.port` | Console address, when the default isn't right |
+| `ludock.console.host` / `ludock.console.port` | Optional direct host override / container's internal console port |
 | `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
 | `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
@@ -153,11 +153,30 @@ administrators, a shell inside the container.
 - **History:** Up and Down step through commands sent during the current visit.
   Nothing is stored.
 
-Network consoles (RCON, WebRCON, and Telnet) need a reachable address, the
-console enabled in the game, and credentials. These protocols aren't encrypted,
-so keep them on a trusted Docker network or behind an authenticated TLS tunnel.
-Ludock sends console credentials to `ludock.console.host`, so point it only at an
-endpoint you trust.
+Network consoles need the console enabled in the game and its password in an
+environment variable. Factorio, Palworld, ARK SE/SA, CS2, Project Zomboid, Conan
+Exiles, and V Rising use Source RCON; Rust uses WebRCON; 7 Days to Die uses
+Telnet. By default, each command runs in a temporary helper sharing the game
+container's network namespace and connects to `127.0.0.1` on the internal
+console port. This works across separate Compose networks and with consoles
+that listen only on localhost. No published console port, shared network, or
+console client installed in the game image is needed.
+
+Helpers reuse Ludock's runtime image and receive the password over attached
+standard input, never through their environment, labels, or command arguments.
+Connections have five seconds to open and commands have ten seconds to finish.
+Disconnecting, losing console permission, or changing the server binding cancels
+the helper. The server stays locked until Docker confirms the helper is removed;
+a Docker outage can delay releasing that lock. Console output remains limited
+and redacted.
+
+Set `ludock.console.port` when the internal port differs from the game's default,
+and `ludock.console.password-env` when the password uses a different environment
+variable. Setting `ludock.console.host` explicitly uses a direct connection from
+Ludock instead of a helper. That address must be reachable from Ludock's network.
+RCON, WebRCON, and Telnet aren't encrypted, and Ludock sends the console password
+to that host, so use only a trusted endpoint and network or an authenticated
+TLS tunnel.
 
 - **Minecraft** runs `rcon-cli` inside the game container and needs no published
   RCON port. The image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`,
