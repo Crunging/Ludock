@@ -33,6 +33,7 @@ const server: Server = {
   labels: {},
   latestBackup: null,
   bindingStatus: "active",
+  bindingRevision: 1,
   permissions: ["server.view", "server.stop", "server.restart", "console.execute", "files.read"],
 };
 

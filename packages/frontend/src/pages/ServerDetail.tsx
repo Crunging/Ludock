@@ -654,7 +654,10 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
                 apiJson(
                   `${path}/binding-review`,
                   bindingReviewResponseSchema,
-                  jsonBody("POST", { confirmation: bindingConfirmation }),
+                  jsonBody("POST", {
+                    confirmation: bindingConfirmation,
+                    bindingRevision: server.bindingRevision,
+                  }),
                 ),
               "Server binding reviewed.",
             );

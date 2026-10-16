@@ -53,6 +53,8 @@ export async function handleContainerLogsConnection(
     allowed: () => access.allowed(),
     send,
     endedMessage: "Log stream ended (container may have stopped)",
+    // Nothing else uses this socket. Closing lets the browser reconnect.
+    closeOnFailure: true,
   });
 }
 
@@ -67,6 +69,8 @@ export async function followContainerLogs(
     allowed: () => boolean;
     send: (type: SocketOutput, data: string) => void;
     endedMessage: string;
+    /** Close the socket when Docker logs fail, rather than leave it silent. */
+    closeOnFailure?: boolean;
   },
 ): Promise<void> {
   const { send } = options;
@@ -85,6 +89,7 @@ export async function followContainerLogs(
   } catch {
     logger.warn("Failed to attach Docker log stream", { container: containerId.slice(0, 12) });
     send("error", "Failed to open Docker logs");
+    if (options.closeOnFailure) ws.close(1011, "Docker logs unavailable");
     return;
   }
   let stopped = false;
@@ -111,6 +116,7 @@ export async function followContainerLogs(
       if (!stopped) {
         logger.warn("Docker log stream failed", { container: containerId.slice(0, 12) });
         send("error", "Docker log stream failed");
+        if (options.closeOnFailure) ws.close(1011, "Docker log stream failed");
       }
     } finally {
       stopped = true;

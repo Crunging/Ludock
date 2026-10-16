@@ -262,6 +262,8 @@ describe("WebSocket server capability boundaries", () => {
       await settle();
       expect(ws.sent.filter(message => message.type === "stdout" || message.type === "stderr")).toStrictEqual([]);
       expect(ws.sent.some(message => message.type === "error" && message.data === "Docker log stream failed")).toBe(true);
+      // A log-only socket closes so the browser reconnects; a console keeps accepting commands.
+      expect(ws.closeCode).toBe(endpoint === "logs" ? 1011 : null);
     });
   }
 

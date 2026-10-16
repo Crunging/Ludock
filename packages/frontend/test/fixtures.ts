@@ -31,6 +31,7 @@ export function serverFixture(overrides: Partial<Server> = {}): Server {
     latestBackup: null,
     permissions: ["server.view"],
     bindingStatus: "active",
+    bindingRevision: 1,
     ...overrides,
   };
 }

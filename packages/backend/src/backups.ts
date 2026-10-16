@@ -28,7 +28,7 @@ import {
   type ServerContext,
 } from "./servers.js";
 import { withLocks } from "./operation-locks.js";
-import type { JobContext } from "./operations.js";
+import { withJobLocks, type JobContext } from "./operations.js";
 import { setIntentionalStop, suppressMonitoring } from "./monitoring.js";
 import { notifyEvent } from "./notifications.js";
 import { RESTORE_HELPER_SCRIPT } from "./helper-scripts.js";
@@ -533,7 +533,8 @@ export async function restoreInitialRunningState(
         ((await docker.getContainer(context.container.id).inspect()).State.StartedAt || "") !==
           job.job.recovery.stoppedStartedAt)
       return;
-    job.progress("restarting");
+    // Persist before dispatch, so recovery can recognize a start that reached Docker.
+    job.progress("restarting", { startRequested: true });
     await changeContainerState(context.container.id, "start", (observation) => {
       assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
     });
@@ -746,7 +747,7 @@ export async function runBackup(
     "backups.create",
     job.job.bindingRevision,
   );
-  return withLocks([...context.lockKeys, "backups:storage"], async () => {
+  return withJobLocks(job, [...context.lockKeys, "backups:storage"], async () => {
     assertServerCapability(jobActor(job), context.logical.id, "backups.create");
     await assertBackupReady(context);
     try {
@@ -981,7 +982,7 @@ export async function runRestore(
     settings.maxBytes,
     row.checksum,
   );
-  return withLocks([...context.lockKeys, "backups:storage"], async () => {
+  return withJobLocks(job, [...context.lockKeys, "backups:storage"], async () => {
     let helper: DataHelper | undefined;
     const assertAccess = () => assertDataOperationAuthority(context, job);
     try {

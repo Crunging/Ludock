@@ -66,6 +66,9 @@ export const serverSchema = z.object({
     .nullable(),
   permissions: z.array(serverCapabilitySchema),
   bindingStatus: bindingStatusSchema,
+  /** Changes whenever the observed binding changes, so a review accepts only
+   * the binding the administrator saw. */
+  bindingRevision: z.number().int().nonnegative(),
   /** Present while persisted work owns this server's controls. */
   activeOperation: z.object({
     id: z.string().uuid(),
@@ -129,7 +132,10 @@ export const consoleMessageSchema = z.object({
 export type ConsoleMessage = z.infer<typeof consoleMessageSchema>;
 
 export const bindingReviewRequestSchema = z
-  .object({ confirmation: z.string().max(200) })
+  .object({
+    confirmation: z.string().max(200),
+    bindingRevision: z.number().int().nonnegative(),
+  })
   .strict();
 export type BindingReviewRequest = z.infer<typeof bindingReviewRequestSchema>;
 

@@ -3,6 +3,7 @@ import { getDatabase, findUserById, writeAuditLog } from "./database.js";
 import { publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
+import { acquireLocks, nextLockRelease } from "./operation-locks.js";
 
 interface OperationRow {
   id: string;
@@ -35,11 +36,28 @@ interface JobHandler {
   recover?: (context: JobContext) => Promise<Record<string, unknown> | void>;
 }
 const handlers = new Map<string, JobHandler>();
-let running = false;
 let enabled = false;
 let pending: ReturnType<typeof setTimeout> | null = null;
-let settled: Promise<void> = Promise.resolve();
 let starting: Promise<void> | null = null;
+
+/** Start, stop, and plain restart are short and never touch backup storage,
+ * so they run beside each other and beside one data operation. Everything
+ * else, including unknown kinds, runs one at a time. */
+type Lane = "lifecycle" | "data";
+const LANE_CAPACITY: Record<Lane, number> = { lifecycle: 4, data: 1 };
+const laneLoad: Record<Lane, number> = { lifecycle: 0, data: 0 };
+const claimed = new Set<string>();
+/** Jobs that found their resources held by another job. No new work starts
+ * until each retries, so a job never waits longer than serial execution. */
+const yielded = new Set<string>();
+const inFlight = new Set<Promise<void>>();
+let jobSettled: { promise: Promise<void>; resolve: () => void } | undefined;
+
+class ResourcesBusy extends Error {
+  constructor(readonly released: Promise<void>) {
+    super("Operation resources are busy");
+  }
+}
 
 function parseObject(json: string): Record<string, unknown> {
   try {
@@ -236,13 +254,6 @@ function finish(
     },
   });
 }
-function schedule() {
-  if (!enabled || starting || running || pending) return;
-  pending = setTimeout(() => {
-    pending = null;
-    settled = runNext();
-  }, 0);
-}
 function notifyScheduledFailure(row: OperationRow): void {
   let input: Record<string, unknown>;
   try {
@@ -258,43 +269,121 @@ function notifyScheduledFailure(row: OperationRow): void {
     "A scheduled Ludock action failed. Review its operation details.",
   );
 }
-async function runNext() {
-  if (!enabled || running) return;
-  const row = getDatabase()
-    .query(
-      "SELECT * FROM operations WHERE status='queued' ORDER BY created_at,id LIMIT 1",
-    )
-    .get() as OperationRow | null;
-  if (!row) return;
-  running = true;
+/** Acquire a job's resources. Handlers call this before any effect: if
+ * another job holds them, this job returns to the queue and runs again from
+ * the start once they are released, as it would have run after that job.
+ * Conflicts with requests outside the runner fail as before. */
+export async function withJobLocks<T>(
+  context: JobContext,
+  keys: readonly string[],
+  action: () => Promise<T> | T,
+): Promise<T> {
+  const id = context.job.id;
+  let release: () => void;
   try {
-    // Damaged saved state must fail this job without wedging the runner.
-    const job = toJob(row);
-    getDatabase()
-      .query(
-        "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?",
-      )
-      .run(Date.now(), job.id);
-    const handler = handlers.get(job.kind);
-    if (!handler)
-      throw new AppError(
-        "UNSUPPORTED_OPERATION",
-        409,
-        "This operation type is unavailable",
-      );
-    const result = (await handler.run(context(job))) ?? {};
-    finish(
-      job,
-      result.alreadyCurrent ? "already_current" : "succeeded",
-      result,
-      null,
-    );
+    release = acquireLocks(keys);
+  } catch (error) {
+    if (claimed.has(id) && error instanceof AppError && error.code === "OPERATION_CONFLICT" &&
+        [...claimed].some((other) => other !== id && !yielded.has(other)))
+      throw new ResourcesBusy(nextLockRelease());
+    if (yielded.delete(id)) schedule();
+    throw error;
+  }
+  if (yielded.delete(id)) schedule();
+  try {
+    return await action();
+  } finally {
+    release();
+  }
+}
+function laneFor(row: OperationRow): Lane {
+  if (row.kind === "start" || row.kind === "stop") return "lifecycle";
+  if (row.kind !== "restart") return "data";
+  try {
+    return parseObject(row.input_json).createBackup === true ? "data" : "lifecycle";
+  } catch {
+    return "data";
+  }
+}
+function schedule() {
+  if (!enabled || starting || pending) return;
+  pending = setTimeout(() => {
+    pending = null;
+    fill();
+  }, 0);
+}
+function fill() {
+  if (!enabled || yielded.size) return;
+  const rows = getDatabase()
+    .query("SELECT * FROM operations WHERE status='queued' ORDER BY created_at,id")
+    .all() as unknown as OperationRow[];
+  for (const row of rows) {
+    const lane = laneFor(row);
+    if (claimed.has(row.id) || laneLoad[lane] >= LANE_CAPACITY[lane]) continue;
+    claimed.add(row.id);
+    laneLoad[lane]++;
+    const run = runJob(row).finally(() => {
+      claimed.delete(row.id);
+      yielded.delete(row.id);
+      laneLoad[lane]--;
+      inFlight.delete(run);
+      jobSettled?.resolve();
+      jobSettled = undefined;
+      schedule();
+    });
+    inFlight.add(run);
+  }
+}
+function nextJobSettled(): Promise<void> {
+  jobSettled ??= Promise.withResolvers<void>();
+  return jobSettled.promise;
+}
+async function runJob(initial: OperationRow) {
+  let row = initial;
+  try {
+    while (true) {
+      // Damaged saved state must fail this job without wedging the runner.
+      const job = toJob(row);
+      getDatabase()
+        .query(
+          "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?",
+        )
+        .run(Date.now(), job.id);
+      const handler = handlers.get(job.kind);
+      if (!handler)
+        throw new AppError(
+          "UNSUPPORTED_OPERATION",
+          409,
+          "This operation type is unavailable",
+        );
+      try {
+        const result = (await handler.run(context(job))) ?? {};
+        finish(
+          job,
+          result.alreadyCurrent ? "already_current" : "succeeded",
+          result,
+          null,
+        );
+        return;
+      } catch (error) {
+        if (!(error instanceof ResourcesBusy)) throw error;
+        // Nothing has changed yet. Keep the job queued, so a restart while it
+        // waits runs it normally instead of reconciling an interruption.
+        getDatabase()
+          .query("UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?")
+          .run(Date.now(), job.id);
+        yielded.add(job.id);
+        await Promise.race([error.released, nextJobSettled()]);
+        const current = getDatabase()
+          .query("SELECT * FROM operations WHERE id = ?")
+          .get(job.id) as OperationRow | null;
+        if (!enabled || current?.status !== "queued") return;
+        row = current;
+      }
+    }
   } catch (error) {
     finish(jobIdentity(row), "failed", null, publicError(error).error);
     notifyScheduledFailure(row);
-  } finally {
-    running = false;
-    schedule();
   }
 }
 export async function startOperationRunner(): Promise<void> {
@@ -347,5 +436,8 @@ export async function stopOperationRunner(): Promise<void> {
   // Wait for it before allowing the database and Docker connections to close;
   // its completion must never re-enable queued work after this stop request.
   await starting?.catch(() => {});
-  await settled;
+  // Waiting jobs stay queued for the next start.
+  jobSettled?.resolve();
+  jobSettled = undefined;
+  while (inFlight.size) await Promise.allSettled([...inFlight]);
 }

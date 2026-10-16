@@ -14,6 +14,7 @@ import {
   registerJobHandler,
   startOperationRunner,
   stopOperationRunner,
+  withJobLocks,
 } from "../src/operations.js";
 import {
   acquireLocks,
@@ -287,6 +288,100 @@ describe("durable operations", () => {
     await stopped;
     expect(getOperation(first.id)?.status).toBe("succeeded");
     expect(started.length).toBe(1);
+  });
+});
+
+describe("operation lanes", () => {
+  const servers = () => {
+    const [a, b, c] = reconcileServers(["a", "b", "c"].map((name) => ({
+      containerId: dockerId(`lane-${name}`), name, displayName: name, gameType: "minecraft", mounts: [],
+    })));
+    return [a.id, b.id, c.id];
+  };
+  const queue = (id: string, kind: string, input: Record<string, unknown> = {}) =>
+    enqueueOperation({ serverId: id, actorId: owner.id, kind, bindingRevision: 1, input });
+  async function until(condition: () => boolean) {
+    for (let attempt = 0; attempt < 200 && !condition(); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(condition()).toBe(true);
+  }
+
+  it("runs a lifecycle action for another server while a data operation is in progress", async () => {
+    const [a, b] = servers();
+    const gate = Promise.withResolvers<void>();
+    registerJobHandler("backup", { run: () => gate.promise });
+    registerJobHandler("restart", { run: async () => {} });
+    const backup = queue(a, "backup");
+    const restart = queue(b, "restart", { createBackup: false });
+    await startOperationRunner();
+    expect((await finished(restart.id)).status).toBe("succeeded");
+    expect(getOperation(backup.id)?.status).toBe("running");
+    gate.resolve();
+    expect((await finished(backup.id)).status).toBe("succeeded");
+  });
+
+  it("keeps restart with a backup in the serial data lane", async () => {
+    const [a, b] = servers();
+    const gate = Promise.withResolvers<void>();
+    registerJobHandler("backup", { run: () => gate.promise });
+    registerJobHandler("restart", { run: async () => {} });
+    const backup = queue(a, "backup");
+    const restart = queue(b, "restart", { createBackup: true });
+    getDatabase().prepare("UPDATE operations SET created_at=0 WHERE id=?").run(backup.id);
+    await startOperationRunner();
+    await until(() => getOperation(backup.id)?.status === "running");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getOperation(restart.id)?.status).toBe("queued");
+    gate.resolve();
+    expect((await finished(restart.id)).status).toBe("succeeded");
+  });
+
+  it("returns a job to the queue while another job holds its resources, then runs it from the start", async () => {
+    const [a, b, c] = servers();
+    const gate = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const runs: string[] = [];
+    registerJobHandler("backup", {
+      run: (context) => withJobLocks(context, ["project:shared"], async () => {
+        held.resolve();
+        await gate.promise;
+      }),
+    });
+    registerJobHandler("stop", {
+      run: (context) => {
+        runs.push(context.job.serverId);
+        return withJobLocks(context, context.job.serverId === b ? ["project:shared"] : [], () => {});
+      },
+    });
+    const backup = queue(a, "backup");
+    await startOperationRunner();
+    await held.promise;
+    const stop = queue(b, "stop");
+    await until(() => runs.length === 1);
+    await until(() => getOperation(stop.id)?.status === "queued");
+    // New work waits until the yielded job has retried, as it would serially.
+    const other = queue(c, "stop");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getOperation(other.id)?.status).toBe("queued");
+    gate.resolve();
+    expect((await finished(backup.id)).status).toBe("succeeded");
+    expect((await finished(stop.id)).status).toBe("succeeded");
+    expect((await finished(other.id)).status).toBe("succeeded");
+    expect(runs).toStrictEqual([b, b, c]);
+  });
+
+  it("still fails a job whose resources are held outside the runner", async () => {
+    const [a] = servers();
+    const release = acquireLocks(["project:shared"]);
+    registerJobHandler("stop", {
+      run: (context) => withJobLocks(context, ["project:shared"], () => {}),
+    });
+    const stop = queue(a, "stop");
+    await startOperationRunner();
+    const result = await finished(stop.id);
+    release();
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/conflicting operation/);
   });
 });
 

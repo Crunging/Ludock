@@ -8,7 +8,7 @@ import { assertObservedServerBinding } from "./identity.js";
 import { jobActor } from "./jobs.js";
 import { setIntentionalStop, suppressMonitoring } from "./monitoring.js";
 import { withLocks } from "./operation-locks.js";
-import type { JobContext } from "./operations.js";
+import { withJobLocks, type JobContext } from "./operations.js";
 import { resolveAuthorizedServer, type ServerContext } from "./servers.js";
 
 const SAVE_SETTLE_MS = 5_000;
@@ -77,7 +77,7 @@ export async function runLifecycle(context: JobContext, action: ContainerAction)
   const permission = capability(action);
   const resolve = () => resolveAuthorizedServer(jobActor(context), context.job.serverId, permission, context.job.bindingRevision);
   const initial = await resolve();
-  return withLocks(initial.lockKeys, async () => {
+  return withJobLocks(context, initial.lockKeys, async () => {
     let server = await resolve();
     let accessFailure: Error | undefined;
     const assertAccess = () => {

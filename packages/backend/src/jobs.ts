@@ -9,8 +9,7 @@ import { assertServerCapability } from "./authorization.js";
 import { docker } from "./docker-client.js";
 import { changeContainerState } from "./docker.js";
 import { resolveAuthorizedServer, refreshServers } from "./servers.js";
-import { withLocks } from "./operation-locks.js";
-import { registerJobHandler, type JobContext } from "./operations.js";
+import { registerJobHandler, withJobLocks, type JobContext } from "./operations.js";
 import {
   runBackup,
   recoverBackup,
@@ -94,7 +93,7 @@ async function runBackupRestart(context: JobContext): Promise<Record<string, unk
     assertServerCapability(actor, server.logical.id, "server.restart");
     assertServerCapability(actor, server.logical.id, "backups.create");
   };
-  return withLocks([...server.lockKeys, "backups:storage"], async () => {
+  return withJobLocks(context, [...server.lockKeys, "backups:storage"], async () => {
     const current = await resolveAuthorizedServer(
       jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
     );
@@ -166,7 +165,8 @@ async function runUpdate(
     capability,
     context.job.bindingRevision,
   );
-  return withLocks(
+  return withJobLocks(
+    context,
     [...server.lockKeys, ...(request.createBackup ? ["backups:storage"] : [])],
     async () => {
       const selected = await validatedProject(server);

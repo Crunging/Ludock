@@ -317,6 +317,10 @@ describe("restarts with a backup", () => {
     await startOperationRunner();
     expect(getOperation(operation.id)?.status).toBe("interrupted");
     expect(calls).toEqual(["start"]);
+    // A later recovery must recognize this start rather than repeat it.
+    const { recovery_json } = getDatabase().query("SELECT recovery_json FROM operations WHERE id=?")
+      .get(operation.id) as { recovery_json: string };
+    expect(JSON.parse(recovery_json)).toMatchObject({ startRequested: true });
     expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(false);
   });
   for (const startedSinceStop of [false, true])

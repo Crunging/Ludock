@@ -57,10 +57,10 @@ describe("authorization after administrator request preparation", () => {
     it(`keeps a changed binding suspended after ${change} during discovery`, async () => {
       const logical = identity.reconcileServers([observation])[0];
       identity.reconcileServers([{ ...observation, mounts: [{ ...observation.mounts[0], source: "/srv/replacement" }] }]);
-      const pendingFingerprint = identity.getLogicalServer(logical.id)!.pendingFingerprint;
+      const { pendingFingerprint, bindingRevision } = identity.getLogicalServer(logical.id)!;
       const hold = gate();
       spyOn(servers, "refreshServers").mockImplementation(async () => { await hold.wait(); return new Map(); });
-      const response = request(`/api/v1/servers/${logical.id}/binding-review`, "POST", { confirmation: "Fixture" });
+      const response = request(`/api/v1/servers/${logical.id}/binding-review`, "POST", { confirmation: "Fixture", bindingRevision });
       await hold.pending;
       if (change === "revoke-session") database.deleteSessionRecord(sessionHash);
       else database.getDatabase().prepare("UPDATE users SET role='viewer' WHERE id=?").run(actor.id);
@@ -72,6 +72,21 @@ describe("authorization after administrator request preparation", () => {
       expect(current.reviewRequired).toBe(true);
     });
   }
+
+  it("rejects a binding review for a replacement the administrator did not see", async () => {
+    const logical = identity.reconcileServers([observation])[0];
+    identity.reconcileServers([{ ...observation, mounts: [{ ...observation.mounts[0], source: "/srv/replacement" }] }]);
+    const reviewed = identity.getLogicalServer(logical.id)!;
+    identity.reconcileServers([{ ...observation, mounts: [{ ...observation.mounts[0], source: "/srv/unseen" }] }]);
+    spyOn(servers, "refreshServers").mockResolvedValue(new Map());
+    const response = await request(`/api/v1/servers/${logical.id}/binding-review`, "POST", {
+      confirmation: "Fixture", bindingRevision: reviewed.bindingRevision,
+    });
+    expect(response.status).toBe(409);
+    const current = identity.getLogicalServer(logical.id)!;
+    expect(current.status).toBe("review_required");
+    expect(current.pendingFingerprint).not.toBe(reviewed.pendingFingerprint);
+  });
 
   it("does not replace backup settings when the session is revoked during destination validation", async () => {
     const initial: BackupSettings = { destination: "/backups", retentionCount: 2, maxBytes: 1024, reserveBytes: 0 };

@@ -3,6 +3,7 @@ import { AppError } from "./errors.js";
 
 const active = new Set<string>();
 const drained = new Set<() => void>();
+let releasedWaiters: { promise: Promise<void>; resolve: () => void } | undefined;
 const normalizeKey = (key: string) =>
   key.startsWith("path:") ? `path:${path.posix.resolve(key.slice(5))}` : key;
 const overlaps = (left: string, right: string) =>
@@ -29,6 +30,8 @@ export function acquireLocks(keys: readonly string[]): () => void {
     if (!released) {
       released = true;
       ordered.forEach((key) => active.delete(key));
+      releasedWaiters?.resolve();
+      releasedWaiters = undefined;
       if (active.size === 0) {
         for (const resolve of drained) resolve();
         drained.clear();
@@ -46,6 +49,11 @@ export async function withLocks<T>(
   } finally {
     release();
   }
+}
+/** Resolves at the next release of any held keys. */
+export function nextLockRelease(): Promise<void> {
+  releasedWaiters ??= Promise.withResolvers<void>();
+  return releasedWaiters.promise;
 }
 export function isServerBusy(id: string): boolean {
   return active.has(`server:${id}`);

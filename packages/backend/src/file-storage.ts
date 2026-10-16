@@ -603,7 +603,20 @@ async function runExec(
   signal?.throwIfAborted();
   const execution = await container.exec(options);
   assertAccess?.();
-  const stream = await execution.start();
+  const limit = input ? 30 * 60_000 : 60_000;
+  // Docker can accept the connection and never answer it. Cancellation and the
+  // operation deadline must also end the opening, so the caller can remove the
+  // helper and release its locks.
+  const opening = AbortSignal.any([AbortSignal.timeout(limit), ...(signal ? [signal] : [])]);
+  let stream: Awaited<ReturnType<typeof execution.start>>;
+  try {
+    stream = await execution.start(opening);
+  } catch (error) {
+    if (signal?.aborted)
+      throw signal.reason instanceof Error ? signal.reason : new FileStorageError("FILE_UPLOAD_FAILED", 400);
+    if (opening.aborted) throw new FileStorageError("FILE_OPERATION_TIMEOUT", 409);
+    throw error;
+  }
   const reader = input?.getReader();
   const writer = input ? stream.writable.getWriter() : undefined;
   void reader?.closed.catch(() => {});
@@ -627,7 +640,7 @@ async function runExec(
     inputFailure ??= error;
     stream.abort(error);
     void reader?.cancel().catch(() => {});
-  }, input ? 30 * 60_000 : 60_000);
+  }, limit);
   const received = demuxDockerStream(stream.readable, chunk => {
     size += chunk.length;
     if (size > MAX_HELPER_OUTPUT) throw new FileStorageError("FILE_OUTPUT_LIMIT", 409);
