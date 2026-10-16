@@ -7,6 +7,7 @@ import { enqueueOperation } from "../operations.js";
 import { getServerSnapshot, listServers, resolveAuthorizedServer } from "../servers.js";
 import { audit, requestKey, requestUser, respond, type ApiHandler, type ApiRoutes } from "./request.js";
 import { serverAction } from "./server-action.js";
+import { assertRunningForBackupRestart } from "../jobs.js";
 
 function containerAction(action: "stop" | "restart"): ApiHandler {
   return async (ctx) => {
@@ -15,7 +16,10 @@ function containerAction(action: "stop" | "restart"): ApiHandler {
     const context = await resolveAuthorizedServer(actor, ctx.params.id, `server.${action}`);
     const current = assertRequestUser(ctx.request, actor);
     assertServerCapability(current, context.logical.id, `server.${action}`);
-    if (createBackup) assertServerCapability(current, context.logical.id, "backups.create");
+    if (createBackup) {
+      assertServerCapability(current, context.logical.id, "backups.create");
+      assertRunningForBackupRestart(context.container.state);
+    }
     return respond(operationResponseSchema, { operation: enqueueOperation({
       serverId: context.logical.id,
       actorId: operationActorId(ctx.request, actor),

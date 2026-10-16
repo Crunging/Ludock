@@ -20,6 +20,7 @@ import { isServerBusy } from "../src/operation-locks.js";
 import * as notifications from "../src/notifications.js";
 import { getAvailability } from "../src/monitoring.js";
 import type { JobContext } from "../src/operations.js";
+import { AppError } from "../src/errors.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin = { id: "admin", username: "admin", role: "admin" as const };
@@ -75,6 +76,7 @@ beforeEach(async () => {
   serverId = listLogicalServers()[0].id;
   grants();
   registerBackgroundJobs();
+  spyOn(backups, "assertBackupReady").mockResolvedValue();
   spyOn(lifecycle, "saveWorld").mockImplementation(async (context) => {
     calls.push("save");
     context.progress("waiting_for_save", { saveStatus: "sent", saveReason: null });
@@ -165,6 +167,12 @@ describe("restart requests", () => {
     expect(response.status).toBe(202);
     expect(calls).toEqual([]);
   });
+  it("rejects a backup for a server that isn't running", async () => {
+    running = false;
+    await refreshServers();
+    await expect(restartRoute(routeContext("restart", { createBackup: true }))).rejects.toMatchObject({ code: "SERVER_NOT_RUNNING" });
+    expect(listOperationHistory(admin, { serverId, limit: 10 }).operations).toEqual([]);
+  });
   it("rechecks request authentication after asynchronous discovery", async () => {
     const ctx = routeContext("restart", { createBackup: true });
     onInspect = () => deleteRequestSession(ctx.request);
@@ -200,6 +208,24 @@ describe("restarts with a backup", () => {
     expect(calls).toEqual(["save", "stop"]);
     expect(getAvailability(serverId).state.intentionallyStopped).toBe(false);
     expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(false);
+  });
+  it("checks backup readiness before saving or stopping the server", async () => {
+    spyOn(backups, "assertBackupReady").mockRejectedValue(new AppError("BACKUP_NOT_CONFIGURED", 409, "fixture"));
+    const notify = spyOn(notifications, "notifyEvent");
+    const operation = enqueue();
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(running).toBe(true);
+    expect(notify.mock.calls.some(([, message]) => message.includes("left stopped"))).toBe(false);
+  });
+  it("fails without changing a server that stopped before the job ran", async () => {
+    const operation = enqueue();
+    running = false;
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("failed");
+    expect(getOperation(operation.id)?.error).toContain("needs a running server");
+    expect(calls).toEqual([]);
   });
   it("leaves the server stopped and says so when the backup fails", async () => {
     const notify = spyOn(notifications, "notifyEvent");

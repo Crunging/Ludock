@@ -138,7 +138,9 @@ to finish without sending it again. A server that had to be killed (exit 137)
 shows **Force-stopped** in **Needs attention**.
 
 With permission to create backups, the Restart dialog offers **Take a backup
-first**. The server stays stopped while the backup runs, then starts once.
+first**. Ludock checks the backup destination first, so a backup that can't
+run never stops the server. The server stays stopped while the backup runs, then
+starts once.
 Starting can update the game and change the world, so if the backup fails,
 including when the game had to be killed, the server stays stopped and Ludock
 sends a notification. Review the operation, then start the server yourself.

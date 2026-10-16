@@ -727,6 +727,15 @@ export async function createStoppedBackup(
   }
 }
 
+/** Checks that need no stop, so a backup that can't succeed never takes the
+ * server offline. The caller holds the server and backup storage locks. */
+export async function assertBackupReady(context: ServerContext): Promise<void> {
+  const settings = await settingsForBackup();
+  await assertSeparateDestination(context, settings);
+  await assertDestinationSpace(settings.destination, settings.reserveBytes);
+  await assertNoOtherWriters(context);
+}
+
 export async function runBackup(
   job: JobContext,
 ): Promise<Record<string, unknown>> {
@@ -739,10 +748,7 @@ export async function runBackup(
   );
   return withLocks([...context.lockKeys, "backups:storage"], async () => {
     assertServerCapability(jobActor(job), context.logical.id, "backups.create");
-    const settings = await settingsForBackup();
-    await assertSeparateDestination(context, settings);
-    await assertDestinationSpace(settings.destination, settings.reserveBytes);
-    await assertNoOtherWriters(context);
+    await assertBackupReady(context);
     try {
       await stopForDataOperation(context, job);
       const backup = await createStoppedBackup(context, job);

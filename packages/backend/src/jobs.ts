@@ -20,6 +20,7 @@ import {
   stopForDataOperation,
   restoreInitialRunningState,
   keepStoppedAfterFailedBackup,
+  assertBackupReady,
 } from "./backups.js";
 import {
   composeSnapshotArgs,
@@ -76,6 +77,12 @@ export function jobActor(context: JobContext): SessionUser {
   }
   return actor;
 }
+/** Restarting with a backup returns a running server to running. A stopped
+ * server can be backed up from Backups, or started. */
+export function assertRunningForBackupRestart(state: string): void {
+  if (state !== "running")
+    throw new AppError("SERVER_NOT_RUNNING", 409, "Restart with a backup needs a running server. Start it, or back it up from Backups.");
+}
 /** Restart with a backup taken while the server is stopped, starting it once. */
 async function runBackupRestart(context: JobContext): Promise<Record<string, unknown>> {
   const server = await resolveAuthorizedServer(
@@ -91,6 +98,8 @@ async function runBackupRestart(context: JobContext): Promise<Record<string, unk
       jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
     );
     assertAccess();
+    assertRunningForBackupRestart(current.container.state);
+    await assertBackupReady(current);
     suppressMonitoring(server.logical.id);
     try {
       await saveWorld(context, current, () => {
