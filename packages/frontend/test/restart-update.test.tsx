@@ -45,7 +45,8 @@ describe("restart updates on the Update tab", () => {
       const form = within(button.closest("form")!);
       expect((button as HTMLButtonElement).disabled).toBe(true);
       expect((form.getByRole("checkbox", { name: "Take a backup first" }) as HTMLInputElement).checked).toBe(true);
-      expect(screen.getByText("This image downloads the latest game version when it starts.")).toBeTruthy();
+      expect(form.getByText("Restarts the server. This image downloads the latest game version when it starts.")).toBeTruthy();
+      expect(form.getByText(/The image itself isn’t changed.*this one can take a backup first/)).toBeTruthy();
       expect(Boolean(screen.queryByRole("button", { name: "Update server", exact: true }))).toBe(compose);
       if (!compose) expect(screen.getByText("No Compose source")).toBeTruthy();
       await userEvent.click(form.getByRole("checkbox", { name: /I understand/ }));
@@ -65,6 +66,8 @@ describe("restart updates on the Update tab", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Update", exact: true }));
     expect(screen.queryByRole("checkbox", { name: "Take a backup first" })).toBeNull();
     expect(screen.queryByText("Update container image")).toBeNull();
+    expect(screen.getByText(/A normal Restart updates the game too\.$/)).toBeTruthy();
+    expect(screen.getByText("Pull a newer image through the tool that created this container.")).toBeTruthy();
     const button = await screen.findByRole("button", { name: "Restart to update" });
     await userEvent.click(screen.getByRole("checkbox", { name: /I understand/ }));
     expect((button as HTMLButtonElement).disabled).toBe(true);

@@ -60,8 +60,11 @@ export default function UpdatePanel(props: Props) {
           onRestartUpdate();
         }}>
           <h3>Restart to update</h3>
-          <p className="section-lede">This image downloads the latest game version when it starts.</p>
-          <p className="muted">Uses the image’s configured version and startup update settings.</p>
+          <p className="section-lede">Restarts the server. This image downloads the latest game version when it starts.</p>
+          <p className="muted">
+            The image itself isn’t changed, and version pins in its settings still apply. A normal Restart
+            updates the game too{canBackup ? "; this one can take a backup first" : ""}.
+          </p>
           {canBackup && <label className="check-label">
             <input type="checkbox" checked={restartValue.createBackup} onChange={(event) =>
               onRestartChange({ ...restartValue, createBackup: event.target.checked, confirmed: false })
@@ -88,6 +91,13 @@ export default function UpdatePanel(props: Props) {
             ((!canBackup || !restartValue.createBackup) && restartValue.skipConfirmation !== serverName)
           }>Restart to update</button>
         </form>
+      )}
+      {!canUpdateImage && capability?.updatesOnStart && (
+        <p className="section-note">
+          {capability.manager === "compose"
+            ? "Pulling a newer image needs an administrator."
+            : "Pull a newer image through the tool that created this container."}
+        </p>
       )}
       {!canUpdateImage && !capability?.updatesOnStart && (
         <p className="section-note">This image is not known to update the game on startup. Update it through its owning manager.</p>
@@ -118,7 +128,8 @@ export default function UpdatePanel(props: Props) {
         >
           <p className="section-lede">
             Pull the newest image for this service and recreate it with Docker
-            Compose.
+            Compose. This updates the image itself, including its system
+            packages and startup scripts.
           </p>
           <dl className="metadata-list">
             <dt>Project</dt>
