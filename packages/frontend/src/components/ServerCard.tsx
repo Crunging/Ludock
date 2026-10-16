@@ -37,7 +37,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
     null,
   );
   const operation = server.activeOperation;
-  actionsDisabled = actionsDisabled || Boolean(operation);
+  const controlsDisabled = actionsDisabled || Boolean(operation);
   const isRunning = server.state === "running";
   const lifecycleAction = lifecycleActionForState(server.state);
   const stateGuidance = lifecycleStateGuidance(server.state);
@@ -49,7 +49,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
       !can(user, server, `server.${action}`) ||
       bindingBlocked ||
       actionLoading ||
-      actionsDisabled ||
+      controlsDisabled ||
       (action === "start" ? lifecycleAction !== "start" : !isRunning)
     )
       return;
@@ -73,7 +73,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
       ? [
           {
             label: actionLoading === "restart" ? "Restarting…" : "Restart…",
-            disabled: actionLoading !== null || bindingBlocked || actionsDisabled,
+            disabled: actionLoading !== null || bindingBlocked || controlsDisabled,
             onSelect: () => setConfirmation("restart"),
           },
         ]
@@ -158,7 +158,7 @@ export default function ServerCard({ server, onAction, actionsDisabled = false, 
         {lifecycleAction && can(user, server, `server.${lifecycleAction}`) && (
           <button
             className={`secondary-btn ${isRunning ? "secondary-btn--danger" : ""}`}
-            disabled={actionLoading !== null || bindingBlocked || actionsDisabled}
+            disabled={actionLoading !== null || bindingBlocked || controlsDisabled}
             onClick={() =>
               isRunning
                 ? setConfirmation("stop")

@@ -127,23 +127,15 @@ until the check passes and **Unhealthy** while it fails. A stopped server shows:
 
 ### Stop and Restart
 
-Manual and scheduled stops allow 120 seconds for shutdown by default. ARK,
-Palworld, Valheim, and 7 Days to Die allow 180 seconds. A longer container
-`stop_grace_period` takes precedence, including an indefinite timeout. Ludock
-does not change the container's configuration.
+Stop and Restart run as tracked operations in **Activity**. When the game's
+console has a **Save world** shortcut, Ludock sends it and waits five seconds
+first; if the console isn't available, the stop goes ahead. Docker then allows
+120 seconds for shutdown, or 180 seconds for ARK, Palworld, Valheim, and 7 Days
+to Die. A longer `stop_grace_period` on the container wins.
 
-When a console offers **Save world**, Ludock sends that command and waits five
-seconds before stopping. An unavailable console or timed-out command is recorded
-as skipped in **Activity**, and shutdown continues. Stop and Restart run as
-tracked operations; progress survives page reloads. If Ludock restarts during
-an operation, it checks the server state without replaying it. An unfinished
-stop retains its locks while Ludock waits for shutdown, up to a deadline recorded
-five minutes after the stop request. Recovery marks the operation interrupted;
-if the deadline expires, Activity asks you to review the actual server state.
-
-A Ludock stop that ends with exit 137 appears in **Needs attention** as
-**Force-stopped, recent progress may not have been saved.** The warning remains
-in recent operation history even if a restart brings the server back up.
+If Ludock restarts mid-operation, it waits up to five minutes for a pending stop
+to finish without sending it again. A server that had to be killed (exit 137)
+shows **Force-stopped** in **Needs attention**.
 
 ### Addresses
 
