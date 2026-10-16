@@ -41,7 +41,7 @@ function record(context: JobContext, phase: string, recovery?: Record<string, un
   context.progress(phase, recovery, lifecycleResult(context, recovery));
 }
 
-async function saveWorld(context: JobContext, server: ServerContext, assertAccess: () => void) {
+export async function saveWorld(context: JobContext, server: ServerContext, assertAccess: () => void) {
   const expected = resolveGameConsoleAdapter({ gameType: server.container.gameType, labels: {} });
   const adapter = resolveGameConsoleAdapter(server.container);
   const command = adapter?.commands.find((item) => item.label === "Save world")?.command;

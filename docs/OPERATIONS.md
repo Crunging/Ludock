@@ -307,9 +307,9 @@ container in Docker, and its owning manager's logs.
 **Server → Update** offers **Restart to update** for recognized images that
 download the latest game files on startup by default (Minecraft, Palworld, CS2,
 Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
-permission to restart the server. Ludock can take a backup first, keeping the
-server stopped until it finishes; skipping the backup requires typing the
-server's name. Version pins in the image's settings still apply, and the
+permission to restart the server. Like **Restart**, it saves the world first.
+Ludock can also take a backup, keeping the server stopped until it finishes;
+skipping the backup requires typing the server's name. Version pins in the image's settings still apply, and the
 operation finishes when Docker restarts the container, not when the game is
 ready.
 

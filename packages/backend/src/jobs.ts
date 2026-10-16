@@ -1,4 +1,4 @@
-import { runLifecycle, recoverLifecycle } from "./lifecycle.js";
+import { runLifecycle, recoverLifecycle, saveWorld } from "./lifecycle.js";
 import {
   type ServerCapability,
   updateRequestSchema,
@@ -101,6 +101,10 @@ async function runRestartUpdate(context: JobContext): Promise<Record<string, unk
         throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
       suppressMonitoring(server.logical.id);
       try {
+        await saveWorld(context, current, () => {
+          assertAccess();
+          assertObservedServerBinding(server.logical.id, current.observation, context.job.bindingRevision);
+        });
         if (request.createBackup) {
           await stopForDataOperation(current, context);
           const backup = await createStoppedBackup(current, context);
@@ -119,10 +123,8 @@ async function runRestartUpdate(context: JobContext): Promise<Record<string, unk
         context.progress("restarted", { stateRestored: true });
         setIntentionalStop(server.logical.id, false);
         notifyEvent(`operation:${context.job.id}`, `${selected.container.displayName}: restarted to update.`);
-        return {
-          action: "restart",
-          backupId: context.job.recovery.backupId ?? null,
-        };
+        const { backupId, saveStatus, saveReason } = context.job.recovery;
+        return { action: "restart", backupId: backupId ?? null, saveStatus, saveReason };
       } finally {
         // The backup keeps the game stopped until restart. On failure, return
         // it to its initial state only after the data helper has been removed.

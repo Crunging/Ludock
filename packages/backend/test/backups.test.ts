@@ -27,12 +27,16 @@ describe("backup execution authority", () => {
   let context: ServerContext;
   let job: JobContext;
   let stopped: number;
+  let stopOptions: unknown;
+  let stopTimeout: number | undefined;
   let running: boolean;
   let onInspect: () => void;
   beforeEach(async () => {
     process.env.LUDOCK_DB_PATH = ":memory:";
     closeDatabase();
     stopped = 0;
+    stopOptions = undefined;
+    stopTimeout = undefined;
     running = true;
     onInspect = () => {};
     for (const actor of [admin, operator])
@@ -47,7 +51,7 @@ describe("backup execution authority", () => {
         onInspect();
         return {
           Id: id, Name: "/fixture",
-          Config: { Image: "alpine:latest", Labels: labels },
+          Config: { Image: "alpine:latest", Labels: labels, StopTimeout: stopTimeout },
           State: { Status: running ? "running" : "exited", Running: running },
           Mounts: [
             { Type: "volume", Name: "world", Source: "/var/lib/docker/volumes/world/_data", Destination: "/data", RW: true },
@@ -56,7 +60,7 @@ describe("backup execution authority", () => {
           Created: "2026-01-01T00:00:00Z",
         };
       },
-      stop: async () => { stopped++; running = false; },
+      stop: async (options: unknown) => { stopped++; stopOptions = options; running = false; },
       start: async () => { running = true; },
     })) as unknown as typeof docker.getContainer;
     await refreshServers();
@@ -82,6 +86,11 @@ describe("backup execution authority", () => {
     docker.listContainers = originalList;
     docker.getContainer = originalGet;
     closeDatabase();
+  });
+  it("allows the container's own longer stop grace period", async () => {
+    stopTimeout = 300;
+    await stopForDataOperation(context, job);
+    expect(stopOptions).toEqual({ t: 300 });
   });
   it("rechecks the backup grant after Docker inspection before stopping", async () => {
     onInspect = () => setServerGrant(
