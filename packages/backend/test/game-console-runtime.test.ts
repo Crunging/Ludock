@@ -7,14 +7,17 @@ import { expect, afterEach, describe, it, spyOn } from "bun:test";
 import type * as Docker from "../src/docker-client.js";
 import { DockerApiError, DockerStreamOpenError, type DockerConnection } from "../src/docker-transport.js";
 import { serve, type Socket, type SocketHandler } from "bun";
+import { executeGameCommand, MAX_DOCKER_EXEC_OUTPUT_BYTES } from "../src/game-console-runtime.js";
+import { resolveGameConsoleAdapter, type GameConsoleAdapter } from "../src/game-console.js";
+import { NETWORK_CONSOLE_SCRIPT } from "../src/helper-scripts.js";
 import {
-  executeGameCommand,
   executeRustWebRcon,
   executeSourceRcon,
   executeTelnetCommand,
-  MAX_DOCKER_EXEC_OUTPUT_BYTES,
-} from "../src/game-console-runtime.js";
-import type { GameConsoleAdapter } from "../src/game-console.js";
+  type NetworkConsoleRequest,
+} from "../src/helpers/network-console.js";
+import { JsonLineDecoder } from "../src/json-lines.js";
+import { docker } from "../src/docker-client.js";
 
 const closers: Array<() => Promise<void>> = [];
 
@@ -23,6 +26,25 @@ afterEach(async () => {
 });
 
 describe("Source RCON transport", () => {
+  it("keeps an explicit console host on the direct transport", async () => {
+    const port = listenRcon((socket, packet) => {
+      socket.write(encodePacket(packet.id, packet.type === 3 ? 2 : 0, packet.type === 3 ? "" : "Ready"));
+    });
+    const create = spyOn(docker, "createContainer");
+    closers.push(async () => { create.mockRestore(); });
+    const container = {
+      inspect: async () => ({ Config: { Env: ["RCON_PASSWORD=credential"] } }),
+    } as unknown as Docker.Container;
+    let result = "";
+    await executeGameCommand(container, {
+      state: "running", labels: { "ludock.console.host": "127.0.0.1", "ludock.console.port": String(port) },
+    }, resolveGameConsoleAdapter({ gameType: "factorio", labels: {} })!, "status", {
+      stdout: value => { result += value; }, stderr: () => {}, system: () => {},
+    });
+    expect(result).toBe("Ready");
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("does not send credentials when access changes while connecting", async () => {
     let accessChecks = 0;
     const received: Uint8Array[] = [];
@@ -275,6 +297,84 @@ describe("Telnet console transport", () => {
   });
 
 });
+
+describe("Console helper program", () => {
+  it("runs Source RCON and asks again between credentials and command", async () => {
+    const received: string[] = [];
+    const port = listenRcon((socket, packet) => {
+      received.push(decodeText(packet.body));
+      socket.write(encodePacket(packet.id, packet.type === 3 ? 2 : 0, packet.type === 3 ? "" : "Ready 🐉"));
+    });
+    const result = await runHelper({ transport: "source-rcon", port, password: "credential", command: "status" });
+    expect(result.response).toBe("Ready 🐉");
+    expect(result.authorizations).toBe(3);
+    expect(received).toEqual(["credential", "status"]);
+  });
+
+  it("stops before the Source RCON command when the backend refuses authorization", async () => {
+    const received: string[] = [];
+    const port = listenRcon((socket, packet) => {
+      received.push(decodeText(packet.body));
+      socket.write(encodePacket(packet.id, 2, ""));
+    });
+    const result = await runHelper({ transport: "source-rcon", port, password: "do-not-leak", command: "stop" }, 2);
+    expect(result.response).toBeUndefined();
+    expect(result.exitCode).toBe(1);
+    expect(received).toEqual(["do-not-leak"]);
+  });
+
+  it("runs Rust WebRCON with authorization before its credential handshake and command", async () => {
+    const server = serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request, server) {
+        expect(new URL(request.url).pathname).toBe("/credential");
+        return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
+      },
+      websocket: { message(socket, raw) {
+        const request = JSON.parse(typeof raw === "string" ? raw : decodeText(raw)) as { Identifier: number; Message: string };
+        expect(request.Message).toBe("status");
+        socket.send(JSON.stringify({ Identifier: request.Identifier, Message: "Ready" }));
+      } },
+    });
+    closers.push(() => server.stop(true));
+    const result = await runHelper({ transport: "rust-webrcon", port: server.port!, password: "credential", command: "status" });
+    expect(result.response).toBe("Ready");
+    expect(result.authorizations).toBe(2);
+  });
+
+  it("runs Telnet with authorization before credentials and the delayed command", async () => {
+    const received: string[] = [];
+    const port = listenTelnet((socket, line) => {
+      received.push(line);
+      socket.write(line === "credential" ? "Logged in\n" : "Ready\n");
+    });
+    const result = await runHelper({ transport: "telnet", port, password: "credential", command: "status" });
+    expect(result.response).toBe("Logged in\nReady");
+    expect(result.authorizations).toBe(3);
+    expect(received).toEqual(["credential", "status"]);
+  });
+});
+
+async function runHelper(request: NetworkConsoleRequest, allowCount = Infinity) {
+  const child = Bun.spawn([process.execPath, "-e", NETWORK_CONSOLE_SCRIPT], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  closers.push(async () => { child.kill(); await child.exited; });
+  child.stdin.write(JSON.stringify(request) + "\n");
+  let authorizations = 0;
+  let response: string | undefined;
+  const decoder = new JsonLineDecoder(value => {
+    const record = value as { type: string; response?: string };
+    if (record.type === "authorize") {
+      authorizations++;
+      child.stdin.write(JSON.stringify({ type: authorizations <= allowCount ? "authorized" : "denied" }) + "\n");
+    } else if (record.type === "result") response = record.response;
+    else expect(record).toEqual({ type: "error" });
+  });
+  for await (const chunk of child.stdout) decoder.push(chunk);
+  decoder.end();
+  const exitCode = await child.exited;
+  expect(await new Response(child.stderr).text()).toBe("");
+  return { response, authorizations, exitCode };
+}
 
 describe("Native TCP connection lifetime", () => {
   it("retries partial and zero-byte writes without dropping or duplicating RCON bytes", async () => {

@@ -83,7 +83,7 @@ labels:
 | `ludock.game` | Game integration, such as `minecraft` or `terraria` |
 | `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
 | `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
-| `ludock.console.host` / `ludock.console.port` | Console address, when the default isn't right |
+| `ludock.console.host` / `ludock.console.port` | Direct console address, or the console port inside the container |
 | `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
 | `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
@@ -165,11 +165,18 @@ administrators, a shell inside the container.
 - **History:** Up and Down step through commands sent during the current visit.
   Nothing is stored.
 
-Network consoles (RCON, WebRCON, and Telnet) need a reachable address, the
-console enabled in the game, and credentials. These protocols aren't encrypted,
-so keep them on a trusted Docker network or behind an authenticated TLS tunnel.
-Ludock sends console credentials to `ludock.console.host`, so point it only at an
-endpoint you trust.
+Network consoles (RCON, WebRCON, and Telnet) need the console enabled in the
+game and its password in an environment variable. Each command runs in a
+short-lived helper container that shares the game container's network and
+connects to the console on `127.0.0.1`, so the console port doesn't need to be
+published or share a network with Ludock. The password reaches the helper over
+standard input, never its configuration. The server stays locked until the
+helper is removed.
+
+Set `ludock.console.port` when the console listens on a non-default port.
+Setting `ludock.console.host` connects directly from Ludock instead. These
+protocols aren't encrypted and Ludock sends the password to that host, so point
+it only at a trusted endpoint or an authenticated TLS tunnel.
 
 - **Minecraft** runs `rcon-cli` inside the game container and needs no published
   RCON port. The image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`,
@@ -225,15 +232,20 @@ are covered in [`.env.example`](../.env.example).
 
 ### Set up storage
 
-With the example deployment, open **Settings → Backup storage**. Ludock suggests
-the `/backups` folder; review the defaults and save to turn backups on. Nothing
-is enabled until you save. If several folders are configured, pick one.
+With the example deployment, Ludock turns on backup storage by itself when
+`/backups` is the only approved root, passes the same checks as a manual save,
+and doesn't overlap game data. It uses these defaults:
 
 | Setting | Default |
 | --- | --- |
 | Backups kept per server | 10 |
 | Combined size limit | 100 GiB |
 | Minimum free disk space | 5 GiB |
+
+Change them in **Settings → Backup storage**. Once settings have been saved,
+including disabling or clearing storage, Ludock never sets them up again. With
+several roots, pick one and save. Turning on storage doesn't create backups or
+schedules.
 
 To keep backups on another disk, create a host folder and replace the `/backups`
 volume mount with it, keeping the socket and data mounts:
@@ -292,8 +304,18 @@ container in Docker, and its owning manager's logs.
 
 ## Compose updates
 
-Updates need the Linux Ludock image, an administrator, and the Compose source
-folders mounted read-only at their **original absolute paths on the Docker host**:
+**Server → Update** offers **Restart to update** for recognized images that
+download the latest game files on startup by default (Minecraft, Palworld, CS2,
+Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
+permission to restart the server. Ludock can take a backup first, keeping the
+server stopped until it finishes; skipping the backup requires typing the
+server's name. Version pins in the image's settings still apply, and the
+operation finishes when Docker restarts the container, not when the game is
+ready.
+
+Pulling a new image and recreating the service needs the Linux Ludock image, an
+administrator, and the Compose source folders mounted read-only at their
+**original absolute paths on the Docker host**:
 
 ```yaml
 services:
@@ -304,16 +326,15 @@ services:
       - /srv/game-stacks:/srv/game-stacks:ro
 ```
 
-**Server → Update** finds the project folder, its Compose files in order, and any
-environment files from Docker's labels. Without recorded environment files, it
-uses the project's `.env` if there is one. Every file it reads must stay inside
-approved folders, can't be a symlink, and must be under 2 MiB. Variables that
-only exist in your shell must be added to those files.
+Ludock finds the project folder, its Compose files in order, and any environment
+files from Docker's labels. Without recorded environment files, it uses the
+project's `.env` if there is one. Every file it reads must stay inside approved
+folders, can't be a symlink, and must be under 2 MiB. Variables that only exist
+in your shell must be added to those files.
 
 - **Update server** pulls the configured image, optionally takes a backup first,
   and recreates only that service, without building or pulling again.
-- **Recreate anyway** does the same when the image hasn't changed, for example
-  to pick up a game update that installs on startup.
+- **Recreate anyway** does the same when the image hasn't changed.
 - Skipping the backup requires typing the server's name. A server that was
   stopped stays stopped.
 

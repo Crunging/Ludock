@@ -2,16 +2,18 @@ import path from "node:path";
 import { z } from "zod";
 import {
   backupSettingsSchema,
+  DEFAULT_BACKUP_LIMITS,
   type Backup,
   type BackupPreflight,
   type BackupReadinessIssue,
   type BackupSettings,
   type BackupStorageStatus,
 } from "@ludock/shared";
-import { getDatabase } from "./database.js";
+import { getDatabase, writeAuditLog } from "./database.js";
 import { getSetting } from "./settings.js";
+import { rootList } from "./approved-paths.js";
 import { docker } from "./docker-client.js";
-import { getManagedContainerObservation } from "./docker.js";
+import { getManagedContainerObservation, listManagedContainerObservations } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -124,13 +126,57 @@ export async function deleteBackup(
   });
 }
 async function settingsForBackup(): Promise<BackupSettings> {
-  const settings = getSetting<BackupSettings>("backups");
+  let settings = getSetting<BackupSettings>("backups");
+  if (!settings) {
+    // A backup due at startup can run before the first background tick.
+    await initializeBackupStorage();
+    settings = getSetting<BackupSettings>("backups");
+  }
   if (!settings)
     throw failBackup(
       "BACKUPS_NOT_CONFIGURED",
       "An administrator must configure a backup destination, retention, and capacity before creating backups.",
     );
   return validateBackupSettings(settings);
+}
+
+let backupStorageInitialization: Promise<void> | undefined;
+
+/** Enables the single approved root with default limits, unless an
+ * administrator has ever saved backup settings. */
+export function initializeBackupStorage(): Promise<void> {
+  backupStorageInitialization ??= initializeBackupStorageOnce()
+    .finally(() => { backupStorageInitialization = undefined; });
+  return backupStorageInitialization;
+}
+
+async function initializeBackupStorageOnce(): Promise<void> {
+  const db = getDatabase();
+  // Any saved value, including null, is an administrator decision.
+  if (db.query("SELECT 1 FROM settings WHERE key='backups'").get()) return;
+  const roots = rootList(process.env.LUDOCK_BACKUP_ROOTS);
+  if (roots.length !== 1) return;
+  const settings: BackupSettings = { destination: roots[0], ...DEFAULT_BACKUP_LIMITS };
+  try {
+    await validateBackupSettings(settings);
+    for (const observed of await listManagedContainerObservations())
+      await assertSeparateDestination(observed, settings);
+  } catch {
+    return;
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // A decision saved while validation awaited I/O wins.
+    const inserted = db.query(
+      "INSERT INTO settings(key,value_json) VALUES('backups',?) ON CONFLICT(key) DO NOTHING",
+    ).run(JSON.stringify(settings));
+    if (inserted.changes)
+      writeAuditLog({ action: "settings.backups.auto_enabled", targetType: "settings" });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function archiveUsageBytes(): number {
@@ -311,7 +357,7 @@ async function assertNoOtherWriters(
   }
 }
 async function assertSeparateDestination(
-  context: ServerContext,
+  context: Pick<ServerContext, "observation">,
   settings: BackupSettings,
 ): Promise<void> {
   const destination = await approvedBackupDirectory(settings.destination);
@@ -403,6 +449,8 @@ function assertDataOperationAuthority(
   context: ServerContext,
   job: JobContext,
 ): void {
+  if (job.job.kind === "restart_to_update")
+    assertServerCapability(jobActor(job), context.logical.id, "server.restart");
   assertServerCapability(
     jobActor(job),
     context.logical.id,
@@ -410,7 +458,9 @@ function assertDataOperationAuthority(
       ? "backups.create"
       : job.job.kind === "restore"
         ? "backups.restore"
-        : "server.update",
+        : job.job.kind === "restart_to_update"
+          ? "backups.create"
+          : "server.update",
   );
   assertObservedServerBinding(
     context.logical.id,

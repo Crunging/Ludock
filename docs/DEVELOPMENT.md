@@ -47,6 +47,10 @@ and [Compose](../scripts/test-compose.mjs) harnesses one at a time, on both Linu
 AMD64 and ARM64, and note any emulation. For only the production startup check,
 run `bun scripts/test-linux.mjs --smoke-only`.
 
+`bun scripts/test-consoles.mjs` runs console commands against a real Factorio
+server and loopback-only WebRCON and Telnet fixtures on a separate Compose
+network. It pulls a pinned Factorio image (Box64 on ARM64).
+
 - **Choosing the daemon:** use a local Unix-socket Docker context or
   `DOCKER_HOST`; `DOCKER_CONTEXT` wins when both are set. Remote TCP and SSH
   contexts aren't supported.

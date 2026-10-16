@@ -8,6 +8,7 @@ export const updateRequestSchema = z
   })
   .strict();
 export type CreateServerUpdateRequest = z.input<typeof updateRequestSchema>;
+export const restartUpdateRequestSchema = updateRequestSchema.omit({ forceRecreate: true });
 
 export const composeSourceProjectSchema = z
   .object({
@@ -25,6 +26,7 @@ export type ComposeProjectSource = z.infer<
 >;
 
 export const updateCapabilitySchema = z.object({
+  updatesOnStart: z.boolean(),
   available: z.boolean(),
   actionLabel: z.enum(["Update server", "Update image"]),
   manager: z.enum(["compose", "external"]),

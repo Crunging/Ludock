@@ -46,6 +46,7 @@ describe("backup storage", () => {
     });
     render(<NavigationProvider><Settings /></NavigationProvider>);
     await screen.findByText("100 GiB");
+    expect(screen.getByText(/Backups are on\. You can change the destination and limits below\./)).toBeTruthy();
     const limit = screen.getByLabelText("Total backup limit (GiB)") as HTMLInputElement;
     fireEvent.change(limit, { target: { value: "75" } });
     fireEvent.click(screen.getByRole("button", { name: "Refresh storage" }));
