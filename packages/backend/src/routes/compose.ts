@@ -18,8 +18,9 @@ export const composeRoutes: ApiRoutes = {
         throw new AppError("RESTART_UPDATE_UNAVAILABLE", 409, "This image is not known to update the game on startup");
       if (!request.createBackup && request.skipBackupConfirmation !== context.container.displayName)
         throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
-      if (request.createBackup) assertServerCapability(assertRequestUser(ctx.request, user), serverId, "backups.create");
-      assertServerCapability(assertRequestUser(ctx.request, user), serverId, "server.restart");
+      const current = assertRequestUser(ctx.request, user);
+      assertServerCapability(current, serverId, "server.restart");
+      if (request.createBackup) assertServerCapability(current, serverId, "backups.create");
       return respond(operationResponseSchema, {
         operation: enqueueOperation({
           serverId,

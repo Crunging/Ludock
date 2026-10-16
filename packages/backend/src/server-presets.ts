@@ -16,8 +16,7 @@ interface GameIntegration {
   /** The container port and protocol players connect with, used to pick the address to share. */
   gamePort?: { port: number; protocol: "tcp" | "udp" };
   repositories: readonly string[];
-  /** All listed images download current game files on startup by default.
-   * Version pins and explicit image configuration can override this behavior. */
+  /** Every listed image downloads game updates on startup by default. */
   updatesOnStart?: boolean;
   aliases?: readonly string[];
   console?: GameConsolePreset;

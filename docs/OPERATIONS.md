@@ -280,27 +280,18 @@ container in Docker, and its owning manager's logs.
 
 ## Compose updates
 
-**Server → Update** offers **Restart to update** for recognized images documented
-to download the latest game files on startup by default. This works for
-standalone containers and Compose services without source mounts or additional
-update setup. It uses the same permission as restarting the server; **Take a
-backup first** also requires backup creation access and configured backup storage.
-The image’s version pins and startup update settings still apply. Images with
-uncertain or opt-in startup updates do not offer this option.
+**Server → Update** offers **Restart to update** for recognized images that
+download the latest game files on startup by default (Minecraft, Palworld, CS2,
+Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
+permission to restart the server. Ludock can take a backup first, keeping the
+server stopped until it finishes; skipping the backup requires typing the
+server's name. Version pins in the image's settings still apply, and the
+operation finishes when Docker restarts the container, not when the game is
+ready.
 
-The optional backup uses Ludock’s existing stopped-server backup flow. The
-server stays stopped until the backup finishes, then the existing container
-restarts (a previously stopped server starts too). If the backup fails, Ludock
-restores the initial running state. Skipping the backup requires typing the
-server’s name. The whole action is tracked in **Activity**, including after a
-page reload. Access and container identity are checked again during the operation.
-If Ludock itself restarts, interrupted operations are reconciled; dispatched
-restarts are never replayed. Completion confirms the Docker restart, not the
-game’s download or readiness; review the server logs for those.
-
-Pulling a new container image and recreating the service still requires the
-Linux Ludock image, an administrator, and the Compose source folders mounted
-read-only at their **original absolute paths on the Docker host**:
+Pulling a new image and recreating the service needs the Linux Ludock image, an
+administrator, and the Compose source folders mounted read-only at their
+**original absolute paths on the Docker host**:
 
 ```yaml
 services:
@@ -312,19 +303,18 @@ services:
 ```
 
 Ludock finds the project folder, its Compose files in order, and any environment
-files from Docker’s labels. Without recorded environment files, it uses the
-project’s `.env` if there is one. Every file it reads must stay inside approved
-folders, can’t be a symlink, and must be under 2 MiB. Variables that only exist
+files from Docker's labels. Without recorded environment files, it uses the
+project's `.env` if there is one. Every file it reads must stay inside approved
+folders, can't be a symlink, and must be under 2 MiB. Variables that only exist
 in your shell must be added to those files.
 
 - **Update server** pulls the configured image, optionally takes a backup first,
-  and recreates only that service, without building or pulling again. This stays
-  available alongside **Restart to update** when Compose access is configured.
-- **Recreate anyway** does the same when the image hasn’t changed.
-- Skipping the backup requires typing the server’s name. A server that was
-  stopped stays stopped after Compose recreation.
+  and recreates only that service, without building or pulling again.
+- **Recreate anyway** does the same when the image hasn't changed.
+- Skipping the backup requires typing the server's name. A server that was
+  stopped stays stopped.
 
-Image pulls and recreation do not support:
+Not supported:
 
 - `include`, `extends`, secrets, configs, `label_file`, credential specs,
   lifecycle hooks, providers, development settings, and `volumes_from`.

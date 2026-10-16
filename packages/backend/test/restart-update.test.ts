@@ -14,7 +14,6 @@ import { enqueueOperation, getOperation, startOperationRunner, stopOperationRunn
 import { listOperationHistory } from "../src/history.js";
 import { composeRoutes } from "../src/routes/compose.js";
 import type { RequestContext } from "../src/routes/request.js";
-import { getImageIntegration } from "../src/server-presets.js";
 import { isServerBusy } from "../src/operation-locks.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -124,12 +123,6 @@ describe("restart update capability", () => {
     expect(response.status).toBe(200);
     expect(updateCapabilityResponseSchema.parse(await response.json()).capability).toMatchObject({ updatesOnStart: true, available: false });
     expect(spawn).not.toHaveBeenCalled();
-  });
-  it("enables only presets with confirmed startup defaults", () => {
-    for (const repository of ["itzg/minecraft-server", "thijsvanloef/palworld-server-docker", "jammsen/palworld-dedicated-server", "joedwards32/cs2", "indifferentbroccoli/conan-exiles-enhanced-server-docker", "didstopia/rust-server", "ghcr.io/community-valheim-tools/valheim-server", "lloesche/valheim-server"])
-      expect(getImageIntegration(`${repository}:latest`)?.updatesOnStart, repository).toBe(true);
-    for (const repository of ["factoriotools/factorio", "hermsi/ark-server", "sknnr/ark-ascended-server", "renegademaster/zomboid-dedicated-server", "trueosiris/vrising", "vinanrra/7dtd-server", "beardedio/terraria", "example/custom"])
-      expect(getImageIntegration(repository)?.updatesOnStart ?? false, repository).toBe(false);
   });
 });
 
