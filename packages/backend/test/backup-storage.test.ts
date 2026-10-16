@@ -389,6 +389,23 @@ describe("backup storage boundaries", () => {
       }
       await expect(command).rejects.toBe(failure);
     });
+  it("stops a helper whose command hangs past its limit before reporting the timeout", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number) =>
+      realSetTimeout(callback, ms === 120_000 ? 0 : ms)) as unknown as typeof setTimeout);
+    let running = true;
+    const stops: unknown[] = [];
+    const helper = {
+      stop: async (options: unknown) => { stops.push(options); running = false; },
+      inspect: async () => ({ State: { Running: running } }),
+      exec: async () => ({
+        start: async () => new StreamFixture().connection,
+        inspect: async () => ({ Running: true, ExitCode: null }),
+      }),
+    } as unknown as Docker.Container;
+    await expect(helperExec(helper, ["bun", "restore-helper"])).rejects.toMatchObject({ code: "BACKUP_TIMEOUT" });
+    expect(stops).toEqual([{ t: 0 }]);
+  });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "stops streaming restore data when access changes after extraction starts",
     async () => {

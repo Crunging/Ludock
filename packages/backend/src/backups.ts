@@ -39,6 +39,7 @@ import {
   archiveReadStream,
   assertDestinationSpace,
   createDataHelper,
+  isHelperRunning,
   extractRootToStage,
   failBackup,
   helperExec,
@@ -1015,8 +1016,17 @@ export async function runRestore(
       return { restoredBackupId: row.id, safetyBackupId: safety.id };
     } catch (error) {
       const restore = restoreRecovery(job);
-      if (helper && restore?.status !== "committed" && restore?.status !== "cleaned")
+      if (helper && restore?.status !== "committed" && restore?.status !== "cleaned") {
+        // A command that exceeded its limit stops the helper. Roll back through
+        // a fresh one, as recovery does, instead of failing on a stopped helper.
+        if (!(await isHelperRunning(helper.container))) {
+          await helper.cleanup();
+          await assertDataOperationStopped(context, job);
+          helper = await createDataHelper(context, false, job.job.id);
+          job.progress(job.job.phase, { dataHelperId: helper.container.id });
+        }
         await rollbackRestore(context, job, helper);
+      }
       notifyEvent(
         `restore-result:${job.job.id}`,
         `Restore failed for ${context.container.displayName}. Review its recovery state.`,
