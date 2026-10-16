@@ -136,9 +136,8 @@ async function runRestartUpdate(context: JobContext): Promise<Record<string, unk
   );
 }
 export async function recoverRestartUpdate(context: JobContext): Promise<void> {
-  // Recovery can complete a stopped backup, but must not repeat a dispatched
-  // restart (including one interrupted before Docker acknowledged it).
-  if (context.job.recovery.restartRequested) return;
+  // Recovery can complete a stopped backup and start a server whose restart
+  // never reached Docker, but must not repeat a restart that started it.
   if (typeof context.job.recovery.initialRunning === "boolean")
     await recoverBackup(context);
 }

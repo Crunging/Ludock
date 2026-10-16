@@ -25,6 +25,7 @@ const originalRoots = process.env.LUDOCK_COMPOSE_ROOTS;
 let serverId: string;
 let image: string;
 let running: boolean;
+let startedAt: string;
 let labels: Record<string, string>;
 let name: string;
 let calls: string[];
@@ -38,6 +39,7 @@ beforeEach(async () => {
   delete process.env.LUDOCK_COMPOSE_ROOTS;
   image = "itzg/minecraft-server:latest";
   running = true;
+  startedAt = "2026-01-01T00:00:00Z";
   name = "/world";
   labels = { "ludock.enable": "true", "ludock.game": "minecraft" };
   calls = [];
@@ -57,13 +59,13 @@ beforeEach(async () => {
         return {
           Id: id, Name: name, Image: "sha256:fixture",
           Config: { Image: image, Labels: labels },
-          State: { Status: running ? "running" : "exited", Running: running, StartedAt: "fixture", ExitCode: 0 },
+          State: { Status: running ? "running" : "exited", Running: running, StartedAt: startedAt, ExitCode: 0 },
           Mounts: [], NetworkSettings: { Ports: {} }, Created: "2026-01-01T00:00:00Z",
         };
       },
       stop: async () => { calls.push("stop"); running = false; },
-      start: async () => { calls.push("start"); running = true; },
-      restart: async () => { calls.push("restart"); running = true; },
+      start: async () => { calls.push("start"); running = true; startedAt = "2026-01-02T00:00:00Z"; },
+      restart: async () => { calls.push("restart"); running = true; startedAt = "2026-01-02T00:00:00Z"; },
     } as unknown as ReturnType<typeof docker.getContainer>;
   });
   await refreshServers();
@@ -212,17 +214,25 @@ describe("tracked restart updates", () => {
       expect((await finished(operation.id)).status).toBe("failed");
       expect(calls).toEqual(["save"]);
     });
-  for (const restartRequested of [false, true])
-    it(`reconciles interruption without replaying a restart (dispatched: ${restartRequested})`, async () => {
+  for (const [restartRequested, docker, expected] of [
+    [false, "stopped", ["start"]],
+    [true, "stopped", ["start"]],
+    [true, "started", []],
+    [true, "running", []],
+  ] as const)
+    it(`reconciles interruption without replaying a restart (dispatched: ${restartRequested}, Docker: ${docker})`, async () => {
       const server = await resolveAuthorizedServer(operator, serverId, "server.restart");
       const operation = enqueue(true);
-      running = false;
+      const stoppedStartedAt = startedAt;
+      // "started" means Docker ran the restart and the game has exited since.
+      running = docker === "running";
+      if (docker !== "stopped") startedAt = "2026-01-02T00:00:00Z";
       getDatabase().query("UPDATE operations SET status='running',recovery_json=? WHERE id=?").run(JSON.stringify({
         initialRunning: true, dataSafe: true, containerId, fingerprint: server.logical.bindingFingerprint,
-        bindingRevision: 1, restartRequested,
+        bindingRevision: 1, stopSettled: true, stoppedStartedAt, restartRequested,
       }), operation.id);
       await startOperationRunner();
       expect(getOperation(operation.id)?.status).toBe("interrupted");
-      expect(calls).toEqual(restartRequested ? [] : ["start"]);
+      expect(calls).toEqual([...expected]);
     });
 });
