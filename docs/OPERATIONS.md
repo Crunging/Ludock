@@ -137,6 +137,11 @@ If Ludock restarts mid-operation, it waits up to five minutes for a pending stop
 to finish without sending it again. A server that had to be killed (exit 137)
 shows **Force-stopped** in **Needs attention**.
 
+With permission to create backups, the Restart dialog offers **Take a backup
+first**. The server stays stopped while the backup runs, then starts once. If
+the backup fails, the server starts again without one, and no backup is
+created if the game had to be killed.
+
 ### Addresses
 
 Ludock combines the name or IP in **Settings → Server address** with the host
@@ -310,18 +315,13 @@ container in Docker, and its owning manager's logs.
 
 ## Compose updates
 
-**Server → Update** offers **Restart to update** for recognized images that
-download the latest game files on startup by default (Minecraft, Palworld, CS2,
-Conan Exiles, Rust, and Valheim). It works without Compose access and needs only
-permission to restart the server. It is a restart: the image's own startup
-downloads the update, so a plain **Restart** updates the game the same way. What
-it adds is an optional backup, taken while the server is stopped, before the
-restart; skipping the backup requires typing the server's name. Like
-**Restart**, it saves the world first. It keeps the current image, version pins
-in the image's settings still apply, and the operation finishes when Docker
-restarts the container, not when the game is ready.
+Recognized images that download the latest game files on startup by default
+(Minecraft, Palworld, CS2, Conan Exiles, Rust, and Valheim) update the game on
+every **Restart**, and **Server → Update** says so. The image itself doesn't
+change, and version pins in its settings still apply. Choose **Take a backup
+first** when you restart to back up before the update.
 
-To get a newer image itself, with its system packages and startup scripts, use
+To get a newer image, with its system packages and startup scripts, use
 **Update server**, which pulls the image and recreates the service.
 
 Pulling a new image and recreating the service needs the Linux Ludock image, an

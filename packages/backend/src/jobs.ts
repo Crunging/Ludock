@@ -2,7 +2,6 @@ import { runLifecycle, recoverLifecycle, saveWorld } from "./lifecycle.js";
 import {
   type ServerCapability,
   updateRequestSchema,
-  restartUpdateRequestSchema,
   scheduleSchema,
 } from "@ludock/shared";
 import { findUserById, getDatabase, type SessionUser } from "./database.js";
@@ -28,7 +27,6 @@ import {
   assertSingleServiceContainer,
 } from "./compose.js";
 import { AppError } from "./errors.js";
-import { getImageIntegration } from "./server-presets.js";
 import { notifyEvent } from "./notifications.js";
 import { suppressMonitoring, setIntentionalStop } from "./monitoring.js";
 import {
@@ -77,67 +75,54 @@ export function jobActor(context: JobContext): SessionUser {
   }
   return actor;
 }
-async function runRestartUpdate(context: JobContext): Promise<Record<string, unknown>> {
-  const request = restartUpdateRequestSchema.parse(context.job.input.request);
+/** Restart with a backup taken while the server is stopped, starting it once. */
+async function runBackupRestart(context: JobContext): Promise<Record<string, unknown>> {
   const server = await resolveAuthorizedServer(
     jobActor(context), context.job.serverId, "server.restart", context.job.bindingRevision,
   );
   const assertAccess = () => {
     const actor = jobActor(context);
     assertServerCapability(actor, server.logical.id, "server.restart");
-    if (request.createBackup)
-      assertServerCapability(actor, server.logical.id, "backups.create");
+    assertServerCapability(actor, server.logical.id, "backups.create");
   };
-  return withLocks(
-    [...server.lockKeys, ...(request.createBackup ? ["backups:storage"] : [])],
-    async () => {
-      const current = await resolveAuthorizedServer(
+  return withLocks([...server.lockKeys, "backups:storage"], async () => {
+    const current = await resolveAuthorizedServer(
+      jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
+    );
+    assertAccess();
+    suppressMonitoring(server.logical.id);
+    try {
+      await saveWorld(context, current, () => {
+        assertAccess();
+        assertObservedServerBinding(server.logical.id, current.observation, context.job.bindingRevision);
+      });
+      await stopForDataOperation(current, context);
+      const backup = await createStoppedBackup(current, context);
+      context.progress("backup_complete", { backupId: backup.id });
+      const selected = await resolveAuthorizedServer(
         jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
       );
-      if (!getImageIntegration(current.container.image)?.updatesOnStart)
-        throw new AppError("RESTART_UPDATE_UNAVAILABLE", 409, "This image is not known to update the game on startup");
       assertAccess();
-      if (!request.createBackup && request.skipBackupConfirmation !== current.container.displayName)
-        throw new AppError("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup");
-      suppressMonitoring(server.logical.id);
-      try {
-        await saveWorld(context, current, () => {
-          assertAccess();
-          assertObservedServerBinding(server.logical.id, current.observation, context.job.bindingRevision);
-        });
-        if (request.createBackup) {
-          await stopForDataOperation(current, context);
-          const backup = await createStoppedBackup(current, context);
-          context.progress("backup_complete", { backupId: backup.id });
-        }
-        const selected = await resolveAuthorizedServer(
-          jobActor(context), server.logical.id, "server.restart", context.job.bindingRevision,
-        );
+      context.progress("starting");
+      await changeContainerState(selected.container.id, "start", (observation) => {
         assertAccess();
-        // Persist before dispatch. Interrupted restarts are never replayed.
-        context.progress("restarting", { restartRequested: true });
-        await changeContainerState(selected.container.id, "restart", (observation) => {
-          assertAccess();
-          assertObservedServerBinding(server.logical.id, observation, context.job.bindingRevision);
-        });
-        context.progress("restarted", { stateRestored: true });
-        setIntentionalStop(server.logical.id, false);
-        notifyEvent(`operation:${context.job.id}`, `${selected.container.displayName}: restarted to update.`);
-        const { backupId, saveStatus, saveReason } = context.job.recovery;
-        return { action: "restart", backupId: backupId ?? null, saveStatus, saveReason };
-      } finally {
-        // The backup keeps the game stopped until restart. On failure, return
-        // it to its initial state only after the data helper has been removed.
-        if (request.createBackup && !context.job.recovery.dataHelperId)
-          await restoreInitialRunningState(current, context);
-        suppressMonitoring(server.logical.id);
-      }
-    },
-  );
+        assertObservedServerBinding(server.logical.id, observation, context.job.bindingRevision);
+      });
+      context.progress("started", { stateRestored: true });
+      setIntentionalStop(server.logical.id, false);
+      const { backupId, saveStatus, saveReason } = context.job.recovery;
+      return { action: "restart", backupId: backupId ?? null, saveStatus, saveReason };
+    } finally {
+      // The backup keeps the game stopped until it starts. On failure, return
+      // it to its initial state only after the data helper has been removed.
+      if (!context.job.recovery.dataHelperId)
+        await restoreInitialRunningState(current, context);
+      suppressMonitoring(server.logical.id);
+    }
+  });
 }
-export async function recoverRestartUpdate(context: JobContext): Promise<void> {
-  // Recovery can complete a stopped backup and start a server whose restart
-  // never reached Docker, but must not repeat a restart that started it.
+async function recoverBackupRestart(context: JobContext): Promise<void> {
+  // Starting is safe to reconcile: a server that is already running is left alone.
   if (typeof context.job.recovery.initialRunning === "boolean")
     await recoverBackup(context);
 }
@@ -331,13 +316,18 @@ async function runUpdate(
   );
 }
 export function registerBackgroundJobs(): void {
-  for (const action of ["start", "stop", "restart"] as const)
+  for (const action of ["start", "stop"] as const)
     registerJobHandler(action, {
       run: (context) => runLifecycle(context, action),
       recover: recoverLifecycle,
     });
+  registerJobHandler("restart", {
+    run: (context) => context.job.input.createBackup === true
+      ? runBackupRestart(context) : runLifecycle(context, "restart"),
+    recover: (context) => context.job.input.createBackup === true
+      ? recoverBackupRestart(context) : recoverLifecycle(context),
+  });
   registerJobHandler("backup", { run: runBackup, recover: recoverBackup });
   registerJobHandler("restore", { run: runRestore, recover: recoverRestore });
   registerJobHandler("update", { run: runUpdate, recover: recoverUpdate });
-  registerJobHandler("restart_to_update", { run: runRestartUpdate, recover: recoverRestartUpdate });
 }

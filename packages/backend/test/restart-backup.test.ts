@@ -14,18 +14,18 @@ import { registerBackgroundJobs } from "../src/jobs.js";
 import { enqueueOperation, getOperation, startOperationRunner, stopOperationRunner } from "../src/operations.js";
 import { listOperationHistory } from "../src/history.js";
 import { composeRoutes } from "../src/routes/compose.js";
+import { serversRoutes } from "../src/routes/servers.js";
 import type { RequestContext } from "../src/routes/request.js";
 import { isServerBusy } from "../src/operation-locks.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin = { id: "admin", username: "admin", role: "admin" as const };
 const operator = { id: "operator", username: "operator", role: "operator" as const };
-const containerId = dockerId("restart_to_update");
+const containerId = dockerId("restart_backup");
 const originalRoots = process.env.LUDOCK_COMPOSE_ROOTS;
 let serverId: string;
 let image: string;
 let running: boolean;
-let startedAt: string;
 let labels: Record<string, string>;
 let name: string;
 let calls: string[];
@@ -39,7 +39,6 @@ beforeEach(async () => {
   delete process.env.LUDOCK_COMPOSE_ROOTS;
   image = "itzg/minecraft-server:latest";
   running = true;
-  startedAt = "2026-01-01T00:00:00Z";
   name = "/world";
   labels = { "ludock.enable": "true", "ludock.game": "minecraft" };
   calls = [];
@@ -59,13 +58,12 @@ beforeEach(async () => {
         return {
           Id: id, Name: name, Image: "sha256:fixture",
           Config: { Image: image, Labels: labels },
-          State: { Status: running ? "running" : "exited", Running: running, StartedAt: startedAt, ExitCode: 0 },
+          State: { Status: running ? "running" : "exited", Running: running, StartedAt: "fixture", ExitCode: 0 },
           Mounts: [], NetworkSettings: { Ports: {} }, Created: "2026-01-01T00:00:00Z",
         };
       },
       stop: async () => { calls.push("stop"); running = false; },
-      start: async () => { calls.push("start"); running = true; startedAt = "2026-01-02T00:00:00Z"; },
-      restart: async () => { calls.push("restart"); running = true; startedAt = "2026-01-02T00:00:00Z"; },
+      start: async () => { calls.push("start"); running = true; },
     } as unknown as ReturnType<typeof docker.getContainer>;
   });
   await refreshServers();
@@ -85,16 +83,15 @@ afterEach(async () => {
   else process.env.LUDOCK_COMPOSE_ROOTS = originalRoots;
 });
 
-const request = (createBackup: boolean) => ({ createBackup, ...(createBackup ? {} : { skipBackupConfirmation: "world" }) });
-function routeContext(body: unknown, actor = operator): RequestContext {
-  const url = new URL(`http://localhost/api/v1/servers/${serverId}/restart-update`);
+function routeContext(path: string, body: unknown, actor = operator): RequestContext {
+  const url = new URL(`http://localhost/api/v1/servers/${serverId}/${path}`);
   const { token } = createSession(actor, new Request(url.href));
   return { request: new Request(url.href, { headers: { Cookie: `ludock_session=${token}` } }),
     user: actor, params: { id: serverId }, url, body, headers: new Headers() };
 }
-function enqueue(createBackup = false) {
-  return enqueueOperation({ serverId, actorId: operator.id, kind: "restart_to_update", bindingRevision: 1,
-    input: { request: request(createBackup) } });
+function enqueue() {
+  return enqueueOperation({ serverId, actorId: operator.id, kind: "restart", bindingRevision: 1,
+    input: { createBackup: true } });
 }
 async function finished(id: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -106,11 +103,11 @@ async function finished(id: string) {
 }
 
 const capabilityRoute = composeRoutes["/api/v1/servers/:id/update-capability"].GET!;
-const restartRoute = composeRoutes["/api/v1/servers/:id/restart-update"].POST!;
+const restartRoute = serversRoutes["/api/v1/servers/:id/restart"].POST!;
 
-describe("restart update capability", () => {
+describe("startup update capability", () => {
   for (const compose of [false, true])
-    it(`offers startup updates without source mounts (${compose ? "Compose" : "standalone"})`, async () => {
+    it(`reports startup updates without source mounts (${compose ? "Compose" : "standalone"})`, async () => {
       const server = await resolveAuthorizedServer(admin, serverId, "server.update");
       if (compose) server.observation.compose = { project: "games", service: "world", containerNumber: "1" };
       const capability = await updateCapability(server, true);
@@ -126,111 +123,107 @@ describe("restart update capability", () => {
   });
   it("allows restart operators without exposing Compose sources or launching Compose", async () => {
     const spawn = spyOn(Bun, "spawn");
-    const response = await capabilityRoute(routeContext(undefined));
+    const response = await capabilityRoute(routeContext("update-capability", undefined));
     expect(response.status).toBe(200);
     expect(updateCapabilityResponseSchema.parse(await response.json()).capability).toMatchObject({ updatesOnStart: true, available: false });
     expect(spawn).not.toHaveBeenCalled();
   });
 });
 
-describe("restart update requests", () => {
-  it("requires restart access and backup access only when selected", async () => {
+describe("restart requests", () => {
+  it("requires backup access only when a backup is selected", async () => {
     grants(false);
-    await expect(restartRoute(routeContext(request(true)))).rejects.toMatchObject({ code: "FORBIDDEN" });
-    const response = await restartRoute(routeContext(request(false)));
-    expect(response.status).toBe(202);
+    await expect(restartRoute(routeContext("restart", { createBackup: true }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+    for (const body of [undefined, { createBackup: false }]) {
+      const response = await restartRoute(routeContext("restart", body));
+      expect(response.status).toBe(202);
+      const { id } = operationResponseSchema.parse(await response.json()).operation;
+      expect(getOperation(id)?.input).toEqual({});
+      getDatabase().query("UPDATE operations SET status='succeeded' WHERE id=?").run(id);
+    }
+    grants();
+    const response = await restartRoute(routeContext("restart", { createBackup: true }));
     const operation = operationResponseSchema.parse(await response.json()).operation;
-    expect(getOperation(operation.id)?.input).toEqual({ request: request(false) });
-    expect(listOperationHistory(operator, { serverId, limit: 10 }).operations[0].kind).toBe("restart_to_update");
+    expect(getOperation(operation.id)?.input).toEqual({ createBackup: true });
+    expect(listOperationHistory(operator, { serverId, limit: 10 }).operations[0].kind).toBe("restart");
   });
-  it("rejects unsupported images, missing confirmation, and malformed options", async () => {
-    await expect(restartRoute(routeContext({ createBackup: false }))).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
-    await expect(restartRoute(routeContext({ createBackup: true, forceRecreate: true }))).rejects.toThrow();
+  it("rejects malformed options for any image", async () => {
     image = "factoriotools/factorio";
-    await expect(restartRoute(routeContext(request(true)))).rejects.toMatchObject({ code: "RESTART_UPDATE_UNAVAILABLE" });
+    await expect(restartRoute(routeContext("restart", { createBackup: "yes" }))).rejects.toThrow();
+    await expect(restartRoute(routeContext("restart", { createBackup: true, forceRecreate: true }))).rejects.toThrow();
+    const response = await restartRoute(routeContext("restart", { createBackup: true }));
+    expect(response.status).toBe(202);
     expect(calls).toEqual([]);
   });
   it("rechecks request authentication after asynchronous discovery", async () => {
-    const ctx = routeContext(request(false));
+    const ctx = routeContext("restart", { createBackup: true });
     onInspect = () => deleteRequestSession(ctx.request);
     await expect(restartRoute(ctx)).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
     expect(listOperationHistory(admin, { serverId, limit: 10 }).operations).toEqual([]);
   });
 });
 
-describe("tracked restart updates", () => {
-  for (const initiallyRunning of [false, true])
-    it(`restarts the existing container once (initially running: ${initiallyRunning})`, async () => {
-      running = initiallyRunning;
-      const spawn = spyOn(Bun, "spawn");
-      const operation = enqueue();
-      await startOperationRunner();
-      expect((await finished(operation.id)).status).toBe("succeeded");
-      expect(calls).toEqual(["save", "restart"]);
-      expect(spawn).not.toHaveBeenCalled();
-      expect(getOperation(operation.id)?.recovery.restartRequested).toBe(true);
-    });
-  it("holds the locks and keeps the server stopped between backup and restart", async () => {
+describe("restarts with a backup", () => {
+  it("holds the locks, keeps the server stopped during the backup, and starts it once", async () => {
     spyOn(backups, "createStoppedBackup").mockImplementation(async () => {
       expect(running).toBe(false);
       expect(isServerBusy(serverId)).toBe(true);
       calls.push("backup");
       return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
     });
-    const operation = enqueue(true);
+    const operation = enqueue();
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("succeeded");
-    expect(calls).toEqual(["save", "stop", "backup", "restart"]);
-    expect(getOperation(operation.id)?.result).toMatchObject({ backupId: "backup-fixture", saveStatus: "sent" });
+    expect(calls).toEqual(["save", "stop", "backup", "start"]);
+    expect(getOperation(operation.id)?.result).toMatchObject({ action: "restart", backupId: "backup-fixture", saveStatus: "sent" });
     expect(isServerBusy(serverId)).toBe(false);
   });
-  it("restores the initial running state after a backup failure without restarting to update", async () => {
+  it("restores the initial running state after a backup failure", async () => {
     spyOn(backups, "createStoppedBackup").mockRejectedValue(new Error("private-fixture"));
-    const operation = enqueue(true);
+    const operation = enqueue();
     await startOperationRunner();
     expect((await finished(operation.id)).status).toBe("failed");
     expect(calls).toEqual(["save", "stop", "start"]);
     expect(getOperation(operation.id)?.error).not.toContain("private-fixture");
   });
-  it("rechecks backup and restart access after the backup", async () => {
-    spyOn(backups, "createStoppedBackup").mockImplementation(async () => {
-      grants(false);
-      return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
-    });
-    const operation = enqueue(true);
-    await startOperationRunner();
-    expect((await finished(operation.id)).status).toBe("failed");
-    expect(calls).toEqual(["save", "stop", "start"]);
-  });
-  for (const change of ["revoke", "rename"])
-    it(`rechecks authority at the final Docker inspection (${change})`, async () => {
+  for (const revoked of ["server.restart", "backups.create"] as const)
+    it(`rechecks ${revoked} after the backup`, async () => {
+      spyOn(backups, "createStoppedBackup").mockImplementation(async () => {
+        setServerGrant(operator.id, serverId,
+          ["server.view", revoked === "server.restart" ? "backups.create" : "server.restart"], admin);
+        return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
+      });
       const operation = enqueue();
-      onInspect = () => {
-        if (getOperation(operation.id)?.phase !== "restarting") return;
-        if (change === "revoke") setServerGrant(operator.id, serverId, ["server.view"], admin);
-        else name = "/different";
-      };
       await startOperationRunner();
       expect((await finished(operation.id)).status).toBe("failed");
-      expect(calls).toEqual(["save"]);
+      // The only start returns the server to its initial running state.
+      expect(calls).toEqual(["save", "stop", "start"]);
+      expect(getOperation(operation.id)?.phase).not.toBe("started");
     });
-  for (const [restartRequested, docker, expected] of [
-    [false, "stopped", ["start"]],
+  it("rechecks the binding at the final Docker inspection", async () => {
+    spyOn(backups, "createStoppedBackup").mockResolvedValue(
+      { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>);
+    const operation = enqueue();
+    onInspect = () => {
+      if (getOperation(operation.id)?.phase === "starting") name = "/different";
+    };
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("failed");
+    expect(calls).toEqual(["save", "stop"]);
+  });
+  for (const [recovery, docker, expected] of [
     [true, "stopped", ["start"]],
-    [true, "started", []],
     [true, "running", []],
+    [false, "running", []],
   ] as const)
-    it(`reconciles interruption without replaying a restart (dispatched: ${restartRequested}, Docker: ${docker})`, async () => {
+    it(`reconciles interruption by restoring the initial state (stop recorded: ${recovery}, Docker: ${docker})`, async () => {
       const server = await resolveAuthorizedServer(operator, serverId, "server.restart");
-      const operation = enqueue(true);
-      const stoppedStartedAt = startedAt;
-      // "started" means Docker ran the restart and the game has exited since.
+      const operation = enqueue();
       running = docker === "running";
-      if (docker !== "stopped") startedAt = "2026-01-02T00:00:00Z";
-      getDatabase().query("UPDATE operations SET status='running',recovery_json=? WHERE id=?").run(JSON.stringify({
+      getDatabase().query("UPDATE operations SET status='running',recovery_json=? WHERE id=?").run(JSON.stringify(recovery ? {
         initialRunning: true, dataSafe: true, containerId, fingerprint: server.logical.bindingFingerprint,
-        bindingRevision: 1, stopSettled: true, stoppedStartedAt, restartRequested,
-      }), operation.id);
+        bindingRevision: 1, stopSettled: true, stoppedStartedAt: "fixture",
+      } : {}), operation.id);
       await startOperationRunner();
       expect(getOperation(operation.id)?.status).toBe("interrupted");
       expect(calls).toEqual([...expected]);

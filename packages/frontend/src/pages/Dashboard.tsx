@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { useServers } from "../hooks/useServers";
 import ServerCard from "../components/ServerCard";
 import NeedsAttention from "../components/NeedsAttention";
-import { apiJson } from "../api";
+import { apiJson, jsonBody } from "../api";
 import { useAuth } from "../auth-context";
 import { useViewPreferences } from "../view-preferences-context";
 import { NavLink } from "../navigation";
@@ -45,13 +45,14 @@ export default function Dashboard() {
   const [showHelp, setShowHelp] = useState(false);
   const [attentionRefresh, setAttentionRefresh] = useState(0);
   const handleAction = useCallback(
-    async (id: string, action: "start" | "stop" | "restart") => {
+    async (id: string, action: "start" | "stop" | "restart", options?: { createBackup: boolean }) => {
       if (stale || loading) return;
       try {
         setActionError(null);
         const path = `/servers/${encodeURIComponent(id)}/${action}`;
         if (action === "start") await apiJson(path, okResponseSchema, { method: "POST" });
-        else await apiJson(path, operationResponseSchema, { method: "POST" });
+        else await apiJson(path, operationResponseSchema,
+          options?.createBackup ? jsonBody("POST", { createBackup: true }) : { method: "POST" });
         refresh();
       } catch (reason) {
         setActionError(

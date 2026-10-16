@@ -1,10 +1,12 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import "./lifecycle-confirmation.css";
 
 interface LifecycleConfirmationProps {
   action: "stop" | "restart";
   serverName: string;
-  onConfirm: () => void;
+  /** Offer a backup taken while the server is stopped, before it starts again. */
+  backupOption?: boolean;
+  onConfirm: (options: { createBackup: boolean }) => void;
   onCancel: () => void;
   fallbackFocusId?: string;
 }
@@ -12,6 +14,7 @@ interface LifecycleConfirmationProps {
 export default function LifecycleConfirmation({
   action,
   serverName,
+  backupOption = false,
   onConfirm,
   onCancel,
   fallbackFocusId,
@@ -21,6 +24,8 @@ export default function LifecycleConfirmation({
   const titleId = useId();
   const descriptionId = useId();
   const label = action === "stop" ? "Stop" : "Restart";
+  const offerBackup = action === "restart" && backupOption;
+  const [createBackup, setCreateBackup] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -63,13 +68,28 @@ export default function LifecycleConfirmation({
         {action === "stop" &&
           " The server will remain stopped until started again."}
       </p>
+      {offerBackup && (
+        <label className="check-label lifecycle-confirmation__option">
+          <input
+            type="checkbox"
+            checked={createBackup}
+            onChange={(event) => setCreateBackup(event.target.checked)}
+          />
+          Take a backup first
+        </label>
+      )}
+      {offerBackup && createBackup && (
+        <p className="lifecycle-confirmation__help">
+          The server stays stopped while the backup runs, then starts again.
+        </p>
+      )}
       <div className="lifecycle-confirmation__actions">
         <button className="secondary-btn" ref={cancelRef} onClick={onCancel}>
           Cancel
         </button>
         <button
           className="secondary-btn secondary-btn--danger"
-          onClick={onConfirm}
+          onClick={() => onConfirm({ createBackup: offerBackup && createBackup })}
         >
           {label} server
         </button>

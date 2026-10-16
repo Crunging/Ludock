@@ -119,8 +119,8 @@ describe("backup execution authority", () => {
     expect(stopped).toBe(0);
   });
   for (const capability of ["server.restart", "backups.create"] as const)
-    it(`rechecks ${capability} before a restart update stops for backup`, async () => {
-      job.job.kind = "restart_to_update";
+    it(`rechecks ${capability} before a restart stops for backup`, async () => {
+      job.job.kind = "restart";
       setServerGrant(operator.id, context.logical.id,
         ["server.view", "server.restart", "backups.create"], admin);
       onInspect = () => setServerGrant(operator.id, context.logical.id,

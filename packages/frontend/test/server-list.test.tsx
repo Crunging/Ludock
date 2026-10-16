@@ -114,6 +114,23 @@ describe("server list", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
+  for (const backup of [false, true])
+    it(`offers a backup before restarting only with backup access (${backup ? "granted" : "not granted"})`, async () => {
+      const { action, update } = card();
+      if (backup) update({ ...server, permissions: [...server.permissions, "backups.create"] });
+      await userEvent.click(screen.getByRole("button", { name: /More actions/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Restart…", exact: true }));
+      const option = screen.queryByRole("checkbox", { name: "Take a backup first" }) as HTMLInputElement | null;
+      expect(Boolean(option)).toBe(backup);
+      if (option) {
+        expect(option.checked).toBe(false);
+        await userEvent.click(option);
+        expect(screen.getByText("The server stays stopped while the backup runs, then starts again.")).toBeTruthy();
+      }
+      await userEvent.click(screen.getByRole("button", { name: "Restart server" }));
+      expect(action).toHaveBeenCalledWith(server.id, "restart", { createBackup: backup });
+    });
+
   it("disables further lifecycle controls while a request is pending", async () => {
     const { action } = card();
     let complete: () => void = () => {};

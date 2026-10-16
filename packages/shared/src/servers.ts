@@ -132,3 +132,8 @@ export const bindingReviewRequestSchema = z
   .object({ confirmation: z.string().max(200) })
   .strict();
 export type BindingReviewRequest = z.infer<typeof bindingReviewRequestSchema>;
+
+export const restartRequestSchema = z
+  .object({ createBackup: z.boolean().default(false) })
+  .strict();
+export type RestartRequest = z.input<typeof restartRequestSchema>;

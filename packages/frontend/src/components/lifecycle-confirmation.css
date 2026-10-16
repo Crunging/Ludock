@@ -27,6 +27,16 @@
   line-height: 1.6;
 }
 
+.lifecycle-confirmation__option {
+  margin-top: 16px;
+}
+
+.lifecycle-confirmation p.lifecycle-confirmation__help {
+  margin-top: 4px;
+  padding-left: 24px;
+  font-size: 13px;
+}
+
 .lifecycle-confirmation__actions {
   display: flex;
   justify-content: flex-end;

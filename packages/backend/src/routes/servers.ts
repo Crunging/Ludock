@@ -1,4 +1,4 @@
-import { okResponseSchema, operationResponseSchema, serverResponseSchema, serversResponseSchema } from "@ludock/shared";
+import { okResponseSchema, operationResponseSchema, restartRequestSchema, serverResponseSchema, serversResponseSchema } from "@ludock/shared";
 import { assertRequestUser, operationActorId } from "../auth.js";
 import { assertServerCapability } from "../authorization.js";
 import { changeContainerState } from "../docker.js";
@@ -11,13 +11,17 @@ import { serverAction } from "./server-action.js";
 function containerAction(action: "stop" | "restart"): ApiHandler {
   return async (ctx) => {
     const actor = requestUser(ctx);
+    const { createBackup } = action === "restart" ? restartRequestSchema.parse(ctx.body ?? {}) : { createBackup: false };
     const context = await resolveAuthorizedServer(actor, ctx.params.id, `server.${action}`);
-    assertServerCapability(assertRequestUser(ctx.request, actor), context.logical.id, `server.${action}`);
+    const current = assertRequestUser(ctx.request, actor);
+    assertServerCapability(current, context.logical.id, `server.${action}`);
+    if (createBackup) assertServerCapability(current, context.logical.id, "backups.create");
     return respond(operationResponseSchema, { operation: enqueueOperation({
       serverId: context.logical.id,
       actorId: operationActorId(ctx.request, actor),
       kind: action,
       bindingRevision: context.logical.bindingRevision,
+      ...(createBackup ? { input: { createBackup } } : {}),
       idempotencyKey: requestKey(ctx.request.headers.get("Idempotency-Key") ?? undefined),
     }) }, 202);
   };

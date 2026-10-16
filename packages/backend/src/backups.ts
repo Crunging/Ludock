@@ -455,7 +455,7 @@ function assertDataOperationAuthority(
   context: ServerContext,
   job: JobContext,
 ): void {
-  if (job.job.kind === "restart_to_update")
+  if (job.job.kind === "restart")
     assertServerCapability(jobActor(job), context.logical.id, "server.restart");
   assertServerCapability(
     jobActor(job),
@@ -464,7 +464,7 @@ function assertDataOperationAuthority(
       ? "backups.create"
       : job.job.kind === "restore"
         ? "backups.restore"
-        : job.job.kind === "restart_to_update"
+        : job.job.kind === "restart"
           ? "backups.create"
           : "server.update",
   );
@@ -540,14 +540,6 @@ export async function restoreInitialRunningState(
     job.progress("stop_reconciled", { stopSettled: true });
   }
   if (observed.container.state !== "running") {
-    // Never repeat a restart to update that reached Docker. One that didn't
-    // leaves the container unstarted since the backup stopped it.
-    if (
-      job.job.recovery.restartRequested === true &&
-      ((await docker.getContainer(context.container.id).inspect()).State.StartedAt || "") !==
-        job.job.recovery.stoppedStartedAt
-    )
-      return;
     job.progress("restarting");
     await changeContainerState(context.container.id, "start", (observation) => {
       assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
