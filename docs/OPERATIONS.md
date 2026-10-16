@@ -83,7 +83,7 @@ labels:
 | `ludock.game` | Game integration, such as `minecraft` or `terraria` |
 | `ludock.address` | Exact address players connect to, such as `mc.example.com`, `play.example.com:30000`, or `[2001:db8::1]:2456`; replaces the detected address |
 | `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
-| `ludock.console.host` / `ludock.console.port` | Console address, when the default isn't right |
+| `ludock.console.host` / `ludock.console.port` | Direct console address, or the console port inside the container |
 | `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
 | `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
@@ -153,11 +153,18 @@ administrators, a shell inside the container.
 - **History:** Up and Down step through commands sent during the current visit.
   Nothing is stored.
 
-Network consoles (RCON, WebRCON, and Telnet) need a reachable address, the
-console enabled in the game, and credentials. These protocols aren't encrypted,
-so keep them on a trusted Docker network or behind an authenticated TLS tunnel.
-Ludock sends console credentials to `ludock.console.host`, so point it only at an
-endpoint you trust.
+Network consoles (RCON, WebRCON, and Telnet) need the console enabled in the
+game and its password in an environment variable. Each command runs in a
+short-lived helper container that shares the game container's network and
+connects to the console on `127.0.0.1`, so the console port doesn't need to be
+published or share a network with Ludock. The password reaches the helper over
+standard input, never its configuration. The server stays locked until the
+helper is removed.
+
+Set `ludock.console.port` when the console listens on a non-default port.
+Setting `ludock.console.host` connects directly from Ludock instead. These
+protocols aren't encrypted and Ludock sends the password to that host, so point
+it only at a trusted endpoint or an authenticated TLS tunnel.
 
 - **Minecraft** runs `rcon-cli` inside the game container and needs no published
   RCON port. The image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`,
