@@ -140,6 +140,22 @@ describe("availability monitoring", () => {
     expect(deliveries().length).toBe(1);
   });
 
+  for (const startupHealth of ["starting", "unhealthy"])
+    it(`resumes monitoring after an external start with ${startupHealth} health`, async () => {
+      setIntentionalStop(serverId, true);
+      state = "exited";
+      await checkAvailability(1000);
+      state = "running";
+      health = startupHealth;
+      await checkAvailability(2000);
+      expect(getAvailability(serverId).state.intentionallyStopped).toBe(false);
+      await checkAvailability(12_000);
+      expect(deliveries()).toHaveLength(1);
+      health = "healthy";
+      await checkAvailability(13_000);
+      expect(deliveries()).toHaveLength(2);
+    });
+
   it("reports lost Docker connectivity without deleting or rebinding servers", async () => {
     unavailable = true;
     await checkAvailability(1000);

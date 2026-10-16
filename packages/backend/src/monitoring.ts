@@ -104,9 +104,16 @@ export function checkAvailability(
     const policy = availabilitySchema.parse(JSON.parse(row.policy_json));
     if (monitoringSuppressed(server.id, policy, row.suppressed_until, now)) continue;
     const container = current?.get(server.containerId ?? "");
+    const running = server.status === "active" && container?.state === "running";
+    // An owner can start the container outside Ludock. Resume monitoring even
+    // if startup never passes its health check, or that failure stays hidden.
+    if (running && row.intentionally_stopped) {
+      getDatabase().query("UPDATE availability SET intentionally_stopped=0 WHERE server_id=?")
+        .run(server.id);
+      row.intentionally_stopped = 0;
+    }
     const healthy =
-      server.status === "active" &&
-      container?.state === "running" &&
+      running &&
       container.health !== "unhealthy" && container.health !== "starting";
     if (healthy) {
       if (row.notified)

@@ -17,6 +17,7 @@ import type * as Docker from "./docker-client.js";
 import { walkTar, encodeTarHeader, tarPadding, tarEnd, type TarHeader } from "./tar.js";
 import { backupSettingsSchema, type BackupSettings } from "@ludock/shared";
 import { docker } from "./docker-client.js";
+import { DockerApiError, DockerStreamOpenError, type DockerConnection } from "./docker-transport.js";
 import type { ServerContext } from "./servers.js";
 import { AppError } from "./errors.js";
 import { rootList } from "./approved-paths.js";
@@ -24,7 +25,7 @@ import { FILE_HELPER_SCRIPT, RESTORE_EXTRACT_SCRIPT } from "./helper-scripts.js"
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
 import { resolveHelperImage } from "./runtime-images.js";
-import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
+import { createHelperContainer, removeOperationHelper } from "./docker-helpers.js";
 
 export interface BackupRoot {
   id: string;
@@ -586,14 +587,14 @@ export async function createDataHelper(
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         try {
-          await removeHelperContainer(container);
+          await removeOperationHelper(container);
         } finally {
           await proof.cleanup();
         }
       })());
     return { container, roots, cleanup };
   } catch (error) {
-    try { await removeHelperContainer(container); }
+    try { await removeOperationHelper(container); }
     finally { await proof.cleanup(); }
     throw error;
   }
@@ -613,6 +614,54 @@ export function helperRoot(context: ServerContext, root: BackupRoot): string {
   return `/mounts/${root.id}${root.path.slice(mount.destination.length)}`;
 }
 
+/** Docker cannot signal an exec. Stopping the helper ends its PID namespace,
+ * so no command can still run inside it once Docker reports it stopped. */
+async function terminateHelper(container: Docker.Container): Promise<boolean> {
+  try {
+    await container.stop({ t: 0 }).catch((error: unknown) => {
+      if (!(error instanceof DockerApiError) || (error.statusCode !== 304 && error.statusCode !== 404)) throw error;
+    });
+    return !(await container.inspect()).State.Running;
+  } catch (error) {
+    return error instanceof DockerApiError && error.statusCode === 404;
+  }
+}
+
+async function waitForHelperExit(
+  container: Docker.Container,
+  execution: Docker.Exec,
+  expired: () => boolean,
+): Promise<Docker.ExecInspectInfo | null> {
+  for (;;) {
+    try {
+      const result = await execution.inspect();
+      if (result.Running === false && Number.isInteger(result.ExitCode)) return result;
+    } catch (error) {
+      if (error instanceof DockerApiError && error.statusCode === 404) return null;
+    }
+    // Losing the stream does not terminate the process. Keep rollback and the
+    // next restore step from writing concurrently with an earlier command, but
+    // stop the helper once the command exceeds its limit so a hang cannot hold
+    // the operation forever.
+    if (expired() && await terminateHelper(container)) return null;
+    await Bun.sleep(250);
+  }
+}
+
+async function startHelperExec(container: Docker.Container, execution: Docker.Exec, deadline: AbortSignal) {
+  try { return await execution.start(deadline); }
+  catch (error) {
+    if (error instanceof DockerStreamOpenError && error.requestStarted)
+      await waitForHelperExit(container, execution, () => deadline.aborted);
+    throw deadline.aborted ? deadline.reason : error;
+  }
+}
+
+/** Restore steps reuse their helper, so a stopped one must be replaced. */
+export async function isHelperRunning(container: Docker.Container): Promise<boolean> {
+  return (await container.inspect()).State.Running;
+}
+
 export async function helperExec(
   container: Docker.Container,
   command: string[],
@@ -626,26 +675,42 @@ export async function helperExec(
     AttachStderr: true,
   });
   assertAccess?.();
-  const stream = await execution.start();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const timeout = setTimeout(() => stream.abort(failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")), 120_000);
+  let stream: DockerConnection | undefined;
+  // The limit also bounds opening the stream and waiting for the process after it ends.
+  const deadline = new AbortController();
+  const expired = () => deadline.signal.aborted;
+  const timeout = setTimeout(() => {
+    const error = failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.");
+    deadline.abort(error);
+    stream?.abort(error);
+  }, 120_000);
   try {
-    await demuxDockerStream(stream.readable, chunk => {
-      size += chunk.length;
-      if (size > 4_194_304) throw failBackup("HELPER_OUTPUT", "A data operation produced too much output.");
-      chunks.push(chunk);
-    });
+    stream = await startHelperExec(container, execution, deadline.signal);
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let failure: { error: unknown } | undefined;
+    try {
+      await demuxDockerStream(stream.readable, chunk => {
+        size += chunk.length;
+        if (size > 4_194_304) throw failBackup("HELPER_OUTPUT", "A data operation produced too much output.");
+        chunks.push(chunk);
+      });
+    } catch (error) {
+      failure = { error };
+    } finally {
+      stream.abort();
+    }
+    const result = await waitForHelperExit(container, execution, expired);
+    if (failure) throw failure.error;
+    if (!result || result.ExitCode !== 0)
+      throw failBackup(
+        "DATA_OPERATION_FAILED",
+        "A data operation failed. The server remains stopped until its data is safe.",
+      );
+    return decodeText(concatBytes(chunks));
   } finally {
     clearTimeout(timeout);
-    stream.abort();
   }
-  if ((await execution.inspect()).ExitCode !== 0)
-    throw failBackup(
-      "DATA_OPERATION_FAILED",
-      "A data operation failed. The server remains stopped until its data is safe.",
-    );
-  return decodeText(concatBytes(chunks));
 }
 
 async function helperArchive(
@@ -803,21 +868,29 @@ export async function extractRootToStage(
     AttachStderr: true,
   });
   assertAccess?.();
-  const socket = await execution.start();
+  let started: DockerConnection | undefined;
+  const deadline = new AbortController();
+  const hasExpired = () => deadline.signal.aborted;
+  const timeout = setTimeout(() => {
+    const error = failBackup(
+      "RESTORE_TIMEOUT",
+      "Restore extraction exceeded its 30 minute execution limit.",
+    );
+    deadline.abort(error);
+    started?.abort(error);
+  }, 30 * 60_000);
+  try {
+    started = await startHelperExec(helper, execution, deadline.signal);
+  } catch (error) {
+    clearTimeout(timeout);
+    throw error;
+  }
+  const socket = started;
   const writer = socket.writable.getWriter();
   void writer.closed.catch(() => {});
-  const timeout = setTimeout(
-    () =>
-      socket.abort(
-        failBackup(
-          "RESTORE_TIMEOUT",
-          "Restore extraction exceeded its 30 minute execution limit.",
-        ),
-      ),
-    30 * 60_000,
-  );
   const completed = demuxDockerStream(socket.readable).then(async () => {
-    if ((await execution.inspect()).ExitCode !== 0)
+    const result = await waitForHelperExit(helper, execution, hasExpired);
+    if (!result || result.ExitCode !== 0)
       throw failBackup(
         "RESTORE_EXTRACTION",
         "Restore extraction rejected a changed or unsafe data path.",
@@ -861,6 +934,7 @@ export async function extractRootToStage(
   } catch (error) {
     socket.abort(error);
     await completed.catch(() => {});
+    await waitForHelperExit(helper, execution, hasExpired);
     throw error;
   } finally {
     clearTimeout(timeout);

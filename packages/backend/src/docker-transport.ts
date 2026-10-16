@@ -95,14 +95,14 @@ export class DockerTransport {
     return response.body;
   }
 
-  hijack(path: string, body?: unknown): Promise<DockerConnection> {
-    return openDockerStream(this.socketPath, path, body);
+  hijack(path: string, body?: unknown, signal?: AbortSignal): Promise<DockerConnection> {
+    return openDockerStream(this.socketPath, path, body, signal);
   }
 }
 
 /** Each direction has a byte-bounded queue. Stdin EOF preserves stdout until
  * the helper reports its result and finishes cleanup. */
-function openDockerStream(socketPath: string, path: string, body?: unknown): Promise<DockerConnection> {
+function openDockerStream(socketPath: string, path: string, body?: unknown, signal?: AbortSignal): Promise<DockerConnection> {
   return new Promise((resolve, reject) => {
     let socket: Bun.Socket | undefined;
     let headers = new Uint8Array(0);
@@ -150,9 +150,15 @@ function openDockerStream(socketPath: string, path: string, body?: unknown): Pro
       },
       abort,
     }, new ByteLengthQueuingStrategy({ highWaterMark: 65_536 }));
+    // Docker can accept a request and never answer it. A caller's deadline
+    // must still be able to end the opening and close its socket.
+    const onSignal = () => { if (!delivered) abort(signal?.reason); };
+    signal?.addEventListener("abort", onSignal, { once: true });
+    if (signal?.aborted) onSignal();
     const deliver = () => {
       if (!aborted && upgraded && requestSent && !delivered) {
         delivered = true;
+        signal?.removeEventListener("abort", onSignal);
         resolve({ readable, writable, abort });
       }
     };

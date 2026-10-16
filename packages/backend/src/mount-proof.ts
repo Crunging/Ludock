@@ -5,7 +5,7 @@ import { docker } from "./docker-client.js";
 import type { ContainerFileMount } from "./file-storage.js";
 import { resolveHelperImage } from "./runtime-images.js";
 import { AppError } from "./errors.js";
-import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
+import { createHelperContainer, removeHelperContainer, removeOperationHelper } from "./docker-helpers.js";
 import { MOUNT_IDENTITIES_SCRIPT, MOUNT_PROOF_SCRIPT } from "./helper-scripts.js";
 
 export interface MountIdentity {
@@ -96,7 +96,7 @@ export async function createMountProof(
   }
   let removal: Promise<void> | undefined;
   const cleanup = () => {
-    removal ??= removeHelperContainer(container);
+    removal ??= operationId ? removeOperationHelper(container) : removeHelperContainer(container);
     return removal;
   };
   try {

@@ -357,10 +357,10 @@ export type ContainerAction = "start" | "stop" | "restart";
 export async function changeContainerState(
   id: DockerContainerId,
   action: ContainerAction,
-  assertAccess?: (observation: ServerObservation) => void,
+  assertAccess?: (observation: ServerObservation, info: Docker.ContainerInspectInfo) => void,
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
-  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)), info);
   await container[action](action === "start" ? undefined : { t: stopTimeoutSeconds(info) }).catch((error: unknown) => {
     if (action === "restart" || !(error instanceof DockerApiError) || error.statusCode !== 304)
       throw error;
@@ -373,6 +373,21 @@ export function stopTimeoutSeconds(info: Docker.ContainerInspectInfo): number {
   const preset = getGameIntegration(toInspectedManagedContainer(info).gameType)?.stopTimeoutSeconds ?? 120;
   // Docker's -1 explicitly means to wait indefinitely. Preserve that choice.
   return configured === -1 ? -1 : Math.max(preset, configured ?? 0);
+}
+
+// Bound startup recovery even if Docker was never sent the request, or the
+// owner configured an indefinite stop. The persisted deadline survives retries.
+const STOP_RECOVERY_MIN_MS = 5 * 60_000;
+
+/** Persist from the final inspection immediately before dispatching a stop.
+ * Recovery waits through the full grace period plus time to kill the process. */
+export function stopRecoveryState(info: Docker.ContainerInspectInfo, now = Date.now()) {
+  const running = info.State.Running || info.State.Status === "running";
+  return {
+    stopStarted: running,
+    stopInitialStartedAt: running ? dockerTime(info.State.StartedAt) : null,
+    stopRecoveryDeadlineAt: now + Math.max(STOP_RECOVERY_MIN_MS, (stopTimeoutSeconds(info) + 60) * 1000),
+  };
 }
 
 export async function checkDockerConnection(): Promise<void> {
