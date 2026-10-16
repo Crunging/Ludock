@@ -17,6 +17,7 @@ import type * as Docker from "./docker-client.js";
 import { walkTar, encodeTarHeader, tarPadding, tarEnd, type TarHeader } from "./tar.js";
 import { backupSettingsSchema, type BackupSettings } from "@ludock/shared";
 import { docker } from "./docker-client.js";
+import { DockerApiError, DockerStreamOpenError } from "./docker-transport.js";
 import type { ServerContext } from "./servers.js";
 import { AppError } from "./errors.js";
 import { rootList } from "./approved-paths.js";
@@ -24,7 +25,7 @@ import { FILE_HELPER_SCRIPT, RESTORE_EXTRACT_SCRIPT } from "./helper-scripts.js"
 import { createMountProof, assertMountIdentities } from "./mount-proof.js";
 import { isSafeWritableDataMount } from "./file-storage.js";
 import { resolveHelperImage } from "./runtime-images.js";
-import { createHelperContainer, removeHelperContainer } from "./docker-helpers.js";
+import { createHelperContainer, removeOperationHelper } from "./docker-helpers.js";
 
 export interface BackupRoot {
   id: string;
@@ -586,14 +587,14 @@ export async function createDataHelper(
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         try {
-          await removeHelperContainer(container);
+          await removeOperationHelper(container);
         } finally {
           await proof.cleanup();
         }
       })());
     return { container, roots, cleanup };
   } catch (error) {
-    try { await removeHelperContainer(container); }
+    try { await removeOperationHelper(container); }
     finally { await proof.cleanup(); }
     throw error;
   }
@@ -613,6 +614,29 @@ export function helperRoot(context: ServerContext, root: BackupRoot): string {
   return `/mounts/${root.id}${root.path.slice(mount.destination.length)}`;
 }
 
+async function waitForHelperExit(execution: Docker.Exec): Promise<Docker.ExecInspectInfo | null> {
+  for (;;) {
+    try {
+      const result = await execution.inspect();
+      if (result.Running === false && Number.isInteger(result.ExitCode)) return result;
+    } catch (error) {
+      if (error instanceof DockerApiError && error.statusCode === 404) return null;
+    }
+    // Losing the stream does not terminate the process. Keep rollback and the
+    // next restore step from writing concurrently with an earlier command.
+    await Bun.sleep(250);
+  }
+}
+
+async function startHelperExec(execution: Docker.Exec) {
+  try { return await execution.start(); }
+  catch (error) {
+    if (error instanceof DockerStreamOpenError && error.requestStarted)
+      await waitForHelperExit(execution);
+    throw error;
+  }
+}
+
 export async function helperExec(
   container: Docker.Container,
   command: string[],
@@ -626,9 +650,10 @@ export async function helperExec(
     AttachStderr: true,
   });
   assertAccess?.();
-  const stream = await execution.start();
+  const stream = await startHelperExec(execution);
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let failure: { error: unknown } | undefined;
   const timeout = setTimeout(() => stream.abort(failBackup("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")), 120_000);
   try {
     await demuxDockerStream(stream.readable, chunk => {
@@ -636,11 +661,15 @@ export async function helperExec(
       if (size > 4_194_304) throw failBackup("HELPER_OUTPUT", "A data operation produced too much output.");
       chunks.push(chunk);
     });
+  } catch (error) {
+    failure = { error };
   } finally {
     clearTimeout(timeout);
     stream.abort();
   }
-  if ((await execution.inspect()).ExitCode !== 0)
+  const result = await waitForHelperExit(execution);
+  if (failure) throw failure.error;
+  if (!result || result.ExitCode !== 0)
     throw failBackup(
       "DATA_OPERATION_FAILED",
       "A data operation failed. The server remains stopped until its data is safe.",
@@ -803,7 +832,7 @@ export async function extractRootToStage(
     AttachStderr: true,
   });
   assertAccess?.();
-  const socket = await execution.start();
+  const socket = await startHelperExec(execution);
   const writer = socket.writable.getWriter();
   void writer.closed.catch(() => {});
   const timeout = setTimeout(
@@ -817,7 +846,8 @@ export async function extractRootToStage(
     30 * 60_000,
   );
   const completed = demuxDockerStream(socket.readable).then(async () => {
-    if ((await execution.inspect()).ExitCode !== 0)
+    const result = await waitForHelperExit(execution);
+    if (!result || result.ExitCode !== 0)
       throw failBackup(
         "RESTORE_EXTRACTION",
         "Restore extraction rejected a changed or unsafe data path.",
@@ -861,6 +891,7 @@ export async function extractRootToStage(
   } catch (error) {
     socket.abort(error);
     await completed.catch(() => {});
+    await waitForHelperExit(execution);
     throw error;
   } finally {
     clearTimeout(timeout);

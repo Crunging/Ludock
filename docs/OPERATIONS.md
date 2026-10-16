@@ -294,6 +294,11 @@ journal so interrupted work can be finished or rolled back. Replacing several
 mounts is **not atomic**.
 
 The server returns to its previous state only once the data is known to be safe.
+If Docker becomes unavailable during data-helper cleanup, the operation stays
+in progress and conflicting actions stay blocked until cleanup can finish.
+Restore recovery also waits for any earlier data command to exit before rolling
+back or continuing.
+
 If recovery fails or the server's identity can't be confirmed, leave it stopped and check **Server → Activity**, the
 container in Docker, and its owning manager's logs.
 

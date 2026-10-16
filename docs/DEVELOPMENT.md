@@ -47,6 +47,15 @@ and [Compose](../scripts/test-compose.mjs) harnesses one at a time, on both Linu
 AMD64 and ARM64, and note any emulation. For only the production startup check,
 run `bun scripts/test-linux.mjs --smoke-only`.
 
+Build the local test image with current runtime packages:
+
+```sh
+docker buildx build --pull --no-cache-filter runtime --load -t ludock:test .
+```
+
+CI and release builds also bypass the runtime stage's cache so `apk upgrade`
+installs available security fixes even when the pinned base image is unchanged.
+
 `bun scripts/test-consoles.mjs` runs console commands against a real Factorio
 server and loopback-only WebRCON and Telnet fixtures on a separate Compose
 network. It pulls a pinned Factorio image (Box64 on ARM64).

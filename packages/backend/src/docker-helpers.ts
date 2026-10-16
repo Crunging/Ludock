@@ -57,3 +57,16 @@ export async function removeHelperContainer(
     );
   }
 }
+
+/** Persisted data jobs cannot release their locks or restart a game while an
+ * unreachable helper may still be writing. Reconcile removal before returning. */
+export async function removeOperationHelper(container: Docker.Container): Promise<void> {
+  for (;;) {
+    try {
+      await removeHelperContainer(container);
+      return;
+    } catch {
+      await Bun.sleep(1_000);
+    }
+  }
+}

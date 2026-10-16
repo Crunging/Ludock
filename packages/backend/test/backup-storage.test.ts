@@ -33,8 +33,10 @@ import {
   availableBackupDestinationBytes,
 } from "../src/backup-storage.js";
 import { docker } from "../src/docker-client.js";
+import { DockerStreamOpenError } from "../src/docker-transport.js";
 import type { ServerContext } from "../src/servers.js";
 import { streamFrom } from "./fixtures/web-streams.js";
+import { isServerBusy, withLocks } from "../src/operation-locks.js";
 
 const roots = [{ id: "root-0", path: "/data" }];
 let directory: string;
@@ -237,7 +239,7 @@ describe("backup storage boundaries", () => {
         remove: async () => { removed = true; },
         exec: async () => ({
           start: async () => { const stream = new StreamFixture(); stream.close(); return stream.connection; },
-          inspect: async () => ({ ExitCode: 0 }),
+          inspect: async () => ({ ExitCode: 0, Running: false }),
         }),
       } as unknown as Docker.Container;
       spyOn(docker, "getVolume").mockReturnValue({
@@ -288,6 +290,105 @@ describe("backup storage boundaries", () => {
       )).rejects.toThrow(/Access revoked/);
     expect(starts).toBe(0);
   });
+
+  it("keeps data-operation locks until a temporarily unreachable helper is removed", async () => {
+    let available = false;
+    let removed = false;
+    const helper = {
+      start: async () => {},
+      remove: async () => {
+        if (!available) throw new Error("Fixture daemon unavailable");
+        removed = true;
+      },
+      stop: async () => { throw new Error("Fixture daemon unavailable"); },
+      exec: async () => ({
+        start: async () => { const stream = new StreamFixture(); stream.close(); return stream.connection; },
+        inspect: async () => ({ ExitCode: 0, Running: false }),
+      }),
+    } as unknown as Docker.Container;
+    spyOn(docker, "getVolume").mockReturnValue({
+      inspect: async () => ({ Driver: "local", Options: {} }),
+    } as unknown as Docker.Volume);
+    spyOn(docker, "createContainer").mockResolvedValue(helper);
+    const access = await createDataHelper({
+      container: { fileRoots: roots },
+      observation: { mounts: [{
+        type: "volume", name: "game-data", source: "/var/lib/docker/volumes/game-data/_data",
+        destination: "/data", writable: true,
+      }] },
+    } as ServerContext, false, crypto.randomUUID());
+    const gate = Promise.withResolvers<void>();
+    spyOn(Bun, "sleep").mockImplementation(async () => { await gate.promise; });
+    let settled = false;
+    const cleanup = withLocks(["server:cleanup-fixture"], () => access.cleanup())
+      .finally(() => { settled = true; });
+    void cleanup.catch(() => {});
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(isServerBusy("cleanup-fixture")).toBe(true);
+    } finally {
+      available = true;
+      gate.resolve();
+      await cleanup.catch(() => {});
+    }
+    expect(removed).toBe(true);
+    expect(isServerBusy("cleanup-fixture")).toBe(false);
+  });
+
+  for (const disconnected of [false, true])
+    it(`waits for a restore command to exit after stream ${disconnected ? "failure" : "EOF"}`, async () => {
+      const stream = new StreamFixture();
+      if (disconnected) stream.fail(new Error("Fixture stream disconnected"));
+      else stream.close();
+      let running = true;
+      const helper = {
+        exec: async () => ({
+          start: async () => stream.connection,
+          inspect: async () => ({ Running: running, ExitCode: running ? null : 0 }),
+        }),
+      } as unknown as Docker.Container;
+      const gate = Promise.withResolvers<void>();
+      spyOn(Bun, "sleep").mockImplementation(async () => { await gate.promise; });
+      let settled = false;
+      const command = helperExec(helper, ["bun", "restore-helper"]).finally(() => { settled = true; });
+      void command.catch(() => {});
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+      } finally {
+        running = false;
+        gate.resolve();
+        await command.catch(() => {});
+      }
+      if (disconnected) await expect(command).rejects.toThrow("Fixture stream disconnected");
+      else expect(await command).toBe("");
+    });
+
+  for (const requestStarted of [false, true])
+    it(`reconciles a failed restore exec start only when it may have reached Docker: ${requestStarted}`, async () => {
+      const failure = new DockerStreamOpenError(requestStarted);
+      let running = true;
+      const inspect = mock(async () => ({ Running: running, ExitCode: running ? null : 0 }));
+      const helper = {
+        exec: async () => ({ start: async () => { throw failure; }, inspect }),
+      } as unknown as Docker.Container;
+      const gate = Promise.withResolvers<void>();
+      spyOn(Bun, "sleep").mockImplementation(async () => { await gate.promise; });
+      let settled = false;
+      const command = helperExec(helper, ["bun", "restore-helper"]).finally(() => { settled = true; });
+      void command.catch(() => {});
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(!requestStarted);
+        expect(inspect.mock.calls.length > 0).toBe(requestStarted);
+      } finally {
+        running = false;
+        gate.resolve();
+        await command.catch(() => {});
+      }
+      await expect(command).rejects.toBe(failure);
+    });
   it.skipIf(Boolean(process.platform !== "linux"))(
     "stops streaming restore data when access changes after extraction starts",
     async () => {
@@ -300,24 +401,39 @@ describe("backup storage boundaries", () => {
       const id = crypto.randomUUID();
       await writeFile(await backupFilePath(directory, id), bytes);
       let allowed = true;
+      let running = true;
       const writes: Uint8Array[] = [];
       const socket = new StreamFixture();
-      socket.onInput = chunk => { writes.push(fixtureBytes(chunk)); allowed = false; };
+      const firstWrite = Promise.withResolvers<void>();
+      const gate = Promise.withResolvers<void>();
+      spyOn(Bun, "sleep").mockImplementation(async () => { await gate.promise; });
+      socket.onInput = chunk => { writes.push(fixtureBytes(chunk)); allowed = false; firstWrite.resolve(); };
       socket.onInputEnd = () => socket.close();
       const helper = {
         exec: async () => ({
           start: async () => socket.connection,
-          inspect: async () => ({ ExitCode: 0 }),
+          inspect: async () => ({ ExitCode: running ? null : 0, Running: running }),
         }),
       } as unknown as Docker.Container;
-      await expect(extractRootToStage(
+      let settled = false;
+      const extraction = extractRootToStage(
           directory, id, helper, roots[0], "/data",
           `.ludock-restore-${crypto.randomUUID()}`, roots, 10000,
           new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
           () => {
             if (!allowed) throw new Error("Access revoked during streaming");
           },
-        )).rejects.toThrow(/Access revoked/);
+        ).finally(() => { settled = true; });
+      void extraction.catch(() => {});
+      try {
+        await firstWrite.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+      } finally {
+        running = false;
+        gate.resolve();
+      }
+      await expect(extraction).rejects.toThrow(/Access revoked/);
       expect(writes.length).toBe(1);
       expect(decodeText(writes[0])).toMatch(/world\.txt/);
       expect(socket.closed).toBe(true);

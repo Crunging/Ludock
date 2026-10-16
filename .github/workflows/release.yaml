@@ -87,6 +87,8 @@ jobs:
         with:
           context: .
           pull: true
+          # Refresh Alpine security fixes even when the pinned base is unchanged.
+          no-cache-filters: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max

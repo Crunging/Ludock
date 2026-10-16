@@ -96,6 +96,8 @@ jobs:
         with:
           context: .
           pull: true
+          # Refresh Alpine security fixes even when the pinned base is unchanged.
+          no-cache-filters: runtime
           platforms: ${{ matrix.platform }}
           load: true
           tags: ludock:ci

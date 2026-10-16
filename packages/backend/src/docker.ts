@@ -357,10 +357,10 @@ export type ContainerAction = "start" | "stop" | "restart";
 export async function changeContainerState(
   id: DockerContainerId,
   action: ContainerAction,
-  assertAccess?: (observation: ServerObservation) => void,
+  assertAccess?: (observation: ServerObservation, info: Docker.ContainerInspectInfo) => void,
 ): Promise<void> {
   const { container, info } = await getManagedDockerContainer(id);
-  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)));
+  assertAccess?.(toServerObservation(info, toInspectedManagedContainer(info)), info);
   await container[action](action === "start" ? undefined : { t: stopTimeoutSeconds(info) }).catch((error: unknown) => {
     if (action === "restart" || !(error instanceof DockerApiError) || error.statusCode !== 304)
       throw error;

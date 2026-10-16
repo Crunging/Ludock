@@ -13,7 +13,8 @@ import { getDatabase, writeAuditLog } from "./database.js";
 import { getSetting } from "./settings.js";
 import { rootList } from "./approved-paths.js";
 import { docker } from "./docker-client.js";
-import { getManagedContainerObservation, listManagedContainerObservations, stopTimeoutSeconds } from "./docker.js";
+import { removeOperationHelper } from "./docker-helpers.js";
+import { changeContainerState, getManagedContainerObservation, listManagedContainerObservations } from "./docker.js";
 import {
   assertObservedServerBinding,
   getLogicalServer,
@@ -63,6 +64,7 @@ interface BackupRow {
   created_at: number;
   state: "complete" | "failed";
 }
+const STOP_RECOVERY_TIMEOUT_MS = 5 * 60_000;
 const restoreJournalsSchema = z.array(z.object({
   root: z.object({ id: z.string(), path: z.string() }),
   phase: z.enum(["staging", "moving_old", "old_moved", "replaced", "rolling_back", "rolled_back"]),
@@ -417,27 +419,34 @@ export async function stopForDataOperation(
   job: JobContext,
 ): Promise<void> {
   const target = docker.getContainer(context.container.id);
-  const info = await target.inspect();
-  assertDataOperationState(info.State.Status);
-  assertDataOperationAuthority(context, job);
-  if (job.job.recovery.initialRunning === undefined)
-    job.progress("stopping", {
-      initialRunning: info.State.Running || info.State.Status === "running",
-      containerId: context.container.id,
-      fingerprint: context.logical.bindingFingerprint,
-      bindingRevision: context.logical.bindingRevision,
-      dataSafe: true,
-    });
-  suppressMonitoring(context.logical.id);
-  if (info.State.Running || info.State.Status === "running")
-    await target.stop({ t: stopTimeoutSeconds(info) });
+  await changeContainerState(context.container.id, "stop", (observation, info) => {
+    assertDataOperationState(info.State.Status);
+    assertDataOperationAuthority(context, job);
+    assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
+    if (job.job.recovery.initialRunning === undefined) {
+      const running = info.State.Running || info.State.Status === "running";
+      const startedAt = Date.parse(info.State.StartedAt || "");
+      job.progress("stopping", {
+        initialRunning: running,
+        stopStarted: running,
+        stopInitialStartedAt: Number.isFinite(startedAt) ? startedAt : null,
+        stopRecoveryDeadlineAt: Date.now() + STOP_RECOVERY_TIMEOUT_MS,
+        containerId: context.container.id,
+        fingerprint: context.logical.bindingFingerprint,
+        bindingRevision: context.logical.bindingRevision,
+        lockKeys: context.lockKeys,
+        dataSafe: true,
+      });
+    }
+    suppressMonitoring(context.logical.id);
+  });
   const stopped = await target.inspect();
   if (stopped.State.Running || stopped.State.Status === "running")
     throw failBackup(
       "SERVER_DID_NOT_STOP",
       "The server did not stop; no data was copied.",
     );
-  job.progress("stopped", { stoppedStartedAt: stopped.State.StartedAt || "" });
+  job.progress("stopped", { stoppedStartedAt: stopped.State.StartedAt || "", stopSettled: true });
   if (stopped.State.ExitCode === 137 || stopped.State.OOMKilled)
     throw failBackup(
       "UNCLEAN_SHUTDOWN",
@@ -515,15 +524,43 @@ export async function restoreInitialRunningState(
     job.job.recovery.stateRestored === true
   )
     return;
-  const observed = await getManagedContainerObservation(context.container.id);
-  assertObservedServerBinding(
-    context.logical.id,
-    observed.observation,
-    context.logical.bindingRevision,
-  );
+  const observe = async () => {
+    const observed = await getManagedContainerObservation(context.container.id);
+    assertObservedServerBinding(context.logical.id, observed.observation, context.logical.bindingRevision);
+    return observed;
+  };
+  let observed = await observe();
+  if (job.job.recovery.stopStarted === true && job.job.recovery.stopSettled !== true) {
+    // A disconnected stop request may still be executing in Docker. A running
+    // snapshot is not evidence that recovery is complete: wait for that stop
+    // before restoring the server, without dispatching it a second time.
+    job.progress("reconciling_stop");
+    while (!["exited", "dead", "created"].includes(observed.container.state)) {
+      const initialStartedAt = job.job.recovery.stopInitialStartedAt;
+      if (observed.container.state === "running" && typeof initialStartedAt === "number" &&
+          observed.container.stateSince !== null && observed.container.stateSince !== initialStartedAt) {
+        job.progress("state_restored", { stateRestored: true, stopSettled: true });
+        return;
+      }
+      const deadline = job.job.recovery.stopRecoveryDeadlineAt;
+      if (typeof deadline !== "number" || !Number.isFinite(deadline) || deadline <= Date.now())
+        throw failBackup("STOP_RECOVERY_REQUIRED",
+          "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.");
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1000, deadline - Date.now())));
+      try { observed = await observe(); }
+      catch (error) {
+        // Retain locks across transient daemon failures, but never across an
+        // identity mismatch. The original deadline still bounds this wait.
+        if (error instanceof AppError) throw error;
+      }
+    }
+    job.progress("stop_reconciled", { stopSettled: true });
+  }
   if (observed.container.state !== "running") {
     job.progress("restarting");
-    await docker.getContainer(context.container.id).start();
+    await changeContainerState(context.container.id, "start", (observation) => {
+      assertObservedServerBinding(context.logical.id, observation, context.logical.bindingRevision);
+    });
   }
   job.progress("state_restored", { stateRestored: true });
   suppressMonitoring(context.logical.id);
@@ -719,12 +756,24 @@ async function removeUnpublishedBackup(job: JobContext): Promise<void> {
     await removePartialArchive(destination, id);
   }
 }
+function recoveryLockKeys(job: JobContext): string[] {
+  const saved = z.array(z.string().min(1)).safeParse(job.job.recovery.lockKeys ?? []);
+  if (!saved.success)
+    throw failBackup("INVALID_OPERATION_STATE", "Saved data operation locks are invalid; administrator review is required.");
+  // These internal keys are saved before stopping or creating a helper. Reclaim
+  // shared-volume/path locks before any Docker request can fail or hang.
+  return [`server:${job.job.serverId}`, "backups:storage", ...saved.data];
+}
+
 export async function recoverBackup(job: JobContext): Promise<void> {
-  const context = await recoveryContext(job);
-  if (!context) return;
-  await withLocks([...context.lockKeys, "backups:storage"], async () => {
-    await removeUnpublishedBackup(job);
-    await restoreInitialRunningState(context, job);
+  const held = recoveryLockKeys(job);
+  await withLocks(held, async () => {
+    const context = await recoveryContext(job);
+    if (!context) return;
+    await withLocks(context.lockKeys.filter((key) => !held.includes(key)), async () => {
+      await removeUnpublishedBackup(job);
+      await restoreInitialRunningState(context, job);
+    });
   });
 }
 
@@ -972,9 +1021,14 @@ export async function runRestore(
 }
 
 export async function recoverRestore(job: JobContext): Promise<void> {
+  const held = recoveryLockKeys(job);
+  await withLocks(held, () => recoverStoppedRestore(job, held));
+}
+
+async function recoverStoppedRestore(job: JobContext, held: readonly string[]): Promise<void> {
   const context = await recoveryContext(job);
   if (!context) return;
-  await withLocks([...context.lockKeys, "backups:storage"], async () => {
+  await withLocks(context.lockKeys.filter((key) => !held.includes(key)), async () => {
     const roots = journals(job);
     // Recovery must use exactly the roots of the revalidated binding. A corrupt
     // journal must never select a helper path or permit an unsafe restart.
@@ -999,10 +1053,19 @@ export async function recoverRestore(job: JobContext): Promise<void> {
 }
 
 async function removeOperationHelpers(job: JobContext): Promise<void> {
-  const helpers = await docker.listContainers({
-    all: true,
-    filters: { label: [`ludock.operation=${job.job.id}`] },
-  });
+  let helpers: Awaited<ReturnType<typeof docker.listContainers>>;
+  for (;;) {
+    try {
+      helpers = await docker.listContainers({
+        all: true,
+        filters: { label: [`ludock.operation=${job.job.id}`] },
+      });
+      break;
+    } catch {
+      // Failure to enumerate helpers is not evidence that no writer remains.
+      await Bun.sleep(1_000);
+    }
+  }
   for (const helper of helpers) {
     if (
       !["backup-helper", "mount-validator"].includes(
@@ -1011,7 +1074,7 @@ async function removeOperationHelpers(job: JobContext): Promise<void> {
       helper.Labels?.["ludock.operation"] !== job.job.id
     )
       continue;
-    await docker.getContainer(helper.Id).remove({ force: true, v: true });
+    await removeOperationHelper(docker.getContainer(helper.Id));
   }
   job.progress("recovering", { dataHelperId: null });
 }

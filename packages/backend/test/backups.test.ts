@@ -10,6 +10,7 @@ import {
 } from "../src/database.js";
 import { docker } from "../src/docker-client.js";
 import type { JobContext } from "../src/operations.js";
+import { acquireLocks, isServerBusy } from "../src/operation-locks.js";
 import { createSchedule, setScheduleEnabled } from "../src/schedules.js";
 import {
   refreshServers,
@@ -30,6 +31,9 @@ describe("backup execution authority", () => {
   let stopOptions: unknown;
   let stopTimeout: number | undefined;
   let running: boolean;
+  let name: string;
+  let startedAt: string;
+  let stopGate: Promise<void> | undefined;
   let onInspect: () => void;
   beforeEach(async () => {
     process.env.LUDOCK_DB_PATH = ":memory:";
@@ -38,6 +42,9 @@ describe("backup execution authority", () => {
     stopOptions = undefined;
     stopTimeout = undefined;
     running = true;
+    name = "/fixture";
+    startedAt = "2026-01-01T00:00:00Z";
+    stopGate = undefined;
     onInspect = () => {};
     for (const actor of [admin, operator])
       createUser({ ...actor, passwordHash: "fake", disabled: false, createdAt: 0 });
@@ -50,9 +57,9 @@ describe("backup execution authority", () => {
       inspect: async () => {
         onInspect();
         return {
-          Id: id, Name: "/fixture",
+          Id: id, Name: name,
           Config: { Image: "alpine:latest", Labels: labels, StopTimeout: stopTimeout },
-          State: { Status: running ? "running" : "exited", Running: running },
+          State: { Status: running ? "running" : "exited", Running: running, StartedAt: startedAt },
           Mounts: [
             { Type: "volume", Name: "world", Source: "/var/lib/docker/volumes/world/_data", Destination: "/data", RW: true },
             { Type: "volume", Name: "settings", Source: "/var/lib/docker/volumes/settings/_data", Destination: "/config", RW: true },
@@ -60,7 +67,7 @@ describe("backup execution authority", () => {
           Created: "2026-01-01T00:00:00Z",
         };
       },
-      stop: async (options: unknown) => { stopped++; stopOptions = options; running = false; },
+      stop: async (options: unknown) => { stopped++; stopOptions = options; await stopGate; running = false; },
       start: async () => { running = true; },
     })) as unknown as typeof docker.getContainer;
     await refreshServers();
@@ -99,6 +106,12 @@ describe("backup execution authority", () => {
     await expect(stopForDataOperation(context, job)).rejects.toThrow(/permission/);
     expect(stopped).toBe(0);
     expect(job.job.recovery).toStrictEqual({});
+  });
+  it("rejects a rename observed by the final backup stop inspection", async () => {
+    onInspect = () => { name = "/different-server"; };
+    await expect(stopForDataOperation(context, job)).rejects.toThrow();
+    expect(stopped).toBe(0);
+    expect(job.job.recovery).toEqual({});
   });
   it("rejects an owner disabled during Docker inspection", async () => {
     onInspect = () => updateUserAccess(operator.id, "operator", true);
@@ -224,7 +237,10 @@ describe("backup execution authority", () => {
       { Id: "game", Labels: { "ludock.enable": "true", "ludock.operation": job.job.id } },
     ]) as unknown as typeof docker.listContainers;
     docker.getContainer = ((id: string) => ({
-      remove: async (options: unknown) => { removed.push({ id, options }); },
+      remove: async (options: unknown) => {
+        expect(isServerBusy(job.job.serverId)).toBe(true);
+        removed.push({ id, options });
+      },
     })) as unknown as typeof docker.getContainer;
     await recoverBackup(job);
     expect(removed).toEqual([
@@ -241,5 +257,79 @@ describe("backup execution authority", () => {
     await recoverBackup(job);
     expect(running).toBe(true);
     expect(job.job.recovery.stateRestored).toBe(true);
+  });
+
+  it("holds recovery locks until an interrupted Docker stop settles before restoring running state", async () => {
+    const gate = Promise.withResolvers<void>();
+    stopGate = gate.promise;
+    const stopping = stopForDataOperation(context, job);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(1);
+    const recovering = recoverBackup(job);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(job.job.recovery.stateRestored).toBeUndefined();
+      expect(isServerBusy(context.logical.id)).toBe(true);
+    } finally {
+      gate.resolve();
+      await stopping;
+      await recovering;
+    }
+    expect(running).toBe(true);
+    expect(stopped).toBe(1);
+    expect(isServerBusy(context.logical.id)).toBe(false);
+  });
+
+  it("retains recovery locks while Docker cannot list the operation's helpers", async () => {
+    await stopForDataOperation(context, job);
+    let available = false;
+    docker.listContainers = (async () => {
+      if (!available) throw new Error("Fixture daemon unavailable");
+      return [];
+    }) as typeof docker.listContainers;
+    const gate = Promise.withResolvers<void>();
+    spyOn(Bun, "sleep").mockImplementation(async () => { await gate.promise; });
+    let settled = false;
+    const recovery = recoverBackup(job).finally(() => { settled = true; });
+    void recovery.catch(() => {});
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(isServerBusy(context.logical.id)).toBe(true);
+      expect(() => {
+        const release = acquireLocks(["volume:world"]);
+        release();
+      }).toThrow(/conflicting operation/);
+      expect(running).toBe(false);
+    } finally {
+      available = true;
+      gate.resolve();
+      await recovery.catch(() => {});
+    }
+    expect(running).toBe(true);
+    expect(isServerBusy(context.logical.id)).toBe(false);
+  });
+
+  it("does not restart or claim recovery when the saved stop deadline expires", async () => {
+    await stopForDataOperation(context, job);
+    running = true;
+    job.job.recovery.stopSettled = false;
+    job.job.recovery.stopRecoveryDeadlineAt = Date.now() - 1;
+    await expect(recoverBackup(job)).rejects.toMatchObject({ code: "STOP_RECOVERY_REQUIRED" });
+    expect(job.job.recovery.stateRestored).toBeUndefined();
+    expect(stopped).toBe(1);
+    expect(isServerBusy(context.logical.id)).toBe(false);
+  });
+
+  it("recognizes an external restart without waiting on or stopping the new instance", async () => {
+    await stopForDataOperation(context, job);
+    running = true;
+    startedAt = "2026-01-02T00:00:00Z";
+    job.job.recovery.stopSettled = false;
+    job.job.recovery.stopRecoveryDeadlineAt = Date.now() - 1;
+    await recoverBackup(job);
+    expect(job.job.recovery.stateRestored).toBe(true);
+    expect(stopped).toBe(1);
+    expect(running).toBe(true);
   });
 });
