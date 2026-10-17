@@ -61,60 +61,77 @@ export async function stopEventStream(): Promise<void> {
 
 /** Send only logical identifiers after a fresh eligible snapshot and grant check. */
 export function dispatchDockerEvent(event: DockerEvent): Promise<void> {
-  const delivery = deliverDockerEvent(event).finally(() => eventDeliveries.delete(delivery));
+  return dispatchDockerEvents([event]);
+}
+
+/** One discovery refresh covers a whole burst of container events. */
+function dispatchDockerEvents(events: readonly DockerEvent[]): Promise<void> {
+  const delivery = deliverDockerEvents(events).finally(() => eventDeliveries.delete(delivery));
   eventDeliveries.add(delivery);
   return delivery;
 }
 
-async function deliverDockerEvent(event: DockerEvent): Promise<void> {
+function stateChange(event: DockerEvent): { action: string; containerId: string } | null {
   if (typeof event.Action !== "string" || !STATE_ACTIONS.has(event.Action))
-    return;
+    return null;
   const containerId = event.Actor?.ID || event.id;
   if (
     typeof containerId !== "string" ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(containerId)
   )
-    return;
-  const previous = listLogicalServers().find(
-    (server) => server.containerId === containerId,
-  );
-  const previouslyVisible = new Set<SocketChannel>();
-  if (previous) {
-    for (const [client, auth] of eventClients) {
-      if (hasServerCapability(auth.validate(), previous.id, "server.view"))
-        previouslyVisible.add(client);
+    return null;
+  return { action: event.Action, containerId };
+}
+
+async function deliverDockerEvents(events: readonly DockerEvent[]): Promise<void> {
+  const changes = events.flatMap((event) => {
+    const change = stateChange(event);
+    return change ? [{ ...change, event }] : [];
+  });
+  if (!changes.length) return;
+  const before = listLogicalServers();
+  const previouslyVisible = changes.map(({ containerId }) => {
+    const previous = before.find((server) => server.containerId === containerId);
+    const clients = new Set<SocketChannel>();
+    if (previous) {
+      for (const [client, auth] of eventClients) {
+        if (hasServerCapability(auth.validate(), previous.id, "server.view"))
+          clients.add(client);
+      }
     }
-  }
+    return clients;
+  });
   await refreshServers();
-  const current = listLogicalServers().find(
-    (server) => server.containerId === containerId,
-  );
-  for (const [client, auth] of eventClients) {
-    if (!client.isOpen) continue;
-    const user = currentActor(auth.validate());
-    if (!user) {
-      client.close(1008, "Authentication expired");
-      continue;
+  const after = listLogicalServers();
+  changes.forEach(({ action, containerId, event }, index) => {
+    const current = after.find((server) => server.containerId === containerId);
+    for (const [client, auth] of eventClients) {
+      if (!client.isOpen) continue;
+      const user = currentActor(auth.validate());
+      if (!user) {
+        client.close(1008, "Authentication expired");
+        continue;
+      }
+      const visible =
+        current && hasServerCapability(user, current.id, "server.view");
+      // A former viewer needs a content-free invalidation to remove a disappeared
+      // or suspended server. It reveals nothing about any other server.
+      if (!visible && !previouslyVisible[index].has(client)) continue;
+      client.send(
+        JSON.stringify(
+          serverEventSchema.parse({
+            type: "container_event",
+            action: visible ? action : "refresh",
+            ...(visible ? { serverId: current.id } : {}),
+            time:
+              typeof event.time === "number" && Number.isFinite(event.time)
+                ? event.time
+                : Math.floor(Date.now() / 1000),
+          }),
+        ),
+      );
     }
-    const visible =
-      current && hasServerCapability(user, current.id, "server.view");
-    // A former viewer needs a content-free invalidation to remove a disappeared
-    // or suspended server. It reveals nothing about any other server.
-    if (!visible && !previouslyVisible.has(client)) continue;
-    client.send(
-      JSON.stringify(
-        serverEventSchema.parse({
-          type: "container_event",
-          action: visible ? event.Action : "refresh",
-          ...(visible ? { serverId: current.id } : {}),
-          time:
-            typeof event.time === "number" && Number.isFinite(event.time)
-              ? event.time
-              : Math.floor(Date.now() / 1000),
-        }),
-      ),
-    );
-  }
+  });
 }
 
 async function startEventStream(): Promise<void> {
@@ -132,7 +149,8 @@ async function startEventStream(): Promise<void> {
     const reader = stream.getReader();
     eventStream = reader;
     // Coalesce Docker bursts; dashboard updates need the latest state, not an
-    // unbounded queue of health/exec events. Only state actions enter the queue.
+    // unbounded queue of health/exec events. Only state actions enter the queue,
+    // and each drained batch shares one discovery refresh.
     const pending = new Map<string, DockerEvent>();
     let draining = false;
     const drain = async () => {
@@ -140,10 +158,10 @@ async function startEventStream(): Promise<void> {
       draining = true;
       try {
         while (pending.size && eventStream === reader) {
-          const [id, event] = pending.entries().next().value!;
-          pending.delete(id);
+          const batch = [...pending.values()];
+          pending.clear();
           try {
-            await dispatchDockerEvent(event);
+            await dispatchDockerEvents(batch);
           } catch {
             logger.warn("Unable to refresh Docker event state");
           }
@@ -153,10 +171,9 @@ async function startEventStream(): Promise<void> {
       }
     };
     const decode = dockerEventDecoder((event) => {
-      if (!event.Action || !STATE_ACTIONS.has(event.Action)) return;
-      const id = event.Actor?.ID || event.id;
-      if (typeof id !== "string" || pending.size >= 1024) return;
-      pending.set(id, event);
+      const change = stateChange(event);
+      if (!change || pending.size >= 1024) return;
+      pending.set(change.containerId, event);
       void drain();
     });
     void (async () => {

@@ -96,6 +96,22 @@ describe("availability monitoring", () => {
     expect(getAvailability(serverId).state.outageStartedAt).toBe(null);
   });
 
+  it("writes availability only when its observed state changes", async () => {
+    const changes = () => (getDatabase()
+      .query("SELECT total_changes() AS changes").get() as { changes: number }).changes;
+    await checkAvailability(1000);
+    const healthy = changes();
+    await checkAvailability(2000);
+    expect(changes()).toBe(healthy);
+    state = "exited";
+    await checkAvailability(3000);
+    const outage = changes();
+    expect(outage).toBeGreaterThan(healthy);
+    await checkAvailability(4000);
+    expect(changes()).toBe(outage);
+    expect(getAvailability(serverId).state).toMatchObject({ outageStartedAt: 3000, lastState: "exited" });
+  });
+
   it("treats a running server with a failing or starting health check as unavailable", async () => {
     health = "unhealthy";
     await checkAvailability(1000);

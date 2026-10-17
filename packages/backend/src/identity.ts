@@ -77,6 +77,9 @@ export class ServerBindingError extends AppError {
   }
 }
 
+// Matches session activity: coarse enough that polling causes no routine writes.
+const LAST_SEEN_WRITE_INTERVAL_MS = 60_000;
+
 export function getDockerHostId(name = "local"): string {
   const db = getDatabase();
   const existing = db
@@ -288,8 +291,7 @@ export function reconcileServers(
     group.push(observation);
     groups.set(key, group);
   }
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     const current = new Map(
       listLogicalServers(hostId).map((server) => [
         server.externalIdentity,
@@ -297,7 +299,7 @@ export function reconcileServers(
       ]),
     );
     for (const [externalIdentity, group] of groups) {
-      let server = current.get(externalIdentity);
+      const server = current.get(externalIdentity);
       const observation = group[0];
       const ambiguous = group.length !== 1;
       if (!server) {
@@ -325,7 +327,12 @@ export function reconcileServers(
           recordBinding(id, 1, observation, fingerprint, now, true);
         continue;
       }
+      // Every discovery reconciles the fleet. Skip rewriting an unchanged row so
+      // routine polling does not commit to disk; last_seen_at stays coarse.
+      const seenRecently = now - server.lastSeenAt < LAST_SEEN_WRITE_INTERVAL_MS;
       if (ambiguous) {
+        if (server.status === "ambiguous" && server.containerId === null && seenRecently)
+          continue;
         db.query(
           "UPDATE logical_servers SET status = 'ambiguous', container_id = NULL, last_seen_at = ? WHERE id = ?",
         ).run(now, server.id);
@@ -341,6 +348,13 @@ export function reconcileServers(
         (reviewRequired
           ? server.pendingFingerprint !== fingerprint
           : server.bindingFingerprint !== fingerprint);
+      const unchanged = !changed && seenRecently &&
+        server.displayName === observation.displayName &&
+        (reviewRequired
+          ? server.status === "review_required" && server.reviewRequired &&
+            server.pendingGameType === observation.gameType
+          : server.status === "active" && server.gameType === observation.gameType);
+      if (unchanged) continue;
       const revision = changed
         ? server.bindingRevision + 1
         : server.bindingRevision;
@@ -381,21 +395,15 @@ export function reconcileServers(
           now,
           !reviewRequired,
         );
-      server = getLogicalServer(server.id)!;
-      current.set(externalIdentity, server);
     }
     for (const server of current.values()) {
-      if (!groups.has(server.externalIdentity)) {
-        db.query(
-          "UPDATE logical_servers SET status = 'missing', container_id = NULL WHERE id = ?",
-        ).run(server.id);
-      }
+      if (groups.has(server.externalIdentity)) continue;
+      if (server.status === "missing" && server.containerId === null) continue;
+      db.query(
+        "UPDATE logical_servers SET status = 'missing', container_id = NULL WHERE id = ?",
+      ).run(server.id);
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
   return listLogicalServers(hostId);
 }
 
@@ -447,8 +455,7 @@ export function reviewServerBinding(
     );
   }
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     db.query(
       `UPDATE logical_servers SET status = 'active', binding_revision = binding_revision + 1,
       binding_fingerprint = pending_fingerprint, game_type = pending_game_type,
@@ -465,10 +472,6 @@ export function reviewServerBinding(
       expectedFingerprint,
       Date.now(),
     );
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
   return getLogicalServer(serverId)!;
 }

@@ -37,7 +37,10 @@ export class NativeSocketChannel implements SocketChannel {
   send(message: string): void {
     if (!this.isOpen) return;
     // Disconnect a slow reader instead of retaining unlimited console/log data.
-    if (this.socket.getBufferedAmount() + encodeText(message).byteLength > MAX_SOCKET_BUFFER_BYTES) {
+    // UTF-8 needs at most three bytes per UTF-16 unit, so encode only near the limit.
+    const buffered = this.socket.getBufferedAmount();
+    if (buffered + message.length * 3 > MAX_SOCKET_BUFFER_BYTES &&
+      buffered + encodeText(message).byteLength > MAX_SOCKET_BUFFER_BYTES) {
       this.close(1013, "Client is not reading output");
       return;
     }

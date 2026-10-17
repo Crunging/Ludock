@@ -1,5 +1,5 @@
 import { rejectedBy } from "./fixtures/errors.js";
-import { expect, afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it, setSystemTime } from "bun:test";
 import type { DockerContainerId } from "@ludock/shared";
 import { docker } from "../src/docker-client.js";
 import { parseAddressLabel } from "../src/discovery.js";
@@ -272,6 +272,76 @@ describe("automatic discovery boundary", () => {
     await expect(await rejectedBy(pending)).toSatisfy((error) => error === failure);
     expect(settled).toBe(true);
     expect(started).toStrictEqual(ids.slice(0, 4));
+  });
+});
+
+describe("discovery inspection reuse", () => {
+  afterEach(() => setSystemTime());
+
+  /** One listed container whose inspection counts calls; each test owns its ID. */
+  function fleet(id: string) {
+    const state = { inspections: 0, listed: [{ ...listFixture("itzg/minecraft-server", {}, id) }] };
+    docker.listContainers = (async () => state.listed) as unknown as typeof docker.listContainers;
+    docker.getContainer = (() => ({
+      inspect: async () => {
+        state.inspections++;
+        const listed = state.listed[0];
+        return { ...inspectFixture(), Id: id, Name: listed.Names[0], State: { Status: listed.State } };
+      },
+    })) as unknown as typeof docker.getContainer;
+    return state;
+  }
+
+  it("reuses an inspection until the container's listed summary changes", async () => {
+    const state = fleet("c".repeat(64));
+    await listManagedContainerObservations();
+    await listManagedContainerObservations();
+    expect(state.inspections).toBe(1);
+    state.listed = [{ ...state.listed[0], State: "exited", Status: "Exited (0) 1 second ago" }];
+    const [stopped] = await listManagedContainerObservations();
+    expect(state.inspections).toBe(2);
+    expect(stopped.container.state).toBe("exited");
+    state.listed = [{ ...state.listed[0], Names: ["/renamed"] }];
+    const [renamed] = await listManagedContainerObservations();
+    expect(state.inspections).toBe(3);
+    expect(renamed.observation.name).toBe("renamed");
+  });
+
+  it("inspects an unchanged container again after the reuse window", async () => {
+    const state = fleet("d".repeat(64));
+    setSystemTime(new Date("2026-06-01T00:00:00Z"));
+    await listManagedContainerObservations();
+    setSystemTime(new Date("2026-06-01T00:00:29.999Z"));
+    await listManagedContainerObservations();
+    expect(state.inspections).toBe(1);
+    setSystemTime(new Date("2026-06-01T00:00:30Z"));
+    await listManagedContainerObservations();
+    expect(state.inspections).toBe(2);
+  });
+
+  it("forgets removed containers and never reuses without a listed state", async () => {
+    const state = fleet("e".repeat(64));
+    await listManagedContainerObservations();
+    const listed = state.listed;
+    state.listed = [];
+    await listManagedContainerObservations();
+    state.listed = listed;
+    await listManagedContainerObservations();
+    expect(state.inspections).toBe(2);
+    const summaryless: Partial<typeof listed[0]> = { ...listed[0] };
+    delete summaryless.State;
+    delete summaryless.Status;
+    state.listed = [summaryless as typeof listed[0]];
+    await listManagedContainerObservations();
+    await listManagedContainerObservations();
+    expect(state.inspections).toBe(4);
+  });
+
+  it("always inspects a single container for binding checks", async () => {
+    const state = fleet("f".repeat(64));
+    await listManagedContainerObservations();
+    await getManagedContainerObservation(untrusted("f".repeat(64)));
+    expect(state.inspections).toBe(2);
   });
 });
 

@@ -135,6 +135,31 @@ describe("scoped Docker event delivery", () => {
     expect(stopped).toBe(true);
   });
 
+  it("shares one discovery refresh across a burst of container events", async () => {
+    let events: ReadableStreamDefaultController<Uint8Array> | undefined;
+    docker.getEvents = (async () => new ReadableStream<Uint8Array>({
+      start(controller) { events = controller; },
+    })) as unknown as typeof docker.getEvents;
+    let refreshes = 0;
+    const list = docker.listContainers;
+    docker.listContainers = (async () => {
+      refreshes++;
+      return list.call(docker);
+    }) as typeof docker.listContainers;
+    const owner = client(admin);
+    for (let attempt = 0; attempt < 100 && !events; attempt++) await Bun.sleep(1);
+    events!.enqueue(fixtureBytes(
+      '{"Action":"start","Actor":{"ID":"first"}}\n' +
+      '{"Action":"start","Actor":{"ID":"second"}}\n' +
+      '{"Action":"die","Actor":{"ID":"first"}}\n',
+    ));
+    for (let attempt = 0; attempt < 100 && owner.messages.length < 3; attempt++) await Bun.sleep(1);
+    expect(owner.messages.map((message) => JSON.parse(message).action))
+      .toStrictEqual(["start", "start", "die"]);
+    // The first event starts a refresh; events that arrive meanwhile share one.
+    expect(refreshes).toBe(2);
+  });
+
   it("sends only assigned logical server changes to non-administrators", async () => {
     const owner = client(admin),
       allowed = client(friend),
