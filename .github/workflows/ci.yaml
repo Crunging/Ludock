@@ -17,8 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # A new push supersedes an unfinished PR run; every merge to main is checked.
+  # A new push supersedes an unfinished PR run. Each merge to main gets its own
+  # group, since a shared group replaces a pending run when another arrives.
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
