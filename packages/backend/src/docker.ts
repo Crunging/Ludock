@@ -115,6 +115,26 @@ export interface ManagedContainerObservation {
   observation: ServerObservation;
 }
 
+// A container's configuration, labels, and mounts are fixed for its ID. Its
+// state, health, and name all change the summary Docker lists. Reuse an
+// inspection while that summary is unchanged, and re-inspect at least this often.
+const INSPECTION_REUSE_MS = 30_000;
+interface Inspection {
+  summary: string;
+  inspectedAt: number;
+  info: Docker.ContainerInspectInfo;
+}
+let inspections = new Map<string, Inspection>();
+
+function listSummary(container: Docker.ContainerInfo): string | null {
+  // Without a state summary there is no way to notice a change: inspect again.
+  if (typeof container.State !== "string" || typeof container.Status !== "string") return null;
+  return JSON.stringify([
+    container.Names, container.Image, container.State, container.Status,
+    container.Created, container.Labels,
+  ]);
+}
+
 export async function listManagedContainerObservations(): Promise<
   ManagedContainerObservation[]
 > {
@@ -127,18 +147,31 @@ export async function listManagedContainerObservations(): Promise<
   const observations = new Array<ManagedContainerObservation | undefined>(
     eligible.length,
   );
+  const previous = inspections;
+  const current = new Map<string, Inspection>();
   let nextIndex = 0;
   let failure: { error: unknown } | undefined;
 
-  // Bound daemon load while inspecting fresh data for every fingerprint. Keep
-  // list order even when inspections finish out of order.
+  // Bound daemon load when inspecting changed containers. Keep list order even
+  // when inspections finish out of order.
   async function inspectNext(): Promise<void> {
     while (!failure && nextIndex < eligible.length) {
       const index = nextIndex++;
       try {
-        observations[index] = await getManagedContainerObservation(
-          assertValidContainerId(eligible[index].Id),
-        );
+        const id = assertValidContainerId(eligible[index].Id);
+        const summary = listSummary(eligible[index]);
+        const now = Date.now();
+        let inspection = summary === null ? undefined : previous.get(id);
+        if (!inspection || inspection.summary !== summary ||
+          now - inspection.inspectedAt >= INSPECTION_REUSE_MS) {
+          inspection = {
+            summary: summary ?? "",
+            inspectedAt: now,
+            info: await docker.getContainer(id).inspect(),
+          };
+        }
+        if (summary !== null) current.set(id, inspection);
+        observations[index] = observeContainer(inspection.info);
       } catch (error) {
         const code = (error as { statusCode?: number })?.statusCode;
         if (
@@ -158,14 +191,19 @@ export async function listManagedContainerObservations(): Promise<
     Array.from({ length: Math.min(4, eligible.length) }, () => inspectNext()),
   );
   if (failure) throw failure.error;
+  // Removed containers leave the cache with each complete listing.
+  inspections = current;
   return observations.filter((observation) => observation !== undefined);
 }
 
+/** Mutations and their binding checks always inspect the container directly. */
 export async function getManagedContainerObservation(
   id: DockerContainerId,
 ): Promise<ManagedContainerObservation> {
-  const container = docker.getContainer(assertValidContainerId(id));
-  const info = await container.inspect();
+  return observeContainer(await docker.getContainer(assertValidContainerId(id)).inspect());
+}
+
+function observeContainer(info: Docker.ContainerInspectInfo): ManagedContainerObservation {
   assertEligible(info);
   const managed = toInspectedManagedContainer(info);
   return {

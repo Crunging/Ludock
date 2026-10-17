@@ -19,7 +19,8 @@ describe("security dependency pins", () => {
     const fixtureImages = [...fixtures.matchAll(/^\s+image: (.+)$/gm)].map((match) => match[1]);
     // Compose update acceptance needs a tag, whose contents the harness checks
     // against the shared immutable pin before it creates fixture services.
-    expect(fixtureImages).toStrictEqual(["alpine:3", "alpine:3"]);
+    // Both services inherit this one image through a YAML anchor.
+    expect(fixtureImages).toStrictEqual(["alpine:3"]);
   });
 
   it("requires full immutable references for external workflow actions", async () => {

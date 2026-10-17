@@ -7,6 +7,7 @@ import { checkDatabase } from "./database.js";
 import { createClientIpResolver } from "./client-ip.js";
 import { checkDockerConnection } from "./docker.js";
 import { DockerApiError } from "./docker-transport.js";
+import { concatBytes } from "./bytes.js";
 import { AppError, errorResponse } from "./errors.js";
 import { createLogger, errorMessage } from "./logger.js";
 import { isExternalHttpsRequest, isSameOriginRequest } from "./request-security.js";
@@ -29,6 +30,8 @@ import { staticFiles } from "./static-files.js";
 
 const logger = createLogger("api");
 const JSON_LIMIT = 64 * 1024;
+// Unlike protocol text, a JSON request body may start with a BOM to ignore.
+const jsonDecoder = new TextDecoder();
 const publicEndpoints = new Set([
   "GET /api/v1/auth/status", "POST /api/v1/auth/setup",
   "POST /api/v1/auth/login", "POST /api/v1/auth/logout", "GET /api/v1/health",
@@ -87,11 +90,8 @@ async function jsonBody(request: Request): Promise<unknown> {
     }
   } finally { clearTimeout(deadline); reader.releaseLock(); }
   if (length === 0) return undefined;
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try {
-    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    const body: unknown = JSON.parse(jsonDecoder.decode(concatBytes(chunks)));
     if (body === null || typeof body !== "object") throw new Error("JSON object or array required");
     return body;
   } catch {
@@ -195,16 +195,28 @@ function requestHandler(
   };
 }
 
-function matchingRoute(pathname: string, patterns: string[]): {
+interface RoutePattern {
+  pattern: string;
+  /** Literal segments are lowercase; parameters keep their names. */
+  parts: string[];
+}
+
+function routePattern(pattern: string): RoutePattern {
+  return {
+    pattern,
+    parts: pattern.split("/").map((part) => part.startsWith(":") ? part : part.toLowerCase()),
+  };
+}
+
+function matchingRoute(pathname: string, patterns: readonly RoutePattern[]): {
   pattern: string;
   encodedParams: Record<string, string>;
 } | null {
   const parts = pathname.replace(/\/$/, "").split("/");
-  for (const pattern of patterns) {
-    const expected = pattern.split("/");
+  for (const { pattern, parts: expected } of patterns) {
     if (expected.length !== parts.length) continue;
     if (!expected.every((part, index) => part.startsWith(":")
-      ? parts[index].length > 0 : part.toLowerCase() === parts[index].toLowerCase())) continue;
+      ? parts[index].length > 0 : part === parts[index].toLowerCase())) continue;
     return {
       pattern,
       encodedParams: Object.fromEntries(expected.flatMap((part, index) =>
@@ -270,7 +282,7 @@ export function createApp(options: CreateAppOptions = {}): {
   };
   const publicFallback = requestHandler(fallback, clientIp, true);
   const apiFallback = requestHandler(fallback, clientIp);
-  const patterns = Object.keys(routes);
+  const patterns = Object.keys(routes).map(routePattern);
   return {
     routes,
     maxRequestBodySize: Math.max(JSON_LIMIT, getMaxUploadBytes()),

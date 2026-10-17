@@ -1,7 +1,7 @@
 import type { SocketChannel } from "./socket-channel.js";
 import type { WebSocketAuth } from "./auth.js";
 import type { ServerCapability } from "@ludock/shared";
-import { hasServerCapability } from "./authorization.js";
+import { getEffectiveCapabilities } from "./authorization.js";
 import { getLogicalServer } from "./identity.js";
 import { resolveAuthorizedServer, verifyAuthorizedServer, type ServerContext } from "./servers.js";
 
@@ -59,10 +59,12 @@ export async function authorizeServerSocket(
     if (!ws.isOpen) return false;
     const currentUser = auth.validate();
     const binding = getLogicalServer(serverId);
+    // This runs before every output frame. Resolve current capabilities once.
+    const capabilities = currentUser ? getEffectiveCapabilities(currentUser, serverId) : [];
     if (
       !currentUser ||
-      !hasServerCapability(currentUser, serverId, capability) ||
-      !hasServerCapability(currentUser, serverId, required) ||
+      !capabilities.includes(capability) ||
+      !capabilities.includes(required) ||
       binding?.bindingRevision !== revision ||
       binding.containerId !== context.logical.containerId
     ) {

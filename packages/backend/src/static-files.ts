@@ -1,5 +1,33 @@
-import { realpath } from "node:fs/promises";
-import { extname, resolve, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { extname, relative, resolve, sep } from "node:path";
+
+// The frontend build emits content-hashed bundles under assets/ and keeps
+// stable public files and the SPA document at the root.
+const IMMUTABLE_PREFIX = `assets${sep}`;
+// Precompressed siblings written by the frontend build, in preference order.
+const ENCODINGS = [
+  { name: "zstd", suffix: ".zst" },
+  { name: "gzip", suffix: ".gz" },
+] as const;
+
+function acceptedEncodings(header: string | null): Set<string> {
+  const accepted = new Set<string>();
+  for (const part of (header ?? "").toLowerCase().split(",")) {
+    const [name, ...parameters] = part.split(";").map((value) => value.trim());
+    const quality = parameters.find((parameter) => parameter.startsWith("q="));
+    if (name && !(quality && Number(quality.slice(2)) === 0)) accepted.add(name);
+  }
+  return accepted;
+}
+
+/** A sibling of a validated file stays inside the root unless it is a link. */
+async function regularFile(file: string): Promise<boolean> {
+  try {
+    return await realpath(file) === file && (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
 
 export function staticFiles(directory: string) {
   let canonicalRoot: string | undefined;
@@ -23,33 +51,51 @@ export function staticFiles(directory: string) {
       return new Response("Frontend build unavailable", { status: 503 });
     }
     const root = canonicalRoot;
+    const inside = (file: string) => file.startsWith(`${root}${sep}`);
     const requested = resolve(root, `.${pathname}`);
-    if (requested !== root && !requested.startsWith(`${root}${sep}`)) {
+    if (requested !== root && !inside(requested)) {
       return new Response("Not found", { status: 404 });
     }
-    let file = requested;
+    let file: string;
     try {
-      const resolved = await realpath(file);
-      if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) {
+      const resolved = await realpath(requested);
+      if (resolved !== root && !inside(resolved)) {
         return new Response("Not found", { status: 404 });
       }
-      file = (await Bun.file(resolved).stat()).isFile() ? resolved : resolve(root, "index.html");
+      file = (await stat(resolved)).isFile() ? resolved : resolve(root, "index.html");
     } catch {
       if (extname(requested)) return new Response("Not found", { status: 404 });
       file = resolve(root, "index.html");
     }
     try {
       file = await realpath(file);
-      if (!file.startsWith(`${root}${sep}`) || !(await Bun.file(file).stat()).isFile()) {
+      if (!inside(file) || !(await stat(file)).isFile()) {
         return new Response("Not found", { status: 404 });
       }
     } catch {
       return new Response("Frontend build unavailable", { status: 503 });
     }
     const asset = Bun.file(file);
-    if (!(await asset.exists())) return new Response("Frontend build unavailable", { status: 503 });
-    return new Response(request.method === "HEAD" ? null : asset, {
-      headers: { "Content-Type": asset.type, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" },
+    const headers = new Headers({
+      "Content-Type": asset.type,
+      "Cache-Control": relative(root, file).startsWith(IMMUTABLE_PREFIX)
+        ? "public, max-age=31536000, immutable"
+        : "no-cache",
+      "X-Content-Type-Options": "nosniff",
     });
+    let body = asset;
+    const accepted = acceptedEncodings(request.headers.get("accept-encoding"));
+    for (const encoding of ENCODINGS) {
+      const candidate = `${file}${encoding.suffix}`;
+      if (!(await regularFile(candidate))) continue;
+      // The response varies whenever a compressed form exists, even when
+      // this client did not accept it.
+      headers.set("Vary", "Accept-Encoding");
+      if (!accepted.has(encoding.name)) continue;
+      body = Bun.file(candidate);
+      headers.set("Content-Encoding", encoding.name);
+      break;
+    }
+    return new Response(request.method === "HEAD" ? null : body, { headers });
   };
 }

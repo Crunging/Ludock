@@ -115,12 +115,16 @@ export function checkAvailability(
     const healthy =
       running &&
       container.health !== "unhealthy" && container.health !== "starting";
+    // Each tick checks every monitored server. Write only state transitions,
+    // so updated_at records the last change and steady state stays read-only.
     if (healthy) {
       if (row.notified)
         notifyEvent(
           `recovery:${server.id}:${row.outage_started_at}`,
           `${server.displayName} recovered.`,
         );
+      if (row.outage_started_at === null && !row.notified && !row.intentionally_stopped &&
+        row.last_state === "running") continue;
       getDatabase()
         .query(
           "UPDATE availability SET outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=? WHERE server_id=?",
@@ -136,19 +140,17 @@ export function checkAvailability(
             ? `Ludock cannot reach Docker to verify ${server.displayName}.`
             : `${server.displayName} is unavailable.`,
         );
+      const notified = notify || row.notified ? 1 : 0;
+      const lastState = dockerUnavailable
+        ? "docker_unavailable"
+        : (container?.state ?? server.status);
+      if (row.outage_started_at === started && row.notified === notified &&
+        row.last_state === lastState) continue;
       getDatabase()
         .query(
           "UPDATE availability SET outage_started_at=?,notified=?,last_state=?,updated_at=? WHERE server_id=?",
         )
-        .run(
-          started,
-          notify || row.notified ? 1 : 0,
-          dockerUnavailable
-            ? "docker_unavailable"
-            : (container?.state ?? server.status),
-          now,
-          server.id,
-        );
+        .run(started, notified, lastState, now, server.id);
     }
   }
 }

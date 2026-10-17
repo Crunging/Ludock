@@ -166,19 +166,14 @@ async function initializeBackupStorageOnce(): Promise<void> {
   } catch {
     return;
   }
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     // A decision saved while validation awaited I/O wins.
     const inserted = db.query(
       "INSERT INTO settings(key,value_json) VALUES('backups',?) ON CONFLICT(key) DO NOTHING",
     ).run(JSON.stringify(settings));
     if (inserted.changes)
       writeAuditLog({ action: "settings.backups.auto_enabled", targetType: "settings" });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
 }
 
 function archiveUsageBytes(): number {

@@ -110,14 +110,16 @@ export function useServers(): UseServersResult {
     };
   }, [fetchServers]);
 
+  const hasActiveOperation = snapshot.servers.some((server) => server.activeOperation);
   useEffect(() => {
     // Schedules and operation phases need no Docker event to change. Refresh
     // summaries so queued work and completion also survive reloads/reconnects.
+    // Each read rediscovers Docker, so poll quickly only while work is active.
     const interval = window.setInterval(() => {
       if (!requestRef.current) void fetchServers(true);
-    }, 3000);
+    }, hasActiveOperation ? 3000 : 10_000);
     return () => window.clearInterval(interval);
-  }, [fetchServers]);
+  }, [fetchServers, hasActiveOperation]);
 
   useEffect(() => {
     // A policy close may mean session expiry or revoked access. Hide cached

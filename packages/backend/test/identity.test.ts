@@ -63,6 +63,30 @@ describe("logical server identities", () => {
         .map((row) => row.container_id)).toStrictEqual(["docker-a", "docker-b"]);
   });
 
+  it("leaves unchanged bindings unwritten and refreshes last seen coarsely", () => {
+    const changes = () => (getDatabase()
+      .query("SELECT total_changes() AS changes").get() as { changes: number }).changes;
+    const original = reconcileServers([observation()], { now: 100 })[0];
+    const missing = reconcileServers(
+      [observation({ containerId: dockerId("docker-z"), name: "gone" })],
+      { now: 100 },
+    ).find((server) => server.externalIdentity === "standalone:gone")!;
+    const settled = reconcileServers([observation()], { now: 100 })
+      .find((server) => server.id === original.id)!;
+    const before = changes();
+    reconcileServers([observation()], { now: 59_000 });
+    expect(changes()).toBe(before);
+    expect(getLogicalServer(original.id)?.lastSeenAt).toBe(100);
+    expect(getLogicalServer(missing.id)?.status).toBe("missing");
+    reconcileServers([observation()], { now: 60_100 });
+    expect(changes()).toBe(before + 1);
+    expect(getLogicalServer(original.id)).toMatchObject({
+      lastSeenAt: 60_100,
+      bindingRevision: settled.bindingRevision,
+      status: "active",
+    });
+  });
+
   it("keeps missing history and assigns a new UUID to standalone renames", () => {
     const original = reconcileServers([observation()])[0];
     const result = reconcileServers([observation({ name: "different-name" })]);

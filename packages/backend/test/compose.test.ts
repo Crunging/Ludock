@@ -21,6 +21,7 @@ import {
   composeEnvironment,
   isComposeAvailable,
   createComposeSnapshot,
+  parseComposeFile,
   runCompose,
   validateUpdateService,
   validatedProject,
@@ -360,4 +361,63 @@ describe("Compose execution boundary", () => {
       }
     },
   );
+});
+
+describe("Compose YAML parsing", () => {
+  const outcome = (text: string): string => {
+    try {
+      parseComposeFile(text);
+      return "accepted";
+    } catch (error) {
+      return (error as { code?: string }).code ?? "thrown";
+    }
+  };
+
+  it("applies merge keys as Compose does, with explicit keys taking precedence", () => {
+    const model = parseComposeFile([
+      "x-common: &common",
+      "  restart: always",
+      "  image: itzg/minecraft-server",
+      "x-ports: &ports",
+      "  ports: [\"25565:25565\"]",
+      "services:",
+      "  survival:",
+      "    <<: [*common, *ports]",
+      "    image: itzg/minecraft-server:java21",
+      "",
+    ].join("\n"));
+    expect(model.services).toStrictEqual({
+      survival: { restart: "always", image: "itzg/minecraft-server:java21", ports: ["25565:25565"] },
+    });
+    // A literal "<<" key would make Compose reject the JSON snapshot.
+    expect(JSON.stringify(model)).not.toContain("<<");
+  });
+
+  it("accepts a shared anchor across a typical stack but bounds repeated aliases", () => {
+    const stack = (count: number) => `x-common: &common\n  image: itzg/minecraft-server\nservices:\n${
+      Array.from({ length: count }, (_, index) => `  world-${index}:\n    <<: *common\n`).join("")}`;
+    expect(outcome(stack(19))).toBe("accepted");
+    expect(outcome(stack(30))).toBe("INVALID_COMPOSE");
+  });
+
+  it("rejects input Compose itself would reject or that would expand without bound", () => {
+    expect(outcome("services:\n  game:\n    image: a\n    image: b\n")).toBe("INVALID_COMPOSE");
+    expect(outcome("services: {}\n---\nservices: {}\n")).toBe("INVALID_COMPOSE");
+    expect(outcome("services: [\n")).toBe("INVALID_COMPOSE");
+    expect(outcome(`a: ${"[".repeat(200_000)}`)).toBe("INVALID_COMPOSE");
+    const levels = ["l0: &l0 [x, x, x, x, x, x, x, x, x]"];
+    for (let level = 1; level <= 6; level++)
+      levels.push(`l${level}: &l${level} [${Array(9).fill(`*l${level - 1}`).join(", ")}]`);
+    expect(outcome(levels.join("\n"))).toBe("INVALID_COMPOSE");
+    expect(outcome("- not\n- a mapping\n")).toBe("UNSUPPORTED_COMPOSE");
+  });
+
+  it("rejects tags whose meaning a JSON snapshot cannot keep", () => {
+    // Compose resets or replaces merged values for these tags. As JSON they
+    // would silently merge instead, so the update would differ from the owner's.
+    for (const tagged of ["ports: !reset []", "image: !override other", "image: !!binary aGk=", "ports: !!set {a}"])
+      expect(outcome(`services:\n  game:\n    ${tagged}\n`)).toBe("UNSUPPORTED_COMPOSE");
+    expect(parseComposeFile("services:\n  game:\n    image: !!str itzg/minecraft-server\n    stop_grace_period: !!str 60s\n"))
+      .toStrictEqual({ services: { game: { image: "itzg/minecraft-server", stop_grace_period: "60s" } } });
+  });
 });
