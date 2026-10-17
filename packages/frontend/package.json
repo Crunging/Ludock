@@ -9,7 +9,7 @@
     "typecheck": "bun check -b",
     "lint": "oxlint .",
     "preview": "bun scripts/preview.ts",
-    "test": "bun test --isolate --preload ./test/setup.ts ./test",
+    "test": "bun test --parallel --preload ./test/setup.ts ./test",
     "test:e2e": "bun check -p e2e/tsconfig.json && playwright test",
     "screenshots": "bun check -p e2e/tsconfig.json && playwright test --config playwright.screenshots.config.ts"
   },
