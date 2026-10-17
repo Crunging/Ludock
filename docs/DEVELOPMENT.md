@@ -75,9 +75,10 @@ network. It pulls a pinned Factorio image (Box64 on ARM64).
 `bun run build` builds the backend and frontend. Keep `packages/backend/dist`
 together; its entry points share generated chunks and source maps.
 
-- **CI:** every PR, including the release PR, runs the full suite on native
-  AMD64 and ARM64. A weekly workflow audits dependencies and scans the latest
-  published image.
+- **CI:** every PR, including the release PR, and every merge to `main` runs
+  the full suite on native AMD64 and ARM64, with the Docker harnesses split
+  across parallel jobs. A weekly workflow audits dependencies and scans the
+  latest published image.
 - **Nightly:** every push to `main` publishes the multi-platform image to
   `ghcr.io` as `nightly`.
 - **Releases:** Release Please keeps a release PR open on `main`. Merging it tags

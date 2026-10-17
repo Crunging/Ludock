@@ -5,13 +5,21 @@ on:
     paths-ignore:
       - "**.md"
       - LICENSE
+  # Verify main after each merge, which can combine separately tested changes.
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - LICENSE
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A new push supersedes an unfinished PR run; every merge to main is checked.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   source:
@@ -68,18 +76,23 @@ jobs:
       - uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
   container:
-    name: Container (${{ matrix.platform }})
+    name: Container (${{ matrix.platform }}, ${{ matrix.suite }})
+    # Each job builds natively and runs one balanced group of harnesses, one at
+    # a time on its own daemon. A warm layer cache saved no build time because
+    # the runtime stage is always rebuilt, so none is exported.
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64]
+        suite: [runtime, compose, files]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    # A passing run takes about three minutes; fail a hung harness sooner.
-    timeout-minutes: 15
+    # A passing run takes about a minute; fail a hung harness sooner.
+    timeout-minutes: 10
     env:
       LUDOCK_TEST_IMAGE: ludock:ci
     steps:
@@ -89,28 +102,23 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Build image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          pull: true
-          # Refresh Alpine security fixes even when the pinned base is unchanged.
-          no-cache-filters: runtime
-          platforms: ${{ matrix.platform }}
-          load: true
-          tags: ludock:ci
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+        # Refresh Alpine security fixes even when the pinned base is unchanged.
+        run: docker build --pull --no-cache-filter runtime --tag ludock:ci .
       - run: bun install --frozen-lockfile
-      - run: bun scripts/test-compose.mjs
       - name: Smoke-test startup and run Linux backend suites
+        if: matrix.suite == 'runtime'
         run: bun scripts/test-linux.mjs
-      - run: bun scripts/test-files.mjs
-      - run: bun scripts/test-files.mjs --fallback-helper
-      - run: bun scripts/test-backups.mjs
-      - run: bun scripts/test-packaged.mjs
       - name: Scan image for vulnerabilities
+        if: matrix.suite == 'runtime'
         run: bun scripts/ci/containers.mjs scan ludock:ci
+      - if: matrix.suite == 'compose'
+        run: bun scripts/test-compose.mjs
+      - if: matrix.suite == 'compose'
+        run: bun scripts/test-backups.mjs
+      - if: matrix.suite == 'files'
+        run: bun scripts/test-files.mjs
+      - if: matrix.suite == 'files'
+        run: bun scripts/test-files.mjs --fallback-helper
+      - if: matrix.suite == 'files'
+        run: bun scripts/test-packaged.mjs
