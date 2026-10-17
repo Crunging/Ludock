@@ -19,10 +19,13 @@ const root = await realpath(await mkdtemp(path.join(process.env.LUDOCK_TEST_DIRE
 const compose = path.join(root, "compose.yaml");
 let base;
 let serverId;
-await Bun.write(compose, `services:
+// Shared settings use a YAML anchor and merge key, as many owners' files do.
+await Bun.write(compose, `x-sleeper: &sleeper
+  image: alpine:3
+  command: ["sleep", "infinity"]
+services:
   game:
-    image: alpine:3
-    command: ["sleep", "infinity"]
+    <<: *sleeper
     environment:
       WORLD: "\${FIXTURE_WORLD}"
       LITERAL: "cash$$value"
@@ -32,8 +35,7 @@ await Bun.write(compose, `services:
       ludock.name: "Compose Smoke"
     depends_on: [dependency]
   dependency:
-    image: alpine:3
-    command: ["sleep", "infinity"]
+    <<: *sleeper
 `);
 
 await Bun.write(path.join(root, ".env"), "FIXTURE_WORLD=automatic-source\n");
@@ -112,6 +114,7 @@ try {
   const after = cli("ps", "-q", "game");
   expect(after).not.toBe(before);
   expect(cli("ps", "-q", "dependency")).toBe(dependency);
+  expect(inspect(after).Config.Cmd).toStrictEqual(["sleep", "infinity"]);
   const environment = inspect(after).Config.Env;
   expect(environment.includes("WORLD=automatic-source")).toBeTruthy();
   expect(environment.includes("LITERAL=cash$value")).toBeTruthy();
@@ -152,7 +155,7 @@ try {
   console.log(JSON.stringify({
     result: "pass", logicalIdentitySurvived: true, alreadyCurrent: unchanged.status,
     forcedRunning: forced.status, forcedStopped: stopped.status, dependencyUntouched: true,
-    literalDollarPreserved: true, defaultEnvPreserved: true, applicationRestartSurvived: true, sourceChangeAccepted: true, registrationRequired: false,
+    mergeKeysApplied: true, literalDollarPreserved: true, defaultEnvPreserved: true, applicationRestartSurvived: true, sourceChangeAccepted: true, registrationRequired: false,
   }));
 } finally {
   await cleanupFixtures([

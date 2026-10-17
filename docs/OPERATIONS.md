@@ -356,6 +356,8 @@ Not supported:
 
 - `include`, `extends`, secrets, configs, `label_file`, credential specs,
   lifecycle hooks, providers, development settings, and `volumes_from`.
+- The `!reset` and `!override` merge tags. YAML anchors and `<<` merge keys
+  work.
 - Build-only services, images pinned by digest, multiple replicas, and services
   that share another service's namespace, such as `network_mode: service:…`.
 - Containers not started by Compose, or whose Compose labels or original paths

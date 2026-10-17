@@ -2,7 +2,7 @@ import { decodeText, concatBytes } from "./bytes.js";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { parse } from "yaml";
+import { isNode, parseDocument, visit } from "yaml";
 import {
   composeSourceProjectSchema,
   type ComposeProjectSource,
@@ -35,6 +35,14 @@ interface ComposeSnapshot {
   cleanup: () => Promise<void>;
 }
 const serviceNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+// Up to 19 references to one anchor, enough for a shared service template,
+// while nested alias expansion stays under a kilobyte.
+const ALIAS_LIMIT = 20;
+// Explicit tags that keep their meaning in JSON. Others, including !!binary,
+// !!set, and Compose's own !reset and !override, are rejected.
+const JSON_TAGS = new Set(
+  ["str", "int", "float", "bool", "null", "map", "seq"].map((name) => `tag:yaml.org,2002:${name}`),
+);
 export function composeEnvironment(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -161,6 +169,42 @@ function object(
     throw new AppError("UNSUPPORTED_COMPOSE", 400, message);
   return value as Model;
 }
+/** Read one Compose file as Compose does: merge keys apply, duplicate keys
+ * fail, and alias expansion stays bounded. Tags such as !reset and !override
+ * change how files combine, which the JSON snapshot cannot express. */
+export function parseComposeFile(text: string): Model {
+  const invalid = () => new AppError(
+    "INVALID_COMPOSE",
+    400,
+    "Compose YAML could not be parsed safely",
+  );
+  // Unlike parse(), parseDocument() never prints warnings, which quote source
+  // lines that can contain secrets.
+  let document: ReturnType<typeof parseDocument>;
+  try {
+    document = parseDocument(text, { merge: true, uniqueKeys: true });
+  } catch {
+    throw invalid();
+  }
+  if (document.errors.length) throw invalid();
+  visit(document, {
+    Node(_key, node) {
+      if (isNode(node) && node.tag && !JSON_TAGS.has(node.tag))
+        throw new AppError(
+          "UNSUPPORTED_COMPOSE",
+          400,
+          "Compose YAML tags such as !reset and !override are outside the supported update configuration",
+        );
+    },
+  });
+  let value: unknown;
+  try {
+    value = document.toJS({ maxAliasCount: ALIAS_LIMIT });
+  } catch {
+    throw invalid();
+  }
+  return object(value);
+}
 function no(value: Model, keys: string[]) {
   for (const key of keys)
     if (key in value)
@@ -238,22 +282,7 @@ export async function createComposeSnapshot(
       const filename = inputPath(original, base);
       const bytes = await readApprovedFile(filename, roots);
       hash.update(filename).update("\0").update(bytes);
-      let model: Model;
-      try {
-        model = object(
-          parse(decodeText(bytes), {
-            maxAliasCount: 20,
-            uniqueKeys: true,
-          }),
-        );
-      } catch (error) {
-        if (error instanceof AppError) throw error;
-        throw new AppError(
-          "INVALID_COMPOSE",
-          400,
-          "Compose YAML could not be parsed safely",
-        );
-      }
+      const model = parseComposeFile(decodeText(bytes));
       no(model, ["include", "secrets", "configs", "models"]);
       const services = object(model.services, "Compose must declare services");
       for (const [name, value] of Object.entries(services)) {
