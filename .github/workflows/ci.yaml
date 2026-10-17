@@ -78,7 +78,8 @@ jobs:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    # A passing run takes about three minutes; fail a hung harness sooner.
+    timeout-minutes: 15
     env:
       LUDOCK_TEST_IMAGE: ludock:ci
     steps:
