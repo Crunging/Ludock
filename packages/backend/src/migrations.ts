@@ -220,8 +220,7 @@ export function applyMigrations(
   const latestVersion = migrations.at(-1)?.version ?? 0;
   assertCompatibleDatabase(db, latestVersion, firstVersion);
   // One transaction ensures a failed upgrade never leaves half a schema behind.
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     const current = schemaVersion(db);
     for (const migration of migrations) {
       if (migration.version <= current) continue;
@@ -230,9 +229,5 @@ export function applyMigrations(
       db.exec(`PRAGMA user_version = ${migration.version}`);
     }
     db.exec(`PRAGMA application_id = ${DATABASE_APPLICATION_ID}`);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
 }

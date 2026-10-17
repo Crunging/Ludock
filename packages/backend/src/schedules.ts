@@ -235,8 +235,7 @@ export function createSchedule(
   const binding = resolveServerBinding(serverId);
   const id = crypto.randomUUID();
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     // Check the global boundary first. If an older database already exceeds it,
     // this query still stops after a bounded number of rows.
     const globalLimitReached = db
@@ -277,15 +276,7 @@ export function createSchedule(
       },
       { prune: false },
     );
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // A failed commit may already have ended the transaction. Keep its cause.
-    }
-    throw error;
-  }
+  }).immediate();
   try {
     pruneAuditLogIfNeeded();
   } catch {
@@ -325,10 +316,7 @@ function mutateSchedule(
 ) {
   const current = scheduleManager(actor, serverId, update === false);
   const db = getDatabase();
-  let result: ScheduleRow;
-  let changed: boolean;
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  const { result, changed } = db.transaction(() => {
     const row = db
       .query("SELECT * FROM schedules WHERE id=? AND server_id=?")
       .get(id, serverId) as ScheduleRow | null;
@@ -350,39 +338,30 @@ function mutateSchedule(
       assertServerCapability(actor, serverId, actionCapability(data.action));
       scheduleAuthority(row, data);
     }
-    changed = previous.action !== data.action ||
+    const changed = previous.action !== data.action ||
       previous.enabled !== data.enabled ||
       previous.time !== data.time ||
       previous.timezone !== data.timezone ||
       previous.days.some((day) => !data.days.includes(day)) ||
       data.days.some((day) => !previous.days.includes(day));
-    result = row;
-    if (changed) {
-      const inputJson = JSON.stringify(data);
-      // Keep the original binding baseline, consumed clock slot, and history.
-      // Every mutation invalidates work queued from an earlier configuration.
-      db.query("UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?")
-        .run(inputJson, id);
-      result = { ...row, input_json: inputJson, revision: row.revision + 1 };
-      writeAuditLog({
-        userId: current.id,
-        action: typeof update === "boolean"
-          ? update ? "schedule.resumed" : "schedule.paused"
-          : "schedule.updated",
-        targetType: "server",
-        targetId: serverId,
-        details: { scheduleId: id, action: data.action, revision: result.revision },
-      }, { prune: false });
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Keep the original failure if SQLite has already rolled back.
-    }
-    throw error;
-  }
+    if (!changed) return { result: row, changed };
+    const inputJson = JSON.stringify(data);
+    // Keep the original binding baseline, consumed clock slot, and history.
+    // Every mutation invalidates work queued from an earlier configuration.
+    db.query("UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?")
+      .run(inputJson, id);
+    const result = { ...row, input_json: inputJson, revision: row.revision + 1 };
+    writeAuditLog({
+      userId: current.id,
+      action: typeof update === "boolean"
+        ? update ? "schedule.resumed" : "schedule.paused"
+        : "schedule.updated",
+      targetType: "server",
+      targetId: serverId,
+      details: { scheduleId: id, action: data.action, revision: result.revision },
+    }, { prune: false });
+    return { result, changed };
+  }).immediate();
   if (changed) {
     try {
       pruneAuditLogIfNeeded();
@@ -432,8 +411,7 @@ export function runSchedules(now = Date.now()): void {
       configurationValid = true;
       if (!slot || slot === row.last_slot) continue;
       const db = getDatabase();
-      db.exec("BEGIN IMMEDIATE");
-      try {
+      db.transaction(() => {
         const { user, binding } = scheduleAuthority(row, data);
         const op = enqueueOperation({
           serverId: row.server_id,
@@ -449,15 +427,7 @@ export function runSchedules(now = Date.now()): void {
         db.query(
           "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=?",
         ).run(slot, now, op.id, `Queued operation ${op.id}`, row.id);
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {
-          // Preserve the cause if SQLite already rolled the transaction back.
-        }
-        throw error;
-      }
+      }).immediate();
       try {
         pruneAuditLogIfNeeded();
       } catch {

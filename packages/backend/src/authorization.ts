@@ -229,8 +229,7 @@ export function setUserServerGrants(
   }));
   const db = getDatabase();
   const now = Date.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  db.transaction(() => {
     db.query("DELETE FROM server_grants WHERE user_id = ?").run(userId);
     const insert = db.query(`INSERT INTO server_grants
       (user_id, server_id, capabilities_json, updated_at) VALUES (?, ?, ?, ?)`);
@@ -255,10 +254,6 @@ export function setUserServerGrants(
         })),
       },
     });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  }).immediate();
   return listUserServerGrants(userId);
 }

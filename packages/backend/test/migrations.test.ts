@@ -58,6 +58,9 @@ describe("application database ownership and schema migrations", () => {
     const keyPath = path.join(keyDirectory, "key");
     expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA application_id").get()?.application_id).toBe(DATABASE_APPLICATION_ID);
     expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA user_version").get()?.user_version).toBe(DATABASE_MIGRATIONS.at(-1)?.version);
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
+    // FULL: committed operations survive power loss before Docker work starts.
+    expect(db.prepare<Record<string, unknown>, SQLQueryBindings[]>("PRAGMA synchronous").get()?.synchronous).toBe(2);
     expect(String(
         db.prepare<Record<string, unknown>, SQLQueryBindings[]>("SELECT value_json FROM settings WHERE key='identity.key-check'")
           .get()?.value_json,

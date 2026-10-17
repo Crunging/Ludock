@@ -89,6 +89,9 @@ export function getDatabase(): Database {
     opened.exec("PRAGMA busy_timeout = 5000");
     applyMigrations(opened, undefined, key);
     opened.exec("PRAGMA journal_mode = WAL");
+    // Operations are persisted before they act on Docker, so a commit must
+    // survive power loss, not only a restart. WAL defaults differ by platform.
+    opened.exec("PRAGMA synchronous = FULL");
     if (dbPath !== ":memory:") fs.chmodSync(dbPath, 0o600);
     database = opened;
     fingerprintKey = key;
