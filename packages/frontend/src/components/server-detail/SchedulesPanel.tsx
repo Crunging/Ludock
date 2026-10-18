@@ -165,12 +165,12 @@ export default function SchedulesPanel(props: Props) {
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
                 <td className="capitalize">{item.action}{item.createBackup && <> <small className="table-detail">Backup before restart</small></>}</td>
                 <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
-                <td>{item.completedAt !== null ? "Completed" : item.enabled ? "Enabled" : "Paused"}</td>
+                <td>{!item.enabled ? "Paused" : item.completedAt !== null ? "Completed" : "Enabled"}</td>
                 <td className="schedule-next-run">
                   {item.completedAt !== null ? "None" : !item.enabled ? "Paused" : item.nextRunAt !== null
                     ? formatRun(item.nextRunAt, item.timezone, now)
                     : "Unavailable"}
-                  {(item.nextRunUnavailableReason || (item.enabled && item.nextRunAt === null)) && (
+                  {(item.nextRunUnavailableReason || (item.enabled && item.completedAt === null && item.nextRunAt === null)) && (
                     <small className="table-detail">{unavailableGuidance[item.nextRunUnavailableReason ?? "unavailable"]}</small>
                   )}
                 </td>
@@ -192,7 +192,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || item.completedAt !== null || (!item.enabled && (blocked || !scheduleActions.includes(item.action) || (item.createBackup && !props.canCreateBackup)))}
+                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !scheduleActions.includes(item.action) || (item.createBackup && !props.canCreateBackup)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button

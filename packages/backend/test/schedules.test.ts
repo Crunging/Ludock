@@ -26,6 +26,7 @@ import {
   updateSchedule,
 } from "../src/schedules.js";
 import { AppError } from "../src/errors.js";
+import { jobActor } from "../src/jobs.js";
 import { setServerGrant } from "./fixtures/grants.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
@@ -536,6 +537,15 @@ describe("one-time schedules", () => {
     // The queued attempt keeps its revision, so the operation still runs.
     expect(saved.revision).toBe(1);
     expect(saved.enabled).toBe(true);
+  });
+
+  it("stops a queued run when paused after its slot is consumed", () => {
+    const schedule = createSchedule(friend, serverId, once);
+    runSchedules(runAt + 10_000);
+    const job = getOperation(serverOperations()[0].id)!;
+    const paused = setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    expect(paused).toMatchObject({ enabled: false, revision: 2 });
+    expect(() => jobActor({ job, progress: () => {} })).toThrow(/deleted, disabled, or changed/);
   });
 
   it("can be rescheduled by editing, but not resumed at a past time", () => {

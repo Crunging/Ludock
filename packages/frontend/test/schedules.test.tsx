@@ -6,7 +6,7 @@ import { ApiRequestError, apiJson } from "../src/api";
 import ServerDetail from "../src/pages/ServerDetail";
 import { NavigationProvider } from "../src/navigation";
 import TestProviders from "./TestProviders";
-import { scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
+import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 
 const originalApi = { ...await import("../src/api") };
 const apiJsonMock = mock<typeof apiJson>();
@@ -228,6 +228,25 @@ describe("schedules", () => {
     const row = screen.getByText("Once, 2026-09-11 at 09:00").closest("tr")!;
     expect(row.textContent).toContain("Completed");
     expect(row.textContent).toContain("None");
+    expect(row.textContent).not.toContain("The next run cannot be determined");
     expect((within(row).getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("pauses a completed one-time schedule while its operation is still queued", async () => {
+    const completed = scheduleFixture(server.id, {
+      kind: "once",
+      date: "2026-09-11",
+      lastSlot: "2026-09-11T09:00:UTC",
+      nextRunAt: null,
+      completedAt: Date.UTC(2026, 8, 11, 9),
+      lastOperation: operationFixture(server.id, { kind: "restart", status: "queued", phase: "queued" }),
+    });
+    detail({ saved: completed, onRequest: (path, init) => path === itemPath && init?.method === "PATCH"
+      ? { schedule: { ...completed, enabled: false, revision: 2 } } : undefined });
+    await openSchedules();
+    const row = screen.getByText("Once, 2026-09-11 at 09:00").closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Pause" }));
+    await screen.findByText("Schedule paused.");
+    expect(JSON.parse(writes("PATCH")[0][2]!.body as string)).toEqual({ enabled: false, revision: 1 });
   });
 });
