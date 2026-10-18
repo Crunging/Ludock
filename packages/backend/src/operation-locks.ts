@@ -1,7 +1,8 @@
 import path from "node:path";
 import { AppError } from "./errors.js";
 
-const active = new Set<string>();
+/** Held keys. Jobs cancel background holders and wait instead of failing. */
+const active = new Map<string, { background?: AbortController }>();
 const drained = new Set<() => void>();
 let releasedWaiters: { promise: Promise<void>; resolve: () => void } | undefined;
 const normalizeKey = (key: string) =>
@@ -15,16 +16,32 @@ const overlaps = (left: string, right: string) =>
       left.startsWith(`${right}/`) ||
       right.startsWith(`${left}/`)));
 
-export function acquireLocks(keys: readonly string[]): () => void {
+/** A conflict only with background work, such as a countdown warning. */
+export class BackgroundLockConflict extends AppError {
+  constructor(private readonly holders: readonly AbortController[]) {
+    super("OPERATION_CONFLICT", 409, "A conflicting operation is already running");
+  }
+
+  /** The holders keep their keys until their cleanup finishes. */
+  cancel(): void {
+    for (const holder of this.holders) holder.abort();
+  }
+}
+
+export function acquireLocks(keys: readonly string[], options?: { background?: AbortController }): () => void {
   const ordered = [...new Set(keys.map(normalizeKey))].sort();
-  if (ordered.some((key) => [...active].some((held) => overlaps(key, held)))) {
+  const conflicts = [...active]
+    .filter(([held]) => ordered.some((key) => overlaps(key, held)))
+    .map(([, holder]) => holder.background);
+  if (conflicts.length) {
+    if (conflicts.every((holder) => holder !== undefined)) throw new BackgroundLockConflict(conflicts);
     throw new AppError(
       "OPERATION_CONFLICT",
       409,
       "A conflicting operation is already running",
     );
   }
-  ordered.forEach((key) => active.add(key));
+  ordered.forEach((key) => active.set(key, { background: options?.background }));
   let released = false;
   return () => {
     if (!released) {
@@ -42,8 +59,9 @@ export function acquireLocks(keys: readonly string[]): () => void {
 export async function withLocks<T>(
   keys: readonly string[],
   action: () => Promise<T> | T,
+  options?: { background?: AbortController },
 ): Promise<T> {
-  const release = acquireLocks(keys);
+  const release = acquireLocks(keys, options);
   try {
     return await action();
   } finally {

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { nextScheduleRun, scheduleLocalDate, scheduleSchema, type Schedule, type ScheduleAction, type ScheduleInput } from "@ludock/shared";
+import { nextScheduleRun, scheduleAnnouncementsSchema, scheduleLocalDate, scheduleSchema, type Schedule, type ScheduleAction, type ScheduleInput } from "@ludock/shared";
 import { operationStatusLabels, operationTones } from "../../operations";
 import StatusPip from "../StatusPip";
 
@@ -39,7 +39,11 @@ interface Props {
   conflict: boolean;
   onDraftChange: (value: ScheduleInput) => void;
   scheduleActions: ScheduleAction[];
+  /** Whether the user may save or resume a schedule with these settings. */
+  canRunSchedule: (schedule: ScheduleInput) => boolean;
   canCreateBackup: boolean;
+  /** The game has a broadcast command and the user has console access. */
+  canAnnounce: boolean;
   busy: boolean;
   saving: boolean;
   blocked: boolean;
@@ -86,6 +90,29 @@ function state(schedule: Schedule) {
   return !schedule.enabled ? "Paused" : schedule.completedAt !== null ? "Completed" : "Enabled";
 }
 
+function WarningLeadTimes({ minutes, onChange }: { minutes: number[]; onChange: (values: number[]) => void }) {
+  const [text, setText] = useState(() => minutes.join(", "));
+  const lastValue = useRef(JSON.stringify(minutes));
+  useEffect(() => {
+    const value = JSON.stringify(minutes);
+    if (value !== lastValue.current) setText(minutes.join(", "));
+    lastValue.current = value;
+  }, [minutes]);
+  const valid = scheduleAnnouncementsSchema.safeParse({ leadMinutes: minutes }).success;
+  return (
+    <label>Warning lead times (minutes)
+      <input required value={text} aria-invalid={!valid} onChange={(event) => {
+        const values = event.target.value.split(",").map((value) => Number(value.trim()));
+        lastValue.current = JSON.stringify(values);
+        setText(event.target.value);
+        onChange(values);
+      }} />
+      <small>Comma-separated whole minutes, 1–60; up to 10 unique times. Default: 10, 5, 1.</small>
+      {!valid && <small role="alert">Enter 1–10 unique whole numbers between 1 and 60.</small>}
+    </label>
+  );
+}
+
 export default function SchedulesPanel(props: Props) {
   const {
     schedules, draft: schedule, editing, conflict, onDraftChange, scheduleActions,
@@ -105,8 +132,6 @@ export default function SchedulesPanel(props: Props) {
     if (editing && previousEdit.current !== editing.id) heading.current?.focus();
     previousEdit.current = editing?.id;
   }, [editing]);
-  const permitted = (item: ScheduleInput) =>
-    scheduleActions.includes(item.action) && (!item.createBackup || props.canCreateBackup);
   const saved = editing ? schedules.find((item) => item.id === editing.id) : undefined;
   const preview = useMemo(() => {
     const parsed = scheduleSchema.safeParse(schedule);
@@ -115,7 +140,7 @@ export default function SchedulesPanel(props: Props) {
   const missing = Boolean(editing && !saved && props.snapshotReady !== false);
   // One-time runs are saved only while their time is still ahead.
   const runAhead = preview !== null && (schedule.kind === "recurring" || preview >= now);
-  const canSave = !busy && !blocked && !conflict && !missing && runAhead && permitted(schedule);
+  const canSave = !busy && !blocked && !conflict && !missing && runAhead && props.canRunSchedule(schedule);
   const today = scheduleLocalDate(schedule.timezone, now) ?? undefined;
 
   function setKind(kind: ScheduleInput["kind"]) {
@@ -170,7 +195,9 @@ export default function SchedulesPanel(props: Props) {
             {schedules.map((item) => (
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
                 <td className="capitalize">{item.action}{item.createBackup && <> <small className="table-detail">Backup before restart</small></>}</td>
-                <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
+                <td>{when(item)}<small className="table-detail">{item.timezone}</small>
+                  {item.announcements && <small className="table-detail">Warnings: {item.announcements.leadMinutes.join(", ")} min before</small>}
+                </td>
                 <td>{state(item)}</td>
                 <td className="schedule-next-run">
                   {item.completedAt !== null ? "None" : !item.enabled ? "Paused" : item.nextRunAt !== null
@@ -198,7 +225,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !permitted(item)))}
+                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !props.canRunSchedule(item)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button
@@ -221,7 +248,9 @@ export default function SchedulesPanel(props: Props) {
           {conflict && saved && (
             <div className="schedule-conflict" role="alert">
               <p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
-              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {state(saved)}</p>
+              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {state(saved)}
+                {saved.announcements ? ` · Warnings: ${saved.announcements.leadMinutes.join(", ")} min before` : " · Warnings off"}
+              </p>
               <div className="inline-actions">
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(false)}>Keep my draft</button>
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(true)}>Load saved settings</button>
@@ -241,7 +270,8 @@ export default function SchedulesPanel(props: Props) {
             <label>Action
               <select value={scheduleActions.includes(schedule.action) ? schedule.action : ""} disabled={saving} onChange={(event) => {
                 const action = event.target.value as ScheduleAction;
-                onDraftChange({ ...schedule, action, createBackup: action === "restart" && schedule.createBackup });
+                const restart = action === "restart";
+                onDraftChange({ ...schedule, action, createBackup: restart && schedule.createBackup, announcements: restart ? schedule.announcements : undefined });
               }} required>
                 <option value="" disabled>Select action</option>
                 {scheduleActions.map((action) => <option key={action} value={action}>{action.charAt(0).toUpperCase() + action.slice(1)}</option>)}
@@ -285,6 +315,28 @@ export default function SchedulesPanel(props: Props) {
               <input type="checkbox" checked={schedule.createBackup} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, createBackup: event.target.checked })} />
               Create a backup before restarting
             </label>
+          )}
+          {schedule.action === "restart" && (
+            props.canAnnounce ? (
+              <fieldset disabled={saving}>
+                <legend>Player warnings</legend>
+                <label className="check-label">
+                  <input type="checkbox" checked={Boolean(schedule.announcements)} onChange={(event) => onDraftChange({
+                    ...schedule, announcements: event.target.checked ? scheduleAnnouncementsSchema.parse({}) : undefined,
+                  })} />
+                  Announce countdown to players
+                </label>
+                {schedule.announcements && (
+                  <WarningLeadTimes key={editing?.id ?? "new"} minutes={schedule.announcements.leadMinutes}
+                    onChange={(leadMinutes) => onDraftChange({ ...schedule, announcements: { leadMinutes } })} />
+                )}
+                <p className="section-note">Warnings use the game console. Missed or failed warnings are skipped; the action still runs.</p>
+              </fieldset>
+            ) : (
+              <p className="section-note">Player warnings require a supported broadcast console and console access.
+                {schedule.announcements && <button type="button" className="text-link" disabled={saving} onClick={() => onDraftChange({ ...schedule, announcements: undefined })}>Turn off saved warnings</button>}
+              </p>
+            )
           )}
           {!editing && (
             <label className="check-label">

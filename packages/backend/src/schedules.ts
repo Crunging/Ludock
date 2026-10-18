@@ -5,6 +5,7 @@ import {
   oneTimeScheduleSlot,
   operationSchema,
   scheduleCapabilities,
+  scheduleEditCapabilities,
   scheduleEnabledRequestSchema,
   scheduleSchema,
   scheduleSlot,
@@ -26,11 +27,16 @@ import {
   hasServerCapability,
   getUserServerGrant,
 } from "./authorization.js";
-import { getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
+import { assertObservedServerBinding, getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
 import { enqueueOperation, getOperation, publicOperation } from "./operations.js";
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { createLogger } from "./logger.js";
+import { getContainer } from "./docker.js";
+import { resolveAuthorizedServer } from "./servers.js";
+import { resolveBroadcastTemplate, resolveGameConsoleAdapter } from "./game-console.js";
+import { executeGameCommand } from "./game-console-runtime.js";
+import { withLocks } from "./operation-locks.js";
 
 const logger = createLogger("schedules");
 
@@ -165,6 +171,10 @@ function latestOperation(row: ScheduleRow): Operation | null {
   }
 }
 
+function savedInput(row: ScheduleRow): ScheduleInput {
+  return scheduleSchema.parse(JSON.parse(row.input_json));
+}
+
 /** A one-time schedule is complete once its only slot has been consumed. */
 function oneTimeCompleted(row: ScheduleRow, data: ScheduleInput): boolean {
   return data.kind === "once" && row.last_slot === oneTimeScheduleSlot(data);
@@ -193,7 +203,7 @@ function publicSchedule(
   now = Date.now(),
   checkAuthority: PreviewAuthority = scheduleAuthority,
 ) {
-  const data = scheduleSchema.parse(JSON.parse(row.input_json));
+  const data = savedInput(row);
   const completed = oneTimeCompleted(row, data);
   let nextRunAt: number | null = null;
   let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
@@ -262,7 +272,7 @@ export function createSchedule(
   assertPayloadSize(input);
   const data = scheduleSchema.parse(input);
   assertServerCapability(actor, serverId, "schedules.manage");
-  for (const capability of scheduleCapabilities(data))
+  for (const capability of scheduleEditCapabilities(data))
     assertServerCapability(actor, serverId, capability);
   assertOneTimeRunAhead(data);
   if (actor.id === "api-token")
@@ -349,8 +359,8 @@ export function deleteSchedule(
 /** Compares saved settings, treating days as a set. */
 function scheduleKey(data: ScheduleInput): string {
   return JSON.stringify(data.kind === "recurring"
-    ? [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, [...new Set(data.days)].sort()]
-    : [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, data.date]);
+    ? [data.kind, data.action, data.createBackup, data.announcements, data.enabled, data.time, data.timezone, [...new Set(data.days)].sort()]
+    : [data.kind, data.action, data.createBackup, data.announcements, data.enabled, data.time, data.timezone, data.date]);
 }
 
 function mutateSchedule(
@@ -374,14 +384,14 @@ function mutateSchedule(
         409,
         "This schedule changed. Reload it before trying again.",
       );
-    const previous = scheduleSchema.parse(JSON.parse(row.input_json));
+    const previous = savedInput(row);
     const data = typeof update === "boolean"
       ? { ...previous, enabled: update }
       : update;
     // Pausing must remain possible after the action grant or original binding
     // has been revoked. Editing/resuming requires both requester and owner access.
     if (update !== false) {
-      for (const capability of scheduleCapabilities(data))
+      for (const capability of scheduleEditCapabilities(data))
         assertServerCapability(actor, serverId, capability);
       scheduleAuthority(row, data);
       // A consumed or past one-time run is rescheduled by editing, never replayed.
@@ -449,7 +459,7 @@ export function runSchedules(now = Date.now()): void {
     let slot: string | null = null;
     let configurationValid = false;
     try {
-      const data = scheduleSchema.parse(JSON.parse(row.input_json));
+      const data = savedInput(row);
       if (!data.enabled || oneTimeCompleted(row, data)) continue;
       slot = scheduleSlot(data, now);
       configurationValid = true;
@@ -520,4 +530,97 @@ export function runSchedules(now = Date.now()): void {
       }
     }
   }
+}
+
+const announcing = new Map<string, Promise<void>>();
+/** A warning is cancelled this long before its restart, leaving time for cleanup. */
+const ANNOUNCEMENT_CUTOFF_MS = 15_000;
+/** A warning starts only if it can run this long before the cutoff. */
+const ANNOUNCEMENT_MIN_RUNTIME_MS = 15_000;
+
+async function announce(row: ScheduleRow, data: ScheduleInput, runAt: number, lead: number) {
+  // A job that needs the server also cancels the warning; either way the locks
+  // are held only until the console command's cleanup finishes.
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), runAt - ANNOUNCEMENT_CUTOFF_MS - Date.now());
+  deadline.unref();
+  const assertCurrent = () => {
+    const latest = getDatabase().query("SELECT * FROM schedules WHERE id=?").get(row.id) as ScheduleRow | null;
+    if (!latest || latest.revision !== row.revision || controller.signal.aborted ||
+        Date.now() >= runAt - ANNOUNCEMENT_CUTOFF_MS)
+      throw new Error("The announcement is no longer current");
+    const authority = scheduleAuthority(latest, data);
+    assertServerCapability(authority.user, row.server_id, "console.execute");
+    return authority;
+  };
+  try {
+    const { user, binding } = assertCurrent();
+    const initial = await resolveAuthorizedServer(user, row.server_id, "console.execute", binding.bindingRevision);
+    await withLocks(initial.lockKeys, async () => {
+      const current = await resolveAuthorizedServer(
+        assertCurrent().user, row.server_id, "console.execute", binding.bindingRevision,
+      );
+      const adapter = resolveGameConsoleAdapter(current.container);
+      const template = resolveBroadcastTemplate(current.container);
+      if (!adapter || !template) return;
+      const message = `Server restart in ${lead} minute${lead === 1 ? "" : "s"}.`;
+      await executeGameCommand(getContainer(current.container.id), current.container, adapter,
+        template.replace("{message}", message), { stdout() {}, stderr() {}, system() {} }, () => {
+          assertCurrent();
+          assertObservedServerBinding(row.server_id, current.observation, binding.bindingRevision);
+        }, controller.signal);
+    }, { background: controller });
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+function claimAnnouncement(row: ScheduleRow, slot: string, lead: number, now: number): boolean {
+  const db = getDatabase();
+  return db.transaction(() => {
+    const claimed = db.query(
+      "INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes) SELECT id,?,? FROM schedules WHERE id=? AND revision=?",
+    ).run(slot, lead, row.id, row.revision);
+    if (!claimed.changes) return false;
+    // Edits can return to an earlier slot, so keep claims until it has passed.
+    // Slots start with their local date, which is within a day of UTC.
+    const spent = new Date(now - 2 * 86_400_000).toISOString().slice(0, 10);
+    db.query("DELETE FROM schedule_announcements WHERE schedule_id=? AND substr(slot,1,10)<?").run(row.id, spent);
+    return true;
+  })();
+}
+
+/** Best effort: each lead time of a run is attempted at most once, during its
+ * minute and before the cutoff, with at most one warning per server at a time. */
+export function runScheduleAnnouncements(now = Date.now()): void {
+  const rows = getDatabase()
+    .query("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
+    .all(MAX_SCHEDULES_TOTAL) as unknown as ScheduleRow[];
+  for (const row of rows) {
+    if (announcing.has(row.server_id)) continue;
+    try {
+      const data = savedInput(row);
+      if (!data.enabled || !data.announcements || oneTimeCompleted(row, data)) continue;
+      const runAt = nextScheduleRun(data, now, row.last_slot);
+      if (runAt === null) continue;
+      const lead = data.announcements.leadMinutes.find((minutes) =>
+        now >= runAt - minutes * 60_000 && now < runAt - (minutes - 1) * 60_000);
+      const slot = scheduleSlot(data, runAt);
+      if (lead === undefined || !slot || runAt - now < ANNOUNCEMENT_CUTOFF_MS + ANNOUNCEMENT_MIN_RUNTIME_MS) continue;
+      // Claim before sending, so restarting Ludock never repeats a warning.
+      if (!claimAnnouncement(row, slot, lead, now)) continue;
+      announcing.set(row.server_id, announce(row, data, runAt, lead)
+        // Console output and errors may contain secrets; a skipped warning
+        // never affects the scheduled action.
+        .catch(() => logger.debug("Skipped a restart countdown warning", { scheduleId: row.id }))
+        .finally(() => announcing.delete(row.server_id)));
+    } catch {
+      // Invalid saved settings are reported by runSchedules.
+    }
+  }
+}
+
+/** Let warnings settle before the shared database is closed. */
+export async function waitForScheduleAnnouncements(): Promise<void> {
+  await Promise.allSettled(announcing.values());
 }

@@ -82,6 +82,24 @@ async function mockSchedules(page: Page) {
   return { writes, rejectNextEdit: () => { rejectNextEdit = true; } };
 }
 
+test("countdown warnings can be configured and saved", async ({ app, page }) => {
+  const fixture = await mockSchedules(page);
+  await app.open(`/servers/${RUNNING_ID}?tab=schedules`);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Announce countdown to players").check();
+  const leads = page.getByLabel("Warning lead times (minutes)");
+  await expect(leads).toHaveValue("10, 5, 1");
+  await leads.fill("0, 5");
+  await expect(page.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
+  await leads.fill("8, 3, 1");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Add schedule", exact: true })).toBeVisible();
+  expect(fixture.writes[0]?.body).toMatchObject({ announcements: { leadMinutes: [8, 3, 1] } });
+  await expect(page.getByText("Warnings: 8, 3, 1 min before")).toBeVisible();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(leads).toHaveValue("8, 3, 1");
+});
+
 test("schedules can be edited, paused, and resumed with the latest saved revision", async ({ app, page }) => {
   const fixture = await mockSchedules(page);
   await app.open(`/servers/${RUNNING_ID}`);

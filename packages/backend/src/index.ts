@@ -6,7 +6,7 @@ import { closeDatabase } from "./database.js";
 import { registerBackgroundJobs } from "./jobs.js";
 import { startOperationRunner, stopOperationRunner } from "./operations.js";
 import { checkAvailability } from "./monitoring.js";
-import { runSchedules } from "./schedules.js";
+import { runScheduleAnnouncements, runSchedules, waitForScheduleAnnouncements } from "./schedules.js";
 import { deliverNotifications } from "./notifications.js";
 import { refreshServers } from "./servers.js";
 import { initializeBackupStorage } from "./backups.js";
@@ -43,6 +43,7 @@ export function startServer(options: {
       try {
         current = await refreshServers();
         runSchedules();
+        runScheduleAnnouncements();
       } catch {
         logger.warn("Discovery and schedules are temporarily unavailable");
       }
@@ -118,7 +119,8 @@ export function startServer(options: {
     const operationsStopped = stopOperationRunner();
     shutdownTask = (async () => {
       const results = await Promise.allSettled([
-        backgroundTask, backupStorageTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
+        // A final tick may still start countdown warnings.
+        Promise.resolve(backgroundTask).then(waitForScheduleAnnouncements), backupStorageTask, notificationTask, operationsStopped, eventsStopped, httpStopped, socketsStopped,
       ]);
       // A console command or streamed file request can outlive its connection.
       // Its lock and cleanup must settle before the shared database is closed.

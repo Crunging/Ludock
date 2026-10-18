@@ -386,6 +386,20 @@ Restart schedules can **Create a backup before restarting**, which works like
 **Take a backup first** in the Restart dialog. It needs backup access too, and
 the server must be running when the schedule runs.
 
+Restart schedules, recurring or one-time, can also **Announce countdown to
+players** through the game console. Warnings default to 10, 5, and 1 minutes
+before; enter up to ten whole minutes from 1 to 60. The option needs console
+access and appears only for games with a broadcast command: Minecraft, ARK,
+Counter-Strike 2, Project Zomboid, Conan Exiles, Rust, 7 Days to Die, and
+Terraria. Players see, for example, `Server restart in 5 minutes.`
+
+Warnings are best effort. One is skipped if the server is stopped or busy, the
+console fails, its time was missed, or the owner lost console access. Each
+warning is tried at most once, even if Ludock restarts. A warning still sending
+15 seconds before its restart is cancelled, and one that cannot start at least
+30 seconds before is skipped. Any operation that needs the server, including the
+restart, cancels a warning and waits only for its console cleanup.
+
 - **Who:** operators manage their own schedules and administrators manage all of
   them. A schedule runs with its owner's current access. Editing or resuming
   needs both schedule access and access to the action; pausing doesn't.

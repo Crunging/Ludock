@@ -8,7 +8,7 @@ export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
 export const scheduleActionCapability = (action: ScheduleAction): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
 
-/** Every capability a schedule needs, for its owner and for whoever edits or resumes it. */
+/** Every capability a schedule's owner needs for it to run. */
 export const scheduleCapabilities = (
   schedule: { action: ScheduleAction; createBackup: boolean },
 ): ServerCapability[] => [
@@ -16,8 +16,24 @@ export const scheduleCapabilities = (
   ...(schedule.createBackup ? ["backups.create" as const] : []),
 ];
 
+/** Saving or resuming a schedule also needs console access for its best-effort
+ * warnings, which are skipped rather than suspending the schedule if the owner loses it. */
+export const scheduleEditCapabilities = (
+  schedule: { action: ScheduleAction; createBackup: boolean; announcements?: unknown },
+): ServerCapability[] => [
+  ...scheduleCapabilities(schedule),
+  ...(schedule.announcements ? ["console.execute" as const] : []),
+];
+
+export const scheduleAnnouncementsSchema = z.object({
+  leadMinutes: z.array(z.number().int().min(1).max(60)).min(1).max(10)
+    .refine((values) => new Set(values).size === values.length, "Lead times must be unique")
+    .default([10, 5, 1]),
+}).strict();
+
 const scheduleFields = {
   action: scheduleActionSchema,
+  announcements: scheduleAnnouncementsSchema.optional(),
   createBackup: z.boolean().default(false),
   enabled: z.boolean().default(true),
   time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
@@ -58,14 +74,21 @@ export const oneTimeScheduleSchema = z
   })
   .strict();
 
-function backupOnlyForRestart<T extends z.ZodType<{ action: string; createBackup: boolean }>>(schema: T): T {
-  return schema.refine((value) => !value.createBackup || value.action === "restart", {
-    message: "Backup before restart is only available for restart schedules",
-    path: ["createBackup"],
-  });
+function restartOnlyOptions<
+  T extends z.ZodType<{ action: string; announcements?: unknown; createBackup: boolean }>,
+>(schema: T): T {
+  return schema
+    .refine((value) => !value.createBackup || value.action === "restart", {
+      message: "Backup before restart is only available for restart schedules",
+      path: ["createBackup"],
+    })
+    .refine((value) => !value.announcements || value.action === "restart", {
+      message: "Announcements are only available for restarts",
+      path: ["announcements"],
+    });
 }
 
-export const scheduleSchema = backupOnlyForRestart(
+export const scheduleSchema = restartOnlyOptions(
   z.discriminatedUnion("kind", [recurringScheduleSchema, oneTimeScheduleSchema]),
 );
 export type ScheduleInput = z.infer<typeof scheduleSchema>;
@@ -76,7 +99,7 @@ const updateFields = {
   enabled: scheduleFields.enabled.removeDefault(),
   revision: z.number().int().positive(),
 };
-export const updateScheduleRequestSchema = backupOnlyForRestart(
+export const updateScheduleRequestSchema = restartOnlyOptions(
   z.discriminatedUnion("kind", [
     recurringScheduleSchema.extend(updateFields).strict(),
     oneTimeScheduleSchema.extend(updateFields).strict(),
@@ -120,7 +143,7 @@ const savedFields = {
   // Set once a one-time schedule's run was queued, skipped, or missed.
   completedAt: z.number().int().nonnegative().nullable(),
 };
-export const savedScheduleSchema = backupOnlyForRestart(
+export const savedScheduleSchema = restartOnlyOptions(
   z.discriminatedUnion("kind", [
     recurringScheduleSchema.extend(savedFields),
     oneTimeScheduleSchema.extend(savedFields),

@@ -170,6 +170,18 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         WHERE json_valid(input_json) AND json_type(input_json, '$.kind') IS NULL;
     `,
   },
+  {
+    // Claimed countdown warnings, so a restart never repeats one. Repeated
+    // fall-back hours share a slot, so each lead time is claimed separately.
+    version: 9,
+    sql: `
+      CREATE TABLE schedule_announcements (
+        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        slot TEXT NOT NULL, lead_minutes INTEGER NOT NULL,
+        PRIMARY KEY (schedule_id, slot, lead_minutes)
+      ) STRICT;
+    `,
+  },
 ];
 
 function schemaVersion(db: Database): number {

@@ -7,7 +7,7 @@ import {
   operationResponseSchema,
   scheduleActionCapability,
   scheduleActionSchema,
-  scheduleCapabilities,
+  scheduleEditCapabilities,
   scheduleResponseSchema,
   scheduleSchema,
   schedulesResponseSchema,
@@ -78,6 +78,7 @@ function scheduleInput(item: Schedule): ScheduleInput {
   const base = {
     action: item.action, createBackup: item.createBackup, enabled: item.enabled, time: item.time,
     timezone: item.timezone,
+    announcements: item.announcements ? { leadMinutes: [...item.announcements.leadMinutes] } : undefined,
   };
   return item.kind === "once"
     ? { ...base, kind: "once", date: item.date }
@@ -356,7 +357,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
   /** Saving or resuming needs schedule access and every capability the schedule uses. */
   function canRunSchedule(item: ScheduleInput) {
     return can(user, server, "schedules.manage") &&
-      scheduleCapabilities(item).every((capability) => can(user, server, capability));
+      scheduleEditCapabilities(item).every((capability) => can(user, server, capability));
   }
 
   async function saveSchedule() {
@@ -840,7 +841,9 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               else setSchedule(draft);
             }}
             scheduleActions={scheduleActions}
+            canRunSchedule={canRunSchedule}
             canCreateBackup={canCreateBackup}
+            canAnnounce={Boolean(server.gameConsole?.supportsBroadcast) && can(user, server, "console.execute")}
             busy={busy || !snapshotReady || !schedulesReady}
             saving={busy}
             blocked={blocked || discoveryUnavailable}
