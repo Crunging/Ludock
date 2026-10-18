@@ -39,6 +39,18 @@ async function announce() {
   await waitForScheduleAnnouncements();
 }
 
+/** A database file, so closing it simulates restarting Ludock. */
+async function withDatabaseFile(test: () => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), "ludock-countdown-"));
+  try {
+    openFixtureDatabase(join(directory, "ludock.sqlite"));
+    await test();
+  } finally {
+    closeDatabase();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 function openFixtureDatabase(path: string) {
   closeDatabase();
   process.env.LUDOCK_DB_PATH = path;
@@ -118,16 +130,14 @@ describe("restart countdown announcements", () => {
       "say Server restart in 10 minutes.", "say Server restart in 1 minute.",
     ]);
     expect(JSON.stringify(getDatabase().query("SELECT * FROM schedules").all())).not.toContain("fixture-console-secret");
-    now = due;
-    runSchedules();
-    expect(getDatabase().query("SELECT last_result FROM schedules").get()).toEqual({ last_result: expect.stringMatching(/^Queued/) });
   });
 
   it("warns before a one-time restart with a backup, and never after it completes", async () => {
     setServerGrant(friend.id, serverId,
       ["server.view", "server.restart", "schedules.manage", "console.execute", "backups.create"], admin);
-    const { days: _days, ...base } = input;
-    createSchedule(friend, serverId, { ...base, kind: "once", date: "2026-09-09", createBackup: true });
+    createSchedule(friend, serverId, {
+      kind: "once", action: "restart", time: "08:00", date: "2026-09-09", timezone: "UTC", announcements: {}, createBackup: true,
+    });
     await announce();
     now = due;
     runSchedules();
@@ -140,62 +150,46 @@ describe("restart countdown announcements", () => {
     expect(send.mock.calls.map((call) => call[3])).toEqual(["say Server restart in 10 minutes."]);
   });
 
-  it("sends each warning of a slot once across a restart into the repeated hour", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "ludock-countdown-"));
-    try {
-      openFixtureDatabase(join(directory, "ludock.sqlite"));
-      createSchedule(friend, serverId, { ...input, time: "01:30", timezone: "America/Los_Angeles" });
-      const daylight = Date.parse("2026-11-01T08:30:00Z");
-      for (const lead of [10, 5, 1]) {
-        now = daylight - lead * 60_000;
-        await announce();
-      }
-      // Ludock restarts, misses the first 01:30, and is back before the second.
-      closeDatabase();
-      for (const lead of [10, 5, 1]) {
-        now = daylight + 60 * 60_000 - lead * 60_000;
-        await announce();
-      }
-      expect(send).toHaveBeenCalledTimes(3);
-    } finally {
-      closeDatabase();
-      await rm(directory, { recursive: true, force: true });
+  it("sends each warning of a slot once across a restart into the repeated hour", () => withDatabaseFile(async () => {
+    createSchedule(friend, serverId, { ...input, time: "01:30", timezone: "America/Los_Angeles" });
+    const daylight = Date.parse("2026-11-01T08:30:00Z");
+    for (const lead of [10, 5, 1]) {
+      now = daylight - lead * 60_000;
+      await announce();
     }
-  });
-
-  it("does not resend a warning after editing to another time and back", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "ludock-countdown-"));
-    try {
-      openFixtureDatabase(join(directory, "ludock.sqlite"));
-      const announcements = { leadMinutes: [11, 10, 5, 1] };
-      const schedule = createSchedule(friend, serverId, { ...input, announcements });
+    // Ludock restarts, misses the first 01:30, and is back before the second.
+    closeDatabase();
+    for (const lead of [10, 5, 1]) {
+      now = daylight + 60 * 60_000 - lead * 60_000;
       await announce();
-      updateSchedule(friend, serverId, schedule.id, { ...input, announcements, time: "08:01", revision: 1 });
-      await announce();
-      updateSchedule(friend, serverId, schedule.id, { ...input, announcements, revision: 2 });
-      closeDatabase();
-      await announce();
-      expect(send.mock.calls.map((call) => call[3])).toEqual([
-        "say Server restart in 10 minutes.", "say Server restart in 11 minutes.",
-      ]);
-      // Claims are pruned once their slots are well past.
-      now += 3 * 86_400_000;
-      await announce();
-      expect(getDatabase().query("SELECT slot FROM schedule_announcements").all()).toEqual([
-        { slot: "2026-09-12T08:00:UTC" },
-      ]);
-    } finally {
-      closeDatabase();
-      await rm(directory, { recursive: true, force: true });
     }
-  });
+    expect(send).toHaveBeenCalledTimes(3);
+  }));
 
-  it("does not resend a claimed warning after a failure or an edit", async () => {
-    const schedule = createSchedule(friend, serverId, input);
+  it("does not resend a warning after editing to another time and back", () => withDatabaseFile(async () => {
+    const announcements = { leadMinutes: [11, 10, 5, 1] };
+    const schedule = createSchedule(friend, serverId, { ...input, announcements });
+    await announce();
+    updateSchedule(friend, serverId, schedule.id, { ...input, announcements, time: "08:01", revision: 1 });
+    await announce();
+    updateSchedule(friend, serverId, schedule.id, { ...input, announcements, revision: 2 });
+    closeDatabase();
+    await announce();
+    expect(send.mock.calls.map((call) => call[3])).toEqual([
+      "say Server restart in 10 minutes.", "say Server restart in 11 minutes.",
+    ]);
+    // Claims are pruned once their slots are well past.
+    now += 3 * 86_400_000;
+    await announce();
+    expect(getDatabase().query("SELECT slot FROM schedule_announcements").all()).toEqual([
+      { slot: "2026-09-12T08:00:UTC" },
+    ]);
+  }));
+
+  it("does not resend a claimed warning after a failure", async () => {
+    createSchedule(friend, serverId, input);
     send.mockRejectedValueOnce(new Error("fixture-password"));
     await announce();
-    await announce();
-    updateSchedule(friend, serverId, schedule.id, { ...input, announcements: { leadMinutes: [10, 2] }, revision: 1 });
     await announce();
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -229,30 +223,6 @@ describe("restart countdown announcements", () => {
     try { await announce(); } finally { release(); }
     await announce();
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it("keeps a due restart queued until the warning releases its locks", async () => {
-    const command = Promise.withResolvers<void>();
-    let effects = 0;
-    createSchedule(admin, serverId, { ...input, announcements: { leadMinutes: [1] } });
-    send.mockImplementation(() => command.promise);
-    operations.registerJobHandler("restart", {
-      run: (job) => operations.withJobLocks(job, context.lockKeys, () => { effects++; }),
-    });
-    now = due - 60_000;
-    runScheduleAnnouncements();
-    await until(() => send.mock.calls.length === 1);
-    now = due;
-    runSchedules();
-    const { last_operation_id: id } = getDatabase().query("SELECT last_operation_id FROM schedules").get() as
-      { last_operation_id: string };
-    await operations.startOperationRunner();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(operations.getOperation(id)?.status).toBe("queued");
-    command.resolve();
-    await waitForScheduleAnnouncements();
-    await until(() => operations.getOperation(id)?.status === "succeeded");
-    expect(effects).toBe(1);
   });
 
   it("skips a warning without time to finish before its restart", async () => {

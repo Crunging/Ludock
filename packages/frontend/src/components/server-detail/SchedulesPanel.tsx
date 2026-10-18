@@ -39,8 +39,11 @@ interface Props {
   conflict: boolean;
   onDraftChange: (value: ScheduleInput) => void;
   scheduleActions: ScheduleAction[];
+  /** Whether the user may save or resume a schedule with these settings. */
+  canRunSchedule: (schedule: ScheduleInput) => boolean;
   canCreateBackup: boolean;
-  supportsAnnouncements?: boolean;
+  /** The game has a broadcast command and the user has console access. */
+  canAnnounce: boolean;
   busy: boolean;
   saving: boolean;
   blocked: boolean;
@@ -129,8 +132,6 @@ export default function SchedulesPanel(props: Props) {
     if (editing && previousEdit.current !== editing.id) heading.current?.focus();
     previousEdit.current = editing?.id;
   }, [editing]);
-  const permitted = (item: ScheduleInput) =>
-    scheduleActions.includes(item.action) && (!item.createBackup || props.canCreateBackup);
   const saved = editing ? schedules.find((item) => item.id === editing.id) : undefined;
   const preview = useMemo(() => {
     const parsed = scheduleSchema.safeParse(schedule);
@@ -139,7 +140,7 @@ export default function SchedulesPanel(props: Props) {
   const missing = Boolean(editing && !saved && props.snapshotReady !== false);
   // One-time runs are saved only while their time is still ahead.
   const runAhead = preview !== null && (schedule.kind === "recurring" || preview >= now);
-  const canSave = !busy && !blocked && !conflict && !missing && runAhead && permitted(schedule);
+  const canSave = !busy && !blocked && !conflict && !missing && runAhead && props.canRunSchedule(schedule);
   const today = scheduleLocalDate(schedule.timezone, now) ?? undefined;
 
   function setKind(kind: ScheduleInput["kind"]) {
@@ -224,7 +225,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !permitted(item)))}
+                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !props.canRunSchedule(item)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button
@@ -316,12 +317,12 @@ export default function SchedulesPanel(props: Props) {
             </label>
           )}
           {schedule.action === "restart" && (
-            props.supportsAnnouncements ? (
+            props.canAnnounce ? (
               <fieldset disabled={saving}>
                 <legend>Player warnings</legend>
                 <label className="check-label">
                   <input type="checkbox" checked={Boolean(schedule.announcements)} onChange={(event) => onDraftChange({
-                    ...schedule, announcements: event.target.checked ? { leadMinutes: [10, 5, 1] } : undefined,
+                    ...schedule, announcements: event.target.checked ? scheduleAnnouncementsSchema.parse({}) : undefined,
                   })} />
                   Announce countdown to players
                 </label>

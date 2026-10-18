@@ -5,6 +5,7 @@ import {
   oneTimeScheduleSlot,
   operationSchema,
   scheduleCapabilities,
+  scheduleEditCapabilities,
   scheduleEnabledRequestSchema,
   scheduleSchema,
   scheduleSlot,
@@ -170,6 +171,10 @@ function latestOperation(row: ScheduleRow): Operation | null {
   }
 }
 
+function savedInput(row: ScheduleRow): ScheduleInput {
+  return scheduleSchema.parse(JSON.parse(row.input_json));
+}
+
 /** A one-time schedule is complete once its only slot has been consumed. */
 function oneTimeCompleted(row: ScheduleRow, data: ScheduleInput): boolean {
   return data.kind === "once" && row.last_slot === oneTimeScheduleSlot(data);
@@ -198,7 +203,7 @@ function publicSchedule(
   now = Date.now(),
   checkAuthority: PreviewAuthority = scheduleAuthority,
 ) {
-  const data = scheduleSchema.parse(JSON.parse(row.input_json));
+  const data = savedInput(row);
   const completed = oneTimeCompleted(row, data);
   let nextRunAt: number | null = null;
   let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
@@ -267,9 +272,8 @@ export function createSchedule(
   assertPayloadSize(input);
   const data = scheduleSchema.parse(input);
   assertServerCapability(actor, serverId, "schedules.manage");
-  for (const capability of scheduleCapabilities(data))
+  for (const capability of scheduleEditCapabilities(data))
     assertServerCapability(actor, serverId, capability);
-  if (data.announcements) assertServerCapability(actor, serverId, "console.execute");
   assertOneTimeRunAhead(data);
   if (actor.id === "api-token")
     throw new AppError(
@@ -380,16 +384,15 @@ function mutateSchedule(
         409,
         "This schedule changed. Reload it before trying again.",
       );
-    const previous = scheduleSchema.parse(JSON.parse(row.input_json));
+    const previous = savedInput(row);
     const data = typeof update === "boolean"
       ? { ...previous, enabled: update }
       : update;
     // Pausing must remain possible after the action grant or original binding
     // has been revoked. Editing/resuming requires both requester and owner access.
     if (update !== false) {
-      for (const capability of scheduleCapabilities(data))
+      for (const capability of scheduleEditCapabilities(data))
         assertServerCapability(actor, serverId, capability);
-      if (data.announcements) assertServerCapability(actor, serverId, "console.execute");
       scheduleAuthority(row, data);
       // A consumed or past one-time run is rescheduled by editing, never replayed.
       assertOneTimeRunAhead(data);
@@ -456,7 +459,7 @@ export function runSchedules(now = Date.now()): void {
     let slot: string | null = null;
     let configurationValid = false;
     try {
-      const data = scheduleSchema.parse(JSON.parse(row.input_json));
+      const data = savedInput(row);
       if (!data.enabled || oneTimeCompleted(row, data)) continue;
       slot = scheduleSlot(data, now);
       configurationValid = true;
@@ -596,7 +599,7 @@ export function runScheduleAnnouncements(now = Date.now()): void {
   for (const row of rows) {
     if (announcing.has(row.server_id)) continue;
     try {
-      const data = scheduleSchema.parse(JSON.parse(row.input_json));
+      const data = savedInput(row);
       if (!data.enabled || !data.announcements || oneTimeCompleted(row, data)) continue;
       const runAt = nextScheduleRun(data, now, row.last_slot);
       if (runAt === null) continue;

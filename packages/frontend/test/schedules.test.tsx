@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES, nextScheduleRun, type Schedule } from "@ludock/shared";
+import { SERVER_CAPABILITIES, nextScheduleRun, type Schedule, type ServerCapability } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import ServerDetail from "../src/pages/ServerDetail";
 import { NavigationProvider } from "../src/navigation";
@@ -14,20 +14,27 @@ mock.module("../src/api", () => ({ ...originalApi, apiJson: apiJsonMock }));
 const server = serverFixture({ permissions: [...SERVER_CAPABILITIES] });
 const base = `/servers/${server.id}`;
 const itemPath = `${base}/schedules/77777777-7777-4777-8777-777777777777`;
+const broadcastConsole = {
+  id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "say Hello", commands: [], supportsBroadcast: true,
+};
 
 function detail({
   onRequest,
   saved,
-  backupAccess = true,
+  without = [],
+  broadcast = false,
 }: {
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
   saved?: Partial<Schedule>;
-  backupAccess?: boolean;
+  without?: ServerCapability[];
+  broadcast?: boolean;
 } = {}) {
   window.history.replaceState({}, "", base);
   let schedule = scheduleFixture(server.id, saved);
-  const visibleServer = backupAccess ? server : {
-    ...server, permissions: server.permissions.filter((capability) => capability !== "backups.create"),
+  const visibleServer = {
+    ...server,
+    gameConsole: broadcast ? broadcastConsole : server.gameConsole,
+    permissions: server.permissions.filter((capability) => !without.includes(capability)),
   };
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const custom = await onRequest?.(path, init);
@@ -129,7 +136,7 @@ describe("schedules", () => {
   });
 
   it("offers the option only with backup access but allows removing it after access is revoked", async () => {
-    detail({ backupAccess: false, saved: { createBackup: true, enabled: false, nextRunAt: null } });
+    detail({ without: ["backups.create"], saved: { createBackup: true, enabled: false, nextRunAt: null } });
     await openSchedules();
     expect((screen.getByRole("button", { name: "Resume", exact: true }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Action", exact: true }), "restart");
@@ -147,10 +154,7 @@ describe("schedules", () => {
   });
 
   it("edits and saves countdown settings, rejecting invalid leads and clearing warnings for other actions", async () => {
-    const broadcastServer = { ...server, gameConsole: {
-      id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "say Hello", commands: [], supportsBroadcast: true,
-    } };
-    detail({ onRequest: (path) => path === base ? { server: broadcastServer, stats: null } : undefined });
+    detail({ broadcast: true });
     await openSchedules();
     await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
     await userEvent.click(screen.getByLabelText("Announce countdown to players"));
@@ -173,6 +177,19 @@ describe("schedules", () => {
     await userEvent.click(save());
     await waitFor(() => expect(writes("PUT")).toHaveLength(2));
     expect(JSON.parse(writes("PUT")[1][2]!.body as string).announcements).toBeUndefined();
+  });
+
+  it("requires console access to resume or save saved warnings, but allows turning them off", async () => {
+    detail({ broadcast: true, without: ["console.execute"], saved: { announcements: { leadMinutes: [5] }, enabled: false, nextRunAt: null } });
+    await openSchedules();
+    expect((screen.getByRole("button", { name: "Resume", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect(save().disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Turn off saved warnings" }));
+    expect(save().disabled).toBe(false);
+    await userEvent.click(save());
+    await screen.findByText("Schedule saved.");
+    expect(JSON.parse(writes("PUT")[0][2]!.body as string).announcements).toBeUndefined();
   });
 
   it("hides the countdown control without a supported broadcast console", async () => {

@@ -8,12 +8,21 @@ export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
 export const scheduleActionCapability = (action: ScheduleAction): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
 
-/** Every capability a schedule needs, for its owner and for whoever edits or resumes it. */
+/** Every capability a schedule's owner needs for it to run. */
 export const scheduleCapabilities = (
   schedule: { action: ScheduleAction; createBackup: boolean },
 ): ServerCapability[] => [
   scheduleActionCapability(schedule.action),
   ...(schedule.createBackup ? ["backups.create" as const] : []),
+];
+
+/** Saving or resuming a schedule also needs console access for its best-effort
+ * warnings, which are skipped rather than suspending the schedule if the owner loses it. */
+export const scheduleEditCapabilities = (
+  schedule: { action: ScheduleAction; createBackup: boolean; announcements?: unknown },
+): ServerCapability[] => [
+  ...scheduleCapabilities(schedule),
+  ...(schedule.announcements ? ["console.execute" as const] : []),
 ];
 
 export const scheduleAnnouncementsSchema = z.object({
