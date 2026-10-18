@@ -153,3 +153,33 @@ test("canceling an upload stops the batch and keeps the selected folder", async 
     root: "data", path: "", name: "first.txt",
   });
 });
+
+test("a preview stops downloading a file that grew past the limit after it was listed", async ({ app, page }) => {
+  // Routes can only fulfill whole bodies, so the download answers with a stream that never ends.
+  await page.addInitScript(() => {
+    const progress = { pulls: 0, canceled: false };
+    const browserFetch = window.fetch.bind(window);
+    Object.assign(window, {
+      previewProgress: progress,
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (!String(input instanceof Request ? input.url : input).includes("/files/download?")) return browserFetch(input, init);
+        const chunk = new Uint8Array(64 * 1024).fill(120);
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            progress.pulls += 1;
+            controller.enqueue(chunk);
+          },
+          cancel() { progress.canceled = true; },
+        }));
+      },
+    });
+  });
+  const progress = () => page.evaluate(() => (window as unknown as { previewProgress: { pulls: number; canceled: boolean } }).previewProgress);
+  await app.open(`/files/${RUNNING_ID}`);
+  await page.getByRole("button", { name: "server.properties", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "server.properties" })).toContainText("aren’t shown here");
+  const { pulls, canceled } = await progress();
+  expect(canceled).toBe(true);
+  // 512 KiB is eight chunks; a ninth crosses the limit, plus at most a little read-ahead.
+  expect(pulls).toBeLessThan(12);
+});

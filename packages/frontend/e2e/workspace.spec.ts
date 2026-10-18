@@ -181,3 +181,39 @@ test("tracked shutdown progress survives list and detail reloads", async ({ app,
   await expect(page.getByRole("button", { name: "Start", exact: true })).toBeEnabled();
   expect(app.requests.filter((request) => request.method === "POST")).toEqual([]);
 });
+
+test("an accepted update still needs fresh confirmation when its follow-up refresh fails", async ({ app, page }) => {
+  let serverReadFails = false;
+  const updates: unknown[] = [];
+  await page.route(`**/api/v1/servers/${RUNNING_ID}/updates`, async (route) => {
+    updates.push(route.request().postDataJSON());
+    serverReadFails = true;
+    await route.fulfill({ status: 202, json: operationResponseSchema.parse({ operation: {
+      id: "c15cbd1f-dbb6-444d-8b8f-c5d728b94df4", serverId: RUNNING_ID, kind: "update",
+      status: "queued", phase: "queued", createdAt: 0, updatedAt: 0, error: null, result: null,
+    } }) });
+  });
+  await page.route(`**/api/v1/servers/${RUNNING_ID}`, async (route) => {
+    if (serverReadFails) await route.fulfill({ status: 500, json: apiErrorSchema.parse({ error: "Docker request failed" }) });
+    else await route.fallback();
+  });
+  await app.open(`/servers/${RUNNING_ID}?tab=update`);
+  const confirm = page.getByRole("checkbox", { name: /selected service will be recreated/ });
+  const update = page.getByRole("button", { name: "Update server", exact: true });
+  await confirm.check();
+  await update.click();
+  await expect(page.getByText("Update queued.")).toBeVisible();
+  await expect(page.getByText("Docker request failed")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Activity", selected: true })).toBeVisible();
+
+  // Once details load again, the earlier confirmation must not still be armed.
+  serverReadFails = false;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("Docker request failed")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Update", exact: true }).click();
+  await expect(confirm).not.toBeChecked();
+  await expect(update).toBeDisabled();
+  await confirm.check();
+  await expect(update).toBeEnabled();
+  expect(updates).toEqual([{ createBackup: true, forceRecreate: false }]);
+});

@@ -120,3 +120,41 @@ test("reconnecting rechecks access, falls back to logs, and fails closed when ac
   expect(app.sockets).toHaveLength(socketsAfterDenial);
   expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
 });
+
+test("a late access check cannot restore the console after the connection denies access", async ({ app, page }) => {
+  let reads = 0;
+  let releaseCheck = () => {};
+  const checkHeld = new Promise<void>((resolve) => { releaseCheck = resolve; });
+  await page.route(`**/api/v1/servers/${RUNNING_ID}`, async (route) => {
+    reads += 1;
+    // The second read is the access check that runs once the socket opens.
+    if (reads === 2) await checkHeld;
+    await route.fallback();
+  });
+  await app.open(`/console/${RUNNING_ID}`);
+  const command = page.getByRole("textbox", { name: "Game command", exact: true });
+  const output = page.locator(".xterm-rows");
+  await command.fill("list");
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByRole("status").filter({ hasText: "Checking access…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  await app.sockets[0].route.send(JSON.stringify({ type: "stdout", data: "private game output\n" }));
+  await expect(output).toContainText("private game output");
+
+  await app.sockets[0].route.close({ code: 4403, reason: "Fixture access revoked" });
+  await expect(page.getByRole("alert")).toContainText("Connection access is unavailable");
+  await expect(output).not.toContainText("private game output");
+  // Grants changed meanwhile, so a late answer that was trusted would switch modes and reconnect.
+  app.servers[0].permissions = ["server.view", "logs.read"];
+  const lateCheck = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/servers/${RUNNING_ID}`);
+  releaseCheck();
+  await (await lateCheck).finished();
+  await page.waitForTimeout(250);
+  await expect(page.getByRole("alert")).toContainText("Connection access is unavailable");
+  await expect(page.getByRole("tablist")).toHaveCount(0);
+  await expect(command).toHaveCount(0);
+  await expect(output).not.toContainText("private game output");
+  await expect(output).not.toContainText("Switched to");
+  expect(app.sockets).toHaveLength(1);
+  expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
+});
