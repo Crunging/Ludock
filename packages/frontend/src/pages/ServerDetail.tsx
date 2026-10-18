@@ -5,6 +5,9 @@ import {
   bindingReviewResponseSchema,
   okResponseSchema,
   operationResponseSchema,
+  scheduleActionCapability,
+  scheduleActionSchema,
+  scheduleCapabilities,
   scheduleResponseSchema,
   scheduleSchema,
   schedulesResponseSchema,
@@ -350,13 +353,17 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     setScheduleEdit(null);
   }
 
+  /** Saving or resuming needs schedule access and every capability the schedule uses. */
+  function canRunSchedule(item: ScheduleInput) {
+    return can(user, server, "schedules.manage") &&
+      scheduleCapabilities(item).every((capability) => can(user, server, capability));
+  }
+
   async function saveSchedule() {
     const draft = scheduleEdit?.draft ?? schedule;
     const current = scheduleEdit ? schedules.find((item) => item.id === scheduleEdit.id) : undefined;
     if (
-      !schedulesReady || !liveReady || blocked || !can(user, server, "schedules.manage") ||
-      !can(user, server, draft.action === "backup" ? "backups.create" : `server.${draft.action}`) ||
-      (draft.createBackup && !canCreateBackup) ||
+      !schedulesReady || !liveReady || blocked || !canRunSchedule(draft) ||
       !scheduleSchema.safeParse(draft).success ||
       (scheduleEdit && (!current || current.revision !== scheduleEdit.revision))
     ) return;
@@ -378,7 +385,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const current = schedules.find((candidate) => candidate.id === item.id);
     if (
       !schedulesReady || scheduleEdit || !canManageSchedules || !current || current.revision !== item.revision ||
-      (!item.enabled && (!liveReady || blocked || !can(user, server, "schedules.manage") || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`) || (item.createBackup && !canCreateBackup)))
+      (!item.enabled && (!liveReady || blocked || !canRunSchedule(item)))
     ) return;
     await perform(
       () => apiJson(`${path}/schedules/${encodeURIComponent(item.id)}`, scheduleResponseSchema,
@@ -544,15 +551,8 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
         ? startable
         : server.state === "running"),
   );
-  const scheduleActions = (
-    ["start", "stop", "restart", "backup"] as const
-  ).filter((action) =>
-    can(
-      user,
-      server,
-      action === "backup" ? "backups.create" : `server.${action}`,
-    ),
-  );
+  const scheduleActions = scheduleActionSchema.options.filter((action) =>
+    can(user, server, scheduleActionCapability(action)));
 
   return (
     <div className="page server-detail" ref={detailRoot}>

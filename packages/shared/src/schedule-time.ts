@@ -9,6 +9,7 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const MAX_FORMATTERS = 32;
 const MAX_OFFSET_DAYS = 256;
+const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 /**
  * How long after its time a one-time schedule may still start. This covers a
  * delayed scheduler tick or a brief restart; later runs are recorded as missed
@@ -73,7 +74,7 @@ function validClockInput(input: ScheduleInput, now: number): boolean {
     now >= 0 &&
     Number.isFinite(new Date(now).getTime()) &&
     typeof input.time === "string" &&
-    /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time) &&
+    TIME_PATTERN.test(input.time) &&
     typeof input.timezone === "string" &&
     input.timezone.length > 0 &&
     input.timezone.length <= 100 &&
@@ -113,10 +114,8 @@ export function scheduleSlot(input: ScheduleInput, now: number): string | null {
   if (!validClockInput(input, now)) return null;
   try {
     if (input.kind === "once") {
-      const runAt = oneTimeScheduleRun(input);
-      return runAt !== null && now >= runAt && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS
-        ? oneTimeScheduleSlot(input)
-        : null;
+      const runAt = pendingOneTimeRun(input, now);
+      return runAt !== null && now >= runAt ? oneTimeScheduleSlot(input) : null;
     }
     return clockSlot(input, localClock(input.timezone, now));
   } catch {
@@ -149,7 +148,7 @@ export function oneTimeScheduleRun(input: OneTimeScheduleInput): number | null {
     if (
       !Number.isFinite(dateEpoch) ||
       !new Date(dateEpoch).toISOString().startsWith(input.date) ||
-      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time)
+      !TIME_PATTERN.test(input.time)
     )
       return null;
     const [hour, minute] = input.time.split(":").map(Number);
@@ -168,6 +167,12 @@ export function oneTimeScheduleRun(input: OneTimeScheduleInput): number | null {
   return null;
 }
 
+/** A one-time schedule's run time until its grace period ends, otherwise null. */
+function pendingOneTimeRun(input: OneTimeScheduleInput, now: number): number | null {
+  const runAt = oneTimeScheduleRun(input);
+  return runAt !== null && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS ? runAt : null;
+}
+
 /**
  * Next eligible local minute, including the current minute when it is unconsumed.
  * Missed minutes and spring-forward gaps are skipped, never caught up. A one-time
@@ -179,11 +184,8 @@ export function nextScheduleRun(
   lastSlot?: string | null,
 ): number | null {
   if (!validClockInput(input, now)) return null;
-  if (input.kind === "once") {
-    if (oneTimeScheduleSlot(input) === lastSlot) return null;
-    const runAt = oneTimeScheduleRun(input);
-    return runAt !== null && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS ? runAt : null;
-  }
+  if (input.kind === "once")
+    return oneTimeScheduleSlot(input) === lastSlot ? null : pendingOneTimeRun(input, now);
   try {
     const current = localClock(input.timezone, now);
     const [hour, minute] = input.time.split(":").map(Number);

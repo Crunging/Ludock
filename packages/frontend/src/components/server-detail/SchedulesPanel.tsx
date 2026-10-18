@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { nextScheduleRun, scheduleLocalDate, scheduleSchema, type Schedule, type ScheduleInput } from "@ludock/shared";
+import { nextScheduleRun, scheduleLocalDate, scheduleSchema, type Schedule, type ScheduleAction, type ScheduleInput } from "@ludock/shared";
 import { operationStatusLabels, operationTones } from "../../operations";
 import StatusPip from "../StatusPip";
 
@@ -15,7 +15,7 @@ const dayPresets = [
   { label: "Weekdays", days: [1, 2, 3, 4, 5] },
   { label: "Weekends", days: [0, 6] },
 ];
-const actionHelp: Record<ScheduleInput["action"], string> = {
+const actionHelp: Record<ScheduleAction, string> = {
   start: "Starts the server if it is stopped.",
   stop: "Stops the server at the selected time. Connected players will be disconnected.",
   restart: "Stops and starts the server at the selected time. Connected players will be disconnected.",
@@ -38,7 +38,7 @@ interface Props {
   editing: ScheduleEdit | null;
   conflict: boolean;
   onDraftChange: (value: ScheduleInput) => void;
-  scheduleActions: ScheduleInput["action"][];
+  scheduleActions: ScheduleAction[];
   canCreateBackup: boolean;
   busy: boolean;
   saving: boolean;
@@ -82,6 +82,10 @@ function when(schedule: ScheduleInput) {
   return `${schedule.time}, ${preset ? preset.label.toLowerCase() : schedule.days.map((day) => weekdays[day]).join(", ")}`;
 }
 
+function state(schedule: Schedule) {
+  return !schedule.enabled ? "Paused" : schedule.completedAt !== null ? "Completed" : "Enabled";
+}
+
 export default function SchedulesPanel(props: Props) {
   const {
     schedules, draft: schedule, editing, conflict, onDraftChange, scheduleActions,
@@ -101,6 +105,8 @@ export default function SchedulesPanel(props: Props) {
     if (editing && previousEdit.current !== editing.id) heading.current?.focus();
     previousEdit.current = editing?.id;
   }, [editing]);
+  const permitted = (item: ScheduleInput) =>
+    scheduleActions.includes(item.action) && (!item.createBackup || props.canCreateBackup);
   const saved = editing ? schedules.find((item) => item.id === editing.id) : undefined;
   const preview = useMemo(() => {
     const parsed = scheduleSchema.safeParse(schedule);
@@ -109,7 +115,7 @@ export default function SchedulesPanel(props: Props) {
   const missing = Boolean(editing && !saved && props.snapshotReady !== false);
   // One-time runs are saved only while their time is still ahead.
   const runAhead = preview !== null && (schedule.kind === "recurring" || preview >= now);
-  const canSave = !busy && !blocked && !conflict && !missing && runAhead && scheduleActions.includes(schedule.action) && (!schedule.createBackup || props.canCreateBackup);
+  const canSave = !busy && !blocked && !conflict && !missing && runAhead && permitted(schedule);
   const today = scheduleLocalDate(schedule.timezone, now) ?? undefined;
 
   function setKind(kind: ScheduleInput["kind"]) {
@@ -165,7 +171,7 @@ export default function SchedulesPanel(props: Props) {
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
                 <td className="capitalize">{item.action}{item.createBackup && <> <small className="table-detail">Backup before restart</small></>}</td>
                 <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
-                <td>{!item.enabled ? "Paused" : item.completedAt !== null ? "Completed" : "Enabled"}</td>
+                <td>{state(item)}</td>
                 <td className="schedule-next-run">
                   {item.completedAt !== null ? "None" : !item.enabled ? "Paused" : item.nextRunAt !== null
                     ? formatRun(item.nextRunAt, item.timezone, now)
@@ -192,7 +198,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !scheduleActions.includes(item.action) || (item.createBackup && !props.canCreateBackup)))}
+                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !permitted(item)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button
@@ -215,7 +221,7 @@ export default function SchedulesPanel(props: Props) {
           {conflict && saved && (
             <div className="schedule-conflict" role="alert">
               <p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
-              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {saved.enabled ? "Enabled" : "Paused"}</p>
+              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {state(saved)}</p>
               <div className="inline-actions">
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(false)}>Keep my draft</button>
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(true)}>Load saved settings</button>
@@ -234,7 +240,7 @@ export default function SchedulesPanel(props: Props) {
           <div className="form-columns">
             <label>Action
               <select value={scheduleActions.includes(schedule.action) ? schedule.action : ""} disabled={saving} onChange={(event) => {
-                const action = event.target.value as ScheduleInput["action"];
+                const action = event.target.value as ScheduleAction;
                 onDraftChange({ ...schedule, action, createBackup: action === "restart" && schedule.createBackup });
               }} required>
                 <option value="" disabled>Select action</option>

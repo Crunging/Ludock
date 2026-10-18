@@ -4,6 +4,7 @@ import {
   oneTimeScheduleRun,
   oneTimeScheduleSlot,
   operationSchema,
+  scheduleCapabilities,
   scheduleEnabledRequestSchema,
   scheduleSchema,
   scheduleSlot,
@@ -30,7 +31,6 @@ import { enqueueOperation, getOperation, publicOperation } from "./operations.js
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { createLogger } from "./logger.js";
-import type { ServerCapability } from "@ludock/shared";
 
 const logger = createLogger("schedules");
 
@@ -51,14 +51,6 @@ interface ScheduleRow {
 export const MAX_SCHEDULE_PAYLOAD_BYTES = 4 * 1024;
 export const MAX_SCHEDULES_PER_SERVER = 100;
 export const MAX_SCHEDULES_TOTAL = 1_000;
-
-const actionCapability = (action: ScheduleInput["action"]): ServerCapability =>
-  action === "backup" ? "backups.create" : `server.${action}`;
-
-const scheduleCapabilities = (data: ScheduleInput): ServerCapability[] => [
-  actionCapability(data.action),
-  ...(data.createBackup ? ["backups.create" as const] : []),
-];
 
 const unavailableMessages = {
   owner_missing: "Suspended: the schedule owner no longer exists",
@@ -143,7 +135,7 @@ function createPreviewAuthority(): PreviewAuthority {
   // Execution and mutation paths always call scheduleAuthority afresh.
   const outcomes = new Map<string, { error: unknown } | null>();
   return (row, data) => {
-    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, data.action, data.createBackup]);
+    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, scheduleCapabilities(data)]);
     const cached = outcomes.get(key);
     if (cached !== undefined) {
       if (cached !== null) throw cached.error;

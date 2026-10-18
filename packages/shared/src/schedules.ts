@@ -1,7 +1,20 @@
 import { z } from "zod";
+import type { ServerCapability } from "./access.js";
 import { operationSchema } from "./operations.js";
 
 export const scheduleActionSchema = z.enum(["start", "stop", "restart", "backup"]);
+export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
+
+export const scheduleActionCapability = (action: ScheduleAction): ServerCapability =>
+  action === "backup" ? "backups.create" : `server.${action}`;
+
+/** Every capability a schedule needs, for its owner and for whoever edits or resumes it. */
+export const scheduleCapabilities = (
+  schedule: { action: ScheduleAction; createBackup: boolean },
+): ServerCapability[] => [
+  scheduleActionCapability(schedule.action),
+  ...(schedule.createBackup ? ["backups.create" as const] : []),
+];
 
 const scheduleFields = {
   action: scheduleActionSchema,

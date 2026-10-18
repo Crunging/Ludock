@@ -118,6 +118,8 @@ afterEach(async () => {
 });
 
 describe("schedule backup option", () => {
+  const restart = { ...input, action: "restart" as const };
+
   it("defaults to no backup and allows it only for restarts", () => {
     const withoutBackup: Partial<ScheduleInput> = { ...input };
     delete withoutBackup.createBackup;
@@ -130,7 +132,6 @@ describe("schedule backup option", () => {
   });
 
   it("persists the option and changing only it increments the revision", () => {
-    const restart = { ...input, action: "restart" as const };
     const schedule = createSchedule(admin, serverId, { ...restart, createBackup: true });
     expect(listSchedules(admin, serverId)[0].createBackup).toBe(true);
     const updated = updateSchedule(admin, serverId, schedule.id, { ...restart, revision: 1 });
@@ -140,7 +141,7 @@ describe("schedule backup option", () => {
 
   it("queues the existing backup restart path and leaves plain restart input unchanged", () => {
     for (const createBackup of [false, true]) {
-      const schedule = createSchedule(admin, serverId, { ...input, action: "restart", createBackup });
+      const schedule = createSchedule(admin, serverId, { ...restart, createBackup });
       runSchedules(due);
       const operation = listSchedules(admin, serverId).find((item) => item.id === schedule.id)!.lastOperation!;
       expect(operation.kind).toBe("restart");
@@ -153,7 +154,6 @@ describe("schedule backup option", () => {
 
   it("requires backup access for requester and owner on create, edit, and resume", () => {
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
-    const restart = { ...input, action: "restart" as const };
     expect(() => createSchedule(friend, serverId, { ...restart, createBackup: true })).toThrow(/permission/);
     const plain = createSchedule(friend, serverId, restart);
     for (const actor of [friend, admin])
@@ -176,8 +176,8 @@ describe("schedule backup option", () => {
 
   it("suspends backup restarts after backup access is removed without suspending plain restarts", () => {
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "backups.create", "schedules.manage"], admin);
-    const plain = createSchedule(friend, serverId, { ...input, action: "restart" });
-    const withBackup = createSchedule(friend, serverId, { ...input, action: "restart", createBackup: true });
+    const plain = createSchedule(friend, serverId, restart);
+    const withBackup = createSchedule(friend, serverId, { ...restart, createBackup: true });
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
     const schedules = listSchedules(admin, serverId);
     expect(schedules.find((item) => item.id === plain.id)?.nextRunAt).toBeTruthy();

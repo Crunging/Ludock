@@ -82,6 +82,14 @@ function draftTimezone(value: string) {
 
 const save = () => screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
 
+const completedOnce: Partial<Schedule> = {
+  kind: "once",
+  date: "2026-09-11",
+  lastSlot: "2026-09-11T09:00:UTC",
+  nextRunAt: null,
+  completedAt: Date.UTC(2026, 8, 11, 9),
+};
+
 describe("schedules", () => {
   it("creates a restart schedule with an optional backup and clears the option when changing action", async () => {
     detail();
@@ -185,10 +193,7 @@ describe("schedules", () => {
   });
 
   it("creates a one-time schedule at a future date and time instead of on chosen days", async () => {
-    detail({ onRequest: (path, init) => {
-      if (path === `${base}/schedules` && init?.method === "POST")
-        return { schedule: scheduleFixture(server.id, { id: crypto.randomUUID() }) };
-    } });
+    detail();
     await openSchedules();
     await userEvent.click(screen.getByRole("radio", { name: "Once" }));
     expect(screen.queryByRole("group", { name: "Days" })).toBeNull();
@@ -217,13 +222,7 @@ describe("schedules", () => {
   });
 
   it("shows a completed one-time schedule without a next run or resume", async () => {
-    detail({ saved: {
-      kind: "once",
-      date: "2026-09-11",
-      lastSlot: "2026-09-11T09:00:UTC",
-      nextRunAt: null,
-      completedAt: Date.UTC(2026, 8, 11, 9),
-    } });
+    detail({ saved: completedOnce });
     await openSchedules();
     const row = screen.getByText("Once, 2026-09-11 at 09:00").closest("tr")!;
     expect(row.textContent).toContain("Completed");
@@ -234,11 +233,7 @@ describe("schedules", () => {
 
   it("pauses a completed one-time schedule while its operation is still queued", async () => {
     const completed = scheduleFixture(server.id, {
-      kind: "once",
-      date: "2026-09-11",
-      lastSlot: "2026-09-11T09:00:UTC",
-      nextRunAt: null,
-      completedAt: Date.UTC(2026, 8, 11, 9),
+      ...completedOnce,
       lastOperation: operationFixture(server.id, { kind: "restart", status: "queued", phase: "queued" }),
     });
     detail({ saved: completed, onRequest: (path, init) => path === itemPath && init?.method === "PATCH"
