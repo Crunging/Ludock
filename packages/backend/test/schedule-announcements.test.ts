@@ -285,4 +285,36 @@ describe("restart countdown announcements", () => {
     await until(() => operations.getOperation(restart.id)?.status === "succeeded");
     expect(effects).toEqual(["start", "restart"]);
   });
+  it("frees the data lane for unrelated work while a backup restart waits for warning cleanup", async () => {
+    const cleanup = Promise.withResolvers<void>();
+    let signal: AbortSignal | undefined;
+    const effects: string[] = [];
+    createSchedule(admin, serverId, { ...input, announcements: { leadMinutes: [5] } });
+    send.mockImplementation(async (...args) => {
+      signal = args[6];
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      await cleanup.promise;
+    });
+    for (const [kind, keys] of [["restart", context.lockKeys], ["backup", ["server:unrelated"]]] as const)
+      operations.registerJobHandler(kind, {
+        run: (job) => operations.withJobLocks(job, keys, () => { effects.push(kind); }),
+      });
+    now = due - 5 * 60_000;
+    runScheduleAnnouncements();
+    await until(() => send.mock.calls.length === 1);
+    const restart = operations.enqueueOperation({
+      serverId, actorId: admin.id, kind: "restart", bindingRevision: 1, input: { createBackup: true },
+    });
+    await operations.startOperationRunner();
+    await until(() => signal?.aborted === true);
+    const other = reconcileServers([context.observation, { ...context.observation, containerId: dockerId("unrelated"), name: "other", displayName: "Other" }])
+      .find((server) => server.id !== serverId)!;
+    const unrelated = operations.enqueueOperation({ serverId: other.id, actorId: admin.id, kind: "backup", bindingRevision: 1 });
+    await until(() => operations.getOperation(unrelated.id)?.status === "succeeded");
+    expect(operations.getOperation(restart.id)?.status).toBe("queued");
+    cleanup.resolve();
+    await waitForScheduleAnnouncements();
+    await until(() => operations.getOperation(restart.id)?.status === "succeeded");
+    expect(effects).toEqual(["backup", "restart"]);
+  });
 });

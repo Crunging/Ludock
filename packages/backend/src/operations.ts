@@ -50,6 +50,9 @@ const claimed = new Set<string>();
 /** Jobs that found their resources held by another job. No new work starts
  * until each retries, so a job never waits longer than serial execution. */
 const yielded = new Set<string>();
+/** Jobs waiting for background work's cleanup. They leave their lane to other
+ * work and return to the queue at the next lock release. */
+const waiting = new Set<string>();
 const inFlight = new Set<Promise<void>>();
 let jobSettled: { promise: Promise<void>; resolve: () => void } | undefined;
 
@@ -328,7 +331,7 @@ function fill() {
     .all() as unknown as OperationRow[];
   for (const row of rows) {
     const lane = laneFor(row);
-    if (claimed.has(row.id) || laneLoad[lane] >= LANE_CAPACITY[lane]) continue;
+    if (claimed.has(row.id) || waiting.has(row.id) || laneLoad[lane] >= LANE_CAPACITY[lane]) continue;
     claimed.add(row.id);
     laneLoad[lane]++;
     const run = runJob(row).finally(() => {
@@ -381,7 +384,15 @@ async function runJob(initial: OperationRow) {
         getDatabase()
           .query("UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?")
           .run(Date.now(), job.id);
-        if (error.holdsQueue) yielded.add(job.id);
+        if (!error.holdsQueue) {
+          waiting.add(job.id);
+          void error.released.then(() => {
+            waiting.delete(job.id);
+            schedule();
+          });
+          return;
+        }
+        yielded.add(job.id);
         await Promise.race([error.released, nextJobSettled()]);
         const current = getDatabase()
           .query("SELECT * FROM operations WHERE id = ?")
