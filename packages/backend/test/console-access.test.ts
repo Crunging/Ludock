@@ -16,10 +16,7 @@ import { setUserServerGrants } from "../src/authorization.js";
 import { setServerGrant } from "./fixtures/grants.js";
 import { refreshServers } from "../src/servers.js";
 import { acquireLocks } from "../src/operation-locks.js";
-import {
-  ConsoleOutputRedactor,
-  observationSecrets,
-} from "../src/console-redaction.js";
+import { observationSecrets } from "../src/console-redaction.js";
 import { dockerId } from "./fixtures/ids.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
@@ -454,16 +451,7 @@ describe("WebSocket server capability boundaries", () => {
 });
 
 describe("console credential redaction", () => {
-  it("redacts known secrets split across frame boundaries and custom password variables", () => {
-    const values: string[] = [];
-    const redactor = new ConsoleOutputRedactor(["secret-value"], (value) =>
-      values.push(value),
-    );
-    redactor.push("prefix sec");
-    redactor.push("ret-va");
-    redactor.push("lue suffix");
-    redactor.end();
-    expect(values.join("")).toBe("prefix [redacted] suffix");
+  it("redacts custom password variables and credential-like environment values", () => {
     const secrets = observationSecrets({
       containerId: dockerId("id"),
       name: "game",

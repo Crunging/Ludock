@@ -4,6 +4,7 @@ import {
   recordApplicationLog,
   redactApplicationLog,
 } from "../src/application-logs.js";
+import { createLogger } from "../src/logger.js";
 
 describe("application log buffer", () => {
   it("redacts credentials in messages and context values", () => {
@@ -78,4 +79,27 @@ describe("application log buffer", () => {
     expect(entry.context?.detail).toBe(entry.message);
   });
 
+  it("redacts logger messages and structured secrets in both console and stored output", () => {
+    const previousLevel = process.env.LOG_LEVEL;
+    const previousWarn = console.warn;
+    const warnings: string[] = [];
+    process.env.LOG_LEVEL = "warn";
+    console.warn = (message?: unknown) => warnings.push(String(message));
+    try {
+      createLogger("test").warn("visible authorization=Bearer message-secret", {
+        requestId: "request-1",
+        apiToken: "must-not-appear",
+        detail: "password=context-secret",
+      });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/"apiToken":"\[REDACTED\]"/);
+      expect(warnings[0]).toMatch(/"detail":"password=\[REDACTED\]"/);
+      for (const output of [warnings[0], JSON.stringify(listApplicationLogs({ limit: 1 }).entries[0])])
+        expect(output).not.toMatch(/message-secret|must-not-appear|context-secret/);
+    } finally {
+      if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+      else process.env.LOG_LEVEL = previousLevel;
+      console.warn = previousWarn;
+    }
+  });
 });
