@@ -347,7 +347,7 @@ describe("scheduled restarts with a backup", () => {
   function enqueueScheduled() {
     setServerGrant(operator.id, serverId, [...owner], admin);
     createSchedule(operator, serverId, {
-      action: "restart", createBackup: true, enabled: true,
+      kind: "recurring", action: "restart", createBackup: true, enabled: true,
       time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
     });
     runSchedules(Date.parse("2026-09-09T08:00:00Z"));

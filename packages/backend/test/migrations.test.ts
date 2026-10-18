@@ -248,6 +248,28 @@ describe("application database ownership and schema migrations", () => {
     }
   });
 
+  it("marks saved schedules as recurring when one-time schedules are added", () => {
+    const db = new Database(":memory:");
+    try {
+      applyMigrations(db, DATABASE_MIGRATIONS.filter((migration) => migration.version < 8));
+      const saved = { action: "start", enabled: true, time: "08:00", days: [1], timezone: "UTC" };
+      db.prepare(
+        "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
+      ).run("schedule", "server", "owner", JSON.stringify(saved), 1, 1);
+      db.prepare(
+        "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
+      ).run("damaged", "server", "owner", "not json", 1, 2);
+      applyMigrations(db);
+      const rows = db.prepare<{ id: string; input_json: string }, []>(
+        "SELECT id,input_json FROM schedules ORDER BY created_at",
+      ).all();
+      expect(JSON.parse(rows[0].input_json)).toEqual({ ...saved, kind: "recurring" });
+      expect(rows[1].input_json).toBe("not json");
+    } finally {
+      db.close(true);
+    }
+  });
+
   it("rolls back an interrupted migration and leaves the prior version usable", () => {
     const db = new Database(":memory:");
     try {

@@ -19,6 +19,7 @@ async function mockSchedules(page: Page) {
     id: SCHEDULE_ID,
     serverId: RUNNING_ID,
     ownerId: ADMIN.id,
+    kind: "recurring",
     action: "restart",
     createBackup: false,
     enabled: true,
@@ -32,6 +33,7 @@ async function mockSchedules(page: Page) {
     revision: 1,
     nextRunAt: NEXT_RUN,
     nextRunUnavailableReason: null,
+    completedAt: null,
   });
   const writes: { method: string; body: unknown; expectedRevision?: number }[] = [];
   let rejectNextEdit = false;
@@ -102,7 +104,7 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
     method: "PUT",
     expectedRevision: 1,
     body: {
-      action: "restart", createBackup: true, enabled: true, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6],
+      kind: "recurring", action: "restart", createBackup: true, enabled: true, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6],
       timezone: "UTC", revision: 1,
     },
   }]);

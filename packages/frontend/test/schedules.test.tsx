@@ -1,12 +1,12 @@
 import { describe, expect, it, mock } from "bun:test";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_CAPABILITIES, nextScheduleRun, type Schedule } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import ServerDetail from "../src/pages/ServerDetail";
 import { NavigationProvider } from "../src/navigation";
 import TestProviders from "./TestProviders";
-import { scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
+import { operationFixture, scheduleFixture, serverDetailResponse, serverFixture } from "./fixtures";
 
 const originalApi = { ...await import("../src/api") };
 const apiJsonMock = mock<typeof apiJson>();
@@ -81,6 +81,14 @@ function draftTimezone(value: string) {
 }
 
 const save = () => screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+
+const completedOnce: Partial<Schedule> = {
+  kind: "once",
+  date: "2026-09-11",
+  lastSlot: "2026-09-11T09:00:UTC",
+  nextRunAt: null,
+  completedAt: Date.UTC(2026, 8, 11, 9),
+};
 
 describe("schedules", () => {
   it("creates a restart schedule with an optional backup and clears the option when changing action", async () => {
@@ -182,5 +190,58 @@ describe("schedules", () => {
     expect((screen.getByLabelText("Time zone") as HTMLInputElement).value).toBe("Europe/London");
     expect(apiJsonMock.mock.calls.length).toBe(calls);
     expect(screen.queryByText("Schedule saved.")).toBeNull();
+  });
+
+  it("creates a one-time schedule at a future date and time instead of on chosen days", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("radio", { name: "Once" }));
+    expect(screen.queryByRole("group", { name: "Days" })).toBeNull();
+    const add = screen.getByRole("button", { name: "Add schedule" }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2000-01-01" } });
+    expect(add.disabled).toBe(true);
+    expect(screen.getByText("Choose a future date and time that exists in this time zone.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-01-01" } });
+    draftTime("06:15");
+    draftTimezone("UTC");
+    expect(add.disabled).toBe(false);
+    await userEvent.click(add);
+    await screen.findByText("Schedule created.");
+    const body = JSON.parse(writes("POST")[0][2]!.body as string);
+    expect(body).toMatchObject({ kind: "once", date: "2099-01-01", time: "06:15", timezone: "UTC" });
+    expect(body.days).toBeUndefined();
+  });
+
+  it("restores chosen days when switching back to a recurring schedule", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "Weekends" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Once" }));
+    await userEvent.click(screen.getByRole("radio", { name: "On chosen days" }));
+    expect(screen.getByRole("button", { name: "Weekends" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows a completed one-time schedule without a next run or resume", async () => {
+    detail({ saved: completedOnce });
+    await openSchedules();
+    const row = screen.getByText("Once, 2026-09-11 at 09:00").closest("tr")!;
+    expect(row.textContent).toContain("Completed");
+    expect(row.textContent).toContain("None");
+    expect(row.textContent).not.toContain("The next run cannot be determined");
+    expect((within(row).getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("pauses a completed one-time schedule while its operation is still queued", async () => {
+    const completed = scheduleFixture(server.id, {
+      ...completedOnce,
+      lastOperation: operationFixture(server.id, { kind: "restart", status: "queued", phase: "queued" }),
+    });
+    detail({ saved: completed, onRequest: (path, init) => path === itemPath && init?.method === "PATCH"
+      ? { schedule: { ...completed, enabled: false, revision: 2 } } : undefined });
+    await openSchedules();
+    const row = screen.getByText("Once, 2026-09-11 at 09:00").closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Pause" }));
+    await screen.findByText("Schedule paused.");
+    expect(JSON.parse(writes("PATCH")[0][2]!.body as string)).toEqual({ enabled: false, revision: 1 });
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { nextScheduleRun, scheduleSchema, type Schedule, type ScheduleInput } from "@ludock/shared";
+import { nextScheduleRun, scheduleLocalDate, scheduleSchema, type Schedule, type ScheduleAction, type ScheduleInput } from "@ludock/shared";
 import { operationStatusLabels, operationTones } from "../../operations";
 import StatusPip from "../StatusPip";
 
@@ -9,12 +9,13 @@ const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const timezoneOptions = [...new Set([localTimezone, "UTC", ...Intl.supportedValuesOf("timeZone")])]
   .sort()
   .map((timezone) => <option key={timezone} value={timezone} />);
+const allDays = [0, 1, 2, 3, 4, 5, 6];
 const dayPresets = [
-  { label: "Every day", days: [0, 1, 2, 3, 4, 5, 6] },
+  { label: "Every day", days: allDays },
   { label: "Weekdays", days: [1, 2, 3, 4, 5] },
   { label: "Weekends", days: [0, 6] },
 ];
-const actionHelp: Record<ScheduleInput["action"], string> = {
+const actionHelp: Record<ScheduleAction, string> = {
   start: "Starts the server if it is stopped.",
   stop: "Stops the server at the selected time. Connected players will be disconnected.",
   restart: "Stops and starts the server at the selected time. Connected players will be disconnected.",
@@ -37,7 +38,7 @@ interface Props {
   editing: ScheduleEdit | null;
   conflict: boolean;
   onDraftChange: (value: ScheduleInput) => void;
-  scheduleActions: ScheduleInput["action"][];
+  scheduleActions: ScheduleAction[];
   canCreateBackup: boolean;
   busy: boolean;
   saving: boolean;
@@ -75,9 +76,14 @@ function formatRun(timestamp: number, timezone: string, now: number) {
 }
 
 function when(schedule: ScheduleInput) {
+  if (schedule.kind === "once") return `Once, ${schedule.date} at ${schedule.time}`;
   const preset = dayPresets.find(({ days }) =>
     days.length === schedule.days.length && days.every((day) => schedule.days.includes(day)));
   return `${schedule.time}, ${preset ? preset.label.toLowerCase() : schedule.days.map((day) => weekdays[day]).join(", ")}`;
+}
+
+function state(schedule: Schedule) {
+  return !schedule.enabled ? "Paused" : schedule.completedAt !== null ? "Completed" : "Enabled";
 }
 
 export default function SchedulesPanel(props: Props) {
@@ -89,6 +95,8 @@ export default function SchedulesPanel(props: Props) {
   const timezoneId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const previousEdit = useRef(editing?.id);
+  // Keep the other kind's days or date so switching back doesn't lose them.
+  const otherKind = useRef<{ days?: number[]; date?: string }>({});
   useEffect(() => {
     const interval = window.setInterval(() => setNow(minuteStart()), 1000);
     return () => window.clearInterval(interval);
@@ -97,25 +105,45 @@ export default function SchedulesPanel(props: Props) {
     if (editing && previousEdit.current !== editing.id) heading.current?.focus();
     previousEdit.current = editing?.id;
   }, [editing]);
+  const permitted = (item: ScheduleInput) =>
+    scheduleActions.includes(item.action) && (!item.createBackup || props.canCreateBackup);
   const saved = editing ? schedules.find((item) => item.id === editing.id) : undefined;
   const preview = useMemo(() => {
     const parsed = scheduleSchema.safeParse(schedule);
     return parsed.success ? nextScheduleRun({ ...parsed.data, enabled: true }, now, saved?.lastSlot) : null;
   }, [schedule, now, saved?.lastSlot]);
   const missing = Boolean(editing && !saved && props.snapshotReady !== false);
-  const canSave = !busy && !blocked && !conflict && !missing && preview !== null && scheduleActions.includes(schedule.action) && (!schedule.createBackup || props.canCreateBackup);
+  // One-time runs are saved only while their time is still ahead.
+  const runAhead = preview !== null && (schedule.kind === "recurring" || preview >= now);
+  const canSave = !busy && !blocked && !conflict && !missing && runAhead && permitted(schedule);
+  const today = scheduleLocalDate(schedule.timezone, now) ?? undefined;
+
+  function setKind(kind: ScheduleInput["kind"]) {
+    if (kind === schedule.kind) return;
+    const base = { action: schedule.action, createBackup: schedule.createBackup, enabled: schedule.enabled, time: schedule.time, timezone: schedule.timezone };
+    if (schedule.kind === "recurring") otherKind.current.days = schedule.days;
+    else otherKind.current.date = schedule.date;
+    onDraftChange(kind === "once"
+      ? { ...base, kind, date: otherKind.current.date ?? today ?? "" }
+      : { ...base, kind, days: otherKind.current.days ?? [...allDays] });
+  }
   const showForm = editing || scheduleActions.length > 0;
 
   return (
     <>
       <h2>Schedules</h2>
-      <p className="section-lede">Start, stop, restart, or back up this server at set times.</p>
+      <p className="section-lede">Start, stop, restart, or back up this server at set times, or once at a chosen date and time.</p>
       <details className="disclosure">
         <summary>How schedules run</summary>
         <p>
           Each schedule runs in its own time zone, and only while its owner still
           has access to the action. Missed times and daylight-saving gaps are
           skipped; a repeated hour runs once.
+        </p>
+        <p>
+          A one-time schedule runs once. If Ludock isn’t running at that time and
+          misses it by more than five minutes, the run is recorded as missed and
+          never runs late. Edit it to choose a new time.
         </p>
         <p>Pausing stops future runs. It doesn’t undo work that already started.</p>
       </details>
@@ -143,12 +171,12 @@ export default function SchedulesPanel(props: Props) {
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
                 <td className="capitalize">{item.action}{item.createBackup && <> <small className="table-detail">Backup before restart</small></>}</td>
                 <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
-                <td>{item.enabled ? "Enabled" : "Paused"}</td>
+                <td>{state(item)}</td>
                 <td className="schedule-next-run">
-                  {!item.enabled ? "Paused" : item.nextRunAt !== null
+                  {item.completedAt !== null ? "None" : !item.enabled ? "Paused" : item.nextRunAt !== null
                     ? formatRun(item.nextRunAt, item.timezone, now)
                     : "Unavailable"}
-                  {(item.nextRunUnavailableReason || (item.enabled && item.nextRunAt === null)) && (
+                  {(item.nextRunUnavailableReason || (item.enabled && item.completedAt === null && item.nextRunAt === null)) && (
                     <small className="table-detail">{unavailableGuidance[item.nextRunUnavailableReason ?? "unavailable"]}</small>
                   )}
                 </td>
@@ -170,7 +198,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || (!item.enabled && (blocked || !scheduleActions.includes(item.action) || (item.createBackup && !props.canCreateBackup)))}
+                      disabled={busy || Boolean(editing) || (item.completedAt !== null && !(item.enabled && item.lastOperation?.status === "queued")) || (!item.enabled && (blocked || !permitted(item)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button
@@ -193,23 +221,37 @@ export default function SchedulesPanel(props: Props) {
           {conflict && saved && (
             <div className="schedule-conflict" role="alert">
               <p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
-              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {saved.enabled ? "Enabled" : "Paused"}</p>
+              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {state(saved)}</p>
               <div className="inline-actions">
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(false)}>Keep my draft</button>
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(true)}>Load saved settings</button>
               </div>
             </div>
           )}
+          <fieldset className="weekday-input" disabled={saving}>
+            <legend>Repeats</legend>
+            <label className="check-label">
+              <input type="radio" name={`${timezoneId}-kind`} checked={schedule.kind === "recurring"} onChange={() => setKind("recurring")} />On chosen days
+            </label>
+            <label className="check-label">
+              <input type="radio" name={`${timezoneId}-kind`} checked={schedule.kind === "once"} onChange={() => setKind("once")} />Once
+            </label>
+          </fieldset>
           <div className="form-columns">
             <label>Action
               <select value={scheduleActions.includes(schedule.action) ? schedule.action : ""} disabled={saving} onChange={(event) => {
-                const action = event.target.value as ScheduleInput["action"];
+                const action = event.target.value as ScheduleAction;
                 onDraftChange({ ...schedule, action, createBackup: action === "restart" && schedule.createBackup });
               }} required>
                 <option value="" disabled>Select action</option>
                 {scheduleActions.map((action) => <option key={action} value={action}>{action.charAt(0).toUpperCase() + action.slice(1)}</option>)}
               </select>
             </label>
+            {schedule.kind === "once" && (
+              <label>Date
+                <input type="date" required min={today} value={schedule.date} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, date: event.target.value })} />
+              </label>
+            )}
             <label>Time
               <input type="time" required value={schedule.time} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, time: event.target.value })} />
             </label>
@@ -222,7 +264,7 @@ export default function SchedulesPanel(props: Props) {
             <p className="muted" id={`${timezoneId}-help`}>Search by city, for example London or Los_Angeles. Times follow this zone, including daylight saving.</p>
             <button type="button" className="secondary-btn" disabled={saving} onClick={() => onDraftChange({ ...schedule, timezone: localTimezone })}>Use my time zone ({localTimezone})</button>
           </div>
-          <fieldset className="weekday-input" disabled={saving}>
+          {schedule.kind === "recurring" && <fieldset className="weekday-input" disabled={saving}>
             <legend>Days</legend>
             <div className="inline-actions schedule-day-presets">
               {dayPresets.map(({ label, days }) => (
@@ -237,7 +279,7 @@ export default function SchedulesPanel(props: Props) {
                 <input type="checkbox" checked={schedule.days.includes(index)} onChange={(event) => onDraftChange({ ...schedule, days: event.target.checked ? [...schedule.days, index].sort() : schedule.days.filter((value) => value !== index) })} />{day}
               </label>
             ))}
-          </fieldset>
+          </fieldset>}
           {schedule.action === "restart" && (props.canCreateBackup || schedule.createBackup) && (
             <label className="check-label">
               <input type="checkbox" checked={schedule.createBackup} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, createBackup: event.target.checked })} />
@@ -252,7 +294,11 @@ export default function SchedulesPanel(props: Props) {
           )}
           <p className="schedule-preview">
             <strong>{schedule.enabled ? "Next run:" : "Next run when resumed:"}</strong>{" "}
-            {preview === null ? "Choose a valid time, time zone, and at least one day." : formatRun(preview, schedule.timezone, now)}
+            {!runAhead
+              ? schedule.kind === "once"
+                ? "Choose a future date and time that exists in this time zone."
+                : "Choose a valid time, time zone, and at least one day."
+              : formatRun(preview, schedule.timezone, now)}
             <small className="table-detail">Preview assumes the owner has access and the server binding is active.</small>
           </p>
           <p className="schedule-form-note">

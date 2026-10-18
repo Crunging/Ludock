@@ -1,12 +1,18 @@
 import { expect, describe, it } from "bun:test";
 import {
   nextScheduleRun,
+  ONE_TIME_SCHEDULE_GRACE_MS,
+  oneTimeScheduleRun,
+  oneTimeScheduleSlot,
+  scheduleLocalDate,
+  scheduleSchema,
   scheduleSlot,
-  type ScheduleInput,
+  type OneTimeScheduleInput,
 } from "@ludock/shared";
 
-const input: ScheduleInput = {
-  action: "restart",
+const input = {
+  kind: "recurring" as const,
+  action: "restart" as const,
   createBackup: false,
   enabled: true,
   time: "09:30",
@@ -60,5 +66,56 @@ describe("next schedule run", () => {
     expect(nextScheduleRun(casey, now)).toBe(second);
     expect(scheduleSlot(casey, first)).toBe(scheduleSlot(casey, second));
     expect(nextScheduleRun(casey, now, scheduleSlot(casey, first))).toBe(at("2010-03-11T15:30:00Z"));
+  });
+});
+
+describe("one-time schedule runs", () => {
+  const once: OneTimeScheduleInput = {
+    kind: "once",
+    action: "stop",
+    createBackup: false,
+    enabled: true,
+    date: "2026-11-01",
+    time: "09:30",
+    timezone: "America/Los_Angeles",
+  };
+
+  it("resolves its local date and time once, in its own time zone", () => {
+    expect(oneTimeScheduleRun(once)).toBe(at("2026-11-01T17:30:00Z"));
+    expect(oneTimeScheduleRun({ ...once, timezone: "UTC" })).toBe(at("2026-11-01T09:30:00Z"));
+    // A repeated fall-back hour resolves to its first occurrence.
+    expect(oneTimeScheduleRun({ ...once, time: "01:30" })).toBe(at("2026-11-01T08:30:00Z"));
+    // A spring-forward gap has no such local time.
+    expect(oneTimeScheduleRun({ ...once, date: "2026-03-08", time: "02:30" })).toBe(null);
+  });
+
+  it("stays due through its grace period until its single slot is consumed", () => {
+    const runAt = at("2026-11-01T17:30:00Z");
+    const slot = oneTimeScheduleSlot(once);
+    expect(nextScheduleRun(once, runAt - 86400_000)).toBe(runAt);
+    expect(nextScheduleRun(once, runAt + 60_000)).toBe(runAt);
+    expect(nextScheduleRun(once, runAt + ONE_TIME_SCHEDULE_GRACE_MS)).toBe(null);
+    expect(nextScheduleRun(once, runAt, slot)).toBe(null);
+    expect(nextScheduleRun({ ...once, enabled: false }, runAt)).toBe(null);
+    expect(scheduleSlot(once, runAt - 1)).toBe(null);
+    expect(scheduleSlot(once, runAt)).toBe(slot);
+    expect(scheduleSlot(once, runAt + ONE_TIME_SCHEDULE_GRACE_MS - 1)).toBe(slot);
+    expect(scheduleSlot(once, runAt + ONE_TIME_SCHEDULE_GRACE_MS)).toBe(null);
+  });
+
+  it("accepts only real calendar dates and requires the fields of its kind", () => {
+    expect(scheduleSchema.safeParse(once).success).toBe(true);
+    expect(scheduleSchema.safeParse({ ...once, date: "2026-02-30" }).success).toBe(false);
+    expect(scheduleSchema.safeParse({ ...once, date: "2026-2-3" }).success).toBe(false);
+    expect(scheduleSchema.safeParse({ ...once, days: [1] }).success).toBe(false);
+    expect(scheduleSchema.safeParse({ ...input, date: "2026-11-01" }).success).toBe(false);
+    expect(scheduleSchema.safeParse({ ...input, kind: undefined }).success).toBe(false);
+  });
+
+  it("reports today's date in a schedule's time zone", () => {
+    const now = at("2026-11-01T03:00:00Z");
+    expect(scheduleLocalDate("UTC", now)).toBe("2026-11-01");
+    expect(scheduleLocalDate("America/Los_Angeles", now)).toBe("2026-10-31");
+    expect(scheduleLocalDate("Not/AZone", now)).toBe(null);
   });
 });

@@ -1,39 +1,87 @@
 import { z } from "zod";
+import type { ServerCapability } from "./access.js";
 import { operationSchema } from "./operations.js";
 
-export const scheduleSchema = z
+export const scheduleActionSchema = z.enum(["start", "stop", "restart", "backup"]);
+export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
+
+export const scheduleActionCapability = (action: ScheduleAction): ServerCapability =>
+  action === "backup" ? "backups.create" : `server.${action}`;
+
+/** Every capability a schedule needs, for its owner and for whoever edits or resumes it. */
+export const scheduleCapabilities = (
+  schedule: { action: ScheduleAction; createBackup: boolean },
+): ServerCapability[] => [
+  scheduleActionCapability(schedule.action),
+  ...(schedule.createBackup ? ["backups.create" as const] : []),
+];
+
+const scheduleFields = {
+  action: scheduleActionSchema,
+  createBackup: z.boolean().default(false),
+  enabled: z.boolean().default(true),
+  time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  timezone: z
+    .string()
+    .min(1)
+    .max(100)
+    .refine((value) => {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: value });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Unknown timezone"),
+};
+
+export const recurringScheduleSchema = z
   .object({
-    action: z.enum(["start", "stop", "restart", "backup"]),
-    createBackup: z.boolean().default(false),
-    enabled: z.boolean().default(true),
-    time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+    kind: z.literal("recurring"),
+    ...scheduleFields,
     days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-    timezone: z
-      .string()
-      .min(1)
-      .max(100)
-      .refine((value) => {
-        try {
-          new Intl.DateTimeFormat("en", { timeZone: value });
-          return true;
-        } catch {
-          return false;
-        }
-      }, "Unknown timezone"),
   })
-  .strict()
-  .refine((value) => !value.createBackup || value.action === "restart", {
+  .strict();
+
+/** Runs once at a local date and time in its time zone. */
+export const oneTimeScheduleSchema = z
+  .object({
+    kind: z.literal("once"),
+    ...scheduleFields,
+    date: z
+      .string()
+      .regex(/^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/)
+      .refine((value) => {
+        const date = new Date(`${value}T00:00:00Z`);
+        return Number.isFinite(date.getTime()) && date.toISOString().startsWith(value);
+      }, "Unknown date"),
+  })
+  .strict();
+
+function backupOnlyForRestart<T extends z.ZodType<{ action: string; createBackup: boolean }>>(schema: T): T {
+  return schema.refine((value) => !value.createBackup || value.action === "restart", {
     message: "Backup before restart is only available for restart schedules",
     path: ["createBackup"],
   });
-export type ScheduleInput = z.infer<typeof scheduleSchema>;
+}
 
-export const updateScheduleRequestSchema = scheduleSchema
-  .safeExtend({
-    enabled: scheduleSchema.shape.enabled.removeDefault(),
-    revision: z.number().int().positive(),
-  })
-  .strict();
+export const scheduleSchema = backupOnlyForRestart(
+  z.discriminatedUnion("kind", [recurringScheduleSchema, oneTimeScheduleSchema]),
+);
+export type ScheduleInput = z.infer<typeof scheduleSchema>;
+export type RecurringScheduleInput = z.infer<typeof recurringScheduleSchema>;
+export type OneTimeScheduleInput = z.infer<typeof oneTimeScheduleSchema>;
+
+const updateFields = {
+  enabled: scheduleFields.enabled.removeDefault(),
+  revision: z.number().int().positive(),
+};
+export const updateScheduleRequestSchema = backupOnlyForRestart(
+  z.discriminatedUnion("kind", [
+    recurringScheduleSchema.extend(updateFields).strict(),
+    oneTimeScheduleSchema.extend(updateFields).strict(),
+  ]),
+);
 export type UpdateScheduleRequest = z.infer<typeof updateScheduleRequestSchema>;
 
 export const scheduleEnabledRequestSchema = z
@@ -55,9 +103,9 @@ export const nextRunUnavailableReasonSchema = z.enum([
 ]);
 export type NextRunUnavailableReason = z.infer<typeof nextRunUnavailableReasonSchema>;
 
-export const savedScheduleSchema = scheduleSchema.safeExtend({
-  enabled: scheduleSchema.shape.enabled.removeDefault(),
-  createBackup: scheduleSchema.shape.createBackup.removeDefault(),
+const savedFields = {
+  enabled: scheduleFields.enabled.removeDefault(),
+  createBackup: scheduleFields.createBackup.removeDefault(),
   id: z.string().uuid(),
   serverId: z.string().uuid(),
   ownerId: z.string().uuid(),
@@ -69,7 +117,15 @@ export const savedScheduleSchema = scheduleSchema.safeExtend({
   revision: z.number().int().positive(),
   nextRunAt: z.number().int().nonnegative().nullable(),
   nextRunUnavailableReason: nextRunUnavailableReasonSchema.nullable(),
-});
+  // Set once a one-time schedule's run was queued, skipped, or missed.
+  completedAt: z.number().int().nonnegative().nullable(),
+};
+export const savedScheduleSchema = backupOnlyForRestart(
+  z.discriminatedUnion("kind", [
+    recurringScheduleSchema.extend(savedFields),
+    oneTimeScheduleSchema.extend(savedFields),
+  ]),
+);
 export type Schedule = z.infer<typeof savedScheduleSchema>;
 export const schedulesResponseSchema = z.object({
   schedules: z.array(savedScheduleSchema),

@@ -376,10 +376,11 @@ because many images download the game when they start.
 
 ## Schedules
 
-Schedules start, stop, restart, or back up a server at a set time on chosen days.
-New schedules use your browser's time zone; search for another by city or choose
-**Use my time zone**. **Every day**, **Weekdays**, and **Weekends** select days
-in one click, and **Create paused** saves a schedule without running it.
+Schedules start, stop, restart, or back up a server at a set time on chosen days,
+or once at a chosen date and time. New schedules use your browser's time zone;
+search for another by city or choose **Use my time zone**. **Every day**,
+**Weekdays**, and **Weekends** select days in one click, and **Create paused**
+saves a schedule without running it.
 
 Restart schedules can **Create a backup before restarting**, which works like
 **Take a backup first** in the Restart dialog. It needs backup access too, and
@@ -392,6 +393,12 @@ the server must be running when the schedule runs.
   repeated hour runs once. Resuming doesn't replay missed runs. Pausing or editing
   stops queued work under the old settings but doesn't undo work already
   started.
+- **One-time schedules:** under **Repeats**, choose **Once** and pick a date.
+  The date and time must be in the future and exist in the schedule's time zone.
+  After it runs, the schedule shows **Completed** and doesn't run again. If
+  Ludock is stopped at that time and comes back more than five minutes late,
+  the run is recorded as missed and never runs late. A paused one-time schedule
+  can't be resumed after its time; edit it to choose a new time.
 - **Results:** **Last result → View activity** shows what actually happened.
 - **Limits:** 100 schedules per server and 1,000 in total, including paused ones.
   A schedule with an invalid setup is suspended, and the logs say which.

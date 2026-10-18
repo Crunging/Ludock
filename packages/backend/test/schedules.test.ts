@@ -1,7 +1,12 @@
 import { thrownBy } from "./fixtures/errors.js";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { listOperationHistory } from "../src/history.js";
-import { scheduleSchema, updateScheduleRequestSchema, type ScheduleInput } from "@ludock/shared";
+import {
+  ONE_TIME_SCHEDULE_GRACE_MS,
+  scheduleSchema,
+  updateScheduleRequestSchema,
+  type ScheduleInput,
+} from "@ludock/shared";
 import * as database from "../src/database.js";
 import * as identity from "../src/identity.js";
 import {
@@ -21,6 +26,7 @@ import {
   updateSchedule,
 } from "../src/schedules.js";
 import { AppError } from "../src/errors.js";
+import { jobActor } from "../src/jobs.js";
 import { setServerGrant } from "./fixtures/grants.js";
 import { reconcileServers, reviewServerBinding } from "../src/identity.js";
 import {
@@ -46,6 +52,7 @@ const observation = {
   mounts: [],
 };
 const input: ScheduleInput = {
+  kind: "recurring",
   action: "start",
   createBackup: false,
   enabled: true,
@@ -111,6 +118,8 @@ afterEach(async () => {
 });
 
 describe("schedule backup option", () => {
+  const restart = { ...input, action: "restart" as const };
+
   it("defaults to no backup and allows it only for restarts", () => {
     const withoutBackup: Partial<ScheduleInput> = { ...input };
     delete withoutBackup.createBackup;
@@ -123,7 +132,6 @@ describe("schedule backup option", () => {
   });
 
   it("persists the option and changing only it increments the revision", () => {
-    const restart = { ...input, action: "restart" as const };
     const schedule = createSchedule(admin, serverId, { ...restart, createBackup: true });
     expect(listSchedules(admin, serverId)[0].createBackup).toBe(true);
     const updated = updateSchedule(admin, serverId, schedule.id, { ...restart, revision: 1 });
@@ -133,7 +141,7 @@ describe("schedule backup option", () => {
 
   it("queues the existing backup restart path and leaves plain restart input unchanged", () => {
     for (const createBackup of [false, true]) {
-      const schedule = createSchedule(admin, serverId, { ...input, action: "restart", createBackup });
+      const schedule = createSchedule(admin, serverId, { ...restart, createBackup });
       runSchedules(due);
       const operation = listSchedules(admin, serverId).find((item) => item.id === schedule.id)!.lastOperation!;
       expect(operation.kind).toBe("restart");
@@ -146,7 +154,6 @@ describe("schedule backup option", () => {
 
   it("requires backup access for requester and owner on create, edit, and resume", () => {
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
-    const restart = { ...input, action: "restart" as const };
     expect(() => createSchedule(friend, serverId, { ...restart, createBackup: true })).toThrow(/permission/);
     const plain = createSchedule(friend, serverId, restart);
     for (const actor of [friend, admin])
@@ -169,8 +176,8 @@ describe("schedule backup option", () => {
 
   it("suspends backup restarts after backup access is removed without suspending plain restarts", () => {
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "backups.create", "schedules.manage"], admin);
-    const plain = createSchedule(friend, serverId, { ...input, action: "restart" });
-    const withBackup = createSchedule(friend, serverId, { ...input, action: "restart", createBackup: true });
+    const plain = createSchedule(friend, serverId, restart);
+    const withBackup = createSchedule(friend, serverId, { ...restart, createBackup: true });
     setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
     const schedules = listSchedules(admin, serverId);
     expect(schedules.find((item) => item.id === plain.id)?.nextRunAt).toBeTruthy();
@@ -480,5 +487,103 @@ describe("schedule failure isolation", () => {
     expect(state.last_slot).toBe(null);
     expect(state.last_result).toBe(null);
     expect(warn.mock.calls.length).toBe(0);
+  });
+});
+
+describe("one-time schedules", () => {
+  const once: ScheduleInput = {
+    kind: "once",
+    action: "start",
+    createBackup: false,
+    enabled: true,
+    date: "2099-01-01",
+    time: "08:00",
+    timezone: "America/Los_Angeles",
+  };
+  const runAt = Date.parse("2099-01-01T16:00:00Z");
+
+  it("rejects past and nonexistent local times when created or edited", () => {
+    expect(thrownBy(() => createSchedule(friend, serverId, { ...once, date: "2000-01-01" })))
+      .toMatchObject({ code: "SCHEDULE_TIME_PAST", statusCode: 400 });
+    expect(thrownBy(() => createSchedule(friend, serverId, { ...once, enabled: false, date: "2000-01-01" })))
+      .toMatchObject({ code: "SCHEDULE_TIME_PAST" });
+    expect(thrownBy(() => createSchedule(friend, serverId, { ...once, date: "2099-03-08", time: "02:30" })))
+      .toMatchObject({ code: "SCHEDULE_TIME_INVALID", statusCode: 400 });
+    const schedule = createSchedule(friend, serverId, once);
+    expect(schedule.nextRunAt).toBe(runAt);
+    expect(schedule.completedAt).toBe(null);
+    expect(thrownBy(() => updateSchedule(friend, serverId, schedule.id, { ...once, date: "2001-01-01", revision: 1 })))
+      .toMatchObject({ code: "SCHEDULE_TIME_PAST" });
+    expect(listSchedules(friend, serverId)[0].revision).toBe(1);
+  });
+
+  it("runs once at its time, then completes without running again", () => {
+    const schedule = createSchedule(friend, serverId, once);
+    runSchedules(runAt - 15_000);
+    expect(serverOperations().length).toBe(0);
+    runSchedules(runAt + 10_000);
+    runSchedules(runAt + 25_000);
+    expect(serverOperations().length).toBe(1);
+    const operation = getOperation(serverOperations()[0].id)!;
+    expect(operation.input).toMatchObject({ scheduleId: schedule.id, scheduleRevision: 1 });
+    getDatabase().prepare("UPDATE operations SET status='succeeded'").run();
+    runSchedules(runAt + 86400_000);
+    expect(serverOperations().length).toBe(1);
+
+    const saved = listSchedules(friend, serverId)[0];
+    expect(saved.completedAt).toBe(runAt + 10_000);
+    expect(saved.nextRunAt).toBe(null);
+    expect(saved.nextRunUnavailableReason).toBe(null);
+    // The queued attempt keeps its revision, so the operation still runs.
+    expect(saved.revision).toBe(1);
+    expect(saved.enabled).toBe(true);
+  });
+
+  it("stops a queued run when paused after its slot is consumed", () => {
+    const schedule = createSchedule(friend, serverId, once);
+    runSchedules(runAt + 10_000);
+    const job = getOperation(serverOperations()[0].id)!;
+    const paused = setScheduleEnabled(friend, serverId, schedule.id, { enabled: false, revision: 1 });
+    expect(paused).toMatchObject({ enabled: false, revision: 2 });
+    expect(() => jobActor({ job, progress: () => {} })).toThrow(/deleted, disabled, or changed/);
+  });
+
+  it("can be rescheduled by editing, but not resumed at a past time", () => {
+    const schedule = createSchedule(friend, serverId, { ...once, enabled: false });
+    getDatabase().prepare("UPDATE schedules SET input_json=? WHERE id=?")
+      .run(JSON.stringify({ ...once, enabled: false, date: "2001-01-01" }), schedule.id);
+    expect(thrownBy(() => setScheduleEnabled(friend, serverId, schedule.id, { enabled: true, revision: 1 })))
+      .toMatchObject({ code: "SCHEDULE_TIME_PAST" });
+    const edited = updateSchedule(friend, serverId, schedule.id, { ...once, revision: 1 });
+    expect(edited).toMatchObject({ enabled: true, revision: 2, nextRunAt: runAt, completedAt: null });
+  });
+
+  it("records a run missed while Ludock was stopped instead of replaying it", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const schedule = createSchedule(friend, serverId, once);
+    // A restart inside the grace period still starts the run once.
+    const late = createSchedule(friend, serverId, { ...once, time: "08:05" });
+    runSchedules(runAt + ONE_TIME_SCHEDULE_GRACE_MS + 60_000);
+
+    const operations = serverOperations();
+    expect(operations.length).toBe(1);
+    expect(getOperation(operations[0].id)?.input.scheduleId).toBe(late.id);
+    const missed = listSchedules(friend, serverId).find((item) => item.id === schedule.id)!;
+    expect(missed.lastResult).toBe("Missed: Ludock was not running at the scheduled time");
+    expect(missed.lastOperation).toBe(null);
+    expect(missed.completedAt).toBe(runAt + ONE_TIME_SCHEDULE_GRACE_MS + 60_000);
+    expect(missed.nextRunAt).toBe(null);
+    runSchedules(runAt + ONE_TIME_SCHEDULE_GRACE_MS + 120_000);
+    expect(serverOperations().length).toBe(1);
+    expect(warn.mock.calls.length).toBe(0);
+  });
+
+  it("does not mark paused one-time schedules missed", () => {
+    const schedule = createSchedule(friend, serverId, { ...once, enabled: false });
+    runSchedules(runAt + ONE_TIME_SCHEDULE_GRACE_MS + 60_000);
+    const saved = listSchedules(friend, serverId)[0];
+    expect(saved.id).toBe(schedule.id);
+    expect(saved.lastResult).toBe(null);
+    expect(saved.completedAt).toBe(null);
   });
 });

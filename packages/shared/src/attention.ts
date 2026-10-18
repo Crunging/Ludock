@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { nextRunUnavailableReasonSchema, scheduleSchema } from "./schedules.js";
+import { nextRunUnavailableReasonSchema, scheduleActionSchema } from "./schedules.js";
 
 const attentionItemBaseSchema = z.object({
   id: z.string(),
@@ -20,7 +20,7 @@ export const attentionItemSchema = z.discriminatedUnion("kind", [
   attentionItemBaseSchema.extend({
     kind: z.literal("schedule"),
     scheduleId: z.string().uuid(),
-    action: scheduleSchema.shape.action,
+    action: scheduleActionSchema,
     reason: nextRunUnavailableReasonSchema,
   }),
   attentionItemBaseSchema.extend({
