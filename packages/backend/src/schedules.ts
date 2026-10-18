@@ -572,15 +572,17 @@ async function announce(row: ScheduleRow, data: ScheduleInput, runAt: number, le
   }
 }
 
-function claimAnnouncement(row: ScheduleRow, slot: string, lead: number): boolean {
+function claimAnnouncement(row: ScheduleRow, slot: string, lead: number, now: number): boolean {
   const db = getDatabase();
   return db.transaction(() => {
     const claimed = db.query(
       "INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes) SELECT id,?,? FROM schedules WHERE id=? AND revision=?",
     ).run(slot, lead, row.id, row.revision);
     if (!claimed.changes) return false;
-    // Only the upcoming slot is announced, so claims for earlier slots are spent.
-    db.query("DELETE FROM schedule_announcements WHERE schedule_id=? AND slot<>?").run(row.id, slot);
+    // Edits can return to an earlier slot, so keep claims until it has passed.
+    // Slots start with their local date, which is within a day of UTC.
+    const spent = new Date(now - 2 * 86_400_000).toISOString().slice(0, 10);
+    db.query("DELETE FROM schedule_announcements WHERE schedule_id=? AND substr(slot,1,10)<?").run(row.id, spent);
     return true;
   })();
 }
@@ -603,7 +605,7 @@ export function runScheduleAnnouncements(now = Date.now()): void {
       const slot = scheduleSlot(data, runAt);
       if (lead === undefined || !slot || runAt - now < ANNOUNCEMENT_CUTOFF_MS + ANNOUNCEMENT_MIN_RUNTIME_MS) continue;
       // Claim before sending, so restarting Ludock never repeats a warning.
-      if (!claimAnnouncement(row, slot, lead)) continue;
+      if (!claimAnnouncement(row, slot, lead, now)) continue;
       announcing.set(row.server_id, announce(row, data, runAt, lead)
         // Console output and errors may contain secrets; a skipped warning
         // never affects the scheduled action.

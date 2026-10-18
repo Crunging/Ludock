@@ -163,6 +163,33 @@ describe("restart countdown announcements", () => {
     }
   });
 
+  it("does not resend a warning after editing to another time and back", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ludock-countdown-"));
+    try {
+      openFixtureDatabase(join(directory, "ludock.sqlite"));
+      const announcements = { leadMinutes: [11, 10, 5, 1] };
+      const schedule = createSchedule(friend, serverId, { ...input, announcements });
+      await announce();
+      updateSchedule(friend, serverId, schedule.id, { ...input, announcements, time: "08:01", revision: 1 });
+      await announce();
+      updateSchedule(friend, serverId, schedule.id, { ...input, announcements, revision: 2 });
+      closeDatabase();
+      await announce();
+      expect(send.mock.calls.map((call) => call[3])).toEqual([
+        "say Server restart in 10 minutes.", "say Server restart in 11 minutes.",
+      ]);
+      // Claims are pruned once their slots are well past.
+      now += 3 * 86_400_000;
+      await announce();
+      expect(getDatabase().query("SELECT slot FROM schedule_announcements").all()).toEqual([
+        { slot: "2026-09-12T08:00:UTC" },
+      ]);
+    } finally {
+      closeDatabase();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not resend a claimed warning after a failure or an edit", async () => {
     const schedule = createSchedule(friend, serverId, input);
     send.mockRejectedValueOnce(new Error("fixture-password"));
