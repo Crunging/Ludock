@@ -123,12 +123,14 @@ export default function SchedulesPanel(props: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   const previousEdit = useRef(editing?.id);
   // Keep the other kind's days or date so switching back doesn't lose them.
+  // They belong to one draft, so starting or leaving an edit clears them.
   const otherKind = useRef<{ days?: number[]; date?: string }>({});
   useEffect(() => {
     const interval = window.setInterval(() => setNow(minuteStart()), 1000);
     return () => window.clearInterval(interval);
   }, []);
   useEffect(() => {
+    if (previousEdit.current !== editing?.id) otherKind.current = {};
     if (editing && previousEdit.current !== editing.id) heading.current?.focus();
     previousEdit.current = editing?.id;
   }, [editing]);

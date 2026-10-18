@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SERVER_CAPABILITIES, nextScheduleRun, type Schedule, type ServerCapability } from "@ludock/shared";
+import { SERVER_CAPABILITIES, nextScheduleRun, scheduleLocalDate, type Schedule, type ServerCapability } from "@ludock/shared";
 import { ApiRequestError, apiJson } from "../src/api";
 import ServerDetail from "../src/pages/ServerDetail";
 import { NavigationProvider } from "../src/navigation";
@@ -273,6 +273,17 @@ describe("schedules", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Once" }));
     await userEvent.click(screen.getByRole("radio", { name: "On chosen days" }));
     expect(screen.getByRole("button", { name: "Weekends" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("does not carry another draft's kept date into an edited schedule", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("radio", { name: "Once" }));
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-01-01" } });
+    await userEvent.click(screen.getByRole("radio", { name: "On chosen days" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    await userEvent.click(screen.getByRole("radio", { name: "Once" }));
+    expect((screen.getByLabelText("Date") as HTMLInputElement).value).toBe(scheduleLocalDate("UTC", Date.now())!);
   });
 
   it("shows a completed one-time schedule without a next run or resume", async () => {
