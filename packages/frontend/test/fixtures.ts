@@ -56,6 +56,7 @@ export function scheduleFixture(serverId: string, overrides: Partial<Schedule> =
     id: "77777777-7777-4777-8777-777777777777",
     serverId,
     ownerId: "88888888-8888-4888-8888-888888888888",
+    kind: "recurring",
     action: "restart",
     createBackup: false,
     enabled: true,
@@ -71,6 +72,7 @@ export function scheduleFixture(serverId: string, overrides: Partial<Schedule> =
     lastRunAt: Date.UTC(2026, 8, 11, 9),
     nextRunAt: Date.UTC(2026, 8, 12, 9),
     nextRunUnavailableReason: null,
+    completedAt: null,
     ...overrides,
   };
 }

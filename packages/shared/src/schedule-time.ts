@@ -1,10 +1,20 @@
-import type { ScheduleInput } from "./schedules.js";
+import type {
+  OneTimeScheduleInput,
+  RecurringScheduleInput,
+  ScheduleInput,
+} from "./schedules.js";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const MAX_FORMATTERS = 32;
 const MAX_OFFSET_DAYS = 256;
+/**
+ * How long after its time a one-time schedule may still start. This covers a
+ * delayed scheduler tick or a brief restart; later runs are recorded as missed
+ * and never replayed.
+ */
+export const ONE_TIME_SCHEDULE_GRACE_MS = 5 * MINUTE;
 const formatters = new Map<string, Intl.DateTimeFormat>();
 const offsetDays = new Map<string, number[]>();
 
@@ -64,18 +74,21 @@ function validClockInput(input: ScheduleInput, now: number): boolean {
     Number.isFinite(new Date(now).getTime()) &&
     typeof input.time === "string" &&
     /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time) &&
-    Array.isArray(input.days) &&
-    input.days.length > 0 &&
-    input.days.length <= 7 &&
-    input.days.every((day) => Number.isInteger(day) && day >= 0 && day <= 6) &&
     typeof input.timezone === "string" &&
     input.timezone.length > 0 &&
-    input.timezone.length <= 100
+    input.timezone.length <= 100 &&
+    (input.kind === "once"
+      ? typeof input.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.date)
+      : input.kind === "recurring" &&
+        Array.isArray(input.days) &&
+        input.days.length > 0 &&
+        input.days.length <= 7 &&
+        input.days.every((day) => Number.isInteger(day) && day >= 0 && day <= 6))
   );
 }
 
 function clockSlot(
-  input: ScheduleInput,
+  input: RecurringScheduleInput,
   clock: ReturnType<typeof localClock>,
 ): string | null {
   if (
@@ -87,10 +100,24 @@ function clockSlot(
   return `${clock.date}T${input.time}:${input.timezone}`;
 }
 
-/** The matching local minute, without an offset so fall-back repetitions deduplicate. */
+/** The single execution slot of a one-time schedule. */
+export function oneTimeScheduleSlot(input: OneTimeScheduleInput): string {
+  return `${input.date}T${input.time}:${input.timezone}`;
+}
+
+/**
+ * The matching local minute, without an offset so fall-back repetitions deduplicate.
+ * A one-time schedule matches from its time until the grace period ends.
+ */
 export function scheduleSlot(input: ScheduleInput, now: number): string | null {
   if (!validClockInput(input, now)) return null;
   try {
+    if (input.kind === "once") {
+      const runAt = oneTimeScheduleRun(input);
+      return runAt !== null && now >= runAt && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS
+        ? oneTimeScheduleSlot(input)
+        : null;
+    }
     return clockSlot(input, localClock(input.timezone, now));
   } catch {
     return null;
@@ -113,8 +140,38 @@ function dayOffsets(timezone: string, dateEpoch: number): number[] {
 }
 
 /**
+ * The first instant a one-time schedule's local date and time occurs, or null
+ * when that wall time doesn't exist, such as inside a spring-forward gap.
+ */
+export function oneTimeScheduleRun(input: OneTimeScheduleInput): number | null {
+  try {
+    const dateEpoch = Date.parse(`${input.date}T00:00:00Z`);
+    if (
+      !Number.isFinite(dateEpoch) ||
+      !new Date(dateEpoch).toISOString().startsWith(input.date) ||
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time)
+    )
+      return null;
+    const [hour, minute] = input.time.split(":").map(Number);
+    const wallTime = dateEpoch + hour * HOUR + minute * MINUTE;
+    const candidates = dayOffsets(input.timezone, dateEpoch)
+      .map((offset) => wallTime - offset)
+      .filter((candidate) => candidate >= 0)
+      .sort((left, right) => left - right);
+    for (const candidate of candidates) {
+      const clock = localClock(input.timezone, candidate);
+      if (clock.dateEpoch === dateEpoch && clock.time === input.time) return candidate;
+    }
+  } catch {
+    // Invalid persisted or draft values must not break schedule lists/previews.
+  }
+  return null;
+}
+
+/**
  * Next eligible local minute, including the current minute when it is unconsumed.
- * Missed minutes and spring-forward gaps are skipped, never caught up.
+ * Missed minutes and spring-forward gaps are skipped, never caught up. A one-time
+ * schedule stays due through its grace period until its slot is consumed.
  */
 export function nextScheduleRun(
   input: ScheduleInput,
@@ -122,6 +179,11 @@ export function nextScheduleRun(
   lastSlot?: string | null,
 ): number | null {
   if (!validClockInput(input, now)) return null;
+  if (input.kind === "once") {
+    if (oneTimeScheduleSlot(input) === lastSlot) return null;
+    const runAt = oneTimeScheduleRun(input);
+    return runAt !== null && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS ? runAt : null;
+  }
   try {
     const current = localClock(input.timezone, now);
     const [hour, minute] = input.time.split(":").map(Number);
@@ -147,4 +209,13 @@ export function nextScheduleRun(
     // Invalid persisted or draft values must not break schedule lists/previews.
   }
   return null;
+}
+
+/** Today's date in a time zone, as YYYY-MM-DD, for one-time schedule defaults. */
+export function scheduleLocalDate(timezone: string, now: number): string | null {
+  try {
+    return localClock(timezone, now).date;
+  } catch {
+    return null;
+  }
 }

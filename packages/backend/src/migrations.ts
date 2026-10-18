@@ -161,6 +161,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
     `,
   },
+  {
+    // Schedules are now either recurring or one-time. Saved schedules were all
+    // recurring, so record that kind in their settings.
+    version: 8,
+    sql: `
+      UPDATE schedules SET input_json = json_set(input_json, '$.kind', 'recurring')
+        WHERE json_valid(input_json) AND json_type(input_json, '$.kind') IS NULL;
+    `,
+  },
 ];
 
 function schemaVersion(db: Database): number {

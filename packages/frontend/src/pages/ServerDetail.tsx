@@ -45,6 +45,7 @@ import { usePageRead } from "../hooks/usePageRead";
 import { useServerDetail, type ServerMutationOptions } from "../hooks/useServerDetail";
 
 const defaultSchedule: ScheduleInput = {
+  kind: "recurring",
   action: "start",
   createBackup: false,
   enabled: true,
@@ -71,10 +72,13 @@ function SettingsLoadState({ state, onReload }: {
 }
 
 function scheduleInput(item: Schedule): ScheduleInput {
-  return {
+  const base = {
     action: item.action, createBackup: item.createBackup, enabled: item.enabled, time: item.time,
-    days: [...item.days], timezone: item.timezone,
+    timezone: item.timezone,
   };
+  return item.kind === "once"
+    ? { ...base, kind: "once", date: item.date }
+    : { ...base, kind: "recurring", days: [...item.days] };
 }
 
 export default function ServerDetail({ serverId }: { serverId: string }) {

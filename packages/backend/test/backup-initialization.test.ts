@@ -146,7 +146,7 @@ describe("automatic backup storage setup", () => {
     database.createUser({ ...actor, passwordHash: "fixture", disabled: false, createdAt: 1 });
     const logical = reconcileServers([observed[0].observation])[0];
     const schedule = createSchedule(actor, logical.id, {
-      action: "backup", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
+      kind: "recurring", action: "backup", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
     });
     runSchedules(Date.parse("2026-09-15T08:00:00Z"));
     const attempt = database.getDatabase().query(

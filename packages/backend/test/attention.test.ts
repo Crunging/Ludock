@@ -29,6 +29,7 @@ const other: SessionUser = { id: crypto.randomUUID(), username: "other", role: "
 const viewer: SessionUser = { id: crypto.randomUUID(), username: "viewer", role: "viewer" };
 const now = 50_000;
 const scheduleInput: ScheduleInput = {
+  kind: "recurring",
   action: "start",
   createBackup: false,
   enabled: true,

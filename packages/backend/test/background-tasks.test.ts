@@ -22,7 +22,7 @@ it("evaluates due schedules during slow notifications and backup setup, then dra
     containerId: dockerId("background-fixture"), name: "world", displayName: "World", gameType: "minecraft", mounts: [],
   }])[0];
   const schedule = createSchedule(actor, server.id, {
-    action: "start", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
+    kind: "recurring", action: "start", enabled: true, time: "08:00", timezone: "UTC", days: [0, 1, 2, 3, 4, 5, 6],
   });
   const database = getDatabase();
   const discovery = spyOn(servers, "refreshServers").mockResolvedValue(new Map());

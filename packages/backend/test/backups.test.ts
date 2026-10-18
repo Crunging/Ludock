@@ -134,7 +134,7 @@ describe("backup execution authority", () => {
       "server.view", "backups.create", "schedules.manage",
     ], admin);
     const schedule = createSchedule(operator, context.logical.id, {
-      action: "backup", enabled: true, time: "08:00", days: [1], timezone: "UTC",
+      kind: "recurring", action: "backup", enabled: true, time: "08:00", days: [1], timezone: "UTC",
     });
     job.job.input = { scheduleId: schedule.id, scheduleRevision: schedule.revision };
     return schedule.id;

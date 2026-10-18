@@ -44,6 +44,7 @@ const originalList = docker.listContainers.bind(docker),
 let serverId: string,
   mutations = 0;
 const input = {
+  kind: "recurring" as const,
   action: "start" as const,
   enabled: true,
   time: "08:00",

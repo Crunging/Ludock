@@ -164,7 +164,7 @@ describe("graceful lifecycle operations", () => {
   });
   it("uses the same graceful stop and save steps for a scheduled restart", async () => {
     createSchedule(admin, serverId, {
-      action: "restart", enabled: true, time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
+      kind: "recurring", action: "restart", enabled: true, time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
     });
     runSchedules(Date.parse("2026-09-09T08:00:00Z"));
     const saved = getDatabase().query<{ id: string }, []>("SELECT id FROM operations").get()!;

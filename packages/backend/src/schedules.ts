@@ -1,5 +1,8 @@
 import {
   nextScheduleRun,
+  ONE_TIME_SCHEDULE_GRACE_MS,
+  oneTimeScheduleRun,
+  oneTimeScheduleSlot,
   operationSchema,
   scheduleEnabledRequestSchema,
   scheduleSchema,
@@ -75,6 +78,18 @@ class ScheduleUnavailableError extends AppError {
         : binding ? "SCHEDULE_BINDING_UNAVAILABLE" : "SCHEDULE_REVOKED",
       binding ? 409 : 403,
       unavailableMessages[reason],
+    );
+  }
+}
+
+class ScheduleMissedError extends AppError {
+  constructor(nonexistent: boolean) {
+    super(
+      "SCHEDULE_MISSED",
+      409,
+      nonexistent
+        ? "Missed: the scheduled local time doesn't exist in its time zone"
+        : "Missed: Ludock was not running at the scheduled time",
     );
   }
 }
@@ -158,15 +173,39 @@ function latestOperation(row: ScheduleRow): Operation | null {
   }
 }
 
+/** A one-time schedule is complete once its only slot has been consumed. */
+function oneTimeCompleted(row: ScheduleRow, data: ScheduleInput): boolean {
+  return data.kind === "once" && row.last_slot === oneTimeScheduleSlot(data);
+}
+
+/** One-time schedules must be saved or resumed with a time that is still ahead. */
+function assertOneTimeRunAhead(data: ScheduleInput, now = Date.now()): void {
+  if (data.kind !== "once") return;
+  const runAt = oneTimeScheduleRun(data);
+  if (runAt === null)
+    throw new AppError(
+      "SCHEDULE_TIME_INVALID",
+      400,
+      "That local time doesn't exist in the selected time zone. Choose another time.",
+    );
+  if (runAt < Math.floor(now / 60_000) * 60_000)
+    throw new AppError(
+      "SCHEDULE_TIME_PAST",
+      400,
+      "One-time schedules need a date and time in the future.",
+    );
+}
+
 function publicSchedule(
   row: ScheduleRow,
   now = Date.now(),
   checkAuthority: PreviewAuthority = scheduleAuthority,
 ) {
   const data = scheduleSchema.parse(JSON.parse(row.input_json));
+  const completed = oneTimeCompleted(row, data);
   let nextRunAt: number | null = null;
   let nextRunUnavailableReason: NextRunUnavailableReason | null = null;
-  if (data.enabled) {
+  if (data.enabled && !completed) {
     try {
       checkAuthority(row, data);
       nextRunAt = nextScheduleRun(data, now, row.last_slot);
@@ -188,6 +227,7 @@ function publicSchedule(
     revision: row.revision,
     nextRunAt,
     nextRunUnavailableReason,
+    completedAt: completed ? row.last_run_at : null,
   };
 }
 function scheduleManager(actor: SessionUser, serverId: string, allowUnavailable = false) {
@@ -232,6 +272,7 @@ export function createSchedule(
   assertServerCapability(actor, serverId, "schedules.manage");
   for (const capability of scheduleCapabilities(data))
     assertServerCapability(actor, serverId, capability);
+  assertOneTimeRunAhead(data);
   if (actor.id === "api-token")
     throw new AppError(
       "SCHEDULE_OWNER_REQUIRED",
@@ -313,6 +354,13 @@ export function deleteSchedule(
   });
 }
 
+/** Compares saved settings, treating days as a set. */
+function scheduleKey(data: ScheduleInput): string {
+  return JSON.stringify(data.kind === "recurring"
+    ? [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, [...new Set(data.days)].sort()]
+    : [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, data.date]);
+}
+
 function mutateSchedule(
   actor: SessionUser,
   serverId: string,
@@ -344,14 +392,10 @@ function mutateSchedule(
       for (const capability of scheduleCapabilities(data))
         assertServerCapability(actor, serverId, capability);
       scheduleAuthority(row, data);
+      // A consumed or past one-time run is rescheduled by editing, never replayed.
+      assertOneTimeRunAhead(data);
     }
-    const changed = previous.action !== data.action ||
-      previous.createBackup !== data.createBackup ||
-      previous.enabled !== data.enabled ||
-      previous.time !== data.time ||
-      previous.timezone !== data.timezone ||
-      previous.days.some((day) => !data.days.includes(day)) ||
-      data.days.some((day) => !previous.days.includes(day));
+    const changed = scheduleKey(previous) !== scheduleKey(data);
     if (!changed) return { result: row, changed };
     const inputJson = JSON.stringify(data);
     // Keep the original binding baseline, consumed clock slot, and history.
@@ -414,9 +458,17 @@ export function runSchedules(now = Date.now()): void {
     let configurationValid = false;
     try {
       const data = scheduleSchema.parse(JSON.parse(row.input_json));
-      if (!data.enabled) continue;
+      if (!data.enabled || oneTimeCompleted(row, data)) continue;
       slot = scheduleSlot(data, now);
       configurationValid = true;
+      if (data.kind === "once" && !slot) {
+        const runAt = oneTimeScheduleRun(data);
+        if (runAt !== null && now < runAt + ONE_TIME_SCHEDULE_GRACE_MS) continue;
+        // The run time passed while Ludock was stopped or the schedule could not
+        // be evaluated. Record it as missed instead of replaying it late.
+        slot = oneTimeScheduleSlot(data);
+        throw new ScheduleMissedError(runAt === null);
+      }
       if (!slot || slot === row.last_slot) continue;
       const db = getDatabase();
       db.transaction(() => {
@@ -448,7 +500,7 @@ export function runSchedules(now = Date.now()): void {
     } catch (error) {
       const reason = !configurationValid
         ? "Suspended: saved schedule configuration is invalid; recreate this schedule"
-        : error instanceof ScheduleUnavailableError
+        : error instanceof ScheduleMissedError || error instanceof ScheduleUnavailableError
           ? error.message
           : "Skipped: server state or a conflicting operation prevented this run";
       try {
