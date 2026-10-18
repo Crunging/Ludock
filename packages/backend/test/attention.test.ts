@@ -30,6 +30,7 @@ const viewer: SessionUser = { id: crypto.randomUUID(), username: "viewer", role:
 const now = 50_000;
 const scheduleInput: ScheduleInput = {
   action: "start",
+  createBackup: false,
   enabled: true,
   time: "08:00",
   days: [0, 1, 2, 3, 4, 5, 6],

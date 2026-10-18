@@ -381,6 +381,10 @@ New schedules use your browser's time zone; search for another by city or choose
 **Use my time zone**. **Every day**, **Weekdays**, and **Weekends** select days
 in one click, and **Create paused** saves a schedule without running it.
 
+Restart schedules can **Create a backup before restarting**, which works like
+**Take a backup first** in the Restart dialog. It needs backup access too, and
+the server must be running when the schedule runs.
+
 - **Who:** operators manage their own schedules and administrators manage all of
   them. A schedule runs with its owner's current access. Editing or resuming
   needs both schedule access and access to the action; pausing doesn't.

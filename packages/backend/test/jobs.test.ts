@@ -167,6 +167,11 @@ describe("queued operation authority", () => {
     setScheduleEnabled(friend, serverId, scheduleId, { enabled: true, revision: 2 });
     expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
   });
+  it("rejects queued work whose backup option doesn't match the schedule", () => {
+    const { context } = scheduled();
+    context.job.input = { ...context.job.input, createBackup: true };
+    expect(() => jobActor(context)).toThrow(/deleted, disabled, or changed/);
+  });
   it("rechecks action grants before a scheduled job touches Docker", async () => {
     const { context } = scheduled();
     setServerGrant(

@@ -21,6 +21,7 @@ import * as notifications from "../src/notifications.js";
 import { getAvailability } from "../src/monitoring.js";
 import type { JobContext } from "../src/operations.js";
 import { AppError } from "../src/errors.js";
+import { createSchedule, runSchedules } from "../src/schedules.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin = { id: "admin", username: "admin", role: "admin" as const };
@@ -339,4 +340,51 @@ describe("restarts with a backup", () => {
       expect(getOperation(operation.id)?.status).toBe("interrupted");
       expect(calls).toEqual(startedSinceStop ? [] : ["start"]);
     });
+});
+
+describe("scheduled restarts with a backup", () => {
+  const owner = ["server.view", "server.restart", "backups.create", "schedules.manage"] as const;
+  function enqueueScheduled() {
+    setServerGrant(operator.id, serverId, [...owner], admin);
+    createSchedule(operator, serverId, {
+      action: "restart", createBackup: true, enabled: true,
+      time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
+    });
+    runSchedules(Date.parse("2026-09-09T08:00:00Z"));
+    return listOperationHistory(operator, { serverId, limit: 1 }).operations[0];
+  }
+  const revoke = (capability: typeof owner[number]) =>
+    setServerGrant(operator.id, serverId, owner.filter((granted) => granted !== capability), admin);
+
+  it("keeps the server stopped during the backup and starts it once", async () => {
+    spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
+      expect(running).toBe(false);
+      calls.push("backup");
+      return completedBackup(job);
+    });
+    const operation = enqueueScheduled();
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("succeeded");
+    expect(calls).toEqual(["save", "stop", "backup", "start"]);
+  });
+  for (const capability of ["backups.create", "schedules.manage"] as const)
+    it(`rechecks ${capability} before changing the server`, async () => {
+      const operation = enqueueScheduled();
+      revoke(capability);
+      await startOperationRunner();
+      expect((await finished(operation.id)).status).toBe("failed");
+      expect(calls).toEqual([]);
+    });
+  it("rechecks schedules.manage after the backup", async () => {
+    spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
+      revoke("schedules.manage");
+      return completedBackup(job);
+    });
+    const operation = enqueueScheduled();
+    await startOperationRunner();
+    expect((await finished(operation.id)).status).toBe("failed");
+    // With a completed backup, the only start returns the server to its initial running state.
+    expect(calls).toEqual(["save", "stop", "start"]);
+    expect(getOperation(operation.id)?.phase).not.toBe("started");
+  });
 });

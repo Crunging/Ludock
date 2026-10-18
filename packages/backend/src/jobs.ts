@@ -66,7 +66,8 @@ export function jobActor(context: JobContext): SessionUser {
       schedule.owner_id !== id ||
       context.job.input.scheduleRevision !== schedule.revision ||
       !settings?.enabled ||
-      settings.action !== context.job.kind
+      settings.action !== context.job.kind ||
+      settings.createBackup !== (context.job.input.createBackup === true)
     )
       throw new AppError(
         "SCHEDULE_REVOKED",

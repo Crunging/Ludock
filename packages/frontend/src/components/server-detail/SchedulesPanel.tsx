@@ -38,6 +38,7 @@ interface Props {
   conflict: boolean;
   onDraftChange: (value: ScheduleInput) => void;
   scheduleActions: ScheduleInput["action"][];
+  canCreateBackup: boolean;
   busy: boolean;
   saving: boolean;
   blocked: boolean;
@@ -102,7 +103,7 @@ export default function SchedulesPanel(props: Props) {
     return parsed.success ? nextScheduleRun({ ...parsed.data, enabled: true }, now, saved?.lastSlot) : null;
   }, [schedule, now, saved?.lastSlot]);
   const missing = Boolean(editing && !saved && props.snapshotReady !== false);
-  const canSave = !busy && !blocked && !conflict && !missing && preview !== null && scheduleActions.includes(schedule.action);
+  const canSave = !busy && !blocked && !conflict && !missing && preview !== null && scheduleActions.includes(schedule.action) && (!schedule.createBackup || props.canCreateBackup);
   const showForm = editing || scheduleActions.length > 0;
 
   return (
@@ -140,7 +141,7 @@ export default function SchedulesPanel(props: Props) {
             )}
             {schedules.map((item) => (
               <tr key={item.id} id={`schedule-${item.id}`} tabIndex={-1} aria-current={editing?.id === item.id || props.selectedScheduleId === item.id ? "true" : undefined}>
-                <td className="capitalize">{item.action}</td>
+                <td className="capitalize">{item.action}{item.createBackup && <> <small className="table-detail">Backup before restart</small></>}</td>
                 <td>{when(item)}<small className="table-detail">{item.timezone}</small></td>
                 <td>{item.enabled ? "Enabled" : "Paused"}</td>
                 <td className="schedule-next-run">
@@ -169,7 +170,7 @@ export default function SchedulesPanel(props: Props) {
                     >Edit</button>
                     <button
                       type="button" className="secondary-btn"
-                      disabled={busy || Boolean(editing) || (!item.enabled && (blocked || !scheduleActions.includes(item.action)))}
+                      disabled={busy || Boolean(editing) || (!item.enabled && (blocked || !scheduleActions.includes(item.action) || (item.createBackup && !props.canCreateBackup)))}
                       onClick={() => onToggle(item)}
                     >{item.enabled ? "Pause" : "Resume"}</button>
                     <button
@@ -192,7 +193,7 @@ export default function SchedulesPanel(props: Props) {
           {conflict && saved && (
             <div className="schedule-conflict" role="alert">
               <p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
-              <p><strong>Current saved settings:</strong> {saved.action} · {when(saved)} · {saved.timezone} · {saved.enabled ? "Enabled" : "Paused"}</p>
+              <p><strong>Current saved settings:</strong> {saved.action}{saved.createBackup ? " with backup before restart" : ""} · {when(saved)} · {saved.timezone} · {saved.enabled ? "Enabled" : "Paused"}</p>
               <div className="inline-actions">
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(false)}>Keep my draft</button>
                 <button type="button" className="secondary-btn" disabled={busy} onClick={() => onResolveConflict(true)}>Load saved settings</button>
@@ -201,7 +202,10 @@ export default function SchedulesPanel(props: Props) {
           )}
           <div className="form-columns">
             <label>Action
-              <select value={scheduleActions.includes(schedule.action) ? schedule.action : ""} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, action: event.target.value as ScheduleInput["action"] })} required>
+              <select value={scheduleActions.includes(schedule.action) ? schedule.action : ""} disabled={saving} onChange={(event) => {
+                const action = event.target.value as ScheduleInput["action"];
+                onDraftChange({ ...schedule, action, createBackup: action === "restart" && schedule.createBackup });
+              }} required>
                 <option value="" disabled>Select action</option>
                 {scheduleActions.map((action) => <option key={action} value={action}>{action.charAt(0).toUpperCase() + action.slice(1)}</option>)}
               </select>
@@ -234,6 +238,12 @@ export default function SchedulesPanel(props: Props) {
               </label>
             ))}
           </fieldset>
+          {schedule.action === "restart" && (props.canCreateBackup || schedule.createBackup) && (
+            <label className="check-label">
+              <input type="checkbox" checked={schedule.createBackup} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, createBackup: event.target.checked })} />
+              Create a backup before restarting
+            </label>
+          )}
           {!editing && (
             <label className="check-label">
               <input type="checkbox" checked={!schedule.enabled} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, enabled: !event.target.checked })} />
@@ -245,7 +255,10 @@ export default function SchedulesPanel(props: Props) {
             {preview === null ? "Choose a valid time, time zone, and at least one day." : formatRun(preview, schedule.timezone, now)}
             <small className="table-detail">Preview assumes the owner has access and the server binding is active.</small>
           </p>
-          <p className="schedule-form-note">{actionHelp[schedule.action]}</p>
+          <p className="schedule-form-note">
+            {actionHelp[schedule.action]}
+            {schedule.createBackup && " The server must be running. It stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."}
+          </p>
           <div className="inline-actions schedule-form-actions">
             <button className="primary-btn" disabled={!canSave}>{editing ? "Save changes" : "Add schedule"}</button>
             {editing && <button type="button" className="secondary-btn" disabled={saving} onClick={onCancelEdit}>Cancel editing</button>}

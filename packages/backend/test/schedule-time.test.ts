@@ -7,6 +7,7 @@ import {
 
 const input: ScheduleInput = {
   action: "restart",
+  createBackup: false,
   enabled: true,
   time: "09:30",
   days: [1, 3],
