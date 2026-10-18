@@ -120,19 +120,18 @@ describe("schedules", () => {
     expect(JSON.parse(writes("PUT")[1][2]!.body as string)).toMatchObject({ createBackup: false, revision: 2 });
   });
 
-  it("requires backup access to select the option but allows removing it after access is revoked", async () => {
+  it("offers the option only with backup access but allows removing it after access is revoked", async () => {
     detail({ backupAccess: false, saved: { createBackup: true, enabled: false, nextRunAt: null } });
     await openSchedules();
     expect((screen.getByRole("button", { name: "Resume", exact: true }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Action", exact: true }), "restart");
-    const backup = () => screen.getByRole("checkbox", { name: "Create a backup before restarting" }) as HTMLInputElement;
-    expect(backup().disabled).toBe(true);
+    const backup = () => screen.queryByRole("checkbox", { name: "Create a backup before restarting" }) as HTMLInputElement | null;
+    expect(backup()).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
-    expect(backup().checked).toBe(true);
-    expect(backup().disabled).toBe(false);
+    expect(backup()?.checked).toBe(true);
     expect(save().disabled).toBe(true);
-    await userEvent.click(backup());
-    expect(backup().disabled).toBe(true);
+    await userEvent.click(backup()!);
+    expect(backup()).toBeNull();
     expect(save().disabled).toBe(false);
     await userEvent.click(save());
     await screen.findByText("Schedule saved.");

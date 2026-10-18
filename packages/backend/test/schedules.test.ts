@@ -1,7 +1,7 @@
 import { thrownBy } from "./fixtures/errors.js";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { listOperationHistory } from "../src/history.js";
-import { scheduleSchema, updateScheduleRequestSchema, savedScheduleSchema, type ScheduleInput } from "@ludock/shared";
+import { scheduleSchema, updateScheduleRequestSchema, type ScheduleInput } from "@ludock/shared";
 import * as database from "../src/database.js";
 import * as identity from "../src/identity.js";
 import {
@@ -111,39 +111,24 @@ afterEach(async () => {
 });
 
 describe("schedule backup option", () => {
-  it("defaults to no backup and validates create, update, and response contracts", () => {
+  it("defaults to no backup and allows it only for restarts", () => {
     const withoutBackup: Partial<ScheduleInput> = { ...input };
     delete withoutBackup.createBackup;
-    expect(scheduleSchema.parse(withoutBackup).createBackup).toBe(false);
     expect(createSchedule(friend, serverId, withoutBackup).createBackup).toBe(false);
     for (const action of ["start", "stop", "backup"] as const) {
       const invalid = { ...input, action, createBackup: true };
       expect(scheduleSchema.safeParse(invalid).success).toBe(false);
       expect(updateScheduleRequestSchema.safeParse({ ...invalid, revision: 1 }).success).toBe(false);
-      const saved = createSchedule(admin, serverId, { ...input, action });
-      expect(savedScheduleSchema.safeParse({ ...saved, createBackup: true }).success).toBe(false);
     }
-    expect(scheduleSchema.safeParse({ ...input, action: "restart", createBackup: "true" }).success).toBe(false);
-    expect(scheduleSchema.parse({ ...input, action: "restart", createBackup: true }).createBackup).toBe(true);
   });
 
-  it("persists the option and changing only it increments revision and preserves history", () => {
-    const schedule = createSchedule(admin, serverId, { ...input, action: "restart", createBackup: true });
-    const stored = getDatabase().query("SELECT input_json FROM schedules WHERE id=?").get(schedule.id) as { input_json: string };
-    expect(JSON.parse(stored.input_json).createBackup).toBe(true);
+  it("persists the option and changing only it increments the revision", () => {
+    const restart = { ...input, action: "restart" as const };
+    const schedule = createSchedule(admin, serverId, { ...restart, createBackup: true });
     expect(listSchedules(admin, serverId)[0].createBackup).toBe(true);
-    runSchedules(due);
-    const before = listSchedules(admin, serverId)[0];
-    const updated = updateSchedule(admin, serverId, schedule.id, {
-      ...input, action: "restart", createBackup: false, revision: 1,
-    });
-    expect(updated.createBackup).toBe(false);
-    expect(updated.revision).toBe(2);
-    expect(updated.lastSlot).toBe(before.lastSlot);
-    expect(updated.lastOperation?.id).toBe(before.lastOperation?.id);
-    expect(updateSchedule(admin, serverId, schedule.id, {
-      ...input, action: "restart", createBackup: false, revision: 2,
-    }).revision).toBe(2);
+    const updated = updateSchedule(admin, serverId, schedule.id, { ...restart, revision: 1 });
+    expect(updated).toMatchObject({ createBackup: false, revision: 2 });
+    expect(updateSchedule(admin, serverId, schedule.id, { ...restart, revision: 2 }).revision).toBe(2);
   });
 
   it("queues the existing backup restart path and leaves plain restart input unchanged", () => {

@@ -381,14 +381,9 @@ New schedules use your browser's time zone; search for another by city or choose
 **Use my time zone**. **Every day**, **Weekdays**, and **Weekends** select days
 in one click, and **Create paused** saves a schedule without running it.
 
-For restart schedules, **Create a backup before restarting** uses the same
-stopped-server backup flow as a manual restart. It is off by default and requires
-both restart and backup creation access for the requester and schedule owner.
-At each run, the server must be running and backup storage must be ready; otherwise
-the operation fails without stopping it. The server stays stopped during the
-backup and starts once after it succeeds. If the backup fails after stopping,
-the server stays stopped for review. Interrupted operations are reconciled,
-never replayed. The schedule list shows which restarts include a backup.
+Restart schedules can **Create a backup before restarting**, which works like
+**Take a backup first** in the Restart dialog. It needs backup access too, and
+the server must be running when the schedule runs.
 
 - **Who:** operators manage their own schedules and administrators manage all of
   them. A schedule runs with its owner's current access. Editing or resuming

@@ -218,18 +218,6 @@ export default function SchedulesPanel(props: Props) {
               <datalist id={timezoneId}>{timezoneOptions}</datalist>
             </label>
           </div>
-          {schedule.action === "restart" && (
-            <>
-              <label className="check-label">
-                <input type="checkbox" checked={schedule.createBackup} disabled={saving || (!props.canCreateBackup && !schedule.createBackup)} onChange={(event) => onDraftChange({ ...schedule, createBackup: event.target.checked })} />
-                Create a backup before restarting
-              </label>
-              <p className="schedule-form-note">
-                The server must be running and backup storage must be ready at each run. It stays stopped during the backup and starts once after success. If the backup fails after stopping, the server stays stopped for review.
-                {!props.canCreateBackup && " An administrator must grant backup creation access to use this option."}
-              </p>
-            </>
-          )}
           <div className="inline-actions">
             <p className="muted" id={`${timezoneId}-help`}>Search by city, for example London or Los_Angeles. Times follow this zone, including daylight saving.</p>
             <button type="button" className="secondary-btn" disabled={saving} onClick={() => onDraftChange({ ...schedule, timezone: localTimezone })}>Use my time zone ({localTimezone})</button>
@@ -250,6 +238,12 @@ export default function SchedulesPanel(props: Props) {
               </label>
             ))}
           </fieldset>
+          {schedule.action === "restart" && (props.canCreateBackup || schedule.createBackup) && (
+            <label className="check-label">
+              <input type="checkbox" checked={schedule.createBackup} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, createBackup: event.target.checked })} />
+              Create a backup before restarting
+            </label>
+          )}
           {!editing && (
             <label className="check-label">
               <input type="checkbox" checked={!schedule.enabled} disabled={saving} onChange={(event) => onDraftChange({ ...schedule, enabled: !event.target.checked })} />
@@ -261,7 +255,10 @@ export default function SchedulesPanel(props: Props) {
             {preview === null ? "Choose a valid time, time zone, and at least one day." : formatRun(preview, schedule.timezone, now)}
             <small className="table-detail">Preview assumes the owner has access and the server binding is active.</small>
           </p>
-          <p className="schedule-form-note">{actionHelp[schedule.action]}</p>
+          <p className="schedule-form-note">
+            {actionHelp[schedule.action]}
+            {schedule.createBackup && " The server must be running. It stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."}
+          </p>
           <div className="inline-actions schedule-form-actions">
             <button className="primary-btn" disabled={!canSave}>{editing ? "Save changes" : "Add schedule"}</button>
             {editing && <button type="button" className="secondary-btn" disabled={saving} onClick={onCancelEdit}>Cancel editing</button>}
