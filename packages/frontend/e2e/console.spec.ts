@@ -51,3 +51,72 @@ test("exhausted reconnects require Retry and fresh access before sending", async
     .toBeGreaterThan(previousReads);
   expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
 });
+
+test("shortcuts and command history work alongside the unsent draft", async ({ app, page }) => {
+  await app.open(`/console/${RUNNING_ID}`);
+  const command = page.getByRole("textbox", { name: "Game command", exact: true });
+  const output = page.locator(".xterm-rows");
+  const sent = () => app.sockets.flatMap((socket) => socket.messages).map((message) => JSON.parse(message).data);
+  await expect(page.getByRole("status").filter({ hasText: "Connected" })).toBeVisible();
+  await command.fill("whitelist add Steve");
+  await page.getByRole("button", { name: "List players", exact: true }).click();
+  await expect.poll(sent).toEqual(["list"]);
+  await expect(command).toHaveValue("whitelist add Steve");
+  await app.sockets[0].route.send(JSON.stringify({ type: "stdout", data: "There are 0 of a max of 20 players online\n" }));
+  await expect(output).toContainText("> list");
+  await expect(output).toContainText("There are 0 of a max of 20 players online");
+  // Shortcuts that need more input only prefill the command.
+  await page.getByRole("button", { name: "Message players", exact: true }).click();
+  await expect(command).toHaveValue("say ");
+  expect(sent()).toEqual(["list"]);
+
+  await command.fill("time set day");
+  await command.press("Enter");
+  await command.fill("weather clear");
+  await command.press("Enter");
+  await expect.poll(sent).toEqual(["list", "time set day", "weather clear"]);
+  await command.fill("difficulty");
+  await command.press("ArrowUp");
+  await expect(command).toHaveValue("weather clear");
+  await command.press("ArrowUp");
+  await command.press("ArrowUp");
+  await command.press("ArrowUp");
+  await expect(command).toHaveValue("list");
+  await command.press("ArrowDown");
+  await expect(command).toHaveValue("time set day");
+  await command.press("ArrowDown");
+  await command.press("ArrowDown");
+  await expect(command).toHaveValue("difficulty");
+  expect(sent()).toEqual(["list", "time set day", "weather clear"]);
+});
+
+test("reconnecting rechecks access, falls back to logs, and fails closed when access ends", async ({ app, page }) => {
+  await page.clock.install();
+  app.user = { ...app.user!, role: "operator" };
+  await app.open(`/console/${RUNNING_ID}`);
+  const command = page.getByRole("textbox", { name: "Game command", exact: true });
+  await command.fill("list");
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+  await expect.poll(() => app.sockets.map((socket) => socket.path)).toEqual([`/ws/v1/game-console/${RUNNING_ID}`]);
+
+  app.servers[0].permissions = ["server.view", "logs.read"];
+  await app.sockets[0].route.close({ code: 1011, reason: "Fixture interruption" });
+  await page.clock.runFor(2_100);
+  await expect(command).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveText(["Docker Logs"]);
+  await expect.poll(() => app.sockets.at(-1)?.path).toBe(`/ws/v1/logs/${RUNNING_ID}`);
+  await page.clock.runFor(100);
+  await expect(page.locator(".xterm-rows")).toContainText("Switched to Docker Logs");
+
+  app.servers = app.servers.filter((server) => server.id !== RUNNING_ID);
+  const socketsBeforeRevocation = app.sockets.length;
+  await app.sockets.at(-1)!.route.close({ code: 1011, reason: "Fixture interruption after revocation" });
+  await page.clock.runFor(2_100);
+  await expect(page.getByRole("alert")).toContainText("Reload details to check your access");
+  await expect(page.getByRole("tablist")).toHaveCount(0);
+  const socketsAfterDenial = app.sockets.length;
+  expect(socketsAfterDenial).toBeGreaterThan(socketsBeforeRevocation);
+  await page.clock.runFor(25_000);
+  expect(app.sockets).toHaveLength(socketsAfterDenial);
+  expect(app.sockets.flatMap((socket) => socket.messages)).toEqual([]);
+});
