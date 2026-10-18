@@ -1,8 +1,8 @@
 import path from "node:path";
 import { AppError } from "./errors.js";
 
-/** Held keys. Jobs wait for background holders instead of failing. */
-const active = new Map<string, { background: boolean }>();
+/** Held keys. Jobs cancel background holders and wait instead of failing. */
+const active = new Map<string, { background?: AbortController }>();
 const drained = new Set<() => void>();
 let releasedWaiters: { promise: Promise<void>; resolve: () => void } | undefined;
 const normalizeKey = (key: string) =>
@@ -18,23 +18,30 @@ const overlaps = (left: string, right: string) =>
 
 /** A conflict only with background work, such as a countdown warning. */
 export class BackgroundLockConflict extends AppError {
-  constructor() {
+  constructor(private readonly holders: readonly AbortController[]) {
     super("OPERATION_CONFLICT", 409, "A conflicting operation is already running");
+  }
+
+  /** The holders keep their keys until their cleanup finishes. */
+  cancel(): void {
+    for (const holder of this.holders) holder.abort();
   }
 }
 
-export function acquireLocks(keys: readonly string[], options?: { background?: boolean }): () => void {
+export function acquireLocks(keys: readonly string[], options?: { background?: AbortController }): () => void {
   const ordered = [...new Set(keys.map(normalizeKey))].sort();
-  const conflicts = [...active].filter(([held]) => ordered.some((key) => overlaps(key, held)));
+  const conflicts = [...active]
+    .filter(([held]) => ordered.some((key) => overlaps(key, held)))
+    .map(([, holder]) => holder.background);
   if (conflicts.length) {
-    if (conflicts.every(([, holder]) => holder.background)) throw new BackgroundLockConflict();
+    if (conflicts.every((holder) => holder !== undefined)) throw new BackgroundLockConflict(conflicts);
     throw new AppError(
       "OPERATION_CONFLICT",
       409,
       "A conflicting operation is already running",
     );
   }
-  ordered.forEach((key) => active.set(key, { background: options?.background === true }));
+  ordered.forEach((key) => active.set(key, { background: options?.background }));
   let released = false;
   return () => {
     if (!released) {
@@ -52,7 +59,7 @@ export function acquireLocks(keys: readonly string[], options?: { background?: b
 export async function withLocks<T>(
   keys: readonly string[],
   action: () => Promise<T> | T,
-  options?: { background?: boolean },
+  options?: { background?: AbortController },
 ): Promise<T> {
   const release = acquireLocks(keys, options);
   try {

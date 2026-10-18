@@ -54,7 +54,8 @@ const inFlight = new Set<Promise<void>>();
 let jobSettled: { promise: Promise<void>; resolve: () => void } | undefined;
 
 class ResourcesBusy extends Error {
-  constructor(readonly released: Promise<void>) {
+  /** holdsQueue: the holder is another job, so no new work starts meanwhile. */
+  constructor(readonly released: Promise<void>, readonly holdsQueue = true) {
     super("Operation resources are busy");
   }
 }
@@ -272,8 +273,9 @@ function notifyScheduledFailure(row: OperationRow): void {
 /** Acquire a job's resources. Handlers call this before any effect: if
  * another job holds them, this job returns to the queue and runs again from
  * the start once they are released, as it would have run after that job.
- * A job also waits for background work. Conflicts with requests outside the
- * runner fail as before. */
+ * A job cancels background work holding its resources and waits for its
+ * cleanup without holding back other jobs. Conflicts with requests outside
+ * the runner fail as before. */
 export async function withJobLocks<T>(
   context: JobContext,
   keys: readonly string[],
@@ -284,9 +286,14 @@ export async function withJobLocks<T>(
   try {
     release = acquireLocks(keys);
   } catch (error) {
+    if (claimed.has(id) && error instanceof BackgroundLockConflict) {
+      const released = nextLockRelease();
+      error.cancel();
+      if (yielded.delete(id)) schedule();
+      throw new ResourcesBusy(released, false);
+    }
     if (claimed.has(id) && error instanceof AppError && error.code === "OPERATION_CONFLICT" &&
-        (error instanceof BackgroundLockConflict ||
-          [...claimed].some((other) => other !== id && !yielded.has(other))))
+        [...claimed].some((other) => other !== id && !yielded.has(other)))
       throw new ResourcesBusy(nextLockRelease());
     if (yielded.delete(id)) schedule();
     throw error;
@@ -374,7 +381,7 @@ async function runJob(initial: OperationRow) {
         getDatabase()
           .query("UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?")
           .run(Date.now(), job.id);
-        yielded.add(job.id);
+        if (error.holdsQueue) yielded.add(job.id);
         await Promise.race([error.released, nextJobSettled()]);
         const current = getDatabase()
           .query("SELECT * FROM operations WHERE id = ?")

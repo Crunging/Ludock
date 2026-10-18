@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest, mock, spyOn } from "bun:test";
 import { scheduleSchema } from "@ludock/shared";
 import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src/database.js";
 import { reconcileServers } from "../src/identity.js";
@@ -196,5 +196,66 @@ describe("restart countdown announcements", () => {
     await waitForScheduleAnnouncements();
     await until(() => operations.getOperation(id)?.status === "succeeded");
     expect(effects).toBe(1);
+  });
+
+  it("skips a warning without time to finish before its restart", async () => {
+    createSchedule(friend, serverId, { ...input, announcements: { leadMinutes: [1] } });
+    now = due - 29_999;
+    await announce();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("cancels a stalled warning before its restart", async () => {
+    createSchedule(friend, serverId, { ...input, announcements: { leadMinutes: [1] } });
+    let signal: AbortSignal | undefined;
+    send.mockImplementation(async (...args) => {
+      signal = args[6];
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+    });
+    now = due - 60_000;
+    jest.useFakeTimers();
+    try {
+      runScheduleAnnouncements();
+      for (let tick = 0; tick < 20 && !signal; tick++) await Promise.resolve();
+      jest.advanceTimersByTime(44_999);
+      expect(signal?.aborted).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+    await waitForScheduleAnnouncements();
+    expect(isServerBusy(serverId)).toBe(false);
+  });
+
+  it("cancels a warning for a job and keeps other jobs running during its cleanup", async () => {
+    const cleanup = Promise.withResolvers<void>();
+    let signal: AbortSignal | undefined;
+    const effects: string[] = [];
+    createSchedule(admin, serverId, { ...input, announcements: { leadMinutes: [5] } });
+    send.mockImplementation(async (...args) => {
+      signal = args[6];
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      await cleanup.promise;
+    });
+    for (const [kind, keys] of [["restart", context.lockKeys], ["start", ["server:unrelated"]]] as const)
+      operations.registerJobHandler(kind, {
+        run: (job) => operations.withJobLocks(job, keys, () => { effects.push(kind); }),
+      });
+    now = due - 5 * 60_000;
+    runScheduleAnnouncements();
+    await until(() => send.mock.calls.length === 1);
+    const restart = operations.enqueueOperation({ serverId, actorId: admin.id, kind: "restart", bindingRevision: 1 });
+    await operations.startOperationRunner();
+    await until(() => signal?.aborted === true);
+    const other = reconcileServers([context.observation, { ...context.observation, containerId: dockerId("unrelated"), name: "other", displayName: "Other" }])
+      .find((server) => server.id !== serverId)!;
+    const unrelated = operations.enqueueOperation({ serverId: other.id, actorId: admin.id, kind: "start", bindingRevision: 1 });
+    await until(() => operations.getOperation(unrelated.id)?.status === "succeeded");
+    expect(operations.getOperation(restart.id)?.status).toBe("queued");
+    cleanup.resolve();
+    await waitForScheduleAnnouncements();
+    await until(() => operations.getOperation(restart.id)?.status === "succeeded");
+    expect(effects).toEqual(["start", "restart"]);
   });
 });

@@ -413,8 +413,10 @@ Terraria. Players see, for example, `Server restart in 5 minutes.`
 
 Warnings are best effort. One is skipped if the server is stopped or busy, the
 console fails, its time was missed, or the owner lost console access. Each
-warning is tried at most once, even if Ludock restarts. A restart that comes due
-while a warning is still sending waits for it to finish.
+warning is tried at most once, even if Ludock restarts. A warning still sending
+15 seconds before its restart is cancelled, and one that cannot start at least
+30 seconds before is skipped. Any operation that needs the server, including the
+restart, cancels a warning and waits only for its console cleanup.
 
 ## Availability alerts
 

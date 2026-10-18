@@ -530,37 +530,50 @@ export function runSchedules(now = Date.now()): void {
 }
 
 const announcing = new Map<string, Promise<void>>();
+/** A warning is cancelled this long before its restart, leaving time for cleanup. */
+const ANNOUNCEMENT_CUTOFF_MS = 15_000;
+/** A warning starts only if it can run this long before the cutoff. */
+const ANNOUNCEMENT_MIN_RUNTIME_MS = 15_000;
 
 async function announce(row: ScheduleRow, data: ScheduleInput, runAt: number, lead: number) {
+  // A job that needs the server also cancels the warning; either way the locks
+  // are held only until the console command's cleanup finishes.
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), runAt - ANNOUNCEMENT_CUTOFF_MS - Date.now());
+  deadline.unref();
   const assertCurrent = () => {
     const latest = getDatabase().query("SELECT * FROM schedules WHERE id=?").get(row.id) as ScheduleRow | null;
-    if (!latest || latest.revision !== row.revision || Date.now() >= runAt)
+    if (!latest || latest.revision !== row.revision || controller.signal.aborted ||
+        Date.now() >= runAt - ANNOUNCEMENT_CUTOFF_MS)
       throw new Error("The announcement is no longer current");
     const authority = scheduleAuthority(latest, data);
     assertServerCapability(authority.user, row.server_id, "console.execute");
     return authority;
   };
-  const { user, binding } = assertCurrent();
-  const initial = await resolveAuthorizedServer(user, row.server_id, "console.execute", binding.bindingRevision);
-  // Background locks make a due restart wait for console cleanup, not fail.
-  await withLocks(initial.lockKeys, async () => {
-    const current = await resolveAuthorizedServer(
-      assertCurrent().user, row.server_id, "console.execute", binding.bindingRevision,
-    );
-    const adapter = resolveGameConsoleAdapter(current.container);
-    const template = resolveBroadcastTemplate(current.container);
-    if (!adapter || !template) return;
-    const message = `Server restart in ${lead} minute${lead === 1 ? "" : "s"}.`;
-    await executeGameCommand(getContainer(current.container.id), current.container, adapter,
-      template.replace("{message}", message), { stdout() {}, stderr() {}, system() {} }, () => {
-        assertCurrent();
-        assertObservedServerBinding(row.server_id, current.observation, binding.bindingRevision);
-      });
-  }, { background: true });
+  try {
+    const { user, binding } = assertCurrent();
+    const initial = await resolveAuthorizedServer(user, row.server_id, "console.execute", binding.bindingRevision);
+    await withLocks(initial.lockKeys, async () => {
+      const current = await resolveAuthorizedServer(
+        assertCurrent().user, row.server_id, "console.execute", binding.bindingRevision,
+      );
+      const adapter = resolveGameConsoleAdapter(current.container);
+      const template = resolveBroadcastTemplate(current.container);
+      if (!adapter || !template) return;
+      const message = `Server restart in ${lead} minute${lead === 1 ? "" : "s"}.`;
+      await executeGameCommand(getContainer(current.container.id), current.container, adapter,
+        template.replace("{message}", message), { stdout() {}, stderr() {}, system() {} }, () => {
+          assertCurrent();
+          assertObservedServerBinding(row.server_id, current.observation, binding.bindingRevision);
+        }, controller.signal);
+    }, { background: controller });
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 /** Best effort: each lead time of a run is attempted at most once, during its
- * minute, with at most one warning per server at a time. */
+ * minute and before the cutoff, with at most one warning per server at a time. */
 export function runScheduleAnnouncements(now = Date.now()): void {
   const rows = getDatabase()
     .query("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
@@ -574,7 +587,7 @@ export function runScheduleAnnouncements(now = Date.now()): void {
       if (runAt === null) continue;
       const lead = data.announcements.leadMinutes.find((minutes) =>
         now >= runAt - minutes * 60_000 && now < runAt - (minutes - 1) * 60_000);
-      if (lead === undefined) continue;
+      if (lead === undefined || runAt - now < ANNOUNCEMENT_CUTOFF_MS + ANNOUNCEMENT_MIN_RUNTIME_MS) continue;
       // Claim before sending, so restarting Ludock never repeats a warning.
       const claim = `${scheduleSlot(data, runAt)}:${lead}`;
       const claimed = getDatabase()
