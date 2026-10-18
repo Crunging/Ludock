@@ -286,6 +286,17 @@ describe("schedules", () => {
     expect((screen.getByLabelText("Date") as HTMLInputElement).value).toBe(scheduleLocalDate("UTC", Date.now())!);
   });
 
+  it("keeps the new draft's chosen days while another schedule is edited", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "Weekends" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Once" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel editing" }));
+    await userEvent.click(screen.getByRole("radio", { name: "On chosen days" }));
+    expect(screen.getByRole("button", { name: "Weekends" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("shows a completed one-time schedule without a next run or resume", async () => {
     detail({ saved: completedOnce });
     await openSchedules();
