@@ -17,21 +17,32 @@ const itemPath = `${base}/schedules/77777777-7777-4777-8777-777777777777`;
 
 function detail({
   onRequest,
+  saved,
+  backupAccess = true,
 }: {
   onRequest?: (path: string, init?: RequestInit) => unknown | Promise<unknown>;
+  saved?: Partial<Schedule>;
+  backupAccess?: boolean;
 } = {}) {
   window.history.replaceState({}, "", base);
-  let schedule = scheduleFixture(server.id);
+  let schedule = scheduleFixture(server.id, saved);
+  const visibleServer = backupAccess ? server : {
+    ...server, permissions: server.permissions.filter((capability) => capability !== "backups.create"),
+  };
   apiJsonMock.mockImplementation(async (path, _schema, init) => {
     const custom = await onRequest?.(path, init);
     if (custom !== undefined) return custom;
+    if (path === `${base}/schedules` && init?.method === "POST") {
+      schedule = { ...schedule, ...JSON.parse(init.body as string) };
+      return { schedule };
+    }
     if (path === itemPath && init?.method === "PUT") {
       const input = JSON.parse(init.body as string);
       schedule = { ...schedule, ...input, revision: schedule.revision + 1 };
       schedule.nextRunAt = nextScheduleRun(schedule, Date.now(), schedule.lastSlot);
       return { schedule };
     }
-    return serverDetailResponse(path, server, {
+    return serverDetailResponse(path, visibleServer, {
       schedules: [schedule],
       operations: [],
     });
@@ -72,6 +83,62 @@ function draftTimezone(value: string) {
 const save = () => screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
 
 describe("schedules", () => {
+  it("creates a restart schedule with an optional backup and clears the option when changing action", async () => {
+    detail();
+    await openSchedules();
+    expect(screen.queryByRole("checkbox", { name: "Create a backup before restarting" })).toBeNull();
+    const action = screen.getByRole("combobox", { name: "Action", exact: true });
+    await userEvent.selectOptions(action, "restart");
+    const backup = () => screen.getByRole("checkbox", { name: "Create a backup before restarting" }) as HTMLInputElement;
+    expect(backup().checked).toBe(false);
+    await userEvent.click(backup());
+    await userEvent.selectOptions(action, "stop");
+    expect(screen.queryByRole("checkbox", { name: "Create a backup before restarting" })).toBeNull();
+    await userEvent.selectOptions(action, "restart");
+    expect(backup().checked).toBe(false);
+    await userEvent.click(backup());
+    await userEvent.click(screen.getByRole("button", { name: "Add schedule", exact: true }));
+    await screen.findByText("Schedule created.");
+    expect(JSON.parse(writes("POST")[0][2]!.body as string)).toMatchObject({ action: "restart", createBackup: true });
+  });
+
+  it("shows a saved backup restart and preserves the option when editing other settings", async () => {
+    const view = detail({ saved: { createBackup: true } });
+    await openSchedules();
+    expect(screen.getByRole("cell", { name: "restart Backup before restart" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect((screen.getByRole("checkbox", { name: "Create a backup before restarting" }) as HTMLInputElement).checked).toBe(true);
+    draftTime("14:45");
+    await userEvent.click(save());
+    await screen.findByText("Schedule saved.");
+    expect(JSON.parse(writes("PUT")[0][2]!.body as string)).toMatchObject({ createBackup: true, time: "14:45", revision: 1 });
+    expect(view.schedule.createBackup).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Create a backup before restarting" }));
+    await userEvent.click(save());
+    await screen.findByText("Schedule saved.");
+    expect(JSON.parse(writes("PUT")[1][2]!.body as string)).toMatchObject({ createBackup: false, revision: 2 });
+  });
+
+  it("requires backup access to select the option but allows removing it after access is revoked", async () => {
+    detail({ backupAccess: false, saved: { createBackup: true, enabled: false, nextRunAt: null } });
+    await openSchedules();
+    expect((screen.getByRole("button", { name: "Resume", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Action", exact: true }), "restart");
+    const backup = () => screen.getByRole("checkbox", { name: "Create a backup before restarting" }) as HTMLInputElement;
+    expect(backup().disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect(backup().checked).toBe(true);
+    expect(backup().disabled).toBe(false);
+    expect(save().disabled).toBe(true);
+    await userEvent.click(backup());
+    expect(backup().disabled).toBe(true);
+    expect(save().disabled).toBe(false);
+    await userEvent.click(save());
+    await screen.findByText("Schedule saved.");
+    expect(JSON.parse(writes("PUT")[0][2]!.body as string)).toMatchObject({ createBackup: false, enabled: false });
+  });
+
   it("requires review after a revision conflict and preserves an intervening pause when retaining the edit draft", async () => {
     let reject = true;
     const view = detail({ onRequest: (path, init) => {

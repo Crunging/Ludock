@@ -21,6 +21,7 @@ import * as notifications from "../src/notifications.js";
 import { getAvailability } from "../src/monitoring.js";
 import type { JobContext } from "../src/operations.js";
 import { AppError } from "../src/errors.js";
+import { createSchedule, runSchedules, updateSchedule } from "../src/schedules.js";
 
 process.env.LUDOCK_DB_PATH = ":memory:";
 const admin = { id: "admin", username: "admin", role: "admin" as const };
@@ -37,7 +38,7 @@ let name: string;
 let calls: string[];
 let onInspect: () => void;
 const grants = (backup = true) => setServerGrant(operator.id, serverId,
-  ["server.view", "server.restart", ...(backup ? ["backups.create" as const] : [])], admin);
+  ["server.view", "server.restart", "schedules.manage", ...(backup ? ["backups.create" as const] : [])], admin);
 
 beforeEach(async () => {
   await stopOperationRunner();
@@ -103,9 +104,17 @@ function completedBackup(job: JobContext) {
   job.progress("backup_complete", { backupId: "backup-fixture", backupComplete: true });
   return { id: "backup-fixture" } as Awaited<ReturnType<typeof backups.createStoppedBackup>>;
 }
-function enqueue() {
+function enqueueManual() {
   return enqueueOperation({ serverId, actorId: operator.id, kind: "restart", bindingRevision: 1,
     input: { createBackup: true } });
+}
+function enqueueScheduled() {
+  createSchedule(operator, serverId, {
+    action: "restart", createBackup: true, enabled: true,
+    time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
+  });
+  runSchedules(Date.parse("2026-09-09T08:00:00Z"));
+  return listOperationHistory(operator, { serverId, limit: 1 }).operations[0];
 }
 async function finished(id: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -183,7 +192,36 @@ describe("restart requests", () => {
   });
 });
 
-describe("restarts with a backup", () => {
+for (const scheduled of [false, true])
+describe(`${scheduled ? "scheduled" : "manual"} restarts with a backup`, () => {
+  const enqueue = scheduled ? enqueueScheduled : enqueueManual;
+
+  if (scheduled) {
+    it("rejects queued work when the backup option changes, even if changed back", async () => {
+      const operation = enqueue();
+      const job = getOperation(operation.id)!;
+      const input = {
+        action: "restart", createBackup: false, enabled: true,
+        time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], timezone: "UTC",
+      };
+      updateSchedule(operator, serverId, job.input.scheduleId as string, { ...input, revision: 1 });
+      updateSchedule(operator, serverId, job.input.scheduleId as string, { ...input, createBackup: true, revision: 2 });
+      await startOperationRunner();
+      expect((await finished(operation.id)).status).toBe("failed");
+      expect(calls).toEqual([]);
+    });
+
+    for (const capability of ["backups.create", "schedules.manage"] as const)
+      it(`rechecks ${capability} after queueing and before changing the server`, async () => {
+        const operation = enqueue();
+        setServerGrant(operator.id, serverId,
+          ["server.view", "server.restart", capability === "backups.create" ? "schedules.manage" : "backups.create"], admin);
+        await startOperationRunner();
+        expect((await finished(operation.id)).status).toBe("failed");
+        expect(calls).toEqual([]);
+      });
+  }
+
   it("holds the locks, keeps the server stopped during the backup, and starts it once", async () => {
     spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
       expect(running).toBe(false);
@@ -255,11 +293,12 @@ describe("restarts with a backup", () => {
     expect(notify).toHaveBeenCalledWith(`operation:${operation.id}`,
       "world: the backup failed, so the server was left stopped. Review the operation, then start it.");
   });
-  for (const revoked of ["server.restart", "backups.create"] as const)
+  for (const revoked of ["server.restart", "backups.create", ...(scheduled ? ["schedules.manage" as const] : [])] as const)
     it(`rechecks ${revoked} after the backup`, async () => {
       spyOn(backups, "createStoppedBackup").mockImplementation(async (_server, job) => {
         setServerGrant(operator.id, serverId,
-          ["server.view", revoked === "server.restart" ? "backups.create" : "server.restart"], admin);
+          (["server.view", "server.restart", "backups.create", "schedules.manage"] as const)
+            .filter((capability) => capability !== revoked), admin);
         return completedBackup(job);
       });
       const operation = enqueue();

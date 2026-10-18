@@ -1,7 +1,7 @@
 import { thrownBy } from "./fixtures/errors.js";
 import { expect, afterEach, beforeEach, describe, it, mock, spyOn } from "bun:test";
 import { listOperationHistory } from "../src/history.js";
-import type { ScheduleInput } from "@ludock/shared";
+import { scheduleSchema, updateScheduleRequestSchema, savedScheduleSchema, type ScheduleInput } from "@ludock/shared";
 import * as database from "../src/database.js";
 import * as identity from "../src/identity.js";
 import {
@@ -47,6 +47,7 @@ const observation = {
 };
 const input: ScheduleInput = {
   action: "start",
+  createBackup: false,
   enabled: true,
   time: "08:00",
   days: [0, 1, 2, 3, 4, 5, 6],
@@ -107,6 +108,92 @@ afterEach(async () => {
   mock.restore();
   await stopOperationRunner();
   closeDatabase();
+});
+
+describe("schedule backup option", () => {
+  it("defaults to no backup and validates create, update, and response contracts", () => {
+    const withoutBackup: Partial<ScheduleInput> = { ...input };
+    delete withoutBackup.createBackup;
+    expect(scheduleSchema.parse(withoutBackup).createBackup).toBe(false);
+    expect(createSchedule(friend, serverId, withoutBackup).createBackup).toBe(false);
+    for (const action of ["start", "stop", "backup"] as const) {
+      const invalid = { ...input, action, createBackup: true };
+      expect(scheduleSchema.safeParse(invalid).success).toBe(false);
+      expect(updateScheduleRequestSchema.safeParse({ ...invalid, revision: 1 }).success).toBe(false);
+      const saved = createSchedule(admin, serverId, { ...input, action });
+      expect(savedScheduleSchema.safeParse({ ...saved, createBackup: true }).success).toBe(false);
+    }
+    expect(scheduleSchema.safeParse({ ...input, action: "restart", createBackup: "true" }).success).toBe(false);
+    expect(scheduleSchema.parse({ ...input, action: "restart", createBackup: true }).createBackup).toBe(true);
+  });
+
+  it("persists the option and changing only it increments revision and preserves history", () => {
+    const schedule = createSchedule(admin, serverId, { ...input, action: "restart", createBackup: true });
+    const stored = getDatabase().query("SELECT input_json FROM schedules WHERE id=?").get(schedule.id) as { input_json: string };
+    expect(JSON.parse(stored.input_json).createBackup).toBe(true);
+    expect(listSchedules(admin, serverId)[0].createBackup).toBe(true);
+    runSchedules(due);
+    const before = listSchedules(admin, serverId)[0];
+    const updated = updateSchedule(admin, serverId, schedule.id, {
+      ...input, action: "restart", createBackup: false, revision: 1,
+    });
+    expect(updated.createBackup).toBe(false);
+    expect(updated.revision).toBe(2);
+    expect(updated.lastSlot).toBe(before.lastSlot);
+    expect(updated.lastOperation?.id).toBe(before.lastOperation?.id);
+    expect(updateSchedule(admin, serverId, schedule.id, {
+      ...input, action: "restart", createBackup: false, revision: 2,
+    }).revision).toBe(2);
+  });
+
+  it("queues the existing backup restart path and leaves plain restart input unchanged", () => {
+    for (const createBackup of [false, true]) {
+      const schedule = createSchedule(admin, serverId, { ...input, action: "restart", createBackup });
+      runSchedules(due);
+      const operation = listSchedules(admin, serverId).find((item) => item.id === schedule.id)!.lastOperation!;
+      expect(operation.kind).toBe("restart");
+      expect(getOperation(operation.id)?.input).toEqual({
+        scheduleId: schedule.id, scheduleRevision: 1, ...(createBackup ? { createBackup: true } : {}),
+      });
+      getDatabase().query("UPDATE operations SET status='succeeded' WHERE id=?").run(operation.id);
+    }
+  });
+
+  it("requires backup access for requester and owner on create, edit, and resume", () => {
+    setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
+    const restart = { ...input, action: "restart" as const };
+    expect(() => createSchedule(friend, serverId, { ...restart, createBackup: true })).toThrow(/permission/);
+    const plain = createSchedule(friend, serverId, restart);
+    for (const actor of [friend, admin])
+      expect(() => updateSchedule(actor, serverId, plain.id, {
+        ...restart, createBackup: true, revision: 1,
+      })).toThrow(/permission|required access/);
+    setServerGrant(friend.id, serverId, ["server.view", "server.restart", "backups.create", "schedules.manage"], admin);
+    const withBackup = updateSchedule(friend, serverId, plain.id, {
+      ...restart, createBackup: true, revision: 1,
+    });
+    expect(withBackup.createBackup).toBe(true);
+    setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
+    const paused = setScheduleEnabled(friend, serverId, plain.id, { enabled: false, revision: 2 });
+    expect(paused.createBackup).toBe(true);
+    for (const actor of [friend, admin])
+      expect(() => setScheduleEnabled(actor, serverId, plain.id, {
+        enabled: true, revision: 3,
+      })).toThrow(/permission|required access/);
+  });
+
+  it("suspends backup restarts after backup access is removed without suspending plain restarts", () => {
+    setServerGrant(friend.id, serverId, ["server.view", "server.restart", "backups.create", "schedules.manage"], admin);
+    const plain = createSchedule(friend, serverId, { ...input, action: "restart" });
+    const withBackup = createSchedule(friend, serverId, { ...input, action: "restart", createBackup: true });
+    setServerGrant(friend.id, serverId, ["server.view", "server.restart", "schedules.manage"], admin);
+    const schedules = listSchedules(admin, serverId);
+    expect(schedules.find((item) => item.id === plain.id)?.nextRunAt).toBeTruthy();
+    expect(schedules.find((item) => item.id === withBackup.id)?.nextRunUnavailableReason).toBe("action_access_removed");
+    runSchedules(due);
+    expect(serverOperations()).toHaveLength(1);
+    expect(listSchedules(admin, serverId).find((item) => item.id === withBackup.id)?.lastResult).toMatch(/Suspended: required access/);
+  });
 });
 
 describe("schedule creation audit transaction", () => {

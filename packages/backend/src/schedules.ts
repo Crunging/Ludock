@@ -52,6 +52,11 @@ export const MAX_SCHEDULES_TOTAL = 1_000;
 const actionCapability = (action: ScheduleInput["action"]): ServerCapability =>
   action === "backup" ? "backups.create" : `server.${action}`;
 
+const scheduleCapabilities = (data: ScheduleInput): ServerCapability[] => [
+  actionCapability(data.action),
+  ...(data.createBackup ? ["backups.create" as const] : []),
+];
+
 const unavailableMessages = {
   owner_missing: "Suspended: the schedule owner no longer exists",
   owner_disabled: "Suspended: the schedule owner's account is disabled",
@@ -86,7 +91,7 @@ function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
       !grant?.capabilities.includes("server.view") ||
       !grant.capabilities.includes("schedules.manage"))
       throw new ScheduleUnavailableError("owner_access_removed");
-    if (!grant.capabilities.includes(actionCapability(data.action)))
+    if (!scheduleCapabilities(data).every((capability) => grant.capabilities.includes(capability)))
       throw new ScheduleUnavailableError("action_access_removed");
   }
   const logical = getLogicalServer(row.server_id);
@@ -111,7 +116,7 @@ function scheduleAuthority(row: ScheduleRow, data: ScheduleInput) {
   // Keep the normal current role, grant, and binding authority as the final gate.
   if (!hasServerCapability(user, row.server_id, "schedules.manage"))
     throw new ScheduleUnavailableError("owner_access_removed");
-  if (!hasServerCapability(user, row.server_id, actionCapability(data.action)))
+  if (!scheduleCapabilities(data).every((capability) => hasServerCapability(user, row.server_id, capability)))
     throw new ScheduleUnavailableError("action_access_removed");
   return { user, binding };
 }
@@ -123,7 +128,7 @@ function createPreviewAuthority(): PreviewAuthority {
   // Execution and mutation paths always call scheduleAuthority afresh.
   const outcomes = new Map<string, { error: unknown } | null>();
   return (row, data) => {
-    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, data.action]);
+    const key = JSON.stringify([row.owner_id, row.server_id, row.binding_revision, data.action, data.createBackup]);
     const cached = outcomes.get(key);
     if (cached !== undefined) {
       if (cached !== null) throw cached.error;
@@ -225,7 +230,8 @@ export function createSchedule(
   assertPayloadSize(input);
   const data = scheduleSchema.parse(input);
   assertServerCapability(actor, serverId, "schedules.manage");
-  assertServerCapability(actor, serverId, actionCapability(data.action));
+  for (const capability of scheduleCapabilities(data))
+    assertServerCapability(actor, serverId, capability);
   if (actor.id === "api-token")
     throw new AppError(
       "SCHEDULE_OWNER_REQUIRED",
@@ -335,10 +341,12 @@ function mutateSchedule(
     // Pausing must remain possible after the action grant or original binding
     // has been revoked. Editing/resuming requires both requester and owner access.
     if (update !== false) {
-      assertServerCapability(actor, serverId, actionCapability(data.action));
+      for (const capability of scheduleCapabilities(data))
+        assertServerCapability(actor, serverId, capability);
       scheduleAuthority(row, data);
     }
     const changed = previous.action !== data.action ||
+      previous.createBackup !== data.createBackup ||
       previous.enabled !== data.enabled ||
       previous.time !== data.time ||
       previous.timezone !== data.timezone ||
@@ -418,7 +426,11 @@ export function runSchedules(now = Date.now()): void {
           actorId: user.id,
           kind: data.action,
           bindingRevision: binding.bindingRevision,
-          input: { scheduleId: row.id, scheduleRevision: row.revision },
+          input: {
+            scheduleId: row.id,
+            scheduleRevision: row.revision,
+            ...(data.createBackup ? { createBackup: true } : {}),
+          },
           idempotencyKey: `schedule:${row.id}:${slot}`,
           deferAuditPrune: true,
         });

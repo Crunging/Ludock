@@ -46,6 +46,7 @@ import { useServerDetail, type ServerMutationOptions } from "../hooks/useServerD
 
 const defaultSchedule: ScheduleInput = {
   action: "start",
+  createBackup: false,
   enabled: true,
   time: "08:00",
   days: [0, 1, 2, 3, 4, 5, 6],
@@ -71,7 +72,7 @@ function SettingsLoadState({ state, onReload }: {
 
 function scheduleInput(item: Schedule): ScheduleInput {
   return {
-    action: item.action, enabled: item.enabled, time: item.time,
+    action: item.action, createBackup: item.createBackup, enabled: item.enabled, time: item.time,
     days: [...item.days], timezone: item.timezone,
   };
 }
@@ -351,6 +352,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     if (
       !schedulesReady || !liveReady || blocked || !can(user, server, "schedules.manage") ||
       !can(user, server, draft.action === "backup" ? "backups.create" : `server.${draft.action}`) ||
+      (draft.createBackup && !canCreateBackup) ||
       !scheduleSchema.safeParse(draft).success ||
       (scheduleEdit && (!current || current.revision !== scheduleEdit.revision))
     ) return;
@@ -372,7 +374,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
     const current = schedules.find((candidate) => candidate.id === item.id);
     if (
       !schedulesReady || scheduleEdit || !canManageSchedules || !current || current.revision !== item.revision ||
-      (!item.enabled && (!liveReady || blocked || !can(user, server, "schedules.manage") || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`)))
+      (!item.enabled && (!liveReady || blocked || !can(user, server, "schedules.manage") || !can(user, server, item.action === "backup" ? "backups.create" : `server.${item.action}`) || (item.createBackup && !canCreateBackup)))
     ) return;
     await perform(
       () => apiJson(`${path}/schedules/${encodeURIComponent(item.id)}`, scheduleResponseSchema,
@@ -834,6 +836,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
               else setSchedule(draft);
             }}
             scheduleActions={scheduleActions}
+            canCreateBackup={canCreateBackup}
             busy={busy || !snapshotReady || !schedulesReady}
             saving={busy}
             blocked={blocked || discoveryUnavailable}

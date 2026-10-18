@@ -20,6 +20,7 @@ async function mockSchedules(page: Page) {
     serverId: RUNNING_ID,
     ownerId: ADMIN.id,
     action: "restart",
+    createBackup: false,
     enabled: true,
     time: "09:00",
     days: [0, 1, 2, 3, 4, 5, 6],
@@ -92,6 +93,8 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
   await page.keyboard.press("Enter");
   await expect(page.getByRole("combobox", { name: "Action", exact: true })).toHaveValue("restart");
   await expect(page.getByLabel("Time", { exact: true })).toHaveValue("09:00");
+  await expect(page.getByRole("checkbox", { name: "Create a backup before restarting" })).not.toBeChecked();
+  await page.getByRole("checkbox", { name: "Create a backup before restarting" }).check();
   await page.getByLabel("Time", { exact: true }).fill("14:45");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Add schedule", exact: true })).toBeVisible();
@@ -99,10 +102,11 @@ test("schedules can be edited, paused, and resumed with the latest saved revisio
     method: "PUT",
     expectedRevision: 1,
     body: {
-      action: "restart", enabled: true, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6],
+      action: "restart", createBackup: true, enabled: true, time: "14:45", days: [0, 1, 2, 3, 4, 5, 6],
       timezone: "UTC", revision: 1,
     },
   }]);
+  await expect(row).toContainText("Backup before restart");
 
   await row.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(row.getByRole("cell").nth(2)).toHaveText("Paused");

@@ -4,6 +4,7 @@ import { operationSchema } from "./operations.js";
 export const scheduleSchema = z
   .object({
     action: z.enum(["start", "stop", "restart", "backup"]),
+    createBackup: z.boolean().default(false),
     enabled: z.boolean().default(true),
     time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
     days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
@@ -20,11 +21,15 @@ export const scheduleSchema = z
         }
       }, "Unknown timezone"),
   })
-  .strict();
+  .strict()
+  .refine((value) => !value.createBackup || value.action === "restart", {
+    message: "Backup before restart is only available for restart schedules",
+    path: ["createBackup"],
+  });
 export type ScheduleInput = z.infer<typeof scheduleSchema>;
 
 export const updateScheduleRequestSchema = scheduleSchema
-  .extend({
+  .safeExtend({
     enabled: scheduleSchema.shape.enabled.removeDefault(),
     revision: z.number().int().positive(),
   })
@@ -50,8 +55,9 @@ export const nextRunUnavailableReasonSchema = z.enum([
 ]);
 export type NextRunUnavailableReason = z.infer<typeof nextRunUnavailableReasonSchema>;
 
-export const savedScheduleSchema = scheduleSchema.extend({
+export const savedScheduleSchema = scheduleSchema.safeExtend({
   enabled: scheduleSchema.shape.enabled.removeDefault(),
+  createBackup: scheduleSchema.shape.createBackup.removeDefault(),
   id: z.string().uuid(),
   serverId: z.string().uuid(),
   ownerId: z.string().uuid(),

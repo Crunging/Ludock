@@ -57,6 +57,7 @@ export function scheduleFixture(serverId: string, overrides: Partial<Schedule> =
     serverId,
     ownerId: "88888888-8888-4888-8888-888888888888",
     action: "restart",
+    createBackup: false,
     enabled: true,
     time: "09:00",
     days: [0, 1, 2, 3, 4, 5, 6],
