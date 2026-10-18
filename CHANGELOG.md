@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0](https://github.com/Crunging/Ludock/compare/v0.4.0...v0.5.0) (2026-10-18)
+
+
+### Features
+
+* **schedules:** one-time scheduled actions ([#45](https://github.com/Crunging/Ludock/issues/45)) ([7e34307](https://github.com/Crunging/Ludock/commit/7e3430713aa44d150ca65a732192b7f4c8b67ea1))
+* **schedules:** restart countdown announcements ([#46](https://github.com/Crunging/Ludock/issues/46)) ([38a6fae](https://github.com/Crunging/Ludock/commit/38a6fae3908c08ddd1b77a90f16d2fb92cd27095))
+* support backups before scheduled restarts ([#44](https://github.com/Crunging/Ludock/issues/44)) ([8e3ecf8](https://github.com/Crunging/Ludock/commit/8e3ecf816a829d4be7d7a9acc4a673fd78cddfcc))
+
+
+### Bug Fixes
+
+* **compose:** apply YAML merge keys and reject !reset and !override tags ([63bbdc0](https://github.com/Crunging/Ludock/commit/63bbdc0428df14d89b0747a2b24abcea9a9df03f))
+* **schedules:** reset kept draft values and free lanes during warning cleanup ([#47](https://github.com/Crunging/Ludock/issues/47)) ([e498121](https://github.com/Crunging/Ludock/commit/e498121aa59f20a4972cc49ff8a2800472174400))
+* warn instead of failing on group or ACL access to the identity key ([#49](https://github.com/Crunging/Ludock/issues/49)) ([0de5089](https://github.com/Crunging/Ludock/commit/0de50898a6b337a540bbfc2fd3078782ab57322f))
+
+
+### Performance Improvements
+
+* cut per-poll Docker and database work, compress frontend assets, and fix Compose merge keys ([#41](https://github.com/Crunging/Ludock/issues/41)) ([63bbdc0](https://github.com/Crunging/Ludock/commit/63bbdc0428df14d89b0747a2b24abcea9a9df03f))
+
 ## [0.4.0](https://github.com/Crunging/Ludock/compare/v0.3.0...v0.4.0) (2026-10-16)
 
 
