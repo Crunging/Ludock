@@ -172,8 +172,8 @@ describe("application database ownership and schema migrations", () => {
     const databaseBytes = fs.readFileSync(dbPath);
     fs.renameSync(keyDirectory, savedDirectory);
 
-    const reject = () => {
-      expect(() => getDatabase()).toThrow(/identity key/);
+    const reject = (message = /identity key/) => {
+      expect(() => getDatabase()).toThrow(message);
       expect(fs.readFileSync(dbPath)).toStrictEqual(databaseBytes);
     };
     reject();
@@ -194,7 +194,7 @@ describe("application database ownership and schema migrations", () => {
     fs.mkdirSync(keyDirectory, { mode: 0o755 });
     fs.copyFileSync(savedKeyPath, path.join(keyDirectory, "key"));
     fs.chmodSync(path.join(keyDirectory, "key"), 0o600);
-    reject();
+    reject(/expected 0700, found 0755\. Fix it with: chmod 700 '.+' && setfacl -b '.+'$/);
     fs.rmSync(keyDirectory, { recursive: true });
 
     for (const key of [new Uint8Array(3), new Uint8Array(32).fill(1)]) {
@@ -207,7 +207,7 @@ describe("application database ownership and schema migrations", () => {
     fs.mkdirSync(keyDirectory, { mode: 0o700 });
     fs.copyFileSync(savedKeyPath, path.join(keyDirectory, "key"));
     fs.chmodSync(path.join(keyDirectory, "key"), 0o644);
-    reject();
+    reject(/expected 0600, found 0644\. Fix it with: chmod 600 '.+key' && setfacl -b /);
     fs.rmSync(keyDirectory, { recursive: true });
 
     fs.mkdirSync(keyDirectory, { mode: 0o700 });
@@ -222,6 +222,27 @@ describe("application database ownership and schema migrations", () => {
 
     fs.renameSync(savedDirectory, keyDirectory);
     expect(() => getDatabase()).not.toThrow();
+  });
+
+  it("starts with group or ACL access to the key but warns how to fix it", () => {
+    const dbPath = path.join(directory, "group-key.db");
+    process.env.LUDOCK_DB_PATH = dbPath;
+    getDatabase();
+    closeDatabase();
+    const keyDirectory = `${dbPath}.identity-key`;
+    fs.chmodSync(keyDirectory, 0o770);
+    fs.chmodSync(path.join(keyDirectory, "key"), 0o660);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => getDatabase()).not.toThrow();
+    const warnings = warn.mock.calls.map(([line]) => String(line));
+    expect(warnings).toHaveLength(2);
+    for (const [expected, found] of [["0700", "0770"], ["0600", "0660"]]) {
+      expect(warnings.some((line) =>
+        line.includes("group bits or a POSIX ACL") &&
+        line.includes(`expected ${expected}, found ${found}`) &&
+        line.includes("setfacl -b"))).toBe(true);
+    }
   });
 
   it("applies a future schema addition without replacing existing records", () => {

@@ -1,8 +1,10 @@
 import { encodeText } from "./bytes.js";
+import { createLogger } from "./logger.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
 
+const logger = createLogger("identity-key");
 const KEY_BYTES = 32;
 const KEY_DIRECTORY_MODE = 0o700;
 const KEY_FILE_MODE = 0o600;
@@ -15,25 +17,56 @@ function keyError(): Error {
   );
 }
 
+/** Says exactly what to fix, so it must not be replaced by the generic error. */
+class KeyPermissionError extends Error {}
+
 function ownedByProcess(info: fs.Stats): boolean {
   return !process.getuid || info.uid === process.getuid();
 }
 
-function openKeyDirectory(directory: string): number {
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/** Rejects owner or other bits that differ from the expected mode. Extra group
+ * bits, which also reflect a POSIX ACL mask, only produce a warning. */
+function checkKeyMode(
+  target: string,
+  info: fs.Stats,
+  expected: number,
+  warn: boolean,
+): void {
+  const mode = info.mode & 0o777;
+  if (mode === expected) return;
+  const kind = info.isDirectory() ? "directory" : "file";
+  const octal = (value: number) => value.toString(8).padStart(4, "0");
+  const fix = `chmod ${expected.toString(8)} ${shellQuote(target)} && setfacl -b ${shellQuote(target)}`;
+  if ((mode & 0o707) !== expected) {
+    throw new KeyPermissionError(
+      `Ludock's identity key ${kind} ${target} has unsafe permissions: expected ${octal(expected)}, found ${octal(mode)}. Fix it with: ${fix}`,
+    );
+  }
+  if (warn) {
+    logger.warn(
+      `Ludock's identity key ${kind} ${target} grants extra access through group bits or a POSIX ACL: expected ${octal(expected)}, found ${octal(mode)}. Starting anyway; fix it with: ${fix}`,
+    );
+  }
+}
+
+function openKeyDirectory(directory: string, warn = true): number {
   const descriptor = fs.openSync(
     directory,
     fs.constants.O_RDONLY |
       fs.constants.O_DIRECTORY |
       fs.constants.O_NOFOLLOW,
   );
-  const info = fs.fstatSync(descriptor);
-  if (
-    !info.isDirectory() ||
-    (info.mode & 0o777) !== KEY_DIRECTORY_MODE ||
-    !ownedByProcess(info)
-  ) {
+  try {
+    const info = fs.fstatSync(descriptor);
+    if (!info.isDirectory() || !ownedByProcess(info)) throw keyError();
+    checkKeyMode(directory, info, KEY_DIRECTORY_MODE, warn);
+  } catch (error) {
     fs.closeSync(descriptor);
-    throw keyError();
+    throw error;
   }
   return descriptor;
 }
@@ -58,8 +91,9 @@ function readPublishedKey(directory: string): Uint8Array {
   let key: Uint8Array | undefined;
   try {
     directoryDescriptor = openKeyDirectory(directory);
+    const keyPath = path.join(directory, KEY_FILENAME);
     keyDescriptor = fs.openSync(
-      path.join(directory, KEY_FILENAME),
+      keyPath,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
     );
     const info = fs.fstatSync(keyDescriptor);
@@ -67,11 +101,11 @@ function readPublishedKey(directory: string): Uint8Array {
       !info.isFile() ||
       info.nlink !== 1 ||
       info.size !== KEY_BYTES ||
-      (info.mode & 0o777) !== KEY_FILE_MODE ||
       !ownedByProcess(info)
     ) {
       throw keyError();
     }
+    checkKeyMode(keyPath, info, KEY_FILE_MODE, true);
     key = fs.readFileSync(keyDescriptor);
     if (key.length !== KEY_BYTES) throw keyError();
 
@@ -81,8 +115,9 @@ function readPublishedKey(directory: string): Uint8Array {
     fs.fsyncSync(directoryDescriptor);
     syncParentDirectory(directory);
     return key;
-  } catch {
+  } catch (error) {
     key?.fill(0);
+    if (error instanceof KeyPermissionError) throw error;
     throw keyError();
   } finally {
     if (keyDescriptor !== undefined) fs.closeSync(keyDescriptor);
@@ -122,7 +157,8 @@ function publishKeyDirectory(directory: string, key: Uint8Array): void {
     } finally {
       fs.closeSync(descriptor);
     }
-    const stagingDescriptor = openKeyDirectory(staging);
+    // The published directory is checked again and warns under its real name.
+    const stagingDescriptor = openKeyDirectory(staging, false);
     try {
       fs.fsyncSync(stagingDescriptor);
     } finally {
@@ -153,6 +189,7 @@ export function loadFingerprintKey(dbPath: string, required: boolean): Uint8Arra
     if (!info.isDirectory()) throw keyError();
     return readPublishedKey(keyDirectory);
   } catch (error) {
+    if (error instanceof KeyPermissionError) throw error;
     if ((error as NodeJS.ErrnoException).code !== "ENOENT" || required)
       throw keyError();
   }
@@ -160,7 +197,8 @@ export function loadFingerprintKey(dbPath: string, required: boolean): Uint8Arra
   const generated = crypto.getRandomValues(new Uint8Array(KEY_BYTES));
   try {
     publishKeyDirectory(keyDirectory, generated);
-  } catch {
+  } catch (error) {
+    if (error instanceof KeyPermissionError) throw error;
     throw keyError();
   } finally {
     generated.fill(0);
