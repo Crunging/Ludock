@@ -171,9 +171,16 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     `,
   },
   {
-    // The latest claimed countdown warning, so a restart never repeats one.
+    // Claimed countdown warnings, so a restart never repeats one. Repeated
+    // fall-back hours share a slot, so each lead time is claimed separately.
     version: 9,
-    sql: "ALTER TABLE schedules ADD COLUMN last_announcement TEXT;",
+    sql: `
+      CREATE TABLE schedule_announcements (
+        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        slot TEXT NOT NULL, lead_minutes INTEGER NOT NULL,
+        PRIMARY KEY (schedule_id, slot, lead_minutes)
+      ) STRICT;
+    `,
   },
 ];
 

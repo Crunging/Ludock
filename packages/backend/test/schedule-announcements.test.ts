@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, jest, mock, spyOn } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { scheduleSchema } from "@ludock/shared";
 import { closeDatabase, createUser, getDatabase, type SessionUser } from "../src/database.js";
 import { reconcileServers } from "../src/identity.js";
@@ -36,10 +39,9 @@ async function announce() {
   await waitForScheduleAnnouncements();
 }
 
-beforeEach(async () => {
-  await operations.stopOperationRunner();
+function openFixtureDatabase(path: string) {
   closeDatabase();
-  process.env.LUDOCK_DB_PATH = ":memory:";
+  process.env.LUDOCK_DB_PATH = path;
   for (const user of [admin, friend]) createUser({ ...user, passwordHash: "fake", disabled: false, createdAt: 0 });
   const observation = { containerId: dockerId("countdown"), name: "world", displayName: "World", gameType: "minecraft", mounts: [] };
   const logical = reconcileServers([observation])[0];
@@ -54,6 +56,11 @@ beforeEach(async () => {
       stateSince: null, exit: null, addressLabel: null, connectPort: null, gameConsole: null, fileRoots: [], ports: [], created: 0,
     },
   };
+}
+
+beforeEach(async () => {
+  await operations.stopOperationRunner();
+  openFixtureDatabase(":memory:");
   now = due - 10 * 60_000;
   spyOn(Date, "now").mockImplementation(() => now);
   spyOn(servers, "resolveAuthorizedServer").mockImplementation(async () => context);
@@ -131,6 +138,29 @@ describe("restart countdown announcements", () => {
     now = due - 5 * 60_000;
     await announce();
     expect(send.mock.calls.map((call) => call[3])).toEqual(["say Server restart in 10 minutes."]);
+  });
+
+  it("sends each warning of a slot once across a restart into the repeated hour", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ludock-countdown-"));
+    try {
+      openFixtureDatabase(join(directory, "ludock.sqlite"));
+      createSchedule(friend, serverId, { ...input, time: "01:30", timezone: "America/Los_Angeles" });
+      const daylight = Date.parse("2026-11-01T08:30:00Z");
+      for (const lead of [10, 5, 1]) {
+        now = daylight - lead * 60_000;
+        await announce();
+      }
+      // Ludock restarts, misses the first 01:30, and is back before the second.
+      closeDatabase();
+      for (const lead of [10, 5, 1]) {
+        now = daylight + 60 * 60_000 - lead * 60_000;
+        await announce();
+      }
+      expect(send).toHaveBeenCalledTimes(3);
+    } finally {
+      closeDatabase();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("does not resend a claimed warning after a failure or an edit", async () => {

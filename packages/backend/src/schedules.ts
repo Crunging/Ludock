@@ -572,6 +572,19 @@ async function announce(row: ScheduleRow, data: ScheduleInput, runAt: number, le
   }
 }
 
+function claimAnnouncement(row: ScheduleRow, slot: string, lead: number): boolean {
+  const db = getDatabase();
+  return db.transaction(() => {
+    const claimed = db.query(
+      "INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes) SELECT id,?,? FROM schedules WHERE id=? AND revision=?",
+    ).run(slot, lead, row.id, row.revision);
+    if (!claimed.changes) return false;
+    // Only the upcoming slot is announced, so claims for earlier slots are spent.
+    db.query("DELETE FROM schedule_announcements WHERE schedule_id=? AND slot<>?").run(row.id, slot);
+    return true;
+  })();
+}
+
 /** Best effort: each lead time of a run is attempted at most once, during its
  * minute and before the cutoff, with at most one warning per server at a time. */
 export function runScheduleAnnouncements(now = Date.now()): void {
@@ -587,13 +600,10 @@ export function runScheduleAnnouncements(now = Date.now()): void {
       if (runAt === null) continue;
       const lead = data.announcements.leadMinutes.find((minutes) =>
         now >= runAt - minutes * 60_000 && now < runAt - (minutes - 1) * 60_000);
-      if (lead === undefined || runAt - now < ANNOUNCEMENT_CUTOFF_MS + ANNOUNCEMENT_MIN_RUNTIME_MS) continue;
+      const slot = scheduleSlot(data, runAt);
+      if (lead === undefined || !slot || runAt - now < ANNOUNCEMENT_CUTOFF_MS + ANNOUNCEMENT_MIN_RUNTIME_MS) continue;
       // Claim before sending, so restarting Ludock never repeats a warning.
-      const claim = `${scheduleSlot(data, runAt)}:${lead}`;
-      const claimed = getDatabase()
-        .query("UPDATE schedules SET last_announcement=? WHERE id=? AND revision=? AND last_announcement IS NOT ?")
-        .run(claim, row.id, row.revision, claim);
-      if (!claimed.changes) continue;
+      if (!claimAnnouncement(row, slot, lead)) continue;
       announcing.set(row.server_id, announce(row, data, runAt, lead)
         // Console output and errors may contain secrets; a skipped warning
         // never affects the scheduled action.
