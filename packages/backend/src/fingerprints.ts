@@ -40,15 +40,21 @@ function checkKeyMode(
   if (mode === expected) return;
   const kind = info.isDirectory() ? "directory" : "file";
   const octal = (value: number) => value.toString(8).padStart(4, "0");
-  const fix = `chmod ${expected.toString(8)} ${shellQuote(target)} && setfacl -b ${shellQuote(target)}`;
+  // Name the key relative to the database's directory so host paths stay out
+  // of logs. Clear ACL entries first: chmod alone leaves a base group entry
+  // that setfacl -b would make effective again.
+  const name = info.isDirectory()
+    ? path.basename(target)
+    : path.join(path.basename(path.dirname(target)), path.basename(target));
+  const fix = `in the database's directory, run setfacl -b ${shellQuote(name)} && chmod ${expected.toString(8)} ${shellQuote(name)}`;
   if ((mode & 0o707) !== expected) {
     throw new KeyPermissionError(
-      `Ludock's identity key ${kind} ${target} has unsafe permissions: expected ${octal(expected)}, found ${octal(mode)}. Fix it with: ${fix}`,
+      `Ludock's identity key ${kind} ${name} has unsafe permissions: expected ${octal(expected)}, found ${octal(mode)}. To fix it, ${fix}`,
     );
   }
   if (warn) {
     logger.warn(
-      `Ludock's identity key ${kind} ${target} grants extra access through group bits or a POSIX ACL: expected ${octal(expected)}, found ${octal(mode)}. Starting anyway; fix it with: ${fix}`,
+      `Ludock's identity key ${kind} ${name} grants extra access through group bits or a POSIX ACL: expected ${octal(expected)}, found ${octal(mode)}. Starting anyway; to fix it, ${fix}`,
     );
   }
 }

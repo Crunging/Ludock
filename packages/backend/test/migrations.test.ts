@@ -194,7 +194,7 @@ describe("application database ownership and schema migrations", () => {
     fs.mkdirSync(keyDirectory, { mode: 0o755 });
     fs.copyFileSync(savedKeyPath, path.join(keyDirectory, "key"));
     fs.chmodSync(path.join(keyDirectory, "key"), 0o600);
-    reject(/expected 0700, found 0755\. Fix it with: chmod 700 '.+' && setfacl -b '.+'$/);
+    reject(/directory key-validation\.db\.identity-key has unsafe permissions: expected 0700, found 0755\. To fix it, in the database's directory, run setfacl -b 'key-validation\.db\.identity-key' && chmod 700 'key-validation\.db\.identity-key'$/);
     fs.rmSync(keyDirectory, { recursive: true });
 
     for (const key of [new Uint8Array(3), new Uint8Array(32).fill(1)]) {
@@ -207,7 +207,7 @@ describe("application database ownership and schema migrations", () => {
     fs.mkdirSync(keyDirectory, { mode: 0o700 });
     fs.copyFileSync(savedKeyPath, path.join(keyDirectory, "key"));
     fs.chmodSync(path.join(keyDirectory, "key"), 0o644);
-    reject(/expected 0600, found 0644\. Fix it with: chmod 600 '.+key' && setfacl -b /);
+    reject(/expected 0600, found 0644\. To fix it, in the database's directory, run setfacl -b 'key-validation\.db\.identity-key\/key' && chmod 600 /);
     fs.rmSync(keyDirectory, { recursive: true });
 
     fs.mkdirSync(keyDirectory, { mode: 0o700 });
@@ -237,6 +237,7 @@ describe("application database ownership and schema migrations", () => {
     expect(() => getDatabase()).not.toThrow();
     const warnings = warn.mock.calls.map(([line]) => String(line));
     expect(warnings).toHaveLength(2);
+    expect(warnings.some((line) => line.includes(directory))).toBe(false);
     for (const [expected, found] of [["0700", "0770"], ["0600", "0660"]]) {
       expect(warnings.some((line) =>
         line.includes("group bits or a POSIX ACL") &&
