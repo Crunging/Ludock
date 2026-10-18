@@ -141,6 +141,7 @@ export function getGameConsoleAdapterSummary(
   name: string;
   commandPlaceholder: string;
   commands: QuickCommand[];
+  supportsBroadcast: boolean;
 } | null {
   const adapter = resolveGameConsoleAdapter(server);
   return adapter
@@ -149,8 +150,19 @@ export function getGameConsoleAdapterSummary(
         name: adapter.name,
         commandPlaceholder: adapter.commandPlaceholder,
         commands: adapter.commands.map((command) => ({ ...command })),
+        supportsBroadcast: resolveBroadcastTemplate(server) !== null,
       }
     : null;
+}
+
+/** A transport override alone cannot establish a game's broadcast syntax. */
+export function resolveBroadcastTemplate(
+  server: Pick<ManagedContainer, "gameType" | "labels">,
+): string | null {
+  const preset = getGameIntegration(server.gameType)?.console;
+  const adapter = resolveGameConsoleAdapter(server);
+  return preset?.broadcastTemplate && adapter?.id === preset.adapter
+    ? preset.broadcastTemplate : null;
 }
 
 function isAdapterId(value: string): value is GameConsoleAdapterId {

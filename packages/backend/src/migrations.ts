@@ -170,6 +170,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         WHERE json_valid(input_json) AND json_type(input_json, '$.kind') IS NULL;
     `,
   },
+  {
+    // The latest claimed countdown warning, so a restart never repeats one.
+    version: 9,
+    sql: "ALTER TABLE schedules ADD COLUMN last_announcement TEXT;",
+  },
 ];
 
 function schemaVersion(db: Database): number {

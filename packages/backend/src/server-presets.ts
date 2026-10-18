@@ -2,6 +2,8 @@ import type { GameConsoleAdapterId, QuickCommand } from "./game-console.js";
 
 interface GameConsolePreset {
   adapter: GameConsoleAdapterId;
+  /** Fixed command template; only generated, non-user text replaces {message}. */
+  broadcastTemplate?: string;
   name?: string;
   placeholder?: string;
   /** Common commands offered as shortcuts; a trailing space expects more input. */
@@ -33,7 +35,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     gamePort: { port: 25565, protocol: "tcp" },
     repositories: ["itzg/minecraft-server"],
     updatesOnStart: true,
-    console: { adapter: "minecraft-rcon" },
+    console: { adapter: "minecraft-rcon", broadcastTemplate: "say {message}" },
   },
   {
     gameType: "factorio",
@@ -87,6 +89,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "source-rcon",
       name: "ARK RCON",
+      broadcastTemplate: "Broadcast {message}",
       defaultPort: 27020,
       placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
       commands: [
@@ -106,6 +109,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "source-rcon",
       name: "ARK RCON",
+      broadcastTemplate: "Broadcast {message}",
       defaultPort: 27020,
       placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
       commands: [
@@ -125,6 +129,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "source-rcon",
       name: "Source RCON",
+      broadcastTemplate: "say {message}",
       defaultPort: 27015,
       placeholder: "status, changelevel de_dust2, say Hello",
       commands: [
@@ -147,6 +152,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "source-rcon",
       name: "Project Zomboid RCON",
+      broadcastTemplate: 'servermsg "{message}"',
       defaultPort: 27015,
       placeholder: "players, save, servermsg Hello",
       commands: [
@@ -165,6 +171,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "source-rcon",
       name: "Conan Exiles RCON",
+      broadcastTemplate: "Broadcast {message}",
       defaultPort: 25575,
       commands: [
         { label: "List players", command: "ListPlayers" },
@@ -192,6 +199,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     updatesOnStart: true,
     console: {
       adapter: "rust-webrcon",
+      broadcastTemplate: 'say "{message}"',
       passwordEnvCandidates: ["RUST_RCON_PASSWORD", "RCON_PASSWORD"],
     },
   },
@@ -205,6 +213,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "telnet-console",
       name: "7 Days to Die Telnet",
+      broadcastTemplate: 'say "{message}"',
       defaultPort: 8081,
       placeholder: "listplayers, saveworld, say Hello",
       commands: [
@@ -237,6 +246,7 @@ export const GAME_INTEGRATIONS: readonly GameIntegration[] = [
     console: {
       adapter: "stdin-console",
       name: "Terraria console",
+      broadcastTemplate: "say {message}",
       placeholder: "playing, save, say Hello",
       commands: [
         { label: "List players", command: "playing" },

@@ -3,7 +3,7 @@ import { getDatabase, findUserById, writeAuditLog } from "./database.js";
 import { publicHistoryActor, publicOperationActorId } from "./auth.js";
 import { AppError, publicError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
-import { acquireLocks, nextLockRelease } from "./operation-locks.js";
+import { acquireLocks, BackgroundLockConflict, nextLockRelease } from "./operation-locks.js";
 
 interface OperationRow {
   id: string;
@@ -272,7 +272,8 @@ function notifyScheduledFailure(row: OperationRow): void {
 /** Acquire a job's resources. Handlers call this before any effect: if
  * another job holds them, this job returns to the queue and runs again from
  * the start once they are released, as it would have run after that job.
- * Conflicts with requests outside the runner fail as before. */
+ * A job also waits for background work. Conflicts with requests outside the
+ * runner fail as before. */
 export async function withJobLocks<T>(
   context: JobContext,
   keys: readonly string[],
@@ -284,7 +285,8 @@ export async function withJobLocks<T>(
     release = acquireLocks(keys);
   } catch (error) {
     if (claimed.has(id) && error instanceof AppError && error.code === "OPERATION_CONFLICT" &&
-        [...claimed].some((other) => other !== id && !yielded.has(other)))
+        (error instanceof BackgroundLockConflict ||
+          [...claimed].some((other) => other !== id && !yielded.has(other))))
       throw new ResourcesBusy(nextLockRelease());
     if (yielded.delete(id)) schedule();
     throw error;

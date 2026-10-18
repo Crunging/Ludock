@@ -146,6 +146,43 @@ describe("schedules", () => {
     expect(JSON.parse(writes("PUT")[0][2]!.body as string)).toMatchObject({ createBackup: false, enabled: false });
   });
 
+  it("edits and saves countdown settings, rejecting invalid leads and clearing warnings for other actions", async () => {
+    const broadcastServer = { ...server, gameConsole: {
+      id: "minecraft-rcon", name: "Minecraft RCON", commandPlaceholder: "say Hello", commands: [], supportsBroadcast: true,
+    } };
+    detail({ onRequest: (path) => path === base ? { server: broadcastServer, stats: null } : undefined });
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    await userEvent.click(screen.getByLabelText("Announce countdown to players"));
+    const leads = screen.getByLabelText(/Warning lead times/) as HTMLInputElement;
+    expect(leads.value).toBe("10, 5, 1");
+    fireEvent.change(leads, { target: { value: "10, 10" } });
+    expect(save().disabled).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("unique whole numbers");
+    fireEvent.change(leads, { target: { value: "8, " } });
+    expect(leads.value).toBe("8, ");
+    fireEvent.change(leads, { target: { value: "8, 3, 1" } });
+    expect(save().disabled).toBe(false);
+    await userEvent.click(save());
+    await screen.findByText("Schedule saved.");
+    expect(JSON.parse(writes("PUT")[0][2]!.body as string)).toMatchObject({ announcements: { leadMinutes: [8, 3, 1] } });
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect((screen.getByLabelText(/Warning lead times/) as HTMLInputElement).value).toBe("8, 3, 1");
+    await userEvent.selectOptions(screen.getByLabelText("Action"), "start");
+    expect(screen.queryByLabelText("Announce countdown to players")).toBeNull();
+    await userEvent.click(save());
+    await waitFor(() => expect(writes("PUT")).toHaveLength(2));
+    expect(JSON.parse(writes("PUT")[1][2]!.body as string).announcements).toBeUndefined();
+  });
+
+  it("hides the countdown control without a supported broadcast console", async () => {
+    detail();
+    await openSchedules();
+    await userEvent.click(screen.getByRole("button", { name: "Edit", exact: true }));
+    expect(screen.queryByLabelText("Announce countdown to players")).toBeNull();
+    expect(screen.getByText(/Player warnings require a supported broadcast console/)).toBeTruthy();
+  });
+
   it("requires review after a revision conflict and preserves an intervening pause when retaining the edit draft", async () => {
     let reject = true;
     const view = detail({ onRequest: (path, init) => {

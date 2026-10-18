@@ -45,6 +45,7 @@ const server = serverFixture({
       { label: "List players", command: "list" },
       { label: "Message players", command: "say " },
     ],
+    supportsBroadcast: true,
   },
   permissions: [...SERVER_CAPABILITIES],
 });

@@ -404,6 +404,18 @@ the server must be running when the schedule runs.
   A schedule with an invalid setup is suspended, and the logs say which.
 - **Server changes:** when a server's data binding changes, recreate its schedules.
 
+For a **Restart**, turn on **Announce countdown to players** to warn players
+through the game console before it runs. Warnings default to 10, 5, and 1
+minutes before; enter up to ten whole minutes from 1 to 60. The option needs
+console access and appears only for games with a broadcast command: Minecraft,
+ARK, Counter-Strike 2, Project Zomboid, Conan Exiles, Rust, 7 Days to Die, and
+Terraria. Players see, for example, `Server restart in 5 minutes.`
+
+Warnings are best effort. One is skipped if the server is stopped or busy, the
+console fails, its time was missed, or the owner lost console access. Each
+warning is tried at most once, even if Ludock restarts. A restart that comes due
+while a warning is still sending waits for it to finish.
+
 ## Availability alerts
 
 Monitoring is off by default. An administrator turns it on from a server's

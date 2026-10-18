@@ -26,11 +26,16 @@ import {
   hasServerCapability,
   getUserServerGrant,
 } from "./authorization.js";
-import { getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
+import { assertObservedServerBinding, getLogicalServer, resolveServerBinding, ServerBindingError } from "./identity.js";
 import { enqueueOperation, getOperation, publicOperation } from "./operations.js";
 import { AppError } from "./errors.js";
 import { notifyEvent } from "./notifications.js";
 import { createLogger } from "./logger.js";
+import { getContainer } from "./docker.js";
+import { resolveAuthorizedServer } from "./servers.js";
+import { resolveBroadcastTemplate, resolveGameConsoleAdapter } from "./game-console.js";
+import { executeGameCommand } from "./game-console-runtime.js";
+import { withLocks } from "./operation-locks.js";
 
 const logger = createLogger("schedules");
 
@@ -264,6 +269,7 @@ export function createSchedule(
   assertServerCapability(actor, serverId, "schedules.manage");
   for (const capability of scheduleCapabilities(data))
     assertServerCapability(actor, serverId, capability);
+  if (data.announcements) assertServerCapability(actor, serverId, "console.execute");
   assertOneTimeRunAhead(data);
   if (actor.id === "api-token")
     throw new AppError(
@@ -349,8 +355,8 @@ export function deleteSchedule(
 /** Compares saved settings, treating days as a set. */
 function scheduleKey(data: ScheduleInput): string {
   return JSON.stringify(data.kind === "recurring"
-    ? [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, [...new Set(data.days)].sort()]
-    : [data.kind, data.action, data.createBackup, data.enabled, data.time, data.timezone, data.date]);
+    ? [data.kind, data.action, data.createBackup, data.announcements, data.enabled, data.time, data.timezone, [...new Set(data.days)].sort()]
+    : [data.kind, data.action, data.createBackup, data.announcements, data.enabled, data.time, data.timezone, data.date]);
 }
 
 function mutateSchedule(
@@ -383,6 +389,7 @@ function mutateSchedule(
     if (update !== false) {
       for (const capability of scheduleCapabilities(data))
         assertServerCapability(actor, serverId, capability);
+      if (data.announcements) assertServerCapability(actor, serverId, "console.execute");
       scheduleAuthority(row, data);
       // A consumed or past one-time run is rescheduled by editing, never replayed.
       assertOneTimeRunAhead(data);
@@ -520,4 +527,72 @@ export function runSchedules(now = Date.now()): void {
       }
     }
   }
+}
+
+const announcing = new Map<string, Promise<void>>();
+
+async function announce(row: ScheduleRow, data: ScheduleInput, runAt: number, lead: number) {
+  const assertCurrent = () => {
+    const latest = getDatabase().query("SELECT * FROM schedules WHERE id=?").get(row.id) as ScheduleRow | null;
+    if (!latest || latest.revision !== row.revision || Date.now() >= runAt)
+      throw new Error("The announcement is no longer current");
+    const authority = scheduleAuthority(latest, data);
+    assertServerCapability(authority.user, row.server_id, "console.execute");
+    return authority;
+  };
+  const { user, binding } = assertCurrent();
+  const initial = await resolveAuthorizedServer(user, row.server_id, "console.execute", binding.bindingRevision);
+  // Background locks make a due restart wait for console cleanup, not fail.
+  await withLocks(initial.lockKeys, async () => {
+    const current = await resolveAuthorizedServer(
+      assertCurrent().user, row.server_id, "console.execute", binding.bindingRevision,
+    );
+    const adapter = resolveGameConsoleAdapter(current.container);
+    const template = resolveBroadcastTemplate(current.container);
+    if (!adapter || !template) return;
+    const message = `Server restart in ${lead} minute${lead === 1 ? "" : "s"}.`;
+    await executeGameCommand(getContainer(current.container.id), current.container, adapter,
+      template.replace("{message}", message), { stdout() {}, stderr() {}, system() {} }, () => {
+        assertCurrent();
+        assertObservedServerBinding(row.server_id, current.observation, binding.bindingRevision);
+      });
+  }, { background: true });
+}
+
+/** Best effort: each lead time of a run is attempted at most once, during its
+ * minute, with at most one warning per server at a time. */
+export function runScheduleAnnouncements(now = Date.now()): void {
+  const rows = getDatabase()
+    .query("SELECT * FROM schedules ORDER BY rowid LIMIT ?")
+    .all(MAX_SCHEDULES_TOTAL) as unknown as ScheduleRow[];
+  for (const row of rows) {
+    if (announcing.has(row.server_id)) continue;
+    try {
+      const data = scheduleSchema.parse(JSON.parse(row.input_json));
+      if (!data.enabled || !data.announcements || oneTimeCompleted(row, data)) continue;
+      const runAt = nextScheduleRun(data, now, row.last_slot);
+      if (runAt === null) continue;
+      const lead = data.announcements.leadMinutes.find((minutes) =>
+        now >= runAt - minutes * 60_000 && now < runAt - (minutes - 1) * 60_000);
+      if (lead === undefined) continue;
+      // Claim before sending, so restarting Ludock never repeats a warning.
+      const claim = `${scheduleSlot(data, runAt)}:${lead}`;
+      const claimed = getDatabase()
+        .query("UPDATE schedules SET last_announcement=? WHERE id=? AND revision=? AND last_announcement IS NOT ?")
+        .run(claim, row.id, row.revision, claim);
+      if (!claimed.changes) continue;
+      announcing.set(row.server_id, announce(row, data, runAt, lead)
+        // Console output and errors may contain secrets; a skipped warning
+        // never affects the scheduled action.
+        .catch(() => logger.debug("Skipped a restart countdown warning", { scheduleId: row.id }))
+        .finally(() => announcing.delete(row.server_id)));
+    } catch {
+      // Invalid saved settings are reported by runSchedules.
+    }
+  }
+}
+
+/** Let warnings settle before the shared database is closed. */
+export async function waitForScheduleAnnouncements(): Promise<void> {
+  await Promise.allSettled(announcing.values());
 }

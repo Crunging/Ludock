@@ -50,6 +50,7 @@ export const serverSchema = z.object({
       name: z.string(),
       commandPlaceholder: z.string(),
       commands: z.array(z.object({ label: z.string(), command: z.string() })),
+      supportsBroadcast: z.boolean(),
     })
     .nullable(),
   fileRoots: z.array(fileRootSchema),

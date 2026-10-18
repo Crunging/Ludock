@@ -78,6 +78,7 @@ function scheduleInput(item: Schedule): ScheduleInput {
   const base = {
     action: item.action, createBackup: item.createBackup, enabled: item.enabled, time: item.time,
     timezone: item.timezone,
+    announcements: item.announcements ? { leadMinutes: [...item.announcements.leadMinutes] } : undefined,
   };
   return item.kind === "once"
     ? { ...base, kind: "once", date: item.date }
@@ -841,6 +842,7 @@ function ServerDetailSession({ serverId }: { serverId: string }) {
             }}
             scheduleActions={scheduleActions}
             canCreateBackup={canCreateBackup}
+            supportsAnnouncements={Boolean(server.gameConsole?.supportsBroadcast) && can(user, server, "console.execute")}
             busy={busy || !snapshotReady || !schedulesReady}
             saving={busy}
             blocked={blocked || discoveryUnavailable}

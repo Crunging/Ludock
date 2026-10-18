@@ -61,6 +61,7 @@ export interface ManagedContainer {
     name: string;
     commandPlaceholder: string;
     commands: QuickCommand[];
+    supportsBroadcast: boolean;
   } | null;
   fileRoots: FileRoot[];
   ports: Array<{ private: number; public: number; type: string }>;

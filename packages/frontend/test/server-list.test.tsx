@@ -27,6 +27,7 @@ const server: Server = {
     name: "Minecraft RCON",
     commandPlaceholder: "help",
     commands: [],
+    supportsBroadcast: true,
   },
   fileRoots: [{ id: "data", name: "Data", path: "/data" }],
   ports: [{ private: 25565, public: 25565, type: "tcp" }],

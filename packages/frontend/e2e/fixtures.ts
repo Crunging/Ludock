@@ -63,6 +63,7 @@ export function makeServers(): Server[] {
         { label: "Save world", command: "save-all" },
         { label: "Message players", command: "say " },
       ],
+      supportsBroadcast: true,
     },
     fileRoots: [
       { id: "data", name: "Data", path: "/data" },

@@ -1,7 +1,8 @@
 import path from "node:path";
 import { AppError } from "./errors.js";
 
-const active = new Set<string>();
+/** Held keys. Jobs wait for background holders instead of failing. */
+const active = new Map<string, { background: boolean }>();
 const drained = new Set<() => void>();
 let releasedWaiters: { promise: Promise<void>; resolve: () => void } | undefined;
 const normalizeKey = (key: string) =>
@@ -15,16 +16,25 @@ const overlaps = (left: string, right: string) =>
       left.startsWith(`${right}/`) ||
       right.startsWith(`${left}/`)));
 
-export function acquireLocks(keys: readonly string[]): () => void {
+/** A conflict only with background work, such as a countdown warning. */
+export class BackgroundLockConflict extends AppError {
+  constructor() {
+    super("OPERATION_CONFLICT", 409, "A conflicting operation is already running");
+  }
+}
+
+export function acquireLocks(keys: readonly string[], options?: { background?: boolean }): () => void {
   const ordered = [...new Set(keys.map(normalizeKey))].sort();
-  if (ordered.some((key) => [...active].some((held) => overlaps(key, held)))) {
+  const conflicts = [...active].filter(([held]) => ordered.some((key) => overlaps(key, held)));
+  if (conflicts.length) {
+    if (conflicts.every(([, holder]) => holder.background)) throw new BackgroundLockConflict();
     throw new AppError(
       "OPERATION_CONFLICT",
       409,
       "A conflicting operation is already running",
     );
   }
-  ordered.forEach((key) => active.add(key));
+  ordered.forEach((key) => active.set(key, { background: options?.background === true }));
   let released = false;
   return () => {
     if (!released) {
@@ -42,8 +52,9 @@ export function acquireLocks(keys: readonly string[]): () => void {
 export async function withLocks<T>(
   keys: readonly string[],
   action: () => Promise<T> | T,
+  options?: { background?: boolean },
 ): Promise<T> {
-  const release = acquireLocks(keys);
+  const release = acquireLocks(keys, options);
   try {
     return await action();
   } finally {
