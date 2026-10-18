@@ -161,7 +161,8 @@ try {
         // smoke test above verifies the actual production restrictions.
         "--network", "none", "--label", "ludock.enable=false",
         ...backendSourceMounts(repository),
-        image, "bun", "test", "--isolate",
+        // Worker processes keep each file isolated, as --isolate does.
+        image, "bun", "test", "--parallel",
         ...files.map((file) => "./packages/backend/test/" + file),
       ],
       { stdin: "inherit", stdout: "inherit", stderr: "inherit" },

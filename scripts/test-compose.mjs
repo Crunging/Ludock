@@ -20,8 +20,11 @@ const compose = path.join(root, "compose.yaml");
 let base;
 let serverId;
 // Shared settings use a YAML anchor and merge key, as many owners' files do.
+// As PID 1, sleep ignores SIGTERM. An init process lets stops finish at once
+// instead of waiting out the grace period for an unknown game.
 await Bun.write(compose, `x-sleeper: &sleeper
   image: alpine:3
+  init: true
   command: ["sleep", "infinity"]
 services:
   game:

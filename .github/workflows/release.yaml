@@ -101,6 +101,3 @@ jobs:
             org.opencontainers.image.title=Ludock
             org.opencontainers.image.description=A self-hosted control panel for existing Docker game servers
             org.opencontainers.image.licenses=MIT
-          cache-from: |
-            type=gha,scope=linux/amd64
-            type=gha,scope=linux/arm64
