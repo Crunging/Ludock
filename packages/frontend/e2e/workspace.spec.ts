@@ -52,6 +52,48 @@ test("lifecycle actions need confirmation, recheck the latest state, and submit 
   expect(posts()).toEqual([{ method: "POST", path: `/servers/${RUNNING_ID}/stop`, query: {}, body: undefined }]);
 });
 
+test("an older detail refresh cannot restore controls after a newer one invalidated the binding", async ({ app, page }) => {
+  let holdNextRead = false;
+  let releaseOlder = () => {};
+  const olderHeld = new Promise<void>((resolve) => { releaseOlder = resolve; });
+  let olderSettled: Promise<void> = Promise.resolve();
+  const activeSnapshot = { ...app.servers[0], state: "exited" };
+  await page.route(`**/api/v1/servers/${RUNNING_ID}`, async (route) => {
+    if (!holdNextRead) {
+      await route.fallback();
+      return;
+    }
+    holdNextRead = false;
+    olderSettled = (async () => {
+      await olderHeld;
+      // The page may already have cancelled this request.
+      await route.fulfill({ json: serverResponseSchema.parse({ server: activeSnapshot, stats: null }) }).catch(() => {});
+    })();
+    await olderSettled;
+  });
+  await app.open(`/servers/${RUNNING_ID}`);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+  holdNextRead = true;
+  await refresh.click();
+  await expect.poll(() => holdNextRead).toBe(false);
+
+  app.servers[0].bindingStatus = "review_required";
+  await refresh.click();
+  const banner = page.getByRole("alert").filter({ hasText: "This server’s binding is review required." });
+  await expect(banner).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeDisabled();
+
+  // The older read finishes last with the binding still active and the server stopped.
+  releaseOlder();
+  await olderSettled;
+  await page.waitForTimeout(250);
+  await expect(banner).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeDisabled();
+});
+
 test("restarts offer a backup first only with backup access", async ({ app, page }) => {
   await app.open();
   const row = page.getByRole("article", { name: RUNNING_NAME });
