@@ -253,7 +253,7 @@ templ ServerCard(row ServerRow) {
 			}
 			if row.CanStop {
 				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } data-dialog-open={ "stop-" + server.ID }>Stop</button>
-				@LifecycleDialog("stop", server.ID, server.DisplayName, false)
+				@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#action-error")
 			}
 			if row.CanFiles || row.CanRestart {
 				<div class="action-menu" data-action-menu>
@@ -268,7 +268,7 @@ templ ServerCard(row ServerRow) {
 					</div>
 				</div>
 				if row.CanRestart {
-					@LifecycleDialog("restart", server.ID, server.DisplayName, row.CanBackup)
+					@LifecycleDialog("restart", server.ID, server.DisplayName, row.CanBackup, "#action-error")
 				}
 			}
 		</div>
@@ -285,10 +285,11 @@ func operationKindLabel(kind string) string {
 	return kind
 }
 
-templ LifecycleDialog(action, serverID, serverName string, backupOption bool) {
+// LifecycleDialog confirms a stop or restart; target receives errors.
+templ LifecycleDialog(action, serverID, serverName string, backupOption bool, target string) {
 	{{ label := map[string]string{"stop": "Stop", "restart": "Restart"}[action] }}
 	<dialog class="lifecycle-confirmation" id={ action + "-" + serverID } aria-labelledby={ action + "-" + serverID + "-title" }>
-		<form hx-post={ "/servers/" + serverID + "/" + action } hx-target="#action-error" data-close-on-success>
+		<form hx-post={ "/servers/" + serverID + "/" + action } hx-target={ target } data-close-on-success>
 			<h2 id={ action + "-" + serverID + "-title" }>{ label } { serverName }?</h2>
 			<p>
 				Connected players will be disconnected.

@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: app wiring, layout, sign-in/setup/logout, dashboard + SSE done; account, server detail, console/logs, schedules, files/backups, admin next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity) done; detail backups/update/schedules tabs, console/logs, files, admin next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -237,6 +237,15 @@ at the very end (not opened yet). Update this file after every area.
 - Dashboard live updates: one SSE stream (`/events`) per tab; `server`
   events trigger fragment reloads (`sse:server`), `expired` sends the tab
   to /login. Actions answer `HX-Trigger: servers-changed`.
+- Server detail: tabs are links (`?tab=`), not client state; a remembered
+  tab per server (React kept one in localStorage) is not carried over.
+  Live regions (`#detail-live`, `#overview-live`, `#activity-list`,
+  `#selected-operation`) reload themselves on `sse:server-<id>`,
+  `sse:refresh`, `servers-changed`, and a poll (2 s while work is active,
+  else 10 s); forms and dialogs sit outside them so drafts survive.
+  `/events` sends `server` plus `server-<id>` (or `refresh`) per change.
+  Actions posted from the detail page target `#detail-status`
+  (`HX-Target`), so stop/restart answer `HX-Redirect` to the operation.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.
@@ -271,6 +280,8 @@ at the very end (not opened yet). Update this file after every area.
   `[hidden] { display: none !important; }` rule: React rendered them
   conditionally, so component CSS sets `display` and overrides `hidden`.
 - templ: a `.` right after `@Component(...)` is a parse error; wrap the text.
+- Run post-swap JS on `htmx:load` (fires per new element, also for
+  outerHTML swaps), not `htmx:afterSettle` with `detail.elt`.
 - Local checks: `GOMAXPROCS=2 go test ./internal/<pkg>`; CI runs
   `.github/workflows/go.yaml` (gofmt, vet, `go test -race ./...`) on pushes
   to `go-rewrite`. The Bun `ci.yaml` only runs on PRs and `main`.

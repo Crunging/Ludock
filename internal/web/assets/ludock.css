@@ -1612,9 +1612,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .back-link { margin-bottom: 20px; }
 .detail-actions { margin: -8px 0 24px; }
 .section-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 24px 0; overflow-x: auto; }
-.section-tabs button { padding: 10px 0; border-bottom: 3px solid transparent; color: var(--text-dim); font-weight: 550; white-space: nowrap; transition: color 0.15s, border-color 0.15s; }
-.section-tabs button:hover { color: var(--text); border-bottom-color: var(--border-light); }
-.section-tabs button[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--accent); }
+.section-tabs :is(button, a) { padding: 10px 0; border-bottom: 3px solid transparent; color: var(--text-dim); font-weight: 550; white-space: nowrap; transition: color 0.15s, border-color 0.15s; }
+.section-tabs :is(button, a):hover { color: var(--text); border-bottom-color: var(--border-light); }
+.section-tabs :is(button, a)[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--accent); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .server-detail h2, .settings-page h2 { font-size: 20px; font-weight: 750; }
 .server-detail h3, .settings-page h3 { font-size: 16px; font-weight: 700; }
@@ -2945,12 +2945,12 @@ html select:not([multiple]) {
   margin: 20px 0 24px;
 }
 
-.server-detail .section-tabs button {
+.server-detail .section-tabs :is(button, a) {
   min-height: 44px;
   font-size: 15px;
 }
 
-.server-detail .section-tabs button:focus-visible {
+.server-detail .section-tabs :is(button, a):focus-visible {
   outline-offset: -3px;
 }
 
@@ -2976,7 +2976,7 @@ html select:not([multiple]) {
   flex: 1 1 280px;
 }
 
-.detail-operation-notice button {
+.detail-operation-notice :is(button, a) {
   flex-shrink: 0;
   min-height: 34px;
 }
@@ -2984,8 +2984,8 @@ html select:not([multiple]) {
 @media (pointer: coarse) {
   .detail-actions .primary-btn,
   .detail-actions .secondary-btn,
-  .detail-operation-notice button,
-  .server-detail .section-tabs button {
+  .detail-operation-notice :is(button, a),
+  .server-detail .section-tabs :is(button, a) {
     min-height: 44px;
   }
 }
@@ -3521,5 +3521,6 @@ html select:not([multiple]) {
 [hidden] { display: none !important; }
 .sidebar__logout-form { display: contents; }
 .inline-form { display: inline; margin: 0; }
+.section-tabs a, .detail-operation-notice a { display: inline-flex; align-items: center; text-decoration: none; }
 a.login-card__submit { display: block; text-align: center; text-decoration: none; }
 .htmx-request [data-busy-label], [data-busy-label].htmx-request { opacity: 0.7; }

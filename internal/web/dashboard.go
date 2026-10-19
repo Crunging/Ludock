@@ -146,8 +146,16 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 	}
 	app.Monitor.SetIntentionalStop(action.Ctx, action.Logical.ID, false)
 	s.audit(r, request, "server.start", action.Logical.ID, nil)
+	if fromDetail(r) {
+		w.Header().Set("HX-Trigger", "servers-changed")
+		render(w, r, http.StatusOK, views.Alert("success", "Server started."))
+		return
+	}
 	changed(w)
 }
+
+// fromDetail reports an action submitted from the server detail page.
+func fromDetail(r *http.Request) bool { return r.Header.Get("HX-Target") == "detail-status" }
 
 func (s *Server) audit(r *http.Request, request *Request, action, serverID string, details map[string]any) {
 	entry := db.AuditEntry{UserID: request.User().ID, Action: action, TargetType: "settings", Details: details, IPAddress: request.Client.IP}
@@ -186,11 +194,15 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		if createBackup {
 			input = map[string]any{"createBackup": true}
 		}
-		if _, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: current.User.ID,
-			Kind: kind, BindingRevision: resolved.Logical.BindingRevision, Input: input,
-			IdempotencyKey: requestKey(r)}); err != nil {
+		job, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: current.User.ID,
+			Kind: kind, BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)})
+		if err != nil {
 			s.fail(w, r, request, err)
 			return
+		}
+		if fromDetail(r) {
+			// Follow the queued work in the server's activity.
+			w.Header().Set("HX-Redirect", "/servers/"+resolved.Logical.ID+"?tab=activity&operation="+job.ID)
 		}
 		changed(w)
 	}
@@ -262,7 +274,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request
 			flusher.Flush()
 			return
 		case id := <-messages:
-			fmt.Fprintf(w, "event: server\ndata: %s\n\n", id)
+			// "server" refreshes lists; "server-<id>" or "refresh" refreshes
+			// one server's page. IDs are UUIDs, safe as event names.
+			name := "server-" + id
+			if id == "refresh" {
+				name = "refresh"
+			}
+			fmt.Fprintf(w, "event: server\ndata: %s\n\nevent: %s\ndata: %s\n\n", id, name, id)
 			flusher.Flush()
 		case <-heartbeat.C:
 			if principal, _ := s.App.Auth.Session(r.Context(), request.Principal.Token); principal == nil {

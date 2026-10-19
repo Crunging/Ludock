@@ -96,6 +96,26 @@
     if (event.detail.xhr && event.detail.xhr.status === 401) window.location.assign("/login");
   });
 
+  // data-shown-by="checkbox-id" shows an element while the box is checked.
+  document.addEventListener("change", function (event) {
+    if (!event.target.id) return;
+    document.querySelectorAll('[data-shown-by="' + event.target.id + '"]').forEach(function (element) {
+      element.hidden = !event.target.checked;
+    });
+  });
+
+  // data-confirm-value="name" keeps the form's submit button disabled until
+  // the field matches.
+  function confirmations(root) {
+    (root || document).querySelectorAll("input[data-confirm-value]").forEach(function (input) {
+      var button = input.form && input.form.querySelector("button[type=submit]");
+      if (button) button.disabled = input.value !== input.getAttribute("data-confirm-value");
+    });
+  }
+  document.addEventListener("input", function (event) {
+    if (event.target.matches && event.target.matches("input[data-confirm-value]")) confirmations(event.target.form);
+  });
+
   // Copy buttons: data-copy="text".
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-copy]");
@@ -194,14 +214,17 @@
     });
   }
 
-  document.addEventListener("htmx:afterSettle", function (event) {
+  // htmx:load fires for each element htmx adds, including outerHTML swaps.
+  document.addEventListener("htmx:load", function (event) {
     formatTimes(event.detail.elt);
     collapseLists(event.detail.elt);
+    confirmations(event.detail.elt);
   });
 
   onReady(function () {
     formatTimes();
     collapseLists();
+    confirmations();
     // Error and success responses both render into their targets.
     if (window.htmx) {
       htmx.config.responseHandling = [
