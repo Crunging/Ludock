@@ -32,6 +32,8 @@ type Container struct {
 	Logs []string
 	// Stats is returned by /stats.
 	Stats docker.ContainerStats
+	// Stdin collects data written to attached stdin.
+	Stdin []byte
 }
 
 // ExecHandler runs a fake exec. It reads stdin and writes stdout/stderr and
@@ -449,7 +451,12 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 	case action == "/attach" && r.Method == "POST":
 		e.mu.Unlock()
 		e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
-			<-r.Context().Done()
+			data, _ := io.ReadAll(reader)
+			e.mu.Lock()
+			if current := e.containers[id]; current != nil {
+				current.Stdin = append(current.Stdin, data...)
+			}
+			e.mu.Unlock()
 		})
 	case action == "" && r.Method == "DELETE":
 		if c.State.Running && r.URL.Query().Get("force") != "true" {

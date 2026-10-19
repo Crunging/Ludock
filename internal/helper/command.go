@@ -49,7 +49,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return RunRestore(argument(1), stdout, stderr)
 	case "restore-extract":
 		return RunRestoreExtract(argument(1), stdin, stdout, stderr)
+	case "network-console":
+		return RunNetworkConsole(stdin, stdout)
 	}
-	fmt.Fprintln(stderr, "Usage: ludock helper <file|idle|mount-proof|mount-identities|restore|restore-extract> …")
+	fmt.Fprintln(stderr, "Usage: ludock helper <file|idle|mount-proof|mount-identities|restore|restore-extract|network-console> …")
 	return 2
 }
