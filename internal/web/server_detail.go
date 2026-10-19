@@ -114,6 +114,10 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		switch d.Tab {
 		case "activity":
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
+		case "backups":
+			d.Backups = s.backupsView(r, request, d)
+		case "update":
+			d.Recreate = r.URL.Query().Get("recreate") == "1"
 		case "overview":
 			err = s.overview(r, request, d)
 		}

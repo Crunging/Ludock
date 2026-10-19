@@ -34,6 +34,9 @@ type ServerDetail struct {
 	NextSchedule   *schedules.Schedule
 	Now            int64
 	Activity       ActivityView
+	Backups        BackupsView
+	// Recreate preselects "Recreate anyway" in the update tab.
+	Recreate bool
 }
 
 // ActivityView is the activity tab of a server.
@@ -105,6 +108,10 @@ templ ServerDetailPage(page Page, d ServerDetail) {
 				switch d.Tab {
 					case "activity":
 						@ActivityPanel(d.Activity)
+					case "backups":
+						@BackupsTab(d.Backups)
+					case "update":
+						@UpdateTab(server.ID, d.Recreate)
 					default:
 						@OverviewLive(d)
 						if d.Admin && d.Availability != nil {
@@ -130,7 +137,7 @@ func tabLabel(d ServerDetail) string {
 // DetailLive is the header and server-wide notices; it reloads itself.
 templ DetailLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
-	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?tab=" + d.Tab } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML">
+	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?tab=" + d.Tab } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
 		<header class={ headerClass(d) }>
 			<div class="detail-header__title">
 				<h1 class="page__title" id="server-detail-title" tabindex="-1">{ server.DisplayName }</h1>
@@ -236,7 +243,7 @@ func memoryShare(stats *servers.Stats) string {
 // OverviewLive is the overview facts and monitoring status; it reloads itself.
 templ OverviewLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
-	<div id="overview-live" hx-get={ "/fragments/servers/" + server.ID + "/overview" } hx-trigger={ liveTrigger(server.ID, false) + ", availability-changed from:body" } hx-swap="outerHTML">
+	<div id="overview-live" hx-get={ "/fragments/servers/" + server.ID + "/overview" } hx-trigger={ liveTrigger(server.ID, false) + ", availability-changed from:body" } hx-swap="outerHTML" hx-disinherit="*">
 		<h2 class="sr-only">Overview</h2>
 		<dl class="overview-facts">
 			<div>
@@ -540,7 +547,7 @@ var operationStatuses = []string{"queued", "running", "succeeded", "already_curr
 
 // ActivityList is the filtered operation list; it reloads itself.
 templ ActivityList(a ActivityView) {
-	<div id="activity-list" hx-get={ "/fragments/servers/" + a.ServerID + "/activity?" + activityQuery(a) } hx-trigger={ liveTrigger(a.ServerID, a.Active) } hx-swap="outerHTML">
+	<div id="activity-list" hx-get={ "/fragments/servers/" + a.ServerID + "/activity?" + activityQuery(a) } hx-trigger={ liveTrigger(a.ServerID, a.Active) } hx-swap="outerHTML" hx-disinherit="*">
 		if a.Error != "" {
 			@Alert("error", a.Error)
 		}
@@ -576,6 +583,7 @@ templ SelectedOperation(a ActivityView) {
 			hx-get={ "/fragments/servers/" + a.ServerID + "/operations/" + a.SelectedID }
 			hx-trigger="every 2s"
 			hx-swap="outerHTML"
+			hx-disinherit="*"
 		}
 	>
 		<div class="section-heading">

@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity) done; detail backups/update/schedules tabs, console/logs, files, admin next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update) done; schedules tab, console/logs, files, admin next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -280,6 +280,8 @@ at the very end (not opened yet). Update this file after every area.
   `[hidden] { display: none !important; }` rule: React rendered them
   conditionally, so component CSS sets `display` and overrides `hidden`.
 - templ: a `.` right after `@Component(...)` is a parse error; wrap the text.
+- htmx inherits `hx-swap` and `hx-target`: self-reloading regions set
+  `hx-disinherit="*"`, or buttons inside them swap the wrong way.
 - Run post-swap JS on `htmx:load` (fires per new element, also for
   outerHTML swaps), not `htmx:afterSettle` with `detail.elt`.
 - Local checks: `GOMAXPROCS=2 go test ./internal/<pkg>`; CI runs

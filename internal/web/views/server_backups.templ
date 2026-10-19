@@ -1,0 +1,346 @@
+package views
+
+import (
+	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/compose"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// BackupsView is the backups tab of a server.
+type BackupsView struct {
+	ServerID, ServerName string
+	Admin                bool
+	CanRead, CanCreate   bool
+	CanRestore           bool
+	CanDelete            bool
+	// Blocked: the binding needs review or Docker state is unavailable.
+	Blocked      bool
+	Active       bool
+	LatestBackup *servers.BackupSummary
+	Backups      []backups.Backup
+	HistoryError string
+	Restore      *backups.Backup
+}
+
+func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
+
+templ BackupsTab(b BackupsView) {
+	<div class="section-heading">
+		<h2>Backups</h2>
+		if b.CanCreate {
+			@CreateBackupButton(b.ServerID, b.ServerName, false, false)
+		}
+	</div>
+	<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
+	if b.CanCreate && !b.Blocked && !b.Active {
+		<section class="backup-readiness" id="backup-readiness" aria-labelledby="backup-readiness-title" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML" hx-disinherit="*">
+			<div class="backup-readiness__status">
+				<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
+				<p role="status">
+					@Pip("active")
+					Checking backup destination and data roots…
+				</p>
+			</div>
+		</section>
+	}
+	if !b.archives() {
+		<p class="section-note">
+			Last backup:
+			if b.LatestBackup != nil {
+				@Time(b.LatestBackup.CreatedAt, "plain", "")
+				({ FormatBytes(b.LatestBackup.Size) })
+			} else {
+				never
+			}
+		</p>
+	}
+	<details class="disclosure">
+		<summary>How backups work</summary>
+		<p>A backup stops the server for the whole copy, then restores its previous running state. A server that was already stopped stays stopped.</p>
+		<p>The readiness check doesn’t copy anything or stop the server. Space and data can change before the backup runs, so Ludock checks them again then.</p>
+		if b.Admin {
+			<p>Choose where backups go and how many to keep in <a class="text-link" href="/settings">backup settings</a>.</p>
+		}
+	</details>
+	if b.archives() {
+		@BackupList(b)
+	} else if b.Admin {
+		<p class="section-note">Archive access is unavailable for this server.</p>
+	} else {
+		<p class="section-note">You can create backups using the administrator’s policy. Archive access and restoration require an administrator.</p>
+	}
+	if b.archives() && b.CanRestore && b.Restore != nil {
+		@RestoreForm(b)
+	}
+}
+
+// CreateBackupButton is replaced out of band once readiness is known.
+templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
+	<button
+		id="create-backup"
+		class="primary-btn"
+		type="button"
+		disabled?={ !ready }
+		hx-post={ "/servers/" + serverID + "/backups" }
+		hx-target="#detail-status"
+		hx-confirm={ "Create a backup of " + serverName + "? The server stops for the entire copy and returns to its previous running state afterward." }
+		data-busy-label="Working…"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>Create backup</button>
+}
+
+// ReadinessView is the result of a backup readiness check.
+type ReadinessView struct {
+	ServerID, ServerName string
+	Admin                bool
+	Preflight            *backups.Preflight
+	Error                string
+}
+
+templ BackupReadiness(r ReadinessView) {
+	{{ ready := r.Preflight != nil && r.Preflight.Ready }}
+	<section
+		class={ "backup-readiness", templ.KV("backup-readiness--ready", r.Preflight != nil && ready), templ.KV("backup-readiness--blocked", r.Preflight != nil && !ready) }
+		id="backup-readiness"
+		aria-labelledby="backup-readiness-title"
+	>
+		<div class="backup-readiness__status">
+			<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
+			if r.Preflight != nil {
+				<p>
+					if ready {
+						@Pip("ok")
+						<strong>Ready to back up.</strong>
+					} else {
+						@Pip("attention")
+						<strong>Not ready to back up.</strong>
+					}
+				</p>
+			}
+			<button class="text-link" type="button" hx-get={ "/fragments/servers/" + r.ServerID + "/backups/preflight" } hx-target="#backup-readiness" hx-swap="outerHTML" data-busy-label="Checking…">Check again</button>
+		</div>
+		if r.Error != "" {
+			<p class="alert alert--error" role="alert">{ r.Error }</p>
+		}
+		if r.Preflight != nil && len(r.Preflight.Issues) > 0 {
+			<ul>
+				for _, issue := range r.Preflight.Issues {
+					<li>{ issue.Message }</li>
+				}
+			</ul>
+		}
+		if r.Preflight != nil && !ready {
+			<p class="muted">
+				if r.Admin {
+					Fix these in <a class="text-link" href="/settings">backup settings</a> or the server’s mounts, then check again.
+				} else {
+					Ask an administrator to fix these, then check again.
+				}
+			</p>
+		}
+	</section>
+	@CreateBackupButton(r.ServerID, r.ServerName, ready, true)
+}
+
+// BackupList is the archive table; it reloads after a deletion.
+templ BackupList(b BackupsView) {
+	<div class="table-scroll" id="backup-list" hx-get={ "/fragments/servers/" + b.ServerID + "/backups" } hx-trigger="backups-changed from:body" hx-swap="outerHTML" hx-disinherit="*">
+		<table class="data-table">
+			<thead>
+				<tr>
+					<th>Created</th>
+					<th>Size</th>
+					<th>State</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(b.Backups) == 0 {
+					<tr>
+						<td colspan="4" class="muted">
+							if b.HistoryError != "" {
+								Backup history is unavailable.
+							} else {
+								No backups yet.
+							}
+						</td>
+					</tr>
+				}
+				for _, backup := range b.Backups {
+					<tr>
+						<td>
+							@Time(backup.CreatedAt, "", "")
+							<small class="table-detail">@Time(backup.CreatedAt, "sentence", "")</small>
+						</td>
+						<td>{ FormatBytes(backup.Size) }</td>
+						<td>
+							@Pip(map[bool]string{true: "ok", false: "failed"}[backup.State == "complete"])
+							{ backup.State }
+						</td>
+						<td>
+							<div class="inline-actions">
+								if backup.State == "complete" {
+									<a class="secondary-btn" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
+								}
+								if b.CanRestore && !b.Blocked && !b.Active && backup.State == "complete" {
+									<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) }>Restore…</a>
+								} else {
+									<button class="secondary-btn secondary-btn--danger" type="button" disabled>Restore…</button>
+								}
+								<button
+									class="secondary-btn secondary-btn--danger"
+									type="button"
+									disabled?={ !b.CanDelete || b.Active }
+									hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
+									hx-target="#detail-status"
+									hx-confirm="Permanently delete this backup archive?"
+									data-busy-label="Deleting…"
+								>Delete</button>
+							</div>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ RestoreForm(b BackupsView) {
+	<form class="danger-panel stack-form" hx-post={ "/servers/" + b.ServerID + "/restores" } hx-target="#restore-status">
+		<h3>Restore backup from @Time(b.Restore.CreatedAt, "", "")</h3>
+		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
+		<details class="disclosure">
+			<summary>More about restoring</summary>
+			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t roll back the container image or Compose settings.</p>
+		</details>
+		<input type="hidden" name="backupId" value={ b.Restore.ID }/>
+		<label>
+			<span>Type <strong>{ b.ServerName }</strong> to confirm</span>
+			<input name="confirmation" autocomplete="off" required data-confirm-value={ b.ServerName }/>
+		</label>
+		<div id="restore-status" aria-live="polite"></div>
+		<div class="inline-actions">
+			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore game data</button>
+			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") }>Cancel</a>
+		</div>
+	</form>
+}
+
+// UpdateView is the update tab of a server.
+type UpdateView struct {
+	ServerID, ServerName string
+	Admin, CanBackup     bool
+	Blocked, Active      bool
+	Recreate             bool
+	Capability           *compose.Capability
+	Error                string
+}
+
+templ UpdateTab(serverID string, recreate bool) {
+	<div id="update-panel" hx-get={ "/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate] } hx-trigger="load" hx-swap="outerHTML" hx-disinherit="*">
+		<p role="status">Loading server settings…</p>
+	</div>
+}
+
+templ UpdatePanel(u UpdateView) {
+	<div id="update-panel">
+		if u.Capability == nil {
+			<div>
+				<p role="alert">Unable to load server settings. Reload them before making changes.</p>
+				@reloadUpdate(u.ServerID, "Reload server settings")
+			</div>
+		} else {
+			{{ capability := u.Capability }}
+			<h2>{ capability.ActionLabel }</h2>
+			if capability.UpdatesOnStart {
+				<div class="startup-update-note">
+					<h3>Game updates</h3>
+					<p class="section-lede">This image downloads the latest game version when it starts, so Restart updates the game.</p>
+					<p class="muted">
+						Version pins in the image’s settings still apply.
+						if u.CanBackup {
+							To back up first, choose Take a backup first when you restart.
+						}
+					</p>
+				</div>
+			}
+			if !u.Admin {
+				if capability.UpdatesOnStart {
+					<p class="section-note">
+						if capability.Manager == "compose" {
+							Pulling a newer image needs an administrator.
+						} else {
+							Pull a newer image through the tool that created this container.
+						}
+					</p>
+				} else {
+					<p class="section-note">This image is not known to update the game on startup. Update it through its owning manager.</p>
+				}
+			} else {
+				<h3>Update container image</h3>
+				if !capability.Available {
+					<p class="section-note">
+						if capability.UnavailableReason != "" {
+							{ capability.UnavailableReason }
+						} else {
+							Ludock discovers Compose source files automatically. Check source access in Settings if updates are unavailable.
+						}
+					</p>
+					<div class="inline-actions">
+						@reloadUpdate(u.ServerID, "Check again")
+						<a class="text-link" href="/settings">Check source access</a>
+					</div>
+				} else {
+					@UpdateForm(u)
+				}
+			}
+		}
+	</div>
+}
+
+templ reloadUpdate(serverID, label string) {
+	<button class="secondary-btn" type="button" hx-get={ "/fragments/servers/" + serverID + "/update" } hx-target="#update-panel" hx-swap="outerHTML" data-busy-label="Checking…">{ label }</button>
+}
+
+templ UpdateForm(u UpdateView) {
+	{{ capability := u.Capability }}
+	<form class="stack-form" hx-post={ "/servers/" + u.ServerID + "/updates" } hx-target="#update-status">
+		<p class="section-lede">
+			Pull the newest image for this service and recreate it with Docker Compose. This updates the image itself, including its system packages and startup scripts.
+		</p>
+		<dl class="metadata-list">
+			<dt>Project</dt>
+			<dd>{ capability.ProjectName }</dd>
+			<dt>Service</dt>
+			<dd>{ capability.ServiceName }</dd>
+			<dt>Configured image</dt>
+			<dd>{ capability.Image }</dd>
+		</dl>
+		<details class="disclosure">
+			<summary>What gets replaced</summary>
+			<p>Ludock follows your Compose files exactly. Changes made to the running container that aren’t saved in those files are lost. Only this service is recreated; other services and dependencies aren’t touched.</p>
+		</details>
+		<label class="check-label">
+			<input type="checkbox" name="createBackup" value="true" id="update-backup" checked?={ u.CanBackup } disabled?={ !u.CanBackup }/>
+			Create a stopped-server backup before recreation
+		</label>
+		<p class="muted check-help">The server stays stopped until it’s recreated. If it was stopped before, it stays stopped after.</p>
+		<label class="check-label">
+			<input type="checkbox" name="forceRecreate" value="true" id="update-recreate" checked?={ u.Recreate }/>
+			Recreate anyway, even if the configured image is current
+		</label>
+		<p class="muted check-help" data-shown-by="update-recreate" hidden?={ !u.Recreate }>Use this to pick up a game update that installs on startup.</p>
+		<label data-hidden-by="update-backup" hidden?={ u.CanBackup }>
+			<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
+			<input name="skipBackupConfirmation" autocomplete="off"/>
+		</label>
+		<label class="check-label">
+			<input type="checkbox" name="confirmed" value="true" required/>
+			I understand that connected players will be disconnected and the selected service will be recreated.
+		</label>
+		<div id="update-status" aria-live="polite"></div>
+		<button class="primary-btn" type="submit" disabled?={ u.Blocked || u.Active } data-busy-label="Working…">{ capability.ActionLabel }</button>
+	</form>
+}

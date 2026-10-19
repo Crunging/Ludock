@@ -96,11 +96,15 @@
     if (event.detail.xhr && event.detail.xhr.status === 401) window.location.assign("/login");
   });
 
-  // data-shown-by="checkbox-id" shows an element while the box is checked.
+  // data-shown-by="checkbox-id" shows an element while the box is checked;
+  // data-hidden-by hides it.
   document.addEventListener("change", function (event) {
     if (!event.target.id) return;
     document.querySelectorAll('[data-shown-by="' + event.target.id + '"]').forEach(function (element) {
       element.hidden = !event.target.checked;
+    });
+    document.querySelectorAll('[data-hidden-by="' + event.target.id + '"]').forEach(function (element) {
+      element.hidden = event.target.checked;
     });
   });
 
