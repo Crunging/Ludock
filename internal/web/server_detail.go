@@ -116,6 +116,8 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
+		case "schedules":
+			d.Schedules = s.schedulesView(r, request, d)
 		case "update":
 			d.Recreate = r.URL.Query().Get("recreate") == "1"
 		case "overview":

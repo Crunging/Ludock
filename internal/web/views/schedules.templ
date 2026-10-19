@@ -1,0 +1,486 @@
+package views
+
+import (
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Crunging/Ludock/internal/schedtime"
+	"github.com/Crunging/Ludock/internal/schedules"
+)
+
+// SchedulesView is the schedules tab of a server.
+type SchedulesView struct {
+	ServerID  string
+	Schedules []schedules.Schedule
+	Error     string
+	// Selected highlights a linked schedule; SelectedMissing says it is gone.
+	Selected        string
+	SelectedMissing bool
+	Editing         string
+	// CanResume lists schedules the viewer may resume with their settings.
+	CanResume map[string]bool
+	Blocked   bool
+	Message   string
+	Now       int64
+	Form      ScheduleForm
+}
+
+// ScheduleForm is the add or edit form, with the viewer's draft.
+type ScheduleForm struct {
+	ServerID        string
+	EditID          string
+	Revision        int64
+	Input           schedules.Input
+	LeadText        string
+	Actions         []string
+	CanCreateBackup bool
+	CanAnnounce     bool
+	Blocked         bool
+	Error           string
+	// Conflict is the latest saved schedule when it changed elsewhere.
+	Conflict *schedules.Schedule
+	Missing  bool
+}
+
+var weekdays = []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+
+var dayPresets = []struct {
+	Label string
+	Days  []int
+}{{"Every day", []int{0, 1, 2, 3, 4, 5, 6}}, {"Weekdays", []int{1, 2, 3, 4, 5}}, {"Weekends", []int{0, 6}}}
+
+var actionHelp = map[string]string{
+	"start":   "Starts the server if it is stopped.",
+	"stop":    "Stops the server at the selected time. Connected players will be disconnected.",
+	"restart": "Stops and starts the server at the selected time. Connected players will be disconnected.",
+	"backup":  "Each backup stops the server for the copy and restores its previous running state. An administrator must enable backup storage in Settings first.",
+}
+
+var unavailableGuidance = map[string]string{
+	"owner_missing":         "Schedule owner no longer exists. Recreate this schedule with an authorized owner.",
+	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
+	"owner_access_removed":  "Schedule owner no longer has schedule access. Ask an administrator to restore server view and schedule management grants.",
+	"action_access_removed": "Schedule owner no longer has access to this action. Ask an administrator to restore the action grant, or edit the schedule to use an allowed action.",
+	"binding_changed":       "Server identity changed. Ask an administrator to review the binding, then recreate this schedule.",
+	"binding_unavailable":   "Server binding is unavailable. Ask an administrator to resolve its identity before this schedule can run.",
+	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
+}
+
+func sameDays(a, b []int) bool {
+	return len(a) == len(b) && !slices.ContainsFunc(b, func(day int) bool { return !slices.Contains(a, day) })
+}
+
+// ScheduleWhen describes when a schedule runs.
+func ScheduleWhen(input schedules.Input) string {
+	if input.Kind == "once" {
+		return "Once, " + input.Date + " at " + input.Time
+	}
+	for _, preset := range dayPresets {
+		if sameDays(input.Days, preset.Days) {
+			return input.Time + ", " + strings.ToLower(preset.Label)
+		}
+	}
+	var names []string
+	for _, day := range input.Days {
+		names = append(names, weekdays[day])
+	}
+	return input.Time + ", " + strings.Join(names, ", ")
+}
+
+// ScheduleDate formats a time in the schedule's own zone.
+func ScheduleDate(ms int64, timezone string) string {
+	location, ok := schedtime.Location(timezone)
+	if !ok {
+		location = time.UTC
+	}
+	return time.UnixMilli(ms).In(location).Format("Mon, Jan 2, 2006, 15:04") + " (" + timezone + ")"
+}
+
+// ScheduleRun formats a next run; a run that is due is waiting for the
+// scheduler's next tick.
+func ScheduleRun(ms int64, timezone string, now int64) string {
+	minute := now / 60_000 * 60_000
+	prefix := ""
+	if ms == minute {
+		prefix = "Due now · "
+	} else if ms < minute {
+		prefix = "Awaiting scheduler · "
+	}
+	return prefix + ScheduleDate(ms, timezone)
+}
+
+func scheduleState(item schedules.Schedule) string {
+	switch {
+	case !item.Enabled:
+		return "Paused"
+	case item.CompletedAt != 0:
+		return "Completed"
+	}
+	return "Enabled"
+}
+
+// LeadText lists warning lead times for the form.
+func LeadText(minutes []int) string {
+	var parts []string
+	for _, minute := range minutes {
+		parts = append(parts, strconv.Itoa(minute))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
+	if v.Editing != "" {
+		return true
+	}
+	if item.CompletedAt != 0 && !(item.Enabled && item.LastOperation != nil && item.LastOperation.Status == "queued") {
+		return true
+	}
+	return !item.Enabled && (v.Blocked || !v.CanResume[item.ID])
+}
+
+templ SchedulesTab(v SchedulesView) {
+	<h2>Schedules</h2>
+	<p class="section-lede">Start, stop, restart, or back up this server at set times, or once at a chosen date and time.</p>
+	<details class="disclosure">
+		<summary>How schedules run</summary>
+		<p>Each schedule runs in its own time zone, and only while its owner still has access to the action. Missed times and daylight-saving gaps are skipped; a repeated hour runs once.</p>
+		<p>A one-time schedule runs once. If Ludock isn’t running at that time and misses it by more than five minutes, the run is recorded as missed and never runs late. Edit it to choose a new time.</p>
+		<p>Pausing stops future runs. It doesn’t undo work that already started.</p>
+	</details>
+	if v.Message != "" {
+		@Alert("success", v.Message)
+	}
+	if v.SelectedMissing {
+		<p role="status" class="section-note">This schedule is no longer available or you no longer have access.</p>
+	}
+	@ScheduleList(v)
+	if v.Form.EditID != "" || len(v.Form.Actions) > 0 {
+		@ScheduleEditor(v.Form)
+	} else {
+		<p class="section-note">No schedule actions are granted. An administrator must also grant the specific start, stop, restart, or backup action. Existing schedules can still be paused or deleted.</p>
+	}
+}
+
+// ScheduleList reloads after a pause, resume, or deletion.
+templ ScheduleList(v SchedulesView) {
+	<div class="table-scroll schedules-table-scroll" id="schedule-list" tabindex="0" role="region" aria-label="Schedule list" hx-get={ "/fragments/servers/" + v.ServerID + "/schedules?" + scheduleListQuery(v) } hx-trigger="schedules-changed from:body" hx-swap="outerHTML" hx-disinherit="*">
+		<table class="data-table schedules-table" aria-label="Schedules">
+			<thead>
+				<tr>
+					<th scope="col">Action</th>
+					<th scope="col">When</th>
+					<th scope="col">State</th>
+					<th scope="col">Next run</th>
+					<th scope="col">Last result</th>
+					<th scope="col">Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(v.Schedules) == 0 {
+					<tr>
+						<td colspan="6" class="muted">
+							if v.Error != "" {
+								Schedule history is unavailable.
+							} else {
+								No schedules.
+							}
+						</td>
+					</tr>
+				}
+				for _, item := range v.Schedules {
+					<tr
+						id={ "schedule-" + item.ID }
+						tabindex="-1"
+						if v.Editing == item.ID || v.Selected == item.ID {
+							aria-current="true"
+						}
+					>
+						<td>
+							{ Capitalize(item.Action) }
+							if item.CreateBackup {
+								<small class="table-detail">Backup before restart</small>
+							}
+						</td>
+						<td>
+							{ ScheduleWhen(item.Input) }
+							<small class="table-detail">{ item.Timezone }</small>
+							if item.Announcements != nil {
+								<small class="table-detail">Warnings: { LeadText(item.Announcements.LeadMinutes) } min before</small>
+							}
+						</td>
+						<td>{ scheduleState(item) }</td>
+						<td class="schedule-next-run">
+							switch {
+								case item.CompletedAt != 0:
+									None
+								case !item.Enabled:
+									Paused
+								case item.NextRunAt != 0:
+									{ ScheduleRun(item.NextRunAt, item.Timezone, v.Now) }
+								default:
+									Unavailable
+							}
+							if item.NextRunUnavailableReason != "" {
+								<small class="table-detail">{ unavailableGuidance[item.NextRunUnavailableReason] }</small>
+							} else if item.Enabled && item.CompletedAt == 0 && item.NextRunAt == 0 {
+								<small class="table-detail">{ unavailableGuidance["unavailable"] }</small>
+							}
+						</td>
+						<td class="schedule-result">
+							if operation := item.LastOperation; operation != nil {
+								@Pip(OperationTones[operation.Status])
+								{ OperationStatusLabels[operation.Status] }
+							} else if item.LastResult != "" {
+								{ item.LastResult }
+							} else {
+								No runs yet
+							}
+							if item.LastRunAt != 0 {
+								<small class="table-detail">{ ScheduleDate(item.LastRunAt, item.Timezone) }</small>
+							}
+							if item.LastOperation != nil {
+								<a class="text-link schedule-activity-link" href={ detailURL(v.ServerID, "tab=activity&operation="+item.LastOperation.ID) }>View activity</a>
+							}
+						</td>
+						<td>
+							<div class="schedule-row-actions">
+								if v.Editing == "" && !v.Blocked && len(v.Form.Actions) > 0 {
+									<a class="secondary-btn" id={ "schedule-edit-" + item.ID } href={ detailURL(v.ServerID, "tab=schedules&edit="+item.ID) }>Edit</a>
+								} else {
+									<button type="button" class="secondary-btn" disabled>Edit</button>
+								}
+								<button
+									type="button"
+									class="secondary-btn"
+									disabled?={ toggleDisabled(v, item) }
+									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/toggle" }
+									hx-vals={ toggleValues(item) }
+									hx-target="#detail-status"
+									data-busy-label="Working…"
+								>
+									if item.Enabled {
+										Pause
+									} else {
+										Resume
+									}
+								</button>
+								<button
+									type="button"
+									class="secondary-btn secondary-btn--danger"
+									disabled?={ v.Editing != "" }
+									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete" }
+									hx-target="#detail-status"
+									hx-confirm="Delete this schedule?"
+									data-busy-label="Deleting…"
+								>Delete</button>
+							</div>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+func scheduleListQuery(v SchedulesView) string {
+	query := []string{}
+	if v.Editing != "" {
+		query = append(query, "edit="+urlQuery(v.Editing))
+	}
+	if v.Selected != "" {
+		query = append(query, "schedule="+urlQuery(v.Selected))
+	}
+	return strings.Join(query, "&")
+}
+
+func toggleValues(item schedules.Schedule) string {
+	return `{"revision":"` + strconv.FormatInt(item.Revision, 10) + `","enabled":"` + strconv.FormatBool(!item.Enabled) + `"}`
+}
+
+func savedSummary(item *schedules.Schedule) string {
+	summary := item.Action
+	if item.CreateBackup {
+		summary += " with backup before restart"
+	}
+	summary += " · " + ScheduleWhen(item.Input) + " · " + item.Timezone + " · " + scheduleState(*item)
+	if item.Announcements != nil {
+		return summary + " · Warnings: " + LeadText(item.Announcements.LeadMinutes) + " min before"
+	}
+	return summary + " · Warnings off"
+}
+
+func scheduleTarget(f ScheduleForm) string {
+	if f.EditID != "" {
+		return "/servers/" + f.ServerID + "/schedules/" + f.EditID
+	}
+	return "/servers/" + f.ServerID + "/schedules"
+}
+
+// ScheduleEditor is the add or edit form. It posts to itself, so errors
+// and conflicts keep the draft.
+templ ScheduleEditor(f ScheduleForm) {
+	{{ input := f.Input }}
+	<form class="stack-form settings-section schedule-form" id="schedule-form" hx-post={ scheduleTarget(f) } hx-target="this" hx-swap="outerHTML" hx-disinherit="*">
+		<h3 tabindex="-1">
+			if f.EditID != "" {
+				Edit schedule
+			} else {
+				Add schedule
+			}
+		</h3>
+		if f.EditID != "" {
+			<input type="hidden" name="scheduleId" value={ f.EditID }/>
+			<input type="hidden" name="revision" value={ strconv.FormatInt(f.Revision, 10) }/>
+			<input type="hidden" name="enabled" value={ strconv.FormatBool(input.Enabled) }/>
+			<p class="schedule-form-note">
+				This schedule stays
+				if input.Enabled {
+					enabled
+				} else {
+					paused
+				}
+				when saved. Its owner is unchanged.
+			</p>
+		}
+		if f.Missing {
+			<p class="alert alert--error" role="alert">This schedule is no longer available. Your draft is preserved. Cancel editing to return to the new schedule form.</p>
+		}
+		if f.Error != "" {
+			@Alert("error", f.Error)
+		}
+		if saved := f.Conflict; saved != nil {
+			<div class="schedule-conflict" role="alert">
+				<p>This schedule changed elsewhere. Your draft is preserved. Review the current saved settings before saving.</p>
+				<p><strong>Current saved settings:</strong> { savedSummary(saved) }</p>
+				<div class="inline-actions">
+					<button type="submit" class="secondary-btn" name="keepDraft" value={ strconv.FormatInt(saved.Revision, 10) }>Keep my draft</button>
+					<a class="secondary-btn" href={ detailURL(f.ServerID, "tab=schedules&edit="+saved.ID) }>Load saved settings</a>
+				</div>
+			</div>
+		}
+		<fieldset class="weekday-input">
+			<legend>Repeats</legend>
+			<label class="check-label">
+				<input type="radio" name="kind" value="recurring" id="schedule-kind-recurring" checked?={ input.Kind != "once" }/>On chosen days
+			</label>
+			<label class="check-label">
+				<input type="radio" name="kind" value="once" id="schedule-kind-once" checked?={ input.Kind == "once" }/>Once
+			</label>
+		</fieldset>
+		<div class="form-columns">
+			<label>
+				Action
+				<select name="action" required>
+					<option value="" disabled selected?={ !slices.Contains(f.Actions, input.Action) }>Select action</option>
+					for _, action := range f.Actions {
+						<option value={ action } selected?={ input.Action == action }>{ Capitalize(action) }</option>
+					}
+				</select>
+			</label>
+			<label data-shown-by="schedule-kind-once" hidden?={ input.Kind != "once" }>
+				Date
+				<input type="date" name="date" value={ input.Date }/>
+			</label>
+			<label>
+				Time
+				<input type="time" name="time" required value={ input.Time }/>
+			</label>
+			<label>
+				Time zone
+				<input name="timezone" required list="schedule-timezones" aria-describedby="schedule-timezone-help" autocapitalize="none" spellcheck="false" value={ input.Timezone } data-default-local-timezone/>
+				<datalist id="schedule-timezones" data-timezones></datalist>
+			</label>
+		</div>
+		<div class="inline-actions">
+			<p class="muted" id="schedule-timezone-help">Search by city, for example London or Los_Angeles. Times follow this zone, including daylight saving.</p>
+			<button type="button" class="secondary-btn" data-local-timezone="timezone">Use my time zone</button>
+		</div>
+		<fieldset class="weekday-input" data-shown-by="schedule-kind-recurring" hidden?={ input.Kind == "once" }>
+			<legend>Days</legend>
+			<div class="inline-actions schedule-day-presets">
+				for _, preset := range dayPresets {
+					<button type="button" class="secondary-btn" data-days={ LeadText(preset.Days) } aria-pressed={ strconv.FormatBool(sameDays(input.Days, preset.Days)) }>{ preset.Label }</button>
+				}
+			</div>
+			for index, day := range weekdays {
+				<label class="check-label">
+					<input type="checkbox" name="days" value={ strconv.Itoa(index) } checked?={ slices.Contains(input.Days, index) }/>{ day }
+				</label>
+			}
+		</fieldset>
+		if f.CanCreateBackup || input.CreateBackup {
+			<label class="check-label" data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
+				<input type="checkbox" name="createBackup" value="true" id="schedule-backup" checked?={ input.CreateBackup }/>
+				Create a backup before restarting
+			</label>
+		}
+		<div data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
+			if f.CanAnnounce {
+				<fieldset>
+					<legend>Player warnings</legend>
+					<label class="check-label">
+						<input type="checkbox" name="announce" value="true" id="schedule-announce" checked?={ input.Announcements != nil }/>
+						Announce countdown to players
+					</label>
+					<label data-shown-by="schedule-announce" hidden?={ input.Announcements == nil }>
+						Warning lead times (minutes)
+						<input name="leadMinutes" value={ f.LeadText }/>
+						<small>Comma-separated whole minutes, 1–60; up to 10 unique times. Default: 10, 5, 1.</small>
+					</label>
+					<p class="section-note">Warnings use the game console. Missed or failed warnings are skipped; the action still runs.</p>
+				</fieldset>
+			} else {
+				<p class="section-note">
+					Player warnings require a supported broadcast console and console access.
+					if input.Announcements != nil {
+						Saving turns off the saved warnings.
+					}
+				</p>
+			}
+		</div>
+		if f.EditID == "" {
+			<label class="check-label">
+				<input type="checkbox" name="paused" value="true" checked?={ !input.Enabled }/>
+				Create paused
+			</label>
+		}
+		<p class="schedule-preview" id="schedule-preview" hx-post={ "/fragments/servers/" + f.ServerID + "/schedules/preview" } hx-include="#schedule-form" hx-trigger="load, change from:#schedule-form, input from:#schedule-form delay:400ms, every 30s" hx-swap="innerHTML">
+			<strong>Next run:</strong>
+		</p>
+		<p class="schedule-form-note">
+			for _, action := range schedules.Actions {
+				<span data-shown-when={ "action=" + action } hidden?={ input.Action != action }>{ actionHelp[action] }</span>
+			}
+			<span data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
+				<span data-shown-by="schedule-backup" hidden?={ !input.CreateBackup }>The server must be running. It stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped.</span>
+			</span>
+		</p>
+		<div class="inline-actions schedule-form-actions">
+			<button class="primary-btn" type="submit" disabled?={ f.Blocked || f.Missing } data-busy-label="Saving…">
+				if f.EditID != "" {
+					Save changes
+				} else {
+					Add schedule
+				}
+			</button>
+			if f.EditID != "" {
+				<a class="secondary-btn" href={ detailURL(f.ServerID, "tab=schedules&schedule="+f.EditID) }>Cancel editing</a>
+			}
+		</div>
+	</form>
+}
+
+// SchedulePreview is the next run of a draft.
+templ SchedulePreview(enabled bool, text string) {
+	<strong>
+		if enabled {
+			Next run:
+		} else {
+			Next run when resumed:
+		}
+	</strong>
+	{ text }
+	<small class="table-detail">Preview assumes the owner has access and the server binding is active.</small>
+}

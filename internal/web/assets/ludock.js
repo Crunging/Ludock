@@ -98,15 +98,65 @@
 
   // data-shown-by="checkbox-id" shows an element while the box is checked;
   // data-hidden-by hides it.
+  // A radio's siblings change too, without their own events.
+  // data-shown-when="field=value" shows an element while the form's field
+  // has that value.
+  function toggles(input) {
+    var inputs = input.type === "radio" && input.form ? input.form.querySelectorAll('input[type=radio][name="' + input.name + '"]') : [input];
+    inputs.forEach(function (box) {
+      if (!box.id) return;
+      document.querySelectorAll('[data-shown-by="' + box.id + '"]').forEach(function (element) { element.hidden = !box.checked; });
+      document.querySelectorAll('[data-hidden-by="' + box.id + '"]').forEach(function (element) { element.hidden = box.checked; });
+    });
+    if (!input.form || !input.name) return;
+    input.form.querySelectorAll("[data-shown-when]").forEach(function (element) {
+      var rule = element.getAttribute("data-shown-when").split("=");
+      if (rule[0] !== input.name) return;
+      var field = input.form.elements[rule[0]];
+      element.hidden = !field || field.value !== rule[1];
+    });
+  }
   document.addEventListener("change", function (event) {
-    if (!event.target.id) return;
-    document.querySelectorAll('[data-shown-by="' + event.target.id + '"]').forEach(function (element) {
-      element.hidden = !event.target.checked;
-    });
-    document.querySelectorAll('[data-hidden-by="' + event.target.id + '"]').forEach(function (element) {
-      element.hidden = event.target.checked;
-    });
+    if (event.target.matches && event.target.matches("input, select")) toggles(event.target);
   });
+
+  // Schedule forms: day presets and the browser's time zone.
+  var localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  document.addEventListener("click", function (event) {
+    var preset = event.target.closest && event.target.closest("button[data-days]");
+    if (preset && preset.form) {
+      var days = preset.getAttribute("data-days").split(", ");
+      preset.form.querySelectorAll("input[name=days]").forEach(function (box) { box.checked = days.indexOf(box.value) >= 0; });
+      preset.form.querySelectorAll("button[data-days]").forEach(function (other) { other.setAttribute("aria-pressed", String(other === preset)); });
+      preset.form.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    var zone = event.target.closest && event.target.closest("button[data-local-timezone]");
+    if (zone && zone.form) {
+      zone.form.elements[zone.getAttribute("data-local-timezone")].value = localTimezone;
+      zone.form.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  function timezones(root) {
+    (root || document).querySelectorAll("input[data-default-local-timezone]").forEach(function (input) {
+      if (input.value) return;
+      input.value = localTimezone;
+      if (input.form) input.form.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    (root || document).querySelectorAll("button[data-local-timezone]").forEach(function (button) {
+      button.textContent = "Use my time zone (" + localTimezone + ")";
+    });
+    (root || document).querySelectorAll("datalist[data-timezones]").forEach(function (list) {
+      if (list.options.length || !Intl.supportedValuesOf) return;
+      var zones = Intl.supportedValuesOf("timeZone");
+      if (zones.indexOf("UTC") < 0) zones.push("UTC");
+      zones.sort().forEach(function (zone) {
+        var option = document.createElement("option");
+        option.value = zone;
+        list.appendChild(option);
+      });
+    });
+  }
 
   // data-confirm-value="name" keeps the form's submit button disabled until
   // the field matches.
@@ -223,12 +273,14 @@
     formatTimes(event.detail.elt);
     collapseLists(event.detail.elt);
     confirmations(event.detail.elt);
+    timezones(event.detail.elt);
   });
 
   onReady(function () {
     formatTimes();
     collapseLists();
     confirmations();
+    timezones();
     // Error and success responses both render into their targets.
     if (window.htmx) {
       htmx.config.responseHandling = [

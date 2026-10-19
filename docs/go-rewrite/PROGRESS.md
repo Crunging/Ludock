@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update) done; schedules tab, console/logs, files, admin next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor) done; console/logs, files, admin next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -246,6 +246,15 @@ at the very end (not opened yet). Update this file after every area.
   `/events` sends `server` plus `server-<id>` (or `refresh`) per change.
   Actions posted from the detail page target `#detail-status`
   (`HX-Target`), so stop/restart answer `HX-Redirect` to the operation.
+- Schedule editor is server-rendered: the form posts to itself and comes
+  back with the draft on errors; a revision conflict shows the saved
+  settings with "Keep my draft" (adopts the new revision without saving)
+  or "Load saved settings" (`?edit=`). The next-run preview is a fragment
+  (`POST /fragments/servers/{id}/schedules/preview`) refreshed on form
+  changes. Generic `data-*` behaviors in ludock.js: `data-shown-by`,
+  `data-hidden-by`, `data-shown-when="field=value"`, `data-days`,
+  `data-local-timezone`, `data-default-local-timezone`,
+  `datalist[data-timezones]`, `data-confirm-value`.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.

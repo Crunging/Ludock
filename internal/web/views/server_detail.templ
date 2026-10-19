@@ -35,6 +35,7 @@ type ServerDetail struct {
 	Now            int64
 	Activity       ActivityView
 	Backups        BackupsView
+	Schedules      SchedulesView
 	// Recreate preselects "Recreate anyway" in the update tab.
 	Recreate bool
 }
@@ -110,6 +111,8 @@ templ ServerDetailPage(page Page, d ServerDetail) {
 						@ActivityPanel(d.Activity)
 					case "backups":
 						@BackupsTab(d.Backups)
+					case "schedules":
+						@SchedulesTab(d.Schedules)
 					case "update":
 						@UpdateTab(server.ID, d.Recreate)
 					default:
