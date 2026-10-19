@@ -1,0 +1,493 @@
+package backups
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"io"
+	"path"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// Backup is a stored backup.
+type Backup struct {
+	ID        string
+	ServerID  string
+	Roots     []Root
+	Size      int64
+	Checksum  string
+	CreatedAt int64
+	State     string
+	// fingerprint and destination are internal.
+	fingerprint string
+	destination string
+}
+
+// Fingerprint is the binding fingerprint the backup was made from.
+func (b *Backup) Fingerprint() string { return b.fingerprint }
+
+// Destination is where the archive is stored.
+func (b *Backup) Destination() string { return b.destination }
+
+// Service manages backup records and settings.
+type Service struct {
+	DB       *db.DB
+	Storage  *Storage
+	Helpers  *Helpers
+	Docker   *docker.Client
+	Observer *servers.Observer
+	Locks    *locks.Table
+
+	initMu  sync.Mutex
+	initRun bool
+}
+
+const settingsKey = "backups"
+
+var errNotFound = fail("BACKUP_NOT_FOUND", "Backup not found.")
+
+const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state"
+
+func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
+	var backup Backup
+	var roots string
+	if err := s.Scan(&backup.ID, &backup.ServerID, &backup.fingerprint, &backup.destination, &roots, &backup.Size,
+		&backup.Checksum, &backup.CreatedAt, &backup.State); err != nil {
+		return nil, err
+	}
+	json.Unmarshal([]byte(roots), &backup.Roots)
+	return &backup, nil
+}
+
+// List lists a server's backups, newest first.
+func (s *Service) List(ctx context.Context, serverID string) ([]Backup, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? ORDER BY created_at DESC,id", serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *backup)
+	}
+	return result, rows.Err()
+}
+
+// Get returns a complete backup of a server.
+func (s *Service) Get(ctx context.Context, serverID, id string) (*Backup, error) {
+	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? AND id=?", serverID, id))
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && backup.State != "complete") {
+		return nil, errNotFound
+	}
+	return backup, err
+}
+
+// Open opens a backup archive for download.
+func (s *Service) Open(ctx context.Context, serverID, id string) (io.ReadCloser, error) {
+	backup, err := s.Get(ctx, serverID, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.Storage.Open(backup.destination, backup.ID)
+}
+
+// Delete removes a backup under the server and storage locks.
+func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess func() error) error {
+	backup, err := s.Get(ctx, serverID, id)
+	if err != nil {
+		return err
+	}
+	release, err := s.Locks.Acquire([]string{"server:" + serverID, "backups:storage"}, nil)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := s.Storage.Remove(backup.destination, id, assertAccess); err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=? AND server_id=?", id, serverID)
+	return err
+}
+
+// SavedSettings returns the saved settings, whether any value (even null)
+// was saved, and whether it validates.
+func (s *Service) SavedSettings(ctx context.Context) (*Settings, bool, error) {
+	var raw json.RawMessage
+	found, err := s.DB.Setting(ctx, settingsKey, &raw)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	var settings Settings
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if string(raw) == "null" || decoder.Decode(&settings) != nil || settings.Destination == "" || settings.RetentionCount < 1 ||
+		settings.RetentionCount > 1000 || settings.MaxBytes <= 0 || settings.ReserveBytes < 0 {
+		return nil, true, nil
+	}
+	return &settings, true, nil
+}
+
+// SaveSettings validates and stores settings.
+func (s *Service) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
+	settings, err := s.Storage.ValidateSettings(ctx, settings)
+	if err != nil {
+		return settings, err
+	}
+	return settings, s.DB.SetSetting(ctx, nil, settingsKey, settings)
+}
+
+// Initialize enables the single approved root with default limits, unless
+// an administrator has ever saved backup settings.
+func (s *Service) Initialize(ctx context.Context) error {
+	s.initMu.Lock()
+	if s.initRun {
+		s.initMu.Unlock()
+		return nil
+	}
+	s.initRun = true
+	s.initMu.Unlock()
+	defer func() { s.initMu.Lock(); s.initRun = false; s.initMu.Unlock() }()
+	// Any saved value, including null, is an administrator decision.
+	if _, found, err := s.SavedSettings(ctx); err != nil || found {
+		return err
+	}
+	roots := RootList(s.Storage.Roots)
+	if len(roots) != 1 {
+		return nil
+	}
+	settings := Settings{Destination: roots[0], RetentionCount: DefaultRetention, MaxBytes: DefaultMaxBytes, ReserveBytes: DefaultReserve}
+	if _, err := s.Storage.ValidateSettings(ctx, settings); err != nil {
+		return nil
+	}
+	observed, err := s.Observer.List(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range observed {
+		if s.AssertSeparateDestination(ctx, entry.Observation, settings) != nil {
+			return nil
+		}
+	}
+	encoded, _ := json.Marshal(settings)
+	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// A decision saved while validation awaited I/O wins.
+		result, err := tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES('backups',?) ON CONFLICT(key) DO NOTHING", string(encoded))
+		if err != nil {
+			return err
+		}
+		if changed, _ := result.RowsAffected(); changed > 0 {
+			return s.DB.WriteAudit(ctx, tx, db.AuditEntry{Action: "settings.backups.auto_enabled", TargetType: "settings"})
+		}
+		return nil
+	})
+}
+
+// ForBackup returns validated settings, initializing them if needed: a
+// backup due at startup can run before the first background tick.
+func (s *Service) ForBackup(ctx context.Context) (Settings, error) {
+	settings, _, err := s.SavedSettings(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	if settings == nil {
+		s.Initialize(ctx)
+		if settings, _, err = s.SavedSettings(ctx); err != nil {
+			return Settings{}, err
+		}
+	}
+	if settings == nil {
+		return Settings{}, fail("BACKUPS_NOT_CONFIGURED", "An administrator must configure a backup destination, retention, and capacity before creating backups.")
+	}
+	return s.Storage.ValidateSettings(ctx, *settings)
+}
+
+// ArchiveBytes is the size of complete backups.
+func (s *Service) ArchiveBytes(ctx context.Context) int64 {
+	var size int64
+	s.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM backups WHERE state='complete'").Scan(&size)
+	return size
+}
+
+// Remaining is the archive budget left under the global limit.
+func Remaining(settings Settings, used int64) (int64, error) {
+	if available := settings.MaxBytes - used; available > 0 {
+		return available, nil
+	}
+	return 0, fail("BACKUP_CAPACITY", "The global backup byte limit is reached. Remove backups or increase the limit.")
+}
+
+// Issue is a public readiness problem.
+type Issue struct{ Code, Message string }
+
+// readinessIssue keeps Docker and filesystem errors, which can contain host
+// paths or credentials, out of the result.
+func readinessIssue(err error, fallback Issue) Issue {
+	if public, ok := apperr.As(err); ok {
+		return Issue{Code: public.Code, Message: public.Message}
+	}
+	return fallback
+}
+
+// StorageStatus is the storage readiness shown to administrators.
+type StorageStatus struct {
+	Configured     bool
+	ArchiveBytes   int64
+	MaxBytes       int64
+	ReserveBytes   int64
+	AvailableBytes int64 // -1 when unknown
+	Issues         []Issue
+}
+
+func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
+	settings, found, _ := s.SavedSettings(ctx)
+	status := StorageStatus{Configured: found, ArchiveBytes: s.ArchiveBytes(ctx), AvailableBytes: -1}
+	if settings == nil {
+		code := "BACKUP_SETTINGS_INVALID"
+		if !found {
+			code = "BACKUPS_NOT_CONFIGURED"
+		}
+		status.Issues = append(status.Issues, Issue{code, "An administrator must configure a valid backup destination, retention, and capacity before creating backups."})
+		return status, nil
+	}
+	status.MaxBytes, status.ReserveBytes = settings.MaxBytes, settings.ReserveBytes
+	if _, err := Remaining(*settings, status.ArchiveBytes); err != nil {
+		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup archive limit could not be checked."}))
+	}
+	if _, err := s.Storage.ValidateSettings(ctx, *settings); err != nil {
+		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DESTINATION",
+			"The backup destination is missing or inaccessible. Ask an administrator to check its mount and LUDOCK_BACKUP_ROOTS."}))
+		return status, nil
+	}
+	available, err := s.Storage.AvailableBytes(settings.Destination)
+	if err != nil {
+		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DISK_UNAVAILABLE",
+			"Available disk space could not be checked. Ask an administrator to check that the backup destination is accessible and writable."}))
+	} else {
+		status.AvailableBytes = available
+		if available <= settings.ReserveBytes {
+			status.Issues = append(status.Issues, Issue{"BACKUP_CAPACITY", "The backup destination does not have free space above its configured reserve."})
+		}
+	}
+	return status, settings
+}
+
+// Status reports storage readiness.
+func (s *Service) Status(ctx context.Context) StorageStatus {
+	status, _ := s.inspect(ctx)
+	return status
+}
+
+// Preflight is advisory only: no helpers, locks, stops, archive writes, or
+// data scans. Execution repeats its checks after acquiring locks.
+type Preflight struct {
+	Ready     bool
+	CheckedAt int64
+	Issues    []Issue
+}
+
+// Preflight checks whether a backup could run now.
+func (s *Service) Preflight(ctx context.Context, server *servers.Context) Preflight {
+	status, settings := s.inspect(ctx)
+	issues := slices.Clone(status.Issues)
+	check := func(err error, fallback Issue) {
+		if err != nil {
+			issues = append(issues, readinessIssue(err, fallback))
+		}
+	}
+	_, err := PlanRoots(server, true)
+	check(err, Issue{"BACKUP_ROOT_UNAVAILABLE", "The selected data roots could not be verified. Ask an administrator to review the server's mounted data roots."})
+	if settings != nil {
+		check(s.AssertSeparateDestination(ctx, server.Observation, *settings), Issue{"BACKUP_MOUNT_UNVERIFIED",
+			"Ludock could not verify that its backup destination is separate from game data. Ask an administrator to check the backup mount."})
+	}
+	info, err := s.Docker.Inspect(ctx, server.Container.ID)
+	if err == nil {
+		err = AssertDataOperationState(info.State.Status)
+	}
+	check(err, Issue{"SERVER_STATE_UNAVAILABLE", "The server's current state could not be checked. Check its Docker connection and try again."})
+	check(s.AssertNoOtherWriters(ctx, server, ""), Issue{"BACKUP_WRITERS_UNVERIFIED",
+		"Ludock could not check for other containers writing to this server's data. Check its Docker connection and try again."})
+	return Preflight{Ready: len(issues) == 0, CheckedAt: time.Now().UnixMilli(), Issues: issues}
+}
+
+// AssertReady runs the checks that need no stop, so a backup that cannot
+// succeed never takes the server offline.
+func (s *Service) AssertReady(ctx context.Context, server *servers.Context) error {
+	settings, err := s.ForBackup(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.AssertSeparateDestination(ctx, server.Observation, settings); err != nil {
+		return err
+	}
+	if err := s.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
+		return err
+	}
+	return s.AssertNoOtherWriters(ctx, server, "")
+}
+
+func overlaps(left, right string) bool {
+	return left == "/" || right == "/" || left == right || strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
+// MountsOverlap reports two mounts that can reach the same data.
+func MountsOverlap(left, right identity.Mount) bool {
+	if left.Type == "volume" && right.Type == "volume" && left.Name != "" && right.Name != "" {
+		return left.Name == right.Name
+	}
+	return left.Source != "" && right.Source != "" && overlaps(path.Clean("/"+left.Source), path.Clean("/"+right.Source))
+}
+
+// AssertNoOtherWriters refuses when another running container can write to
+// the server's data.
+func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Context, helperID string) error {
+	containers, err := s.Docker.ListContainers(ctx, true, nil)
+	if err != nil {
+		return err
+	}
+	var sources []identity.Mount
+	for _, mount := range server.Observation.Mounts {
+		if mount.Writable {
+			sources = append(sources, mount)
+		}
+	}
+	for _, candidate := range containers {
+		state := ""
+		if candidate.State != nil {
+			state = *candidate.State
+		}
+		if candidate.ID == server.Container.ID || candidate.ID == helperID || !slices.Contains([]string{"running", "restarting", "paused"}, state) {
+			continue
+		}
+		info, err := s.Docker.Inspect(ctx, candidate.ID)
+		if err != nil {
+			return err
+		}
+		if !info.State.Running && !info.State.Restarting && !info.State.Paused {
+			continue
+		}
+		for _, mount := range info.Mounts {
+			if !mount.RW {
+				continue
+			}
+			other := identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Writable: true, Name: mount.Name}
+			for _, source := range sources {
+				if MountsOverlap(source, other) {
+					return fail("SHARED_DATA_WRITER", "Another running container can write to this server's data. Stop shared writers before backing up or restoring.")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// AssertSeparateDestination proves the destination is mounted into Ludock
+// and does not overlap the server's data.
+func (s *Service) AssertSeparateDestination(ctx context.Context, observation identity.Observation, settings Settings) error {
+	destination, err := s.Storage.ApprovedDirectory(settings.Destination)
+	if err != nil {
+		return err
+	}
+	targets := []identity.Mount{{Type: "bind", Source: destination, Destination: destination, Writable: true}}
+	proven := false
+	if docker.ContainerIDPattern.MatchString(s.Storage.Self) {
+		self, err := s.Docker.Inspect(ctx, s.Storage.Self)
+		if err != nil && !docker.IsNotFound(err) {
+			return err
+		}
+		if err == nil {
+			for _, mount := range self.Mounts {
+				if destination == mount.Destination || strings.HasPrefix(destination, mount.Destination+"/") {
+					proven = true
+					targets = append(targets, identity.Mount{Type: mount.Type, Name: mount.Name,
+						Source: mount.Source + destination[len(mount.Destination):], Destination: destination, Writable: true})
+				}
+			}
+		}
+	}
+	if !proven {
+		return fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be mounted into Ludock. Set LUDOCK_SELF_CONTAINER if its Docker hostname does not identify its container.")
+	}
+	for _, source := range observation.Mounts {
+		if !source.Writable {
+			continue
+		}
+		for _, target := range targets {
+			if MountsOverlap(source, target) {
+				return fail("BACKUP_SOURCE_OVERLAP", "The backup destination overlaps game data. Mount a separate backup destination.")
+			}
+		}
+	}
+	return nil
+}
+
+// AssertDataOperationState refuses servers in transitional states.
+func AssertDataOperationState(state string) error {
+	if slices.Contains([]string{"paused", "restarting", "removing", "dead"}, state) {
+		return fail("SERVER_STATE", "Unpause or repair this server before a data operation.")
+	}
+	return nil
+}
+
+// Record saves a complete backup.
+func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destination string) error {
+	roots, _ := json.Marshal(backup.Roots)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
+    VALUES(?,?,?,?,?,?,?,?,'complete')`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum, backup.CreatedAt)
+	return err
+}
+
+// Exists reports whether a backup row exists (any state when complete is
+// false).
+func (s *Service) Exists(ctx context.Context, id string, complete bool) bool {
+	query := "SELECT id FROM backups WHERE id=?"
+	if complete {
+		query += " AND state='complete'"
+	}
+	var found string
+	return s.DB.QueryRowContext(ctx, query, id).Scan(&found) == nil
+}
+
+// Prune removes complete backups beyond the retention count, keeping keep.
+func (s *Service) Prune(ctx context.Context, serverID string, retention int, keep string) error {
+	list, err := s.List(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	var complete []Backup
+	for _, backup := range list {
+		if backup.State == "complete" {
+			complete = append(complete, backup)
+		}
+	}
+	if len(complete) <= retention {
+		return nil
+	}
+	for _, old := range complete[retention:] {
+		if old.ID == keep {
+			continue
+		}
+		if err := s.Storage.Remove(old.destination, old.ID, nil); err != nil {
+			return err
+		}
+		if _, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", old.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}

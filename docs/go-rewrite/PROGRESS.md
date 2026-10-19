@@ -14,10 +14,10 @@ at the very end (not opened yet). Update this file after every area.
 | 3 | Auth/security core (argon2id, sessions, setup window, throttles, origin, client IP, grants, logical-server identity) | done |
 | 4 | Docker layer (Engine client, discovery, observation, events hub, fake Docker) | done (container log streaming moves to area 8) |
 | 5 | Helper subcommands replacing `bun -e` helper containers | done (network-console helper moves to area 8) |
-| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | files, tar, backup storage done; backups.ts (job flows) after area 7 |
-| 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | next (locks done) |
-| 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | todo |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | todo |
+| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
+| 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
+| 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | next (start with app wiring: background tick, shutdown order) |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -112,7 +112,33 @@ at the very end (not opened yet). Update this file after every area.
   `Broadcaster` interface for countdown warnings (implemented in area 8).
   Requester capability checks run before transactions because denial
   audits write through another connection.
-- `internal/compose`: only `SourceLabels` so far.
+- `internal/history`: `Service.Operations` (access-filtered, cursor bound
+  to filters), `Service.Audit`, `PublicActor` (api-token hiding).
+- `internal/attention`: `Service.List` (binding, availability, schedule,
+  operation items; `DiscoveryUnavailable`).
+- `internal/netconsole`: Source RCON, Rust WebRCON (coder/websocket),
+  Telnet; `Control{Authorize, AssertAccess}` before each write.
+- `internal/console`: `Runtime.GameCommand` / `Shell` (in-container
+  watchdog script, cancel exec, wait for exit before release, 4 MiB cap,
+  stdin attach, network target resolution, network helper container in
+  the game's netns), `Redactor`, `LogDecoder`, `Follow`, `Sessions`
+  (`Authorize`/`Access.Allowed` per frame + 2 s idle inspect, `Logs`,
+  `Console` over a transport-neutral `Channel`), `Broadcaster` for
+  schedules.
+- `internal/compose`: `Runner.Run` (exec, own process group, stderr
+  dropped, 8 MiB stdout), `ParseFile` (yaml.v3 nodes: merge keys,
+  duplicate keys, ≤20 aliases, tag allowlist), `ReadApprovedFile`,
+  `DiscoverSource`, `Snapshots.Create`, `Updates.Validated`,
+  `AssertSingleContainer`, `Capability`, `ValidateService`.
+- `internal/backups` service: `List`, `Get`, `Open`, `Delete`,
+  `SavedSettings`, `SaveSettings`, `Initialize` (auto-enable single root),
+  `ForBackup`, `Status`, `Preflight`, `AssertReady`,
+  `AssertNoOtherWriters`, `AssertSeparateDestination`, `Record`, `Prune`.
+- `internal/jobs`: `Jobs.Register(runner)` for start/stop/restart (±backup),
+  backup, restore (journals, rollback, fresh helper after a stopped one),
+  update (Compose pull/up/verify); `Actor` (schedule revision recheck),
+  save-world, stop reconciliation, recovery under saved lock keys.
+  Tests run whole jobs on fakedocker with in-process helpers.
 - `internal/servers`: `Observer` (List with 30 s inspection reuse and
   4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,
   `StopRecoveryState`, `Secrets`; `Service` (single-flight `Refresh`,
@@ -205,9 +231,13 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Area 7: `operations.ts`, `jobs.ts`, `schedules.ts` (+ shared
-   schedule-time), `notifications.ts`, `monitoring.ts`, `history.ts`,
-   `attention.ts`, `lifecycle.ts`, settings logic.
-2. Then `backups.ts` job flows on top of `internal/backups` storage
-   (tests: `storage_test.go` `startHelpers` maps `/mounts/<root>` back to
-   host paths for in-process helpers).
+1. App wiring in `cmd/ludock` (or `internal/app`): construct every
+   service, background tick every 15 s (refresh → schedules.Run →
+   schedules.Announce → monitor.Check; backups.Initialize and
+   notify.Deliver off the schedule path), ops runner start (recovery) then
+   tick, shutdown order (HTTP stop, events hub stop, runner stop, wait for
+   announcements, locks drained, DB close). Port index.ts.
+2. Pages (area 9): templ + htmx 2 + SSE. Session cookie + CSRF token
+   (hash of session token) on forms; re-authenticate after reading the
+   body; admin pages; per-page server checks replacing the browser race
+   tests. Look at packages/frontend/src for screens and copy CSS.
