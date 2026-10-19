@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
@@ -89,11 +90,16 @@ func (s *Service) ConnectionHost(ctx context.Context) string {
 }
 
 // SetConnectionHost stores or clears the public host.
+// An invalid host is rejected rather than stored.
 func (s *Service) SetConnectionHost(ctx context.Context, host string) error {
-	if host == "" {
+	if strings.TrimSpace(host) == "" {
 		return s.DB.DeleteSetting(ctx, connectionHostSetting)
 	}
-	return s.DB.SetSetting(ctx, nil, connectionHostSetting, host)
+	normalized, ok := games.ConnectionHost(host)
+	if !ok {
+		return apperr.New("INVALID_REQUEST", 400, "Enter a host name or IP address, such as play.example.com or 203.0.113.10.")
+	}
+	return s.DB.SetSetting(ctx, nil, connectionHostSetting, normalized)
 }
 
 // Connection is the address players use. A "label" source is the owner's

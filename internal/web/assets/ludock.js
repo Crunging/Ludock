@@ -298,6 +298,16 @@
       grantSummary(preset.closest("[data-grants]"));
       return;
     }
+    // data-fill="input-id" with data-fill-value sets that field and focuses it.
+    var fill = event.target.closest && event.target.closest("[data-fill]");
+    if (fill) {
+      var field = document.getElementById(fill.getAttribute("data-fill"));
+      if (field) {
+        field.value = fill.getAttribute("data-fill-value");
+        field.focus();
+      }
+      return;
+    }
     // data-clear="id" empties a region, such as a closed editor.
     var clear = event.target.closest && event.target.closest("[data-clear]");
     if (clear) {

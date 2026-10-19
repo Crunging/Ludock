@@ -200,7 +200,7 @@ func (g GrantsView) selectedCount() int {
 }
 
 templ GrantsEditor(g GrantsView) {
-	<form class="grants-editor" id={ "grants-" + g.UserID } hx-post={ "/users/" + g.UserID + "/grants" } hx-target="this" hx-swap="outerHTML" data-grants>
+	<form class="grants-editor" id={ "grants-" + g.UserID } hx-post={ "/users/" + g.UserID + "/grants" } hx-target="this" hx-swap="outerHTML" hx-disinherit="*" data-grants>
 		<h3 tabindex="-1" autofocus>Server access for { g.Username }</h3>
 		<p class="muted">Choose a preset for each server, then adjust its permissions. New servers are not shared automatically.</p>
 		if g.Error != "" {

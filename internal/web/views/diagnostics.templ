@@ -1,0 +1,144 @@
+package views
+
+import (
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// DiagnosticsView is the diagnostics page.
+type DiagnosticsView struct {
+	DockerConnected bool
+	ComposeOK       bool
+	Diagnostics     []servers.Diagnostic
+}
+
+func consoleName(integration games.Integration) string {
+	if adapter := games.ResolveAdapter(integration.GameType, nil); adapter != nil {
+		return adapter.Name
+	}
+	return "—"
+}
+
+templ DiagnosticsPage(page Page, d DiagnosticsView) {
+	@Shell(page) {
+		<div class="page">
+			<div class="page__header page__header--actions">
+				<div>
+					<h1 class="page__title">Diagnostics</h1>
+					<p class="page__subtitle">Docker connectivity, discovery issues, and integration support.</p>
+				</div>
+				<a class="secondary-btn" href="/diagnostics">Refresh</a>
+			</div>
+			<dl class="metadata-list">
+				<dt>Docker Engine</dt>
+				<dd>
+					if d.DockerConnected {
+						Connected
+					} else {
+						Unavailable
+					}
+				</dd>
+				<dt>Compose updates</dt>
+				<dd>
+					if d.ComposeOK {
+						Available
+					} else {
+						Not enabled
+					}
+				</dd>
+			</dl>
+			if !d.DockerConnected {
+				<section class="help-panel diagnostics-help" aria-labelledby="docker-help-title">
+					<h2 id="docker-help-title">Connect Ludock to Docker</h2>
+					<p>Check that Docker is running on the host where Ludock is installed. The Ludock container needs its Docker socket mounted:</p>
+					<pre><code>/var/run/docker.sock:/var/run/docker.sock:ro</code></pre>
+					<p>
+						In <code>compose.yaml</code>, change the socket mount’s <code>source</code> to the socket path on the Docker host.
+						For rootless Docker, this is usually <code>/run/user/1000/docker.sock</code>; replace <code>1000</code> with the Docker user’s ID.
+					</p>
+					<p>
+						Run <code>docker compose up -d --force-recreate ludock</code> from Ludock’s Compose folder, then refresh this page.
+						Custom deployments must match the mount’s container path to <code>LUDOCK_DOCKER_SOCKET</code>.
+					</p>
+					<a class="text-link" href="/logs">View Ludock logs</a>
+				</section>
+			}
+			if !d.ComposeOK {
+				<section class="help-panel diagnostics-help" aria-labelledby="compose-help-title">
+					<h2 id="compose-help-title">Enable Compose updates when you need them</h2>
+					<p>
+						Server discovery and ordinary controls work without Compose update access. To update through Ludock, use its Linux container image,
+						mount the existing Compose sources read-only, and set <code>LUDOCK_COMPOSE_ROOTS</code> to those directories.
+					</p>
+					<a class="text-link" href="/settings">Open update settings</a>
+				</section>
+			}
+			<section class="settings-section">
+				<h2>Discovery issues</h2>
+				<div class="table-scroll">
+					<table class="data-table">
+						<thead>
+							<tr>
+								<th>Container</th>
+								<th>Issue</th>
+								<th>Details</th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(d.Diagnostics) == 0 {
+								<tr>
+									<td colspan="3" class="muted">
+										if d.DockerConnected {
+											No discovery issues reported.
+										} else {
+											Discovery cannot be checked until Docker is connected.
+										}
+									</td>
+								</tr>
+							}
+							for _, diagnostic := range d.Diagnostics {
+								<tr>
+									<td>
+										if diagnostic.Name != "" {
+											{ diagnostic.Name }
+										} else {
+											—
+										}
+									</td>
+									<td>{ strings.ReplaceAll(diagnostic.Code, "_", " ") }</td>
+									<td>{ diagnostic.Message }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+			<section class="settings-section">
+				<h2>Supported games</h2>
+				<p class="section-note">These images are managed automatically and get a built-in console. Recognition does not verify an image; other images need <code>ludock.enable=true</code>.</p>
+				<div class="table-scroll">
+					<table class="data-table">
+						<thead>
+							<tr>
+								<th>Game</th>
+								<th>Recognized images</th>
+								<th>Console</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, game := range games.Integrations {
+								<tr>
+									<td>{ game.Name }</td>
+									<td>{ strings.Join(game.Repositories, ", ") }</td>
+									<td>{ consoleName(game) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		</div>
+	}
+}

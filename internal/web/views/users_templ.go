@@ -765,7 +765,7 @@ func GrantsEditor(g GrantsView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "\" hx-target=\"this\" hx-swap=\"outerHTML\" data-grants><h3 tabindex=\"-1\" autofocus>Server access for ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disinherit=\"*\" data-grants><h3 tabindex=\"-1\" autofocus>Server access for ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

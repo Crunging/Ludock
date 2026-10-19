@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs, files, operations + detail, audit, Ludock logs, users + grants done; settings and diagnostics next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | done |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -298,6 +298,10 @@ at the very end (not opened yet). Update this file after every area.
   per-user fragment. ludock.js mirrors the old toggle rules; the server
   normalizes the same way (`views.GrantInputs`) and `SetUserGrants`
   enforces role ceilings.
+- Settings: four forms post to themselves (`hx-target="this"` always
+  with `hx-disinherit="*"`, or lazily loaded children replace the form).
+  `servers.SetConnectionHost` validates and normalizes the host. Hands-on
+  checks never enable Discord delivery: webhooks must be discord.com.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.
@@ -344,8 +348,7 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Pages (area 9), remaining: settings (connection host, backups,
-   notifications) and diagnostics. Screens and texts come from packages/frontend/src.
+1. Playwright journeys (area 10) against the real binary + `cmd/fakedocker`. Screens and texts come from packages/frontend/src.
    Check each by hand with headless Playwright (screenshots in
    /tmp/feature-screenshots/go-rewrite/) and add server-side tests in
    `internal/web` for the old browser race checks.
