@@ -33,8 +33,16 @@ Layout: `cmd/ludock` (serve, recover, and helper subcommands), `internal/{db,doc
 
 HTTP: stdlib **net/http ServeMux** (Go 1.22+ method/path patterns), no framework. Websockets: **github.com/coder/websocket**. Middleware: request ID, no-store on /api, security headers, auth, rate limits.
 
-### SQLite compatibility
-Keeping the schema byte-compatible is **cheap**: the Go migrations package embeds the same CREATE statements and the user_version numbering, and modernc reads Bun-created files fine. The real cost is matching JSON column shapes and the fingerprint/HMAC encodings. Recommendation: keep compatibility (users keep their accounts, grants, schedules, backup index, audit history, and notification settings). If it breaks, they lose all of that, have to re-run first-run setup, and have to re-register servers and schedules. Backups on disk survive, but they need to be re-indexed. Add one container test that boots Go on a DB created by v0.5.0.
+### SQLite schema
+**Decided (Logan, 2026-10-19): no compatibility with v0.5.0 databases.** The Go
+app starts from one fresh initial schema (version 1) with its own SQLite
+`application_id` marker; databases from the Bun releases are refused without
+being written to, and users run first-administrator setup again. There is no
+legacy migration chain, no v0.5.0 fixture, and no JavaScript-encoding shims:
+binding fingerprints are computed with `encoding/json` and `path.Clean`.
+Later schema changes are added as consecutive migrations after version 1.
+The data model otherwise stays as it was (it fits the Go services); old
+backup archives are not re-indexed.
 
 ## 2. Option A: Go backend plus embedded React
 - API-first. `/api/v1/*` and `/ws` stay exactly as they are, so React needs minimal changes.
@@ -72,7 +80,7 @@ Go lives in `go/` (or the root go.mod) alongside packages/. CI adds one **Go job
 
 Shared (A and B):
 1. **Scaffold**: go.mod, cmd/ludock, config, slog, health endpoint, Go CI job. (S, ~400 lines)
-2. **DB layer**: modernc sqlite, schema-compatible migrations, repos; test opening a v0.5.0 DB fixture. (M, ~1.2k)
+2. **DB layer**: modernc sqlite, one initial schema plus versioned migrations, repos. (M, ~1.2k)
 3. **Auth & security core**: argon2id compat, sessions, rate limits, request security, authorization/grants, identity key + #49 permission check, fingerprints. Focused unit tests. (L, ~2k)
 4. **Docker layer**: official SDK client, discovery, events, logs/stdcopy, attach/exec. (L, ~1.5k)
 5. **Helpers as subcommands + files/tar/backups core**, preview limits, path containment. (L, ~2.5k)
@@ -111,7 +119,7 @@ Option B continues (instead of 8A–11A):
 
 ## 8. Open decisions for Logan
 1. **A vs B** (recommendation: A first, B later page-by-page).
-2. **Keep DB compatibility?** (recommended yes; cheap.)
+2. **Keep DB compatibility?** Decided: no; fresh schema (see §1 “SQLite schema”).
 3. **Compose:** keep shelling out to `docker compose` (bigger image, exact behavior) or embed the compose library (smaller, riskier). Recommendation: exec first.
 4. **Release number** for the Go cutover: 0.6.0 vs 1.0.0.
 5. Repo layout: Go module at root vs `go/` subdir (recommendation: root `cmd/` + `internal/`, frontend stays in packages/frontend for A).

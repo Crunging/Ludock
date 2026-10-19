@@ -13,7 +13,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/jscompat"
 )
 
 // Service combines Docker observation with logical servers and grants.
@@ -351,10 +350,10 @@ func LockKeys(id string, observation identity.Observation) []string {
 			}
 			keys = append(keys, "volume:"+name)
 			if path.IsAbs(mount.Source) {
-				keys = append(keys, "path:"+jscompat.NormalizePosix(mount.Source))
+				keys = append(keys, "path:"+path.Clean(mount.Source))
 			}
 		} else {
-			keys = append(keys, "path:"+jscompat.NormalizePosix(mount.Source))
+			keys = append(keys, "path:"+path.Clean(mount.Source))
 		}
 	}
 	return keys

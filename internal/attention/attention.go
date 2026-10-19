@@ -11,9 +11,9 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/jscompat"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/schedules"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 // Item is one attention entry.
@@ -133,7 +133,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		if left.Kind == "operation" && left.UpdatedAt != right.UpdatedAt {
 			return left.UpdatedAt > right.UpdatedAt
 		}
-		if order := jscompat.LocaleCompare(left.ServerName, right.ServerName); order != 0 {
+		if order := textutil.Compare(left.ServerName, right.ServerName); order != 0 {
 			return order < 0
 		}
 		return strings.Compare(left.ID, right.ID) < 0

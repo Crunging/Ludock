@@ -10,7 +10,7 @@ at the very end (not opened yet). Update this file after every area.
 | # | Area | State |
 |---|------|-------|
 | 1 | Scaffold (go.mod, `cmd/ludock`, config, logging, health, Go CI) | done |
-| 2 | DB (modernc sqlite, v6–v9 migrations, identity key, account repos, v0.5.0 fixture) | done |
+| 2 | DB (modernc sqlite, fresh initial schema v1, identity key, account repos) | done (v0.5.0 compatibility dropped 2026-10-19) |
 | 3 | Auth/security core (argon2id, sessions, setup window, throttles, origin, client IP, grants, logical-server identity) | done |
 | 4 | Docker layer (Engine client, discovery, observation, events hub, fake Docker) | done (container log streaming moves to area 8) |
 | 5 | Helper subcommands replacing `bun -e` helper containers | done (network-console helper moves to area 8) |
@@ -27,18 +27,19 @@ at the very end (not opened yet). Update this file after every area.
 - `cmd/ludock`: `serve` (default), `recover <username>` (reads
   `LUDOCK_RECOVERY_PASSWORD`), `healthcheck`, `version`. Helpers go here as
   `ludock helper <name>`.
-- `internal/config`: env vars, same names as v0.5.0.
+- `internal/config`: env vars, same names as the Bun releases.
 - `internal/logging`: console lines in the old format
   (`ISO LEVEL [component] message {json}`), redaction (`Redact`,
   `IsSensitiveKey`), 1000-entry ring buffer for the admin log page (`List`).
 - `internal/apperr`: public errors (`Code`, `Status`, `Message`, `RetryAfterMs`).
-- `internal/db`: `Open`, migrations (verbatim SQL), identity key
+- `internal/db`: `Open`, migrations (initial schema v1, `ApplicationID`
+  "LDCK"), identity key
   (`LoadKey`, #49 mode check), fingerprints, users/sessions/login_attempts/
   audit/settings repos, guarded mutations (`CreateFirstUser`,
   `ChangePassword`, `AdminMutation`, `RemovesLastAdmin`).
-  `internal/db/dbtest`: `Open`, `OpenV050`, `V050Vectors`.
-- `internal/jscompat`: JSON.stringify string quoting, encodeURIComponent,
-  localeCompare (x/text/collate root), path.posix.normalize, UTF-16 length.
+  `internal/db/dbtest`: `Open`.
+- `internal/textutil`: `Length` (UTF-16 units, like HTML minlength and
+  maxlength), `Compare`/`CompareFold` (x/text collation for display order).
 - `internal/identity`: logical servers (`Store.Reconcile`, `ResolveBinding`,
   `AssertObservedBinding`, `ReviewBinding`, `BindingDigest`).
 - `internal/authz`: capabilities, role ceilings, `Effective`, `Assert`
@@ -102,7 +103,7 @@ at the very end (not opened yet). Update this file after every area.
   only transitions; Docker outage → `docker_unavailable`).
 - `internal/schedtime`: port of shared schedule-time (`Slot`, `NextRun`,
   `OneTimeRun`, `OneTimeSlot`, `LocalDate`, `Location` with embedded
-  tzdata). The v0.5.0 DST cases pass (fall-back, spring gap, Lord Howe,
+  tzdata). The ported DST cases pass (fall-back, spring gap, Lord Howe,
   Casey rollback).
 - `internal/schedules`: `Input` (stored JSON shape, `Validate`,
   `ParseSaved` strict + defaults, `Capabilities`, `EditCapabilities`),
@@ -149,7 +150,7 @@ at the very end (not opened yet). Update this file after every area.
   content-free `refresh` events for former viewers).
 - `internal/helper` (runs inside helper containers): `Main` dispatches
   `ludock helper file|idle|mount-proof|mount-identities|restore|restore-extract`;
-  same JSON protocols and fixed failure texts as the v0.5.0 scripts; all
+  same JSON protocols and fixed failure texts as the Bun helper scripts; all
   walks use `openat` with `O_NOFOLLOW` from pinned descriptors (no
   `/proc/self/fd` paths); uploads commit only after the exact trailer;
   rename uses `RENAME_NOREPLACE`; tar headers ported byte-for-byte
@@ -203,8 +204,15 @@ at the very end (not opened yet). Update this file after every area.
   (modernc). Pool of 4 connections, `_txlock=immediate`, per-connection
   pragmas `foreign_keys`, `busy_timeout(5000)`, `synchronous(FULL)` via DSN;
   WAL set after migrations. `:memory:` uses one connection.
+- No compatibility with v0.5.0 databases (Logan, 2026-10-19; PLAN.md §1
+  "SQLite schema"). One initial schema (version 1) replaces the Bun chain
+  6–9; later changes go in as consecutive migrations. The SQLite
+  `application_id` is "LDCK" (Bun used "LUDK"), so Bun databases are refused
+  like any foreign file. Binding fingerprints use `encoding/json` and
+  `path.Clean` instead of JS encodings; external identities use
+  `url.QueryEscape`. The data model is otherwise unchanged.
 - Existing DBs are inspected read-only (`immutable=1` unless a WAL/journal
-  exists) before anything writes, as in v0.5.0.
+  exists) before anything writes.
 - Read-then-write sequences that were atomic in single-threaded JS are now
   single transactions or compare-and-swap updates (first-admin insert,
   password change + session replacement, admin mutations recheck the
@@ -212,14 +220,13 @@ at the very end (not opened yet). Update this file after every area.
   throttle counters).
 - `LUDOCK_API_TOKEN` and the `/api/v1` JSON API are dropped (option B has no
   JSON API). `/api/v1/health` stays for monitors and the image healthcheck.
-  Old operations whose actor is `api-token:…` will fail closed (no account).
-  The `CredentialFingerprint` helper is kept only for display/compat.
-  Confirm with Logan before the final PR; mention in the PR description.
+  Operation and audit actors are always account IDs. Mention the API
+  removal in the PR description.
 - Default `PORT` is 3000 (was 3001 in dev; the image always set 3000).
 - `LUDOCK_DB_PATH` defaults to `data/ludock.db`; the image sets
   `/data/ludock.db` (NODE_ENV no longer matters).
-- Argon2id: m=65536, t=2, p=1, 32-byte salt, 32-byte key, PHC format, same
-  as Bun; parameter bounds as v0.5.0. Tests lower `argonMemoryKiB`.
+- Argon2id: m=65536, t=2, p=1, 32-byte salt, 32-byte key, PHC format.
+  Tests lower `argonMemoryKiB`.
 - Pages: CSRF token = sha256("ludock:csrf:v1:" + session token), sent as
   the `_csrf` field or the `X-CSRF-Token` header (`hx-headers` on
   `.app-layout`), on top of the Origin / Sec-Fetch-Site checks and
@@ -242,7 +249,7 @@ at the very end (not opened yet). Update this file after every area.
   server that the real binary talks to in Playwright journeys.
 - Helper containers run the Go binary (`Entrypoint [/usr/local/bin/ludock]`,
   `Cmd [helper …]`), with `GOMAXPROCS=1`, `GOMEMLIMIT=96MiB`, and
-  `PidsLimit` 64 (v0.5.0: 32) because Go runtimes start several threads.
+  `PidsLimit` 64 (Bun helpers used 32) because Go runtimes start several threads.
 - `launch.FallbackImage` is empty until a Go image is published: native
   runs outside a container need `FILE_HELPER_IMAGE` for file/backup
   helpers. Pin the published digest before the final PR.
@@ -251,14 +258,9 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Gotchas
 
-- Binding fingerprints hash a JS `JSON.stringify` encoding sorted with
-  `localeCompare`; `identity.BindingDigest` reproduces it and
-  `TestV050Fingerprints` checks it against vectors from the Bun code.
-- `internal/db/testdata/v050/` is a real v0.5.0 DB + key generated by
-  `generate.ts.txt` (run with Bun 1.4.3 from a temp dir against
-  `packages/backend/src`). Regenerate only while the TS code still exists.
-- The old code compared lengths in UTF-16 units (Zod); use
-  `jscompat.Length` for user-facing limits.
+- Use `textutil.Length` for user-facing limits so they agree with the
+  form's minlength/maxlength (UTF-16 units).
+- Never edit the version 1 schema once released; add a migration.
 - Chain verification and `git commit` with `&&` on one line: a failing
   `go vet` on an earlier line does not stop a later commit command.
 - Writing `\ufeff` through a heredoc/tool can produce a literal BOM in Go
@@ -287,6 +289,9 @@ at the very end (not opened yet). Update this file after every area.
 2. Playwright journeys (area 10) against the real binary + `cmd/fakedocker`.
 3. Dockerfile and CI cutover (area 11): fold `go.yaml` into `ci.yaml`, add a
    `templ generate` diff check; pin `launch.FallbackImage`.
-4. Delete Bun/TS, update docs (OPERATIONS.md: `ludock recover`, API removal),
+4. Delete Bun/TS, update docs (OPERATIONS.md: `ludock recover`, API removal,
+   fresh database: upgrading from the Bun releases needs a new data volume
+   and setup; AGENTS.md: schema guidance now points at
+   `internal/db/migrations.go`, version 1),
    release-please `simple` (area 12). Take the "before" screenshots from
    main before deleting the frontend.

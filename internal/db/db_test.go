@@ -44,10 +44,10 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fresh.db")
 	d := mustOpen(t, path)
-	if got := pragma(t, d.DB, "application_id"); got != "1280656459" {
+	if got := pragma(t, d.DB, "application_id"); got != "1279542091" {
 		t.Fatalf("application_id = %s", got)
 	}
-	if got := pragma(t, d.DB, "user_version"); got != "9" {
+	if got := pragma(t, d.DB, "user_version"); got != "1" {
 		t.Fatalf("user_version = %s", got)
 	}
 	if got := pragma(t, d.DB, "journal_mode"); got != "wal" {
@@ -117,17 +117,13 @@ func TestRejectsUnrelatedDatabaseWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestRejectsOlderSchemaWithoutWriting(t *testing.T) {
+// A database from the Bun releases carries their marker and schema; it is
+// refused before anything writes to it.
+func TestRejectsBunDatabaseWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "older.db")
+	path := filepath.Join(dir, "bun.db")
 	raw, _ := sql.Open("sqlite", path)
-	raw.SetMaxOpenConns(1)
-	conn, _ := raw.Conn(bg)
-	if err := ApplyMigrations(bg, conn, Migrations, bytes.Repeat([]byte{42}, 32)); err != nil {
-		t.Fatal(err)
-	}
-	conn.ExecContext(bg, "INSERT INTO docker_hosts VALUES ('host','local',1); PRAGMA user_version = 1")
-	conn.Close()
+	raw.Exec("CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1280656459; PRAGMA user_version = 9")
 	raw.Close()
 	os.Chmod(path, 0o640)
 	original, _ := os.ReadFile(path)
@@ -183,7 +179,7 @@ func TestInterruptedKeyWriteNeverPublishesPartialKey(t *testing.T) {
 	}
 	d := mustOpen(t, durable)
 	defer d.Close()
-	if pragma(t, d.DB, "user_version") != "9" {
+	if pragma(t, d.DB, "user_version") != "1" {
 		t.Fatal("not migrated")
 	}
 	again, _ := os.ReadFile(filepath.Join(durable+".identity-key", "key"))
@@ -328,25 +324,6 @@ func TestFutureMigrationKeepsRecords(t *testing.T) {
 	}
 	if err := ApplyMigrations(bg, conn, next, testKey); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestSavedSchedulesBecomeRecurring(t *testing.T) {
-	_, conn := memoryConn(t)
-	if err := ApplyMigrations(bg, conn, Migrations[:2], testKey); err != nil {
-		t.Fatal(err)
-	}
-	conn.ExecContext(bg, `INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES
-    ('schedule','server','owner','{"action":"start","enabled":true,"time":"08:00","days":[1],"timezone":"UTC"}',1,1),
-    ('damaged','server','owner','not json',1,2)`)
-	if err := ApplyMigrations(bg, conn, Migrations, testKey); err != nil {
-		t.Fatal(err)
-	}
-	var kind, damaged string
-	conn.QueryRowContext(bg, "SELECT json_extract(input_json,'$.kind') FROM schedules WHERE id='schedule'").Scan(&kind)
-	conn.QueryRowContext(bg, "SELECT input_json FROM schedules WHERE id='damaged'").Scan(&damaged)
-	if kind != "recurring" || damaged != "not json" {
-		t.Fatalf("kind=%q damaged=%q", kind, damaged)
 	}
 }
 

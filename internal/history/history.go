@@ -25,16 +25,12 @@ type Actor struct {
 	Name string
 }
 
-// PublicActor hides API-token fingerprints from v0.5.0 history.
+// PublicActor is the actor of a history entry, or nil when none is recorded.
 func PublicActor(id, name string) *Actor {
 	if id == "" && name == "" {
 		return nil
 	}
-	safe := ops.PublicActorID(id)
-	if safe == "api-token" {
-		return &Actor{ID: safe, Name: "API token"}
-	}
-	return &Actor{ID: safe, Name: name}
+	return &Actor{ID: id, Name: name}
 }
 
 // Query filters a history page. Zero values mean unset.
@@ -135,11 +131,6 @@ func nextCursor(scopeKey string, createdAt int64, id any) string {
 	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
-// Only the safe public token label takes part in search or output.
-func safeActorSQL(value string) string {
-	return "CASE WHEN " + value + " = 'api-token' OR " + value + " GLOB 'api-token:*' THEN 'api-token' ELSE " + value + " END"
-}
-
 // Operation is a history entry.
 type Operation struct {
 	ID, ServerID, Kind, Status, Phase string
@@ -201,12 +192,11 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 		values = append(values, q.Status)
 	}
 	if q.Actor != "" {
-		actorSQL := safeActorSQL("o.actor_id")
-		conditions = append(conditions, "("+actorSQL+" = ? COLLATE NOCASE OR instr(lower(u.username), lower(?)) > 0 OR ("+actorSQL+" = 'api-token' AND instr('api token', lower(?)) > 0))")
-		values = append(values, q.Actor, q.Actor, q.Actor)
+		conditions = append(conditions, "(o.actor_id = ? COLLATE NOCASE OR instr(lower(u.username), lower(?)) > 0)")
+		values = append(values, q.Actor, q.Actor)
 	}
 	values = append(values, q.Limit+1)
-	rows, err := s.DB.QueryContext(ctx, `SELECT o.id, o.server_id, `+safeActorSQL("o.actor_id")+`, u.username,
+	rows, err := s.DB.QueryContext(ctx, `SELECT o.id, o.server_id, o.actor_id, u.username,
     o.kind, o.status, o.phase, o.created_at, o.updated_at, o.error, o.result_json
     FROM operations o LEFT JOIN users u ON u.id = o.actor_id
     WHERE `+strings.Join(conditions, " AND ")+` ORDER BY o.created_at DESC, o.id DESC LIMIT ?`, values...)
@@ -284,7 +274,7 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	actorSQL := safeActorSQL("COALESCE(a.user_id, " + auditDetailsActorSQL + ", o.actor_id)")
+	actorSQL := "COALESCE(a.user_id, " + auditDetailsActorSQL + ", o.actor_id)"
 	statusSQL := auditStatusSQL()
 	if q.ServerID != "" {
 		conditions = append(conditions, "a.target_type = 'server' AND a.target_id = ?")
@@ -303,8 +293,8 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 		values = append(values, q.Status)
 	}
 	if q.Actor != "" {
-		conditions = append(conditions, "("+actorSQL+" = ? COLLATE NOCASE OR instr(lower(COALESCE(u.username, actor_user.username)), lower(?)) > 0 OR ("+actorSQL+" = 'api-token' AND instr('api token', lower(?)) > 0))")
-		values = append(values, q.Actor, q.Actor, q.Actor)
+		conditions = append(conditions, "("+actorSQL+" = ? COLLATE NOCASE OR instr(lower(COALESCE(u.username, actor_user.username)), lower(?)) > 0)")
+		values = append(values, q.Actor, q.Actor)
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -339,11 +329,6 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 			var parsed any
 			// Unreadable historical events stay listed without details.
 			if json.Unmarshal([]byte(details.String), &parsed) == nil {
-				if object, ok := parsed.(map[string]any); ok {
-					if id, ok := object["actorId"].(string); ok {
-						object["actorId"] = ops.PublicActorID(id)
-					}
-				}
 				entry.Details = parsed
 			}
 		}

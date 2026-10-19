@@ -1,6 +1,6 @@
 // Package helper implements the `ludock helper` subcommands that run inside
-// disposable helper containers. They replace v0.5.0's `bun -e` scripts and
-// keep the same request and output protocols. Every path is walked one
+// disposable helper containers, speaking JSON request and output
+// protocols with the backend. Every path is walked one
 // component at a time through pinned directory descriptors that never follow
 // symbolic links, and failures never print paths or raw filesystem errors.
 package helper

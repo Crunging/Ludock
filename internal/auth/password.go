@@ -33,8 +33,7 @@ type Hasher interface {
 	Verify(password, encoded string) bool
 }
 
-// Argon2 is the production hasher. It writes PHC strings compatible with the
-// hashes Ludock v0.5.0 stored.
+// Argon2 is the production hasher. It writes argon2id PHC strings.
 type Argon2 struct{}
 
 var b64 = base64.RawStdEncoding.Strict()

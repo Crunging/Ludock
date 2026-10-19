@@ -2,7 +2,6 @@ package identity
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -38,31 +37,52 @@ func wantCode(t *testing.T, err error, code string) {
 	}
 }
 
-func TestV050Fingerprints(t *testing.T) {
-	d := dbtest.OpenV050(t)
-	var vectors struct {
-		Servers []struct {
-			ID, ExternalIdentity, BindingFingerprint string
-		} `json:"servers"`
-		Observations []Observation `json:"observations"`
+func TestBindingDigestCoversMaterialSettingsOnly(t *testing.T) {
+	base := BindingDigest(observation(nil))
+	same := []func(*Observation){
+		func(o *Observation) { o.ContainerID, o.Name, o.DisplayName = "docker-b", "renamed", "Renamed" },
+		func(o *Observation) { o.Mounts[0].Source = "/srv//minecraft/" },
+		func(o *Observation) {
+			o.Mounts = append(o.Mounts, Mount{Type: "bind", Source: "/srv/mods", Destination: "/mods"})
+		},
 	}
-	if err := json.Unmarshal(dbtest.V050Vectors(t), &vectors); err != nil {
-		t.Fatal(err)
-	}
-	s := &Store{DB: d}
-	for index, o := range vectors.Observations {
-		external, _ := ExternalIdentity(o)
-		fingerprint, _ := s.BindingFingerprint(o)
-		if external != vectors.Servers[index].ExternalIdentity || fingerprint != vectors.Servers[index].BindingFingerprint {
-			t.Errorf("observation %d: %s %s", index, external, fingerprint)
+	for index, change := range same {
+		if BindingDigest(observation(change)) != base {
+			t.Errorf("change %d altered the digest", index)
 		}
 	}
-	// A v0.5.0 binding stays active when Go observes the same containers.
-	servers := reconcile(t, s, 1700000001000+120_000, vectors.Observations...)
-	for _, server := range servers {
-		if server.Status != StatusActive || server.BindingRevision != 1 {
-			t.Errorf("server %s: %s rev %d", server.DisplayName, server.Status, server.BindingRevision)
+	two := func(first, second Mount) func(*Observation) {
+		return func(o *Observation) { o.Mounts = []Mount{first, second} }
+	}
+	a := Mount{Type: "bind", Source: "/srv/a", Destination: "/a", Writable: true}
+	b := Mount{Type: "volume", Source: "/var/lib/docker/volumes/b/_data", Name: "b", Destination: "/b", Writable: true}
+	if BindingDigest(observation(two(a, b))) != BindingDigest(observation(two(b, a))) {
+		t.Error("mount order altered the digest")
+	}
+	different := []func(*Observation){
+		func(o *Observation) { o.GameType = "valheim" },
+		func(o *Observation) { o.Mounts[0].Source = "/srv/other" },
+		func(o *Observation) { o.Mounts[0].Destination = "/world" },
+		func(o *Observation) { o.GameConfiguration["ludock.console"] = "attach" },
+		func(o *Observation) { o.GameConfiguration = nil },
+	}
+	for index, change := range different {
+		if BindingDigest(observation(change)) == base {
+			t.Errorf("change %d kept the digest", index)
 		}
+	}
+}
+
+func TestExternalIdentityEscapesSeparators(t *testing.T) {
+	compose, _ := ExternalIdentity(observation(func(o *Observation) {
+		o.Compose = &ComposeIdentity{Project: "a:b", Service: "c", ContainerNumber: "1"}
+	}))
+	other, _ := ExternalIdentity(observation(func(o *Observation) {
+		o.Compose = &ComposeIdentity{Project: "a", Service: "b:c", ContainerNumber: "1"}
+	}))
+	standalone, _ := ExternalIdentity(observation(func(o *Observation) { o.Name = "/games stack" }))
+	if compose == other || compose != "compose:a%3Ab:c:1" || standalone != "standalone:games+stack" {
+		t.Fatal(compose, other, standalone)
 	}
 }
 

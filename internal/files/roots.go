@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/games"
-	"github.com/Crunging/Ludock/internal/jscompat"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 // Root is a browsable data directory.
@@ -32,7 +32,7 @@ type Mount struct {
 }
 
 func normalizedMountPath(value string) string {
-	normalized := strings.TrimSuffix(jscompat.NormalizePosix(value), "/")
+	normalized := strings.TrimSuffix(path.Clean(value), "/")
 	if normalized == "" {
 		return "/"
 	}
@@ -53,12 +53,12 @@ func SafeWritableDataMount(mount Mount) bool {
 		return false
 	}
 	destination := normalizedMountPath(mount.Destination)
-	if !strings.HasPrefix(destination, "/") || jscompat.Length(destination) > 512 ||
+	if !strings.HasPrefix(destination, "/") || textutil.Length(destination) > 512 ||
 		strings.Contains(mount.Destination, "\x00") || SensitiveSystemPath(destination) || socketSuffix.MatchString(destination) {
 		return false
 	}
 	if mount.Type == "bind" {
-		source := jscompat.NormalizePosix(mount.Source)
+		source := path.Clean(mount.Source)
 		if !strings.HasPrefix(source, "/") || strings.Contains(mount.Source, "\x00") ||
 			SensitiveSystemPath(source) || socketSuffix.MatchString(source) {
 			return false
@@ -82,7 +82,7 @@ func SensitiveSystemPath(value string) bool {
 	roots := slices.Clone(protectedPaths)
 	for _, part := range strings.Split(configured, ":") {
 		if strings.HasPrefix(part, "/") {
-			roots = append(roots, jscompat.NormalizePosix(part))
+			roots = append(roots, path.Clean(part))
 		}
 	}
 	if slices.Contains(broadPaths, value) {
@@ -118,8 +118,8 @@ func Roots(gameType string, labels map[string]string, mounts []Mount) []Root {
 		if !strings.HasPrefix(value, "/") || strings.Contains(value, "\x00") || slices.Contains(strings.Split(value, "/"), "..") {
 			continue
 		}
-		normalized := strings.TrimSuffix(jscompat.NormalizePosix(value), "/")
-		if normalized == "" || jscompat.Length(normalized) > 512 || slices.Contains(paths, normalized) || SensitiveSystemPath(normalized) {
+		normalized := strings.TrimSuffix(path.Clean(value), "/")
+		if normalized == "" || textutil.Length(normalized) > 512 || slices.Contains(paths, normalized) || SensitiveSystemPath(normalized) {
 			continue
 		}
 		var owners []Mount
@@ -129,7 +129,7 @@ func Roots(gameType string, labels map[string]string, mounts []Mount) []Root {
 			}
 		}
 		sort.SliceStable(owners, func(i, j int) bool {
-			return jscompat.Length(owners[i].Destination) > jscompat.Length(owners[j].Destination)
+			return textutil.Length(owners[i].Destination) > textutil.Length(owners[j].Destination)
 		})
 		if len(owners) == 0 || !SafeWritableDataMount(owners[0]) {
 			continue

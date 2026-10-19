@@ -442,10 +442,6 @@ func (d *DB) WriteAudit(ctx context.Context, q execer, entry AuditEntry) error {
 		details = string(encoded)
 	}
 	userID := entry.UserID
-	// API-token actors are not accounts; their events are recorded without a user.
-	if strings.HasPrefix(userID, "api-token") {
-		userID = ""
-	}
 	if _, err := q.ExecContext(ctx, `INSERT INTO audit_log
     (user_id, action, target_type, target_id, details_json, ip_address, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`,

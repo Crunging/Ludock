@@ -266,14 +266,4 @@ func TestInvalidSavedSchedulesAreReportedNotRun(t *testing.T) {
 	}
 }
 
-func TestV050ScheduleParses(t *testing.T) {
-	d := dbtest.OpenV050(t)
-	var raw string
-	d.QueryRow("SELECT input_json FROM schedules").Scan(&raw)
-	input, err := ParseSaved(raw)
-	if err != nil || input.Action != "restart" || input.Timezone != "Europe/Berlin" || !input.Enabled {
-		t.Fatal(input, err)
-	}
-}
-
 func schedtimeGrace() int64 { return 5 * 60_000 }

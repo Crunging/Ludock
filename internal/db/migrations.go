@@ -7,15 +7,15 @@ import (
 	"fmt"
 )
 
-// ApplicationID is the "LUDK" marker that identifies Ludock-owned SQLite files
-// independently of the schema version. Never infer ownership merely from a
-// familiar table name.
-const ApplicationID = 0x4c55444b
+// ApplicationID marks Ludock-owned SQLite files ("LDCK") independently of the
+// schema version. Never infer ownership merely from a familiar table name.
+// The Bun releases used "LUDK" with a different schema; Ludock refuses those
+// files without writing to them.
+const ApplicationID = 0x4c44434b
 
-// BaseSchemaVersion is the schema released in v0.3.0. Earlier development
-// schemas have no supported upgrade path; add later changes as consecutive
-// migrations.
-const BaseSchemaVersion = 6
+// BaseSchemaVersion is the initial schema. Add later changes as consecutive
+// migrations; never edit a released one.
+const BaseSchemaVersion = 1
 
 // Migration is one schema version. Upgrade runs inside the migration
 // transaction after SQL.
@@ -28,8 +28,7 @@ type Migration struct {
 // ErrIncompatible reports a database that Ludock does not own or cannot upgrade.
 var ErrIncompatible = errors.New("This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.")
 
-// Migrations is the complete schema history. It must stay byte-compatible
-// with the schema that v0.5.0 created.
+// Migrations is the complete schema history.
 var Migrations = []Migration{
 	{
 		Version: BaseSchemaVersion,
@@ -129,12 +128,16 @@ var Migrations = []Migration{
       ) STRICT;
       CREATE INDEX operations_history_idx ON operations(created_at DESC, id DESC);
       CREATE INDEX operations_server_history_idx ON operations(server_id, created_at DESC, id DESC);
+      -- Server lists and the runner read active work on every refresh.
+      CREATE INDEX operations_active_server_idx ON operations(server_id) WHERE status IN ('queued','running');
+      CREATE INDEX operations_queued_idx ON operations(created_at, id) WHERE status = 'queued';
       CREATE TABLE backups (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         binding_fingerprint TEXT NOT NULL, destination TEXT NOT NULL,
         roots_json TEXT NOT NULL, size INTEGER NOT NULL, checksum TEXT NOT NULL,
         created_at INTEGER NOT NULL, state TEXT NOT NULL
       ) STRICT;
+      CREATE INDEX backups_server_idx ON backups(server_id, created_at DESC, id);
       CREATE TABLE schedules (
         id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES logical_servers(id),
         owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -142,6 +145,14 @@ var Migrations = []Migration{
         last_slot TEXT, last_result TEXT, created_at INTEGER NOT NULL,
         revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
         last_operation_id TEXT, last_run_at INTEGER CHECK (last_run_at >= 0)
+      ) STRICT;
+      CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
+      -- Claimed countdown warnings, so a restart never repeats one. Repeated
+      -- fall-back hours share a slot, so each lead time is claimed separately.
+      CREATE TABLE schedule_announcements (
+        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        slot TEXT NOT NULL, lead_minutes INTEGER NOT NULL,
+        PRIMARY KEY (schedule_id, slot, lead_minutes)
       ) STRICT;
       CREATE TABLE availability (
         server_id TEXT PRIMARY KEY REFERENCES logical_servers(id), policy_json TEXT NOT NULL,
@@ -163,40 +174,6 @@ var Migrations = []Migration{
       CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
     `,
 		Upgrade: initializeKeyCheck,
-	},
-	{
-		// Server lists and the operation runner read active work and the latest
-		// backup on every refresh. Keep those reads off the growing history.
-		Version: 7,
-		SQL: `
-      CREATE INDEX operations_active_server_idx ON operations(server_id)
-        WHERE status IN ('queued','running');
-      CREATE INDEX operations_queued_idx ON operations(created_at, id)
-        WHERE status = 'queued';
-      CREATE INDEX backups_server_idx ON backups(server_id, created_at DESC, id);
-      CREATE INDEX schedules_server_idx ON schedules(server_id, created_at, id);
-    `,
-	},
-	{
-		// Schedules are now either recurring or one-time. Saved schedules were all
-		// recurring, so record that kind in their settings.
-		Version: 8,
-		SQL: `
-      UPDATE schedules SET input_json = json_set(input_json, '$.kind', 'recurring')
-        WHERE json_valid(input_json) AND json_type(input_json, '$.kind') IS NULL;
-    `,
-	},
-	{
-		// Claimed countdown warnings, so a restart never repeats one. Repeated
-		// fall-back hours share a slot, so each lead time is claimed separately.
-		Version: 9,
-		SQL: `
-      CREATE TABLE schedule_announcements (
-        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
-        slot TEXT NOT NULL, lead_minutes INTEGER NOT NULL,
-        PRIMARY KEY (schedule_id, slot, lead_minutes)
-      ) STRICT;
-    `,
 	},
 }
 

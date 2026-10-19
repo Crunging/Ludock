@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -26,10 +27,10 @@ import (
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/jscompat"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/tarstream"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 // Settings is the backup configuration.
@@ -97,7 +98,7 @@ func NewStorage(client *docker.Client) *Storage {
 // ValidateSettings checks limits, the destination, and that it is a
 // writable mount of Ludock's own container.
 func (s *Storage) ValidateSettings(ctx context.Context, settings Settings) (Settings, error) {
-	if settings.Destination == "" || jscompat.Length(settings.Destination) > 1024 || settings.RetentionCount < 1 ||
+	if settings.Destination == "" || textutil.Length(settings.Destination) > 1024 || settings.RetentionCount < 1 ||
 		settings.RetentionCount > 1000 || settings.MaxBytes <= 0 || settings.MaxBytes > 1<<53-1 ||
 		settings.ReserveBytes < 0 || settings.ReserveBytes > 1<<53-1 {
 		return settings, apperr.New("INVALID_REQUEST", 400, "Invalid request")
@@ -400,7 +401,7 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 	}
 	if strings.Contains(header.Name, "\x00") || strings.Contains(header.Name, "\\") || strings.HasPrefix(header.Name, "/") ||
 		slices.ContainsFunc(parts, func(part string) bool { return part == ".." || part == "." || part == "" }) ||
-		len(parts) > 64 || jscompat.Length(name) > 4096 {
+		len(parts) > 64 || textutil.Length(name) > 4096 {
 		return fail("UNSAFE_ARCHIVE", "The archive contains an unsafe path.")
 	}
 	if name != "snapshot" && (!strings.HasPrefix(name, "snapshot/") || !slices.ContainsFunc(roots, func(root Root) bool { return parts[1] == root.ID })) {
@@ -518,7 +519,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		if !strings.HasPrefix(source.Source, "/") {
 			return nil, fail("BACKUP_ROOT_CHANGED", "The physical source of a selected data root could not be verified.")
 		}
-		physical := jscompat.NormalizePosix(source.Source + root.Path[len(source.Destination):])
+		physical := path.Clean(source.Source + root.Path[len(source.Destination):])
 		if slices.ContainsFunc(physicalRoots, func(other string) bool {
 			return physical == other || strings.HasPrefix(physical, other+"/") || strings.HasPrefix(other, physical+"/")
 		}) {

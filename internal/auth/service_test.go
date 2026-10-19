@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -111,18 +110,6 @@ func TestPasswordEncoding(t *testing.T) {
 	weak, _ := hashWith("x", 512, 1, 1)
 	if !NeedsUpgrade(weak) || !(Argon2{}).Verify("x", weak) {
 		t.Fatal("weak hash handling")
-	}
-}
-
-func TestV050PasswordsVerify(t *testing.T) {
-	d := dbtest.OpenV050(t)
-	var vectors struct{ AdminPassword, ViewerPassword string }
-	json.Unmarshal(dbtest.V050Vectors(t), &vectors)
-	for username, password := range map[string]string{"admin": vectors.AdminPassword, "viewer": vectors.ViewerPassword} {
-		user, _ := d.FindUserByUsername(ctx, username)
-		if user == nil || !(Argon2{}).Verify(password, user.PasswordHash) || NeedsUpgrade(user.PasswordHash) {
-			t.Fatalf("%s did not verify", username)
-		}
 	}
 }
 

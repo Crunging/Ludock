@@ -142,7 +142,7 @@ var (
 
 // Actor resolves the operation's owner now. Queued work from a schedule
 // also requires the schedule to be unchanged and the owner to still manage
-// schedules. API-token actors from v0.5.0 have no account and fail closed.
+// schedules. A deleted owner fails closed.
 func (j *Jobs) Actor(ctx context.Context, job *ops.Context) (*db.SessionUser, error) {
 	user, err := j.DB.FindUserByID(ctx, job.Job.ActorID)
 	if err != nil {

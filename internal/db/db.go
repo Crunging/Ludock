@@ -166,12 +166,6 @@ func (d *DB) ComposeSourceFingerprint(digest string) (string, error) {
 	return protectDigest(digest, d.key, "compose-source:v1")
 }
 
-// CredentialFingerprint identifies a credential generation for durable
-// work; it is not a password verifier.
-func (d *DB) CredentialFingerprint(value string) string {
-	return keyedHex(d.key, "ludock:credential:v1:"+value)
-}
-
 // Tx runs fn in an immediate transaction.
 func (d *DB) Tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := d.BeginTx(ctx, nil)

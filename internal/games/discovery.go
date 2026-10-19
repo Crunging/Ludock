@@ -3,7 +3,7 @@ package games
 import (
 	"regexp"
 
-	"github.com/Crunging/Ludock/internal/jscompat"
+	"github.com/Crunging/Ludock/internal/textutil"
 	"strconv"
 	"strings"
 )
@@ -117,7 +117,7 @@ var (
 // falls back to detection.
 func ParseAddress(value string) *Address {
 	text := strings.TrimSpace(value)
-	if text == "" || jscompat.Length(text) > 300 {
+	if text == "" || textutil.Length(text) > 300 {
 		return nil
 	}
 	host, port := text, ""
@@ -188,7 +188,7 @@ func InvalidComposeIdentity(labels map[string]string) bool {
 		return false
 	}
 	for _, value := range []string{project, service} {
-		if value == "" || jscompat.Length(value) > 512 || strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+		if value == "" || textutil.Length(value) > 512 || strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 			return true
 		}
 	}

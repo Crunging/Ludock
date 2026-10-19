@@ -29,14 +29,14 @@ func TestPagesRecheckAccessAndHideTokens(t *testing.T) {
 		server := list[index%2].ID
 		actor := "admin"
 		if index == 4 {
-			actor = "api-token:" + fmt.Sprintf("%064d", 1)
+			actor = "viewer"
 		}
 		d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
       VALUES (?,?,?,'start','succeeded','succeeded','{}',1,?,?)`, fmt.Sprintf("00000000-0000-4000-8000-%012d", index), server, actor, index, index)
 	}
 	s := &Service{DB: d, Authz: authorization, Identity: store}
 	page, next, err := s.Operations(ctx, admin, Query{Limit: 2, From: -1, To: -1})
-	if err != nil || len(page) != 2 || next == "" || page[0].Actor.ID != "api-token" || page[0].Actor.Name != "API token" {
+	if err != nil || len(page) != 2 || next == "" || page[0].Actor.ID != "viewer" || page[0].Actor.Name != "viewer" {
 		t.Fatal(page, next, err)
 	}
 	rest, last, _ := s.Operations(ctx, admin, Query{Limit: 2, Cursor: next, From: -1, To: -1})
@@ -50,14 +50,14 @@ func TestPagesRecheckAccessAndHideTokens(t *testing.T) {
 	if len(visible) != 3 {
 		t.Fatal(len(visible))
 	}
-	if found, _, _ := s.Operations(ctx, admin, Query{Actor: "api token", From: -1, To: -1}); len(found) != 1 {
+	if found, _, _ := s.Operations(ctx, admin, Query{Actor: "VIEW", From: -1, To: -1}); len(found) != 1 {
 		t.Fatal(found)
 	}
 	d.WriteAudit(ctx, nil, db.AuditEntry{Action: "server.start.failed", TargetType: "server", TargetID: list[0].ID,
-		Details: map[string]string{"operationId": "00000000-0000-4000-8000-000000000000", "actorId": "api-token:abc"}})
+		Details: map[string]string{"operationId": "00000000-0000-4000-8000-000000000000", "actorId": "viewer"}})
 	entries, _, err := s.Audit(ctx, Query{Status: "failed", From: -1, To: -1})
 	if err != nil || len(entries) != 1 || entries[0].Status != "failed" || entries[0].OperationID == "" ||
-		entries[0].Details.(map[string]any)["actorId"] != "api-token" {
+		entries[0].Details.(map[string]any)["actorId"] != "viewer" {
 		t.Fatal(entries, err)
 	}
 }

@@ -20,7 +20,7 @@ const (
 
 var errArchiveValue = errors.New("an archive value is too large")
 
-// tarHeader builds a ustar header like v0.5.0's helper. A name that does not
+// tarHeader builds a ustar header. A name that does not
 // fit the ustar name/prefix fields gets a per-entry PAX path record, which
 // keeps long and Unicode names intact. Ownership is kept only for backups.
 func tarHeader(name string, info tarInfo, directory bool, kind byte, keepOwner bool) ([]byte, error) {

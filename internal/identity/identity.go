@@ -3,19 +3,23 @@
 package identity
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/url"
+	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
-	"github.com/Crunging/Ludock/internal/jscompat"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 // ComposeIdentity is the Compose project, service, and replica number.
@@ -131,7 +135,7 @@ func (s *Store) DockerHostID(ctx context.Context, name string) (string, error) {
 }
 
 func validIdentityPart(value string) bool {
-	if value == "" || jscompat.Length(value) > 512 {
+	if value == "" || textutil.Length(value) > 512 {
 		return false
 	}
 	return strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) < 0
@@ -147,42 +151,44 @@ func ExternalIdentity(o Observation) (string, error) {
 		if !validIdentityPart(c.Project) || !validIdentityPart(c.Service) || !replicaPattern.MatchString(c.ContainerNumber) {
 			return "", bindingError("INVALID_SERVER_OBSERVATION", "Incomplete Compose server identity", 409)
 		}
-		return "compose:" + jscompat.EncodeURIComponent(c.Project) + ":" + jscompat.EncodeURIComponent(c.Service) + ":" + c.ContainerNumber, nil
+		return "compose:" + url.QueryEscape(c.Project) + ":" + url.QueryEscape(c.Service) + ":" + c.ContainerNumber, nil
 	}
-	return "standalone:" + jscompat.EncodeURIComponent(strings.TrimPrefix(o.Name, "/")), nil
+	return "standalone:" + url.QueryEscape(strings.TrimPrefix(o.Name, "/")), nil
 }
 
 // BindingDigest is the unkeyed digest of what makes a binding material:
 // game type, writable mounts, and game configuration.
 func BindingDigest(o Observation) string {
-	var mounts []string
+	type mount struct {
+		Type        string `json:"type"`
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	mounts := []mount{}
 	for _, m := range o.Mounts {
 		if !m.Writable {
 			continue
 		}
-		source := jscompat.NormalizePosix(m.Source)
+		source := path.Clean(m.Source)
 		if m.Type == "volume" && m.Name != "" {
 			source = m.Name
 		}
-		mounts = append(mounts, `{"type":`+jscompat.Quote(m.Type)+`,"source":`+jscompat.Quote(source)+
-			`,"destination":`+jscompat.Quote(jscompat.NormalizePosix(m.Destination))+`}`)
+		mounts = append(mounts, mount{m.Type, source, path.Clean(m.Destination)})
 	}
-	sort.SliceStable(mounts, func(i, j int) bool { return jscompat.LocaleCompare(mounts[i], mounts[j]) < 0 })
-	keys := make([]string, 0, len(o.GameConfiguration))
-	for key := range o.GameConfiguration {
-		keys = append(keys, key)
+	slices.SortFunc(mounts, func(a, b mount) int {
+		return cmp.Or(cmp.Compare(a.Type, b.Type), cmp.Compare(a.Source, b.Source), cmp.Compare(a.Destination, b.Destination))
+	})
+	// encoding/json writes map keys sorted.
+	configuration := o.GameConfiguration
+	if configuration == nil {
+		configuration = map[string]string{}
 	}
-	// Map order is random; make ties deterministic before the stable sort.
-	sort.Strings(keys)
-	sort.SliceStable(keys, func(i, j int) bool { return jscompat.LocaleCompare(keys[i], keys[j]) < 0 })
-	var configuration []string
-	for _, key := range keys {
-		configuration = append(configuration, "["+jscompat.Quote(key)+","+jscompat.Quote(o.GameConfiguration[key])+"]")
-	}
-	// Preserve the historical fingerprint encoding for existing bindings.
-	encoded := `{"projectRegistrationId":null,"gameType":` + jscompat.Quote(o.GameType) +
-		`,"mounts":[` + strings.Join(mounts, ",") + `],"configuration":[` + strings.Join(configuration, ",") + `]}`
-	sum := sha256.Sum256([]byte(encoded))
+	encoded, _ := json.Marshal(struct {
+		GameType      string            `json:"gameType"`
+		Mounts        []mount           `json:"mounts"`
+		Configuration map[string]string `json:"configuration"`
+	}{o.GameType, mounts, configuration})
+	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
 

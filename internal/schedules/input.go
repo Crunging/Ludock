@@ -21,7 +21,7 @@ type Announcements struct {
 	LeadMinutes []int `json:"leadMinutes"`
 }
 
-// Input is a schedule's settings, in v0.5.0's stored JSON shape.
+// Input is a schedule's settings, as stored in JSON.
 type Input struct {
 	Kind          string         `json:"kind"`
 	Action        string         `json:"action"`
@@ -52,7 +52,7 @@ var DefaultLeadMinutes = []int{10, 5, 1}
 
 func invalid(message string) error { return apperr.New("INVALID_REQUEST", 400, message) }
 
-// Validate checks settings the way v0.5.0's schema did.
+// Validate checks settings.
 func (i *Input) Validate() error {
 	if !slices.Contains(Actions, i.Action) {
 		return invalid("Choose a schedule action")
@@ -112,7 +112,7 @@ func (i *Input) Validate() error {
 	return nil
 }
 
-// ParseSaved decodes stored settings strictly, applying v0.5.0's defaults.
+// ParseSaved decodes stored settings strictly, applying defaults.
 func ParseSaved(raw string) (Input, error) {
 	input := Input{Enabled: true}
 	decoder := json.NewDecoder(bytes.NewReader([]byte(raw)))

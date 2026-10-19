@@ -266,14 +266,6 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 	return result.job()
 }
 
-// PublicActorID hides API-token credential fingerprints.
-func PublicActorID(id string) string {
-	if id == "api-token" || len(id) > 10 && id[:10] == "api-token:" {
-		return "api-token"
-	}
-	return id
-}
-
 func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) {
 	var resultJSON, errorValue any
 	if result != nil {
@@ -283,7 +275,7 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 	if errorText != "" {
 		errorValue = errorText
 	}
-	details := map[string]any{"operationId": job.ID, "actorId": PublicActorID(job.ActorID)}
+	details := map[string]any{"operationId": job.ID, "actorId": job.ActorID}
 	if errorText != "" {
 		details["error"] = errorText
 	}

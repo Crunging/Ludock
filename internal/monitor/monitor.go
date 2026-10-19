@@ -47,7 +47,7 @@ type Service struct {
 	Store  *identity.Store
 }
 
-// ParsePolicy validates a policy, applying the defaults of v0.5.0.
+// ParsePolicy validates a policy, applying defaults.
 func ParsePolicy(raw []byte) (Policy, error) {
 	var input struct {
 		Enabled      *bool    `json:"enabled"`

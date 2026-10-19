@@ -1,4 +1,4 @@
-// Package datasize parses and formats byte sizes the way v0.5.0 did.
+// Package datasize parses and formats byte sizes.
 package datasize
 
 import (

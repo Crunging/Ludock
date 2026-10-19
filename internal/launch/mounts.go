@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
-	"github.com/Crunging/Ludock/internal/jscompat"
 )
 
 // ErrUnverifiedMount reports a data mount that could not be proven.
@@ -35,7 +35,7 @@ type Proof struct {
 }
 
 // HelperLimits are the resource limits of helper containers. Go runtimes
-// start several threads, so the PID limit is higher than v0.5.0's 32.
+// start several threads, so the PID limit leaves room for them.
 const (
 	helperPids    = 64
 	helperCPUNano = 1_000_000_000
@@ -46,7 +46,7 @@ var HelperEnv = []string{"GOMAXPROCS=1", "GOMEMLIMIT=96MiB"}
 
 var digits = regexp.MustCompile(`^\d+$`)
 
-func trimSlash(value string) string { return strings.TrimSuffix(jscompat.NormalizePosix(value), "/") }
+func trimSlash(value string) string { return strings.TrimSuffix(path.Clean(value), "/") }
 
 // MountProof verifies volume drivers and pins bind sources through a private
 // validator that sees only directory device and inode numbers. It never runs

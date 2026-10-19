@@ -18,9 +18,9 @@ import (
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/jscompat"
 	"github.com/Crunging/Ludock/internal/launch"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 var log = logging.New("files")
@@ -72,7 +72,7 @@ func NormalizeRelativePath(value string) (string, error) {
 	if value == "" {
 		value = "."
 	}
-	normalized := jscompat.NormalizePosix(value)
+	normalized := path.Clean(value)
 	if normalized == "." {
 		normalized = ""
 	}
@@ -86,7 +86,7 @@ func NormalizeRelativePath(value string) (string, error) {
 // control characters (which also forge terminal output in logs), or are
 // longer than 255 characters.
 func ValidateName(name string) error {
-	if name == "" || jscompat.Length(name) > 255 || name == "." || name == ".." || strings.Contains(name, "/") ||
+	if name == "" || textutil.Length(name) > 255 || name == "." || name == ".." || strings.Contains(name, "/") ||
 		strings.TrimSpace(name) != name || strings.IndexFunc(name, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return Error("INVALID_NAME", 400)
 	}
@@ -167,7 +167,7 @@ func OwnerMount(rootPath string, mounts []Mount) *Mount {
 	for index := range mounts {
 		mount := &mounts[index]
 		if Within(rootPath, normalizedMountPath(mount.Destination)) &&
-			(owner == nil || jscompat.Length(mount.Destination) > jscompat.Length(owner.Destination)) {
+			(owner == nil || textutil.Length(mount.Destination) > textutil.Length(owner.Destination)) {
 			owner = mount
 		}
 	}
@@ -320,7 +320,7 @@ func (s *Service) List(ctx context.Context, target Target, rootID, relative stri
 		if left != right {
 			return left
 		}
-		return jscompat.LocaleCompareBase(entries[i].Name, entries[j].Name) < 0
+		return textutil.CompareFold(entries[i].Name, entries[j].Name) < 0
 	})
 	return &Listing{Root: root, Path: normalized, Entries: entries}, nil
 }

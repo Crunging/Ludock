@@ -557,7 +557,7 @@ func EncodeHeader(header Header) ([]byte, error) {
 	return append(result, raw...), nil
 }
 
-// paxOrder keeps records in the order v0.5.0 wrote them.
+// paxOrder writes records in a fixed order, so encoding is deterministic.
 func paxOrder(key string) int {
 	switch key {
 	case "uid":

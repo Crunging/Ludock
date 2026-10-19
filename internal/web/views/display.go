@@ -193,5 +193,5 @@ func Since(state string, since int64) (string, bool) {
 	return "", true
 }
 
-// FormatBytes formats a size like v0.5.0.
+// FormatBytes formats a size in binary units.
 func FormatBytes(bytes int64) string { return datasize.Format(bytes) }

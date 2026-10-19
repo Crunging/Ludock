@@ -18,8 +18,8 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/jscompat"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 const (
@@ -114,13 +114,14 @@ var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // ValidUsername trims and validates a username.
 func ValidUsername(username string) (string, bool) {
 	username = strings.TrimSpace(username)
-	length := jscompat.Length(username)
+	length := textutil.Length(username)
 	return username, length >= 3 && length <= 32 && usernamePattern.MatchString(username)
 }
 
-// ValidPassword checks the length policy in UTF-16 units, matching v0.5.0.
+// ValidPassword checks the length policy in UTF-16 units, like the form's
+// minlength and maxlength.
 func ValidPassword(password string) bool {
-	length := jscompat.Length(password)
+	length := textutil.Length(password)
 	return length >= PasswordMin && length <= PasswordMax
 }
 
@@ -208,7 +209,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	username, validUsername := ValidUsername(username)
-	if !validUsername || !ValidPassword(password) || jscompat.Length(code) < SetupCodeMin || jscompat.Length(code) > SetupCodeMax {
+	if !validUsername || !ValidPassword(password) || textutil.Length(code) < SetupCodeMin || textutil.Length(code) > SetupCodeMax {
 		return nil, apperr.New("INVALID_REQUEST", 400,
 			"Username must be 3-32 letters, numbers, dots, underscores, or hyphens; password must be at least 15 characters.")
 	}
@@ -379,8 +380,7 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	return principal, s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: user.ID, Action: "auth.login", TargetType: "session", IPAddress: client.IP})
 }
 
-// SessionToken extracts the session cookie. The last valid cookie wins, as
-// in v0.5.0.
+// SessionToken extracts the session cookie. The last valid cookie wins.
 func SessionToken(r *http.Request) string {
 	value := ""
 	for _, header := range r.Header.Values("Cookie") {
@@ -470,7 +470,7 @@ func (s *Service) Logout(ctx context.Context, token string, client Client) error
 // per credential, so a stolen session cannot be brute forced into a takeover
 // and one stolen session cannot lock every session out.
 func (s *Service) ChangePassword(ctx context.Context, principal *Principal, currentPassword, newPassword string, client Client) (*Principal, error) {
-	if length := jscompat.Length(currentPassword); length < 1 || length > PasswordMax || !ValidPassword(newPassword) {
+	if length := textutil.Length(currentPassword); length < 1 || length > PasswordMax || !ValidPassword(newPassword) {
 		return nil, apperr.Newf("INVALID_REQUEST", 400, "New password must be between %d and %d characters", PasswordMin, PasswordMax)
 	}
 	now := s.Now()
