@@ -122,6 +122,7 @@ func serve() int {
 	defer cancel()
 	// Stop new requests first; background work and held locks settle before
 	// the database closes.
+	server.CloseSockets()
 	failed := httpServer.Shutdown(shutdownCtx) != nil
 	services.Stop()
 	if failed {

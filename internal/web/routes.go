@@ -32,6 +32,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}", s.authed(s.saveSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/toggle", s.authed(s.toggleSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/delete", s.authed(s.deleteSchedule))
+	m.HandleFunc("GET /console/{id}", s.authed(s.consolePage))
+	m.HandleFunc("GET /ws/console/{id}", s.authed(s.consoleSocket))
 	m.HandleFunc("POST /servers/{id}/start", s.authed(s.startServer))
 	m.HandleFunc("POST /servers/{id}/stop", s.authed(s.queueLifecycle("stop")))
 	m.HandleFunc("POST /servers/{id}/restart", s.authed(s.queueLifecycle("restart")))

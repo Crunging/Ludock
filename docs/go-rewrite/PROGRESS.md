@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor) done; console/logs, files, admin next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs done; files, admin next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -271,6 +271,16 @@ at the very end (not opened yet). Update this file after every area.
   `data-hidden-by`, `data-shown-when="field=value"`, `data-days`,
   `data-local-timezone`, `data-default-local-timezone`,
   `datalist[data-timezones]`, `data-confirm-value`.
+- Console: `/console/{id}?mode=logs|game|shell` is server-rendered (mode
+  tabs are links; drafts and history live only in the page) and
+  `assets/console.js` drives xterm. `/ws/console/{id}?mode=` (coder/websocket,
+  same-origin only, session cookie) keeps the old limits: 12 per user, 8 per
+  session, 100 total with 10 reserved for administrators, 64 KiB messages,
+  1 MiB queued output (then close 1013), session recheck every 15 s and per
+  message (1008 on revocation). The page treats the first server message as
+  proof of authorization. `Server.CloseSockets` runs before HTTP shutdown;
+  the handler waits for the close handshake before cancelling, or coder
+  drops the close code.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.
@@ -317,9 +327,7 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Pages (area 9), remaining in order: console/logs (xterm over
-   WebSocket, `console.Sessions`; the detail header already links
-   `/console/{id}`); files (browse, preview, upload, download, at
+1. Pages (area 9), remaining in order: files (browse, preview, upload, download, at
    `/files/{id}`); admin (users + grants, settings, diagnostics, audit,
    Ludock logs, operations list `/operations` and detail
    `/operations/{id}`, which the activity tab already links). Reuse

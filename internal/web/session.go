@@ -74,6 +74,10 @@ func readForm(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) loginRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Upgrade") != "" {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", "/login")
 		w.WriteHeader(http.StatusUnauthorized)

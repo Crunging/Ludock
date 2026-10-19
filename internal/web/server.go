@@ -36,6 +36,7 @@ type Server struct {
 	healthMu sync.Mutex
 	healthAt time.Time
 	healthy  bool
+	sockets  sockets
 }
 
 // Handler builds the routed handler.
