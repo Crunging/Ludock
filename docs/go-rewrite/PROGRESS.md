@@ -281,6 +281,8 @@ at the very end (not opened yet). Update this file after every area.
 - Never edit the version 1 schema once released; add a migration.
 - Chain verification and `git commit` with `&&` on one line: a failing
   `go vet` on an earlier line does not stop a later commit command.
+  `gofmt -l` exits 0 even when it lists files: gate with
+  `test -z "$(gofmt -l internal cmd)"`.
 - Writing `\ufeff` through a heredoc/tool can produce a literal BOM in Go
   source (vet: illegal byte order mark); escape it in Python instead.
 - `pkill -f ludock-bin` kills your own shell (the pattern is in the command
@@ -299,12 +301,13 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Pages (area 9), in order: account (password, sessions); server detail
-   (overview, availability, update, backups, schedules, activity, binding
-   review); console/logs (xterm over WebSocket, `console.Sessions`);
-   schedule editors; files (browse, preview, upload, download); backups and
-   restore; admin (users + grants, settings, diagnostics, audit, Ludock
-   logs, operations). Screens and texts come from packages/frontend/src.
+1. Pages (area 9), remaining in order: console/logs (xterm over
+   WebSocket, `console.Sessions`; the detail header already links
+   `/console/{id}`); files (browse, preview, upload, download, at
+   `/files/{id}`); admin (users + grants, settings, diagnostics, audit,
+   Ludock logs, operations list `/operations` and detail
+   `/operations/{id}`, which the activity tab already links). Reuse
+   `views.OperationList(…, showContext=true, names)` for `/operations`. Screens and texts come from packages/frontend/src.
    Check each by hand with headless Playwright (screenshots in
    /tmp/feature-screenshots/go-rewrite/) and add server-side tests in
    `internal/web` for the old browser race checks.
