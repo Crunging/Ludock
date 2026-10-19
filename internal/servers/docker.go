@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/compose"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/games"
@@ -404,7 +403,7 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 		GameType: container.GameType, GameConfiguration: map[string]string{}}
 	if project, service, number, ok := games.ComposeLabels(labels); ok {
 		observation.Compose = &identity.ComposeIdentity{Project: project, Service: service, ContainerNumber: number}
-		observation.ComposeSourceLabels = compose.SourceLabels(labels)
+		observation.ComposeSourceLabels = games.ComposeSourceLabels(labels)
 	}
 	adapter := games.ResolveAdapter(container.GameType, container.Labels)
 	credentials := map[string]bool{}

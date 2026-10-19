@@ -160,7 +160,9 @@ func (a *Access) revalidate(ctx context.Context, discover bool) (*servers.Contex
 }
 
 // Refresh rediscovers the fleet and confirms the binding again.
-func (a *Access) Refresh(ctx context.Context) (*servers.Context, error) { return a.revalidate(ctx, true) }
+func (a *Access) Refresh(ctx context.Context) (*servers.Context, error) {
+	return a.revalidate(ctx, true)
+}
 
 func (s *Sessions) audit(user *db.SessionUser, action, serverID string, details map[string]any, ip string) {
 	s.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: user.ID, Action: action, TargetType: "server",
