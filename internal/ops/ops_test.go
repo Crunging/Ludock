@@ -128,11 +128,25 @@ func TestDataLaneIsSerialAndLifecycleParallel(t *testing.T) {
 		job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[index], ActorID: "admin", Kind: kind})
 		ids = append(ids, job.ID)
 	}
+	// Wait for both lifecycle jobs to run at once (a fixed sleep flakes on
+	// slow runners), then give a second data job time to start wrongly.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		lifecycle := active["lifecycle"]
+		mu.Unlock()
+		if lifecycle == 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	time.Sleep(100 * time.Millisecond)
 	close(gate)
 	for _, id := range ids {
 		waitStatus(t, r, id, Succeeded)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if peak["data"] != 1 || peak["lifecycle"] != 2 {
 		t.Fatal(peak)
 	}
