@@ -86,6 +86,20 @@ at the very end (not opened yet). Update this file after every area.
   `WriteSnapshot`, `ExtractToStage`, `IsRunning`, wait-for-exit +
   terminate on expiry). Destination files are opened via `openat` on a
   pinned directory descriptor. backups.ts itself (jobs) comes after area 7.
+- `internal/ops`: operation runner (port of operations.ts): `Runner`
+  (`Register`, `Enqueue` with idempotency key + one-active-per-server in a
+  tx, `Get`, `Start` reconciles `running` rows via `Handler.Recover` then
+  marks them interrupted, `Stop`, `Wake`), lanes lifecycle=4 / data=1,
+  `Context.Progress`, `Context.WithLocks` (yield + retry when another job
+  holds keys, cancel background holders, fail on request-held keys),
+  outcome + audit in one tx, `PublicActorID`.
+- `internal/notify`: Discord webhook queue (`Configure` validation,
+  `Notify` once per event key, `QueueTest`, `Retry`, `Deliver` ≤10 per
+  call, 5-attempt cycles with backoff, no response/transport text stored,
+  redirects refused, 30-day retention), `Deliveries`.
+- `internal/monitor`: availability (`ParsePolicy`, `Get`, `Configure`,
+  `SetIntentionalStop`, `Suppress`, `Problem`, `Check` per tick writing
+  only transitions; Docker outage → `docker_unavailable`).
 - `internal/compose`: only `SourceLabels` so far.
 - `internal/servers`: `Observer` (List with 30 s inspection reuse and
   4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,

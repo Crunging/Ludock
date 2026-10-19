@@ -1,0 +1,108 @@
+package monitor
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+var ctx = context.Background()
+
+type recorder struct{ events []string }
+
+func (r *recorder) notify(key, message string) { r.events = append(r.events, message) }
+
+func setup(t *testing.T) (*Service, *recorder, identity.Server) {
+	t.Helper()
+	d := dbtest.Open(t)
+	store := &identity.Store{DB: d}
+	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
+	events := &recorder{}
+	s := &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
+	if _, err := s.Configure(ctx, list[0].ID, Policy{Enabled: true, GraceSeconds: 60}); err != nil {
+		t.Fatal(err)
+	}
+	return s, events, list[0]
+}
+
+func state(value, health string) map[string]servers.Container {
+	return map[string]servers.Container{"mc": {ID: "mc", State: value, Health: health}}
+}
+
+func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
+	s, events, server := setup(t)
+	s.Check(ctx, state("exited", ""), 1000)
+	s.Check(ctx, state("exited", ""), 30_000)
+	if len(events.events) != 0 {
+		t.Fatal("notified before grace")
+	}
+	if problem, _ := s.Problem(ctx, server.ID, 30_000); problem != nil {
+		t.Fatal("problem before grace")
+	}
+	s.Check(ctx, state("exited", ""), 61_000)
+	s.Check(ctx, state("exited", ""), 90_000)
+	if problem, _ := s.Problem(ctx, server.ID, 90_000); problem == nil || problem.State != "exited" || problem.OutageStartedAt != 1000 {
+		t.Fatal(problem)
+	}
+	s.Check(ctx, state("running", "starting"), 100_000)
+	s.Check(ctx, state("running", ""), 110_000)
+	s.Check(ctx, state("running", ""), 120_000)
+	if len(events.events) != 2 || events.events[0] != "Minecraft is unavailable." || events.events[1] != "Minecraft recovered." {
+		t.Fatal(events.events)
+	}
+}
+
+func TestIntentionalStopsAndOperationsSuppress(t *testing.T) {
+	s, events, server := setup(t)
+	s.SetIntentionalStop(ctx, server.ID, true)
+	s.Check(ctx, state("exited", ""), 1000)
+	s.Check(ctx, state("exited", ""), 200_000)
+	if len(events.events) != 0 {
+		t.Fatal(events.events)
+	}
+	// Observed running again: monitoring resumes.
+	s.Check(ctx, state("running", ""), 300_000)
+	s.Check(ctx, state("exited", ""), 400_000)
+	release, _ := s.Locks.Acquire([]string{"server:" + server.ID}, nil)
+	s.Check(ctx, state("exited", ""), 500_000)
+	release()
+	if len(events.events) != 0 {
+		t.Fatal("notified while an action held the server")
+	}
+	s.Check(ctx, state("exited", ""), 500_000)
+	if len(events.events) != 1 {
+		t.Fatal(events.events)
+	}
+}
+
+func TestDockerOutageIsReportedWithoutRebinding(t *testing.T) {
+	s, events, server := setup(t)
+	s.Check(ctx, nil, 1000)
+	s.Check(ctx, nil, 70_000)
+	if len(events.events) != 1 || events.events[0] != "Ludock cannot reach Docker to verify Minecraft." {
+		t.Fatal(events.events)
+	}
+	availability, _ := s.Get(ctx, server.ID)
+	if availability.State.LastState != "docker_unavailable" {
+		t.Fatal(availability.State)
+	}
+	current, _ := s.Store.Get(ctx, server.ID)
+	if current.Status != identity.StatusActive {
+		t.Fatal("binding changed")
+	}
+}
+
+func TestPolicyParsing(t *testing.T) {
+	if policy, err := ParsePolicy([]byte(`{"enabled":true}`)); err != nil || policy.GraceSeconds != 120 {
+		t.Fatal(policy, err)
+	}
+	for _, raw := range []string{`{}`, `{"enabled":true,"graceSeconds":5}`, `{"enabled":true,"extra":1}`, `{"enabled":true,"graceSeconds":10.5}`} {
+		if _, err := ParsePolicy([]byte(raw)); err == nil {
+			t.Errorf("accepted %s", raw)
+		}
+	}
+}
