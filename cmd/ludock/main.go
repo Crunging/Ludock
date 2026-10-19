@@ -18,6 +18,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/web"
@@ -77,7 +78,8 @@ func serve() int {
 	servers := &identity.Store{DB: database}
 	authorization := &authz.Service{DB: database, Servers: servers}
 	accounts := auth.NewService(database, authorization, setup)
-	app := &web.Server{DB: database, Auth: accounts, ClientIP: clientIP}
+	dockerClient := docker.New(cfg.DockerSocket)
+	app := &web.Server{DB: database, Auth: accounts, ClientIP: clientIP, Docker: dockerClient.Ping}
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	if err != nil {

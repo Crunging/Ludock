@@ -12,8 +12,8 @@ at the very end (not opened yet). Update this file after every area.
 | 1 | Scaffold (go.mod, `cmd/ludock`, config, logging, health, Go CI) | done |
 | 2 | DB (modernc sqlite, v6–v9 migrations, identity key, account repos, v0.5.0 fixture) | done |
 | 3 | Auth/security core (argon2id, sessions, setup window, throttles, origin, client IP, grants, logical-server identity) | done |
-| 4 | Docker layer (SDK client, discovery, events, logs, attach/exec) | next |
-| 5 | Helper subcommands replacing `bun -e` helper containers | todo |
+| 4 | Docker layer (Engine client, discovery, observation, events hub, fake Docker) | done (container log streaming moves to area 8) |
+| 5 | Helper subcommands replacing `bun -e` helper containers | next |
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | todo |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | todo |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | todo |
@@ -48,6 +48,30 @@ at the very end (not opened yet). Update this file after every area.
   ChangePassword, Sessions, RevokeSession, CreateUser, UpdateAccess,
   DeleteUser, ResetPassword, RecoverPassword), `IsSameOrigin`,
   `IsExternalHTTPS`, `ClientIP`, `SessionToken`.
+- `internal/docker`: own Engine API client over the unix socket
+  (`New`, `Ping`, list/inspect/start/stop/restart/remove/wait/stats/logs,
+  exec create/start/inspect, attach, volumes, image inspect, events, `Pull`
+  with per-record error checks, `CreateHelper`/`RemoveHelper`/
+  `RemoveOperationHelper`), `APIError{Status}` (no daemon text),
+  `StreamOpenError{RequestStarted}`, `Demux`/`Stdout` frame decoding,
+  `DecodeJSONLines`. `internal/docker/fakedocker`: in-memory Engine on a
+  unix socket (containers, events, logs, exec via `Engine.Exec`, attach,
+  volumes, images, `Fail` switch, `Requests` log).
+- `internal/games`: presets (`Integrations`, `Lookup`, `InferGameType`,
+  `DisplayName`), console adapters (`ResolveAdapter`, `BroadcastTemplate`,
+  `MinecraftExec`), discovery (`Evaluate`, `ParseAddress`, `ConnectionHost`,
+  `ApprovedLabels`, `ComposeLabels`, `InvalidComposeIdentity`).
+- `internal/files`: `Roots` (ludock.files / safe mounts), `SafeWritableDataMount`,
+  `SensitiveSystemPath`, `Within`. Rest of file-storage comes in area 6.
+- `internal/compose`: only `SourceLabels` so far.
+- `internal/servers`: `Observer` (List with 30 s inspection reuse and
+  4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,
+  `StopRecoveryState`, `Secrets`; `Service` (single-flight `Refresh`,
+  `List`, `ListSaved`, `Snapshot`, `ResolveAuthorized`, `VerifyAuthorized`,
+  `LockKeys`, connection host setting) producing `View`s for templates.
+- `internal/events`: `Hub` (Subscribe/Stop, Docker stream with reconnect,
+  coalesced batches, one refresh per batch, per-subscriber recheck,
+  content-free `refresh` events for former viewers).
 - `internal/web`: `Server.Handler()` with security headers, cross-origin
   rejection for unsafe methods, panic recovery, `/api/v1/health` (5 s cache).
 
@@ -80,6 +104,15 @@ at the very end (not opened yet). Update this file after every area.
   Avoid `hx-on` and inline scripts (CSP `script-src 'self'`); Alpine needs
   its CSP build or vanilla JS instead.
 
+- Docker: a small own Engine API client instead of the official SDK (plan
+  said SDK). Reasons: the SDK pulls a large dependency tree into a static
+  binary, the TS code already defined the exact behavior (API 1.44–1.55
+  negotiation, no proxy, no daemon text in errors, hijack validation,
+  request-started tracking), and the fake Docker can then be a plain HTTP
+  server that the real binary talks to in Playwright journeys.
+- Live updates use SSE instead of WebSockets for the dashboard; the events
+  hub is transport-neutral (`Subscriber.Send` must not block).
+
 ## Gotchas
 
 - Binding fingerprints hash a JS `JSON.stringify` encoding sorted with
@@ -98,10 +131,12 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Docker layer: `internal/docker` with the official SDK (`client.WithHost`
-   unix socket from `DOCKER_SOCKET`), port docker.ts/docker-client.ts/
-   discovery.ts/events.ts/container-logs.ts/docker-stream.ts, and an
-   interface so tests and Playwright can use a fake Docker. Wire the health
-   check (`web.Server.Docker`).
-2. Then helpers (area 5) — read `packages/backend/src/helpers/*.js` and
-   `helper-scripts.ts`, `runtime-images.ts`, `mount-proof.ts`.
+1. Helpers (area 5): read `packages/backend/src/helpers/*.js`,
+   `helpers/contracts.ts`, `helper-scripts.ts`, `runtime-images.ts`,
+   `mount-proof.ts`, `network-console-helper.ts`; implement
+   `ludock helper <name>` subcommands (same JSON protocols over
+   stdin/stdout) and the launcher side (helper image = Ludock's own image by
+   digest via `runtime-images.ts` logic; `FILE_HELPER_IMAGE` override).
+   The fakedocker `Exec`/create path may need a hook to run helper
+   subcommands in-process for tests.
+2. Then files/tar/backups (area 6).
