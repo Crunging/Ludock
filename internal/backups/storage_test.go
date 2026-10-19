@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,7 +109,7 @@ func TestPlanRefusesNestedAndOverlappingRoots(t *testing.T) {
 }
 
 func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
-	engine, client := startHelpers(t)
+	_, client := startHelpers(t)
 	base := t.TempDir()
 	data := filepath.Join(base, "game")
 	os.MkdirAll(filepath.Join(data, "world"), 0o755)

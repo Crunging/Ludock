@@ -14,8 +14,8 @@ at the very end (not opened yet). Update this file after every area.
 | 3 | Auth/security core (argon2id, sessions, setup window, throttles, origin, client IP, grants, logical-server identity) | done |
 | 4 | Docker layer (Engine client, discovery, observation, events hub, fake Docker) | done (container log streaming moves to area 8) |
 | 5 | Helper subcommands replacing `bun -e` helper containers | done (network-console helper moves to area 8) |
-| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | next |
-| 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | todo |
+| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | files, tar, backup storage done; backups.ts (job flows) after area 7 |
+| 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | next (locks done) |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | todo |
 | 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | todo |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
@@ -74,6 +74,18 @@ at the very end (not opened yet). Update this file after every area.
 - `internal/locks`: `Table.Acquire(keys, background)` (path keys overlap
   parents/children, `BackgroundConflict.Cancel`), `NextRelease`,
   `ServerBusy`, `Drained`; `locks.Default`.
+- `internal/tarstream`: port of tar.ts (`Walk` with `onChunk`,
+  `DecodeHeader`, `EncodeHeader`, `Padding`, `End`, `FormatSeconds`).
+  `testdata/v050-backup.tar` (written by the Bun encoder) is parsed and
+  re-encoded byte-for-byte.
+- `internal/backups` storage (port of backup-storage.ts): `Storage`
+  (`ValidateSettings`, `ApprovedDirectory`, `AvailableBytes`,
+  `AssertSpace`, `RemovePartial`, `Open`, `Remove`, `Validate`),
+  `EntryMetadata`, `MappedHeader`, `ValidateEntry`, `ValidateStream`,
+  `PlanRoots`, `HelperRoot`, `Helpers` (`NewDataHelper`, `Exec` 2 min,
+  `WriteSnapshot`, `ExtractToStage`, `IsRunning`, wait-for-exit +
+  terminate on expiry). Destination files are opened via `openat` on a
+  pinned directory descriptor. backups.ts itself (jobs) comes after area 7.
 - `internal/compose`: only `SourceLabels` so far.
 - `internal/servers`: `Observer` (List with 30 s inspection reuse and
   4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,
@@ -155,6 +167,10 @@ at the very end (not opened yet). Update this file after every area.
   `packages/backend/src`). Regenerate only while the TS code still exists.
 - The old code compared lengths in UTF-16 units (Zod); use
   `jscompat.Length` for user-facing limits.
+- Chain verification and `git commit` with `&&` on one line: a failing
+  `go vet` on an earlier line does not stop a later commit command.
+- Writing `\ufeff` through a heredoc/tool can produce a literal BOM in Go
+  source (vet: illegal byte order mark); escape it in Python instead.
 - `pkill -f ludock-bin` kills your own shell (the pattern is in the command
   line); stop test servers by PID.
 - Local checks: `GOMAXPROCS=2 go test ./internal/<pkg>`; CI runs
@@ -163,12 +179,9 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Files/tar/backups (area 6): port the rest of `file-storage.ts`
-   (acquireFileContainer with fileTargetSignature, list/mkdir/delete/
-   rename/upload/download, preview 512 KiB cap — find where the cap lives),
-   `tar.ts`, `backups.ts`, `backup-storage.ts`, `routes/files.ts` and
-   `routes/backups.ts` logic (as services, not JSON routes). Tests run
-   helpers in-process through `fakedocker.Engine.Exec` (see
-   `launch_test.go` `runHelpers`) with mount destinations set to real temp
-   dirs.
-2. Then schedules/jobs/operations (area 7).
+1. Area 7: `operations.ts`, `jobs.ts`, `schedules.ts` (+ shared
+   schedule-time), `notifications.ts`, `monitoring.ts`, `history.ts`,
+   `attention.ts`, `lifecycle.ts`, settings logic.
+2. Then `backups.ts` job flows on top of `internal/backups` storage
+   (tests: `storage_test.go` `startHelpers` maps `/mounts/<root>` back to
+   host paths for in-process helpers).
