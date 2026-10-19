@@ -43,8 +43,8 @@ func (s *Server) scheduleForm(d *views.ServerDetail) views.ScheduleForm {
 	return views.ScheduleForm{ServerID: view.ID, Actions: scheduleActions(view), CanCreateBackup: can(view, authz.BackupsCreate),
 		CanAnnounce: view.Console != nil && view.Console.SupportsBroadcast && can(view, authz.ConsoleExecute),
 		Blocked:     view.BindingStatus != "active" || d.DiscoveryUnavailable,
-		Input: schedules.Input{Kind: "recurring", Action: "start", Enabled: true, Time: "08:00", Days: []int{0, 1, 2, 3, 4, 5, 6}},
-		LeadText: "10, 5, 1"}
+		Input:       schedules.Input{Kind: "recurring", Action: "start", Enabled: true, Time: "08:00", Days: []int{0, 1, 2, 3, 4, 5, 6}},
+		LeadText:    "10, 5, 1"}
 }
 
 // schedulesView reads the schedules tab; edit= opens a saved schedule in
