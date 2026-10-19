@@ -63,6 +63,17 @@ at the very end (not opened yet). Update this file after every area.
   `ApprovedLabels`, `ComposeLabels`, `InvalidComposeIdentity`).
 - `internal/files`: `Roots` (ludock.files / safe mounts), `SafeWritableDataMount`,
   `SensitiveSystemPath`, `Within`. Rest of file-storage comes in area 6.
+- `internal/files` storage: `Service.Acquire` (fresh inspect, fresh roots,
+  deepest owner mount, unsafe nested mounts blocked, mount proof, helper
+  container, identity check, `check`, binding signature recheck), `List`
+  (folders first, `LocaleCompareBase`), `Mkdir`, `Delete`, `Rename`,
+  `Upload` (trailer commit + unconditional staging cleanup), `OpenDownload`
+  (`*Download` ReadCloser verifies the helper exit on EOF), `Preview` /
+  `ReadPreview` (512 KiB cap read server-side, NUL or invalid UTF-8 →
+  binary), `NormalizeRelativePath`, `ValidateName`, `Error(code)`.
+- `internal/locks`: `Table.Acquire(keys, background)` (path keys overlap
+  parents/children, `BackgroundConflict.Cancel`), `NextRelease`,
+  `ServerBusy`, `Drained`; `locks.Default`.
 - `internal/compose`: only `SourceLabels` so far.
 - `internal/servers`: `Observer` (List with 30 s inspection reuse and
   4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,

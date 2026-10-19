@@ -127,3 +127,11 @@ func normalizeString(path string, allowAboveRoot bool) string {
 	}
 	return strings.Join(segments, "/")
 }
+
+var baseCollator = collate.New(language.Und, collate.IgnoreCase, collate.IgnoreDiacritics)
+
+// LocaleCompareBase orders like localeCompare with sensitivity "base":
+// case and accents are ignored.
+func LocaleCompareBase(left, right string) int {
+	return baseCollator.CompareString(left, right)
+}
