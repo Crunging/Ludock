@@ -26,6 +26,8 @@ import (
 // Container is a fake container.
 type Container struct {
 	docker.ContainerInspect
+	// Created is the create request of a container made through the API.
+	CreateRequest docker.ContainerCreate
 	// Logs are emitted on /logs as stdout lines.
 	Logs []string
 	// Stats is returned by /stats.
@@ -47,6 +49,9 @@ type Engine struct {
 	events     []chan []byte
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
+	// OnStart runs when a container starts, under no lock, e.g. to fill in
+	// the logs a helper process would print.
+	OnStart func(c *Container)
 	// APIVersion is reported by /version.
 	APIVersion string
 	// Fail makes every API request return this status when non-zero.
@@ -327,6 +332,10 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 	id := e.AddContainer(GameOptions{Name: r.URL.Query().Get("name"), Image: body.Image, Labels: body.Labels, Env: body.Env})
 	e.Update(id, func(c *Container) {
 		c.Config.OpenStdin, c.Config.StdinOnce, c.Config.Tty = body.OpenStdin, body.StdinOnce, body.Tty
+		c.CreateRequest = body
+		for _, mount := range mountsOf(body) {
+			c.Mounts = append(c.Mounts, mount)
+		}
 	})
 	writeJSON(w, 201, map[string]string{"Id": id})
 }
@@ -366,7 +375,11 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		}
 		c.State.Status, c.State.Running, c.State.StartedAt = "running", true, now
 		e.emitLocked("start", id)
+		hook := e.OnStart
 		e.mu.Unlock()
+		if hook != nil {
+			hook(c)
+		}
 		w.WriteHeader(204)
 	case action == "/stop" && r.Method == "POST":
 		if !c.State.Running {
@@ -549,6 +562,18 @@ func (e *Engine) streamEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func mountsOf(body docker.ContainerCreate) []docker.MountPoint {
+	if body.HostConfig == nil {
+		return nil
+	}
+	var mounts []docker.MountPoint
+	for _, mount := range body.HostConfig.Mounts {
+		mounts = append(mounts, docker.MountPoint{Type: mount.Type, Source: mount.Source, Destination: mount.Target,
+			RW: !mount.ReadOnly, Name: mount.Source})
+	}
+	return mounts
 }
 
 // Frame encodes one multiplexed stream frame.

@@ -13,8 +13,8 @@ at the very end (not opened yet). Update this file after every area.
 | 2 | DB (modernc sqlite, v6–v9 migrations, identity key, account repos, v0.5.0 fixture) | done |
 | 3 | Auth/security core (argon2id, sessions, setup window, throttles, origin, client IP, grants, logical-server identity) | done |
 | 4 | Docker layer (Engine client, discovery, observation, events hub, fake Docker) | done (container log streaming moves to area 8) |
-| 5 | Helper subcommands replacing `bun -e` helper containers | next |
-| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | todo |
+| 5 | Helper subcommands replacing `bun -e` helper containers | done (network-console helper moves to area 8) |
+| 6 | Files / tar / backups (path containment, 512 KiB preview cap) | next |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | todo |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | todo |
 | 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | todo |
@@ -72,6 +72,21 @@ at the very end (not opened yet). Update this file after every area.
 - `internal/events`: `Hub` (Subscribe/Stop, Docker stream with reconnect,
   coalesced batches, one refresh per batch, per-subscriber recheck,
   content-free `refresh` events for former viewers).
+- `internal/helper` (runs inside helper containers): `Main` dispatches
+  `ludock helper file|idle|mount-proof|mount-identities|restore|restore-extract`;
+  same JSON protocols and fixed failure texts as the v0.5.0 scripts; all
+  walks use `openat` with `O_NOFOLLOW` from pinned descriptors (no
+  `/proc/self/fd` paths); uploads commit only after the exact trailer;
+  rename uses `RENAME_NOREPLACE`; tar headers ported byte-for-byte
+  (ustar + PAX path records, base-256 sizes). `helper.Command(name, args…)`
+  builds `[/usr/local/bin/ludock helper name json…]`; `helper.HostRoot` is
+  `/host` (tests override).
+- `internal/launch` (backend side): `Images` (FILE_HELPER_IMAGE pinned
+  digest, else self container's `sha256:` image ID, else fallback),
+  `ValidateImage`, `Exec` (helper exec with stdin/trailer, access checks
+  between chunks, 60 s / 30 min deadlines, 4 MiB stdout cap, 5 s upload
+  cleanup grace, never blocks on a stuck input), `MountProof` and
+  `AssertMountIdentities`, `HelperEnv`.
 - `internal/web`: `Server.Handler()` with security headers, cross-origin
   rejection for unsafe methods, panic recovery, `/api/v1/health` (5 s cache).
 
@@ -110,6 +125,12 @@ at the very end (not opened yet). Update this file after every area.
   negotiation, no proxy, no daemon text in errors, hijack validation,
   request-started tracking), and the fake Docker can then be a plain HTTP
   server that the real binary talks to in Playwright journeys.
+- Helper containers run the Go binary (`Entrypoint [/usr/local/bin/ludock]`,
+  `Cmd [helper …]`), with `GOMAXPROCS=1`, `GOMEMLIMIT=96MiB`, and
+  `PidsLimit` 64 (v0.5.0: 32) because Go runtimes start several threads.
+- `launch.FallbackImage` is empty until a Go image is published: native
+  runs outside a container need `FILE_HELPER_IMAGE` for file/backup
+  helpers. Pin the published digest before the final PR.
 - Live updates use SSE instead of WebSockets for the dashboard; the events
   hub is transport-neutral (`Subscriber.Send` must not block).
 
@@ -131,12 +152,12 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Helpers (area 5): read `packages/backend/src/helpers/*.js`,
-   `helpers/contracts.ts`, `helper-scripts.ts`, `runtime-images.ts`,
-   `mount-proof.ts`, `network-console-helper.ts`; implement
-   `ludock helper <name>` subcommands (same JSON protocols over
-   stdin/stdout) and the launcher side (helper image = Ludock's own image by
-   digest via `runtime-images.ts` logic; `FILE_HELPER_IMAGE` override).
-   The fakedocker `Exec`/create path may need a hook to run helper
-   subcommands in-process for tests.
-2. Then files/tar/backups (area 6).
+1. Files/tar/backups (area 6): port the rest of `file-storage.ts`
+   (acquireFileContainer with fileTargetSignature, list/mkdir/delete/
+   rename/upload/download, preview 512 KiB cap — find where the cap lives),
+   `tar.ts`, `backups.ts`, `backup-storage.ts`, `routes/files.ts` and
+   `routes/backups.ts` logic (as services, not JSON routes). Tests run
+   helpers in-process through `fakedocker.Engine.Exec` (see
+   `launch_test.go` `runHelpers`) with mount destinations set to real temp
+   dirs.
+2. Then schedules/jobs/operations (area 7).

@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/web"
@@ -43,10 +44,12 @@ func main() {
 		code = recoverAccount(args)
 	case "healthcheck":
 		code = healthcheck()
+	case "helper":
+		code = helper.Main(args, os.Stdin, os.Stdout, os.Stderr)
 	case "version", "--version":
 		fmt.Println(version)
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|healthcheck|version]\n")
+		fmt.Fprintf(os.Stderr, "Usage: ludock [serve|recover <username>|healthcheck|helper …|version]\n")
 		code = 2
 	}
 	os.Exit(code)
