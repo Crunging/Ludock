@@ -100,6 +100,18 @@ at the very end (not opened yet). Update this file after every area.
 - `internal/monitor`: availability (`ParsePolicy`, `Get`, `Configure`,
   `SetIntentionalStop`, `Suppress`, `Problem`, `Check` per tick writing
   only transitions; Docker outage → `docker_unavailable`).
+- `internal/schedtime`: port of shared schedule-time (`Slot`, `NextRun`,
+  `OneTimeRun`, `OneTimeSlot`, `LocalDate`, `Location` with embedded
+  tzdata). The v0.5.0 DST cases pass (fall-back, spring gap, Lord Howe,
+  Casey rollback).
+- `internal/schedules`: `Input` (stored JSON shape, `Validate`,
+  `ParseSaved` strict + defaults, `Capabilities`, `EditCapabilities`),
+  `Service` (`List`, `Create`, `Delete`, `Update`, `SetEnabled`, `Run`,
+  `Announce`, `Wait`), owner authority with `UnavailableError.Reason`,
+  missed one-time runs recorded, enqueue + association in one tx,
+  `Broadcaster` interface for countdown warnings (implemented in area 8).
+  Requester capability checks run before transactions because denial
+  audits write through another connection.
 - `internal/compose`: only `SourceLabels` so far.
 - `internal/servers`: `Observer` (List with 30 s inspection reuse and
   4 workers, Inspect, Stats, ChangeState, Diagnostics), `StopTimeoutSeconds`,
