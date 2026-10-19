@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | next (start with app wiring: background tick, shutdown order) |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: app wiring, layout, sign-in/setup/logout, dashboard + SSE done; account, server detail, console/logs, schedules, files/backups, admin next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -169,6 +169,33 @@ at the very end (not opened yet). Update this file after every area.
   shuts HTTP down first, then `App.Stop`, then closes the DB.
 - `internal/web`: `Server{App,…}.Handler()` with security headers, cross-origin
   rejection for unsafe methods, panic recovery, `/api/v1/health` (5 s cache).
+  `session.go`: `authed` (session; for unsafe methods bounded form read,
+  CSRF check, then the session again) and `admin`; `fail` renders only
+  public errors (Alert fragment for htmx, else ErrorPage; 401 → login).
+  `action.go`: `startAction` = the old `serverAction` (capability + binding
+  recheck, locks, 1 s revalidation, `Assert`/`AssertObserved` right before
+  Docker calls). `routes.go` lists every page, fragment, and action.
+  `pages_test.go` covers sessions, CSRF, discovery-not-permission, and a
+  session revoked while the body arrives, against `app.New` + fakedocker.
+- `internal/web/views`: templ components (`layout`, `auth`, `common`,
+  `dashboard`; `display.go` holds the formatting ported from the frontend).
+  Regenerate with `go tool templ generate -path internal/web/views` and
+  commit the `_templ.go` files.
+- `internal/web/assets`: embedded; `views.Asset(name)` returns
+  `/assets/name?v=<hash>` (immutable cache); LICENSE files and dotfiles are
+  not served. `ludock.css` is the 16 frontend CSS files concatenated in
+  import order plus a short "Go server-rendered additions" block at the
+  end. `ludock.js` is the only script of ours (data-attribute behaviors,
+  no inline handlers). `vendor/` holds htmx 2.0.11, htmx-ext-sse 2.2.4,
+  xterm 6 + fit/web-links addons, with their licenses.
+- `internal/datasize`: `Parse`/`Format` from shared `data-size.ts`.
+- `cmd/fakedocker`: dev daemon for hands-on page checks:
+  `go run ./cmd/fakedocker -dir /tmp/ludock-run/docker -backups /tmp/ludock-run/backups`
+  seeds a running Minecraft (Compose labels, RCON) and a stopped Valheim,
+  plus the `ludock-dev` self container; helper execs run `helper.Main`
+  in-process. Point Ludock at it with `DOCKER_SOCKET=<dir>/docker.sock
+  LUDOCK_SELF_CONTAINER=ludock-dev LUDOCK_BACKUP_ROOTS=<backups>
+  FILE_HELPER_IMAGE=ghcr.io/crunging/ludock@sha256:<64 hex>`.
 
 ## Decisions
 
@@ -193,11 +220,19 @@ at the very end (not opened yet). Update this file after every area.
   `/data/ludock.db` (NODE_ENV no longer matters).
 - Argon2id: m=65536, t=2, p=1, 32-byte salt, 32-byte key, PHC format, same
   as Bun; parameter bounds as v0.5.0. Tests lower `argonMemoryKiB`.
-- Planned for pages: CSRF token = hash of the session token (sent as form
-  field / `X-CSRF-Token` header via `hx-headers`), in addition to the
-  existing Origin / Sec-Fetch-Site checks and SameSite=Strict cookies.
-  Avoid `hx-on` and inline scripts (CSP `script-src 'self'`); Alpine needs
-  its CSP build or vanilla JS instead.
+- Pages: CSRF token = sha256("ludock:csrf:v1:" + session token), sent as
+  the `_csrf` field or the `X-CSRF-Token` header (`hx-headers` on
+  `.app-layout`), on top of the Origin / Sec-Fetch-Site checks and
+  SameSite=Strict cookies. No `hx-on`, no inline scripts, htmx
+  `allowEval:false`; vanilla JS instead of Alpine.
+- htmx swaps 4xx/5xx responses (except 401, which follows `HX-Redirect` to
+  /login), so handlers answer errors with an `Alert` fragment.
+- Dashboard live updates: one SSE stream (`/events`) per tab; `server`
+  events trigger fragment reloads (`sse:server`), `expired` sends the tab
+  to /login. Actions answer `HX-Trigger: servers-changed`.
+- `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
+  Chrome sends `Origin: null` on same-origin form posts, which the
+  cross-origin check rejects.
 
 - Docker: a small own Engine API client instead of the official SDK (plan
   said SDK). Reasons: the SDK pulls a large dependency tree into a static
@@ -230,13 +265,28 @@ at the very end (not opened yet). Update this file after every area.
   source (vet: illegal byte order mark); escape it in Python instead.
 - `pkill -f ludock-bin` kills your own shell (the pattern is in the command
   line); stop test servers by PID.
+- Elements toggled with the `hidden` attribute need the global
+  `[hidden] { display: none !important; }` rule: React rendered them
+  conditionally, so component CSS sets `display` and overrides `hidden`.
+- templ: a `.` right after `@Component(...)` is a parse error; wrap the text.
 - Local checks: `GOMAXPROCS=2 go test ./internal/<pkg>`; CI runs
   `.github/workflows/go.yaml` (gofmt, vet, `go test -race ./...`) on pushes
   to `go-rewrite`. The Bun `ci.yaml` only runs on PRs and `main`.
 
 ## Next steps
 
-1. Pages (area 9): templ + htmx 2 + SSE. Session cookie + CSRF token
-   (hash of session token) on forms; re-authenticate after reading the
-   body; admin pages; per-page server checks replacing the browser race
-   tests. Look at packages/frontend/src for screens and copy CSS.
+1. Pages (area 9), in order: account (password, sessions); server detail
+   (overview, availability, update, backups, schedules, activity, binding
+   review); console/logs (xterm over WebSocket, `console.Sessions`);
+   schedule editors; files (browse, preview, upload, download); backups and
+   restore; admin (users + grants, settings, diagnostics, audit, Ludock
+   logs, operations). Screens and texts come from packages/frontend/src.
+   Check each by hand with headless Playwright (screenshots in
+   /tmp/feature-screenshots/go-rewrite/) and add server-side tests in
+   `internal/web` for the old browser race checks.
+2. Playwright journeys (area 10) against the real binary + `cmd/fakedocker`.
+3. Dockerfile and CI cutover (area 11): fold `go.yaml` into `ci.yaml`, add a
+   `templ generate` diff check; pin `launch.FallbackImage`.
+4. Delete Bun/TS, update docs (OPERATIONS.md: `ludock recover`, API removal),
+   release-please `simple` (area 12). Take the "before" screenshots from
+   main before deleting the frontend.

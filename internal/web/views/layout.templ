@@ -1,0 +1,209 @@
+package views
+
+// Page describes the signed-in shell around a page.
+type Page struct {
+	Title    string
+	CSRF     string
+	Username string
+	Admin    bool
+	RoleName string
+	// Path is the current path, for active navigation links.
+	Path string
+	// ServerTools marks server pages, which highlight "Servers".
+	ServerTools bool
+	// Console hides the navigation for the full-screen console.
+	Console bool
+	// Scripts are extra script URLs for this page.
+	Scripts []string
+	Styles  []string
+}
+
+templ Document(title, csrf string, scripts, styles []string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<meta name="theme-color" content="#141414"/>
+			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
+			// Eval stays off: the CSP allows no inline or string-evaluated script.
+			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"selfRequestsOnly":true}'/>
+			if csrf != "" {
+				<meta name="csrf-token" content={ csrf }/>
+			}
+			<link rel="icon" type="image/svg+xml" href={ Asset("favicon.svg") }/>
+			<link rel="icon" type="image/png" sizes="32x32" href={ Asset("favicon-32.png") }/>
+			<link rel="apple-touch-icon" sizes="180x180" href={ Asset("apple-touch-icon.png") }/>
+			<link rel="stylesheet" href={ Asset("ludock.css") }/>
+			for _, style := range styles {
+				<link rel="stylesheet" href={ Asset(style) }/>
+			}
+			<title>{ title }</title>
+			<script src={ Asset("vendor/htmx.min.js") } defer></script>
+			<script src={ Asset("vendor/htmx-sse.min.js") } defer></script>
+			<script src={ Asset("ludock.js") } defer></script>
+			for _, script := range scripts {
+				<script src={ Asset(script) } defer></script>
+			}
+		</head>
+		<body hx-ext="sse">
+			{ children... }
+		</body>
+	</html>
+}
+
+templ LudockMark(class string) {
+	<svg class={ class } viewBox="0 0 64 64" fill="currentColor" aria-hidden="true" focusable="false">
+		<rect x="17" y="9" width="14" height="14" rx="1.5"></rect>
+		<rect x="17" y="25" width="14" height="14" rx="1.5"></rect>
+		<rect x="17" y="41" width="14" height="14" rx="1.5"></rect>
+		<rect x="33" y="41" width="14" height="14" rx="1.5"></rect>
+	</svg>
+}
+
+templ navIcon(name string) {
+	<svg class="nav-link__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		switch name {
+			case "servers":
+				<rect x="3.5" y="4" width="17" height="7" rx="2"></rect>
+				<rect x="3.5" y="13" width="17" height="7" rx="2"></rect>
+				<path d="M7.5 7.5h.01M7.5 16.5h.01"></path>
+			case "operations":
+				<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"></path>
+				<path d="M3.5 4v4.5H8"></path>
+				<path d="M12 8v4l3 2"></path>
+			case "users":
+				<circle cx="9" cy="8" r="3.5"></circle>
+				<path d="M2.5 20a6.5 6.5 0 0 1 13 0"></path>
+				<path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"></path>
+			case "settings":
+				<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"></path>
+				<circle cx="15" cy="6" r="2"></circle>
+				<circle cx="9" cy="12" r="2"></circle>
+				<circle cx="17" cy="18" r="2"></circle>
+			case "diagnostics":
+				<path d="M3 12h4l2.5-6 5 12 2.5-6H21"></path>
+			case "audit":
+				<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"></path>
+				<path d="M9 12l2 2 4-4"></path>
+			case "logs":
+				<rect x="4.5" y="3" width="15" height="18" rx="2"></rect>
+				<path d="M8.5 8h7M8.5 12h7M8.5 16h4"></path>
+			case "account":
+				<circle cx="12" cy="12" r="9"></circle>
+				<circle cx="12" cy="10" r="3"></circle>
+				<path d="M6.5 18.5a6.5 6.5 0 0 1 11 0"></path>
+		}
+	</svg>
+}
+
+func linkClass(page Page, to string, exact bool) string {
+	class := "nav-link"
+	if (exact && page.Path == to) || (!exact && (page.Path == to || len(page.Path) > len(to) && page.Path[:len(to)+1] == to+"/")) {
+		class += " active"
+	}
+	if to == "/" && page.ServerTools {
+		class += " nav-link--active"
+	}
+	return class
+}
+
+func current(page Page, to string) string {
+	if page.Path == to {
+		return "page"
+	}
+	if to == "/" && page.ServerTools {
+		return "location"
+	}
+	return ""
+}
+
+templ navLink(page Page, to, icon, label string) {
+	<a href={ templ.SafeURL(to) } class={ linkClass(page, to, to == "/") } aria-current={ current(page, to) }>
+		@navIcon(icon)
+		{ label }
+	</a>
+}
+
+templ logout(page Page, class string) {
+	<form method="post" action="/logout" class="sidebar__logout-form">
+		<input type="hidden" name="_csrf" value={ page.CSRF }/>
+		<button class={ class } type="submit">Sign out</button>
+	</form>
+}
+
+// Shell is the signed-in layout.
+templ Shell(page Page) {
+	@Document(page.Title+" · Ludock", page.CSRF, page.Scripts, page.Styles) {
+		<div class="app-layout" hx-headers={ csrfHeaders(page.CSRF) }>
+			<a class="skip-link" href="#main-content">Skip to content</a>
+			if !page.Console {
+				<aside class="sidebar">
+					<div class="sidebar__header">
+						<a class="sidebar__logo" href="/" aria-label="Ludock servers">
+							@LudockMark("sidebar__logo-icon")
+							<div class="sidebar__logo-text">Ludock</div>
+						</a>
+					</div>
+					<nav class="sidebar__nav" aria-label="Primary navigation">
+						@navLink(page, "/", "servers", "Servers")
+						@navLink(page, "/operations", "operations", "Operations")
+						if page.Admin {
+							<div class="sidebar__group" role="group" aria-labelledby="administration-label">
+								<p class="sidebar__group-label" id="administration-label">Administration</p>
+								@navLink(page, "/users", "users", "Users")
+								@navLink(page, "/settings", "settings", "Settings")
+								@navLink(page, "/diagnostics", "diagnostics", "Diagnostics")
+							</div>
+							<div class="sidebar__group" role="group" aria-labelledby="history-label">
+								<p class="sidebar__group-label" id="history-label">History</p>
+								@navLink(page, "/audit", "audit", "Audit log")
+								@navLink(page, "/logs", "logs", "Ludock logs")
+							</div>
+						}
+					</nav>
+					<div class="sidebar__footer">
+						<a href="/account" class={ linkClass(page, "/account", true) + " sidebar__account" } aria-current={ current(page, "/account") }>
+							@navIcon("account")
+							Account
+						</a>
+						<div class="sidebar__session">
+							<div class="sidebar__identity">
+								<span class="sidebar__username" title={ page.Username }>{ page.Username }</span>
+								<span class="sidebar__role">{ page.RoleName }</span>
+							</div>
+							@logout(page, "sidebar__logout")
+						</div>
+					</div>
+				</aside>
+				<header class="mobile-header">
+					<a class="sidebar__logo" href="/" aria-label="Ludock servers">
+						@LudockMark("sidebar__logo-icon")
+						<div class="sidebar__logo-text">Ludock</div>
+					</a>
+					<span class="mobile-header__user">{ page.Username }</span>
+					@logout(page, "mobile-header__logout")
+				</header>
+				<nav class="mobile-nav" aria-label="Primary navigation">
+					@mobileLink(page, "/", "Servers")
+					@mobileLink(page, "/operations", "Operations")
+					if page.Admin {
+						@mobileLink(page, "/users", "Users")
+						@mobileLink(page, "/settings", "Settings")
+						@mobileLink(page, "/diagnostics", "Diagnostics")
+						@mobileLink(page, "/audit", "Audit")
+						@mobileLink(page, "/logs", "Logs")
+					}
+					@mobileLink(page, "/account", "Account")
+				</nav>
+			}
+			<main id="main-content" tabindex="-1" class={ "main-content", templ.KV("main-content--console", page.Console) }>
+				{ children... }
+			</main>
+		</div>
+	}
+}
+
+templ mobileLink(page Page, to, label string) {
+	<a href={ templ.SafeURL(to) } class={ templ.KV("active", page.Path == to), templ.KV("nav-link--active", to == "/" && page.ServerTools) } aria-current={ current(page, to) }>{ label }</a>
+}

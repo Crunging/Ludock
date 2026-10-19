@@ -1,0 +1,17 @@
+package views
+
+templ Alert(kind, message string) {
+	<div class={ "alert", "alert--" + kind } role={ map[bool]string{true: "alert", false: "status"}[kind == "error"] }>{ message }</div>
+}
+
+templ ErrorPage(page Page, title, message string) {
+	@Shell(page) {
+		<div class="page">
+			<header class="page-header">
+				<h1 class="page-title">{ title }</h1>
+			</header>
+			@Alert("error", message)
+			<p><a href="/">Back to servers</a></p>
+		</div>
+	}
+}

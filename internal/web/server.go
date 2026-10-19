@@ -42,6 +42,14 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("GET /api/v1/health", s.health)
+	s.mux.HandleFunc("GET /assets/", serveAsset)
+	s.mux.HandleFunc("GET /login", s.loginPage)
+	s.mux.HandleFunc("POST /login", s.login)
+	s.mux.HandleFunc("POST /setup", s.setup)
+	s.mux.HandleFunc("POST /logout", s.authed(s.logout))
+	if s.App != nil {
+		s.routes()
+	}
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not found", http.StatusNotFound)
 	})
@@ -97,14 +105,16 @@ func (s *Server) policy(next http.Handler) http.Handler {
 		header := w.Header()
 		header.Set("X-Request-ID", id)
 		header.Set("X-Content-Type-Options", "nosniff")
-		header.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer: Chrome sends "Origin: null" on form posts
+		// under no-referrer, which the cross-origin check must reject.
+		header.Set("Referrer-Policy", "same-origin")
 		header.Set("X-Frame-Options", "DENY")
 		header.Set("Cross-Origin-Opener-Policy", "same-origin")
 		header.Set("Cross-Origin-Resource-Policy", "same-origin")
 		header.Set("Origin-Agent-Cluster", "?1")
 		header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 		header.Set("Content-Security-Policy", contentSecurityPolicy)
-		if !strings.HasPrefix(r.URL.Path, "/assets/") {
+		if !strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Query().Get("v") == "" {
 			// Pages and fragments carry account and server data.
 			header.Set("Cache-Control", "no-store")
 		}
