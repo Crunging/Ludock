@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs, files done; admin pages next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs, files, operations + detail, audit, Ludock logs, users + grants done; settings and diagnostics next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -289,6 +289,15 @@ at the very end (not opened yet). Update this file after every area.
   The preview is server-side (`files.Service.Preview`, at most 512 KiB read).
   Uploads (`assets/files.js`) are raw `PUT /files/{id}/upload` bodies with
   `X-CSRF-Token`, one file at a time, capped by `LUDOCK_MAX_UPLOAD_SIZE`.
+- History pages (`/operations`, `/audit`) keep filters and the cursor in
+  the URL; From/To are Unix ms in hidden fields that `data-ms-field`
+  date inputs edit in local time. "Newer" returns to the first page (React
+  kept an in-memory stack of earlier cursors). `/logs` filters the process
+  ring buffer (1,000 entries) on the server and polls every 2 s.
+- Users: every account change re-renders `#users`; the grant editor is a
+  per-user fragment. ludock.js mirrors the old toggle rules; the server
+  normalizes the same way (`views.GrantInputs`) and `SetUserGrants`
+  enforces role ceilings.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.
@@ -335,10 +344,8 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Pages (area 9), remaining: admin (users + grants, settings, diagnostics, audit,
-   Ludock logs, operations list `/operations` and detail
-   `/operations/{id}`, which the activity tab already links). Reuse
-   `views.OperationList(…, showContext=true, names)` for `/operations`. Screens and texts come from packages/frontend/src.
+1. Pages (area 9), remaining: settings (connection host, backups,
+   notifications) and diagnostics. Screens and texts come from packages/frontend/src.
    Check each by hand with headless Playwright (screenshots in
    /tmp/feature-screenshots/go-rewrite/) and add server-side tests in
    `internal/web` for the old browser race checks.

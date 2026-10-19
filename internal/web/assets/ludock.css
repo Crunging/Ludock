@@ -3523,5 +3523,7 @@ html select:not([multiple]) {
 .inline-form { display: inline; margin: 0; }
 .section-tabs a, .detail-operation-notice a, .console-mode-tabs a { display: inline-flex; align-items: center; text-decoration: none; }
 a.console-retry { display: inline-flex; align-items: center; text-decoration: none; }
+.grants-region { grid-column: 1 / -1; width: 100%; }
+.grants-region:empty { display: none; }
 a.login-card__submit { display: block; text-align: center; text-decoration: none; }
 .htmx-request [data-busy-label], [data-busy-label].htmx-request { opacity: 0.7; }

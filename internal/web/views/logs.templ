@@ -1,0 +1,150 @@
+package views
+
+import (
+	"net/url"
+	"strconv"
+
+	"github.com/Crunging/Ludock/internal/logging"
+)
+
+// LogEntry is one rendered application log line.
+type LogEntry struct {
+	logging.Entry
+	ContextJSON string
+}
+
+// LogsView is the Ludock logs page.
+type LogsView struct {
+	Entries          []LogEntry
+	Total            int
+	Search, Level    string
+	Component        string
+	Components       []string
+	Paused           bool
+}
+
+// Query is the page URL query for these filters.
+func (l LogsView) Query() string {
+	values := url.Values{}
+	for name, value := range map[string]string{"q": l.Search, "level": l.Level, "component": l.Component} {
+		if value != "" {
+			values.Set(name, value)
+		}
+	}
+	if l.Paused {
+		values.Set("paused", "1")
+	}
+	return values.Encode()
+}
+
+// toggleURL pauses or resumes fetching, keeping the filters.
+func (l LogsView) toggleURL() templ.SafeURL {
+	l.Paused = !l.Paused
+	return templ.SafeURL("/logs?" + l.Query())
+}
+
+templ LogsPage(page Page, l LogsView) {
+	@Shell(page) {
+		<div class="page application-logs-page">
+			<div class="application-logs-header">
+				<div>
+					<h1 class="page__title">Ludock logs</h1>
+					<p class="page__subtitle">Recent structured output from this Ludock process.</p>
+				</div>
+				<div class="application-logs-actions">
+					<label class="application-logs-follow">
+						<input type="checkbox" checked data-log-follow/>
+						Follow latest
+					</label>
+					<a class="secondary-btn" href={ l.toggleURL() } aria-pressed={ strconv.FormatBool(l.Paused) }>
+						if l.Paused {
+							Resume
+						} else {
+							Pause
+						}
+					</a>
+					<button class="secondary-btn" type="button" hx-get={ "/fragments/logs?" + l.Query() } hx-target="#application-logs" hx-swap="outerHTML" data-busy-label="Refreshing…">Refresh</button>
+				</div>
+			</div>
+			<form class="application-logs-filters" role="group" aria-label="Log filters" method="get" action="/logs" hx-get="/fragments/logs" hx-target="#application-logs" hx-swap="outerHTML" hx-trigger="input changed delay:250ms from:find input, change from:find select" hx-disinherit="*">
+				if l.Paused {
+					<input type="hidden" name="paused" value="1"/>
+				}
+				<label class="application-logs-filter application-logs-filter--search">
+					Search logs
+					<input type="search" name="q" value={ l.Search } placeholder="Message or context" aria-describedby="application-logs-scope"/>
+				</label>
+				<label class="application-logs-filter">
+					Severity
+					<select name="level">
+						<option value="">All severities</option>
+						for _, level := range []string{"error", "warn", "info", "debug"} {
+							<option value={ level } selected?={ l.Level == level }>{ level }</option>
+						}
+					</select>
+				</label>
+				<label class="application-logs-filter">
+					Component
+					<select name="component">
+						<option value="">All components</option>
+						for _, component := range l.Components {
+							<option value={ component } selected?={ l.Component == component }>{ component }</option>
+						}
+					</select>
+				</label>
+				if l.Search != "" || l.Level != "" || l.Component != "" {
+					<a class="secondary-btn" href={ templ.SafeURL("/logs" + map[bool]string{true: "?paused=1"}[l.Paused]) }>Clear filters</a>
+				} else {
+					<button class="secondary-btn" type="button" disabled>Clear filters</button>
+				}
+				<noscript><button class="secondary-btn" type="submit">Apply</button></noscript>
+			</form>
+			@LogEntries(l)
+		</div>
+	}
+}
+
+// LogEntries is the filtered buffer; it reloads every 2 s unless paused.
+templ LogEntries(l LogsView) {
+	<div
+		id="application-logs"
+		if !l.Paused {
+			hx-get={ "/fragments/logs?" + l.Query() }
+			hx-trigger="every 2s"
+			hx-swap="outerHTML"
+		}
+		hx-disinherit="*"
+	>
+		<div class="application-logs-summary">
+			<span class="application-logs-count">{ intText(len(l.Entries)) } of { intText(l.Total) } recent entries</span>
+			<span id="application-logs-scope">
+				Searches up to 1,000 recent entries kept by this Ludock process.
+				if l.Paused {
+					Fetching paused.
+				} else {
+					Fetching every 2 seconds.
+				}
+			</span>
+		</div>
+		<div class="application-logs-output" role="log" tabindex="0" aria-live={ map[bool]string{true: "off", false: "polite"}[l.Paused] } aria-label="Ludock application logs" data-log-output>
+			for _, entry := range l.Entries {
+				<div class={ "application-log", "application-log--" + entry.Level } data-log-id={ strconv.FormatInt(entry.ID, 10) }>
+					@Time(entry.Timestamp, "", "")
+					<span class="application-log__level">{ entry.Level }</span>
+					<span class="application-log__component">{ entry.Component }</span>
+					<pre>
+						{ entry.Message }
+						if entry.ContextJSON != "" {
+							{ " " + entry.ContextJSON }
+						}
+					</pre>
+				</div>
+			}
+			if l.Total == 0 {
+				<div class="application-logs-empty">No log entries yet.</div>
+			} else if len(l.Entries) == 0 {
+				<div class="application-logs-empty">No recent log entries match these filters.</div>
+			}
+		</div>
+	</div>
+}

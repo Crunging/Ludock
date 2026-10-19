@@ -170,6 +170,142 @@
     if (event.target.matches && event.target.matches("input[data-confirm-value]")) confirmations(event.target.form);
   });
 
+  // History dates: a datetime-local field (local time) edits the hidden
+  // Unix-millisecond field it names. An unchanged field keeps the exact
+  // instant, which matters when a local time repeats as daylight saving ends.
+  function localInput(ms) {
+    var date = new Date(ms);
+    var local = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, -1);
+    return local.replace(/\.000$/, "").replace(/:00$/, "");
+  }
+  function msFields(root) {
+    (root || document).querySelectorAll("input[data-ms-field]").forEach(function (input) {
+      var hidden = input.form && input.form.elements[input.getAttribute("data-ms-field")];
+      var ms = hidden && Number(hidden.value);
+      if (hidden && hidden.value && isFinite(ms)) {
+        input.value = localInput(ms);
+        input.step = input.value.indexOf(".") >= 0 ? "0.001" : input.value.length > 16 ? "1" : "60";
+      }
+    });
+  }
+  document.addEventListener("change", function (event) {
+    var input = event.target;
+    if (!input.matches || !input.matches("input[data-ms-field]") || !input.form) return;
+    var hidden = input.form.elements[input.getAttribute("data-ms-field")];
+    var ms = new Date(input.value).getTime();
+    hidden.value = input.value && isFinite(ms) ? String(ms) : "";
+  });
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    var from = form.elements && form.elements.from, to = form.elements && form.elements.to;
+    if (!from || !to || !from.value || !to.value || Number(from.value) <= Number(to.value)) return;
+    event.preventDefault();
+    var error = form.querySelector("[data-range-error]");
+    if (!error) {
+      error = document.createElement("p");
+      error.className = "alert alert--error";
+      error.setAttribute("role", "alert");
+      error.setAttribute("data-range-error", "");
+      form.querySelector(".inline-actions").before(error);
+    }
+    error.textContent = "From must be before or equal to To.";
+  }, true);
+
+  // GET forms with data-compact-query leave empty fields out of the URL.
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (event.defaultPrevented || !form.matches || !form.matches("form[data-compact-query]")) return;
+    Array.prototype.forEach.call(form.elements, function (field) {
+      if (field.name && !field.value) {
+        field.disabled = true;
+        setTimeout(function () { field.disabled = false; }, 0);
+      }
+    });
+  });
+
+  // Ludock logs: follow the newest entry, or keep the entry being read in
+  // place while the buffer refreshes.
+  var logAnchor = null;
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var output = document.querySelector("[data-log-output]");
+    if (!output || !event.detail.target || event.detail.target.id !== "application-logs") return;
+    logAnchor = null;
+    var view = output.getBoundingClientRect();
+    var rows = output.querySelectorAll("[data-log-id]");
+    for (var index = 0; index < rows.length; index++) {
+      var bounds = rows[index].getBoundingClientRect();
+      if (bounds.bottom > view.top && bounds.top < view.bottom) {
+        logAnchor = { id: rows[index].getAttribute("data-log-id"), offset: bounds.top - view.top };
+        break;
+      }
+    }
+  });
+  function followLogs() {
+    var output = document.querySelector("[data-log-output]");
+    var follow = document.querySelector("[data-log-follow]");
+    if (!output) return;
+    if (!follow || follow.checked) {
+      output.scrollTop = output.scrollHeight;
+      return;
+    }
+    var row = logAnchor && output.querySelector('[data-log-id="' + logAnchor.id + '"]');
+    if (row) output.scrollTop += row.getBoundingClientRect().top - output.getBoundingClientRect().top - logAnchor.offset;
+  }
+  document.addEventListener("change", function (event) {
+    if (event.target.matches && event.target.matches("[data-log-follow]")) followLogs();
+  });
+
+  // Server access editor: any action needs "View server", changing files
+  // needs reading them, and removing view removes everything. The server
+  // applies the same rules when saving.
+  function grantSummary(form) {
+    var count = 0;
+    form.querySelectorAll("[data-grant-server]").forEach(function (fieldset) {
+      var view = fieldset.querySelector('input[value="server.view"]');
+      if (view && view.checked) count++;
+      var backup = fieldset.querySelector('input[value="backups.create"]');
+      var note = fieldset.querySelector('[data-grant-note="backups.create"]');
+      if (note) note.hidden = !(backup && backup.checked);
+    });
+    var summary = form.querySelector("[data-grant-summary]");
+    if (summary) {
+      summary.textContent = (count === 0 ? "No servers selected. This user will not see any servers."
+        : count + (count === 1 ? " server" : " servers") + " selected.") + " Unsaved changes.";
+    }
+  }
+  document.addEventListener("change", function (event) {
+    var box = event.target;
+    var fieldset = box.closest && box.closest("[data-grants] [data-grant-server]");
+    if (!fieldset || box.type !== "checkbox") return;
+    var find = function (value) { return fieldset.querySelector('input[value="' + value + '"]'); };
+    if (box.checked) {
+      if (find("server.view")) find("server.view").checked = true;
+      if (box.value === "files.write" && find("files.read")) find("files.read").checked = true;
+    } else if (box.value === "server.view") {
+      fieldset.querySelectorAll("input[type=checkbox]").forEach(function (other) { other.checked = false; });
+    } else if (box.value === "files.read" && find("files.write")) {
+      find("files.write").checked = false;
+    }
+    grantSummary(box.closest("[data-grants]"));
+  });
+  document.addEventListener("click", function (event) {
+    var preset = event.target.closest && event.target.closest("[data-grant-preset]");
+    if (preset) {
+      var chosen = preset.getAttribute("data-grant-preset").split(",");
+      preset.closest("[data-grant-server]").querySelectorAll("input[type=checkbox]").forEach(function (box) {
+        box.checked = chosen.indexOf(box.value) >= 0;
+      });
+      grantSummary(preset.closest("[data-grants]"));
+      return;
+    }
+    // data-clear="id" empties a region, such as a closed editor.
+    var clear = event.target.closest && event.target.closest("[data-clear]");
+    if (clear) {
+      var region = document.getElementById(clear.getAttribute("data-clear"));
+      if (region) region.replaceChildren();
+    }
+  });
+
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
   document.addEventListener("change", function (event) {
@@ -222,7 +358,9 @@
       if (isNaN(timestamp)) return;
       var mode = element.getAttribute("data-relative");
       element.title = dateTime.format(timestamp);
-      if (mode === "sentence" || mode === "plain") {
+      if (mode === "date") {
+        element.textContent = dateOnly.format(timestamp);
+      } else if (mode === "sentence" || mode === "plain") {
         var text = relativeText(timestamp, now);
         element.textContent = mode === "sentence" ? text.charAt(0).toUpperCase() + text.slice(1) : text;
       } else {
@@ -294,6 +432,7 @@
     confirmations(event.detail.elt);
     timezones(event.detail.elt);
     openDialogs(event.detail.elt);
+    if (event.detail.elt.id === "application-logs") followLogs();
   });
 
   onReady(function () {
@@ -301,6 +440,8 @@
     collapseLists();
     confirmations();
     timezones();
+    msFields();
+    followLogs();
     // Error and success responses both render into their targets.
     if (window.htmx) {
       htmx.config.responseHandling = [
