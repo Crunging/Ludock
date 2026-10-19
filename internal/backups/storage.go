@@ -82,17 +82,14 @@ func RootList(value string) []string {
 // Storage checks destinations against approved roots and Ludock's mounts.
 type Storage struct {
 	Docker *docker.Client
-	// Roots is LUDOCK_BACKUP_ROOTS; Self names Ludock's own container.
+	// Roots are approved destinations, ':'-separated; Self names Ludock's
+	// own container.
 	Roots, Self string
 }
 
-// NewStorage reads the environment.
-func NewStorage(client *docker.Client) *Storage {
-	self := os.Getenv("LUDOCK_SELF_CONTAINER")
-	if self == "" {
-		self = os.Getenv("HOSTNAME")
-	}
-	return &Storage{Docker: client, Roots: os.Getenv("LUDOCK_BACKUP_ROOTS"), Self: self}
+// NewStorage checks destinations against roots and the mounts of self.
+func NewStorage(client *docker.Client, roots []string, self string) *Storage {
+	return &Storage{Docker: client, Roots: strings.Join(roots, ":"), Self: self}
 }
 
 // ValidateSettings checks limits, the destination, and that it is a

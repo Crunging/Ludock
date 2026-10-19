@@ -5,9 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -417,10 +414,8 @@ var (
 	auditWritesSincePrune int
 )
 
-func auditMaxRows() int64 {
-	value, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("AUDIT_LOG_MAX_ROWS")), 10, 64)
-	return max(1000, value)
-}
+// auditMaxRows is the rolling window of audit entries kept.
+const auditMaxRows = 100_000
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -475,7 +470,7 @@ func (d *DB) PruneAuditIfNeeded(ctx context.Context) error {
 
 // PruneAudit keeps the newest AUDIT_LOG_MAX_ROWS entries.
 func (d *DB) PruneAudit(ctx context.Context) error {
-	_, err := d.ExecContext(ctx, "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", auditMaxRows())
+	_, err := d.ExecContext(ctx, "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", auditMaxRows)
 	return err
 }
 

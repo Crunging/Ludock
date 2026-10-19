@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -37,13 +36,10 @@ type Images struct {
 	resolved string
 }
 
-// NewImages reads the environment.
-func NewImages(client *docker.Client) *Images {
-	self := os.Getenv("LUDOCK_SELF_CONTAINER")
-	if self == "" {
-		self = os.Getenv("HOSTNAME")
-	}
-	return &Images{Docker: client, Configured: os.Getenv("FILE_HELPER_IMAGE"), Self: self}
+// NewImages resolves helper images: configured (pinned by digest) wins,
+// else the image of Ludock's own container named self.
+func NewImages(client *docker.Client, configured, self string) *Images {
+	return &Images{Docker: client, Configured: configured, Self: self}
 }
 
 // Resolve returns the helper image reference.

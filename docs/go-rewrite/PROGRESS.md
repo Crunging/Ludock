@@ -157,7 +157,7 @@ at the very end (not opened yet). Update this file after every area.
   (ustar + PAX path records, base-256 sizes). `helper.Command(name, args…)`
   builds `[/usr/local/bin/ludock helper name json…]`; `helper.HostRoot` is
   `/host` (tests override).
-- `internal/launch` (backend side): `Images` (FILE_HELPER_IMAGE pinned
+- `internal/launch` (backend side): `Images` (`LUDOCK_HELPER_IMAGE` pinned
   digest, else self container's `sha256:` image ID, else fallback),
   `ValidateImage`, `Exec` (helper exec with stdin/trailer, access checks
   between chunks, 60 s / 30 min deadlines, 4 MiB stdout cap, 5 s upload
@@ -194,9 +194,10 @@ at the very end (not opened yet). Update this file after every area.
   `go run ./cmd/fakedocker -dir /tmp/ludock-run/docker -backups /tmp/ludock-run/backups`
   seeds a running Minecraft (Compose labels, RCON) and a stopped Valheim,
   plus the `ludock-dev` self container; helper execs run `helper.Main`
-  in-process. Point Ludock at it with `DOCKER_SOCKET=<dir>/docker.sock
+  in-process. Point Ludock at it with `LUDOCK_DOCKER_SOCKET=<dir>/docker.sock
   LUDOCK_SELF_CONTAINER=ludock-dev LUDOCK_BACKUP_ROOTS=<backups>
-  FILE_HELPER_IMAGE=ghcr.io/crunging/ludock@sha256:<64 hex>`.
+  LUDOCK_HELPER_IMAGE=ghcr.io/crunging/ludock@sha256:<64 hex>
+  LUDOCK_LISTEN=127.0.0.1:3950 LUDOCK_DATA_DIR=<dir>`.
 
 ## Decisions
 
@@ -222,9 +223,24 @@ at the very end (not opened yet). Update this file after every area.
   JSON API). `/api/v1/health` stays for monitors and the image healthcheck.
   Operation and audit actors are always account IDs. Mention the API
   removal in the PR description.
-- Default `PORT` is 3000 (was 3001 in dev; the image always set 3000).
-- `LUDOCK_DB_PATH` defaults to `data/ludock.db`; the image sets
-  `/data/ludock.db` (NODE_ENV no longer matters).
+- Configuration (Logan, 2026-10-19: rethink freely, no compatibility):
+  every setting is a `LUDOCK_*` variable read and validated once by
+  `config.Load`; invalid values stop startup with the variable's name
+  (never its value). Services get values through constructors
+  (`launch.NewImages`, `backups.NewStorage`, `compose.NewRunner`,
+  `files.SetSensitivePaths`); nothing else reads the environment except
+  `ludock recover` (`LUDOCK_RECOVERY_PASSWORD`) and compose's `PATH`.
+  Set: `LUDOCK_LISTEN` (`:3000`, replaces HOST + PORT), `LUDOCK_DATA_DIR`
+  (`data`; image sets `/data`; DB is `<dir>/ludock.db`, replaces
+  LUDOCK_DB_PATH), `LUDOCK_LOG_LEVEL`, `LUDOCK_TRUSTED_PROXIES`,
+  `LUDOCK_SETUP_CODE`, `LUDOCK_DOCKER_SOCKET`, `LUDOCK_SELF_CONTAINER`
+  (default HOSTNAME), `LUDOCK_BACKUP_ROOTS` (default `/backups`; empty turns
+  backups off), `LUDOCK_COMPOSE_ROOTS`, `LUDOCK_DOCKER_CONFIG`,
+  `LUDOCK_SENSITIVE_PATHS`, `LUDOCK_HELPER_IMAGE`, `LUDOCK_MAX_UPLOAD_SIZE`
+  (2 GiB). Dropped: `AUDIT_LOG_MAX_ROWS` (fixed 100,000 entries),
+  `FILE_SENSITIVE_PATHS`, `LUDOCK_API_TOKEN`, `NODE_ENV`. The image must use
+  `ENTRYPOINT ["/usr/local/bin/ludock"]` with `CMD ["serve"]` so
+  `docker compose run --rm ludock recover <user>` works (OPERATIONS.md).
 - Argon2id: m=65536, t=2, p=1, 32-byte salt, 32-byte key, PHC format.
   Tests lower `argonMemoryKiB`.
 - Pages: CSRF token = sha256("ludock:csrf:v1:" + session token), sent as
@@ -269,7 +285,7 @@ at the very end (not opened yet). Update this file after every area.
   `Cmd [helper …]`), with `GOMAXPROCS=1`, `GOMEMLIMIT=96MiB`, and
   `PidsLimit` 64 (Bun helpers used 32) because Go runtimes start several threads.
 - `launch.FallbackImage` is empty until a Go image is published: native
-  runs outside a container need `FILE_HELPER_IMAGE` for file/backup
+  runs outside a container need `LUDOCK_HELPER_IMAGE` for file/backup
   helpers. Pin the published digest before the final PR.
 - Live updates use SSE instead of WebSockets for the dashboard; the events
   hub is transport-neutral (`Subscriber.Send` must not block).

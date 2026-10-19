@@ -41,7 +41,8 @@ func TestLabelsCannotOpenUnsafeRoots(t *testing.T) {
 	if Roots("custom", nil, nil) != nil {
 		t.Fatal("roots without mounts")
 	}
-	t.Setenv("LUDOCK_SENSITIVE_PATHS", "/srv/game:/other")
+	SetSensitivePaths([]string{"/srv/game", "/other"})
+	t.Cleanup(func() { SetSensitivePaths(nil) })
 	if got := Roots("custom", nil, []Mount{{Type: "bind", Source: "/srv/game", Destination: "/data", RW: true}}); got != nil {
 		t.Fatal("configured sensitive source offered", got)
 	}

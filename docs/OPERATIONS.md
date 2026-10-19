@@ -32,8 +32,8 @@ mounted read-only. For remote access, put an HTTPS reverse proxy in front of
 Ludock and expose only the proxy. The proxy must:
 
 - Keep the public host name and forward the original protocol.
-- Support WebSocket upgrades. API requests and WebSockets use same-origin
-  session cookies.
+- Support WebSocket upgrades and server-sent events (no response buffering).
+  Pages, live updates, and the console use same-origin session cookies.
 - Overwrite any client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`,
   `X-Forwarded-Port`, and `X-Forwarded-For` headers.
 
@@ -222,7 +222,7 @@ already finished.
 
 | Limit | Value |
 | --- | --- |
-| Upload size | 2 GiB; set `MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
+| Upload size | 2 GiB; set `LUDOCK_MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
 | Text preview | 512 KiB; larger or binary files are downloaded instead |
 | Folder listing | 10,000 entries |
 | Upload or download | 30 minutes; uploads also stop after 60 seconds without data |
@@ -497,7 +497,7 @@ Stop Ludock and copy all of `/data`, including the identity key folder next to
 the database (normally `/data/ludock.db.identity-key/`). Restore the database and
 key together: a missing, unsafe, or mismatched key prevents startup, so recover a
 lost key from an earlier backup instead of creating a new one. The key protects
-server and Compose source fingerprints and queued API-token credentials. Copying
+server and Compose source fingerprints. Copying
 `/data` doesn't back up game worlds.
 
 ```bash
@@ -509,7 +509,7 @@ docker compose start ludock
 ### Logs
 
 Administrators can use **Diagnostics**, **Audit log**, and **Ludock logs**, or
-run `docker compose logs --follow --tail 200 ludock`. Set `LOG_LEVEL=debug`
+run `docker compose logs --follow --tail 200 ludock`. Set `LUDOCK_LOG_LEVEL=debug`
 temporarily for more detail, and leave credentials and command contents out of
 anything you share.
 
@@ -519,8 +519,7 @@ Export `LUDOCK_RECOVERY_PASSWORD` without saving it in your shell history, then:
 
 ```bash
 docker compose stop ludock
-docker compose run --rm -e LUDOCK_RECOVERY_PASSWORD \
-  ludock bun packages/backend/dist/recovery.js admin
+docker compose run --rm -e LUDOCK_RECOVERY_PASSWORD ludock recover admin
 unset LUDOCK_RECOVERY_PASSWORD
 docker compose start ludock
 ```
@@ -528,20 +527,10 @@ docker compose start ludock
 Replace `admin` with the existing username. This signs the account out
 everywhere; it doesn't create accounts or change game data.
 
-## API
+## Health check
 
-HTTP routes live under `/api/v1` and WebSockets under `/ws/v1`. Server IDs are
-Ludock's IDs, not Docker container IDs. Browsers use session cookies; the optional
-administrator token uses `Authorization: Bearer …`. Never put credentials in URLs.
-
-- **Long-running actions** return an operation. Poll `/operations/:id` for its
-  result, or `/servers/:id/operations` for a server's recent work.
-- **History:** `GET /operations` searches servers you can access, and
-  administrator-only `GET /audit` searches the audit log. Both accept `limit`
-  (up to 250), `cursor`, `serverId`, `actor`, `action`, `status`, `from`, and
-  `to`; audit also accepts `operationId`. Dates are inclusive Unix milliseconds.
-  `actor` matches an account name or recorded actor ID, and `action` matches the
-  operation kind or audit action. Pass `nextCursor` with the same filters until
-  it's null. Every page rechecks your access.
-- `GET /attention` returns what needs attention, with `discoveryUnavailable`
-  when Docker can't be checked. `GET /integrations` lists the supported games.
+`GET /api/v1/health` answers status 200 with `"status":"ok"` while the database
+and Docker are reachable, and 503 with `{"status":"degraded"}` otherwise. It needs no
+sign-in and returns nothing else; the image's `HEALTHCHECK` runs
+`ludock healthcheck` against it. Ludock has no other HTTP API: everything else is
+the browser interface.

@@ -82,7 +82,7 @@ type sink struct {
 var std = newSink()
 
 func newSink() *sink {
-	level, _ := ParseLevel(os.Getenv("LOG_LEVEL"))
+	level := LevelInfo
 	var id [16]byte
 	_, _ = rand.Read(id[:])
 	return &sink{level: level, nextID: 1, generation: hex.EncodeToString(id[:]),

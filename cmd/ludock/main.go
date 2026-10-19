@@ -53,14 +53,27 @@ func main() {
 	os.Exit(code)
 }
 
+// loadConfig reads the environment, reporting every invalid setting.
+func loadConfig() (config.Config, bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Invalid configuration:\n"+err.Error())
+		return cfg, false
+	}
+	return cfg, true
+}
+
 func serve() int {
-	cfg := config.Load()
-	level, invalid := logging.ParseLevel(cfg.LogLevel)
+	cfg, ok := loadConfig()
+	if !ok {
+		return 2
+	}
+	level, _ := logging.ParseLevel(cfg.LogLevel)
 	logging.SetLevel(level)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		log.Error(err.Error())
 		return 1
@@ -79,9 +92,9 @@ func serve() int {
 	accounts := services.Auth
 	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping}
 
-	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
+	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		log.Error("Could not listen", logging.F("port", cfg.Port))
+		log.Error("Could not listen", logging.F("address", cfg.Listen))
 		return 1
 	}
 	httpServer := &http.Server{
@@ -91,10 +104,6 @@ func serve() int {
 	}
 	log.Info("Ludock listening", logging.F("address", "http://localhost:"+strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)),
 		logging.F("logLevel", level.String()), logging.F("version", version))
-	if invalid != "" {
-		log.Warn("Invalid LOG_LEVEL; using info", logging.F("configuredValue", invalid),
-			logging.F("supportedValues", "error,warn,info,debug"))
-	}
 	accounts.LogSetupInstructions(ctx, func(text string) { os.Stdout.WriteString(text) })
 
 	services.Start(ctx)
@@ -139,7 +148,11 @@ func recoverAccount(args []string) int {
 		fmt.Fprintf(os.Stderr, "Recovery password must be between %d and %d characters.\n", auth.PasswordMin, auth.PasswordMax)
 		return 2
 	}
-	database, err := db.Open(config.Load().DBPath)
+	cfg, ok := loadConfig()
+	if !ok {
+		return 2
+	}
+	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
@@ -160,8 +173,12 @@ func recoverAccount(args []string) int {
 
 // healthcheck backs the image HEALTHCHECK without shipping wget.
 func healthcheck() int {
+	cfg, ok := loadConfig()
+	if !ok {
+		return 2
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(config.Load().Port) + "/api/v1/health")
+	response, err := client.Get(cfg.HealthURL())
 	if err != nil {
 		return 1
 	}

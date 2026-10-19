@@ -4,7 +4,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"sync"
 	"time"
 
@@ -81,14 +80,15 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	observer := &servers.Observer{Docker: client}
 	serverService := &servers.Service{DB: database, Identity: store, Authz: authorization, Observer: observer}
 	notifications := &notify.Service{DB: database}
-	images := launch.NewImages(client)
-	storage := backups.NewStorage(client)
+	images := launch.NewImages(client, cfg.HelperImage, cfg.SelfContainer)
+	storage := backups.NewStorage(client, cfg.BackupRoots, cfg.SelfContainer)
 	backupService := &backups.Service{DB: database, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	runner := &ops.Runner{DB: database, Locks: table, Notify: notifications.Notify}
 	monitoring := &monitor.Service{DB: database, Locks: table, Notify: notifications.Notify, Store: store}
 	runtime := &console.Runtime{Docker: client, Images: images}
-	composeRunner := compose.NewRunner(cfg.DockerSocket)
+	composeRunner := compose.NewRunner(cfg.DockerSocket, cfg.DockerConfig, cfg.ComposeRoots)
+	files.SetSensitivePaths(cfg.SensitivePaths)
 	updates := &compose.Updates{Snapshots: &compose.Snapshots{Runner: composeRunner, DB: database}, Docker: client, Locks: table}
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
 		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates}
@@ -191,12 +191,4 @@ func (a *App) Stop() {
 	case <-time.After(5 * time.Minute):
 		log.Error("Failed to shut down cleanly")
 	}
-}
-
-// SelfContainer is the configured container name, for diagnostics.
-func SelfContainer() string {
-	if self := os.Getenv("LUDOCK_SELF_CONTAINER"); self != "" {
-		return self
-	}
-	return os.Getenv("HOSTNAME")
 }

@@ -3,13 +3,13 @@
 package files
 
 import (
-	"os"
 	"path"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/textutil"
@@ -72,18 +72,21 @@ var protectedPaths = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/var
 
 var broadPaths = []string{"/", "/home", "/root", "/srv", "/opt", "/mnt", "/media", "/Users"}
 
+var extraSensitive atomic.Pointer[[]string]
+
+// SetSensitivePaths adds configured protected paths (absolute, cleaned).
+// Startup sets them once.
+func SetSensitivePaths(paths []string) {
+	paths = slices.Clone(paths)
+	extraSensitive.Store(&paths)
+}
+
 // SensitiveSystemPath reports a host or container system path, a broad
-// parent directory, or a path from LUDOCK_SENSITIVE_PATHS.
+// parent directory, or a configured sensitive path.
 func SensitiveSystemPath(value string) bool {
-	configured := os.Getenv("LUDOCK_SENSITIVE_PATHS")
-	if configured == "" {
-		configured = os.Getenv("FILE_SENSITIVE_PATHS")
-	}
 	roots := slices.Clone(protectedPaths)
-	for _, part := range strings.Split(configured, ":") {
-		if strings.HasPrefix(part, "/") {
-			roots = append(roots, path.Clean(part))
-		}
+	if extra := extraSensitive.Load(); extra != nil {
+		roots = append(roots, *extra...)
 	}
 	if slices.Contains(broadPaths, value) {
 		return true

@@ -103,13 +103,13 @@ type Runner struct {
 	// Binary is "docker" unless tests override it.
 	Binary string
 	Socket string
-	Config string // LUDOCK_DOCKER_CONFIG
-	Roots  string // LUDOCK_COMPOSE_ROOTS
+	Config string // Docker client config folder for registry access
+	Roots  string // approved source roots, ':'-separated
 }
 
-// NewRunner reads the environment.
-func NewRunner(socket string) *Runner {
-	return &Runner{Binary: "docker", Socket: socket, Config: os.Getenv("LUDOCK_DOCKER_CONFIG"), Roots: os.Getenv("LUDOCK_COMPOSE_ROOTS")}
+// NewRunner runs Compose against socket with approved source roots.
+func NewRunner(socket, dockerConfig string, roots []string) *Runner {
+	return &Runner{Binary: "docker", Socket: socket, Config: dockerConfig, Roots: strings.Join(roots, ":")}
 }
 
 func (r *Runner) environment() []string {
