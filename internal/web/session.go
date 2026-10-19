@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
@@ -177,6 +179,27 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 	}
 	w.WriteHeader(public.Status)
 	views.ErrorPage(s.page(r, request, "Error"), "Something went wrong", public.Message).Render(r.Context(), w)
+}
+
+// render writes components as one HTML response.
+func render(w http.ResponseWriter, r *http.Request, status int, components ...templ.Component) {
+	html(w)
+	w.WriteHeader(status)
+	for _, component := range components {
+		component.Render(r.Context(), w)
+	}
+}
+
+// publicMessage is the text of a public error; other errors are logged and
+// shown generically.
+func publicMessage(err error) string {
+	if public, ok := apperr.As(err); ok {
+		return public.Message
+	}
+	if !errors.Is(err, context.Canceled) {
+		log.Error("Unhandled request error")
+	}
+	return "Internal server error"
 }
 
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }

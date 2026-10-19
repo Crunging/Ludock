@@ -1,0 +1,112 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/Crunging/Ludock/internal/db"
+)
+
+// AccountView is the account page state.
+type AccountView struct {
+	Sessions []db.Session
+	// SessionsError replaces the list when it could not load.
+	SessionsError string
+	Error         string
+	Message       string
+}
+
+templ AccountPage(page Page, view AccountView) {
+	@Shell(page) {
+		<div class="page">
+			<div class="page__header">
+				<h1 class="page__title">Account</h1>
+				<p class="page__subtitle">Change your password and review signed-in devices.</p>
+			</div>
+			@AccountStatus(view, false)
+			<form class="settings-card" method="post" action="/account/password">
+				<input type="hidden" name="_csrf" value={ page.CSRF }/>
+				<h2>Change password</h2>
+				<div class="form-grid form-grid--password">
+					<label>
+						<span>Current password</span>
+						<input type="password" name="currentPassword" autocomplete="current-password" maxlength="128" required/>
+					</label>
+					<label>
+						<span>New password</span>
+						<input type="password" name="newPassword" autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
+					</label>
+					<label>
+						<span>Confirm new password</span>
+						<input type="password" name="confirmPassword" autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
+					</label>
+					<button class="primary-btn" type="submit" data-busy-label="Working…">Change password</button>
+				</div>
+			</form>
+			<section class="settings-section" id="sessions">
+				@AccountSessions(view)
+			</section>
+		</div>
+	}
+}
+
+// AccountStatus shows the page's result; oob replaces it from a fragment.
+templ AccountStatus(view AccountView, oob bool) {
+	<div
+		id="account-status"
+		aria-live="polite"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if view.Error != "" {
+			@Alert("error", view.Error)
+		}
+		if view.Message != "" {
+			@Alert("success", view.Message)
+		}
+	</div>
+}
+
+templ AccountSessions(view AccountView) {
+	<div class="section-heading">
+		<h2>Active sessions</h2>
+		<button class="secondary-btn" type="button" hx-get="/fragments/account/sessions" hx-target="#sessions" data-busy-label="Refreshing…">Refresh sessions</button>
+	</div>
+	if view.SessionsError != "" {
+		<div class="alert alert--error" role="alert">Unable to load sessions: { view.SessionsError }</div>
+	} else if len(view.Sessions) == 0 {
+		<p class="muted">No active sessions.</p>
+	}
+	<div class="settings-list">
+		for _, session := range view.Sessions {
+			<article class="settings-card session-row">
+				<div>
+					<strong>
+						if session.Current {
+							This device
+						} else if session.IPAddress != "" {
+							{ session.IPAddress }
+						} else {
+							Unknown address
+						}
+					</strong>
+					<span>
+						if session.UserAgent != "" {
+							{ session.UserAgent }
+						} else {
+							Unknown browser
+						}
+					</span>
+					<span>Last active @Time(session.LastSeenAt, "", "")</span>
+				</div>
+				<button class="secondary-btn secondary-btn--danger" type="button" hx-post={ "/account/sessions/" + session.ID + "/revoke" } hx-target="#sessions" data-busy-label="Working…">
+					if session.Current {
+						Sign out
+					} else {
+						Revoke
+					}
+				</button>
+			</article>
+		}
+	</div>
+}

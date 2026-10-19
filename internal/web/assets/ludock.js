@@ -63,8 +63,28 @@
     }
   });
 
-  // Close a dialog after its htmx form succeeds.
+  // htmx buttons (or a form's submit button) show their busy label and stay
+  // disabled while the request runs.
+  function busyButton(elt) {
+    if (!elt || !elt.matches) return null;
+    if (elt.matches("button[data-busy-label]")) return elt;
+    return elt.matches("form") ? elt.querySelector("button[type=submit][data-busy-label]") : null;
+  }
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var button = busyButton(event.detail.elt);
+    if (!button || button.hasAttribute("data-idle-label")) return;
+    button.setAttribute("data-idle-label", button.textContent);
+    button.textContent = button.getAttribute("data-busy-label");
+    button.disabled = true;
+  });
+  // Restore busy buttons, and close a dialog after its htmx form succeeds.
   document.addEventListener("htmx:afterRequest", function (event) {
+    var button = busyButton(event.detail.elt);
+    if (button && button.hasAttribute("data-idle-label")) {
+      button.textContent = button.getAttribute("data-idle-label");
+      button.removeAttribute("data-idle-label");
+      button.disabled = false;
+    }
     var form = event.detail.elt;
     if (event.detail.successful && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
       form.closest("dialog").close();

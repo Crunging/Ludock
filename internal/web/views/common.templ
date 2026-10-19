@@ -7,9 +7,9 @@ templ Alert(kind, message string) {
 templ ErrorPage(page Page, title, message string) {
 	@Shell(page) {
 		<div class="page">
-			<header class="page-header">
-				<h1 class="page-title">{ title }</h1>
-			</header>
+			<div class="page__header">
+				<h1 class="page__title">{ title }</h1>
+			</div>
 			@Alert("error", message)
 			<p><a href="/">Back to servers</a></p>
 		</div>
