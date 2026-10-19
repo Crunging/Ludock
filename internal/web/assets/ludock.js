@@ -170,6 +170,25 @@
     if (event.target.matches && event.target.matches("input[data-confirm-value]")) confirmations(event.target.form);
   });
 
+  // data-autosubmit submits its form on change (a GET form keeps working
+  // without scripts through its submit button).
+  document.addEventListener("change", function (event) {
+    var field = event.target;
+    if (field.matches && field.matches("[data-autosubmit]") && field.form) field.form.requestSubmit();
+  });
+
+  // Dialogs swapped in with data-open-on-load open as modals and leave the
+  // page when closed.
+  function openDialogs(root) {
+    var dialogs = root && root.matches && root.matches("dialog[data-open-on-load]") ? [root]
+      : (root || document).querySelectorAll("dialog[data-open-on-load]");
+    Array.prototype.forEach.call(dialogs, function (dialog) {
+      if (dialog.open || !dialog.isConnected || !dialog.showModal) return;
+      dialog.addEventListener("close", function () { dialog.remove(); }, { once: true });
+      dialog.showModal();
+    });
+  }
+
   // Copy buttons: data-copy="text".
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-copy]");
@@ -274,6 +293,7 @@
     collapseLists(event.detail.elt);
     confirmations(event.detail.elt);
     timezones(event.detail.elt);
+    openDialogs(event.detail.elt);
   });
 
   onReady(function () {

@@ -17,7 +17,7 @@ at the very end (not opened yet). Update this file after every area.
 | 6 | Files / tar / backups (path containment, 512 KiB preview cap) | done |
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
-| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs done; files, admin next |
+| 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | in progress: layout, sign-in/setup/logout, dashboard + SSE, account, server detail (header, overview, monitoring, binding review, activity, backups + restore + download, update, schedules editor), console/logs, files done; admin pages next |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
@@ -281,6 +281,14 @@ at the very end (not opened yet). Update this file after every area.
   proof of authorization. `Server.CloseSockets` runs before HTTP shutdown;
   the handler waits for the close handshake before cancelling, or coder
   drops the close code.
+- Files: `/files/{id}?root=&path=&q=&sort=` lists one folder; filter and
+  sort run on the server (`textutil.CompareNatural`, folders first, dashes
+  last). Dialogs (new folder, rename, delete, preview) are fragments opened
+  with `data-open-on-load`; errors re-render the dialog with the draft,
+  success retargets an alert to `#file-feedback` and fires `files-changed`.
+  The preview is server-side (`files.Service.Preview`, at most 512 KiB read).
+  Uploads (`assets/files.js`) are raw `PUT /files/{id}/upload` bodies with
+  `X-CSRF-Token`, one file at a time, capped by `LUDOCK_MAX_UPLOAD_SIZE`.
 - `Referrer-Policy` is `same-origin` (was `no-referrer`): with no-referrer
   Chrome sends `Origin: null` on same-origin form posts, which the
   cross-origin check rejects.
@@ -327,8 +335,7 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Pages (area 9), remaining in order: files (browse, preview, upload, download, at
-   `/files/{id}`); admin (users + grants, settings, diagnostics, audit,
+1. Pages (area 9), remaining: admin (users + grants, settings, diagnostics, audit,
    Ludock logs, operations list `/operations` and detail
    `/operations/{id}`, which the activity tab already links). Reuse
    `views.OperationList(…, showContext=true, names)` for `/operations`. Screens and texts come from packages/frontend/src.

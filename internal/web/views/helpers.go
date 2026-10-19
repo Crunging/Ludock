@@ -4,6 +4,7 @@ package views
 import (
 	"encoding/json"
 	"net/url"
+	"strconv"
 )
 
 // Asset maps an asset name to its versioned URL; set by the web package.
@@ -18,3 +19,7 @@ func csrfHeaders(token string) string {
 }
 
 func urlQuery(value string) string { return url.QueryEscape(value) }
+
+func intText(value int) string { return strconv.Itoa(value) }
+
+func int64Text(value int64) string { return strconv.FormatInt(value, 10) }

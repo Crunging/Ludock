@@ -1105,16 +1105,16 @@ input[type="radio"] {
   font-weight: 400;
 }
 
-.file-breadcrumbs button {
+.file-breadcrumbs :is(button, a) {
   color: var(--text);
   font-weight: 650;
 }
 
-.file-breadcrumbs button[aria-current="page"] {
+.file-breadcrumbs :is(button, a)[aria-current="page"] {
   color: var(--text-dim);
 }
 
-.file-breadcrumbs button:hover {
+.file-breadcrumbs :is(button, a):hover {
   text-decoration: underline;
 }
 
@@ -1199,7 +1199,7 @@ input[type="radio"] {
   gap: 9px;
 }
 
-.file-row__name > button,
+.file-row__name > :is(button, a),
 .file-row__name > span:not(.file-row__icon) {
   min-width: 0;
   overflow: hidden;
@@ -1210,13 +1210,13 @@ input[type="radio"] {
   white-space: nowrap;
 }
 
-.file-row__name > button:hover {
+.file-row__name > :is(button, a):hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 /* Folders are places you step into; files open a preview. */
-.file-row__name > button:not(.file-row__file) {
+.file-row__name > :is(button, a):not(.file-row__file) {
   font-weight: 650;
 }
 
@@ -2269,13 +2269,13 @@ html select:not([multiple]) {
 @media (pointer: coarse) {
   .files-back { min-width: 44px; }
   .files-root select,
-  .file-breadcrumbs button,
+  .file-breadcrumbs :is(button, a),
   .file-row__name button,
   .action-menu__trigger--compact,
   .file-action-dialog__field input {
     min-height: 44px;
   }
-  .file-breadcrumbs button,
+  .file-breadcrumbs :is(button, a),
   .file-row__name button,
   .action-menu__trigger--compact { min-width: 44px; }
 }
