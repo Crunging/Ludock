@@ -31,7 +31,9 @@ const (
 // APIError keeps only the HTTP status of a failed request.
 type APIError struct{ Status int }
 
-func (e *APIError) Error() string { return fmt.Sprintf("Docker API request failed (HTTP %d)", e.Status) }
+func (e *APIError) Error() string {
+	return fmt.Sprintf("Docker API request failed (HTTP %d)", e.Status)
+}
 
 // StatusCode returns the HTTP status of a Docker API error, or 0.
 func StatusCode(err error) int {

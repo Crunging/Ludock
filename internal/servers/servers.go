@@ -130,7 +130,9 @@ type View struct {
 }
 
 // Can reports a capability in the view.
-func (v *View) Can(capability authz.Capability) bool { return slices.Contains(v.Permissions, capability) }
+func (v *View) Can(capability authz.Capability) bool {
+	return slices.Contains(v.Permissions, capability)
+}
 
 func (s *Service) view(ctx context.Context, actor *db.SessionUser, logical identity.Server, permissions []authz.Capability, container *Container) (*View, error) {
 	view := &View{ID: logical.ID, BindingStatus: logical.Status, BindingRevision: logical.BindingRevision, Permissions: permissions}
