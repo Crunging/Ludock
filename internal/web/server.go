@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/app"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/logging"
@@ -23,6 +24,8 @@ type HealthCheck func(ctx context.Context) error
 
 // Server holds the HTTP dependencies.
 type Server struct {
+	// App holds every service the pages use.
+	App      *app.App
 	DB       *db.DB
 	Auth     *auth.Service
 	ClientIP *auth.ClientIP

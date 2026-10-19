@@ -162,7 +162,12 @@ at the very end (not opened yet). Update this file after every area.
   between chunks, 60 s / 30 min deadlines, 4 MiB stdout cap, 5 s upload
   cleanup grace, never blocks on a stuck input), `MountProof` and
   `AssertMountIdentities`, `HelperEnv`.
-- `internal/web`: `Server.Handler()` with security headers, cross-origin
+- `internal/app`: `New` builds every service; `Start` runs ops recovery
+  then a 15 s `Tick` (refresh → schedules Run/Announce → monitor Check;
+  backup auto-setup and notification delivery run beside it); `Stop`
+  (events hub, runner, background, announcements, locks drained). `serve`
+  shuts HTTP down first, then `App.Stop`, then closes the DB.
+- `internal/web`: `Server{App,…}.Handler()` with security headers, cross-origin
   rejection for unsafe methods, panic recovery, `/api/v1/health` (5 s cache).
 
 ## Decisions
@@ -231,13 +236,7 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. App wiring in `cmd/ludock` (or `internal/app`): construct every
-   service, background tick every 15 s (refresh → schedules.Run →
-   schedules.Announce → monitor.Check; backups.Initialize and
-   notify.Deliver off the schedule path), ops runner start (recovery) then
-   tick, shutdown order (HTTP stop, events hub stop, runner stop, wait for
-   announcements, locks drained, DB close). Port index.ts.
-2. Pages (area 9): templ + htmx 2 + SSE. Session cookie + CSRF token
+1. Pages (area 9): templ + htmx 2 + SSE. Session cookie + CSRF token
    (hash of session token) on forms; re-authenticate after reading the
    body; admin pages; per-page server checks replacing the browser race
    tests. Look at packages/frontend/src for screens and copy CSS.

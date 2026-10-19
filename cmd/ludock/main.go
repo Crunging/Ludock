@@ -14,13 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/app"
 	"github.com/Crunging/Ludock/internal/auth"
-	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
-	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
-	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/web"
 )
@@ -62,11 +60,6 @@ func serve() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	clientIP, err := auth.NewClientIP(cfg.TrustedProxies)
-	if err != nil {
-		log.Error(err.Error())
-		return 1
-	}
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		log.Error(err.Error())
@@ -78,11 +71,13 @@ func serve() int {
 		log.Error(err.Error())
 		return 1
 	}
-	servers := &identity.Store{DB: database}
-	authorization := &authz.Service{DB: database, Servers: servers}
-	accounts := auth.NewService(database, authorization, setup)
-	dockerClient := docker.New(cfg.DockerSocket)
-	app := &web.Server{DB: database, Auth: accounts, ClientIP: clientIP, Docker: dockerClient.Ping}
+	services, err := app.New(cfg, database, setup)
+	if err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+	accounts := services.Auth
+	server := &web.Server{App: services, DB: database, Auth: accounts, ClientIP: services.ClientIP, Docker: services.Docker.Ping}
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	if err != nil {
@@ -90,7 +85,7 @@ func serve() int {
 		return 1
 	}
 	httpServer := &http.Server{
-		Handler:           app.Handler(),
+		Handler:           server.Handler(),
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -102,6 +97,7 @@ func serve() int {
 	}
 	accounts.LogSetupInstructions(ctx, func(text string) { os.Stdout.WriteString(text) })
 
+	services.Start(ctx)
 	served := make(chan error, 1)
 	go func() { served <- httpServer.Serve(listener) }()
 	select {
@@ -115,7 +111,11 @@ func serve() int {
 	log.Info("Shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+	// Stop new requests first; background work and held locks settle before
+	// the database closes.
+	failed := httpServer.Shutdown(shutdownCtx) != nil
+	services.Stop()
+	if failed {
 		log.Error("Failed to shut down cleanly")
 		return 1
 	}
