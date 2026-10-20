@@ -40,3 +40,20 @@ func TestRedactsDenseMatches(t *testing.T) {
 		t.Fatal(len(output.String()))
 	}
 }
+
+func TestHoldsBackOnlyTextThatCouldStartASecret(t *testing.T) {
+	var output strings.Builder
+	redactor := NewRedactor([]string{"rcon-secret"}, func(value string) { output.WriteString(value) })
+	redactor.Push("Theo joined the game\n")
+	if output.String() != "Theo joined the game\n" {
+		t.Fatalf("held ordinary output: %q", output.String())
+	}
+	redactor.Push("password rcon-se")
+	if output.String() != "Theo joined the game\npassword " {
+		t.Fatalf("leaked a credential fragment: %q", output.String())
+	}
+	redactor.Push("cret\n")
+	if output.String() != "Theo joined the game\npassword [redacted]\n" {
+		t.Fatalf("got %q", output.String())
+	}
+}

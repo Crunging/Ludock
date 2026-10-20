@@ -5,28 +5,24 @@ import (
 	"unicode/utf8"
 )
 
-// Redactor removes credential values from streamed output. It keeps enough
-// trailing text to catch a credential split across Docker frames, so no
-// fragment of a credential reaches the browser.
+// Redactor removes credential values from streamed output. It holds back
+// trailing text that could start a credential split across Docker frames, so
+// no fragment of a credential reaches the browser; other text is sent at once.
 type Redactor struct {
 	secrets []string
 	output  func(string)
 	pending string
-	tail    int
 }
 
 // NewRedactor redacts secrets (longest first wins at the same position).
 func NewRedactor(secrets []string, output func(string)) *Redactor {
-	tail := 0
 	var kept []string
 	for _, secret := range secrets {
-		if secret == "" {
-			continue
+		if secret != "" {
+			kept = append(kept, secret)
 		}
-		kept = append(kept, secret)
-		tail = max(tail, len(secret)-1)
 	}
-	return &Redactor{secrets: kept, output: output, tail: tail}
+	return &Redactor{secrets: kept, output: output}
 }
 
 // Push adds output.
@@ -41,7 +37,7 @@ func (r *Redactor) End() { r.emit(true) }
 func (r *Redactor) emit(final bool) {
 	limit := len(r.pending)
 	if !final {
-		limit = max(0, len(r.pending)-r.tail)
+		limit = len(r.pending) - r.partial()
 		// Never split a rune: a partial one would not survive encoding.
 		for limit > 0 && limit < len(r.pending) && !utf8.RuneStart(r.pending[limit]) {
 			limit--
@@ -87,4 +83,19 @@ func (r *Redactor) emit(final bool) {
 	if safe.Len() > 0 {
 		r.output(safe.String())
 	}
+}
+
+// partial returns the length of the longest end of pending that begins a
+// credential without completing it.
+func (r *Redactor) partial() int {
+	longest := 0
+	for _, secret := range r.secrets {
+		for length := min(len(secret)-1, len(r.pending)); length > longest; length-- {
+			if strings.HasSuffix(r.pending, secret[:length]) {
+				longest = length
+				break
+			}
+		}
+	}
+	return longest
 }
