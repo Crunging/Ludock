@@ -89,6 +89,27 @@ func TestBoundedRetriesKeepSecretsOut(t *testing.T) {
 	}
 }
 
+func TestUnsavedResultIsNotResentEveryTick(t *testing.T) {
+	calls := 0
+	s := setup(t, func(*http.Request) (*http.Response, error) {
+		calls++
+		return respond(204, "")
+	})
+	if _, err := s.QueueTest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Recording the delivered state fails, as with a full or broken disk.
+	if _, err := s.DB.Exec(`CREATE TRIGGER fail_result BEFORE UPDATE OF state ON notification_deliveries
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s.Deliver(ctx)
+	s.Deliver(ctx)
+	if calls != 1 {
+		t.Fatalf("sent %d times before the retry delay", calls)
+	}
+}
+
 func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 	var mu sync.Mutex
 	statuses := []int{429, 204}

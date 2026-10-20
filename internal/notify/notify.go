@@ -19,7 +19,10 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/logging"
 )
+
+var log = logging.New("notifications")
 
 const settingKey = "notifications"
 
@@ -309,12 +312,19 @@ func (s *Service) Deliver(ctx context.Context) error {
 		if err != nil || r.state != "queued" || r.next > db.Now() {
 			continue
 		}
+		attempts, retries := r.attempts+1, r.retries+1
+		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
+		// Claim the attempt before sending: if its result cannot be saved,
+		// the message is sent again after the backoff, not on every tick.
+		if _, err := s.DB.ExecContext(ctx, "UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=? WHERE id=?",
+			db.Now(), db.Now()+backoff, id); err != nil {
+			log.Warn("Could not claim a notification delivery; it will be retried")
+			continue
+		}
 		s.mu.Lock()
 		s.active = id
 		s.mu.Unlock()
-		s.DB.ExecContext(ctx, "UPDATE notification_deliveries SET last_attempt_at=? WHERE id=?", db.Now(), id)
 		failure := s.send(ctx, &noRedirects, config.WebhookURL, r.payload)
-		attempts, retries := r.attempts+1, r.retries+1
 		finished := db.Now()
 		state := "queued"
 		var delivered, failureCode any
@@ -326,10 +336,19 @@ func (s *Service) Deliver(ctx context.Context) error {
 				state = "failed"
 			}
 		}
-		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
-		s.DB.ExecContext(ctx, `UPDATE notification_deliveries
+		for try := 1; ; try++ {
+			_, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries
       SET attempts=?,retry_attempts=?,state=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`,
-			attempts, retries, state, finished+backoff, delivered, failureCode, id)
+				attempts, retries, state, finished+backoff, delivered, failureCode, id)
+			if err == nil {
+				break
+			}
+			if try == 3 || ctx.Err() != nil {
+				log.Warn("Could not record a notification delivery; it may be sent again after its retry delay")
+				break
+			}
+			time.Sleep(time.Duration(try) * 500 * time.Millisecond)
+		}
 		s.mu.Lock()
 		s.active = ""
 		s.mu.Unlock()
