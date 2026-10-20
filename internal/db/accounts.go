@@ -206,7 +206,15 @@ type SessionInput struct {
 	ExpiresAt int64
 	IPAddress string
 	UserAgent string
+	// PasswordHash, when set, is the hash the password was verified against.
+	// The session is created only while the account still has it and is
+	// enabled, in the same statement, so a concurrent reset or disable wins.
+	PasswordHash string
 }
+
+// ErrAccountChanged means the account's password or access changed after
+// its password was verified.
+var ErrAccountChanged = errors.New("account changed during sign-in")
 
 // CreateSession stores a session and drops expired ones.
 func (d *DB) CreateSession(ctx context.Context, input SessionInput) error {
@@ -214,12 +222,28 @@ func (d *DB) CreateSession(ctx context.Context, input SessionInput) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at <= ?", input.CreatedAt); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO sessions
+		values := []any{input.TokenHash, input.SessionID, input.UserID, input.CreatedAt, input.ExpiresAt, input.CreatedAt,
+			nullable(input.IPAddress), nullable(input.UserAgent)}
+		insert := `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			input.TokenHash, input.SessionID, input.UserID, input.CreatedAt, input.ExpiresAt, input.CreatedAt,
-			nullable(input.IPAddress), nullable(input.UserAgent))
-		return err
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		if input.PasswordHash != "" {
+			insert = `INSERT INTO sessions
+      (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND password_hash = ? AND disabled = 0`
+			values = append(values, input.UserID, input.PasswordHash)
+		}
+		result, err := tx.ExecContext(ctx, insert, values...)
+		if err != nil {
+			return err
+		}
+		if created, err := result.RowsAffected(); err != nil || created != 1 {
+			if err == nil {
+				err = ErrAccountChanged
+			}
+			return err
+		}
+		return nil
 	})
 }
 

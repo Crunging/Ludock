@@ -326,6 +326,26 @@ func TestLoginRejectsAccountChangedDuringVerification(t *testing.T) {
 	}
 }
 
+func TestSessionRequiresTheVerifiedPassword(t *testing.T) {
+	for _, change := range []string{"none", "reset", "disable"} {
+		s, _, _ := racingService(t)
+		record, _ := s.DB.FindUserByID(ctx, adminID)
+		// The account changes after its password was verified.
+		switch change {
+		case "reset":
+			hash, _ := Argon2{}.Hash("reset-password-123")
+			s.DB.UpdateUserPassword(ctx, adminID, hash)
+		case "disable":
+			s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
+		}
+		_, err := s.createSession(ctx, db.SessionUser{ID: adminID, Username: "admin", Role: db.RoleAdmin}, Client{IP: "127.0.0.1"},
+			record.PasswordHash)
+		if (change == "none") != (err == nil) || (err != nil && !errors.Is(err, db.ErrAccountChanged)) {
+			t.Fatalf("%s: %v", change, err)
+		}
+	}
+}
+
 func TestHashUpgradeDoesNotOverwriteReset(t *testing.T) {
 	s, h, _ := racingService(t)
 	weak, _ := hashWith(original, 512, 1, 1)

@@ -169,8 +169,11 @@ func (s *Service) sessionInput(userID string, client Client) (db.SessionInput, s
 		CreatedAt: now, ExpiresAt: now + sessionTTLMs, IPAddress: client.IP, UserAgent: client.UserAgent}, token
 }
 
-func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client) (*Principal, error) {
+// createSession signs user in. A non-empty verifiedHash is the password hash
+// the caller verified; the session is refused if the account changed since.
+func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client, verifiedHash string) (*Principal, error) {
 	input, token := s.sessionInput(user.ID, client)
+	input.PasswordHash = verifiedHash
 	if err := s.DB.CreateSession(ctx, input); err != nil {
 		return nil, err
 	}
@@ -245,41 +248,50 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	s.Setup.markCompleted()
-	return s.createSession(ctx, user, client)
+	return s.createSession(ctx, user, client, "")
 }
 
 // Authenticate verifies credentials against the current account state.
 // Password work yields to other requests, so a reset or disabled account
 // invalidates the credentials that were just checked.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*db.SessionUser, error) {
+	user, _, err := s.authenticate(ctx, username, password)
+	return user, err
+}
+
+// authenticate also returns the password hash it verified, which a new
+// session must still match.
+func (s *Service) authenticate(ctx context.Context, username, password string) (*db.SessionUser, string, error) {
 	record, err := s.DB.FindUserByUsername(ctx, username)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if record == nil || record.Disabled {
 		// Spend comparable time so unknown accounts are not distinguishable.
 		_, err := s.Hasher.Hash(password)
-		return nil, err
+		return nil, "", err
 	}
 	if !s.Hasher.Verify(password, record.PasswordHash) {
-		return nil, nil
+		return nil, "", nil
 	}
 	upgraded := ""
 	if NeedsUpgrade(record.PasswordHash) {
 		if upgraded, err = s.Hasher.Hash(password); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	current, err := s.DB.FindUserByID(ctx, record.ID)
 	if err != nil || current == nil || current.Disabled || current.PasswordHash != record.PasswordHash {
-		return nil, err
+		return nil, "", err
 	}
+	verified := record.PasswordHash
 	if upgraded != "" {
 		if err := s.DB.UpgradePasswordHashIfUnchanged(ctx, current.ID, record.PasswordHash, upgraded); err != nil {
-			return nil, err
+			return nil, "", err
 		}
+		verified = upgraded
 	}
-	return &db.SessionUser{ID: current.ID, Username: current.Username, Role: current.Role}, nil
+	return &db.SessionUser{ID: current.ID, Username: current.Username, Role: current.Role}, verified, nil
 }
 
 var errInvalidCredentials = apperr.New("INVALID_CREDENTIALS", 401, "Invalid username or password")
@@ -326,9 +338,10 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 		return nil, busy(cooldown.BlockedUntil - now)
 	}
 	var user *db.SessionUser
+	var verifiedHash string
 	err = s.Work.Do(passwordWorkSource(client), throttleKey("password-work-login-subject", strings.ToLower(parsedUsername)), func() error {
 		var err error
-		user, err = s.Authenticate(ctx, parsedUsername, password)
+		user, verifiedHash, err = s.authenticate(ctx, parsedUsername, password)
 		return err
 	})
 	if errors.Is(err, ErrPasswordWorkBusy) {
@@ -373,7 +386,12 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	if err := s.DB.ClearLoginThrottle(ctx, accountKey); err != nil {
 		return nil, err
 	}
-	principal, err := s.createSession(ctx, *user, client)
+	// A reset or disable after verification revokes sessions; the insert
+	// checks the verified hash again so this login cannot outlive it.
+	principal, err := s.createSession(ctx, *user, client, verifiedHash)
+	if errors.Is(err, db.ErrAccountChanged) {
+		return nil, errInvalidCredentials
+	}
 	if err != nil {
 		return nil, err
 	}
