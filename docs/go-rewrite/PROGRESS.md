@@ -21,7 +21,7 @@ at the very end (not opened yet). Update this file after every area.
 | 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | done (container journeys on amd64 + arm64 in CI) |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | done |
-| 13 | UI redesign ("harbor chart": top harbor bar, signal-flag states, Archivo) | in progress: pages restyled; demo seed, README and PR screenshots next |
+| 13 | UI redesign ("harbor chart": top harbor bar, signal-flag states, Archivo) | done (dark only; README and PR screenshots from `fakedocker -demo`) |
 
 ## Layout
 
@@ -401,8 +401,10 @@ at the very end (not opened yet). Update this file after every area.
 
 1. Before merging: remove the `go-rewrite` branch trigger from `ci.yaml`,
    decide whether `docs/go-rewrite/` stays, and open the single PR (Logan
-   asked not to open it yet). Before/after screenshots of every screen are on
-   the orphan `pr-assets` branch under `go-rewrite/` for the PR description.
+   asked not to open it yet). Before/after screenshots of the main screens
+   (sign-in, servers, server, console, files) are on the orphan `pr-assets`
+   branch under `go-rewrite/` for the PR description; "before" is the
+   pre-redesign Go UI, which matched `main`, on the same demo data.
 2. Mention in the PR: no `/api/v1` JSON API or API token, a fresh database
    (old data volumes are refused), renamed `LUDOCK_*` settings, and the
    container suite replacing the Bun harnesses.
