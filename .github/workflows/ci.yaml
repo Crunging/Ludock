@@ -6,11 +6,9 @@ on:
       - "**.md"
       - LICENSE
   # Verify main after each merge, which can combine separately tested changes.
-  # go-rewrite runs until the rewrite merges; remove it then.
   push:
     branches:
       - main
-      - go-rewrite
     paths-ignore:
       - "**.md"
       - LICENSE
