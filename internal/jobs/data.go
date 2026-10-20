@@ -67,7 +67,9 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 			stop["bindingRevision"] = server.Logical.BindingRevision
 			stop["lockKeys"] = server.LockKeys
 			stop["dataSafe"] = true
-			job.Progress("stopping", stop, nil)
+			if err := job.Progress("stopping", stop, nil); err != nil {
+				return err
+			}
 		}
 		return j.Monitor.Suppress(ctx, server.Logical.ID)
 	})
@@ -202,7 +204,9 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			}
 		}
 		// Persist before dispatch, so recovery recognizes a start that reached Docker.
-		job.Progress("restarting", map[string]any{"startRequested": true}, nil)
+		if err := job.Progress("restarting", map[string]any{"startRequested": true}, nil); err != nil {
+			return err
+		}
 		if err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
 			_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision)
 			return err
@@ -247,7 +251,9 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		return nil, err
 	}
 	id := identity.NewUUID()
-	job.Progress("backing_up", map[string]any{"backupId": id, "backupDestination": settings.Destination, "backupComplete": false}, nil)
+	if err := job.Progress("backing_up", map[string]any{"backupId": id, "backupDestination": settings.Destination, "backupComplete": false}, nil); err != nil {
+		return nil, err
+	}
 	var data *backups.DataHelper
 	defer func() {
 		if data != nil {
@@ -542,14 +548,21 @@ func journals(job *ops.Context) ([]journal, error) {
 	return state.Roots, nil
 }
 
-func saveRestore(job *ops.Context, state restoreRecovery, phase string) {
+// saveRestore persists the restore journal. Callers stop on an error: the
+// next data change must never run ahead of the journal a restart would read.
+func saveRestore(job *ops.Context, state restoreRecovery, phase string) error {
 	if phase == "" {
 		phase = "restore_" + state.Status
 	}
-	encoded, _ := json.Marshal(state)
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
 	var generic any
-	json.Unmarshal(encoded, &generic)
-	job.Progress(phase, map[string]any{"restore": generic, "dataSafe": state.Status != "replacing" && state.Status != "rolling_back"}, nil)
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		return err
+	}
+	return job.Progress(phase, map[string]any{"restore": generic, "dataSafe": state.Status != "replacing" && state.Status != "rolling_back"}, nil)
 }
 
 func persistJournal(job *ops.Context, index int, phase string) error {
@@ -558,8 +571,7 @@ func persistJournal(job *ops.Context, index int, phase string) error {
 		return errJournal
 	}
 	state.Roots[index].Phase = phase
-	saveRestore(job, *state, "restore_"+phase)
-	return nil
+	return saveRestore(job, *state, "restore_"+phase)
 }
 
 func stageName(job *ops.Context) string { return ".ludock-restore-" + job.Job.ID }
@@ -584,7 +596,9 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 	if err != nil {
 		return err
 	}
-	saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries}, "")
+	if err := saveRestore(job, restoreRecovery{Status: "rolling_back", Roots: entries}, ""); err != nil {
+		return err
+	}
 	for position := len(entries) - 1; position >= 0; position-- {
 		entry := entries[position]
 		if err := j.assertStopped(ctx, server, job); err != nil {
@@ -618,8 +632,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			return err
 		}
 	}
-	saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
-	return nil
+	return saveRestore(job, restoreRecovery{Status: "rolled_back"}, "")
 }
 
 func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job *ops.Context, data *backups.DataHelper) error {
@@ -636,8 +649,7 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 			return err
 		}
 	}
-	saveRestore(job, restoreRecovery{Status: "cleaned"}, "")
-	return nil
+	return saveRestore(job, restoreRecovery{Status: "cleaned"}, "")
 }
 
 func rootsEqual(left []backups.Root, right []backups.Root) bool {
@@ -699,12 +711,16 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err != nil {
 				return nil, err
 			}
-			job.Progress("restore_staging", map[string]any{"safetyBackupId": safety.ID}, nil)
+			if err := job.Progress("restore_staging", map[string]any{"safetyBackupId": safety.ID}, nil); err != nil {
+				return nil, err
+			}
 			var entries []journal
 			for _, root := range row.Roots {
 				entries = append(entries, journal{Root: root, Phase: "staging"})
 			}
-			saveRestore(job, restoreRecovery{Status: "staging", Roots: entries}, "")
+			if err := saveRestore(job, restoreRecovery{Status: "staging", Roots: entries}, ""); err != nil {
+				return nil, err
+			}
 			if err := assertAccess(); err != nil {
 				return nil, err
 			}
@@ -746,7 +762,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			current, _ := journals(job)
-			saveRestore(job, restoreRecovery{Status: "replacing", Roots: current}, "")
+			if err := saveRestore(job, restoreRecovery{Status: "replacing", Roots: current}, ""); err != nil {
+				return nil, err
+			}
 			for index, root := range row.Roots {
 				if err := j.assertStopped(ctx, server, job); err != nil {
 					return nil, err
@@ -758,18 +776,24 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				if err != nil {
 					return nil, err
 				}
-				persistJournal(job, index, "moving_old")
+				if err := persistJournal(job, index, "moving_old"); err != nil {
+					return nil, err
+				}
 				if _, err := j.restoreStep(ctx, data, destination, job, "moveOld", assertAccess); err != nil {
 					return nil, err
 				}
-				persistJournal(job, index, "old_moved")
+				if err := persistJournal(job, index, "old_moved"); err != nil {
+					return nil, err
+				}
 				if err := assertAccess(); err != nil {
 					return nil, err
 				}
 				if _, err := j.restoreStep(ctx, data, destination, job, "moveNew", assertAccess); err != nil {
 					return nil, err
 				}
-				persistJournal(job, index, "replaced")
+				if err := persistJournal(job, index, "replaced"); err != nil {
+					return nil, err
+				}
 			}
 			if err := j.assertStopped(ctx, server, job); err != nil {
 				return nil, err
@@ -778,7 +802,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			current, _ = journals(job)
-			saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, "")
+			if err := saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, ""); err != nil {
+				return nil, err
+			}
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
 				return nil, err
 			}

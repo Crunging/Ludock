@@ -226,8 +226,8 @@ func lifecycleResult(job *ops.Context, updates map[string]any) map[string]any {
 
 // record keeps only fixed lifecycle summaries public; console output is
 // discarded.
-func record(job *ops.Context, phase string, recovery map[string]any) {
-	job.Progress(phase, recovery, lifecycleResult(job, recovery))
+func record(job *ops.Context, phase string, recovery map[string]any) error {
+	return job.Progress(phase, recovery, lifecycleResult(job, recovery))
 }
 
 // saveWorld sends the game's save command, best effort. Revoked authority
@@ -344,7 +344,11 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if mutation == servers.Stop {
 				phase = "stopping"
 			}
-			record(job, phase, map[string]any{"containerId": server.Container.ID})
+			// Persist before dispatch, so recovery recognizes a change that
+			// reached Docker.
+			if err := record(job, phase, map[string]any{"containerId": server.Container.ID}); err != nil {
+				return err
+			}
 			return j.Servers.Observer.ChangeState(ctx, server.Container.ID, mutation, func(observation identity.Observation, info *docker.ContainerInspect) error {
 				if err := j.assertCapability(ctx, job, permission); err != nil {
 					return err
@@ -353,7 +357,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 					return err
 				}
 				if mutation == servers.Stop {
-					record(job, "stopping", stopRecovery(info))
+					return record(job, "stopping", stopRecovery(info))
 				}
 				return nil
 			})

@@ -88,7 +88,9 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}
 			// Persist before dispatch; recovery never repeats a start that
 			// reached Docker.
-			job.Progress("starting", map[string]any{"startRequested": true}, nil)
+			if err := job.Progress("starting", map[string]any{"startRequested": true}, nil); err != nil {
+				return nil, err
+			}
 			if err := j.Servers.Observer.ChangeState(ctx, selected.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
 				if err := assertAccess(); err != nil {
 					return err
@@ -206,8 +208,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
-	job.Progress("pulling", map[string]any{"containerId": server.Container.ID, "initiallyRunning": current.State.Running,
-		"previousImageId": current.Image}, nil)
+	if err := job.Progress("pulling", map[string]any{"containerId": server.Container.ID, "initiallyRunning": current.State.Running,
+		"previousImageId": current.Image}, nil); err != nil {
+		return nil, err
+	}
 	runner := j.Updates.Snapshots.Runner
 	if _, err := runner.Run(ctx, append(slices.Clone(args), "pull", "--policy", "always", service), 15*time.Minute); err != nil {
 		return nil, err
@@ -227,7 +231,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	job.Progress("validating", map[string]any{"selectedImageId": pulled}, nil)
 	j.Monitor.Suppress(ctx, server.Logical.ID)
 	if request.CreateBackup {
-		job.Progress("stopping", map[string]any{"stopRequested": true}, nil)
+		if err := job.Progress("stopping", map[string]any{"stopRequested": true}, nil); err != nil {
+			return nil, err
+		}
 		if err := j.stopForData(ctx, server, job); err != nil {
 			return nil, err
 		}
@@ -265,7 +271,11 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
-	job.Progress("recreating", map[string]any{"mutationStarted": true}, nil)
+	// Recovery chooses its path from this checkpoint, so Compose runs only
+	// once it is saved.
+	if err := job.Progress("recreating", map[string]any{"mutationStarted": true}, nil); err != nil {
+		return nil, err
+	}
 	flags := []string{"up", "--no-start"}
 	if current.State.Running {
 		flags = []string{"up", "-d", "--wait", "--wait-timeout", "180"}
