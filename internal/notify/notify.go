@@ -308,8 +308,16 @@ func (s *Service) Retry(ctx context.Context, id string) (*Delivery, error) {
 	if !s.public(r, true).Retryable {
 		return nil, apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
 	}
-	if _, err := s.DB.ExecContext(ctx, "UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=? WHERE id=?", db.Now(), id); err != nil {
+	// Only the row as read is retried: a send claimed or finished since then
+	// changes last_attempt_at or the counters, and must not be queued again.
+	result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
+    WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
+		db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
+	if err != nil {
 		return nil, err
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		return nil, apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
 	}
 	if r, err = s.row(ctx, id); err != nil {
 		return nil, err
