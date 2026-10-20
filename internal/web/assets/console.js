@@ -25,7 +25,7 @@
   // Terminal, themed from the page's CSS variables.
   var colors = getComputedStyle(document.documentElement);
   var css = function (name, fallback) { return colors.getPropertyValue(name).trim() || fallback; };
-  var background = css("--terminal", "#0f1a28");
+  var background = css("--terminal", "#09111c");
   var fontFamily = css("--mono", "monospace");
   var terminal = new window.Terminal({
     theme: {
@@ -106,8 +106,8 @@
   function showStatus(label, tone) {
     if (!statusBox) return;
     statusBox.className = "connection-status connection-status--" + state;
-    var pip = statusBox.querySelector(".status-pip");
-    if (pip) pip.className = "status-pip status-pip--" + tone;
+    var pip = statusBox.querySelector(".pip");
+    if (pip) pip.className = "pip flag--" + tone;
     statusBox.querySelector("span:last-child").textContent = label;
   }
   function showError(message) {

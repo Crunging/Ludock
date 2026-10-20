@@ -361,8 +361,8 @@ at the very end (not opened yet). Update this file after every area.
   hub is transport-neutral (`Subscriber.Send` must not block).
 
 - Redesign (area 13): not bound by the React look. A navy top "harbor bar"
-  replaces the sidebar; all pages share tokens in `ludock.css` (light and
-  `prefers-color-scheme: dark`). Text is Archivo (variable width; headings
+  replaces the sidebar; all pages share tokens in `ludock.css`. The theme is
+  dark only (Logan's preference, 2026-10-20); there is no light variant. Text is Archivo (variable width; headings
   run wide), code and the terminal use Atkinson Hyperlegible Mono. Server
   state is a small signal flag (`Flag`/`Pip` in `dashboard.templ`, tones
   ok/idle/active/attention/failed) next to the word, never color alone.

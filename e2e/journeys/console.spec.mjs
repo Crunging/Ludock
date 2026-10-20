@@ -8,6 +8,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   const status = page.locator("[data-console-status]");
   const output = page.locator(".xterm-rows");
   await expect(status).toHaveText("Connected");
+  await expect(status.locator(".pip")).toHaveClass(/flag--ok/);
   await expect(output).toContainText("Connected to Minecraft RCON");
 
   await page.getByLabel("Game command").fill("list");
