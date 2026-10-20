@@ -434,7 +434,9 @@ type Download struct {
 	cleanup  func()
 	once     sync.Once
 	timer    *time.Timer
-	done     bool
+	// unwatch stops closing the stream when the caller's context ends.
+	unwatch func() bool
+	done    bool
 }
 
 func (d *Download) Read(p []byte) (int, error) {
@@ -459,6 +461,7 @@ func (d *Download) Read(p []byte) (int, error) {
 // Close ends the stream and removes the helper.
 func (d *Download) Close() error {
 	d.once.Do(func() {
+		d.unwatch()
 		d.timer.Stop()
 		d.conn.Close()
 		d.reader.Close()
@@ -534,6 +537,9 @@ func (s *Service) openDownload(ctx context.Context, access *Access, root Root, n
 			}
 		}}
 	download.timer = time.AfterFunc(30*time.Minute, func() { conn.Close() })
+	// The started stream no longer follows ctx, so revoked access or a closed
+	// request must end it explicitly.
+	download.unwatch = context.AfterFunc(ctx, func() { conn.Close() })
 	return download, nil
 }
 
