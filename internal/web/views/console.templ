@@ -25,7 +25,7 @@ type ConsoleView struct {
 	CanStart      bool
 }
 
-var modeLabels = map[string]string{"logs": "Docker Logs", "game": "Game Console", "shell": "Container Shell"}
+var modeLabels = map[string]string{"logs": "Docker logs", "game": "Game console", "shell": "Container shell"}
 
 func (c ConsoleView) statusText() string {
 	switch c.Mode {
