@@ -11,12 +11,16 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 )
+
+var log = logging.New("operations")
 
 // Statuses.
 const (
@@ -53,23 +57,38 @@ type Context struct {
 
 // Progress persists the phase with merged recovery state and an optional
 // public result, atomically.
+//
+// The job in memory changes only once the write succeeds, so recovery
+// decisions made after a failed write match what a restart would see.
 func (c *Context) Progress(phase string, recovery, result map[string]any) error {
+	merged := make(map[string]any, len(c.Job.Recovery)+len(recovery))
+	for key, value := range c.Job.Recovery {
+		merged[key] = value
+	}
 	for key, value := range recovery {
-		c.Job.Recovery[key] = value
+		merged[key] = value
 	}
-	if result != nil {
-		c.Job.Result = result
+	if result == nil {
+		result = c.Job.Result
 	}
-	c.Job.Phase = phase
-	recoveryJSON, _ := json.Marshal(c.Job.Recovery)
+	recoveryJSON, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
 	var resultJSON any
-	if c.Job.Result != nil {
-		encoded, _ := json.Marshal(c.Job.Result)
+	if result != nil {
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
 		resultJSON = string(encoded)
 	}
-	_, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=?",
-		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID)
-	return err
+	if _, err := c.runner.DB.Exec("UPDATE operations SET phase=?, recovery_json=?, result_json=?, updated_at=? WHERE id=?",
+		phase, string(recoveryJSON), resultJSON, db.Now(), c.Job.ID); err != nil {
+		return err
+	}
+	c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase
+	return nil
 }
 
 // Handler runs and reconciles one operation kind.
@@ -266,7 +285,7 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 	return result.job()
 }
 
-func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) {
+func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) error {
 	var resultJSON, errorValue any
 	if result != nil {
 		encoded, _ := json.Marshal(result)
@@ -285,14 +304,40 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 		entry.UserID = job.ActorID
 	}
 	// The outcome and its audit entry commit together.
-	r.DB.Tx(ctx, func(tx *sql.Tx) error {
+	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE operations SET status=?,phase=?,result_json=COALESCE(?,result_json),error=?,updated_at=? WHERE id=?",
 			status, status, resultJSON, errorValue, db.Now(), job.ID); err != nil {
 			return err
 		}
 		return r.DB.WriteAudit(ctx, tx, entry)
-	})
+	}); err != nil {
+		return err
+	}
 	r.DB.PruneAuditIfNeeded(ctx)
+	return nil
+}
+
+// persist retries a state transition the runner must not skip, such as
+// marking a job running before its handler acts or recording its outcome.
+// It gives up only when the runner stops; the job is then reconciled or run
+// again after a restart, from the state that was last saved.
+func (r *Runner) persist(ctx context.Context, what string, write func() error) bool {
+	delay := 250 * time.Millisecond
+	for {
+		err := write()
+		if err == nil {
+			return true
+		}
+		log.Warn("Could not save an operation's state; retrying", logging.F("step", what), logging.F("error", err.Error()))
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return false
+		case <-r.stopped:
+			return false
+		}
+		delay = min(delay*2, 10*time.Second)
+	}
 }
 
 func (r *Runner) notifyScheduledFailure(rw *row) {
@@ -463,8 +508,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 	fail := func(err error) {
 		message, _ := apperr.Public(err)
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
-		r.finish(ctx, job, Failed, nil, message)
-		r.notifyScheduledFailure(rw)
+		if r.persist(ctx, "finish", func() error { return r.finish(ctx, job, Failed, nil, message) }) {
+			r.notifyScheduledFailure(rw)
+		}
 	}
 	for {
 		// Damaged saved state fails this job without wedging the runner.
@@ -473,7 +519,14 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			fail(err)
 			return
 		}
-		r.DB.ExecContext(ctx, "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?", db.Now(), job.ID)
+		// A job runs only once it is saved as running: a restart then
+		// reconciles it instead of running it a second time.
+		if !r.persist(ctx, "start", func() error {
+			_, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?", db.Now(), job.ID)
+			return err
+		}) {
+			return
+		}
 		handler, ok := r.handler(job.Kind)
 		if !ok {
 			fail(apperr.New("UNSUPPORTED_OPERATION", 409, "This operation type is unavailable"))
@@ -493,7 +546,7 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			if result["alreadyCurrent"] == true {
 				status = AlreadyCurrent
 			}
-			r.finish(ctx, job, status, result, "")
+			r.persist(ctx, "finish", func() error { return r.finish(ctx, job, status, result, "") })
 			return
 		}
 		// Nothing has changed yet. Keep the job queued, so a restart while it
@@ -590,11 +643,15 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 			}
 		}
 		if err != nil {
-			r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
-				"Recovery requires administrator attention. The server has been left stopped where possible.")
+			if err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
+				"Recovery requires administrator attention. The server has been left stopped where possible."); err != nil {
+				return err
+			}
 			continue
 		}
-		r.finish(ctx, job, Interrupted, result, "Ludock restarted during this operation. Review the server state before retrying.")
+		if err := r.finish(ctx, job, Interrupted, result, "Ludock restarted during this operation. Review the server state before retrying."); err != nil {
+			return err
+		}
 	}
 	return nil
 }

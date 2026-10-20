@@ -101,6 +101,75 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	}
 }
 
+func TestRetriesStateItCouldNotSave(t *testing.T) {
+	r, servers := setup(t, 1)
+	// Writes that set a blocked status fail, as with a full or broken disk.
+	for _, statement := range []string{"CREATE TABLE blocked_status (status TEXT)",
+		`CREATE TRIGGER fail_status BEFORE UPDATE OF status ON operations
+		 WHEN EXISTS (SELECT 1 FROM blocked_status WHERE status = NEW.status)
+		 BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`} {
+		if _, err := r.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	block := func(status string) { r.DB.Exec("INSERT INTO blocked_status VALUES (?)", status) }
+	unblock := func() { r.DB.Exec("DELETE FROM blocked_status") }
+	var mu sync.Mutex
+	runs := 0
+	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		return nil, nil
+	}})
+	r.Start(ctx)
+
+	// A job that cannot be saved as running never acts.
+	block(Running)
+	first, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+	time.Sleep(400 * time.Millisecond)
+	mu.Lock()
+	if runs != 0 {
+		t.Fatal("ran before it was saved as running")
+	}
+	mu.Unlock()
+	unblock()
+	waitStatus(t, r, first.ID, Succeeded)
+
+	// An outcome that cannot be saved is retried, not dropped with the job
+	// left running.
+	block(Succeeded)
+	second, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+	waitStatus(t, r, second.ID, Running)
+	time.Sleep(400 * time.Millisecond)
+	unblock()
+	waitStatus(t, r, second.ID, Succeeded)
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 2 {
+		t.Fatal(runs)
+	}
+}
+
+func TestFailedCheckpointLeavesTheJobUnchanged(t *testing.T) {
+	r, servers := setup(t, 1)
+	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "restore"})
+	if _, err := r.DB.Exec(`CREATE TRIGGER fail_phase BEFORE UPDATE OF phase ON operations WHEN NEW.phase = 'moving_old'
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	running := &Context{Job: job, runner: r}
+	if err := running.Progress("staging", map[string]any{"root": "staging"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Progress("moving_old", map[string]any{"root": "moving_old"}, nil); err == nil {
+		t.Fatal("a failed checkpoint reported success")
+	}
+	if job.Phase != "staging" || job.Recovery["root"] != "staging" {
+		t.Fatal("memory ran ahead of the saved checkpoint:", job.Phase, job.Recovery)
+	}
+}
+
 func TestDataLaneIsSerialAndLifecycleParallel(t *testing.T) {
 	r, servers := setup(t, 4)
 	var mu sync.Mutex
