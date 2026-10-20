@@ -205,7 +205,9 @@ func (s *Service) ForBackup(ctx context.Context) (Settings, error) {
 		return Settings{}, err
 	}
 	if settings == nil {
-		s.Initialize(ctx)
+		if err := s.Initialize(ctx); err != nil {
+			return Settings{}, err
+		}
 		if settings, _, err = s.SavedSettings(ctx); err != nil {
 			return Settings{}, err
 		}
@@ -216,11 +218,12 @@ func (s *Service) ForBackup(ctx context.Context) (Settings, error) {
 	return s.Storage.ValidateSettings(ctx, *settings)
 }
 
-// ArchiveBytes is the size of complete backups.
-func (s *Service) ArchiveBytes(ctx context.Context) int64 {
+// ArchiveBytes is the size of complete backups. An unreadable total is an
+// error, never zero: zero would let backups grow past the global limit.
+func (s *Service) ArchiveBytes(ctx context.Context) (int64, error) {
 	var size int64
-	s.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM backups WHERE state='complete'").Scan(&size)
-	return size
+	err := s.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM backups WHERE state='complete'").Scan(&size)
+	return size, err
 }
 
 // Remaining is the archive budget left under the global limit.
@@ -255,7 +258,12 @@ type StorageStatus struct {
 
 func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	settings, found, _ := s.SavedSettings(ctx)
-	status := StorageStatus{Configured: found, ArchiveBytes: s.ArchiveBytes(ctx), AvailableBytes: -1}
+	used, err := s.ArchiveBytes(ctx)
+	status := StorageStatus{Configured: found, ArchiveBytes: used, AvailableBytes: -1}
+	if err != nil {
+		status.Issues = append(status.Issues, Issue{"BACKUP_RECORDS_UNAVAILABLE", "Ludock could not read its backup records. Try again."})
+		return status, nil
+	}
 	if settings == nil {
 		code := "BACKUP_SETTINGS_INVALID"
 		if !found {

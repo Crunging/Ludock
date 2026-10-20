@@ -360,10 +360,16 @@ func (s *Service) Deliver(ctx context.Context) error {
 	var ids []string
 	for rows.Next() {
 		var id string
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
 		ids = append(ids, id)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	client := s.Client
 	if client == nil {
 		client = &http.Client{}
