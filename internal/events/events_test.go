@@ -48,6 +48,8 @@ type fixture struct {
 	refreshes     atomic.Int32
 	admin, friend *db.SessionUser
 	stranger      *db.SessionUser
+	// adminSession is the admin's token hash.
+	adminSession string
 }
 
 func setup(t *testing.T) *fixture {
@@ -68,6 +70,7 @@ func setup(t *testing.T) *fixture {
 	for _, user := range []*db.SessionUser{f.admin, f.friend, f.stranger} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.ID, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
+	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	f.first = engine.AddContainer(fakedocker.GameOptions{ID: "first", Name: "first", Image: "itzg/minecraft-server", Running: true})
 	f.second = engine.AddContainer(fakedocker.GameOptions{ID: "second", Name: "second", Image: "itzg/minecraft-server", Running: true})
 	if _, err := service.Refresh(ctx); err != nil {
@@ -79,7 +82,7 @@ func setup(t *testing.T) *fixture {
 	logical, _ := store.List(ctx, "")
 	for _, server := range logical {
 		if server.ContainerID == "first" {
-			authorization.SetUserGrants(ctx, "friend", []authz.GrantInput{{ServerID: server.ID, Capabilities: []authz.Capability{authz.ServerView}}}, f.admin)
+			authorization.SetUserGrants(ctx, "friend", []authz.GrantInput{{ServerID: server.ID, Capabilities: []authz.Capability{authz.ServerView}}}, f.admin, f.adminSession)
 		}
 	}
 	return f
@@ -144,7 +147,7 @@ func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 func TestRechecksGrantsAndAccountsBeforeEachEvent(t *testing.T) {
 	f := setup(t)
 	socket := f.client(f.friend)
-	f.authz.SetUserGrants(ctx, "friend", nil, f.admin)
+	f.authz.SetUserGrants(ctx, "friend", nil, f.admin, f.adminSession)
 	f.hub.dispatch(ctx, []change{{"start", "first", 1}})
 	if len(socket.events()) != 0 {
 		t.Fatal(socket.events())

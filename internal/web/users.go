@@ -161,7 +161,7 @@ func (s *Server) saveUserGrants(w http.ResponseWriter, r *http.Request, request 
 	// Grants name logical servers; discovery applies binding changes first.
 	_, err := s.App.Servers.Refresh(r.Context())
 	if err == nil {
-		_, err = s.App.Authz.SetUserGrants(r.Context(), userID, inputs, request.User())
+		_, err = s.App.Authz.SetUserGrants(r.Context(), userID, inputs, request.User(), request.Principal.TokenHash)
 	}
 	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
 		s.fail(w, r, request, err)

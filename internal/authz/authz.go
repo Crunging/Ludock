@@ -306,8 +306,10 @@ func (s *Service) validateGrant(ctx context.Context, q interface {
 }
 
 // SetUserGrants replaces a user's complete assignment set atomically. Empty
-// grants revoke access. It does not infer permissions from UI presets.
-func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []GrantInput, actor *db.SessionUser) ([]Grant, error) {
+// grants revoke access. It does not infer permissions from UI presets. The
+// actor's session (tokenHash) and admin role are checked again inside the
+// transaction that writes the grants.
+func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []GrantInput, actor *db.SessionUser, tokenHash string) ([]Grant, error) {
 	administrator, err := s.AssertAdministrator(ctx, actor)
 	if err != nil {
 		return nil, err
@@ -322,7 +324,7 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 		}
 		seen[input.ServerID] = true
 	}
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	err = s.DB.AdminMutation(ctx, administrator.ID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		var role string
 		var disabled int
 		err := tx.QueryRowContext(ctx, "SELECT role, disabled FROM users WHERE id = ?", userID).Scan(&role, &disabled)
@@ -371,7 +373,12 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: administrator.ID, Action: "users.server_grants.updated",
 			TargetType: "user", TargetID: userID, Details: map[string]any{"grants": grants}})
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, db.ErrSessionGone):
+		return nil, apperr.New("AUTHENTICATION_REQUIRED", 401, "Authentication required")
+	case errors.Is(err, db.ErrNotAdmin):
+		return nil, errNotAdmin
+	case err != nil:
 		return nil, err
 	}
 	s.DB.PruneAuditIfNeeded(ctx)

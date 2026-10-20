@@ -17,6 +17,8 @@ var (
 	admin    = &db.SessionUser{ID: "admin", Username: "owner", Role: db.RoleAdmin}
 	operator = &db.SessionUser{ID: "operator", Username: "friend", Role: db.RoleOperator}
 	viewer   = &db.SessionUser{ID: "viewer", Username: "reader", Role: db.RoleViewer}
+	// adminSession is the admin's token hash in the current setup.
+	adminSession string
 )
 
 func observations() []identity.Observation {
@@ -36,6 +38,7 @@ func setup(t *testing.T) (*Service, []identity.Server) {
 			t.Fatal(err)
 		}
 	}
+	adminSession = dbtest.Session(t, d, admin.ID)
 	store := &identity.Store{DB: d}
 	servers, err := store.Reconcile(ctx, observations(), "", 0)
 	if err != nil {
@@ -53,7 +56,7 @@ func setGrant(t *testing.T, s *Service, userID, serverID string, capabilities ..
 			inputs = append(inputs, GrantInput{grant.ServerID, grant.Capabilities})
 		}
 	}
-	if _, err := s.SetUserGrants(ctx, userID, append(inputs, GrantInput{serverID, capabilities}), admin); err != nil {
+	if _, err := s.SetUserGrants(ctx, userID, append(inputs, GrantInput{serverID, capabilities}), admin, adminSession); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -108,7 +111,7 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 	if ok, _ := s.Has(ctx, operator, id, ServerStop); !ok {
 		t.Fatal("re-enabled user lost stop")
 	}
-	s.SetUserGrants(ctx, operator.ID, nil, admin)
+	s.SetUserGrants(ctx, operator.ID, nil, admin, adminSession)
 	if got := effective(t, s, operator, id); len(got) != 0 {
 		t.Fatal("revoked grant kept access")
 	}
@@ -176,21 +179,35 @@ func TestAssertDistinguishesHiddenFromForbiddenAndAudits(t *testing.T) {
 	}
 }
 
+func TestGrantsRequireTheAdminSessionStillValid(t *testing.T) {
+	s, servers := setup(t)
+	if err := s.DB.DeleteSession(ctx, adminSession); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[0].ID, []Capability{ServerView}}}, admin, adminSession)
+	if !apperr.Is(err, "AUTHENTICATION_REQUIRED") {
+		t.Fatal(err)
+	}
+	if grants, _ := s.UserGrants(ctx, operator.ID); len(grants) != 0 {
+		t.Fatal(grants)
+	}
+}
+
 func TestGrantReplacementIsAtomic(t *testing.T) {
 	s, servers := setup(t)
 	setGrant(t, s, operator.ID, servers[0].ID, ServerView)
 	_, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[1].ID, []Capability{ServerView}},
-		{"nonexistent", []Capability{ServerView}}}, admin)
+		{"nonexistent", []Capability{ServerView}}}, admin, adminSession)
 	if !apperr.Is(err, "SERVER_NOT_FOUND") {
 		t.Fatal(err)
 	}
 	if grants, _ := s.UserGrants(ctx, operator.ID); len(grants) != 1 || grants[0].ServerID != servers[0].ID {
 		t.Fatal(grants)
 	}
-	if _, err := s.SetUserGrants(ctx, viewer.ID, []GrantInput{{servers[0].ID, []Capability{ServerView}}}, operator); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := s.SetUserGrants(ctx, viewer.ID, []GrantInput{{servers[0].ID, []Capability{ServerView}}}, operator, ""); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
-	if _, err := s.SetUserGrants(ctx, admin.ID, nil, admin); err == nil || err.Error() != "Administrators already have access to all eligible servers" {
+	if _, err := s.SetUserGrants(ctx, admin.ID, nil, admin, adminSession); err == nil || err.Error() != "Administrators already have access to all eligible servers" {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -200,15 +217,15 @@ func TestGrantReplacementIsAtomic(t *testing.T) {
 		{[]Capability{ServerView, ServerStop}, "A capability exceeds this user's role"},
 		{[]Capability{LogsRead}, "Server access is required for every server capability"},
 	} {
-		if _, err := s.SetUserGrants(ctx, viewer.ID, []GrantInput{{servers[0].ID, c.capabilities}}, admin); err == nil || err.Error() != c.message {
+		if _, err := s.SetUserGrants(ctx, viewer.ID, []GrantInput{{servers[0].ID, c.capabilities}}, admin, adminSession); err == nil || err.Error() != c.message {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[0].ID, []Capability{ServerView, FilesWrite}}}, admin); err == nil ||
+	if _, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[0].ID, []Capability{ServerView, FilesWrite}}}, admin, adminSession); err == nil ||
 		err.Error() != "File writing also requires file reading" {
 		t.Fatal(err)
 	}
-	if _, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[0].ID, nil}, {servers[0].ID, nil}}, admin); err == nil ||
+	if _, err := s.SetUserGrants(ctx, operator.ID, []GrantInput{{servers[0].ID, nil}, {servers[0].ID, nil}}, admin, adminSession); err == nil ||
 		err.Error() != "Duplicate server assignment" {
 		t.Fatal(err)
 	}

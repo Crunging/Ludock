@@ -51,7 +51,9 @@ type sessionFixture struct {
 	serverID string
 	friend   *db.SessionUser
 	admin    *db.SessionUser
-	authz    *authz.Service
+	// adminSession is the admin's token hash.
+	adminSession string
+	authz        *authz.Service
 }
 
 func sessionSetup(t *testing.T) *sessionFixture {
@@ -70,6 +72,7 @@ func sessionSetup(t *testing.T) *sessionFixture {
 	for _, user := range []*db.SessionUser{admin, friend} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
+	adminSession := dbtest.Session(t, d, admin.ID)
 	client := docker.New(engine.Socket)
 	store := &identity.Store{DB: d}
 	authorization := &authz.Service{DB: d, Servers: store}
@@ -79,8 +82,8 @@ func sessionSetup(t *testing.T) *sessionFixture {
 		t.Fatal(views, err)
 	}
 	authorization.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: views[0].ID,
-		Capabilities: []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute}}}, admin)
-	return &sessionFixture{engine: engine, serverID: views[0].ID, friend: friend, admin: admin, authz: authorization,
+		Capabilities: []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute}}}, admin, adminSession)
+	return &sessionFixture{engine: engine, serverID: views[0].ID, friend: friend, admin: admin, adminSession: adminSession, authz: authorization,
 		sessions: &Sessions{DB: d, Authz: authorization, Identity: store, Servers: service, Locks: locks.New(),
 			Runtime: &Runtime{Docker: client, pollInterval: time.Millisecond}, IdleCheck: 20 * time.Millisecond}}
 }
@@ -103,7 +106,7 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 	if !strings.Contains(text, "joined") || strings.Contains(text, "hunter2-secret") || !strings.Contains(text, "[redacted]") {
 		t.Fatal(text)
 	}
-	f.authz.SetUserGrants(ctx, f.friend.ID, nil, f.admin)
+	f.authz.SetUserGrants(ctx, f.friend.ID, nil, f.admin, f.adminSession)
 	time.Sleep(100 * time.Millisecond)
 	if channel.Open() {
 		t.Fatal("stream stayed open after revocation")

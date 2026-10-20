@@ -78,7 +78,7 @@ func (p *pages) user(id, username string, role db.Role) *auth.Principal {
 func (p *pages) grant(principal *auth.Principal, capabilities ...authz.Capability) {
 	p.t.Helper()
 	if _, err := p.app.Authz.SetUserGrants(context.Background(), principal.User.ID,
-		[]authz.GrantInput{{ServerID: p.server, Capabilities: capabilities}}, &p.admin.User); err != nil {
+		[]authz.GrantInput{{ServerID: p.server, Capabilities: capabilities}}, &p.admin.User, p.admin.TokenHash); err != nil {
 		p.t.Fatal(err)
 	}
 }

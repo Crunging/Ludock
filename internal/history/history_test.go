@@ -24,7 +24,8 @@ func TestPagesRecheckAccessAndHideTokens(t *testing.T) {
 	store := &identity.Store{DB: d}
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "a", Name: "a", DisplayName: "a"}, {ContainerID: "b", Name: "b", DisplayName: "b"}}, "", 0)
 	authorization := &authz.Service{DB: d, Servers: store}
-	authorization.SetUserGrants(ctx, viewer.ID, []authz.GrantInput{{ServerID: list[0].ID, Capabilities: []authz.Capability{authz.ServerView}}}, admin)
+	authorization.SetUserGrants(ctx, viewer.ID, []authz.GrantInput{{ServerID: list[0].ID, Capabilities: []authz.Capability{authz.ServerView}}}, admin,
+		dbtest.Session(t, d, admin.ID))
 	for index := range 5 {
 		server := list[index%2].ID
 		actor := "admin"

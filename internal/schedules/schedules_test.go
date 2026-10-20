@@ -20,6 +20,8 @@ var ctx = context.Background()
 var (
 	admin  = &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
 	friend = &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleOperator}
+	// adminSession is the admin's token hash in the current setup.
+	adminSession string
 )
 
 var base = Input{Kind: "recurring", Action: "start", Enabled: true, Time: "08:00", Days: []int{0, 1, 2, 3, 4, 5, 6}, Timezone: "America/Los_Angeles"}
@@ -43,6 +45,7 @@ func setup(t *testing.T) *fixture {
 	for _, user := range []*db.SessionUser{admin, friend} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
+	adminSession = dbtest.Session(t, d, admin.ID)
 	store := &identity.Store{DB: d}
 	obs := identity.Observation{ContainerID: "original", Name: "world", DisplayName: "World", GameType: "minecraft"}
 	list, _ := store.Reconcile(ctx, []identity.Observation{obs}, "", 0)
@@ -58,7 +61,7 @@ func setup(t *testing.T) *fixture {
 
 func (f *fixture) grant(t *testing.T, capabilities ...authz.Capability) {
 	t.Helper()
-	if _, err := f.s.Authz.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: f.serverID, Capabilities: capabilities}}, admin); err != nil {
+	if _, err := f.s.Authz.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: f.serverID, Capabilities: capabilities}}, admin, adminSession); err != nil {
 		t.Fatal(err)
 	}
 }
