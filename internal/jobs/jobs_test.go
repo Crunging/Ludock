@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/console"
@@ -40,9 +41,11 @@ type fixture struct {
 	data     string
 	backupTo string
 	admin    *db.SessionUser
-	mu       sync.Mutex
-	commands []string
-	failStep string
+	// adminSession is the admin's token hash.
+	adminSession string
+	mu           sync.Mutex
+	commands     []string
+	failStep     string
 }
 
 func setup(t *testing.T) *fixture {
@@ -113,6 +116,7 @@ func setup(t *testing.T) *fixture {
 		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
 		Backups: backupService, SaveSettle: time.Millisecond, Poll: 20 * time.Millisecond}
 	f.jobs.Register(f.runner)
+	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	views, err := service.List(ctx, f.admin)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +126,8 @@ func setup(t *testing.T) *fixture {
 			f.serverID = view.ID
 		}
 	}
-	if _, err := backupService.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 5, MaxBytes: 1 << 30}); err != nil {
+	if _, err := backupService.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 5, MaxBytes: 1 << 30},
+		f.admin, f.adminSession); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.runner.Start(ctx); err != nil {
@@ -153,6 +158,21 @@ func (f *fixture) run(t *testing.T, kind string, input map[string]any) *ops.Job 
 }
 
 func (f *fixture) running() bool { return f.engine.Container(f.game).State.Running }
+
+func TestBackupSettingsNeedTheAdminSessionStillValid(t *testing.T) {
+	f := setup(t)
+	if err := f.jobs.DB.DeleteUserSessions(ctx, f.admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 1, MaxBytes: 1 << 30},
+		f.admin, f.adminSession)
+	if !apperr.Is(err, "AUTHENTICATION_REQUIRED") {
+		t.Fatal(err)
+	}
+	if saved, _, _ := f.jobs.Backups.SavedSettings(ctx); saved == nil || saved.RetentionCount != 5 {
+		t.Fatal(saved)
+	}
+}
 
 func TestRevokedOwnerCannotRun(t *testing.T) {
 	f := setup(t)

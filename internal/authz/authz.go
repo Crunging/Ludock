@@ -105,6 +105,17 @@ func (s *Service) CurrentActor(ctx context.Context, actor *db.SessionUser) (*db.
 
 var errNotAdmin = apperr.New("FORBIDDEN", 403, "Administrator permission required")
 
+// AdminMutationError turns a db.AdminMutation rejection into a public error.
+func AdminMutationError(err error) error {
+	switch {
+	case errors.Is(err, db.ErrSessionGone):
+		return apperr.New("AUTHENTICATION_REQUIRED", 401, "Authentication required")
+	case errors.Is(err, db.ErrNotAdmin):
+		return errNotAdmin
+	}
+	return err
+}
+
 // AssertAdministrator requires the actor to be an enabled administrator now.
 func (s *Service) AssertAdministrator(ctx context.Context, actor *db.SessionUser) (*db.SessionUser, error) {
 	current, err := s.CurrentActor(ctx, actor)
@@ -373,13 +384,8 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: administrator.ID, Action: "users.server_grants.updated",
 			TargetType: "user", TargetID: userID, Details: map[string]any{"grants": grants}})
 	})
-	switch {
-	case errors.Is(err, db.ErrSessionGone):
-		return nil, apperr.New("AUTHENTICATION_REQUIRED", 401, "Authentication required")
-	case errors.Is(err, db.ErrNotAdmin):
-		return nil, errNotAdmin
-	case err != nil:
-		return nil, err
+	if err != nil {
+		return nil, AdminMutationError(err)
 	}
 	s.DB.PruneAuditIfNeeded(ctx)
 	return s.UserGrants(ctx, userID)

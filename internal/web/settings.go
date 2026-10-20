@@ -109,7 +109,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 		settings.MaxBytes <= 0 || settings.ReserveBytes < 0 || math.IsInf(maxGiB, 0) || math.IsInf(reserveGiB, 0) {
 		err = invalid
 	} else if err = s.recheckAdmin(r.Context(), request); err == nil {
-		settings, err = s.App.Backups.SaveSettings(r.Context(), settings)
+		settings, err = s.App.Backups.SaveSettings(r.Context(), settings, request.User(), request.Principal.TokenHash)
 	}
 	status, ok := s.settingStatus(w, r, request, err)
 	if !ok {

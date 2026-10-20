@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -142,13 +143,19 @@ func (s *Service) SavedSettings(ctx context.Context) (*Settings, bool, error) {
 	return &settings, true, nil
 }
 
-// SaveSettings validates and stores settings.
-func (s *Service) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
+// SaveSettings validates and stores settings while admin is still an
+// administrator signed in with tokenHash.
+func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db.SessionUser, tokenHash string) (Settings, error) {
 	settings, err := s.Storage.ValidateSettings(ctx, settings)
 	if err != nil {
 		return settings, err
 	}
-	return settings, s.DB.SetSetting(ctx, nil, settingsKey, settings)
+	// Validation can wait on Docker; the admin's session is checked again
+	// in the transaction that saves.
+	err = s.DB.AdminMutation(ctx, admin.ID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		return s.DB.SetSetting(ctx, tx, settingsKey, settings)
+	})
+	return settings, authz.AdminMutationError(err)
 }
 
 // Initialize enables the single approved root with default limits, unless
