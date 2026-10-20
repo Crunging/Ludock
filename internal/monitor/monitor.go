@@ -14,8 +14,11 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
 )
+
+var log = logging.New("monitor")
 
 // Policy is a server's availability policy.
 type Policy struct {
@@ -224,19 +227,27 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// An owner can start the container outside Ludock. Resume monitoring
 		// even if startup never passes its health check.
 		if running && r.intentional == 1 {
-			s.DB.ExecContext(ctx, "UPDATE availability SET intentionally_stopped=0 WHERE server_id=?", server.ID)
+			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET intentionally_stopped=0 WHERE server_id=?", server.ID); err != nil {
+				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
 			r.intentional = 0
 		}
 		healthy := running && container.Health != "unhealthy" && container.Health != "starting"
+		// State is saved before any alert: the saved outage start keys each
+		// alert, so an unsaved state could later alert again under a new key.
 		if healthy {
-			if r.notified == 1 {
-				s.notify("recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
-			}
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=? WHERE server_id=?",
-				now, server.ID)
+			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=? WHERE server_id=?",
+				now, server.ID); err != nil {
+				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
+			if r.notified == 1 {
+				s.notify("recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
+			}
 			continue
 		}
 		if r.intentional == 1 {
@@ -247,13 +258,6 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			started = r.outage.Int64
 		}
 		notify := now-started >= int64(policy.GraceSeconds)*1000
-		if notify && r.notified == 0 {
-			message := server.DisplayName + " is unavailable."
-			if unavailable {
-				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
-			}
-			s.notify("outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
-		}
 		notified := 0
 		if notify || r.notified == 1 {
 			notified = 1
@@ -264,11 +268,20 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		} else if found && server.ContainerID != "" {
 			lastState = container.State
 		}
-		if r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState {
-			continue
+		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
+			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=?,notified=?,last_state=?,updated_at=? WHERE server_id=?",
+				started, notified, lastState, now, server.ID); err != nil {
+				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
 		}
-		s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=?,notified=?,last_state=?,updated_at=? WHERE server_id=?",
-			started, notified, lastState, now, server.ID)
+		if notify && r.notified == 0 {
+			message := server.DisplayName + " is unavailable."
+			if unavailable {
+				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
+			}
+			s.notify("outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
+		}
 	}
 	return nil
 }

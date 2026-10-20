@@ -106,3 +106,22 @@ func TestPolicyParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestNoAlertWithoutSavedState(t *testing.T) {
+	s, events, _ := setup(t)
+	s.Check(ctx, state("exited", ""), 1000)
+	if _, err := s.DB.Exec(`CREATE TRIGGER fail_availability BEFORE UPDATE ON availability
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s.Check(ctx, state("exited", ""), 61_000)
+	if len(events.events) != 0 {
+		t.Fatal("alerted before its state was saved:", events.events)
+	}
+	s.DB.Exec("DROP TRIGGER fail_availability")
+	s.Check(ctx, state("exited", ""), 62_000)
+	s.Check(ctx, state("exited", ""), 63_000)
+	if len(events.events) != 1 || events.events[0] != "Minecraft is unavailable." {
+		t.Fatal(events.events)
+	}
+}
