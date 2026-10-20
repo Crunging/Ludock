@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,5 +136,29 @@ func TestShutdownSkipsPendingAdmissions(t *testing.T) {
 	pending.Close(1001, "again")
 	if status, _ := server.sockets.admit(&socketChannel{userID: "v", tokenHash: "w"}); status != http.StatusServiceUnavailable {
 		t.Fatal("admitted a socket during shutdown")
+	}
+}
+
+func TestShutdownEndsEventStreams(t *testing.T) {
+	p := newPages(t)
+	server := httptest.NewServer(p.handler)
+	t.Cleanup(server.Close)
+	request, _ := http.NewRequest("GET", server.URL+"/events", nil)
+	request.Header.Set("Cookie", auth.SessionCookie+"="+p.admin.Token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatal(response, err)
+	}
+	defer response.Body.Close()
+	ended := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, response.Body)
+		close(ended)
+	}()
+	p.web.CloseStreams()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("event stream stayed open after shutdown began")
 	}
 }

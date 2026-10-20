@@ -265,9 +265,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request
 	flusher.Flush()
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
+	shutdown := s.streamsDone()
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-shutdown:
 			return
 		case <-closed:
 			fmt.Fprint(w, "event: expired\ndata: signin\n\n")

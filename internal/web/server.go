@@ -37,6 +37,34 @@ type Server struct {
 	healthAt time.Time
 	healthy  bool
 	sockets  sockets
+
+	streamsMu sync.Mutex
+	// streamsClosed closes when shutdown begins, ending every event stream.
+	streamsClosed chan struct{}
+}
+
+func (s *Server) streamsDone() <-chan struct{} {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.streamsClosed == nil {
+		s.streamsClosed = make(chan struct{})
+	}
+	return s.streamsClosed
+}
+
+// CloseStreams ends every event stream for shutdown. Streams otherwise stay
+// open until their session ends, and http.Server.Shutdown waits for them.
+func (s *Server) CloseStreams() {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.streamsClosed == nil {
+		s.streamsClosed = make(chan struct{})
+	}
+	select {
+	case <-s.streamsClosed:
+	default:
+		close(s.streamsClosed)
+	}
 }
 
 // Handler builds the routed handler.

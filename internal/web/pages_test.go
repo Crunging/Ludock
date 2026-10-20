@@ -22,6 +22,7 @@ type pages struct {
 	t       *testing.T
 	engine  *fakedocker.Engine
 	app     *app.App
+	web     *Server
 	handler http.Handler
 	server  string // logical ID of the stopped "valheim" container
 	docker  string
@@ -45,8 +46,9 @@ func newPages(t *testing.T) *pages {
 		t.Fatal(err)
 	}
 	p := &pages{t: t, engine: engine, app: services, docker: dockerID}
-	p.handler = (&Server{App: services, DB: d, Auth: services.Auth, ClientIP: services.ClientIP,
-		Docker: func(context.Context) error { return nil }}).Handler()
+	p.web = &Server{App: services, DB: d, Auth: services.Auth, ClientIP: services.ClientIP,
+		Docker: func(context.Context) error { return nil }}
+	p.handler = p.web.Handler()
 	admin := p.user("u-admin", "admin", db.RoleAdmin)
 	views, err := services.Servers.List(context.Background(), &admin.User)
 	if err != nil || len(views) != 1 {
