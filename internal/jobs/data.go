@@ -83,7 +83,9 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 	if stopped.State.Running || stopped.State.Status == "running" {
 		return fail("SERVER_DID_NOT_STOP", "The server did not stop; no data was copied.")
 	}
-	job.Progress("stopped", map[string]any{"stoppedStartedAt": stopped.State.StartedAt, "stopSettled": true}, nil)
+	if err := job.Progress("stopped", map[string]any{"stoppedStartedAt": stopped.State.StartedAt, "stopSettled": true}, nil); err != nil {
+		return err
+	}
 	if stopped.State.ExitCode == 137 || stopped.State.OOMKilled {
 		return fail("UNCLEAN_SHUTDOWN", "The server needed forced termination. The backup was not created; review its graceful shutdown configuration before retrying.")
 	}
@@ -151,12 +153,13 @@ func (j *Jobs) settleInterruptedStop(ctx context.Context, server *servers.Contex
 	if err != nil || !stopPending(job) {
 		return observed, err
 	}
-	job.Progress("reconciling_stop", nil, nil)
+	if err := job.Progress("reconciling_stop", nil, nil); err != nil {
+		return nil, err
+	}
 	for !slices.Contains(stoppedStates, observed.Container.State) {
 		initial, ok := number(job.Job.Recovery["stopInitialStartedAt"])
 		if observed.Container.State == "running" && ok && observed.Container.StateSince != 0 && float64(observed.Container.StateSince) != initial {
-			job.Progress("stop_reconciled", map[string]any{"stopSettled": true}, nil)
-			return nil, nil
+			return nil, job.Progress("stop_reconciled", map[string]any{"stopSettled": true}, nil)
 		}
 		if err := j.waitForStopDeadline(job); err != nil {
 			return nil, err
@@ -165,7 +168,9 @@ func (j *Jobs) settleInterruptedStop(ctx context.Context, server *servers.Contex
 			return nil, err
 		}
 	}
-	job.Progress("stop_reconciled", map[string]any{"stopSettled": true}, nil)
+	if err := job.Progress("stop_reconciled", map[string]any{"stopSettled": true}, nil); err != nil {
+		return nil, err
+	}
 	return observed, nil
 }
 
@@ -214,7 +219,9 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 			return err
 		}
 	}
-	job.Progress("state_restored", map[string]any{"stateRestored": true}, nil)
+	if err := job.Progress("state_restored", map[string]any{"stateRestored": true}, nil); err != nil {
+		return err
+	}
 	return j.Monitor.Suppress(ctx, server.Logical.ID)
 }
 
@@ -225,7 +232,7 @@ func (j *Jobs) keepStoppedAfterFailedBackup(ctx context.Context, server *servers
 	if err != nil || observed == nil || !slices.Contains(stoppedStates, observed.Container.State) {
 		return err
 	}
-	j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true)
+	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
 	j.notify("operation:"+job.Job.ID, observed.Container.DisplayName+": the backup failed, so the server was left stopped. Review the operation, then start it.")
 	return nil
 }
@@ -246,7 +253,11 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 	if err := j.Backups.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
 		return nil, err
 	}
-	available, err := backups.Remaining(settings, j.Backups.ArchiveBytes(ctx))
+	used, err := j.Backups.ArchiveBytes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	available, err := backups.Remaining(settings, used)
 	if err != nil {
 		return nil, err
 	}
@@ -255,11 +266,15 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		return nil, err
 	}
 	var data *backups.DataHelper
+	recorded := false
 	defer func() {
 		if data != nil {
 			data.Cleanup()
 		}
-		job.Progress(job.Job.Phase, map[string]any{"dataHelperId": nil}, nil)
+		// Recovery removes helpers by label, so a stale ID only costs a lookup.
+		if err := job.Progress(job.Job.Phase, map[string]any{"dataHelperId": nil}, nil); err != nil {
+			log.Warn("Could not save a backup helper's removal; recovery will look for it again")
+		}
 	}()
 	backup, err := func() (*backups.Backup, error) {
 		if err := j.dataAuthority(ctx, server, job); err != nil {
@@ -269,7 +284,9 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err != nil {
 			return nil, err
 		}
-		job.Progress("backing_up", map[string]any{"dataHelperId": data.Container}, nil)
+		if err := job.Progress("backing_up", map[string]any{"dataHelperId": data.Container}, nil); err != nil {
+			return nil, err
+		}
 		var mu sync.Mutex
 		var stoppedFailure error
 		assertCopy := func() error {
@@ -332,14 +349,19 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err := j.Backups.Record(ctx, *backup, server.Logical.BindingFingerprint, settings.Destination); err != nil {
 			return nil, err
 		}
-		job.Progress("backup_complete", map[string]any{"backupComplete": true}, nil)
+		recorded = true
+		// The committed backup row is what recovery trusts; this marker only
+		// saves it a lookup.
+		if err := job.Progress("backup_complete", map[string]any{"backupComplete": true}, nil); err != nil {
+			log.Warn("Could not save a backup's completion marker; its record is already saved")
+		}
 		keep, _ := text(job.Job.Input["backupId"])
 		if err := j.Backups.Prune(ctx, server.Logical.ID, settings.RetentionCount, keep); err != nil {
 			return nil, err
 		}
 		return backup, nil
 	}()
-	if err != nil && job.Job.Recovery["backupComplete"] != true {
+	if err != nil && !recorded {
 		j.Backups.Storage.Remove(settings.Destination, id, nil)
 		j.Backups.Storage.RemovePartial(settings.Destination, id)
 	}
@@ -408,7 +430,7 @@ func recoveryLocks(job *ops.Context) ([]string, error) {
 
 // removeOperationHelpers removes this operation's helpers. Failing to list
 // them is not evidence that no writer remains.
-func (j *Jobs) removeOperationHelpers(ctx context.Context, job *ops.Context) {
+func (j *Jobs) removeOperationHelpers(ctx context.Context, job *ops.Context) error {
 	var helpers []docker.ContainerSummary
 	for {
 		var err error
@@ -425,11 +447,13 @@ func (j *Jobs) removeOperationHelpers(ctx context.Context, job *ops.Context) {
 		}
 		j.Docker.RemoveOperationHelper(candidate.ID)
 	}
-	job.Progress("recovering", map[string]any{"dataHelperId": nil}, nil)
+	return job.Progress("recovering", map[string]any{"dataHelperId": nil}, nil)
 }
 
 func (j *Jobs) recoveryContext(ctx context.Context, job *ops.Context) (*servers.Context, error) {
-	j.removeOperationHelpers(ctx, job)
+	if err := j.removeOperationHelpers(ctx, job); err != nil {
+		return nil, err
+	}
 	containerID, ok := text(job.Job.Recovery["containerId"])
 	if !ok {
 		return nil, nil
@@ -727,7 +751,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if data, err = j.Backups.Helpers.NewDataHelper(ctx, server, false, job.Job.ID); err != nil {
 				return nil, err
 			}
-			job.Progress("restore_staging", map[string]any{"dataHelperId": data.Container}, nil)
+			if err := job.Progress("restore_staging", map[string]any{"dataHelperId": data.Container}, nil); err != nil {
+				return nil, err
+			}
 			for _, root := range row.Roots {
 				if err := j.assertStopped(ctx, server, job); err != nil {
 					return nil, err
@@ -839,7 +865,9 @@ func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context
 			return err
 		}
 		*data = fresh
-		job.Progress(job.Job.Phase, map[string]any{"dataHelperId": fresh.Container}, nil)
+		if err := job.Progress(job.Job.Phase, map[string]any{"dataHelperId": fresh.Container}, nil); err != nil {
+			return err
+		}
 	}
 	return j.rollbackRestore(ctx, server, job, *data)
 }
@@ -885,7 +913,10 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
 			if err != nil {
 				return err
 			}
-			job.Progress("recovering", map[string]any{"dataHelperId": data.Container}, nil)
+			if err := job.Progress("recovering", map[string]any{"dataHelperId": data.Container}, nil); err != nil {
+				data.Cleanup()
+				return err
+			}
 			state, _ := restoreState(job)
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data)

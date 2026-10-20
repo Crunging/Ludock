@@ -24,11 +24,14 @@ import (
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
 )
+
+var log = logging.New("jobs")
 
 // Jobs holds the dependencies of every handler.
 type Jobs struct {
@@ -224,6 +227,15 @@ func lifecycleResult(job *ops.Context, updates map[string]any) map[string]any {
 	return result
 }
 
+// noteAvailability logs a monitoring state that could not be saved after
+// Docker already changed. The change stands; at worst one outage alert is
+// sent for it.
+func (j *Jobs) noteAvailability(err error) {
+	if err != nil {
+		log.Warn("Could not save a server's monitoring state; an outage alert may follow")
+	}
+}
+
 // record keeps only fixed lifecycle summaries public; console output is
 // discarded.
 func record(job *ops.Context, phase string, recovery map[string]any) error {
@@ -248,14 +260,14 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 		if expected != nil && slices.ContainsFunc(expected.Commands, func(item games.QuickCommand) bool { return item.Label == "Save world" }) {
 			reason = "console_unavailable"
 		}
-		record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
-		return nil
+		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
 	}
 	if server.Container.State != "running" {
-		record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": "not_running"})
-		return nil
+		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": "not_running"})
 	}
-	record(job, "saving_world", nil)
+	if err := record(job, "saving_world", nil); err != nil {
+		return err
+	}
 	// Console transports have bounded deadlines; exec cleanup keeps this
 	// operation's locks until Docker confirms termination.
 	err := j.Console.GameCommand(ctx, console.Target{ContainerID: server.Container.ID, Labels: server.Container.Labels,
@@ -268,10 +280,11 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 		if console.IsTimeout(err) {
 			reason = "timed_out"
 		}
-		record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
-		return nil
+		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
 	}
-	record(job, "waiting_for_save", map[string]any{"saveStatus": "sent", "saveReason": nil})
+	if err := record(job, "waiting_for_save", map[string]any{"saveStatus": "sent", "saveReason": nil}); err != nil {
+		return err
+	}
 	settle := j.SaveSettle
 	if settle == 0 {
 		settle = 5 * time.Second
@@ -362,8 +375,11 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				return nil
 			})
 		}
-		j.Monitor.Suppress(ctx, server.Logical.ID)
-		defer j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)
+		// Pause outage tracking before acting, or the change could alert.
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+			return nil, err
+		}
+		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
 		if action != servers.Start {
 			if err := j.saveWorld(ctx, job, server, assertAccess); err != nil {
 				return nil, err
@@ -372,18 +388,20 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				return nil, err
 			}
 			// Persist the actual stop before a restart clears Docker's exit code.
-			j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, action == servers.Stop)
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, action == servers.Stop))
 			if server, err = j.resolve(ctx, job, permission, true); err != nil {
 				return nil, err
 			}
-			record(job, "verifying_stop", map[string]any{"stopSettled": true,
-				"forceStopped": job.Job.Recovery["stopStarted"] == true && server.Container.Exit != nil && server.Container.Exit.Code == 137})
+			if err := record(job, "verifying_stop", map[string]any{"stopSettled": true,
+				"forceStopped": job.Job.Recovery["stopStarted"] == true && server.Container.Exit != nil && server.Container.Exit.Code == 137}); err != nil {
+				return nil, err
+			}
 		}
 		if action != servers.Stop {
 			if err := mutate(servers.Start); err != nil {
 				return nil, err
 			}
-			j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false)
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 		}
 		if err := assertAccess(); err != nil {
 			return nil, err
@@ -423,18 +441,20 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	defer j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)
+	defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
 	recovery := job.Job.Recovery
 	containerID, _ := text(recovery["containerId"])
 	if recovery["stopStarted"] == true && recovery["stopSettled"] != true && containerID == server.Container.ID {
 		deadline, deadlineOK := number(recovery["stopRecoveryDeadlineAt"])
 		initialStarted, initialOK := number(recovery["stopInitialStartedAt"])
-		record(job, "reconciling_stop", nil)
+		if err := record(job, "reconciling_stop", nil); err != nil {
+			return nil, err
+		}
 		for server.Container.Exit == nil {
 			// A different running instance proves the old shutdown is over.
 			if server.Container.State == "running" && initialOK && server.Container.StateSince != 0 &&
 				float64(server.Container.StateSince) != initialStarted {
-				j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false)
+				j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 				break
 			}
 			if !deadlineOK {
@@ -442,7 +462,9 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 			}
 			remaining := time.Duration(deadline-float64(time.Now().UnixMilli())) * time.Millisecond
 			if remaining <= 0 {
-				record(job, "reconciliation_timed_out", map[string]any{"stopRecoveryTimedOut": true})
+				if err := record(job, "reconciliation_timed_out", map[string]any{"stopRecoveryTimedOut": true}); err != nil {
+					return nil, err
+				}
 				break
 			}
 			if err := j.assertCapability(ctx, job, permission); err != nil {
@@ -464,9 +486,11 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 			server = refreshed
 		}
 		if server.Container.Exit != nil {
-			j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == "stop")
-			record(job, "reconciling", map[string]any{"stopSettled": true,
-				"forceStopped": recovery["forceStopped"] == true || server.Container.Exit.Code == 137})
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == "stop"))
+			if err := record(job, "reconciling", map[string]any{"stopSettled": true,
+				"forceStopped": recovery["forceStopped"] == true || server.Container.Exit.Code == 137}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return lifecycleResult(job, nil), nil

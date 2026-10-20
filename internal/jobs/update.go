@@ -49,7 +49,9 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		if err := j.Backups.AssertReady(ctx, current); err != nil {
 			return nil, err
 		}
-		j.Monitor.Suppress(ctx, server.Logical.ID)
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+			return nil, err
+		}
 		defer func() {
 			background := context.WithoutCancel(ctx)
 			// Starting can update the game and change the world, so start only
@@ -59,7 +61,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 					err = restoreErr
 				}
 			}
-			j.Monitor.Suppress(background, server.Logical.ID)
+			j.noteAvailability(j.Monitor.Suppress(background, server.Logical.ID))
 		}()
 		result, err = func() (map[string]any, error) {
 			if err := j.saveWorld(ctx, job, current, func() error {
@@ -78,7 +80,9 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			if err != nil {
 				return nil, err
 			}
-			job.Progress("backup_complete", map[string]any{"backupId": backup.ID}, nil)
+			if err := job.Progress("backup_complete", map[string]any{"backupId": backup.ID}, nil); err != nil {
+				return nil, err
+			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
 			if err != nil {
 				return nil, err
@@ -100,8 +104,10 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}); err != nil {
 				return nil, err
 			}
-			job.Progress("started", map[string]any{"stateRestored": true}, nil)
-			j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false)
+			if err := job.Progress("started", map[string]any{"stateRestored": true}, nil); err != nil {
+				return nil, err
+			}
+			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 			recovery := job.Job.Recovery
 			return map[string]any{"action": "restart", "backupId": recovery["backupId"], "saveStatus": recovery["saveStatus"],
 				"saveReason": recovery["saveReason"]}, nil
@@ -110,7 +116,9 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			// A recorded stop may have reached Docker even if its result was
 			// lost; reconcile it before reporting the server left stopped.
 			if _, recorded := job.Job.Recovery["initialRunning"].(bool); recorded && !j.backupCompleted(ctx, job) {
-				j.keepStoppedAfterFailedBackup(context.WithoutCancel(ctx), current, job)
+				if keepErr := j.keepStoppedAfterFailedBackup(context.WithoutCancel(ctx), current, job); keepErr != nil {
+					log.Warn("Could not confirm the server stayed stopped after a failed backup; review its state")
+				}
 			}
 		}
 		return result, err
@@ -179,12 +187,14 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 			return nil, err
 		}
 		defer selected.Snapshot.Cleanup()
-		defer j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)
+		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
 		result, err = j.update(ctx, job, server, request, capability, selected.Snapshot.Fingerprint, selected.Snapshot.Args(), selected.Service, selected.Image)
 		if err != nil {
 			if job.Job.Recovery["mutationStarted"] != true {
 				if restoreErr := j.restoreInitialState(context.WithoutCancel(ctx), server, job); restoreErr != nil {
-					job.Progress("recovery_required", map[string]any{"recoveryRequired": true}, nil)
+					if err := job.Progress("recovery_required", map[string]any{"recoveryRequired": true}, nil); err != nil {
+						log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
+					}
 				}
 			}
 			j.notify("operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Review the operation and actual server state.")
@@ -228,8 +238,12 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {
 		return nil, err
 	}
-	job.Progress("validating", map[string]any{"selectedImageId": pulled}, nil)
-	j.Monitor.Suppress(ctx, server.Logical.ID)
+	if err := job.Progress("validating", map[string]any{"selectedImageId": pulled}, nil); err != nil {
+		return nil, err
+	}
+	if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+		return nil, err
+	}
 	if request.CreateBackup {
 		if err := job.Progress("stopping", map[string]any{"stopRequested": true}, nil); err != nil {
 			return nil, err
@@ -237,14 +251,18 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		if err := j.stopForData(ctx, server, job); err != nil {
 			return nil, err
 		}
-		job.Progress("backing_up", nil, nil)
+		if err := job.Progress("backing_up", nil, nil); err != nil {
+			return nil, err
+		}
 		stopped := *server
 		stopped.Container.State = "exited"
 		backup, err := j.createStoppedBackup(ctx, &stopped, job)
 		if err != nil {
 			return nil, err
 		}
-		job.Progress("validating", map[string]any{"backupId": backup.ID}, nil)
+		if err := job.Progress("validating", map[string]any{"backupId": backup.ID}, nil); err != nil {
+			return nil, err
+		}
 	} else if request.SkipBackupConfirmation != server.Container.DisplayName {
 		return nil, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping the backup")
 	}
@@ -287,7 +305,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if _, err := runner.Run(ctx, append(append(slices.Clone(args), flags...), service), 4*time.Minute); err != nil {
 		return nil, err
 	}
-	job.Progress("verifying", nil, nil)
+	if err := job.Progress("verifying", nil, nil); err != nil {
+		return nil, err
+	}
 	if _, err := j.Servers.Refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -302,7 +322,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if actual.Image != pulled || actual.State.Running != current.State.Running || (actual.State.Health != nil && actual.State.Health.Status == "unhealthy") {
 		return nil, apperr.New("VERIFY_FAILED", 409, "The resulting server state did not match the requested update; review it through Compose")
 	}
-	j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, !current.State.Running)
+	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, !current.State.Running))
 	action := "update"
 	if request.ForceRecreate {
 		action = "recreation"
