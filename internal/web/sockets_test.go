@@ -123,3 +123,17 @@ func TestConsoleSocketCaps(t *testing.T) {
 		t.Fatal("ninth socket", err)
 	}
 }
+
+func TestShutdownSkipsPendingAdmissions(t *testing.T) {
+	server := &Server{}
+	// A request between admission and the upgrade has no connection yet.
+	pending := &socketChannel{userID: "u", tokenHash: "t"}
+	if status, _ := server.sockets.admit(pending); status != 0 {
+		t.Fatal(status)
+	}
+	server.CloseSockets()
+	pending.Close(1001, "again")
+	if status, _ := server.sockets.admit(&socketChannel{userID: "v", tokenHash: "w"}); status != http.StatusServiceUnavailable {
+		t.Fatal("admitted a socket during shutdown")
+	}
+}

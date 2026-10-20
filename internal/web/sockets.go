@@ -87,6 +87,11 @@ func (c *socketChannel) Close(code int, reason string) {
 	}
 	c.closed = true
 	c.mu.Unlock()
+	// An admission placeholder has no connection yet; its handler checks for
+	// shutdown after the upgrade and closes the connection itself.
+	if c.conn == nil {
+		return
+	}
 	// Let queued output (such as the reason for a policy close) go first.
 	go func() {
 		select {
