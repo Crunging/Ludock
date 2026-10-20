@@ -21,7 +21,7 @@ at the very end (not opened yet). Update this file after every area.
 | 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | done (container journeys on amd64 + arm64 in CI) |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | done |
-| 13 | UI redesign ("harbor chart": top harbor bar, signal-flag states, Archivo) | done (dark only; README and PR screenshots from `fakedocker -demo`) |
+| 13 | UI redesign (neutral dark, top bar, block state markers, Archivo) | done (dark only; README and PR screenshots from `fakedocker -demo`) |
 
 ## Layout
 
@@ -360,14 +360,17 @@ at the very end (not opened yet). Update this file after every area.
 - Live updates use SSE instead of WebSockets for the dashboard; the events
   hub is transport-neutral (`Subscriber.Send` must not block).
 
-- Redesign (area 13): not bound by the React look. A navy top "harbor bar"
-  replaces the sidebar; all pages share tokens in `ludock.css`. The theme is
-  dark only (Logan's preference, 2026-10-20); there is no light variant. Text is Archivo (variable width; headings
-  run wide), code and the terminal use Atkinson Hyperlegible Mono. Server
-  state is a small signal flag (`Flag`/`Pip` in `dashboard.templ`, tones
-  ok/idle/active/attention/failed) next to the word, never color alone.
-  Sign-in shows "LUDOCK" in signal flags (`hoist.templ`, CSS unfurl,
-  reduced motion respected). The dashboard is one grid with subgrid rows so
+- Redesign (area 13): not bound by the React look. A navy top bar (CSS
+  `harbor__*`) replaces the sidebar; all pages share tokens in `ludock.css`.
+  The theme is dark only (Logan's preference, 2026-10-20); there is no light
+  variant. An early nautical theme with signal flags was dropped (2026-10-20):
+  "dock" in Ludock points at Docker, and few people read signal flags. Text is
+  Archivo (variable width; headings run wide), code and the terminal use
+  Atkinson Hyperlegible Mono. Server state is a block-shaped marker
+  (`StateMark`/`Pip` in `dashboard.templ`, tones ok/idle/active/attention/
+  failed) next to the word, never color alone; the blocks echo the Ludock
+  mark, the L block from Tetris, which drops in block by block on sign-in
+  (reduced motion respected). The dashboard is one grid with subgrid rows so
   header and row columns line up. A dashboard refresh that would replace an
   open `<dialog>` is deferred until it closes (`htmx:beforeSwap` in
   `ludock.js`), so SSE updates can't destroy a confirmation mid-click.

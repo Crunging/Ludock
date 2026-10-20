@@ -17,7 +17,7 @@ const passwordMin = 15
 templ LoginPage(form LoginForm) {
 	@Document(map[bool]string{true: "Set up Ludock", false: "Sign in · Ludock"}[form.Setup], "", nil, nil) {
 		<main class="login-page">
-			@SignalHoist()
+			@LudockMark("login-mark")
 			<form class="login-card" method="post" action={ templ.SafeURL(map[bool]string{true: "/setup", false: "/login"}[form.Setup]) }>
 				<h1 class="login-card__title">
 					if form.Setup {
@@ -87,7 +87,7 @@ templ LoginPage(form LoginForm) {
 templ SetupExpired() {
 	@Document("Setup window expired · Ludock", "", nil, nil) {
 		<main class="login-page">
-			@SignalHoist()
+			@LudockMark("login-mark")
 			<section class="login-card" aria-labelledby="setup-expired-title">
 				<h1 class="login-card__title" id="setup-expired-title">Setup window expired</h1>
 				<p class="login-card__description">On the Docker host, run these commands from Ludock’s Compose folder:</p>

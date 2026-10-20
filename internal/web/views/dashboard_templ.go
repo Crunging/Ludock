@@ -43,7 +43,7 @@ type ServerList struct {
 	DiscoveryUnavailable bool
 }
 
-// Pip is a small signal flag for a tone: ok, idle, active, attention, or
+// Pip is a small state marker for a tone: ok, idle, active, attention, or
 // failed. It always sits next to a text label.
 func Pip(tone string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
@@ -66,7 +66,7 @@ func Pip(tone string) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		var templ_7745c5c3_Var2 = []any{"pip", "flag--" + tone}
+		var templ_7745c5c3_Var2 = []any{"marker", "marker--sm", "marker--" + tone}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var2...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -92,8 +92,8 @@ func Pip(tone string) templ.Component {
 	})
 }
 
-// Flag is a server's state flag at full size.
-func Flag(tone string) templ.Component {
+// StateMark is a server's state marker at full size.
+func StateMark(tone string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -114,7 +114,7 @@ func Flag(tone string) templ.Component {
 			templ_7745c5c3_Var4 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		var templ_7745c5c3_Var5 = []any{"flag", "flag--" + tone}
+		var templ_7745c5c3_Var5 = []any{"marker", "marker--" + tone}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var5...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -822,7 +822,7 @@ func ServerCard(row ServerRow) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = Flag(ServerStatus(server.State, server.Health, server.Exit).Tone).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

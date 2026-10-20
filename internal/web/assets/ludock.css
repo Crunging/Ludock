@@ -1,5 +1,6 @@
-/* Ludock: a harbor for the game servers you already run.
-   Cool fog surfaces, navy ink, and signal-flag state. Archivo carries the
+/* Ludock: a panel for the game servers you already run.
+   Dark navy surfaces, light ink, and block-shaped state markers that echo
+   the L-block mark. Archivo carries the
    voice (wide and heavy for names, normal width for reading); Atkinson
    Hyperlegible Mono is only for things that are literally code. */
 
@@ -64,7 +65,6 @@
   --caution-soft: #3a3214;
   --halt-soft: #42201f;
   --busy-soft: #1c2f50;
-  --flag-white: #e9eef0;
   --flag-ink: #050a12;
   --harbor: #09111c;
   --harbor-fg: #e4ebee;
@@ -323,34 +323,25 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .settings-card > h2 { margin-bottom: 16px; }
 .settings-list > .settings-card { border: 0; border-radius: 0; background: transparent; }
 
-/* ---------- Signal flags ----------
-   State is a flag: pattern, color, and the label next to it. Running is a
-   green field; stopped an empty outline; busy a blue field with a white band;
-   attention a yellow field crossed by an ink stripe; failed a red field with
-   a white saltire. */
+/* ---------- State markers ----------
+   State is a small block shape plus the label next to it, never color
+   alone: running a green block, stopped an unlit one, busy a pulsing block,
+   attention a triangle, and failed a cross. */
 
-.flag, .pip {
-  display: inline-block; flex: none;
-  border-radius: 2px;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--flag-ink) 18%, transparent);
-}
-.flag { width: 36px; height: 26px; }
-.pip { width: 13px; height: 10px; margin-right: 7px; vertical-align: -0.5px; border-radius: 1px; }
-.flag--ok { background: linear-gradient(90deg, var(--go-deep) 0 26%, var(--go) 26%); }
-.flag--idle {
+.marker { display: inline-block; flex: none; width: 16px; height: 16px; border-radius: 3px; --stroke: 1.6px; }
+.marker--sm { width: 10px; height: 10px; margin-right: 7px; vertical-align: 0; border-radius: 2px; --stroke: 1.2px; }
+.marker--ok { background: var(--go); }
+.marker--idle { background: var(--line-strong); }
+.marker--active { background: var(--busy); animation: marker-pulse 1.6s ease-in-out infinite; }
+.marker--attention { width: 18px; background: var(--caution); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.marker--sm.marker--attention { width: 12px; height: 11px; }
+.marker--failed {
+  border-radius: 0;
   background:
-    linear-gradient(to top right, transparent calc(50% - 0.8px), var(--line-strong) calc(50% - 0.8px) calc(50% + 0.8px), transparent calc(50% + 0.8px)),
-    var(--paper);
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+    linear-gradient(45deg, transparent calc(50% - var(--stroke)), var(--halt) calc(50% - var(--stroke)) calc(50% + var(--stroke)), transparent calc(50% + var(--stroke))),
+    linear-gradient(-45deg, transparent calc(50% - var(--stroke)), var(--halt) calc(50% - var(--stroke)) calc(50% + var(--stroke)), transparent calc(50% + var(--stroke)));
 }
-.flag--active { background: linear-gradient(var(--busy) 0 32%, var(--flag-white) 32% 68%, var(--busy) 68%); }
-.flag--attention { background: linear-gradient(135deg, var(--caution) 0 38%, var(--flag-ink) 38% 62%, var(--caution) 62%); }
-.flag--failed {
-  background:
-    linear-gradient(to top right, transparent 43%, var(--flag-white) 43% 57%, transparent 57%),
-    linear-gradient(to bottom right, transparent 43%, var(--flag-white) 43% 57%, transparent 57%),
-    var(--halt);
-}
+@keyframes marker-pulse { 50% { opacity: 0.35; } }
 .server-state { display: inline-flex; align-items: center; font-weight: 650; }
 .server-state--ok { color: var(--go); }
 .server-state--failed { color: var(--halt); }
@@ -364,26 +355,12 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
   min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 40px 20px 64px; gap: 6px;
 }
-.hoist { width: min(360px, 100%); height: auto; overflow: visible; }
-.hoist__line { fill: none; stroke: var(--ink-3); stroke-width: 1.2; }
-.hoist__toggle { stroke: var(--ink-3); stroke-width: 1.2; }
-.hoist__edge { fill: none; stroke: color-mix(in srgb, var(--ink) 30%, transparent); stroke-width: 1; }
-.hoist__letter {
-  fill: var(--ink-2); font-family: var(--font); font-size: 15px; font-weight: 600;
-  letter-spacing: 0.08em; text-anchor: middle; dominant-baseline: hanging;
-}
-.sf-yellow { fill: #f2c200; }
-.sf-red { fill: #cf2e25; }
-.sf-blue { fill: #1d4f9c; }
-.sf-black { fill: #050a12; }
-.sf-white { fill: #fbfcfc; }
-.hoist__flag { transform-box: fill-box; transform-origin: 50% 0; animation: unfurl 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.hoist__flag--2 { animation-delay: 0.07s; }
-.hoist__flag--3 { animation-delay: 0.14s; }
-.hoist__flag--4 { animation-delay: 0.21s; }
-.hoist__flag--5 { animation-delay: 0.28s; }
-.hoist__flag--6 { animation-delay: 0.35s; }
-@keyframes unfurl { from { transform: scaleY(0.05); opacity: 0; } to { transform: none; opacity: 1; } }
+.login-mark { width: 56px; height: 56px; margin-bottom: 14px; color: var(--caution); }
+.login-mark rect { transform-box: fill-box; animation: block-drop 0.42s cubic-bezier(0.3, 0.7, 0.3, 1) both; }
+.login-mark rect:nth-child(2) { animation-delay: 0.08s; }
+.login-mark rect:nth-child(3) { animation-delay: 0.16s; }
+.login-mark rect:nth-child(4) { animation-delay: 0.24s; }
+@keyframes block-drop { from { transform: translateY(-18px); opacity: 0; } to { transform: none; opacity: 1; } }
 .login-card {
   width: min(420px, 100%); display: grid; gap: 8px;
   padding: 28px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper);
@@ -442,10 +419,10 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 
 .server-list {
   display: grid; column-gap: 22px;
-  grid-template-columns: 54px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) auto;
+  grid-template-columns: 44px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) auto;
   border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden;
 }
-.server-list--backups { grid-template-columns: 54px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) minmax(96px, 0.7fr) auto; }
+.server-list--backups { grid-template-columns: 44px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) minmax(96px, 0.7fr) auto; }
 .server-list__header, .server-row, .server-list__empty {
   grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
   row-gap: 12px; column-gap: 22px;
@@ -456,7 +433,7 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 }
 .server-list__header > :first-child { grid-column: 2; }
 .server-list__header > :last-child, .server-row__actions { padding-right: 18px; }
-.server-row > .flag { justify-self: end; }
+.server-row > .marker { justify-self: end; }
 .server-row { min-height: 78px; padding-top: 14px; padding-bottom: 14px; border-top: 1px solid var(--line); }
 .server-list__header + .server-row { border-top: 0; }
 .server-row--failed { box-shadow: inset 4px 0 0 var(--halt); }
@@ -471,7 +448,7 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .server-row__note, .server-row__warning { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
 .server-row__warning { color: var(--halt); }
 .server-row__state { display: grid; gap: 2px; font-size: 15px; }
-.server-row__state .pip { display: none; }
+.server-row__state .marker { display: none; }
 .server-row__since { color: var(--ink-3); font-size: 13px; }
 .server-row__state [role=status] { font-size: 13px; }
 .server-row__label { display: none; }
@@ -546,7 +523,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px 20px;
   padding-bottom: 22px; border-bottom: 1px solid var(--line);
 }
-.detail-header > .flag { width: 54px; height: 39px; border-radius: 3px; }
+.detail-header > .marker { width: 22px; height: 22px; align-self: start; margin-top: 9px; }
+.detail-header > .marker--attention { width: 25px; }
 .detail-header__title { min-width: 0; }
 .detail-header__title .page__title { font-size: 34px; }
 .detail-header__identity { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; color: var(--ink-2); font-size: 15px; }
@@ -873,8 +851,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 }
 @media (min-width: 761px) and (max-width: 1120px) {
   /* Row actions move under the details so the columns keep their width. */
-  .server-list { grid-template-columns: 54px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr); }
-  .server-list--backups { grid-template-columns: 54px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr) minmax(90px, 0.7fr); }
+  .server-list { grid-template-columns: 44px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr); }
+  .server-list--backups { grid-template-columns: 44px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr) minmax(90px, 0.7fr); }
   .server-list__header > :last-child { display: none; }
   .server-list__header > :nth-last-child(2), .server-row > :nth-last-child(2) { padding-right: 18px; }
   .server-row__actions { grid-column: 2 / -1; justify-content: flex-start; }
@@ -887,9 +865,9 @@ dialog[open] { animation: rise 0.16s ease-out; }
   .server-list { display: block; }
   .server-list__header { display: none; }
   .server-row {
-    display: grid; grid-template-columns: 36px 1fr; column-gap: 14px; row-gap: 10px; padding: 16px;
+    display: grid; grid-template-columns: 18px 1fr; column-gap: 14px; row-gap: 10px; padding: 16px;
   }
-  .server-row > :not(.flag) { grid-column: 2; }
+  .server-row > :not(.marker) { grid-column: 2; }
   .server-row__label { display: block; color: var(--ink-3); font-size: 12px; }
   .server-row__actions { justify-content: flex-start; flex-wrap: wrap; }
   .detail-header { grid-template-columns: auto 1fr; }

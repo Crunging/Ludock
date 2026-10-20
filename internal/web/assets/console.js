@@ -106,8 +106,8 @@
   function showStatus(label, tone) {
     if (!statusBox) return;
     statusBox.className = "connection-status connection-status--" + state;
-    var pip = statusBox.querySelector(".pip");
-    if (pip) pip.className = "pip flag--" + tone;
+    var marker = statusBox.querySelector(".marker");
+    if (marker) marker.className = "marker marker--sm marker--" + tone;
     statusBox.querySelector("span:last-child").textContent = label;
   }
   function showError(message) {

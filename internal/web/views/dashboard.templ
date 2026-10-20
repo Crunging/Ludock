@@ -35,15 +35,15 @@ type ServerList struct {
 	DiscoveryUnavailable bool
 }
 
-// Pip is a small signal flag for a tone: ok, idle, active, attention, or
+// Pip is a small state marker for a tone: ok, idle, active, attention, or
 // failed. It always sits next to a text label.
 templ Pip(tone string) {
-	<span class={ "pip", "flag--" + tone } aria-hidden="true"></span>
+	<span class={ "marker", "marker--sm", "marker--" + tone } aria-hidden="true"></span>
 }
 
-// Flag is a server's state flag at full size.
-templ Flag(tone string) {
-	<span class={ "flag", "flag--" + tone } aria-hidden="true"></span>
+// StateMark is a server's state marker at full size.
+templ StateMark(tone string) {
+	<span class={ "marker", "marker--" + tone } aria-hidden="true"></span>
 }
 
 templ ServerState(state, health string, exit *servers.Exit) {
@@ -206,7 +206,7 @@ func rowClass(row ServerRow) string {
 templ ServerCard(row ServerRow) {
 	{{ server := row.Server }}
 	<article class={ rowClass(row) } aria-labelledby={ "server-" + server.ID }>
-		@Flag(ServerStatus(server.State, server.Health, server.Exit).Tone)
+		@StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone)
 		<div class="server-row__identity">
 			<a class="server-row__name" id={ "server-" + server.ID } href={ templ.SafeURL("/servers/" + server.ID) }>{ server.DisplayName }</a>
 			<span class="server-row__game">{ server.GameName }</span>
