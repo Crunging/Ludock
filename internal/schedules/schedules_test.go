@@ -267,3 +267,29 @@ func TestInvalidSavedSchedulesAreReportedNotRun(t *testing.T) {
 }
 
 func schedtimeGrace() int64 { return 5 * 60_000 }
+
+func TestWarningIsClaimedOnlyWhenTheClaimCommits(t *testing.T) {
+	f := setup(t)
+	schedule, err := f.s.Create(ctx, admin, f.serverID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &row{id: schedule.ID, revision: schedule.Revision}
+	// The cleanup of an expired warning in the claim transaction fails,
+	// rolling back the insert.
+	for _, statement := range []string{
+		`INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES ('` + schedule.ID + `','2026-09-01T08:00',5)`,
+		`CREATE TRIGGER fail_cleanup BEFORE DELETE ON schedule_announcements BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`} {
+		if _, err := f.s.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	slot := "2026-09-09T08:00"
+	if f.s.claimAnnouncement(ctx, r, slot, 5, due) {
+		t.Fatal("claimed a warning whose claim rolled back")
+	}
+	f.s.DB.Exec("DROP TRIGGER fail_cleanup")
+	if !f.s.claimAnnouncement(ctx, r, slot, 5, due) || f.s.claimAnnouncement(ctx, r, slot, 5, due) {
+		t.Fatal("a committed claim must be taken exactly once")
+	}
+}

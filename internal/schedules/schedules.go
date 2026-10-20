@@ -695,7 +695,7 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 // return to an earlier slot.
 func (s *Service) claimAnnouncement(ctx context.Context, r *row, slot string, lead int, now int64) bool {
 	claimed := false
-	s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	if err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
       SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, slot, lead, r.id, r.revision)
 		if err != nil {
@@ -710,7 +710,12 @@ func (s *Service) claimAnnouncement(ctx context.Context, r *row, slot string, le
 		spent := time.UnixMilli(now - 2*86_400_000).UTC().Format("2006-01-02")
 		_, err = tx.ExecContext(ctx, "DELETE FROM schedule_announcements WHERE schedule_id=? AND substr(slot,1,10)<?", r.id, spent)
 		return err
-	})
+	}); err != nil {
+		// The insert rolled back with the transaction: no durable claim, so
+		// no warning. A later tick may claim it again.
+		log.Warn("Could not record a schedule warning; it was not sent", logging.F("scheduleId", r.id))
+		return false
+	}
 	return claimed
 }
 
