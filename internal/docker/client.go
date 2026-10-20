@@ -288,8 +288,11 @@ func (c *Client) ListContainers(ctx context.Context, all bool, filters Filters) 
 		query.Set("all", "true")
 	}
 	filtersQuery(query, filters)
+	// Decode before reading result: Go leaves the order of a plain operand
+	// and a call in one return statement unspecified.
 	var result []ContainerSummary
-	return result, c.getJSON(ctx, "/containers/json", query, &result)
+	err := c.getJSON(ctx, "/containers/json", query, &result)
+	return result, err
 }
 
 func containerPath(id, suffix string) (string, error) {
@@ -516,7 +519,8 @@ func (c *Client) InspectImage(ctx context.Context, reference string) (string, er
 		return "", errors.New("invalid Docker image reference")
 	}
 	var info struct{ Id string }
-	return info.Id, c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", nil, &info)
+	err := c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", nil, &info)
+	return info.Id, err
 }
 
 // Events streams container events.
