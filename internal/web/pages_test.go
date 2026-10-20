@@ -164,7 +164,9 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.app.DB.Exec(`CREATE TRIGGER keep_sessions BEFORE DELETE ON sessions
+	// The audit entry commits with the deletion, so its failure keeps the
+	// session too.
+	if _, err := p.app.DB.Exec(`CREATE TRIGGER no_logout_audit BEFORE INSERT ON audit_log WHEN NEW.action = 'auth.logout'
 		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,10 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
 		t.Fatal(response.Code, response.Header())
 	}
-	p.app.DB.Exec("DROP TRIGGER keep_sessions")
+	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal == nil {
+		t.Fatal("failed sign-out ended the session")
+	}
+	p.app.DB.Exec("DROP TRIGGER no_logout_audit")
 	response = logout()
 	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
 		t.Fatal(response.Code, response.Header())

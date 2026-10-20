@@ -316,6 +316,16 @@ func (d *DB) FindSessionUser(ctx context.Context, tokenHash string, now int64) (
 	return &user, nil
 }
 
+// Logout removes one session and writes its audit entry in one transaction.
+func (d *DB) Logout(ctx context.Context, tokenHash string, audit AuditEntry) error {
+	return d.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash); err != nil {
+			return err
+		}
+		return d.WriteAudit(ctx, tx, audit)
+	})
+}
+
 // DeleteSession removes one session.
 func (d *DB) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash)

@@ -471,16 +471,14 @@ func (s *Service) Recheck(ctx context.Context, principal *Principal) (*Principal
 	return current, nil
 }
 
-// Logout ends the session and audits it.
+// Logout ends the session and audits it; both commit or neither does.
 func (s *Service) Logout(ctx context.Context, token string, client Client) error {
 	principal, err := s.Session(ctx, token)
 	if err != nil || principal == nil {
 		return err
 	}
-	if err := s.DB.DeleteSession(ctx, principal.TokenHash); err != nil {
-		return err
-	}
-	return s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: principal.User.ID, Action: "auth.logout", TargetType: "session", IPAddress: client.IP})
+	return s.DB.Logout(ctx, principal.TokenHash,
+		db.AuditEntry{UserID: principal.User.ID, Action: "auth.logout", TargetType: "session", IPAddress: client.IP})
 }
 
 // ChangePassword replaces the signed-in account's password and returns the
