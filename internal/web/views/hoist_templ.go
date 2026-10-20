@@ -46,7 +46,7 @@ func SignalHoist() templ.Component {
 			var templ_7745c5c3_Var2 string
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue("translate(" + strconv.Itoa(x) + " 12)")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `hoist.templ`, Line: 12, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/hoist.templ`, Line: 12, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 			if templ_7745c5c3_Err != nil {
@@ -68,7 +68,7 @@ func SignalHoist() templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var3).String())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `hoist.templ`, Line: 1, Col: 0}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/hoist.templ`, Line: 1, Col: 0}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 			if templ_7745c5c3_Err != nil {
@@ -157,7 +157,7 @@ func flagU() templ.Component {
 	})
 }
 
-// D: blue, yellow, blue bands.
+// D: yellow, blue, yellow bands; the blue band is twice as wide.
 func flagD() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -179,7 +179,7 @@ func flagD() templ.Component {
 			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<rect class=\"sf-blue\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-yellow\" y=\"8.5\" width=\"48\" height=\"17\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<rect class=\"sf-yellow\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-blue\" y=\"8.5\" width=\"48\" height=\"17\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
