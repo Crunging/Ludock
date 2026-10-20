@@ -452,6 +452,7 @@ func (r *Runner) fill(ctx context.Context) {
 	r.mu.Unlock()
 	rows, err := r.DB.QueryContext(ctx, "SELECT "+columns+" FROM operations WHERE status='queued' ORDER BY created_at,id")
 	if err != nil {
+		r.retryFill()
 		return
 	}
 	var queued []*row
@@ -461,6 +462,10 @@ func (r *Runner) fill(ctx context.Context) {
 		}
 	}
 	rows.Close()
+	if rows.Err() != nil {
+		r.retryFill()
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, rw := range queued {
@@ -486,6 +491,13 @@ func (r *Runner) fill(ctx context.Context) {
 			r.Wake()
 		}()
 	}
+}
+
+// retryFill looks for queued work again shortly. Nothing else may wake the
+// runner, so a queue that could not be read must not wait for unrelated work.
+func (r *Runner) retryFill() {
+	log.Warn("Could not read queued operations; retrying")
+	time.AfterFunc(time.Second, r.Wake)
 }
 
 func (r *Runner) nextSettled() <-chan struct{} {
@@ -640,6 +652,10 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 		running = append(running, rw)
 	}
 	rows.Close()
+	// A partial list would leave the rest unreconciled while work starts.
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	for _, rw := range running {
 		job, err := rw.job()
 		var result map[string]any
