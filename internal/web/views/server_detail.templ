@@ -142,6 +142,7 @@ templ DetailLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
 	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?tab=" + d.Tab } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
 		<header class={ headerClass(d) }>
+			@Flag(ServerStatus(server.State, server.Health, server.Exit).Tone)
 			<div class="detail-header__title">
 				<h1 class="page__title" id="server-detail-title" tabindex="-1">{ server.DisplayName }</h1>
 				<p class="detail-header__identity">

@@ -25,18 +25,18 @@
   // Terminal, themed from the page's CSS variables.
   var colors = getComputedStyle(document.documentElement);
   var css = function (name, fallback) { return colors.getPropertyValue(name).trim() || fallback; };
-  var background = css("--bg-terminal", "#0c0c0c");
-  var fontFamily = css("--font-mono", "monospace");
+  var background = css("--terminal", "#0f1a28");
+  var fontFamily = css("--mono", "monospace");
   var terminal = new window.Terminal({
     theme: {
-      background: background, foreground: css("--text-terminal", "#d6d6d6"), cursor: css("--accent", "#e68a3a"),
-      cursorAccent: background, selectionBackground: css("--accent-selection", "rgba(230, 138, 58, 0.25)"),
+      background: background, foreground: css("--terminal-fg", "#dbe4e8"), cursor: css("--caution", "#e3b20b"),
+      cursorAccent: background, selectionBackground: "rgba(227, 178, 11, 0.28)",
       black: background, red: "#f39b92", green: "#92dba0", yellow: "#e8c46b", blue: "#38bdf8", magenta: "#c084fc",
       cyan: "#7cc8e0", white: "#d6d6d6", brightBlack: "#767676", brightRed: "#fca5a5", brightGreen: "#6ee7b7",
       brightYellow: "#fde68a", brightBlue: "#7dd3fc", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ededed",
     },
     // xterm measures glyph width once, so start on a font that is already present.
-    fontFamily: css("--font-mono-system", "monospace"),
+    fontFamily: "ui-monospace, monospace",
     fontSize: 14, lineHeight: 1.4, cursorBlink: true, cursorStyle: "bar", scrollback: 5000, convertEol: true, disableStdin: true,
   });
   var fitAddon = new window.FitAddon.FitAddon();

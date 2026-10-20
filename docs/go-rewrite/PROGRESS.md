@@ -21,6 +21,7 @@ at the very end (not opened yet). Update this file after every area.
 | 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | done (container journeys on amd64 + arm64 in CI) |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | done |
+| 13 | UI redesign ("harbor chart": top harbor bar, signal-flag states, Archivo) | in progress: pages restyled; demo seed, README and PR screenshots next |
 
 ## Layout
 
@@ -358,6 +359,18 @@ at the very end (not opened yet). Update this file after every area.
   helpers. Pin the published digest before the final PR.
 - Live updates use SSE instead of WebSockets for the dashboard; the events
   hub is transport-neutral (`Subscriber.Send` must not block).
+
+- Redesign (area 13): not bound by the React look. A navy top "harbor bar"
+  replaces the sidebar; all pages share tokens in `ludock.css` (light and
+  `prefers-color-scheme: dark`). Text is Archivo (variable width; headings
+  run wide), code and the terminal use Atkinson Hyperlegible Mono. Server
+  state is a small signal flag (`Flag`/`Pip` in `dashboard.templ`, tones
+  ok/idle/active/attention/failed) next to the word, never color alone.
+  Sign-in shows "LUDOCK" in signal flags (`hoist.templ`, CSS unfurl,
+  reduced motion respected). The dashboard is one grid with subgrid rows so
+  header and row columns line up. A dashboard refresh that would replace an
+  open `<dialog>` is deferred until it closes (`htmx:beforeSwap` in
+  `ludock.js`), so SSE updates can't destroy a confirmation mid-click.
 
 ## Gotchas
 

@@ -8,7 +8,7 @@ test("changing a password signs out the account's other devices", async ({ sessi
   await signIn(laptop, "player1", "first long password");
   await signIn(phone, "player1", "first long password");
 
-  await laptop.getByRole("link", { name: "Account" }).first().click();
+  await laptop.locator(`a[href="/account"]`).click();
   await expect(laptop.locator(".session-row")).toHaveCount(2);
   await laptop.getByLabel("Current password").fill("first long password");
   await laptop.getByLabel("New password", { exact: true }).fill("second long password");

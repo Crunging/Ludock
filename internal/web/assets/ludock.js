@@ -316,6 +316,21 @@
     }
   });
 
+  // A live refresh never replaces an open dialog (such as a stop
+  // confirmation in the server list); it refreshes once the dialog closes.
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail.target;
+    var open = target && target.querySelector && target.querySelector("dialog[open]");
+    if (!open || event.detail.requestConfig.elt.closest("dialog") === open) return;
+    event.detail.shouldSwap = false;
+    if (open.hasAttribute("data-refresh-pending")) return;
+    open.setAttribute("data-refresh-pending", "");
+    open.addEventListener("close", function () {
+      open.removeAttribute("data-refresh-pending");
+      if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
+    }, { once: true });
+  });
+
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
   document.addEventListener("change", function (event) {
