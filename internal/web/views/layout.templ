@@ -24,7 +24,7 @@ templ Document(title, csrf string, scripts, styles []string) {
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-			<meta name="theme-color" content="#09111c"/>
+			<meta name="theme-color" content="#0b1017"/>
 			<meta name="color-scheme" content="dark"/>
 			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
 			// Eval stays off: the CSP allows no inline or string-evaluated script.
@@ -53,12 +53,14 @@ templ Document(title, csrf string, scripts, styles []string) {
 	</html>
 }
 
+// LudockMark is the L block from Tetris: four blocks, drawn like the state
+// markers. It takes the current color (the orange accent).
 templ LudockMark(class string) {
 	<svg class={ class } viewBox="0 0 64 64" fill="currentColor" aria-hidden="true" focusable="false">
-		<rect x="17" y="9" width="14" height="14" rx="1.5"></rect>
-		<rect x="17" y="25" width="14" height="14" rx="1.5"></rect>
-		<rect x="17" y="41" width="14" height="14" rx="1.5"></rect>
-		<rect x="33" y="41" width="14" height="14" rx="1.5"></rect>
+		<rect x="17" y="9" width="14" height="14" rx="2.5"></rect>
+		<rect x="17" y="25" width="14" height="14" rx="2.5"></rect>
+		<rect x="17" y="41" width="14" height="14" rx="2.5"></rect>
+		<rect x="33" y="41" width="14" height="14" rx="2.5"></rect>
 	</svg>
 }
 

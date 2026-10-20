@@ -25,12 +25,12 @@
   // Terminal, themed from the page's CSS variables.
   var colors = getComputedStyle(document.documentElement);
   var css = function (name, fallback) { return colors.getPropertyValue(name).trim() || fallback; };
-  var background = css("--terminal", "#09111c");
+  var background = css("--terminal", "#0b1017");
   var fontFamily = css("--mono", "monospace");
   var terminal = new window.Terminal({
     theme: {
-      background: background, foreground: css("--terminal-fg", "#dbe4e8"), cursor: css("--caution", "#e3b20b"),
-      cursorAccent: background, selectionBackground: "rgba(227, 178, 11, 0.28)",
+      background: background, foreground: css("--terminal-fg", "#dbe4e8"), cursor: css("--accent", "#f08a24"),
+      cursorAccent: background, selectionBackground: "rgba(240, 138, 36, 0.3)",
       black: background, red: "#f39b92", green: "#92dba0", yellow: "#e8c46b", blue: "#38bdf8", magenta: "#c084fc",
       cyan: "#7cc8e0", white: "#d6d6d6", brightBlack: "#767676", brightRed: "#fca5a5", brightGreen: "#6ee7b7",
       brightYellow: "#fde68a", brightBlue: "#7dd3fc", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ededed",

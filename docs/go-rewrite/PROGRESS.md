@@ -21,7 +21,7 @@ at the very end (not opened yet). Update this file after every area.
 | 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | done (container journeys on amd64 + arm64 in CI) |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | done |
-| 13 | UI redesign (neutral dark, top bar, block state markers, Archivo) | done (dark only; README and PR screenshots from `fakedocker -demo`) |
+| 13 | UI redesign (neutral dark, orange L-block accent, block state markers, Archivo) | done (dark only; README and PR screenshots from `fakedocker -demo`) |
 
 ## Layout
 
@@ -364,7 +364,10 @@ at the very end (not opened yet). Update this file after every area.
   `harbor__*`) replaces the sidebar; all pages share tokens in `ludock.css`.
   The theme is dark only (Logan's preference, 2026-10-20); there is no light
   variant. An early nautical theme with signal flags was dropped (2026-10-20):
-  "dock" in Ludock points at Docker, and few people read signal flags. Text is
+  "dock" in Ludock points at Docker, and few people read signal flags. The
+  base is blue-gray, the one accent is the orange of the Tetris L block (the
+  mark, favicon, app icon, current page, console), and yellow only means
+  attention. Text is
   Archivo (variable width; headings run wide), code and the terminal use
   Atkinson Hyperlegible Mono. Server state is a block-shaped marker
   (`StateMark`/`Pip` in `dashboard.templ`, tones ok/idle/active/attention/
