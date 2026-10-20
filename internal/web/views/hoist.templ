@@ -3,9 +3,10 @@ package views
 import "strconv"
 
 // SignalHoist spells LUDOCK in international maritime signal flags, hung
-// from a dressing line: the sign-in page's one decorative moment.
+// from a dressing line, with each flag's letter below it: the sign-in page's
+// one decorative moment.
 templ SignalHoist() {
-	<svg class="hoist" viewBox="0 0 360 64" aria-hidden="true" focusable="false">
+	<svg class="hoist" viewBox="0 0 360 68" aria-hidden="true" focusable="false">
 		<path class="hoist__line" d="M0 9 Q180 15 360 9"></path>
 		for index, flag := range hoistFlags {
 			{{ x := 10 + index*58 }}
@@ -16,10 +17,13 @@ templ SignalHoist() {
 					@flag()
 					<rect class="hoist__edge" x="0" y="0" width="48" height="34"></rect>
 				</g>
+				<text class="hoist__letter" x="24" y="41">{ hoistLetters[index:index+1] }</text>
 			</g>
 		}
 	</svg>
 }
+
+const hoistLetters = "LUDOCK"
 
 var hoistFlags = []func() templ.Component{flagL, flagU, flagD, flagO, flagC, flagK}
 

@@ -11,7 +11,8 @@ import templruntime "github.com/a-h/templ/runtime"
 import "strconv"
 
 // SignalHoist spells LUDOCK in international maritime signal flags, hung
-// from a dressing line: the sign-in page's one decorative moment.
+// from a dressing line, with each flag's letter below it: the sign-in page's
+// one decorative moment.
 func SignalHoist() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -33,7 +34,7 @@ func SignalHoist() templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<svg class=\"hoist\" viewBox=\"0 0 360 64\" aria-hidden=\"true\" focusable=\"false\"><path class=\"hoist__line\" d=\"M0 9 Q180 15 360 9\"></path> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<svg class=\"hoist\" viewBox=\"0 0 360 68\" aria-hidden=\"true\" focusable=\"false\"><path class=\"hoist__line\" d=\"M0 9 Q180 15 360 9\"></path> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -46,7 +47,7 @@ func SignalHoist() templ.Component {
 			var templ_7745c5c3_Var2 string
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue("translate(" + strconv.Itoa(x) + " 12)")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/hoist.templ`, Line: 12, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/hoist.templ`, Line: 13, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 			if templ_7745c5c3_Err != nil {
@@ -82,18 +83,33 @@ func SignalHoist() templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<rect class=\"hoist__edge\" x=\"0\" y=\"0\" width=\"48\" height=\"34\"></rect></g></g>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<rect class=\"hoist__edge\" x=\"0\" y=\"0\" width=\"48\" height=\"34\"></rect></g> <text class=\"hoist__letter\" x=\"24\" y=\"41\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var5 string
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(hoistLetters[index : index+1])
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/hoist.templ`, Line: 20, Col: 75}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</text></g>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</svg>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</svg>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		return nil
 	})
 }
+
+const hoistLetters = "LUDOCK"
 
 var hoistFlags = []func() templ.Component{flagL, flagU, flagD, flagO, flagC, flagK}
 
@@ -114,12 +130,12 @@ func flagL() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var5 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var5 == nil {
-			templ_7745c5c3_Var5 = templ.NopComponent
+		templ_7745c5c3_Var6 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var6 == nil {
+			templ_7745c5c3_Var6 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<rect class=\"sf-yellow\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-black\" x=\"24\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-black\" y=\"17\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-yellow\" x=\"24\" y=\"17\" width=\"24\" height=\"17\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<rect class=\"sf-yellow\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-black\" x=\"24\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-black\" y=\"17\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-yellow\" x=\"24\" y=\"17\" width=\"24\" height=\"17\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -144,12 +160,12 @@ func flagU() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var6 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var6 == nil {
-			templ_7745c5c3_Var6 = templ.NopComponent
+		templ_7745c5c3_Var7 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var7 == nil {
+			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<rect class=\"sf-red\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-white\" x=\"24\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-white\" y=\"17\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-red\" x=\"24\" y=\"17\" width=\"24\" height=\"17\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<rect class=\"sf-red\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-white\" x=\"24\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-white\" y=\"17\" width=\"24\" height=\"17\"></rect> <rect class=\"sf-red\" x=\"24\" y=\"17\" width=\"24\" height=\"17\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -174,12 +190,12 @@ func flagD() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var7 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var7 == nil {
-			templ_7745c5c3_Var7 = templ.NopComponent
+		templ_7745c5c3_Var8 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var8 == nil {
+			templ_7745c5c3_Var8 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<rect class=\"sf-yellow\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-blue\" y=\"8.5\" width=\"48\" height=\"17\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<rect class=\"sf-yellow\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-blue\" y=\"8.5\" width=\"48\" height=\"17\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -204,12 +220,12 @@ func flagO() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var8 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var8 == nil {
-			templ_7745c5c3_Var8 = templ.NopComponent
+		templ_7745c5c3_Var9 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var9 == nil {
+			templ_7745c5c3_Var9 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<rect class=\"sf-yellow\" width=\"48\" height=\"34\"></rect> <path class=\"sf-red\" d=\"M0 0H48V34Z\"></path>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<rect class=\"sf-yellow\" width=\"48\" height=\"34\"></rect> <path class=\"sf-red\" d=\"M0 0H48V34Z\"></path>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -234,12 +250,12 @@ func flagC() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var9 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var9 == nil {
-			templ_7745c5c3_Var9 = templ.NopComponent
+		templ_7745c5c3_Var10 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var10 == nil {
+			templ_7745c5c3_Var10 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<rect class=\"sf-blue\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-white\" y=\"6.8\" width=\"48\" height=\"20.4\"></rect> <rect class=\"sf-red\" y=\"13.6\" width=\"48\" height=\"6.8\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<rect class=\"sf-blue\" width=\"48\" height=\"34\"></rect> <rect class=\"sf-white\" y=\"6.8\" width=\"48\" height=\"20.4\"></rect> <rect class=\"sf-red\" y=\"13.6\" width=\"48\" height=\"6.8\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -264,12 +280,12 @@ func flagK() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var10 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var10 == nil {
-			templ_7745c5c3_Var10 = templ.NopComponent
+		templ_7745c5c3_Var11 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var11 == nil {
+			templ_7745c5c3_Var11 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<rect class=\"sf-yellow\" width=\"24\" height=\"34\"></rect> <rect class=\"sf-blue\" x=\"24\" width=\"24\" height=\"34\"></rect>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<rect class=\"sf-yellow\" width=\"24\" height=\"34\"></rect> <rect class=\"sf-blue\" x=\"24\" width=\"24\" height=\"34\"></rect>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

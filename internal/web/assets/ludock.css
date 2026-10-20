@@ -368,6 +368,10 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .hoist__line { fill: none; stroke: var(--ink-3); stroke-width: 1.2; }
 .hoist__toggle { stroke: var(--ink-3); stroke-width: 1.2; }
 .hoist__edge { fill: none; stroke: color-mix(in srgb, var(--ink) 30%, transparent); stroke-width: 1; }
+.hoist__letter {
+  fill: var(--ink-2); font-family: var(--font); font-size: 15px; font-weight: 600;
+  letter-spacing: 0.08em; text-anchor: middle; dominant-baseline: hanging;
+}
 .sf-yellow { fill: #f2c200; }
 .sf-red { fill: #cf2e25; }
 .sf-blue { fill: #1d4f9c; }
