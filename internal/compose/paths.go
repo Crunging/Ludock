@@ -2,6 +2,7 @@ package compose
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,8 +102,12 @@ func ReadApprovedFile(candidate string, roots []string, optional bool) ([]byte, 
 	for total < len(data) {
 		n, err := file.Read(data[total:])
 		total += n
-		if err != nil || n == 0 {
+		if errors.Is(err, io.EOF) || (err == nil && n == 0) {
 			break
+		}
+		// A partial read must not pass as the whole file.
+		if err != nil {
+			return nil, false, apperr.New("CONFIG_READ_FAILED", 400, "Ludock could not read a configuration input completely")
 		}
 	}
 	if total > maxConfigBytes {
