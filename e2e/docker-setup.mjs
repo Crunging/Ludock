@@ -8,9 +8,11 @@ import { admin } from "./journeys/fixtures.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
-// A busybox-based game stand-in: it stays up, writes its data under /data,
-// and prints a line every few seconds.
-export const gameImage = "alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6";
+// A game stand-in: it stays up, keeps its data under /data, prints a line
+// every few seconds, and exits cleanly on SIGTERM like a well-behaved server
+// (Ludock refuses backups of servers that need forced termination). Updates
+// need a pullable tag, so the image is not pinned by digest.
+export const gameImage = "alpine:3";
 const setupCode = "docker-e2e-setup-code-0123456789abcdef";
 
 export function docker(...args) {
@@ -42,14 +44,13 @@ export default async function setup() {
   writeFileSync(join(stack, "compose.yaml"), `services:
   game:
     image: ${gameImage}
-    command: ["sh", "-c", "mkdir -p /data/world; while true; do echo tick $$(date +%s); sleep 5; done"]
+    command: ["sh", "-c", "trap 'exit 0' TERM; mkdir -p /data/world; while true; do echo tick $$(date +%s); sleep 2 & wait $$!; done"]
     labels:
       ludock.enable: "true"
       ludock.name: Test Game
       ludock.files: /data
     volumes:
       - ./data:/data
-    stop_signal: SIGKILL
 `);
   const override = join(dir, "compose.override.yaml");
   writeFileSync(override, `services:

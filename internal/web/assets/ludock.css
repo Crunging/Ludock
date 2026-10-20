@@ -3523,6 +3523,8 @@ html select:not([multiple]) {
 .inline-form { display: inline; margin: 0; }
 .section-tabs a, .detail-operation-notice a, .console-mode-tabs a { display: inline-flex; align-items: center; text-decoration: none; }
 a.console-retry { display: inline-flex; align-items: center; text-decoration: none; }
+.dashboard-help summary { list-style: none; cursor: pointer; display: inline-block; }
+.dashboard-help summary::-webkit-details-marker { display: none; }
 .grants-region { grid-column: 1 / -1; width: 100%; }
 .grants-region:empty { display: none; }
 a.login-card__submit { display: block; text-align: center; text-decoration: none; }
