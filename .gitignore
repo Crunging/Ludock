@@ -1,18 +1,7 @@
-# Dependencies
+# Journey dependencies and results (e2e/ has its own ignore file)
 node_modules/
-.pnpm-store/
 
-# Build output
-dist/
-packages/frontend/.dist-*/
-packages/backend/.dist-*/
-coverage/
-*.tsbuildinfo
-packages/frontend/test-results/
-packages/frontend/playwright-report/
-/test-results/
-
-# Runtime data
+# Runtime and development data
 /data/
 
 # Environment
@@ -32,9 +21,3 @@ Thumbs.db
 
 # Logs
 *.log
-npm-debug.log*
-pnpm-debug.log*
-
-# Lock files from other package managers
-package-lock.json
-yarn.lock

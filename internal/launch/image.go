@@ -14,13 +14,13 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 )
 
-// FallbackImage is used when Ludock runs outside a container or under a
-// custom hostname. Pin a reviewed multi-platform Go runtime here once one is
-// published; until then such runs need FILE_HELPER_IMAGE.
-const FallbackImage = ""
-
 var errImageUnavailable = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
 	"Ludock could not identify its runtime image. Check Docker connectivity and any LUDOCK_SELF_CONTAINER setting.")
+
+// Outside a container there is no runtime image to reuse; helpers then need
+// an explicitly configured, digest-pinned Ludock image.
+var errNoHelperImage = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
+	"Ludock is not running in a container it can identify. Set LUDOCK_HELPER_IMAGE to a Ludock image pinned by digest, or set LUDOCK_SELF_CONTAINER.")
 
 var imageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
@@ -28,7 +28,7 @@ var imageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // helpers need no registry pull and get the same patches.
 type Images struct {
 	Docker *docker.Client
-	// Configured is FILE_HELPER_IMAGE; Self is LUDOCK_SELF_CONTAINER or
+	// Configured is LUDOCK_HELPER_IMAGE; Self is LUDOCK_SELF_CONTAINER or
 	// HOSTNAME.
 	Configured, Self string
 
@@ -48,7 +48,7 @@ func (i *Images) Resolve(ctx context.Context) (string, error) {
 		return ValidateImage(i.Configured)
 	}
 	if i.Self == "" {
-		return fallback()
+		return "", errNoHelperImage
 	}
 	i.mu.Lock()
 	resolved := i.resolved
@@ -58,10 +58,10 @@ func (i *Images) Resolve(ctx context.Context) (string, error) {
 	}
 	info, err := i.Docker.Inspect(ctx, i.Self)
 	if err != nil {
-		// A native or custom hostname need not name a container. Other daemon
-		// failures stay retryable errors, not silent fallbacks.
+		// A native run or custom hostname need not name a container. Other
+		// daemon failures stay retryable errors.
 		if docker.StatusCode(err) == http.StatusNotFound {
-			return fallback()
+			return "", errNoHelperImage
 		}
 		return "", errImageUnavailable
 	}
@@ -73,13 +73,6 @@ func (i *Images) Resolve(ctx context.Context) (string, error) {
 	i.resolved = info.Image
 	i.mu.Unlock()
 	return info.Image, nil
-}
-
-func fallback() (string, error) {
-	if FallbackImage == "" {
-		return "", errImageUnavailable
-	}
-	return FallbackImage, nil
 }
 
 // Docker's reference grammar and familiar-name rules
@@ -136,8 +129,8 @@ func pinned(image string) bool {
 	return true
 }
 
-// ErrUnpinnedImage rejects a FILE_HELPER_IMAGE without a digest.
-var ErrUnpinnedImage = errors.New("FILE_HELPER_IMAGE must identify a trusted Ludock helper by its immutable sha256 digest.")
+// ErrUnpinnedImage rejects a LUDOCK_HELPER_IMAGE without a digest.
+var ErrUnpinnedImage = errors.New("LUDOCK_HELPER_IMAGE must identify a trusted Ludock helper by its immutable sha256 digest.")
 
 // ValidateImage accepts only digest-pinned references.
 func ValidateImage(image string) (string, error) {

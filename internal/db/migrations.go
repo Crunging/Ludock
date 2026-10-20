@@ -9,8 +9,8 @@ import (
 
 // ApplicationID marks Ludock-owned SQLite files ("LDCK") independently of the
 // schema version. Never infer ownership merely from a familiar table name.
-// The Bun releases used "LUDK" with a different schema; Ludock refuses those
-// files without writing to them.
+// Releases up to 0.5 used "LUDK" with a different schema; Ludock refuses
+// those files without writing to them.
 const ApplicationID = 0x4c44434b
 
 // BaseSchemaVersion is the initial schema. Add later changes as consecutive
@@ -26,7 +26,7 @@ type Migration struct {
 }
 
 // ErrIncompatible reports a database that Ludock does not own or cannot upgrade.
-var ErrIncompatible = errors.New("This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DB_PATH and complete first-administrator setup. The existing database and game data have not been changed.")
+var ErrIncompatible = errors.New("This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DATA_DIR and complete first-administrator setup. The existing database and game data have not been changed.")
 
 // Migrations is the complete schema history.
 var Migrations = []Migration{

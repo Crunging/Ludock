@@ -117,11 +117,11 @@ func TestRejectsUnrelatedDatabaseWithoutWriting(t *testing.T) {
 	}
 }
 
-// A database from the Bun releases carries their marker and schema; it is
+// A database from releases up to 0.5 carries their marker and schema; it is
 // refused before anything writes to it.
-func TestRejectsBunDatabaseWithoutWriting(t *testing.T) {
+func TestRejectsOldReleaseDatabaseWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "bun.db")
+	path := filepath.Join(dir, "old.db")
 	raw, _ := sql.Open("sqlite", path)
 	raw.Exec("CREATE TABLE users (id TEXT PRIMARY KEY); PRAGMA application_id = 1280656459; PRAGMA user_version = 9")
 	raw.Close()

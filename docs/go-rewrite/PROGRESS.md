@@ -19,8 +19,8 @@ at the very end (not opened yet). Update this file after every area.
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
 | 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | done |
 | 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
-| 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
-| 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
+| 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | done (container journeys on amd64 + arm64 in CI) |
+| 12 | Delete Bun/TS code, docs, release-please `simple` | done |
 
 ## Layout
 
@@ -201,6 +201,25 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Decisions
 
+- Image: static binary built on the native platform and copied into Alpine
+  with `docker-cli` and `docker-cli-compose`; `ENTRYPOINT ludock`, `CMD
+  serve`, `LUDOCK_DATA_DIR=/data`, healthcheck `ludock healthcheck`. The
+  release build passes `VERSION` for `ludock version`. `.dockerignore` is an
+  allowlist (go.mod, go.sum, cmd/, internal/).
+- No built-in fallback helper image: helpers reuse Ludock's own image, and
+  native runs set `LUDOCK_HELPER_IMAGE` (a digest baked into the binary
+  would always lag it).
+- Container suite: `e2e/docker` journeys deploy the repository's
+  `compose.yaml` with a test override against the CI runner's disposable
+  daemon and a tag-based Alpine "game" stack (graceful on SIGTERM; Ludock
+  refuses backups of servers that need forced termination, and updates need
+  a pullable tag). They replace the Bun `scripts/test-*.mjs` harnesses.
+- CI (`ci.yaml`): Go (gofmt, templ drift, vet, race tests), Journeys,
+  Workflows (actionlint, `scripts/check-pins.sh`), Container (amd64, arm64;
+  Trivy scan via `scripts/scan-image.sh`). The `go-rewrite` push trigger
+  comes out at merge. Weekly security: govulncheck, npm audit of `e2e/`, scan
+  of the published image. Release Please uses `release-type: simple`.
+
 - Tests (Logan, 2026-10-19: prefers end-to-end tests): the Playwright
   journeys in `e2e/` are the main suite. Each covers one real user flow
   against the real binary and `cmd/fakedocker` (sign-in, dashboard, server
@@ -367,15 +386,10 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Dockerfile and CI cutover (area 11): Go-only multi-arch image
-   (`ENTRYPOINT ["/usr/local/bin/ludock"]`, `CMD ["serve"]`,
-   `LUDOCK_DATA_DIR=/data`, docker CLI + Compose plugin, healthcheck
-   `ludock healthcheck`); fold `go.yaml` (gofmt, vet, templ check, race
-   tests, Journeys) into `ci.yaml`; rework or drop the container suites in
-   `scripts/test-*.mjs`, which call the removed `/api/v1` API; pin
-   `launch.FallbackImage` once an image is published.
-2. Delete Bun/TS and update docs (area 12): OPERATIONS.md, DEVELOPMENT.md,
-   AGENTS.md (schema guidance points at `internal/db/migrations.go`,
-   version 1; tests: `go test ./...` plus the journeys), release-please
-   `simple`. Take the "before" screenshots from main before deleting the
-   frontend.
+1. Before merging: remove the `go-rewrite` branch trigger from `ci.yaml`,
+   decide whether `docs/go-rewrite/` stays, and open the single PR (Logan
+   asked not to open it yet). Before/after screenshots of every screen are on
+   the orphan `pr-assets` branch under `go-rewrite/` for the PR description.
+2. Mention in the PR: no `/api/v1` JSON API or API token, a fresh database
+   (old data volumes are refused), renamed `LUDOCK_*` settings, and the
+   container suite replacing the Bun harnesses.

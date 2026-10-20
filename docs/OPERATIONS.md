@@ -90,7 +90,7 @@ labels:
 ### Supported games
 
 **Diagnostics → Supported games** shows the same list, defined in
-[`server-presets.ts`](../packages/backend/src/server-presets.ts). The console
+[`internal/games/presets.go`](../internal/games/presets.go). The console
 port is where Ludock sends commands, not the port players use.
 
 | Game | Recognized images (repository suffix) | Console | Console port |

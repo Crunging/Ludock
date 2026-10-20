@@ -468,7 +468,7 @@ func (d *DB) PruneAuditIfNeeded(ctx context.Context) error {
 	return d.PruneAudit(ctx)
 }
 
-// PruneAudit keeps the newest AUDIT_LOG_MAX_ROWS entries.
+// PruneAudit keeps the newest auditMaxRows entries.
 func (d *DB) PruneAudit(ctx context.Context) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", auditMaxRows)
 	return err
