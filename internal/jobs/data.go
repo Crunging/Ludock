@@ -438,7 +438,12 @@ func (j *Jobs) removeOperationHelpers(ctx context.Context, job *ops.Context) err
 		if err == nil {
 			break
 		}
-		time.Sleep(j.poll())
+		// On shutdown the operation stays running for the next startup.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(j.poll()):
+		}
 	}
 	for _, candidate := range helpers {
 		internal := candidate.Labels["ludock.internal"]

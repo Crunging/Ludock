@@ -123,6 +123,8 @@ func (a *App) Start(ctx context.Context) {
 			select {
 			case <-a.stop:
 				return
+			case <-ctx.Done():
+				return
 			case <-time.After(delay):
 			}
 		}

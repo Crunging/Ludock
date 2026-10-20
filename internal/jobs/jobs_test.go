@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,6 +159,22 @@ func (f *fixture) run(t *testing.T, kind string, input map[string]any) *ops.Job 
 }
 
 func (f *fixture) running() bool { return f.engine.Container(f.game).State.Running }
+
+func TestRecoveryStopsWhenCancelled(t *testing.T) {
+	f := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- f.jobs.removeOperationHelpers(ctx, &ops.Context{Job: &ops.Job{ID: "interrupted"}}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery kept retrying after cancellation")
+	}
+}
 
 func TestBackupSettingsNeedTheAdminSessionStillValid(t *testing.T) {
 	f := setup(t)

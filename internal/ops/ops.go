@@ -664,6 +664,11 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 				result, err = handler.Recover(ctx, &Context{Job: job, runner: r})
 			}
 		}
+		// Cancelled recovery is not a failed one: the row stays running and is
+		// recovered again on the next startup.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			if err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
 				"Recovery requires administrator attention. The server has been left stopped where possible."); err != nil {
