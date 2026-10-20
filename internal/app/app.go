@@ -191,4 +191,6 @@ func (a *App) Stop() {
 	case <-time.After(5 * time.Minute):
 		log.Error("Failed to shut down cleanly")
 	}
+	// Last: operations finishing above may still queue notifications.
+	a.Notify.Stop()
 }

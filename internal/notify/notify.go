@@ -71,11 +71,26 @@ type Service struct {
 	mu         sync.Mutex
 	active     string
 	delivering bool
+	// retries are event notifications waiting to be queued again.
+	retries sync.WaitGroup
+	quit    chan struct{}
+	stopped bool
 }
 
-func (s *Service) settings(ctx context.Context) settings {
+// retryDelay is the first wait before queueing an event again; tests
+// shorten it.
+var retryDelay = time.Second
+
+func (s *Service) load(ctx context.Context) (settings, error) {
 	var value settings
-	s.DB.Setting(ctx, settingKey, &value)
+	_, err := s.DB.Setting(ctx, settingKey, &value)
+	return value, err
+}
+
+// settings reads the saved settings; an unreadable value counts as off,
+// which only ever withholds a send.
+func (s *Service) settings(ctx context.Context) settings {
+	value, _ := s.load(ctx)
 	return value
 }
 
@@ -89,7 +104,11 @@ var webhookPath = regexp.MustCompile(`^/api/webhooks/\d+/[A-Za-z0-9_-]+$`)
 
 // Configure saves settings. An empty webhookURL keeps the saved one.
 func (s *Service) Configure(ctx context.Context, enabled bool, webhookURL *string) error {
-	value := s.settings(ctx).WebhookURL
+	saved, err := s.load(ctx)
+	if err != nil {
+		return err
+	}
+	value := saved.WebhookURL
 	if webhookURL != nil {
 		value = *webhookURL
 	}
@@ -191,12 +210,63 @@ func (s *Service) enqueue(ctx context.Context, key, message, kind string) (strin
 }
 
 // Notify queues an event once per key, when notifications are enabled.
+// Callers fire and forget, and most events never recur, so a failed queue
+// is retried in the background instead of dropping the alert.
 func (s *Service) Notify(key, message string) {
-	ctx := context.Background()
-	if !s.Configuration(ctx).Enabled {
+	if s.queueEvent(key, message) == nil {
 		return
 	}
-	s.enqueue(ctx, key, message, "event")
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		log.Error("Could not queue a notification; it was dropped")
+		return
+	}
+	if s.quit == nil {
+		s.quit = make(chan struct{})
+	}
+	quit := s.quit
+	s.retries.Add(1)
+	s.mu.Unlock()
+	log.Warn("Could not queue a notification; retrying")
+	go func() {
+		defer s.retries.Done()
+		delay := retryDelay
+		for range 8 {
+			select {
+			case <-time.After(delay):
+			case <-quit:
+				log.Error("Could not queue a notification before shutdown; it was dropped")
+				return
+			}
+			if s.queueEvent(key, message) == nil {
+				return
+			}
+			delay = min(delay*2, time.Minute)
+		}
+		log.Error("Could not queue a notification; it was dropped")
+	}()
+}
+
+func (s *Service) queueEvent(key, message string) error {
+	ctx := context.Background()
+	value, err := s.load(ctx)
+	if err != nil || !value.Enabled {
+		return err
+	}
+	_, err = s.enqueue(ctx, key, message, "event")
+	return err
+}
+
+// Stop abandons pending queue retries, before the database closes.
+func (s *Service) Stop() {
+	s.mu.Lock()
+	s.stopped = true
+	if s.quit != nil {
+		close(s.quit)
+	}
+	s.mu.Unlock()
+	s.retries.Wait()
 }
 
 func (s *Service) assertEnabled(ctx context.Context) error {

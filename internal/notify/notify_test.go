@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
@@ -108,6 +109,28 @@ func TestUnsavedResultIsNotResentEveryTick(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("sent %d times before the retry delay", calls)
 	}
+}
+
+func TestEventsAreQueuedAgainAfterAFailure(t *testing.T) {
+	retryDelay = 10 * time.Millisecond
+	t.Cleanup(func() { retryDelay = time.Second })
+	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
+	t.Cleanup(s.Stop)
+	if _, err := s.DB.Exec(`CREATE TRIGGER busy BEFORE INSERT ON notification_deliveries
+		BEGIN SELECT RAISE(ABORT, 'database is locked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s.Notify("outage:server:1", "Survival is unavailable.")
+	time.Sleep(50 * time.Millisecond)
+	s.DB.Exec("DROP TRIGGER busy")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if deliveries, _ := s.Deliveries(ctx); len(deliveries) == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the event was dropped after a failed queue")
 }
 
 func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
