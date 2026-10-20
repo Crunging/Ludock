@@ -141,6 +141,21 @@ func TestActionsRequireTheSessionCSRFToken(t *testing.T) {
 	}
 }
 
+func TestFormsRejectMultipartBodies(t *testing.T) {
+	p := newPages(t)
+	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "--x\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n" + CSRFToken(admin.Token) + "\r\n--x--\r\n"
+	for _, target := range []string{"/login", "/servers/" + p.server + "/start"} {
+		response := p.do("POST", target, admin, strings.NewReader(body), map[string]string{"Content-Type": "multipart/form-data; boundary=x"})
+		if response.Code != http.StatusUnsupportedMediaType || p.running() {
+			t.Fatalf("%s: %d running=%v", target, response.Code, p.running())
+		}
+	}
+}
+
 func TestDiscoveryIsNotPermission(t *testing.T) {
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)

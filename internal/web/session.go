@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/a-h/templ"
@@ -53,10 +54,16 @@ func (s *Server) principal(r *http.Request) (*auth.Principal, error) {
 	return s.Auth.Session(r.Context(), auth.SessionToken(r))
 }
 
-// readForm parses a bounded urlencoded or multipart-free form within 30 s.
+// readForm parses a bounded urlencoded form within 30 s. Multipart bodies
+// are refused: parsing one would read past the limit into temporary files.
+// Raw uploads (application/octet-stream) are left for their handler, which
+// enforces the upload size.
 func readForm(w http.ResponseWriter, r *http.Request) error {
 	kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if kind != "application/x-www-form-urlencoded" {
+	if strings.HasPrefix(kind, "multipart/") {
+		return apperr.New("UNSUPPORTED_MEDIA_TYPE", 415, "Forms must be sent URL-encoded")
+	}
+	if kind == "application/octet-stream" {
 		return nil
 	}
 	controller := http.NewResponseController(w)
