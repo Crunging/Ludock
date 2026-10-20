@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
@@ -329,5 +331,45 @@ func TestMountProofAndIdentities(t *testing.T) {
 	wrong, _ := json.Marshal(map[string]MountIdentity{filepath.Join(host, "srv"): result.Identities["/data"]})
 	if RunMountIdentities(string(wrong)) == 0 {
 		t.Fatal("mismatched identity accepted")
+	}
+}
+
+func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
+	// Act like a kernel or filesystem without RENAME_NOREPLACE.
+	original := renameat2
+	renameat2 = func(int, string, int, string, uint) error { return unix.ENOSYS }
+	t.Cleanup(func() { renameat2 = original })
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(dir, "taken.txt"), []byte("game data"), 0o644)
+	os.Mkdir(filepath.Join(dir, "folder"), 0o755)
+	parentFD, err := unix.Open(dir, unix.O_DIRECTORY|unix.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(parentFD)
+	parent := fd(parentFD)
+	stat := func(name string) *unix.Stat_t {
+		info, err := lstatAt(parent, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	// A destination created after the existence check is kept.
+	if err := renameNoReplace(parent, "a.txt", parent, "taken.txt", stat("a.txt")); err == nil {
+		t.Fatal("replaced an existing file")
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "taken.txt")); string(data) != "game data" {
+		t.Fatal("destination changed:", string(data))
+	}
+	if err := renameNoReplace(parent, "a.txt", parent, "b.txt", stat("a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); !os.IsNotExist(err) {
+		t.Fatal("source still present")
+	}
+	if err := renameNoReplace(parent, "folder", parent, "moved", stat("folder")); err == nil {
+		t.Fatal("renamed a folder without an atomic no-replace rename")
 	}
 }

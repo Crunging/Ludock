@@ -549,13 +549,8 @@ func (h *fileHelper) run() error {
 		} else if !isNotExist(err) {
 			return err
 		}
-		if err := unix.Renameat2(int(parent), name, int(targetParent), targetName, unix.RENAME_NOREPLACE); err != nil {
-			if !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL) {
-				return err
-			}
-			if err := unix.Renameat(int(parent), name, int(targetParent), targetName); err != nil {
-				return err
-			}
+		if err := renameNoReplace(parent, name, targetParent, targetName, info); err != nil {
+			return err
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "upload":
@@ -637,4 +632,27 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// renameat2 is swapped in tests to act like a kernel without
+// RENAME_NOREPLACE.
+var renameat2 = unix.Renameat2
+
+// renameNoReplace moves an entry without ever replacing what is at the
+// destination: game servers write these trees while files are managed.
+func renameNoReplace(parent fd, name string, targetParent fd, targetName string, info *unix.Stat_t) error {
+	err := renameat2(int(parent), name, int(targetParent), targetName, unix.RENAME_NOREPLACE)
+	if err == nil || (!errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL)) {
+		return err
+	}
+	// A plain rename would replace anything created at the destination since
+	// it was checked. A file can move safely instead: linking fails if the
+	// destination exists.
+	if !isRegular(info) {
+		return errors.New("this filesystem cannot rename folders without risking an overwrite")
+	}
+	if err := unix.Linkat(int(parent), name, int(targetParent), targetName, 0); err != nil {
+		return err
+	}
+	return unix.Unlinkat(int(parent), name, 0)
 }
