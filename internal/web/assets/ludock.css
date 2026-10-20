@@ -471,10 +471,10 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 
 .server-list {
   display: grid; column-gap: 22px;
-  grid-template-columns: 54px minmax(170px, 1.35fr) minmax(130px, 1fr) minmax(170px, 1fr) auto;
+  grid-template-columns: 54px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) auto;
   border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden;
 }
-.server-list--backups { grid-template-columns: 54px minmax(170px, 1.35fr) minmax(130px, 1fr) minmax(170px, 1fr) minmax(96px, 0.7fr) auto; }
+.server-list--backups { grid-template-columns: 54px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) minmax(96px, 0.7fr) auto; }
 .server-list__header, .server-row, .server-list__empty {
   grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
   row-gap: 12px; column-gap: 22px;
@@ -899,6 +899,14 @@ dialog[open] { animation: rise 0.16s ease-out; }
   .harbor__session { margin-left: auto; }
   .user-row { grid-template-columns: 1fr auto; }
   .password-reset { grid-column: 1 / -1; }
+}
+@media (min-width: 761px) and (max-width: 1120px) {
+  /* Row actions move under the details so the columns keep their width. */
+  .server-list { grid-template-columns: 54px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr); }
+  .server-list--backups { grid-template-columns: 54px minmax(150px, 1.3fr) minmax(110px, 0.8fr) minmax(200px, 1.2fr) minmax(90px, 0.7fr); }
+  .server-list__header > :last-child { display: none; }
+  .server-list__header > :nth-last-child(2), .server-row > :nth-last-child(2) { padding-right: 18px; }
+  .server-row__actions { grid-column: 2 / -1; justify-content: flex-start; }
 }
 @media (max-width: 760px) {
   body { font-size: 15px; }
