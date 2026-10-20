@@ -550,8 +550,14 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			return
 		}
 		// Nothing has changed yet. Keep the job queued, so a restart while it
-		// waits runs it normally instead of reconciling an interruption.
-		r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?", db.Now(), job.ID)
+		// waits runs it normally instead of reconciling an interruption. Only
+		// a saved queued row is picked up again once the resource is free.
+		if !r.persist(ctx, "requeue", func() error {
+			_, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?", db.Now(), job.ID)
+			return err
+		}) {
+			return
+		}
 		if !busy.holdsQueue {
 			r.mu.Lock()
 			r.waiting[job.ID] = true
