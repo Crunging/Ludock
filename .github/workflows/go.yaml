@@ -65,3 +65,56 @@ jobs:
           name: journey-results
           path: e2e/test-results/
           retention-days: 7
+
+  container:
+    name: Container (${{ matrix.platform }})
+    # The built image against the runner's disposable Docker daemon: hardened
+    # runtime, helper containers, backups, consoles, Compose updates, recovery.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      LUDOCK_TEST_IMAGE: ludock:ci
+      LUDOCK_DOCKER_E2E: disposable-daemon
+      TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        # Refresh Alpine security fixes even when the pinned base is unchanged.
+        run: docker build --pull --no-cache-filter runtime --tag "$LUDOCK_TEST_IMAGE" .
+      - name: Install journey dependencies
+        working-directory: e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps --only-shell chromium
+      - name: Run container journeys
+        working-directory: e2e
+        run: npx playwright test -c docker.config.mjs
+      - name: Scan image for vulnerabilities
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan="$(mktemp -d "$RUNNER_TEMP/ludock-scan-XXXXXX")"
+          cache="$RUNNER_TEMP/ludock-trivy-cache:/root/.cache/trivy"
+          docker image save --output "$scan/image.tar" "$LUDOCK_TEST_IMAGE"
+          # Download advisories first; the analysis runs offline without the socket.
+          docker run --rm --volume "$cache" "$TRIVY_IMAGE" image --download-db-only --no-progress
+          docker run --rm --network none --volume "$cache" --volume "$scan:/scan:ro" "$TRIVY_IMAGE" \
+            image --input /scan/image.tar --skip-db-update --offline-scan --scanners vuln \
+            --severity MEDIUM,HIGH,CRITICAL --ignore-unfixed --exit-code 1 --timeout 8m
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-results-${{ matrix.runner }}
+          path: e2e/test-results/
+          retention-days: 7
