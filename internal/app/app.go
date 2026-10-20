@@ -112,13 +112,19 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 }
 
 // Start reconciles interrupted operations, then runs the tick every 15 s.
+// Recovery is retried with backoff until it succeeds, since background work
+// must not run before interrupted operations are reconciled.
 func (a *App) Start(ctx context.Context) {
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
-		if err := a.Runner.Start(ctx); err != nil {
-			log.Error("Operation recovery requires administrator attention")
-			return
+		for delay := time.Second; a.Runner.Start(ctx) != nil; delay = min(2*delay, time.Minute) {
+			log.Error("Could not recover interrupted operations; retrying")
+			select {
+			case <-a.stop:
+				return
+			case <-time.After(delay):
+			}
 		}
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
