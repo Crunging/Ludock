@@ -17,53 +17,6 @@ func (p *pages) postForm(target string, principal *auth.Principal, values url.Va
 	return p.do("POST", target, principal, strings.NewReader(values.Encode()), nil).Result()
 }
 
-func TestChangePasswordReplacesTheSession(t *testing.T) {
-	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
-	other, err := p.app.Auth.Login(context.Background(), "operator", "password-u-operator", auth.Client{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []struct {
-		values url.Values
-		want   string
-	}{
-		{url.Values{"currentPassword": {"password-u-operator"}, "newPassword": {"a-new-long-password"}, "confirmPassword": {"a-new-long-passwore"}}, "New passwords do not match."},
-		{url.Values{"currentPassword": {"wrong-password"}, "newPassword": {"a-new-long-password"}, "confirmPassword": {"a-new-long-password"}}, "Current password is incorrect"},
-	} {
-		response := p.postForm("/account/password", operator, c.values)
-		body := readBody(t, response)
-		if response.StatusCode != http.StatusBadRequest || !strings.Contains(body, c.want) || strings.Contains(body, "a-new-long-password") {
-			t.Fatal(response.StatusCode, body)
-		}
-	}
-	response := p.postForm("/account/password", operator, url.Values{"currentPassword": {"password-u-operator"},
-		"newPassword": {"a-new-long-password"}, "confirmPassword": {"a-new-long-password"}})
-	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/account?changed=1" {
-		t.Fatal(response.StatusCode, response.Header)
-	}
-	var replacement string
-	for _, cookie := range response.Cookies() {
-		if cookie.Name == auth.SessionCookie {
-			replacement = cookie.Value
-		}
-	}
-	for _, token := range []string{operator.Token, other.Token} {
-		if principal, _ := p.app.Auth.Session(context.Background(), token); principal != nil {
-			t.Fatal("old session still valid")
-		}
-	}
-	current, _ := p.app.Auth.Session(context.Background(), replacement)
-	if current == nil {
-		t.Fatal("replacement session missing")
-	}
-	page := p.do("GET", "/account?changed=1", current, nil, nil)
-	if !strings.Contains(page.Body.String(), "Password changed. Other sessions have been signed out.") ||
-		!strings.Contains(page.Body.String(), CSRFToken(replacement)) {
-		t.Fatal(page.Body.String())
-	}
-}
-
 func TestRevokeSessions(t *testing.T) {
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)

@@ -154,66 +154,12 @@ func (f *fixture) run(t *testing.T, kind string, input map[string]any) *ops.Job 
 
 func (f *fixture) running() bool { return f.engine.Container(f.game).State.Running }
 
-func TestLifecycleStopSavesTheWorldFirst(t *testing.T) {
-	f := setup(t)
-	job := f.run(t, "stop", nil)
-	if job.Status != ops.Succeeded || job.Result["saveStatus"] != "sent" || f.running() {
-		t.Fatalf("%+v", job)
-	}
-	f.mu.Lock()
-	saved := strings.Contains(strings.Join(f.commands, "\n"), "rcon-cli save-all")
-	f.mu.Unlock()
-	if !saved {
-		t.Fatal("save-all not sent")
-	}
-	availability, _ := f.jobs.Monitor.Get(ctx, f.serverID)
-	if !availability.State.IntentionallyStopped {
-		t.Fatal("intentional stop not recorded")
-	}
-	if job := f.run(t, "start", nil); job.Status != ops.Succeeded || !f.running() {
-		t.Fatalf("%+v", job)
-	}
-}
-
 func TestRevokedOwnerCannotRun(t *testing.T) {
 	f := setup(t)
 	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true)
 	job := f.run(t, "stop", nil)
 	if job.Status != ops.Failed || job.Error != "The operation owner no longer has access" || !f.running() {
 		t.Fatalf("%+v", job)
-	}
-}
-
-func TestBackupAndRestoreRoundTrip(t *testing.T) {
-	f := setup(t)
-	backup := f.run(t, "backup", nil)
-	if backup.Status != ops.Succeeded || !f.running() {
-		t.Fatalf("%+v", backup)
-	}
-	backupID := backup.Result["backupId"].(string)
-	if _, err := os.Stat(filepath.Join(f.backupTo, backupID+".tar")); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("griefed"), 0o644)
-	os.WriteFile(filepath.Join(f.data, "new-file"), []byte("x"), 0o644)
-	restore := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
-	if restore.Status != ops.Succeeded || !f.running() {
-		t.Fatalf("%+v", restore)
-	}
-	if data, _ := os.ReadFile(filepath.Join(f.data, "world", "level.dat")); string(data) != "original" {
-		t.Fatal(string(data))
-	}
-	if _, err := os.Stat(filepath.Join(f.data, "new-file")); !os.IsNotExist(err) {
-		t.Fatal("restore kept a file created after the backup")
-	}
-	list, _ := f.jobs.Backups.List(ctx, f.serverID)
-	if len(list) != 2 {
-		t.Fatal("no safety backup", len(list))
-	}
-	for _, id := range f.engine.SortedIDs() {
-		if c := f.engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] != "" {
-			t.Fatal("helper left behind:", c.Config.Labels["ludock.internal"])
-		}
 	}
 }
 

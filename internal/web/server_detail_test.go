@@ -9,7 +9,6 @@ import (
 
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
-	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -35,29 +34,6 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 		if !strings.Contains(admin, want) {
 			t.Error("admin page lacks", want)
 		}
-	}
-}
-
-func TestActivityShowsOnlyThisServersOperations(t *testing.T) {
-	p := newPages(t)
-	job, err := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
-		Kind: "restart", BindingRevision: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	page := p.do("GET", "/servers/"+p.server+"?tab=activity&operation="+job.ID, p.admin, nil, nil).Body.String()
-	if !strings.Contains(page, "Operation details") || !strings.Contains(page, "/operations/"+job.ID) || strings.Contains(page, "Operation not found") {
-		t.Fatal(page)
-	}
-	// An operation of another server, or none, is not shown.
-	page = p.do("GET", "/servers/"+p.server+"?tab=activity&operation=00000000-0000-4000-8000-000000000000", p.admin, nil, nil).Body.String()
-	if !strings.Contains(page, "Operation not found") {
-		t.Fatal(page)
-	}
-	list := p.do("GET", "/fragments/servers/"+p.server+"/activity?status=failed", p.admin, nil, map[string]string{"HX-Request": "true"})
-	if !strings.Contains(list.Body.String(), "Showing 0 of 1") || !strings.Contains(list.Body.String(), "An active operation is hidden") ||
-		list.Header().Get("HX-Replace-Url") != "/servers/"+p.server+"?status=failed&tab=activity" {
-		t.Fatal(list.Header(), list.Body.String())
 	}
 }
 
@@ -94,17 +70,6 @@ func TestBindingReviewNeedsAPendingReview(t *testing.T) {
 		map[string]string{"HX-Request": "true"})
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "no pending binding review") {
 		t.Fatal(response.Code, response.Body.String())
-	}
-}
-
-func TestStopFromDetailFollowsTheOperation(t *testing.T) {
-	p := newPages(t)
-	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.State.Running = true; c.State.Status = "running" })
-	p.app.Servers.Refresh(context.Background())
-	response := p.do("POST", "/servers/"+p.server+"/stop", p.admin, strings.NewReader(url.Values{"_csrf": {CSRFToken(p.admin.Token)}}.Encode()),
-		map[string]string{"HX-Request": "true", "HX-Target": "detail-status"})
-	if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("HX-Redirect"), "/servers/"+p.server+"?tab=activity&operation=") {
-		t.Fatal(response.Code, response.Header(), response.Body.String())
 	}
 }
 

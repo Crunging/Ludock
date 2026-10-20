@@ -90,29 +90,3 @@ func TestScheduleEditConflictKeepsTheDraft(t *testing.T) {
 		t.Fatal(list[0].Input)
 	}
 }
-
-func TestSchedulePreviewAndToggle(t *testing.T) {
-	p := newPages(t)
-	preview := readBody(t, p.action("/fragments/servers/"+p.server+"/schedules/preview", p.admin, scheduleForm(nil)))
-	if !strings.Contains(preview, "(Europe/Berlin)") {
-		t.Fatal(preview)
-	}
-	preview = readBody(t, p.action("/fragments/servers/"+p.server+"/schedules/preview", p.admin,
-		scheduleForm(map[string][]string{"kind": {"once"}, "date": {"2000-01-01"}})))
-	if !strings.Contains(preview, "Choose a future date") {
-		t.Fatal(preview)
-	}
-	created, _ := p.app.Schedules.Create(context.Background(), &p.admin.User, p.server, schedules.Input{Kind: "recurring",
-		Action: "start", Enabled: true, Time: "06:00", Timezone: "UTC", Days: []int{0}})
-	stale := p.action("/servers/"+p.server+"/schedules/"+created.ID+"/toggle", p.admin, url.Values{"revision": {"9"}, "enabled": {"false"}})
-	if stale.StatusCode != http.StatusConflict || stale.Header.Get("HX-Trigger") != "schedules-changed" {
-		t.Fatal(stale.StatusCode)
-	}
-	paused := p.action("/servers/"+p.server+"/schedules/"+created.ID+"/toggle", p.admin, url.Values{"revision": {"1"}, "enabled": {"false"}})
-	if !strings.Contains(readBody(t, paused), "Schedule paused.") {
-		t.Fatal(paused.StatusCode)
-	}
-	if deleted := p.action("/servers/"+p.server+"/schedules/"+created.ID+"/delete", p.admin, nil); !strings.Contains(readBody(t, deleted), "Schedule deleted.") {
-		t.Fatal(deleted.StatusCode)
-	}
-}

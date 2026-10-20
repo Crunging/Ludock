@@ -1,0 +1,12 @@
+{
+  "name": "ludock-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser journeys against the real Ludock binary and a fake Docker daemon.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

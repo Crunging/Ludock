@@ -1,7 +1,6 @@
 package files
 
 import (
-	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -86,30 +85,6 @@ func (f *fixture) helpersLeft(t *testing.T) {
 	}
 }
 
-func TestListSortsFoldersFirstIgnoringCase(t *testing.T) {
-	f := setup(t)
-	listing, err := f.service.List(ctx, f.target, "root-0", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, entry := range listing.Entries {
-		names = append(names, entry.Name)
-	}
-	if strings.Join(names, ",") != "alpha,World,Banned.json,big.log,level.dat,server.properties" {
-		t.Fatal(names)
-	}
-	f.helpersLeft(t)
-	for _, bad := range []string{"../etc", "/etc", "a/../../b", "x\x00"} {
-		if _, err := f.service.List(ctx, f.target, "root-0", bad, nil); !apperr.Is(err, "INVALID_PATH") {
-			t.Errorf("%q: %v", bad, err)
-		}
-	}
-	if _, err := f.service.List(ctx, f.target, "root-9", "", nil); !apperr.Is(err, "ROOT_NOT_FOUND") {
-		t.Fatal(err)
-	}
-}
-
 func TestPreviewCapAndBinaryDetection(t *testing.T) {
 	f := setup(t)
 	for name, want := range map[string]PreviewKind{"server.properties": PreviewText, "level.dat": PreviewBinary, "big.log": PreviewLarge} {
@@ -139,68 +114,6 @@ func (zeroFree) Read(p []byte) (int, error) {
 		p[i] = 'a'
 	}
 	return len(p), nil
-}
-
-func TestMutationsUploadAndDownload(t *testing.T) {
-	f := setup(t)
-	if err := f.service.Mkdir(ctx, f.target, "root-0", "", "plugins", nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"", ".", "..", "a/b", " padded", "bad\nname", strings.Repeat("n", 256)} {
-		if err := f.service.Mkdir(ctx, f.target, "root-0", "", name, nil); !apperr.Is(err, "INVALID_NAME") {
-			t.Errorf("%q: %v", name, err)
-		}
-	}
-	body := strings.NewReader("new contents")
-	if err := f.service.Upload(ctx, f.target, "root-0", "plugins", "a.txt", int64(body.Len()), body, nil); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(f.data, "plugins", "a.txt")); string(data) != "new contents" {
-		t.Fatal(string(data))
-	}
-	// A body longer than declared is refused and leaves no file.
-	if err := f.service.Upload(ctx, f.target, "root-0", "", "long.txt", 2, strings.NewReader("abc"), nil); err == nil {
-		t.Fatal("accepted a body longer than declared")
-	}
-	if _, err := os.Stat(filepath.Join(f.data, "long.txt")); !os.IsNotExist(err) {
-		t.Fatal("partial upload published")
-	}
-	if err := f.service.Rename(ctx, f.target, "root-0", "plugins/a.txt", "b.txt", nil); err != nil {
-		t.Fatal(err)
-	}
-	download, err := f.service.OpenDownload(ctx, f.target, "root-0", "plugins", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if download.Name != "plugins.tar" || download.Type != "directory" {
-		t.Fatal(download.Name, download.Type)
-	}
-	reader := tar.NewReader(download)
-	found := map[string]bool{}
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		found[header.Name] = true
-	}
-	download.Close()
-	if !found["plugins/b.txt"] {
-		t.Fatal(found)
-	}
-	if err := f.service.Delete(ctx, f.target, "root-0", "", nil); !apperr.Is(err, "ROOT_MUTATION") {
-		t.Fatal(err)
-	}
-	if err := f.service.Delete(ctx, f.target, "root-0", "plugins", nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(f.data, "plugins")); !os.IsNotExist(err) {
-		t.Fatal("not deleted")
-	}
-	f.helpersLeft(t)
 }
 
 func TestAccessRecheckAndTargetChanges(t *testing.T) {

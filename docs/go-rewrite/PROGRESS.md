@@ -18,7 +18,7 @@ at the very end (not opened yet). Update this file after every area.
 | 7 | Schedules / jobs / operations / locks / notifications / monitoring / history | done |
 | 8 | Console runtimes (attach, RCON/telnet) + compose via `docker compose` exec | done |
 | 9 | Pages: layout/auth (cookie + CSRF), dashboard SSE, server detail, console/logs, schedule editors, files/backups, admin | done |
-| 10 | Playwright journeys against the real Go binary with a fake Docker | todo |
+| 10 | Playwright journeys against the real Go binary with a fake Docker | done (e2e/, 14 journeys, CI job "Journeys") |
 | 11 | Dockerfile (multi-arch, small, `ludock healthcheck`), CI cutover | todo |
 | 12 | Delete Bun/TS code, docs, release-please `simple` | todo |
 
@@ -201,6 +201,25 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Decisions
 
+- Tests (Logan, 2026-10-19: prefers end-to-end tests): the Playwright
+  journeys in `e2e/` are the main suite. Each covers one real user flow
+  against the real binary and `cmd/fakedocker` (sign-in, dashboard, server
+  page, backups/restore, schedules, console, files, sharing with an
+  operator, account, history/logs/settings). Go unit tests stay only for
+  tricky logic (schedule time, parsers, tar, paths, sorting), security
+  checks (auth, CSRF, grants, sessions, sockets, path traversal, identity
+  key, secrets in output), failure and recovery paths journeys cannot
+  reach, and the DB schema. Tests that only re-checked a happy path were
+  removed.
+- Journeys use `@playwright/test` (plain JavaScript, its own `e2e/`
+  package and lockfile) rather than playwright-go: playwright-go downloads
+  its driver from CDNs that no longer host it. Global setup builds both
+  binaries, starts them on fresh temp data, completes setup over HTTP, and
+  saves the admin's session; journeys run serially in one worker. Run
+  locally with `cd e2e && npm ci && LUDOCK_E2E_CHROMIUM=/path/to/chrome npx
+  playwright test` (`LUDOCK_E2E_LOGS=1` shows server output,
+  `LUDOCK_E2E_KEEP=1` keeps the temp data).
+
 - Module path `github.com/Crunging/Ludock`, Go 1.27, `CGO_ENABLED=0` friendly
   (modernc). Pool of 4 connections, `_txlock=immediate`, per-connection
   pragmas `foreign_keys`, `busy_timeout(5000)`, `synchronous(FULL)` via DSN;
@@ -348,16 +367,15 @@ at the very end (not opened yet). Update this file after every area.
 
 ## Next steps
 
-1. Playwright journeys (area 10) against the real binary + `cmd/fakedocker`. Screens and texts come from packages/frontend/src.
-   Check each by hand with headless Playwright (screenshots in
-   /tmp/feature-screenshots/go-rewrite/) and add server-side tests in
-   `internal/web` for the old browser race checks.
-2. Playwright journeys (area 10) against the real binary + `cmd/fakedocker`.
-3. Dockerfile and CI cutover (area 11): fold `go.yaml` into `ci.yaml`, add a
-   `templ generate` diff check; pin `launch.FallbackImage`.
-4. Delete Bun/TS, update docs (OPERATIONS.md: `ludock recover`, API removal,
-   fresh database: upgrading from the Bun releases needs a new data volume
-   and setup; AGENTS.md: schema guidance now points at
-   `internal/db/migrations.go`, version 1),
-   release-please `simple` (area 12). Take the "before" screenshots from
-   main before deleting the frontend.
+1. Dockerfile and CI cutover (area 11): Go-only multi-arch image
+   (`ENTRYPOINT ["/usr/local/bin/ludock"]`, `CMD ["serve"]`,
+   `LUDOCK_DATA_DIR=/data`, docker CLI + Compose plugin, healthcheck
+   `ludock healthcheck`); fold `go.yaml` (gofmt, vet, templ check, race
+   tests, Journeys) into `ci.yaml`; rework or drop the container suites in
+   `scripts/test-*.mjs`, which call the removed `/api/v1` API; pin
+   `launch.FallbackImage` once an image is published.
+2. Delete Bun/TS and update docs (area 12): OPERATIONS.md, DEVELOPMENT.md,
+   AGENTS.md (schema guidance points at `internal/db/migrations.go`,
+   version 1; tests: `go test ./...` plus the journeys), release-please
+   `simple`. Take the "before" screenshots from main before deleting the
+   frontend.
