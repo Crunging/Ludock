@@ -542,7 +542,7 @@ func (s *Service) ChangePassword(ctx context.Context, principal *Principal, curr
 		return nil, err
 	}
 	session, token := s.sessionInput(principal.User.ID, client)
-	err = s.DB.ChangePassword(ctx, principal.User.ID, principal.TokenHash, record.PasswordHash, passwordHash, session,
+	err = s.DB.ChangePassword(ctx, principal.User.ID, principal.TokenHash, record.PasswordHash, passwordHash, credentialKey, session,
 		db.AuditEntry{UserID: principal.User.ID, Action: "auth.password.changed", TargetType: "user", TargetID: principal.User.ID, IPAddress: client.IP})
 	switch {
 	case errors.Is(err, db.ErrSessionGone):
@@ -550,9 +550,6 @@ func (s *Service) ChangePassword(ctx context.Context, principal *Principal, curr
 	case errors.Is(err, db.ErrPasswordChanged):
 		return nil, apperr.New("PASSWORD_CHANGED", 409, "Password changed; sign in again")
 	case err != nil:
-		return nil, err
-	}
-	if err := s.DB.ClearLoginThrottle(ctx, credentialKey); err != nil {
 		return nil, err
 	}
 	return &Principal{User: current.User, Token: token, TokenHash: session.TokenHash}, nil

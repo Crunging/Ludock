@@ -578,8 +578,9 @@ func sessionValid(ctx context.Context, tx *sql.Tx, userID, tokenHash string, now
 
 // ChangePassword replaces the password only while the requesting session is
 // still valid and the verifier is the one that was checked. Every session is
-// revoked and the replacement session is created in the same transaction.
-func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, newHash string, session SessionInput, audit AuditEntry) error {
+// revoked, the replacement session is created, and the throttleKey failure
+// counter is cleared in the same transaction.
+func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, newHash, throttleKey string, session SessionInput, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		valid, err := sessionValid(ctx, tx, userID, tokenHash, session.CreatedAt)
 		if err != nil {
@@ -604,6 +605,9 @@ func (d *DB) ChangePassword(ctx context.Context, userID, tokenHash, oldHash, new
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.TokenHash, session.SessionID, userID, session.CreatedAt, session.ExpiresAt, session.CreatedAt,
 			nullable(session.IPAddress), nullable(session.UserAgent)); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM login_attempts WHERE attempt_key = ?", throttleKey); err != nil {
 			return err
 		}
 		return d.WriteAudit(ctx, tx, audit)

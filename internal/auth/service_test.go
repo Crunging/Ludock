@@ -431,6 +431,12 @@ func TestPasswordChangeReplacesSessions(t *testing.T) {
 	if current, _ := s.Session(ctx, next.Token); current == nil {
 		t.Fatal("replacement session missing")
 	}
+	var failures int
+	s.DB.QueryRow("SELECT COUNT(*) FROM login_attempts WHERE attempt_key = ?",
+		throttleKey("password-change-credential", principal.TokenHash)).Scan(&failures)
+	if failures != 0 {
+		t.Fatal("failed attempt was not cleared")
+	}
 }
 
 func TestLastAdminIsProtected(t *testing.T) {
