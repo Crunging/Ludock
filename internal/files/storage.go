@@ -407,7 +407,6 @@ func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, nam
 	if err != nil {
 		return err
 	}
-	defer access.Cleanup(false)
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
 		UploadID: uploadID}, io.LimitReader(body, size+1), []byte(uploadID))
@@ -416,6 +415,9 @@ func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, nam
 		Root: root.Path, Path: normalized, UploadID: uploadID}, nil, nil); cleanupErr != nil {
 		log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
 	}
+	// A failed upload may still be writing, so its helper is removed before
+	// the locks are released, as for Delete.
+	access.Cleanup(err != nil)
 	return err
 }
 
