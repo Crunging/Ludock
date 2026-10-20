@@ -112,7 +112,13 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, request *Request) {
-	s.Auth.Logout(r.Context(), request.Principal.Token, request.Client)
+	// Keep the cookie until the session is gone, so a failed sign-out can be
+	// retried from this browser instead of leaving a live session behind.
+	if err := s.Auth.Logout(r.Context(), request.Principal.Token, request.Client); err != nil {
+		log.Error("Could not end a session")
+		s.fail(w, r, request, apperr.New("LOGOUT_FAILED", 503, "Ludock could not end this session. Try signing out again."))
+		return
+	}
 	clearSessionCookie(w)
 	w.Header().Set("Clear-Site-Data", `"cache", "cookies", "storage"`)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)

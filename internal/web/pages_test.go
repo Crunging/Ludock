@@ -156,6 +156,33 @@ func TestFormsRejectMultipartBodies(t *testing.T) {
 	}
 }
 
+func TestFailedSignOutKeepsTheCookie(t *testing.T) {
+	p := newPages(t)
+	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.app.DB.Exec(`CREATE TRIGGER keep_sessions BEFORE DELETE ON sessions
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	logout := func() *httptest.ResponseRecorder {
+		return p.do("POST", "/logout", admin, strings.NewReader(url.Values{"_csrf": {CSRFToken(admin.Token)}}.Encode()), nil)
+	}
+	response := logout()
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
+		t.Fatal(response.Code, response.Header())
+	}
+	p.app.DB.Exec("DROP TRIGGER keep_sessions")
+	response = logout()
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
+		t.Fatal(response.Code, response.Header())
+	}
+	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal != nil {
+		t.Fatal("session survived sign-out")
+	}
+}
+
 func TestDiscoveryIsNotPermission(t *testing.T) {
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
