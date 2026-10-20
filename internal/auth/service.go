@@ -558,17 +558,18 @@ func (s *Service) Sessions(ctx context.Context, principal *Principal) ([]db.Sess
 	return s.DB.ListUserSessions(ctx, principal.User.ID, principal.TokenHash)
 }
 
-// RevokeSession ends one of the account's sessions.
+// RevokeSession ends one of the account's sessions; the revocation and its
+// audit entry commit together.
 func (s *Service) RevokeSession(ctx context.Context, principal *Principal, sessionID string, client Client) error {
-	removed, err := s.DB.DeleteUserSessionByID(ctx, principal.User.ID, sessionID)
+	removed, err := s.DB.DeleteUserSessionByID(ctx, principal.User.ID, sessionID, db.AuditEntry{UserID: principal.User.ID,
+		Action: "auth.session.revoked", TargetType: "session", TargetID: sessionID, IPAddress: client.IP})
 	if err != nil {
 		return err
 	}
 	if !removed {
 		return apperr.New("SESSION_NOT_FOUND", 404, "Session not found")
 	}
-	return s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: principal.User.ID, Action: "auth.session.revoked",
-		TargetType: "session", TargetID: sessionID, IPAddress: client.IP})
+	return nil
 }
 
 var (

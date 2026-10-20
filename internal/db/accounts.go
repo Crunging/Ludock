@@ -273,14 +273,23 @@ func (d *DB) ListUserSessions(ctx context.Context, userID, currentTokenHash stri
 	return sessions, rows.Err()
 }
 
-// DeleteUserSessionByID revokes one of the account's sessions.
-func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, sessionID string) (bool, error) {
-	result, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)
-	if err != nil {
-		return false, err
-	}
-	changed, err := result.RowsAffected()
-	return changed > 0, err
+// DeleteUserSessionByID revokes one of the account's sessions and writes
+// audit in the same transaction. Nothing is written when no session matched.
+func (d *DB) DeleteUserSessionByID(ctx context.Context, userID, sessionID string, audit AuditEntry) (bool, error) {
+	var removed bool
+	err := d.Tx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND session_id = ?", userID, sessionID)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil || changed == 0 {
+			return err
+		}
+		removed = true
+		return d.WriteAudit(ctx, tx, audit)
+	})
+	return removed && err == nil, err
 }
 
 const lastSeenWriteInterval = 60_000

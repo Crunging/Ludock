@@ -36,6 +36,18 @@ func TestRevokeSessions(t *testing.T) {
 	if principal, _ := p.app.Auth.Session(context.Background(), phone.Token); principal == nil {
 		t.Fatal("revoked another account's session")
 	}
+	// A revocation that cannot be audited does not happen.
+	if _, err := p.app.DB.Exec(`CREATE TRIGGER no_revoke_audit BEFORE INSERT ON audit_log
+		WHEN NEW.action = 'auth.session.revoked' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if response = p.post("/account/sessions/"+phoneID+"/revoke", operator, CSRFToken(operator.Token)); response.Code == http.StatusOK {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if principal, _ := p.app.Auth.Session(context.Background(), phone.Token); principal == nil {
+		t.Fatal("revoked a session without auditing it")
+	}
+	p.app.DB.Exec("DROP TRIGGER no_revoke_audit")
 	response = p.post("/account/sessions/"+phoneID+"/revoke", operator, CSRFToken(operator.Token))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Session revoked.") ||
 		strings.Contains(response.Body.String(), "192.0.2.7") {
