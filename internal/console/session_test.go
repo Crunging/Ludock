@@ -140,3 +140,32 @@ func TestConsoleRunsCommandsAndRejectsWithoutAccess(t *testing.T) {
 		t.Fatal(audits)
 	}
 }
+
+func TestCommandsRunOnlyOnceAudited(t *testing.T) {
+	f := sessionSetup(t)
+	ran := false
+	f.engine.Exec = func(*fakedocker.Container, []string, *bufio.Reader, func([]byte), func([]byte)) int {
+		ran = true
+		return 0
+	}
+	if _, err := f.sessions.DB.Exec(`CREATE TRIGGER no_command_audit BEFORE INSERT ON audit_log
+		WHEN NEW.action = 'server.game-command.started' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	channel := &fakeChannel{}
+	input := make(chan string, 1)
+	input <- `{"type":"input","data":"stop"}`
+	close(input)
+	f.sessions.Console(ctx, channel, f.validate(f.friend), f.serverID, GameMode, input, "")
+	if ran || !strings.Contains(channel.text(), "could not record this command") {
+		t.Fatal(ran, channel.text())
+	}
+	// A connection that cannot be audited is not opened.
+	f.sessions.DB.Exec(`CREATE TRIGGER no_open_audit BEFORE INSERT ON audit_log
+		WHEN NEW.action = 'server.game-console.opened' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+	closed := &fakeChannel{}
+	f.sessions.Console(ctx, closed, f.validate(f.friend), f.serverID, GameMode, make(chan string), "")
+	if closed.closed != CloseInternal || strings.Contains(closed.text(), "Connected to") {
+		t.Fatal(closed.closed, closed.text())
+	}
+}

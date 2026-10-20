@@ -164,9 +164,21 @@ func (a *Access) Refresh(ctx context.Context) (*servers.Context, error) {
 	return a.revalidate(ctx, true)
 }
 
-func (s *Sessions) audit(user *db.SessionUser, action, serverID string, details map[string]any, ip string) {
-	s.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: user.ID, Action: action, TargetType: "server",
+// audit records a console event. Sessions and commands start only once
+// their entry is saved; later entries are logged if they cannot be.
+func (s *Sessions) audit(user *db.SessionUser, action, serverID string, details map[string]any, ip string) error {
+	err := s.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: user.ID, Action: action, TargetType: "server",
 		TargetID: serverID, Details: details, IPAddress: ip})
+	if err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", action))
+	}
+	return err
+}
+
+// unrecorded ends a connection whose opening could not be audited.
+func unrecorded(channel Channel) {
+	channel.Send("error", "Ludock could not record this connection, so it was not opened. Try again.")
+	channel.Close(CloseInternal, "Audit unavailable")
 }
 
 // Logs follows a server's logs until ctx ends or access changes.
@@ -177,9 +189,12 @@ func (s *Sessions) Logs(ctx context.Context, channel Channel, validate func(cont
 	}
 	defer access.Stop()
 	containerID := access.Context.Logical.ContainerID
+	if err := s.audit(access.User(), "server.logs.opened", serverID, map[string]any{"containerId": containerID,
+		"bindingRevision": access.Context.Logical.BindingRevision}, ip); err != nil {
+		unrecorded(channel)
+		return
+	}
 	log.Info("Docker log connection opened", logging.F("container", short(containerID)), logging.F("role", string(access.User().Role)))
-	s.audit(access.User(), "server.logs.opened", serverID, map[string]any{"containerId": containerID,
-		"bindingRevision": access.Context.Logical.BindingRevision}, ip)
 	send := func(kind, data string) {
 		if access.Allowed(authz.LogsRead) {
 			channel.Send(kind, data)
@@ -232,17 +247,21 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 			channel.Send(kind, data)
 		}
 	}
-	if mode == GameMode {
-		send("system", "Connected to "+adapter.Name)
-	} else {
-		send("system", "Administrator shell. Commands require the container's timeout utility and run for at most 60 seconds.")
-	}
 	opened := "server.game-console.opened"
 	prefix := "server.game-command"
 	if mode == ShellMode {
 		opened, prefix = "server.shell.opened", "server.shell"
 	}
-	s.audit(access.User(), opened, serverID, map[string]any{"containerId": containerID, "bindingRevision": access.Context.Logical.BindingRevision}, ip)
+	if err := s.audit(access.User(), opened, serverID, map[string]any{"containerId": containerID,
+		"bindingRevision": access.Context.Logical.BindingRevision}, ip); err != nil {
+		unrecorded(channel)
+		return
+	}
+	if mode == GameMode {
+		send("system", "Connected to "+adapter.Name)
+	} else {
+		send("system", "Administrator shell. Commands require the container's timeout utility and run for at most 60 seconds.")
+	}
 
 	commands := make(chan string, maxPending)
 	go func() {
@@ -349,8 +368,12 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 			redactor.End()
 		}}
 	user := access.User()
-	s.audit(user, prefix+".started", access.ServerID, map[string]any{"containerId": current.Logical.ContainerID,
-		"bindingRevision": current.Logical.BindingRevision}, ip)
+	// A command runs only once its audit entry is saved.
+	if err := s.audit(user, prefix+".started", access.ServerID, map[string]any{"containerId": current.Logical.ContainerID,
+		"bindingRevision": current.Logical.BindingRevision}, ip); err != nil {
+		send("error", "Ludock could not record this command, so it was not sent. Try again.")
+		return
+	}
 	if mode == GameMode {
 		err = s.Runtime.GameCommand(ctx, Target{ContainerID: current.Logical.ContainerID, Labels: current.Container.Labels,
 			State: current.Container.State}, adapter, command, output, assertAccess)

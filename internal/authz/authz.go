@@ -13,7 +13,10 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/logging"
 )
+
+var log = logging.New("authorization")
 
 // Capability is one server permission.
 type Capability string
@@ -264,7 +267,9 @@ func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, server
 	if current, _ := s.CurrentActor(ctx, actor); current != nil {
 		entry.UserID = current.ID
 	}
-	_ = s.DB.WriteAudit(ctx, nil, entry)
+	if err := s.DB.WriteAudit(ctx, nil, entry); err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", entry.Action))
+	}
 }
 
 func invalidGrant(message string) error { return apperr.New("INVALID_GRANT", 400, message) }

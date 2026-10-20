@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/events"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/jobs"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
@@ -136,7 +137,11 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 	}
 	defer action.Done()
 	app := s.App
-	app.Monitor.Suppress(action.Ctx, action.Logical.ID)
+	// Pause outage tracking before acting, or the start could alert.
+	if err := app.Monitor.Suppress(action.Ctx, action.Logical.ID); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
 	err = app.Observer.ChangeState(action.Ctx, action.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
 		return action.AssertObserved(observation)
 	})
@@ -144,7 +149,9 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, err)
 		return
 	}
-	app.Monitor.SetIntentionalStop(action.Ctx, action.Logical.ID, false)
+	if err := app.Monitor.SetIntentionalStop(action.Ctx, action.Logical.ID, false); err != nil {
+		log.Warn("Could not save a server's monitoring state; an outage alert may follow")
+	}
 	s.audit(r, request, "server.start", action.Logical.ID, nil)
 	if fromDetail(r) {
 		w.Header().Set("HX-Trigger", "servers-changed")
@@ -165,7 +172,10 @@ func (s *Server) audit(r *http.Request, request *Request, action, serverID strin
 	if details == nil {
 		entry.Details = nil
 	}
-	s.App.DB.WriteAudit(context.WithoutCancel(r.Context()), nil, entry)
+	// The action already happened; a lost entry is logged, never hidden.
+	if err := s.App.DB.WriteAudit(context.WithoutCancel(r.Context()), nil, entry); err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", action))
+	}
 }
 
 func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Request, *Request) {
