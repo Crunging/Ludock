@@ -63,7 +63,7 @@ func TestValuesAndErrors(t *testing.T) {
 			t.Errorf("%s not reported: %v", name, err)
 		}
 	}
-	if err != nil && strings.Contains(err.Error(), "secret-value") {
+	if err != nil && (strings.Contains(err.Error(), "secret-value") || strings.Contains(err.Error(), "relative/stacks")) {
 		t.Fatal("error leaks a value")
 	}
 }

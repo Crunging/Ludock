@@ -89,7 +89,8 @@ func pathList(name, raw string) ([]string, error) {
 			continue
 		}
 		if !strings.HasPrefix(part, "/") {
-			return nil, fmt.Errorf("%s: %q is not an absolute path", name, part)
+			// The value is a host path; name the variable only.
+			return nil, fmt.Errorf("%s must list absolute paths separated by ':'", name)
 		}
 		if cleaned := path.Clean(part); !contains(paths, cleaned) {
 			paths = append(paths, cleaned)
