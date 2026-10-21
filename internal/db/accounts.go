@@ -167,14 +167,16 @@ func (d *DB) UpdateUserAccess(ctx context.Context, id string, role Role, disable
 }
 
 // UpdateUserPassword replaces a password and revokes every session.
-func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string) error {
+func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
 			passwordHash, Now(), id); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id)
-		return err
+		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
+			return err
+		}
+		return d.WriteAudit(ctx, tx, audit)
 	})
 }
 

@@ -19,6 +19,9 @@ import (
 
 var ctx = context.Background()
 
+// resetAudit records password resets made directly in the database.
+var resetAudit = db.AuditEntry{Action: "user.password.recovered", TargetType: "user", TargetID: adminID}
+
 func TestMain(m *testing.M) {
 	// Keep the KDF cheap; parameter handling is covered explicitly.
 	argonMemoryKiB = 1024
@@ -315,7 +318,7 @@ func TestLoginRejectsAccountChangedDuringVerification(t *testing.T) {
 		h.beforeVerify = func() {
 			if change == "reset" {
 				hash, _ := Argon2{}.Hash("reset-password-123")
-				s.DB.UpdateUserPassword(ctx, adminID, hash)
+				s.DB.UpdateUserPassword(ctx, adminID, hash, resetAudit)
 			} else {
 				s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
 			}
@@ -334,7 +337,7 @@ func TestSessionRequiresTheVerifiedPassword(t *testing.T) {
 		switch change {
 		case "reset":
 			hash, _ := Argon2{}.Hash("reset-password-123")
-			s.DB.UpdateUserPassword(ctx, adminID, hash)
+			s.DB.UpdateUserPassword(ctx, adminID, hash, resetAudit)
 		case "disable":
 			s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
 		}
@@ -349,9 +352,9 @@ func TestSessionRequiresTheVerifiedPassword(t *testing.T) {
 func TestHashUpgradeDoesNotOverwriteReset(t *testing.T) {
 	s, h, _ := racingService(t)
 	weak, _ := hashWith(original, 512, 1, 1)
-	s.DB.UpdateUserPassword(ctx, adminID, weak)
+	s.DB.UpdateUserPassword(ctx, adminID, weak, resetAudit)
 	reset, _ := Argon2{}.Hash("reset-password-123")
-	h.beforeHash = func() { s.DB.UpdateUserPassword(ctx, adminID, reset) }
+	h.beforeHash = func() { s.DB.UpdateUserPassword(ctx, adminID, reset, resetAudit) }
 	if user, _ := s.Authenticate(ctx, "admin", original); user != nil {
 		t.Fatal("authenticated after reset")
 	}
@@ -401,7 +404,7 @@ func TestAdminChangesRejectedAfterDemotionOrRevocation(t *testing.T) {
 func TestPasswordChangeDoesNotRestoreRevokedSession(t *testing.T) {
 	s, h, principal := racingService(t)
 	reset, _ := Argon2{}.Hash("reset-password-123")
-	h.beforeHash = func() { s.DB.UpdateUserPassword(ctx, adminID, reset) }
+	h.beforeHash = func() { s.DB.UpdateUserPassword(ctx, adminID, reset, resetAudit) }
 	_, err := s.ChangePassword(ctx, principal, original, "new-password-123", Client{})
 	wantStatus(t, err, 401)
 	if record, _ := s.DB.FindUserByID(ctx, adminID); record.PasswordHash != reset {
@@ -465,5 +468,20 @@ func TestSessionCookieParsing(t *testing.T) {
 	}
 	if got := SessionToken(httptestRequestWithCookie("ludock_session=%ZZ")); got != "" {
 		t.Fatal(got)
+	}
+}
+
+func TestFailedRecoveryKeepsTheOldPassword(t *testing.T) {
+	s, _, _ := racingService(t)
+	before, _ := s.DB.FindUserByID(ctx, adminID)
+	if _, err := s.DB.Exec(`CREATE TRIGGER no_recovery_audit BEFORE INSERT ON audit_log WHEN NEW.action = 'user.password.recovered'
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecoverPassword(ctx, s.DB, "admin", "recovered-password-123"); err == nil {
+		t.Fatal("recovery reported success without its audit entry")
+	}
+	if after, _ := s.DB.FindUserByID(ctx, adminID); after.PasswordHash != before.PasswordHash {
+		t.Fatal("the password changed although recovery failed")
 	}
 }

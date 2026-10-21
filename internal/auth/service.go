@@ -782,11 +782,13 @@ func RecoverPassword(ctx context.Context, d *db.DB, username, password string) (
 	if err != nil {
 		return nil, err
 	}
-	if err := d.UpdateUserPassword(ctx, user.ID, hash); err != nil {
+	// The reset and its audit entry commit together, so a reported failure
+	// leaves the old password and sessions in place.
+	if err := d.UpdateUserPassword(ctx, user.ID, hash, db.AuditEntry{Action: "user.password.recovered", TargetType: "user",
+		TargetID: user.ID, Details: map[string]string{"username": user.Username}}); err != nil {
 		return nil, err
 	}
-	return user, d.WriteAudit(ctx, nil, db.AuditEntry{Action: "user.password.recovered", TargetType: "user", TargetID: user.ID,
-		Details: map[string]string{"username": user.Username}})
+	return user, nil
 }
 
 func utf8Valid(value string) bool { return utf8.ValidString(value) }
