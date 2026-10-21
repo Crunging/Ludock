@@ -109,21 +109,24 @@ func TestExecRunsHelpersAndCommitsUploadsOnlyAfterTrailer(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "world.dat")); string(data) != "hello" {
 		t.Fatal(string(data))
 	}
-	// Access revoked mid-upload: the trailer is never sent, so nothing commits.
-	checks := 0
-	_, err = Exec(ctx, client, id, ExecOptions{Cmd: upload, Input: strings.NewReader("HELLO"), Trailer: []byte(uploadID),
-		AssertAccess: func() error {
-			checks++
-			if checks > 2 {
-				return apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
-			}
-			return nil
-		}})
-	if !apperr.Is(err, "FORBIDDEN") {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(root, "world.dat")); string(data) != "hello" {
-		t.Fatal("revoked upload committed")
+	// Access revoked mid-upload, or after the last body write right before the
+	// trailer: the trailer is never sent, so nothing commits.
+	for _, allowed := range []int{2, 4} {
+		checks := 0
+		_, err = Exec(ctx, client, id, ExecOptions{Cmd: upload, Input: strings.NewReader("HELLO"), Trailer: []byte(uploadID),
+			AssertAccess: func() error {
+				checks++
+				if checks > allowed {
+					return apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
+				}
+				return nil
+			}})
+		if !apperr.Is(err, "FORBIDDEN") {
+			t.Fatal(allowed, err)
+		}
+		if data, _ := os.ReadFile(filepath.Join(root, "world.dat")); string(data) != "hello" {
+			t.Fatal(allowed, "revoked upload committed")
+		}
 	}
 }
 

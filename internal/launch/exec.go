@@ -151,8 +151,12 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 					}
 				}
 				if readErr == io.EOF {
+					// The trailer commits the upload, so access is confirmed after the
+					// last body write, which can block, and right before sending it.
 					if len(options.Trailer) > 0 && current() == nil {
-						if _, err := conn.Write(options.Trailer); err != nil {
+						if err := check(); err != nil {
+							fail(err)
+						} else if _, err := conn.Write(options.Trailer); err != nil {
 							fail(ErrUpload)
 						}
 					}
