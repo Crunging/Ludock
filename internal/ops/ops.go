@@ -359,6 +359,8 @@ func (r *Runner) notifyScheduledFailure(rw *row) {
 // resourcesBusy returns a job to the queue until its resources are free.
 type resourcesBusy struct {
 	released <-chan struct{}
+	// settled closes when any job finishes; nil unless holdsQueue.
+	settled <-chan struct{}
 	// holdsQueue: the holder is another job, so no new work starts meanwhile.
 	holdsQueue bool
 }
@@ -373,9 +375,16 @@ func (e *resourcesBusy) Error() string { return "Operation resources are busy" }
 func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)) (map[string]any, error) {
 	r := c.runner
 	id := c.Job.ID
+	// Taken before trying, so a release or finish right after a conflict
+	// still wakes this job instead of leaving the queue held.
+	released := r.Locks.NextRelease()
 	release, err := r.Locks.Acquire(keys, nil)
 	if err != nil {
 		r.mu.Lock()
+		if r.settled == nil {
+			r.settled = make(chan struct{})
+		}
+		settled := r.settled
 		claimed := r.claimed[id]
 		otherActive := false
 		for other := range r.claimed {
@@ -388,7 +397,6 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 		r.mu.Unlock()
 		var background *locks.BackgroundConflict
 		if claimed && errors.As(err, &background) {
-			released := r.Locks.NextRelease()
 			background.Cancel()
 			if wasYielded {
 				r.Wake()
@@ -396,7 +404,7 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 			return nil, &resourcesBusy{released: released}
 		}
 		if claimed && errors.Is(err, locks.ErrConflict) && otherActive {
-			return nil, &resourcesBusy{released: r.Locks.NextRelease(), holdsQueue: true}
+			return nil, &resourcesBusy{released: released, settled: settled, holdsQueue: true}
 		}
 		if wasYielded {
 			r.Wake()
@@ -500,15 +508,6 @@ func (r *Runner) retryFill() {
 	time.AfterFunc(time.Second, r.Wake)
 }
 
-func (r *Runner) nextSettled() <-chan struct{} {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.settled == nil {
-		r.settled = make(chan struct{})
-	}
-	return r.settled
-}
-
 func (r *Runner) handler(kind string) (Handler, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -586,10 +585,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		r.mu.Lock()
 		r.yielded[job.ID] = true
 		r.mu.Unlock()
-		settled := r.nextSettled()
 		select {
 		case <-busy.released:
-		case <-settled:
+		case <-busy.settled:
 		case <-r.stopped:
 		}
 		current, err := r.row(ctx, job.ID)
