@@ -379,7 +379,19 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 	// still wakes this job instead of leaving the queue held.
 	released := r.Locks.NextRelease()
 	release, err := r.Locks.Acquire(keys, nil)
-	if err != nil {
+	for err != nil {
+		if testHook != nil {
+			testHook("conflict")
+		}
+		// Keys were released since this attempt began, perhaps by the holder
+		// as it finished: try again rather than report a conflict.
+		select {
+		case <-released:
+			released = r.Locks.NextRelease()
+			release, err = r.Locks.Acquire(keys, nil)
+			continue
+		default:
+		}
 		r.mu.Lock()
 		if r.settled == nil {
 			r.settled = make(chan struct{})
@@ -404,6 +416,9 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 			return nil, &resourcesBusy{released: released}
 		}
 		if claimed && errors.Is(err, locks.ErrConflict) && otherActive {
+			if testHook != nil {
+				testHook("yield")
+			}
 			return nil, &resourcesBusy{released: released, settled: settled, holdsQueue: true}
 		}
 		if wasYielded {
@@ -421,6 +436,10 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 	defer release()
 	return action()
 }
+
+// testHook, set only by tests, runs at named points in WithLocks so a test
+// can force an interleaving.
+var testHook func(point string)
 
 func laneFor(rw *row) string {
 	switch rw.kind {

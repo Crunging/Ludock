@@ -302,3 +302,48 @@ func TestStopLeavesQueuedWork(t *testing.T) {
 	r.Start(ctx)
 	waitStatus(t, r, job.ID, Succeeded)
 }
+
+// A holder that finishes at either point after a job's conflict must not
+// leave that job failed or waiting with the queue held.
+func TestAHolderFinishingAfterAConflictLetsTheJobRun(t *testing.T) {
+	for _, point := range []string{"conflict", "yield"} {
+		t.Run(point, func(t *testing.T) {
+			r, servers := setup(t, 2)
+			held, gate := make(chan struct{}), make(chan struct{})
+			r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
+				return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) {
+					if c.Job.ServerID == servers[0] {
+						close(held)
+						<-gate
+					}
+					return nil, nil
+				})
+			}})
+			r.Start(ctx)
+			first, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+			<-held
+			var once sync.Once
+			testHook = func(at string) {
+				if at != point {
+					return
+				}
+				// The holder releases its keys and finishes right here.
+				once.Do(func() {
+					close(gate)
+					for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+						r.mu.Lock()
+						done := !r.claimed[first.ID]
+						r.mu.Unlock()
+						if done {
+							return
+						}
+					}
+				})
+			}
+			t.Cleanup(func() { testHook = nil })
+			second, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[1], ActorID: "admin", Kind: "start"})
+			waitStatus(t, r, first.ID, Succeeded)
+			waitStatus(t, r, second.ID, Succeeded)
+		})
+	}
+}
