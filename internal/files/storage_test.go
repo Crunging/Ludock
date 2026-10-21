@@ -146,3 +146,24 @@ func TestAccessRecheckAndTargetChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFailedChangesRemoveTheirHelperBeforeReturning(t *testing.T) {
+	f := setup(t)
+	for name, change := range map[string]func() error{
+		"mkdir": func() error { return f.service.Mkdir(ctx, f.target, "root-0", "", "World", nil) },
+		"rename": func() error {
+			return f.service.Rename(ctx, f.target, "root-0", "missing.txt", "other.txt", nil)
+		},
+		"upload": func() error {
+			return f.service.Upload(ctx, f.target, "root-0", "", "short.txt", 10, strings.NewReader("short"), nil)
+		},
+	} {
+		// The changed data may still be written, so removal is retried until
+		// Docker confirms it, even after failures.
+		f.engine.FailRemoves = 2
+		if err := change(); err == nil {
+			t.Fatal(name, "succeeded")
+		}
+		f.helpersLeft(t)
+	}
+}

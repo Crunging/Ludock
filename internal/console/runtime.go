@@ -123,8 +123,9 @@ type Target struct {
 type Runtime struct {
 	Docker *docker.Client
 	Images *launch.Images
-	// pollInterval is shortened in tests.
+	// pollInterval and startLimit are shortened in tests.
 	pollInterval time.Duration
+	startLimit   time.Duration
 }
 
 var (
@@ -384,7 +385,11 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 	// so the start ignores the caller's cancellation. It still has its own
 	// deadline, as Docker can accept it and never answer; a start that times
 	// out is reconciled below as already dispatched.
-	start, cancelStart := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutSeconds+execKillGrace)*time.Second+execStreamGrace)
+	limit := time.Duration(timeoutSeconds+execKillGrace)*time.Second + execStreamGrace
+	if r.startLimit > 0 {
+		limit = r.startLimit
+	}
+	start, cancelStart := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	conn, err := r.Docker.StartExec(start, execID)
 	cancelStart()
 	if err != nil {

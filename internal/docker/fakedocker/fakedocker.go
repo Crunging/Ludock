@@ -58,6 +58,11 @@ type Engine struct {
 	APIVersion string
 	// Fail makes every API request return this status when non-zero.
 	Fail int
+	// FailRemoves makes the next N container removals fail with status 500.
+	FailRemoves int
+	// HangExecStarts makes the next N exec starts accept the request and never
+	// answer, as a stalled daemon can. The exec ends when the client hangs up.
+	HangExecStarts int
 	// Requests records "METHOD path" for each request.
 	Requests []string
 
@@ -459,6 +464,12 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			e.mu.Unlock()
 		})
 	case action == "" && r.Method == "DELETE":
+		if e.FailRemoves > 0 {
+			e.FailRemoves--
+			e.mu.Unlock()
+			fail(w, 500)
+			return
+		}
 		if c.State.Running && r.URL.Query().Get("force") != "true" {
 			e.mu.Unlock()
 			fail(w, 409)
@@ -513,7 +524,20 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 	e.mu.Lock()
 	instance.running = true
 	handler := e.Exec
+	hang := e.HangExecStarts > 0
+	if hang {
+		e.HangExecStarts--
+	}
 	e.mu.Unlock()
+	if hang {
+		io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		killed := 137
+		e.mu.Lock()
+		instance.running, instance.exitCode = false, &killed
+		e.mu.Unlock()
+		return
+	}
 	e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
 		var mu sync.Mutex
 		write := func(channel byte) func([]byte) {

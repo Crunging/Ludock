@@ -194,3 +194,22 @@ func TestNetworkConsoleHelperProtocol(t *testing.T) {
 		t.Fatal(last)
 	}
 }
+
+func TestAStalledCommandStartEndsAndIsReconciled(t *testing.T) {
+	engine, runtime, id := setup(t)
+	runtime.startLimit = 200 * time.Millisecond
+	// Docker accepts the start and never answers it.
+	engine.HangExecStarts = 1
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, games.ResolveAdapter("minecraft", nil), "list", Discard, nil)
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a command whose start never answered reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command start kept waiting for Docker")
+	}
+}
