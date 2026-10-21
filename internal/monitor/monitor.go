@@ -260,12 +260,12 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if !r.outage.Valid && r.notified == 0 && r.intentional == 0 && r.lastState.String == "running" {
 				continue
 			}
-			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=? WHERE server_id=?",
-				now, server.ID); err != nil {
+			changed, err := s.transition(ctx, server.ID, r, "outage_started_at=NULL,notified=0,intentionally_stopped=0,last_state='running',updated_at=?", now)
+			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
 			}
-			if r.notified == 1 {
+			if changed && r.notified == 1 {
 				s.notify("recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
 			}
 			continue
@@ -288,14 +288,17 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		} else if found && server.ContainerID != "" {
 			lastState = container.State
 		}
+		changed := false
 		if !(r.outage.Valid && r.outage.Int64 == started && r.notified == notified && r.lastState.String == lastState) {
-			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET outage_started_at=?,notified=?,last_state=?,updated_at=? WHERE server_id=?",
-				started, notified, lastState, now, server.ID); err != nil {
+			if changed, err = s.transition(ctx, server.ID, r, "outage_started_at=?,notified=?,last_state=?,updated_at=?",
+				started, notified, lastState, now); err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
 				continue
 			}
 		}
-		if notify && r.notified == 0 {
+		// Raising an alert always changes notified, so it is sent only when
+		// that change was saved against the state read above.
+		if changed && notify && r.notified == 0 {
 			message := server.DisplayName + " is unavailable."
 			if unavailable {
 				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
@@ -304,6 +307,20 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 	}
 	return nil
+}
+
+// transition applies set only if the row still has the policy and state
+// that were read, so a policy saved, a stop recorded, or a suppression added
+// meanwhile is never overwritten and raises no alert from the old state.
+func (s *Service) transition(ctx context.Context, serverID string, r *row, set string, args ...any) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, "UPDATE availability SET "+set+` WHERE server_id=? AND policy_json=? AND
+    outage_started_at IS ? AND notified=? AND suppressed_until=? AND intentionally_stopped=?`,
+		append(args, serverID, r.policy, r.outage, r.notified, r.suppressed, r.intentional)...)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return changed == 1, err
 }
 
 func bytesReader(data []byte) *bytes.Reader { return bytes.NewReader(data) }

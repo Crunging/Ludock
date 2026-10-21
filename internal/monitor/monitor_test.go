@@ -143,3 +143,18 @@ func TestUnreadableOperationsDoNotRaiseAnOutage(t *testing.T) {
 		t.Fatal("reported an outage without reading active operations")
 	}
 }
+
+func TestPolicySavedDuringACheckIsKept(t *testing.T) {
+	s, _, server := setup(t)
+	read, _ := s.row(ctx, server.ID)
+	// An administrator disables monitoring after the check read the row.
+	if _, err := s.DB.Exec(`UPDATE availability SET policy_json='{"enabled":false,"graceSeconds":60}' WHERE server_id=?`, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := s.transition(ctx, server.ID, read, "outage_started_at=?,notified=1", 1000); err != nil || changed {
+		t.Fatal(changed, err)
+	}
+	if problem, _ := s.Problem(ctx, server.ID, 200_000); problem != nil {
+		t.Fatal("restored an outage under the old policy")
+	}
+}
