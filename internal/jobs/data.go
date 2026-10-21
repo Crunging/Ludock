@@ -114,14 +114,19 @@ func stopPending(job *ops.Context) bool {
 	return job.Job.Recovery["stopStarted"] == true && job.Job.Recovery["stopSettled"] != true
 }
 
-func (j *Jobs) waitForStopDeadline(job *ops.Context) error {
+func (j *Jobs) waitForStopDeadline(ctx context.Context, job *ops.Context) error {
 	deadline, ok := number(job.Job.Recovery["stopRecoveryDeadlineAt"])
 	now := float64(time.Now().UnixMilli())
 	if !ok || deadline <= now {
 		return fail("STOP_RECOVERY_REQUIRED", "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying.")
 	}
-	time.Sleep(min(j.poll(), time.Duration(deadline-now)*time.Millisecond))
-	return nil
+	// On shutdown the operation stays running for the next startup.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(min(j.poll(), time.Duration(deadline-now)*time.Millisecond)):
+		return nil
+	}
 }
 
 // observeDuringStop confirms the binding. While an interrupted stop may still
@@ -139,7 +144,7 @@ func (j *Jobs) observeDuringStop(ctx context.Context, job *ops.Context, containe
 		if _, public := apperr.As(err); !stopPending(job) || public {
 			return nil, err
 		}
-		if err := j.waitForStopDeadline(job); err != nil {
+		if err := j.waitForStopDeadline(ctx, job); err != nil {
 			return nil, err
 		}
 	}
@@ -161,7 +166,7 @@ func (j *Jobs) settleInterruptedStop(ctx context.Context, server *servers.Contex
 		if observed.Container.State == "running" && ok && observed.Container.StateSince != 0 && float64(observed.Container.StateSince) != initial {
 			return nil, job.Progress("stop_reconciled", map[string]any{"stopSettled": true}, nil)
 		}
-		if err := j.waitForStopDeadline(job); err != nil {
+		if err := j.waitForStopDeadline(ctx, job); err != nil {
 			return nil, err
 		}
 		if observed, err = j.observeDuringStop(ctx, job, server.Container.ID, server.Logical); err != nil {

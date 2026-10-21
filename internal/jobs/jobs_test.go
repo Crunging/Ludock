@@ -164,15 +164,25 @@ func TestRecoveryStopsWhenCancelled(t *testing.T) {
 	f := setup(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	done := make(chan error, 1)
-	go func() { done <- f.jobs.removeOperationHelpers(ctx, &ops.Context{Job: &ops.Job{ID: "interrupted"}}) }()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
+	f.jobs.Poll = time.Hour
+	stopping := &ops.Context{Job: &ops.Job{ID: "interrupted", Recovery: map[string]any{"stopStarted": true,
+		"stopRecoveryDeadlineAt": float64(time.Now().Add(time.Hour).UnixMilli())}}}
+	for name, wait := range map[string]func() error{
+		"helpers": func() error {
+			return f.jobs.removeOperationHelpers(ctx, &ops.Context{Job: &ops.Job{ID: "interrupted"}})
+		},
+		"stop": func() error { return f.jobs.waitForStopDeadline(ctx, stopping) },
+	} {
+		done := make(chan error, 1)
+		go func() { done <- wait() }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatal(name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal(name, "recovery kept waiting after cancellation")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("recovery kept retrying after cancellation")
 	}
 }
 
