@@ -117,7 +117,10 @@ func serve() int {
 		}
 	case <-ctx.Done():
 	}
-	log.Info("Shutting down")
+	// Running operations finish their cleanup before exit. A second signal
+	// exits at once; startup recovery reconciles whatever they left.
+	stop()
+	log.Info("Shutting down; signal again to exit without waiting for running operations")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	// End long-lived connections first: Shutdown waits for every handler,
