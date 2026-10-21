@@ -782,6 +782,11 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		reason = unavailableErr.Public.Message
 	} else if apperr.Is(err, "SCHEDULE_MISSED") {
 		reason = err.Error()
+	} else if _, public := apperr.As(err); !public {
+		// An internal failure, such as a database error, is not a decision to
+		// skip: the slot stays open and the next check retries it.
+		log.Warn("Could not evaluate a schedule; it will be retried", logging.F("scheduleId", r.id))
+		return
 	}
 	var result sql.Result
 	var recordErr error

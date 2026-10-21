@@ -337,3 +337,19 @@ func TestWritesStopWhenAccessChangedAfterTheirChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
+	f := setup(t)
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec("ALTER TABLE operations RENAME TO operations_unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.DB.Exec("ALTER TABLE operations_unavailable RENAME TO operations")
+	f.s.Run(ctx, due+15_000)
+	if f.operations(t) != 1 {
+		t.Fatal("a database error consumed the slot")
+	}
+}
