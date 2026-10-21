@@ -43,8 +43,8 @@ platforms.
    docker compose up -d
    ```
 
-2. Open `http://<docker-host>:3000`. Print the one-time setup code and use it to
-   create the first administrator within five minutes. If it expires,
+2. Print the one-time setup code, then open `http://<docker-host>:3000` and use
+   it to create the first administrator within five minutes. If it expires,
    `docker compose restart ludock` prints a new one.
 
    ```bash
@@ -56,9 +56,9 @@ platforms.
    `ludock.enable: "true"` to its container.
 
 Ludock keeps its own data and your backups in separate volumes; your game
-containers and their data stay where they are. The example's `backups` volume
-is turned on automatically; adjust limits in **Settings → Backup storage**.
-Backups stop the server while they copy.
+containers and their data stay where they are. Backup storage in the example's
+`backups` volume turns on automatically, with limits in **Settings → Backup
+storage**. Backups stop the server while they copy.
 
 Most settings live in the browser. For deployment options, copy
 [`.env.example`](./.env.example) to `.env`, uncomment what you need, and run

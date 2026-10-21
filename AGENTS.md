@@ -1,31 +1,40 @@
 # Ludock
 
 Ludock is a self-hosted web panel for Docker game servers that already exist.
-Compose, Portainer, Dockge, or the Docker CLI stays the owner of each server's
-configuration; Ludock never provisions servers or edits their definitions.
+Compose, Portainer, Dockge, or the Docker CLI owns each server's
+configuration; Ludock never creates servers or edits their definitions.
 
-It is one Go binary (`cmd/ludock`) that serves server-rendered templ pages with
-htmx; the code lives in `internal/`. There are no users yet. Don't add
-compatibility shims, legacy aliases, or data migrations for old development
-states unless asked. The database schema starts at version 1; add changes as
-new consecutive entries in `internal/db/migrations.go` and never edit a
-released one. After editing `.templ` files, run
-`go tool templ generate -path internal/web/views` and commit the output.
+It is one Go binary (`cmd/ludock`) serving server-rendered templ pages with
+htmx; the code is in `internal/`. `cmd/fakedocker` is an in-memory Docker
+Engine API for development and tests. Never point development or tests at a
+Docker daemon running real game servers.
 
-Before finishing, run `gofmt -l cmd internal`, `go vet ./...`, and the tests
-for packages you touched. The Playwright journeys in `e2e/` are the main test
-suite; add or extend a journey for user-facing changes, and keep Go unit tests
-for tricky logic, security checks, and failure paths journeys can't reach.
-Setup, the fake Docker daemon, and release tooling are in
-[docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md). Never point development or tests
-at a Docker daemon running real game servers.
+There are no users yet: don't add compatibility shims, legacy aliases, or
+migrations for old development states unless asked. The schema starts at
+version 1; add changes as new consecutive entries in
+`internal/db/migrations.go` and never edit a released one. After editing
+`.templ` files, run `go tool templ generate -path internal/web/views` and
+commit the output.
 
-Commit with Conventional Commits. Release Please owns versions, `CHANGELOG.md`,
-and `.release-please-manifest.json`; don't edit them or move published tags.
+## Checks and tests
+
+Before finishing, run `gofmt -l cmd internal`, `go vet ./...`, the Go tests for
+the packages you touched, and the journeys if you changed anything a user can
+see (`cd e2e && npx playwright test`).
+
+Prefer end-to-end tests. The Playwright journeys in `e2e/journeys` run the real
+binary against `cmd/fakedocker`; add or extend one for any behavior a user can
+reach in the browser. Write a Go unit test only when it is clearly the better
+fit: logic with many edge cases (time math, parsers, path and tar handling),
+requests the UI never sends (forged or cross-site requests, missing grants),
+and failures or races a journey can't trigger (a database error, a revocation
+between two steps).
+
+Commit with Conventional Commits. Release Please owns versions,
+`CHANGELOG.md`, and `.release-please-manifest.json`; don't edit them or move
+published tags.
 
 ## Safety rules
-
-Tests cover these. Keep them intact when refactoring.
 
 - **Discovery is not permission.** Only grants make a server visible to
   non-admins, within their role's ceiling. Check capabilities again while long
@@ -33,15 +42,23 @@ Tests cover these. Keep them intact when refactoring.
 - **Logical IDs are not Docker IDs.** URL IDs never reach Docker. Right before a
   mutation, confirm the binding with `Servers.ResolveAuthorized` or
   `Identity.AssertObservedBinding`.
-- **Paths stay inside approved roots.** File and Compose reads stay inside
-  approved roots, through file descriptors that don't follow symlinks.
+- **Admin writes recheck the admin.** Admin-only changes run inside
+  `db.AdminMutation`, which checks the exact session and role in the same
+  transaction.
+- **Paths stay inside approved roots.** File and Compose reads go through file
+  descriptors that don't follow symlinks.
 - **Secrets stay out of output.** Environment values, labels, tokens, webhook
   URLs, and host paths never appear in logs, pages, audit details, or public
-  error messages (`apperr`). Console and log output goes through redaction.
-- **Operations survive restarts.** Persist them before they run; reconcile
-  interrupted ones instead of replaying them. Hold locks until helper containers
-  are removed. Backups and restores keep the server stopped, then return it to
-  its initial running state.
+  errors (`apperr`). Console and log output goes through redaction.
+- **Operations survive restarts.** Persist them before they run, and reconcile
+  interrupted ones instead of replaying them. Hold locks until helper
+  containers are removed. Backups and restores keep the server stopped, then
+  return it to its initial running state. Requests can't take locks until
+  startup recovery finishes (`locks.Table.Fence`).
+- **Transactions read only through themselves.** Write transactions take the
+  SQLite write lock immediately and the pool has four connections, so a read
+  through another connection inside one can wait on a writer queued behind it.
+  Run checks before the transaction and verify inside it through `tx`.
 - **Updates need an admin** and a Compose source discovered from container
   labels, and run `docker compose` with argument arrays, never a shell.
 - **Forms are same-origin.** Every unsafe request carries the session's CSRF
