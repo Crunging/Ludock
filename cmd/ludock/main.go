@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/app"
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
@@ -75,18 +76,18 @@ func serve() int {
 
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
-		log.Error(err.Error())
+		log.Error(startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))
 		return 1
 	}
 	defer database.Close()
 	setup, err := auth.NewSetupWindow(func() int64 { return time.Now().UnixMilli() }, auth.SetupWindowMs, cfg.SetupCode)
 	if err != nil {
-		log.Error(err.Error())
+		log.Error(startupError(err, "Could not prepare initial setup. Check LUDOCK_SETUP_CODE."))
 		return 1
 	}
 	services, err := app.New(cfg, database, setup)
 	if err != nil {
-		log.Error(err.Error())
+		log.Error(startupError(err, "Could not start Ludock's services."))
 		return 1
 	}
 	accounts := services.Auth
@@ -160,13 +161,13 @@ func recoverAccount(args []string) int {
 	}
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		fmt.Fprintln(os.Stderr, startupError(err, "Could not open the database. Check that LUDOCK_DATA_DIR exists and is writable."))
 		return 1
 	}
 	defer database.Close()
 	user, err := auth.RecoverPassword(context.Background(), database, username, password)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		fmt.Fprintln(os.Stderr, startupError(err, "Could not reset the password."))
 		return 1
 	}
 	if user == nil {
@@ -193,4 +194,14 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// startupError describes a failure without its underlying message, which can
+// name host paths: a public error keeps its message, anything else gets the
+// fixed description.
+func startupError(err error, fallback string) string {
+	if public, ok := apperr.As(err); ok {
+		return public.Message
+	}
+	return fallback
 }

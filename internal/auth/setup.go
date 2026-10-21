@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"fmt"
 	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -54,7 +53,7 @@ func NewSetupWindow(now func() int64, durationMs int64, code string) (*SetupWind
 		window.generated = code
 	}
 	if len(code) < SetupCodeMin || len(code) > SetupCodeMax {
-		return nil, fmt.Errorf("LUDOCK_SETUP_CODE must be between %d and %d characters", SetupCodeMin, SetupCodeMax)
+		return nil, apperr.Newf("INVALID_SETUP_CODE", 400, "LUDOCK_SETUP_CODE must be between %d and %d characters", SetupCodeMin, SetupCodeMax)
 	}
 	window.authorization = sha256.Sum256([]byte(code))
 	return window, nil
