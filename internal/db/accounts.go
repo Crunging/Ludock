@@ -212,6 +212,8 @@ type SessionInput struct {
 	// The session is created only while the account still has it and is
 	// enabled, in the same statement, so a concurrent reset or disable wins.
 	PasswordHash string
+	// Audit, when set, commits with the session.
+	Audit *AuditEntry
 }
 
 // ErrAccountChanged means the account's password or access changed after
@@ -244,6 +246,9 @@ func (d *DB) CreateSession(ctx context.Context, input SessionInput) error {
 				err = ErrAccountChanged
 			}
 			return err
+		}
+		if input.Audit != nil {
+			return d.WriteAudit(ctx, tx, *input.Audit)
 		}
 		return nil
 	})

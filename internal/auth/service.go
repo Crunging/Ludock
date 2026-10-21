@@ -171,9 +171,9 @@ func (s *Service) sessionInput(userID string, client Client) (db.SessionInput, s
 
 // createSession signs user in. A non-empty verifiedHash is the password hash
 // the caller verified; the session is refused if the account changed since.
-func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client, verifiedHash string) (*Principal, error) {
+func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client, verifiedHash string, audit *db.AuditEntry) (*Principal, error) {
 	input, token := s.sessionInput(user.ID, client)
-	input.PasswordHash = verifiedHash
+	input.PasswordHash, input.Audit = verifiedHash, audit
 	if err := s.DB.CreateSession(ctx, input); err != nil {
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	s.Setup.markCompleted()
-	return s.createSession(ctx, user, client, "")
+	return s.createSession(ctx, user, client, "", nil)
 }
 
 // Authenticate verifies credentials against the current account state.
@@ -387,15 +387,17 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 		return nil, err
 	}
 	// A reset or disable after verification revokes sessions; the insert
-	// checks the verified hash again so this login cannot outlive it.
-	principal, err := s.createSession(ctx, *user, client, verifiedHash)
+	// checks the verified hash again so this login cannot outlive it. The
+	// audit entry commits with the session, so a failed login leaves none.
+	principal, err := s.createSession(ctx, *user, client, verifiedHash,
+		&db.AuditEntry{UserID: user.ID, Action: "auth.login", TargetType: "session", IPAddress: client.IP})
 	if errors.Is(err, db.ErrAccountChanged) {
 		return nil, errInvalidCredentials
 	}
 	if err != nil {
 		return nil, err
 	}
-	return principal, s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: user.ID, Action: "auth.login", TargetType: "session", IPAddress: client.IP})
+	return principal, nil
 }
 
 // SessionToken extracts the session cookie. The last valid cookie wins.

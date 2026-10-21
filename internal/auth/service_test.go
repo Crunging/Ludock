@@ -342,7 +342,7 @@ func TestSessionRequiresTheVerifiedPassword(t *testing.T) {
 			s.DB.UpdateUserAccess(ctx, adminID, db.RoleAdmin, true)
 		}
 		_, err := s.createSession(ctx, db.SessionUser{ID: adminID, Username: "admin", Role: db.RoleAdmin}, Client{IP: "127.0.0.1"},
-			record.PasswordHash)
+			record.PasswordHash, nil)
 		if (change == "none") != (err == nil) || (err != nil && !errors.Is(err, db.ErrAccountChanged)) {
 			t.Fatalf("%s: %v", change, err)
 		}
@@ -483,5 +483,22 @@ func TestFailedRecoveryKeepsTheOldPassword(t *testing.T) {
 	}
 	if after, _ := s.DB.FindUserByID(ctx, adminID); after.PasswordHash != before.PasswordHash {
 		t.Fatal("the password changed although recovery failed")
+	}
+}
+
+func TestFailedLoginAuditLeavesNoSession(t *testing.T) {
+	s, _, _ := newService(t, nil)
+	addUser(t, s, adminID, "admin", db.RoleAdmin, original)
+	if _, err := s.DB.Exec(`CREATE TRIGGER no_login_audit BEFORE INSERT ON audit_log WHEN NEW.action = 'auth.login'
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Login(ctx, "admin", original, Client{IP: "127.0.0.1"}); err == nil {
+		t.Fatal("signed in without an audit entry")
+	}
+	var sessions int
+	s.DB.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions)
+	if sessions != 0 {
+		t.Fatal("left a session the client never received")
 	}
 }
