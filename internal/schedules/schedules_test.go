@@ -296,3 +296,28 @@ func TestWarningIsClaimedOnlyWhenTheClaimCommits(t *testing.T) {
 		t.Fatal("a committed claim must be taken exactly once")
 	}
 }
+
+func TestRunReadBeforeAnEditLeavesTheSlotToTheEdit(t *testing.T) {
+	f := setup(t)
+	schedule, err := f.s.Create(ctx, friend, f.serverID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := f.s.get(ctx, f.s.DB, schedule.ID, f.serverID)
+	// An edit that keeps this Wednesday's slot.
+	edited := base
+	edited.Days = []int{1, 2, 3, 4, 5, 6}
+	if _, err := f.s.Update(ctx, friend, f.serverID, schedule.ID, schedule.Revision, edited); err != nil {
+		t.Fatal(err)
+	}
+	f.s.runOne(ctx, stale, due)
+	if f.operations(t) != 0 {
+		t.Fatal("queued the edited schedule's old revision")
+	}
+	f.s.Run(ctx, due)
+	var input string
+	f.s.DB.QueryRow("SELECT input_json FROM operations").Scan(&input)
+	if !strings.Contains(input, `"scheduleRevision":2`) {
+		t.Fatal(input)
+	}
+}

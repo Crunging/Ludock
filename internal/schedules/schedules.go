@@ -581,6 +581,10 @@ func (s *Service) notify(key, message string) {
 	}
 }
 
+// errScheduleChanged rolls back a run for a schedule edited since it was
+// read; the next run evaluates the current revision.
+var errScheduleChanged = errors.New("schedule changed")
+
 // Run queues every due schedule once per slot. Missed one-time runs are
 // recorded, never replayed.
 func (s *Service) Run(ctx context.Context, now int64) {
@@ -645,8 +649,15 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 				return err
 			}
 			// Queue and associate the same attempt atomically.
-			_, err = tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=?",
-				slot, now, job.ID, "Queued operation "+job.ID, r.id)
+			result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=? AND revision=?",
+				slot, now, job.ID, "Queued operation "+job.ID, r.id, r.revision)
+			if err != nil {
+				return err
+			}
+			changed, err := result.RowsAffected()
+			if err == nil && changed == 0 {
+				err = errScheduleChanged
+			}
 			return err
 		})
 		if err == nil {
@@ -657,7 +668,7 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		}
 		return err
 	}()
-	if err == nil {
+	if err == nil || errors.Is(err, errScheduleChanged) {
 		return
 	}
 	reason := "Skipped: server state or a conflicting operation prevented this run"
@@ -669,15 +680,19 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	} else if apperr.Is(err, "SCHEDULE_MISSED") {
 		reason = err.Error()
 	}
+	var result sql.Result
 	var recordErr error
 	if slot != "" {
-		_, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=?",
-			slot, now, reason, r.id)
+		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=NULL,last_result=? WHERE id=? AND revision=?",
+			slot, now, reason, r.id, r.revision)
 	} else {
-		_, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=?", reason, r.id)
+		result, recordErr = s.DB.ExecContext(ctx, "UPDATE schedules SET last_result=? WHERE id=? AND revision=?", reason, r.id, r.revision)
 	}
 	if recordErr != nil {
 		log.Warn("Could not record or notify a skipped schedule run", logging.F("scheduleId", r.id))
+		return
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
 		return
 	}
 	if !configurationValid && r.lastResult.String != reason {
