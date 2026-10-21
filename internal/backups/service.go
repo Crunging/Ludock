@@ -156,6 +156,10 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 		}
 		return err
 	}
+	// A backup that failed before it was recorded may have left a partial file.
+	if err := s.Storage.RemovePartial(backup.destination, backup.ID); err != nil {
+		return err
+	}
 	_, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", backup.ID)
 	return err
 }
@@ -499,6 +503,15 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 	roots, _ := json.Marshal(backup.Roots)
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
     VALUES(?,?,?,?,?,?,?,?,'complete')`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum, backup.CreatedAt)
+	return err
+}
+
+// RecordDeleting saves an unrecorded archive whose removal failed as a
+// deleting backup. It is never offered, and Prune and Delete retry removing
+// it, so it cannot use storage unseen by retention and capacity checks.
+func (s *Service) RecordDeleting(ctx context.Context, id, serverID, fingerprint, destination string) error {
+	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
+    VALUES(?,?,?,?,'[]',0,'',?,'deleting')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())
 	return err
 }
 

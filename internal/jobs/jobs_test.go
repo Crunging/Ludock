@@ -312,3 +312,22 @@ func TestBackupDeletionRevokedBeforeTheUnlinkKeepsTheBackup(t *testing.T) {
 		reader.Close()
 	}
 }
+
+func TestUnremovedFailedArchiveIsRemovedByTheNextPrune(t *testing.T) {
+	f := setup(t)
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if err := os.WriteFile(filepath.Join(f.backupTo, id+".tar"), []byte("unrecorded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.jobs.Backups.RecordDeleting(ctx, id, f.serverID, server.BindingFingerprint, f.backupTo); err != nil {
+		t.Fatal(err)
+	}
+	if backup, _ := f.jobs.Backups.Get(ctx, f.serverID, id); backup != nil {
+		t.Fatal("offered an archive being deleted")
+	}
+	f.run(t, "backup", nil)
+	if _, err := os.Stat(filepath.Join(f.backupTo, id+".tar")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("archive left behind", err)
+	}
+}

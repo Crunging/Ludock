@@ -367,8 +367,19 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		return backup, nil
 	}()
 	if err != nil && !recorded {
-		j.Backups.Storage.Remove(settings.Destination, id, nil)
-		j.Backups.Storage.RemovePartial(settings.Destination, id)
+		removeErr := j.Backups.Storage.Remove(settings.Destination, id, nil)
+		if removeErr == nil {
+			removeErr = j.Backups.Storage.RemovePartial(settings.Destination, id)
+		}
+		// An archive that is neither recorded nor removed would use storage
+		// unseen by retention and capacity checks; recording it as deleting
+		// leaves its removal to Prune and Delete.
+		if removeErr != nil {
+			if recordErr := j.Backups.RecordDeleting(context.WithoutCancel(ctx), id, server.Logical.ID, server.Logical.BindingFingerprint,
+				settings.Destination); recordErr != nil {
+				log.Warn("Could not remove or record a failed backup's archive; it may use backup storage until removed")
+			}
+		}
 	}
 	return backup, err
 }
