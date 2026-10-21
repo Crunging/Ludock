@@ -337,3 +337,30 @@ func TestUnremovedFailedArchiveIsRemovedInTheBackground(t *testing.T) {
 		t.Fatal("row left behind")
 	}
 }
+
+func TestUpdateCommandStopsWhenTheOwnerLosesAuthority(t *testing.T) {
+	f := setup(t)
+	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return errors.New("compose was stopped")
+		})
+	}()
+	<-started
+	// The owner is demoted while Compose is running.
+	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if _, public := apperr.As(err); !public {
+			t.Fatal("reported", err, "instead of the lost authority")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command kept running after the owner lost authority")
+	}
+}

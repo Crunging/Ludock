@@ -304,29 +304,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	// Compose stops as soon as the owner loses update authority, as lifecycle
 	// and data jobs do.
-	watch, stopWatch := context.WithCancelCause(ctx)
-	go func() {
-		ticker := time.NewTicker(j.poll())
-		defer ticker.Stop()
-		for {
-			select {
-			case <-watch.Done():
-				return
-			case <-ticker.C:
-				if err := j.assertCapability(watch, job, capability); err != nil && watch.Err() == nil {
-					stopWatch(err)
-					return
-				}
-			}
-		}
-	}()
-	_, err = runner.Run(watch, append(append(slices.Clone(args), flags...), service), 4*time.Minute)
-	revoked := context.Cause(watch)
-	stopWatch(nil)
-	if err != nil {
-		if revoked != nil && ctx.Err() == nil {
-			return nil, revoked
-		}
+	if err := j.whileAuthorized(ctx, job, capability, func(ctx context.Context) error {
+		_, err := runner.Run(ctx, append(append(slices.Clone(args), flags...), service), 4*time.Minute)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	if err := job.Progress("verifying", nil, nil); err != nil {
@@ -358,4 +339,32 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	}
 	return map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
 		"running": actual.State.Running, "verification": verification}, nil
+}
+
+// whileAuthorized runs fn under a context cancelled as soon as the job's owner
+// loses capability, and then reports that loss instead of fn's error.
+func (j *Jobs) whileAuthorized(ctx context.Context, job *ops.Context, capability authz.Capability, fn func(context.Context) error) error {
+	watch, stopWatch := context.WithCancelCause(ctx)
+	go func() {
+		ticker := time.NewTicker(j.poll())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watch.Done():
+				return
+			case <-ticker.C:
+				if err := j.assertCapability(watch, job, capability); err != nil && watch.Err() == nil {
+					stopWatch(err)
+					return
+				}
+			}
+		}
+	}()
+	err := fn(watch)
+	revoked := context.Cause(watch)
+	stopWatch(nil)
+	if err != nil && revoked != nil && ctx.Err() == nil {
+		return revoked
+	}
+	return err
 }
