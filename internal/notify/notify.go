@@ -398,16 +398,30 @@ func (s *Service) Deliver(ctx context.Context) error {
 		}
 		attempts, retries := r.attempts+1, r.retries+1
 		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
-		// Claim the attempt before sending: if its result cannot be saved,
-		// the message is sent again after the backoff, not on every tick.
-		if _, err := s.DB.ExecContext(ctx, "UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=? WHERE id=?",
-			db.Now(), db.Now()+backoff, id); err != nil {
-			log.Warn("Could not claim a notification delivery; it will be retried")
-			continue
-		}
+		// Marked active first, so Retry refuses the row from here on, and
+		// claimed only as read: a retry that already reset it wins, and the
+		// row is sent with fresh counters on a later pass. If the result
+		// cannot be saved, the message is sent again after the backoff, not
+		// on every tick.
 		s.mu.Lock()
 		s.active = id
 		s.mu.Unlock()
+		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
+      WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
+			db.Now(), db.Now()+backoff, id, r.attempts, r.retries, r.lastAttempt)
+		claimed := int64(0)
+		if err == nil {
+			claimed, err = result.RowsAffected()
+		}
+		if err != nil || claimed != 1 {
+			if err != nil {
+				log.Warn("Could not claim a notification delivery; it will be retried")
+			}
+			s.mu.Lock()
+			s.active = ""
+			s.mu.Unlock()
+			continue
+		}
 		failure := s.send(ctx, &noRedirects, config.WebhookURL, r.payload)
 		finished := db.Now()
 		state := "queued"
