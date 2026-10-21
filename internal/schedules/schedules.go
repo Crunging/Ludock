@@ -395,6 +395,12 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 	id := identity.NewUUID()
 	encoded, _ := json.Marshal(data)
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// The owner, grants, and binding are read again in this transaction,
+		// as edits do, so access revoked after the checks above plants nothing.
+		if _, _, err := s.authority(ctx, tx, &row{id: id, serverID: serverID, ownerID: actor.ID,
+			bindingRevision: binding.BindingRevision}, data); err != nil {
+			return err
+		}
 		// Check the global boundary first; this stops after a bounded number
 		// of rows even on a database already over it.
 		var present int
