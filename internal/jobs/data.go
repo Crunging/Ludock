@@ -490,7 +490,7 @@ func (j *Jobs) withRecoveryLocks(ctx context.Context, job *ops.Context, action f
 	if err != nil {
 		return err
 	}
-	release, err := j.Locks.Acquire(held, nil)
+	release, err := j.Locks.AcquireForRecovery(held)
 	if err != nil {
 		return err
 	}
@@ -505,7 +505,7 @@ func (j *Jobs) withRecoveryLocks(ctx context.Context, job *ops.Context, action f
 			extra = append(extra, key)
 		}
 	}
-	releaseExtra, err := j.Locks.Acquire(extra, nil)
+	releaseExtra, err := j.Locks.AcquireForRecovery(extra)
 	if err != nil {
 		return err
 	}

@@ -52,3 +52,23 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	}
 	foreground()
 }
+
+func TestFenceHoldsBackAllButRecovery(t *testing.T) {
+	table := New()
+	lift := table.Fence()
+	if _, err := table.Acquire([]string{"server:a"}, nil); !errors.Is(err, ErrRecovering) {
+		t.Fatal(err)
+	}
+	release, err := table.AcquireForRecovery([]string{"server:a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	lift()
+	lift()
+	if release, err := table.Acquire([]string{"server:a"}, nil); err != nil {
+		t.Fatal(err)
+	} else {
+		release()
+	}
+}

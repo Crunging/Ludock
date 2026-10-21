@@ -432,7 +432,7 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	release, err := j.Locks.Acquire(initial.LockKeys, nil)
+	release, err := j.Locks.AcquireForRecovery(initial.LockKeys)
 	if err != nil {
 		return nil, err
 	}

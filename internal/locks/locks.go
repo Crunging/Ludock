@@ -14,6 +14,9 @@ import (
 // ErrConflict reports a conflicting holder.
 var ErrConflict = apperr.New("OPERATION_CONFLICT", 409, "A conflicting operation is already running")
 
+// ErrRecovering reports that startup recovery has not finished.
+var ErrRecovering = apperr.New("RECOVERY_PENDING", 409, "Ludock is recovering interrupted operations. Try again shortly.")
+
 // BackgroundConflict reports a conflict only with background work, such as
 // a countdown warning. Cancel asks those holders to stop; they keep their
 // keys until their cleanup finishes.
@@ -43,6 +46,7 @@ type Table struct {
 	active   map[string]*holder
 	released chan struct{}
 	drained  []chan struct{}
+	fences   int
 }
 
 // Default is the process-wide lock table.
@@ -64,9 +68,36 @@ func overlaps(left, right string) bool {
 		(left == "path:/" || right == "path:/" || strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")))
 }
 
+// Fence refuses Acquire until lifted. After a restart nothing holds an
+// interrupted operation's keys until recovery reaches it, so other work could
+// take them first and leave that operation unreconciled.
+func (t *Table) Fence() (lift func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.fences++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			t.fences--
+		})
+	}
+}
+
 // Acquire takes every key or none. background, when set, marks the holder
 // as cancellable background work.
 func (t *Table) Acquire(keys []string, background func()) (func(), error) {
+	return t.acquire(keys, background, false)
+}
+
+// AcquireForRecovery is Acquire for reconciling interrupted operations, which
+// a Fence does not hold back.
+func (t *Table) AcquireForRecovery(keys []string) (func(), error) {
+	return t.acquire(keys, nil, true)
+}
+
+func (t *Table) acquire(keys []string, background func(), recovering bool) (func(), error) {
 	seen := map[string]bool{}
 	var ordered []string
 	for _, key := range keys {
@@ -79,6 +110,9 @@ func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 	sort.Strings(ordered)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.fences > 0 && !recovering {
+		return nil, ErrRecovering
+	}
 	var conflicts []*holder
 	for held, owner := range t.active {
 		for _, key := range ordered {

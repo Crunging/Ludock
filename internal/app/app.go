@@ -115,6 +115,9 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 // Recovery is retried with backoff until it succeeds, since background work
 // must not run before interrupted operations are reconciled.
 func (a *App) Start(ctx context.Context) {
+	// Requests wait for recovery to take its operations' locks; Start runs
+	// before the server listens, so none can take them first.
+	lift := a.Locks.Fence()
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
@@ -128,6 +131,7 @@ func (a *App) Start(ctx context.Context) {
 			case <-time.After(delay):
 			}
 		}
+		lift()
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
