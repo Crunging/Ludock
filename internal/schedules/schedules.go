@@ -757,6 +757,10 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 		}
 	}
 	rows.Close()
+	// Warnings are best effort; a partial list waits for the next check.
+	if rows.Err() != nil {
+		return
+	}
 	for _, r := range saved {
 		s.mu.Lock()
 		busy := s.announcing[r.serverID]

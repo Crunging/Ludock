@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -85,23 +86,30 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			item.ID, item.Kind, item.BindingStatus = "binding:"+server.ID, "binding", server.Status
 			result.Items = append(result.Items, item)
 		}
-		if problem, err := s.Monitor.Problem(ctx, server.ID, now); err == nil && problem != nil {
+		// An unreadable source fails the list instead of hiding its items.
+		problem, err := s.Monitor.Problem(ctx, server.ID, now)
+		if err != nil {
+			return nil, err
+		}
+		if problem != nil {
 			item := base
 			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.OutageStartedAt
 			result.Items = append(result.Items, item)
 		}
 		if slices.Contains(permissions, authz.SchedulesManage) && s.Schedules != nil {
+			// Access revoked since the check above only hides the schedules.
 			list, err := s.Schedules.List(ctx, actor, server.ID)
-			if err == nil {
-				for _, schedule := range list {
-					if !schedule.Enabled || schedule.NextRunUnavailableReason == "" {
-						continue
-					}
-					item := base
-					item.ID, item.Kind, item.ScheduleID, item.Action, item.Reason = "schedule:"+schedule.ID, "schedule", schedule.ID,
-						schedule.Action, schedule.NextRunUnavailableReason
-					result.Items = append(result.Items, item)
+			if _, public := apperr.As(err); err != nil && !public {
+				return nil, err
+			}
+			for _, schedule := range list {
+				if !schedule.Enabled || schedule.NextRunUnavailableReason == "" {
+					continue
 				}
+				item := base
+				item.ID, item.Kind, item.ScheduleID, item.Action, item.Reason = "schedule:"+schedule.ID, "schedule", schedule.ID,
+					schedule.Action, schedule.NextRunUnavailableReason
+				result.Items = append(result.Items, item)
 			}
 		}
 		// Limit recent work before filtering issues; read summary fields only.
@@ -124,6 +132,9 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			result.Items = append(result.Items, item)
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool {
 		left, right := result.Items[i], result.Items[j]
