@@ -599,6 +599,11 @@ func (s *Service) Run(ctx context.Context, now int64) {
 		}
 	}
 	rows.Close()
+	// A partial list would miss schedules due now; the next tick reads again.
+	if err := rows.Err(); err != nil {
+		log.Warn("Could not read schedules; they will be evaluated at the next check")
+		return
+	}
 	if len(saved) > MaxTotal {
 		log.Warn("Schedule limit exceeded; schedules beyond the limit are not evaluated", logging.F("limit", MaxTotal))
 		saved = saved[:MaxTotal]
