@@ -292,36 +292,54 @@ func (s *Service) manager(ctx context.Context, actor *db.SessionUser, serverID s
 	return current, nil
 }
 
-// recheckManager repeats manager, and checks any extra capabilities, inside a
-// write transaction, so access revoked after manager returned stops the
-// write. It writes no denial audits: manager already ran them, and they
-// cannot be written while the transaction holds the database.
-func (s *Service) recheckManager(ctx context.Context, actor *db.SessionUser, serverID string, allowUnavailable bool,
-	extra ...authz.Capability) (*db.SessionUser, error) {
-	current, err := s.Authz.CurrentActor(ctx, actor)
-	if err != nil {
-		return nil, err
-	}
-	if current == nil {
-		return nil, authz.ErrServerNotFound
-	}
-	required := authz.SchedulesManage
-	if allowUnavailable && current.Role == db.RoleAdmin {
-		required = authz.ServerView
-	}
-	effective, err := s.Authz.Effective(ctx, current, serverID)
-	if err != nil {
-		return nil, err
-	}
-	if !slices.Contains(effective, authz.ServerView) {
-		return nil, authz.ErrServerNotFound
-	}
-	for _, capability := range append([]authz.Capability{required}, extra...) {
-		if !slices.Contains(effective, capability) {
-			return nil, apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
+// authorityState reads, on q alone, every row the authority checks depend
+// on: each user's role, status, and grant on the server, and the server's
+// binding. A write reads it before its checks and again inside its
+// transaction, and stops if anything changed. Transactions take the write
+// lock at once, so the checks themselves, which read through the shared
+// pool, must not run inside one: with every connection held by writers
+// queued behind it, the lock holder would wait for a free connection.
+func authorityState(ctx context.Context, q queryer, serverID string, userIDs ...string) (string, error) {
+	var state []any
+	for _, id := range userIDs {
+		var role string
+		var disabled int
+		var grant sql.NullString
+		err := q.QueryRowContext(ctx, `SELECT users.role, users.disabled, server_grants.capabilities_json FROM users
+      LEFT JOIN server_grants ON server_grants.user_id = users.id AND server_grants.server_id = ? WHERE users.id = ?`,
+			serverID, id).Scan(&role, &disabled, &grant)
+		if errors.Is(err, sql.ErrNoRows) {
+			state = append(state, nil)
+			continue
 		}
+		if err != nil {
+			return "", err
+		}
+		state = append(state, []any{role, disabled, grant})
 	}
-	return current, nil
+	var status string
+	var review int
+	var revision int64
+	var fingerprint, container sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT status, review_required, binding_revision, binding_fingerprint, container_id
+    FROM logical_servers WHERE id = ?`, serverID).Scan(&status, &review, &revision, &fingerprint, &container)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	state = append(state, []any{status, review, revision, fingerprint, container})
+	encoded, _ := json.Marshal(state)
+	return string(encoded), nil
+}
+
+var errAccessChanged = apperr.New("SCHEDULE_ACCESS_CHANGED", 409, "Access to this server changed. Reload and try again.")
+
+// assertUnchanged compares the authority state inside tx with before.
+func assertUnchanged(ctx context.Context, tx *sql.Tx, before, serverID string, userIDs ...string) error {
+	now, err := authorityState(ctx, tx, serverID, userIDs...)
+	if err == nil && now != before {
+		err = errAccessChanged
+	}
+	return err
 }
 
 // List lists a server's schedules: every schedule for administrators, the
@@ -412,6 +430,10 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 	if err := data.Validate(); err != nil {
 		return nil, err
 	}
+	state, err := authorityState(ctx, s.DB, serverID, actor.ID)
+	if err != nil {
+		return nil, err
+	}
 	for _, capability := range append([]authz.Capability{authz.SchedulesManage}, data.EditCapabilities()...) {
 		if _, err := s.Authz.Assert(ctx, actor, serverID, capability); err != nil {
 			return nil, err
@@ -425,12 +447,14 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 		return nil, err
 	}
 	id := identity.NewUUID()
+	if _, _, err := s.authority(ctx, s.DB, &row{id: id, serverID: serverID, ownerID: actor.ID,
+		bindingRevision: binding.BindingRevision}, data); err != nil {
+		return nil, err
+	}
 	encoded, _ := json.Marshal(data)
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// The owner, grants, and binding are read again in this transaction,
-		// as edits do, so access revoked after the checks above plants nothing.
-		if _, _, err := s.authority(ctx, tx, &row{id: id, serverID: serverID, ownerID: actor.ID,
-			bindingRevision: binding.BindingRevision}, data); err != nil {
+		// Access revoked after the checks above plants nothing.
+		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
 			return err
 		}
 		// Check the global boundary first; this stops after a bounded number
@@ -474,12 +498,17 @@ var errNotFound = apperr.New("NOT_FOUND", 404, "Schedule not found")
 
 // Delete removes a schedule.
 func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, id string) error {
+	state, err := authorityState(ctx, s.DB, serverID, actor.ID)
+	if err != nil {
+		return err
+	}
 	current, err := s.manager(ctx, actor, serverID, true)
 	if err != nil {
 		return err
 	}
 	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		if current, err = s.recheckManager(ctx, actor, serverID, true); err != nil {
+		// A grant or role revoked after the check above stops the deletion.
+		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
 			return err
 		}
 		r, err := s.get(ctx, tx, id, serverID)
@@ -499,6 +528,20 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 
 func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, id string, expected int64, update *Input, enabled *bool) (*Schedule, error) {
 	pausing := enabled != nil && !*enabled
+	// The authority state is read before any check, so the transaction can
+	// tell whether the requester's or owner's access changed since.
+	first, err := s.get(ctx, s.DB, id, serverID)
+	if err != nil {
+		return nil, err
+	}
+	users := []string{actor.ID}
+	if first != nil {
+		users = append(users, first.ownerID)
+	}
+	state, err := authorityState(ctx, s.DB, serverID, users...)
+	if err != nil {
+		return nil, err
+	}
 	current, err := s.manager(ctx, actor, serverID, pausing)
 	if err != nil {
 		return nil, err
@@ -524,12 +567,9 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		}
 		return nil
 	}
-	// Requester checks can write denial audits, so they run before the
-	// transaction; the transaction re-reads the same revision.
-	first, err := s.get(ctx, s.DB, id, serverID)
-	if err != nil {
-		return nil, err
-	}
+	// Requester checks can write denial audits, and every check reads through
+	// the shared pool, so they run before the transaction; it re-reads the
+	// same revision and authority state.
 	if err := check(first); err != nil {
 		return nil, err
 	}
@@ -543,6 +583,11 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 				return nil, err
 			}
 		}
+		// Pausing stays possible after the action grant or original binding
+		// was revoked. Editing or resuming needs requester and owner access.
+		if _, _, err := s.authority(ctx, s.DB, first, data); err != nil {
+			return nil, err
+		}
 	}
 	var result *row
 	changed := false
@@ -551,32 +596,20 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		if err != nil {
 			return err
 		}
-		// The requester is read again here, so a grant or role revoked after
-		// the checks above stops the write.
-		var edit []authz.Capability
-		if !pausing && r != nil {
-			if _, data, err := next(r); err == nil {
-				edit = data.EditCapabilities()
-			}
-		}
-		if current, err = s.recheckManager(ctx, actor, serverID, pausing, edit...); err != nil {
+		// The pinned revision keeps the owner and settings checked above.
+		if err := check(r); err != nil {
 			return err
 		}
-		if err := check(r); err != nil {
+		if err := assertUnchanged(ctx, tx, state, serverID, users...); err != nil {
 			return err
 		}
 		previous, data, err := next(r)
 		if err != nil {
 			return err
 		}
-		// Pausing stays possible after the action grant or original binding
-		// was revoked. Editing or resuming needs requester and owner access.
+		// A consumed or past one-time run is rescheduled by editing, never
+		// replayed.
 		if !pausing {
-			if _, _, err := s.authority(ctx, tx, r, data); err != nil {
-				return err
-			}
-			// A consumed or past one-time run is rescheduled by editing, never
-			// replayed.
 			if err := assertRunAhead(data, db.Now()); err != nil {
 				return err
 			}
@@ -694,9 +727,17 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		if slot == "" || slot == r.lastSlot.String {
 			return nil
 		}
+		state, err := authorityState(ctx, s.DB, r.serverID, r.ownerID)
+		if err != nil {
+			return err
+		}
+		user, binding, err := s.authority(ctx, s.DB, r, data)
+		if err != nil {
+			return err
+		}
 		err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
-			user, binding, err := s.authority(ctx, tx, r, data)
-			if err != nil {
+			// The owner's access is as checked above, read on this connection.
+			if err := assertUnchanged(ctx, tx, state, r.serverID, r.ownerID); err != nil {
 				return err
 			}
 			input := map[string]any{"scheduleId": r.id, "scheduleRevision": r.revision}
@@ -728,7 +769,9 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		}
 		return err
 	}()
-	if err == nil || errors.Is(err, errScheduleChanged) {
+	// A schedule or access changed since it was read: the next run
+	// evaluates the current state.
+	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) {
 		return
 	}
 	reason := "Skipped: server state or a conflicting operation prevented this run"

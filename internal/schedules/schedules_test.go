@@ -2,6 +2,8 @@ package schedules
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -319,5 +321,19 @@ func TestRunReadBeforeAnEditLeavesTheSlotToTheEdit(t *testing.T) {
 	f.s.DB.QueryRow("SELECT input_json FROM operations").Scan(&input)
 	if !strings.Contains(input, `"scheduleRevision":2`) {
 		t.Fatal(input)
+	}
+}
+
+func TestWritesStopWhenAccessChangedAfterTheirChecks(t *testing.T) {
+	f := setup(t)
+	before, err := authorityState(ctx, f.s.DB, f.serverID, friend.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The friend loses schedules.manage after a write's checks ran.
+	f.grant(t, authz.ServerView, authz.ServerStart)
+	err = f.s.DB.Tx(ctx, func(tx *sql.Tx) error { return assertUnchanged(ctx, tx, before, f.serverID, friend.ID) })
+	if !errors.Is(err, errAccessChanged) {
+		t.Fatal(err)
 	}
 }
