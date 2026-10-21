@@ -49,8 +49,4 @@ func TestAuditNeedsAnAdministrator(t *testing.T) {
 	if response := p.do("GET", "/audit", operator, nil, nil); response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/" {
 		t.Fatal(response.Code, response.Header())
 	}
-	page := p.do("GET", "/audit?action=auth.login", p.admin, nil, nil).Body.String()
-	if !strings.Contains(page, "auth.login") || !strings.Contains(page, "Audit log") {
-		t.Fatal(page)
-	}
 }

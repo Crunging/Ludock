@@ -28,8 +28,15 @@ test("changing a password signs out the account's other devices", async ({ sessi
   await signIn(phone, "player1", "second long password");
   await expect(phone.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
 
-  // Signing this device out from the session list.
+  // Signing the phone out from the laptop's session list.
   await laptop.reload();
+  await expect(laptop.locator(".session-row")).toHaveCount(2);
+  await laptop.locator(".session-row", { hasNotText: "This device" }).getByRole("button", { name: "Revoke" }).click();
+  await expect(laptop.locator(".session-row")).toHaveCount(1);
+  await phone.goto("/");
+  await expect(phone).toHaveURL(/\/login/);
+
+  // Signing this device out from the session list.
   await laptop.locator(".session-row", { hasText: "This device" }).getByRole("button", { name: "Sign out" }).click();
   await expect(laptop).toHaveURL(/\/login/);
 });

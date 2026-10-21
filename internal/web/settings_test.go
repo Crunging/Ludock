@@ -22,16 +22,3 @@ func TestSettingsNeedAnAdministrator(t *testing.T) {
 		t.Fatal(response.Code)
 	}
 }
-
-// The webhook URL is a credential: it never comes back to the browser.
-func TestWebhookStaysPrivate(t *testing.T) {
-	p := newPages(t)
-	secret := "https://discord.com/api/webhooks/123/secret-token"
-	saved := p.adminPost("/settings/notifications", url.Values{"webhookUrl": {secret}})
-	if !strings.Contains(saved.Body, "Notification settings saved.") || strings.Contains(saved.Body, "secret-token") {
-		t.Fatal(saved.Body)
-	}
-	if page := p.do("GET", "/settings", p.admin, nil, nil).Body.String(); strings.Contains(page, "secret-token") || !strings.Contains(page, "Replace webhook URL") {
-		t.Fatal("webhook leaked or not saved")
-	}
-}

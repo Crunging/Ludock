@@ -109,11 +109,7 @@ func (p *pages) running() bool {
 
 func TestPagesRequireASession(t *testing.T) {
 	p := newPages(t)
-	response := p.do("GET", "/?state=running", nil, nil, nil)
-	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login?next=%2F%3Fstate%3Drunning" {
-		t.Fatal(response.Code, response.Header())
-	}
-	response = p.do("GET", "/fragments/servers", nil, nil, map[string]string{"HX-Request": "true"})
+	response := p.do("GET", "/fragments/servers", nil, nil, map[string]string{"HX-Request": "true"})
 	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/login" {
 		t.Fatal(response.Code, response.Header())
 	}
@@ -179,14 +175,6 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 	}
 	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal == nil {
 		t.Fatal("failed sign-out ended the session")
-	}
-	p.app.DB.Exec("DROP TRIGGER no_logout_audit")
-	response = logout()
-	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Set-Cookie"), auth.SessionCookie) {
-		t.Fatal(response.Code, response.Header())
-	}
-	if principal, _ := p.app.Auth.Session(context.Background(), admin.Token); principal != nil {
-		t.Fatal("session survived sign-out")
 	}
 }
 

@@ -2,7 +2,7 @@ import { test, expect, asAdmin, openServer } from "./fixtures.mjs";
 
 asAdmin();
 
-test("scheduling, editing, pausing, and deleting a restart", async ({ page }) => {
+test("scheduling, editing, pausing, and deleting a restart", async ({ page, session }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
@@ -43,7 +43,28 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page }) =>
   await page.getByRole("tab", { name: "Overview" }).click();
   await expect(page.locator(".overview-facts")).toContainText("Restart");
 
+  // Someone else pauses the schedule while it is being edited: saving shows
+  // the conflict and keeps the draft, which then saves without resuming it.
   await page.getByRole("tab", { name: "Schedules" }).click();
+  await row.getByRole("link", { name: "Edit" }).click();
+  const other = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await openServer(other, "Survival");
+  await other.getByRole("tab", { name: "Schedules" }).click();
+  await other.locator("#schedule-list tbody tr").first().getByRole("button", { name: "Pause" }).click();
+  await expect(other.locator("#detail-status")).toHaveText("Schedule paused.");
+
+  const editor = page.locator("#schedule-form");
+  await editor.getByLabel("Time", { exact: true }).fill("07:15");
+  await editor.getByRole("button", { name: "Save changes" }).click();
+  await expect(editor.locator(".schedule-conflict")).toContainText("This schedule changed elsewhere. Your draft is preserved.");
+  await expect(editor.getByLabel("Time", { exact: true })).toHaveValue("07:15");
+  await editor.getByRole("button", { name: "Keep my draft" }).click();
+  await expect(editor.getByText("This schedule stays paused when saved.")).toBeVisible();
+  await editor.getByRole("button", { name: "Save changes" }).click();
+  await expect(page).toHaveURL(/saved=saved/);
+  await expect(row).toContainText("07:15, weekdays");
+  await expect(row.locator("td").nth(2)).toHaveText("Paused");
+
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator("#schedule-list")).toContainText("No schedules.");
 });

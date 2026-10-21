@@ -17,7 +17,8 @@ func (p *pages) postForm(target string, principal *auth.Principal, values url.Va
 	return p.do("POST", target, principal, strings.NewReader(values.Encode()), nil).Result()
 }
 
-func TestRevokeSessions(t *testing.T) {
+// Revoking a session from the account page is covered by the account journey.
+func TestRevokeSessionsStaysWithinTheAccountAndIsAudited(t *testing.T) {
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	phone, _ := p.app.Auth.Login(context.Background(), "operator", "password-u-operator", auth.Client{IP: "192.0.2.7", UserAgent: "Phone"})
@@ -46,22 +47,6 @@ func TestRevokeSessions(t *testing.T) {
 	}
 	if principal, _ := p.app.Auth.Session(context.Background(), phone.Token); principal == nil {
 		t.Fatal("revoked a session without auditing it")
-	}
-	p.app.DB.Exec("DROP TRIGGER no_revoke_audit")
-	response = p.post("/account/sessions/"+phoneID+"/revoke", operator, CSRFToken(operator.Token))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Session revoked.") ||
-		strings.Contains(response.Body.String(), "192.0.2.7") {
-		t.Fatal(response.Code, response.Body.String())
-	}
-	if principal, _ := p.app.Auth.Session(context.Background(), phone.Token); principal != nil {
-		t.Fatal("session not revoked")
-	}
-	// Revoking this session signs the browser out.
-	sessions, _ = p.app.Auth.Sessions(context.Background(), operator)
-	response = p.post("/account/sessions/"+sessions[0].ID+"/revoke", operator, CSRFToken(operator.Token))
-	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/login" ||
-		!strings.Contains(response.Header().Get("Set-Cookie"), "Max-Age=0") {
-		t.Fatal(response.Code, response.Header())
 	}
 }
 
