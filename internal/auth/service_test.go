@@ -502,3 +502,18 @@ func TestFailedLoginAuditLeavesNoSession(t *testing.T) {
 		t.Fatal("left a session the client never received")
 	}
 }
+
+func TestFailedSetupSessionCanBeRetried(t *testing.T) {
+	s, _, _ := newService(t, nil)
+	if _, err := s.DB.Exec(`CREATE TRIGGER no_session BEFORE INSERT ON sessions
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteSetup(ctx, "owner", original, setupCode, Client{IP: "192.0.2.10"}); err == nil {
+		t.Fatal("setup succeeded without a session")
+	}
+	s.DB.Exec("DROP TRIGGER no_session")
+	if principal, err := s.CompleteSetup(ctx, "owner", original, setupCode, Client{IP: "192.0.2.10"}); err != nil || principal.Token == "" {
+		t.Fatal(principal, err)
+	}
+}

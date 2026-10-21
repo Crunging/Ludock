@@ -226,32 +226,37 @@ func (d *DB) CreateSession(ctx context.Context, input SessionInput) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at <= ?", input.CreatedAt); err != nil {
 			return err
 		}
-		values := []any{input.TokenHash, input.SessionID, input.UserID, input.CreatedAt, input.ExpiresAt, input.CreatedAt,
-			nullable(input.IPAddress), nullable(input.UserAgent)}
-		insert := `INSERT INTO sessions
+		return d.insertSession(ctx, tx, input)
+	})
+}
+
+// insertSession stores a session in tx.
+func (d *DB) insertSession(ctx context.Context, tx *sql.Tx, input SessionInput) error {
+	values := []any{input.TokenHash, input.SessionID, input.UserID, input.CreatedAt, input.ExpiresAt, input.CreatedAt,
+		nullable(input.IPAddress), nullable(input.UserAgent)}
+	insert := `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		if input.PasswordHash != "" {
-			insert = `INSERT INTO sessions
+	if input.PasswordHash != "" {
+		insert = `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
       SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND password_hash = ? AND disabled = 0`
-			values = append(values, input.UserID, input.PasswordHash)
+		values = append(values, input.UserID, input.PasswordHash)
+	}
+	result, err := tx.ExecContext(ctx, insert, values...)
+	if err != nil {
+		return err
+	}
+	if created, err := result.RowsAffected(); err != nil || created != 1 {
+		if err == nil {
+			err = ErrAccountChanged
 		}
-		result, err := tx.ExecContext(ctx, insert, values...)
-		if err != nil {
-			return err
-		}
-		if created, err := result.RowsAffected(); err != nil || created != 1 {
-			if err == nil {
-				err = ErrAccountChanged
-			}
-			return err
-		}
-		if input.Audit != nil {
-			return d.WriteAudit(ctx, tx, *input.Audit)
-		}
-		return nil
-	})
+		return err
+	}
+	if input.Audit != nil {
+		return d.WriteAudit(ctx, tx, *input.Audit)
+	}
+	return nil
 }
 
 // ListUserSessions lists unexpired sessions, newest activity first.
@@ -568,7 +573,7 @@ var (
 
 // CreateFirstUser inserts the initial administrator only while no account
 // exists, so concurrent setup requests create at most one.
-func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEntry) error {
+func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEntry, session SessionInput) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
@@ -582,7 +587,12 @@ func (d *DB) CreateFirstUser(ctx context.Context, user UserRecord, audit AuditEn
 			user.ID, user.Username, user.PasswordHash, string(user.Role), user.CreatedAt, user.CreatedAt); err != nil {
 			return err
 		}
-		return d.WriteAudit(ctx, tx, audit)
+		if err := d.WriteAudit(ctx, tx, audit); err != nil {
+			return err
+		}
+		// The first session commits with the account, so a failed setup can
+		// be retried instead of reporting setup complete with no way in.
+		return d.insertSession(ctx, tx, session)
 	})
 }
 

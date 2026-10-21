@@ -238,9 +238,11 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	user := db.SessionUser{ID: identity.NewUUID(), Username: username, Role: db.RoleAdmin}
+	session, token := s.sessionInput(user.ID, client)
 	err = s.DB.CreateFirstUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role,
 		CreatedAt: s.Now()}, PasswordHash: passwordHash},
-		db.AuditEntry{UserID: user.ID, Action: "auth.setup.completed", TargetType: "user", TargetID: user.ID, IPAddress: client.IP})
+		db.AuditEntry{UserID: user.ID, Action: "auth.setup.completed", TargetType: "user", TargetID: user.ID, IPAddress: client.IP},
+		session)
 	if errors.Is(err, db.ErrSetupComplete) {
 		return nil, errSetupComplete
 	}
@@ -248,7 +250,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	s.Setup.markCompleted()
-	return s.createSession(ctx, user, client, "", nil)
+	return &Principal{User: user, Token: token, TokenHash: session.TokenHash}, nil
 }
 
 // Authenticate verifies credentials against the current account state.
