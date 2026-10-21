@@ -200,3 +200,28 @@ func TestRevokedAdministratorCannotSaveAWebhook(t *testing.T) {
 		t.Fatal("saved a webhook after the session was revoked")
 	}
 }
+
+func TestSavingSettingsCancelsASendInFlight(t *testing.T) {
+	started := make(chan struct{})
+	s := setup(t, func(r *http.Request) (*http.Response, error) {
+		close(started)
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	if _, err := s.QueueTest(ctx, "admin", adminSession); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Deliver(ctx) }()
+	<-started
+	if err := s.Configure(ctx, "admin", adminSession, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	deliveries, _ := s.Deliveries(ctx)
+	if len(deliveries) != 1 || deliveries[0].State != "queued" || deliveries[0].Attempts != 0 {
+		t.Fatalf("%+v", deliveries)
+	}
+}

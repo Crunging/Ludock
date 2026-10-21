@@ -71,6 +71,8 @@ type Service struct {
 	mu         sync.Mutex
 	active     string
 	delivering bool
+	// cancelSend ends the request in flight when the settings change.
+	cancelSend context.CancelCauseFunc
 	// retries are event notifications waiting to be queued again.
 	retries sync.WaitGroup
 	quit    chan struct{}
@@ -106,7 +108,7 @@ var webhookPath = regexp.MustCompile(`^/api/webhooks/\d+/[A-Za-z0-9_-]+$`)
 // The administrator's session and role are checked again in the transaction
 // that saves them.
 func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, enabled bool, webhookURL *string) error {
-	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		value := ""
 		if webhookURL != nil {
 			value = *webhookURL
@@ -127,7 +129,19 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, enab
 		}
 		return s.DB.SetSetting(ctx, tx, settingKey, settings{Enabled: enabled, WebhookURL: value})
 	})
+	if err == nil {
+		// A send in flight may target the old settings; it is released and
+		// sent again under the new ones.
+		s.mu.Lock()
+		if s.cancelSend != nil {
+			s.cancelSend(errSettingsChanged)
+		}
+		s.mu.Unlock()
+	}
+	return err
 }
+
+var errSettingsChanged = errors.New("notification settings changed")
 
 func validWebhook(enabled bool, value string) error {
 	if len(value) > 1024 {
@@ -456,21 +470,37 @@ func (s *Service) Deliver(ctx context.Context) error {
 			s.mu.Unlock()
 			continue
 		}
-		// Read the settings again right before sending: an administrator who
-		// disabled notifications or replaced the webhook since the start of
-		// this pass gets nothing sent to the old one. The claim is released
-		// untouched, and the next pass uses the current settings.
-		if current := s.settings(ctx); !current.Enabled || current.WebhookURL != config.WebhookURL {
+		// An administrator who disables notifications or replaces the webhook
+		// gets nothing more sent to the old one: settings saved before the
+		// reread below are seen by it, and a save after it cancels the send.
+		// Either way the claim is released untouched, and the next pass uses
+		// the current settings.
+		sendCtx, cancelSend := context.WithCancelCause(ctx)
+		s.mu.Lock()
+		s.cancelSend = cancelSend
+		s.mu.Unlock()
+		finishSend := func() {
+			s.mu.Lock()
+			s.active, s.cancelSend = "", nil
+			s.mu.Unlock()
+			cancelSend(nil)
+		}
+		release := func() {
 			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
         WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, id, claimedAt); err != nil {
 				log.Warn("Could not release a notification delivery; it will be retried after its delay")
 			}
-			s.mu.Lock()
-			s.active = ""
-			s.mu.Unlock()
+			finishSend()
+		}
+		if current := s.settings(ctx); !current.Enabled || current.WebhookURL != config.WebhookURL {
+			release()
 			break
 		}
-		failure := s.send(ctx, &noRedirects, config.WebhookURL, r.payload)
+		failure := s.send(sendCtx, &noRedirects, config.WebhookURL, r.payload)
+		if failure != "" && errors.Is(context.Cause(sendCtx), errSettingsChanged) {
+			release()
+			break
+		}
 		finished := db.Now()
 		state := "queued"
 		var delivered, failureCode any
@@ -495,9 +525,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 			}
 			time.Sleep(time.Duration(try) * 500 * time.Millisecond)
 		}
-		s.mu.Lock()
-		s.active = ""
-		s.mu.Unlock()
+		finishSend()
 	}
 	_, err = s.DB.ExecContext(ctx, "DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?",
 		db.Now()-30*86400_000)
