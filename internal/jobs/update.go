@@ -302,7 +302,31 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if request.ForceRecreate {
 		flags = append(flags, "--force-recreate")
 	}
-	if _, err := runner.Run(ctx, append(append(slices.Clone(args), flags...), service), 4*time.Minute); err != nil {
+	// Compose stops as soon as the owner loses update authority, as lifecycle
+	// and data jobs do.
+	watch, stopWatch := context.WithCancelCause(ctx)
+	go func() {
+		ticker := time.NewTicker(j.poll())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watch.Done():
+				return
+			case <-ticker.C:
+				if err := j.assertCapability(watch, job, capability); err != nil && watch.Err() == nil {
+					stopWatch(err)
+					return
+				}
+			}
+		}
+	}()
+	_, err = runner.Run(watch, append(append(slices.Clone(args), flags...), service), 4*time.Minute)
+	revoked := context.Cause(watch)
+	stopWatch(nil)
+	if err != nil {
+		if revoked != nil && ctx.Err() == nil {
+			return nil, revoked
+		}
 		return nil, err
 	}
 	if err := job.Progress("verifying", nil, nil); err != nil {
