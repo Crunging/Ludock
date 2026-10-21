@@ -506,9 +506,46 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 	return err
 }
 
+// FinishDeletions retries every interrupted or failed removal, each under
+// its server and storage locks; one that is busy waits for the next call.
+// It runs in the background, so an archive left behind is removed even when
+// it uses the space later backups need before they would prune.
+func (s *Service) FinishDeletions(ctx context.Context) error {
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='deleting' ORDER BY created_at,id LIMIT 100")
+	if err != nil {
+		return err
+	}
+	var pending []*Backup
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, backup)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var failed error
+	for _, backup := range pending {
+		release, err := s.Locks.Acquire([]string{"server:" + backup.ServerID, "backups:storage"}, nil)
+		if err != nil {
+			continue
+		}
+		if err := s.remove(ctx, backup, nil); err != nil && failed == nil {
+			failed = err
+		}
+		release()
+	}
+	return failed
+}
+
 // RecordDeleting saves an unrecorded archive whose removal failed as a
-// deleting backup. It is never offered, and Prune and Delete retry removing
-// it, so it cannot use storage unseen by retention and capacity checks.
+// deleting backup. It is never offered, and FinishDeletions, Prune, and
+// Delete retry removing it, so it cannot use storage unseen by retention and
+// capacity checks.
 func (s *Service) RecordDeleting(ctx context.Context, id, serverID, fingerprint, destination string) error {
 	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
     VALUES(?,?,?,?,'[]',0,'',?,'deleting')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())

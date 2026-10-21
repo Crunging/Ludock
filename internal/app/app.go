@@ -175,6 +175,9 @@ func (a *App) Tick(ctx context.Context) {
 			if err := a.Backups.Initialize(ctx); err != nil {
 				log.Warn("Automatic backup storage setup is temporarily unavailable")
 			}
+			if err := a.Backups.FinishDeletions(ctx); err != nil {
+				log.Warn("Could not remove deleted backup archives; they will be retried")
+			}
 		}()
 	}
 	if a.delivering.TryLock() {

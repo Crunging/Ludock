@@ -313,7 +313,7 @@ func TestBackupDeletionRevokedBeforeTheUnlinkKeepsTheBackup(t *testing.T) {
 	}
 }
 
-func TestUnremovedFailedArchiveIsRemovedByTheNextPrune(t *testing.T) {
+func TestUnremovedFailedArchiveIsRemovedInTheBackground(t *testing.T) {
 	f := setup(t)
 	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
@@ -326,8 +326,14 @@ func TestUnremovedFailedArchiveIsRemovedByTheNextPrune(t *testing.T) {
 	if backup, _ := f.jobs.Backups.Get(ctx, f.serverID, id); backup != nil {
 		t.Fatal("offered an archive being deleted")
 	}
-	f.run(t, "backup", nil)
+	// No later backup has to succeed first: it may need the space this uses.
+	if err := f.jobs.Backups.FinishDeletions(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(filepath.Join(f.backupTo, id+".tar")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("archive left behind", err)
+	}
+	if exists, _ := f.jobs.Backups.Exists(ctx, id, false); exists {
+		t.Fatal("row left behind")
 	}
 }
