@@ -265,3 +265,27 @@ func TestRecoveryKeepsABackupWhoseRowCannotBeRead(t *testing.T) {
 		t.Fatal(before, after)
 	}
 }
+
+func TestInterruptedPruningIsNeverOfferedAndIsRetried(t *testing.T) {
+	f := setup(t)
+	if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 1, MaxBytes: 1 << 30},
+		f.admin, f.adminSession); err != nil {
+		t.Fatal(err)
+	}
+	old := f.run(t, "backup", nil).Result["backupId"].(string)
+	if _, err := f.jobs.DB.Exec(`CREATE TRIGGER no_prune BEFORE DELETE ON backups
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, "backup", nil)
+	if backup, err := f.jobs.Backups.Get(ctx, f.serverID, old); backup != nil || err == nil {
+		t.Fatal("offered a backup whose archive was removed", backup)
+	}
+	f.jobs.DB.Exec("DROP TRIGGER no_prune")
+	f.run(t, "backup", nil)
+	var left int
+	f.jobs.DB.QueryRow("SELECT COUNT(*) FROM backups WHERE state != 'complete'").Scan(&left)
+	if left != 0 {
+		t.Fatal(left, "interrupted deletions left")
+	}
+}

@@ -107,9 +107,14 @@ func (s *Service) Open(ctx context.Context, serverID, id string) (io.ReadCloser,
 	return s.Storage.Open(backup.destination, backup.ID)
 }
 
-// Delete removes a backup under the server and storage locks.
+// Delete removes a backup under the server and storage locks. It also
+// finishes an interrupted deletion.
 func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess func() error) error {
-	backup, err := s.Get(ctx, serverID, id)
+	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE server_id=? AND id=? AND state IN ('complete','deleting')",
+		serverID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return errNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -118,10 +123,26 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 		return err
 	}
 	defer release()
-	if err := s.Storage.Remove(backup.destination, id, assertAccess); err != nil {
+	if assertAccess != nil {
+		if err := assertAccess(); err != nil {
+			return err
+		}
+	}
+	return s.remove(ctx, backup)
+}
+
+// remove marks a backup deleting before unlinking its archive, so an
+// interrupted removal leaves a row that is never offered for download or
+// restore and is retried by Delete or the next Prune, rather than a complete
+// row without its archive.
+func (s *Service) remove(ctx context.Context, backup *Backup) error {
+	if _, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=?", backup.ID); err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=? AND server_id=?", id, serverID)
+	if err := s.Storage.Remove(backup.destination, backup.ID, nil); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", backup.ID)
 	return err
 }
 
@@ -482,29 +503,31 @@ func (s *Service) Exists(ctx context.Context, id string, complete bool) (bool, e
 	return err == nil, err
 }
 
-// Prune removes complete backups beyond the retention count, keeping keep.
+// Prune removes complete backups beyond the retention count, keeping keep,
+// and finishes interrupted deletions.
 func (s *Service) Prune(ctx context.Context, serverID string, retention int, keep string) error {
 	list, err := s.List(ctx, serverID)
 	if err != nil {
 		return err
 	}
-	var complete []Backup
+	var complete, removed []Backup
 	for _, backup := range list {
-		if backup.State == "complete" {
+		switch backup.State {
+		case "complete":
 			complete = append(complete, backup)
+		case "deleting":
+			removed = append(removed, backup)
 		}
 	}
-	if len(complete) <= retention {
-		return nil
+	if len(complete) > retention {
+		for _, old := range complete[retention:] {
+			if old.ID != keep {
+				removed = append(removed, old)
+			}
+		}
 	}
-	for _, old := range complete[retention:] {
-		if old.ID == keep {
-			continue
-		}
-		if err := s.Storage.Remove(old.destination, old.ID, nil); err != nil {
-			return err
-		}
-		if _, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", old.ID); err != nil {
+	for _, old := range removed {
+		if err := s.remove(ctx, &old); err != nil {
 			return err
 		}
 	}
