@@ -439,9 +439,10 @@ func (s *Service) Deliver(ctx context.Context) error {
 		s.mu.Lock()
 		s.active = id
 		s.mu.Unlock()
+		claimedAt := db.Now()
 		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
       WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-			db.Now(), db.Now()+backoff, id, r.attempts, r.retries, r.lastAttempt)
+			claimedAt, claimedAt+backoff, id, r.attempts, r.retries, r.lastAttempt)
 		claimed := int64(0)
 		if err == nil {
 			claimed, err = result.RowsAffected()
@@ -454,6 +455,20 @@ func (s *Service) Deliver(ctx context.Context) error {
 			s.active = ""
 			s.mu.Unlock()
 			continue
+		}
+		// Read the settings again right before sending: an administrator who
+		// disabled notifications or replaced the webhook since the start of
+		// this pass gets nothing sent to the old one. The claim is released
+		// untouched, and the next pass uses the current settings.
+		if current := s.settings(ctx); !current.Enabled || current.WebhookURL != config.WebhookURL {
+			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
+        WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, id, claimedAt); err != nil {
+				log.Warn("Could not release a notification delivery; it will be retried after its delay")
+			}
+			s.mu.Lock()
+			s.active = ""
+			s.mu.Unlock()
+			break
 		}
 		failure := s.send(ctx, &noRedirects, config.WebhookURL, r.payload)
 		finished := db.Now()
