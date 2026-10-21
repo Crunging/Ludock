@@ -202,14 +202,16 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request, request 
 	buffer := make([]byte, 256*1024)
 	checked := time.Now()
 	for {
-		if time.Since(checked) >= time.Second {
+		controller.SetWriteDeadline(time.Now().Add(time.Minute))
+		n, err := archive.Read(buffer)
+		// Check after the read, which can block on slow storage, so no chunk
+		// is sent more than a second after access was last confirmed.
+		if n > 0 && time.Since(checked) >= time.Second {
 			if check() != nil {
 				panic(http.ErrAbortHandler)
 			}
 			checked = time.Now()
 		}
-		controller.SetWriteDeadline(time.Now().Add(time.Minute))
-		n, err := archive.Read(buffer)
 		if n > 0 {
 			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
 				return
