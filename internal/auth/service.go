@@ -649,8 +649,12 @@ func (s *Service) CreateUser(ctx context.Context, principal *Principal, username
 	if err != nil {
 		return nil, adminMutationError(err)
 	}
+	// Another administrator may have deleted the account since it committed.
 	record, err := s.DB.FindUserByID(ctx, id)
-	if err != nil || record == nil {
+	if err == nil && record == nil {
+		err = errUserNotFound
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &record.User, nil
@@ -694,8 +698,12 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 	if err != nil {
 		return nil, adminMutationError(err)
 	}
+	// Another administrator may have deleted the account since it committed.
 	record, err := s.DB.FindUserByID(ctx, id)
-	if err != nil || record == nil {
+	if err == nil && record == nil {
+		err = errUserNotFound
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &record.User, nil
