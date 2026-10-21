@@ -328,9 +328,19 @@ func (s *Server) fileDownload(w http.ResponseWriter, r *http.Request, request *R
 	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path})
 	controller := http.NewResponseController(w)
 	buffer := make([]byte, 256*1024)
+	checked := time.Now()
 	for {
 		controller.SetWriteDeadline(time.Now().Add(time.Minute))
 		n, err := download.Read(buffer)
+		// Check after the read, which can block and still return buffered
+		// bytes once revocation closes the stream, so no chunk is sent more
+		// than a second after access was last confirmed.
+		if n > 0 && (action.Ctx.Err() != nil || time.Since(checked) >= time.Second) {
+			if action.Assert() != nil {
+				panic(http.ErrAbortHandler)
+			}
+			checked = time.Now()
+		}
 		if n > 0 {
 			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
 				return
