@@ -160,13 +160,18 @@ func (s *Service) Suppress(ctx context.Context, serverID string) error {
 	return err
 }
 
-func (s *Service) suppressed(ctx context.Context, serverID string, policy Policy, until, now int64) bool {
+// suppressed fails if active work cannot be read, rather than treating the
+// server as idle.
+func (s *Service) suppressed(ctx context.Context, serverID string, policy Policy, until, now int64) (bool, error) {
 	if !policy.Enabled || policy.Maintenance || until > now || (s.Locks != nil && s.Locks.ServerBusy(serverID)) {
-		return true
+		return true, nil
 	}
 	var id string
 	err := s.DB.QueryRowContext(ctx, "SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running') LIMIT 1", serverID).Scan(&id)
-	return err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Problem is a current outage.
@@ -183,7 +188,11 @@ func (s *Service) Problem(ctx context.Context, serverID string, now int64) (*Pro
 		return nil, err
 	}
 	state := availability.State
-	if s.suppressed(ctx, serverID, availability.Policy, state.SuppressedUntil, now) || state.IntentionallyStopped ||
+	suppressed, err := s.suppressed(ctx, serverID, availability.Policy, state.SuppressedUntil, now)
+	if err != nil {
+		return nil, err
+	}
+	if suppressed || state.IntentionallyStopped ||
 		state.OutageStartedAt == 0 || now-state.OutageStartedAt < int64(availability.Policy.GraceSeconds)*1000 {
 		return nil, nil
 	}
@@ -219,7 +228,14 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			continue
 		}
 		policy, err := ParsePolicy([]byte(r.policy))
-		if err != nil || s.suppressed(ctx, server.ID, policy, r.suppressed, now) {
+		if err != nil {
+			continue
+		}
+		suppressed, err := s.suppressed(ctx, server.ID, policy, r.suppressed, now)
+		if err != nil {
+			return err
+		}
+		if suppressed {
 			continue
 		}
 		container, found := current[server.ContainerID]

@@ -125,3 +125,17 @@ func TestNoAlertWithoutSavedState(t *testing.T) {
 		t.Fatal(events.events)
 	}
 }
+
+func TestUnreadableOperationsDoNotRaiseAnOutage(t *testing.T) {
+	s, events, server := setup(t)
+	s.Check(ctx, state("exited", ""), 1000)
+	if _, err := s.DB.Exec("ALTER TABLE operations RENAME TO operations_unreadable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Check(ctx, state("exited", ""), 200_000); err == nil || len(events.events) != 0 {
+		t.Fatal(err, events.events)
+	}
+	if _, err := s.Problem(ctx, server.ID, 200_000); err == nil {
+		t.Fatal("reported an outage without reading active operations")
+	}
+}
