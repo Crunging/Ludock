@@ -319,6 +319,9 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 		saved = append(saved, r)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	// Reuse authority outcomes within one listing; runs and edits always
 	// check afresh.
 	outcomes := map[string]error{}
