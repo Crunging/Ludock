@@ -152,7 +152,7 @@ func TestRevokedActionsDisabledOwnersAndBindingChanges(t *testing.T) {
 	changed := f.obs
 	changed.GameType = "factorio"
 	pending, _ := f.s.Identity.Reconcile(ctx, []identity.Observation{changed}, "", 0)
-	f.s.Identity.ReviewBinding(ctx, f.serverID, pending[0].PendingFingerprint, -1)
+	f.s.Identity.ReviewBinding(ctx, admin.ID, adminSession, f.serverID, pending[0].PendingFingerprint, -1)
 	f.s.Run(ctx, due+2*86400_000)
 	if f.operations(t) != 0 || !strings.Contains(f.first(t, admin).LastResult, "server configuration changed") {
 		t.Fatal(f.first(t, admin))

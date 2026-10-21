@@ -466,10 +466,11 @@ func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision in
 }
 
 // ReviewBinding accepts the exact pending binding an administrator reviewed.
-// The caller must authorize an administrator and freshly reconcile Docker
-// first. expectedRevision < 0 skips the revision pin.
-func (s *Store) ReviewBinding(ctx context.Context, id, expectedFingerprint string, expectedRevision int64) (*Server, error) {
-	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+// The caller must freshly reconcile Docker first. The administrator's session
+// and role are checked again in the transaction that accepts the binding.
+// expectedRevision < 0 skips the revision pin.
+func (s *Store) ReviewBinding(ctx context.Context, adminID, tokenHash, id, expectedFingerprint string, expectedRevision int64) (*Server, error) {
+	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		server, err := getServer(ctx, tx, id)
 		if err != nil {
 			return err

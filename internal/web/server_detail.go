@@ -264,8 +264,8 @@ func (s *Server) reviewBinding(w http.ResponseWriter, r *http.Request, request *
 		if err := s.recheckAdmin(ctx, request); err != nil {
 			return err
 		}
-		_, err := s.App.Identity.ReviewBinding(ctx, id, server.PendingFingerprint, revision)
-		return err
+		_, err := s.App.Identity.ReviewBinding(ctx, request.User().ID, request.Principal.TokenHash, id, server.PendingFingerprint, revision)
+		return authz.AdminMutationError(err)
 	}()
 	if err != nil {
 		s.fail(w, r, request, err)

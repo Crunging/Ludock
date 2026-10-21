@@ -2,10 +2,12 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 )
 
@@ -163,6 +165,10 @@ func TestDuplicateComposeIdentityIsAmbiguous(t *testing.T) {
 
 func TestMaterialChangesNeedReview(t *testing.T) {
 	s := &Store{DB: dbtest.Open(t)}
+	if err := s.DB.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	session := dbtest.Session(t, s.DB, "admin")
 	original := reconcile(t, s, 0, observation(nil))[0]
 	changed := observation(func(o *Observation) {
 		o.Mounts = []Mount{{Type: "bind", Source: "/srv/unrelated-world", Destination: "/data", Writable: true}}
@@ -174,9 +180,13 @@ func TestMaterialChangesNeedReview(t *testing.T) {
 	}
 	_, err := s.ResolveBinding(ctx, pending.ID, -1)
 	wantCode(t, err, "SERVER_BINDING_UNAVAILABLE")
-	_, err = s.ReviewBinding(ctx, pending.ID, "stale-fingerprint", -1)
+	_, err = s.ReviewBinding(ctx, "admin", session, pending.ID, "stale-fingerprint", -1)
 	wantCode(t, err, "SERVER_REVIEW_CHANGED")
-	reviewed, err := s.ReviewBinding(ctx, pending.ID, pending.PendingFingerprint, -1)
+	// A revoked session cannot accept the binding.
+	if _, err := s.ReviewBinding(ctx, "admin", "revoked-session", pending.ID, pending.PendingFingerprint, -1); !errors.Is(err, db.ErrSessionGone) {
+		t.Fatal(err)
+	}
+	reviewed, err := s.ReviewBinding(ctx, "admin", session, pending.ID, pending.PendingFingerprint, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

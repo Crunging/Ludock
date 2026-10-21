@@ -151,7 +151,7 @@ func TestMaterialChangeSuspendsGrantsUntilReview(t *testing.T) {
 	if grants, _ := s.UserGrants(ctx, operator.ID); len(grants) != 1 {
 		t.Fatal("grant deleted")
 	}
-	s.Servers.ReviewBinding(ctx, first.ID, pending.PendingFingerprint, -1)
+	s.Servers.ReviewBinding(ctx, admin.ID, adminSession, first.ID, pending.PendingFingerprint, -1)
 	if ok, _ := s.Has(ctx, operator, first.ID, ServerStop); !ok {
 		t.Fatal("review did not restore grant")
 	}
