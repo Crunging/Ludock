@@ -289,3 +289,26 @@ func TestInterruptedPruningIsNeverOfferedAndIsRetried(t *testing.T) {
 		t.Fatal(left, "interrupted deletions left")
 	}
 }
+
+func TestBackupDeletionRevokedBeforeTheUnlinkKeepsTheBackup(t *testing.T) {
+	f := setup(t)
+	id := f.run(t, "backup", nil).Result["backupId"].(string)
+	checks := 0
+	err := f.jobs.Backups.Delete(ctx, f.serverID, id, func() error {
+		if checks++; checks > 1 {
+			return apperr.New("FORBIDDEN", 403, "Forbidden")
+		}
+		return nil
+	})
+	if !apperr.Is(err, "FORBIDDEN") || checks != 2 {
+		t.Fatal(err, checks)
+	}
+	if backup, err := f.jobs.Backups.Get(ctx, f.serverID, id); err != nil || backup == nil {
+		t.Fatal("lost a backup whose deletion was revoked", err)
+	}
+	if reader, err := f.jobs.Backups.Open(ctx, f.serverID, id); err != nil {
+		t.Fatal(err)
+	} else {
+		reader.Close()
+	}
+}

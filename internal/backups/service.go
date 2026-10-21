@@ -128,18 +128,32 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 			return err
 		}
 	}
-	return s.remove(ctx, backup)
+	return s.remove(ctx, backup, assertAccess)
 }
 
 // remove marks a backup deleting before unlinking its archive, so an
 // interrupted removal leaves a row that is never offered for download or
 // restore and is retried by Delete or the next Prune, rather than a complete
-// row without its archive.
-func (s *Service) remove(ctx context.Context, backup *Backup) error {
+// row without its archive. assertAccess runs again right before the unlink;
+// if it refuses, the archive is kept and offered again.
+func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error) error {
 	if _, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=?", backup.ID); err != nil {
 		return err
 	}
-	if err := s.Storage.Remove(backup.destination, backup.ID, nil); err != nil {
+	var denied error
+	var check func() error
+	if assertAccess != nil {
+		check = func() error {
+			denied = assertAccess()
+			return denied
+		}
+	}
+	if err := s.Storage.Remove(backup.destination, backup.ID, check); err != nil {
+		if denied != nil && backup.State == "complete" {
+			if _, restoreErr := s.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE backups SET state='complete' WHERE id=?", backup.ID); restoreErr != nil {
+				return restoreErr
+			}
+		}
 		return err
 	}
 	_, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", backup.ID)
@@ -527,7 +541,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, retention int, kee
 		}
 	}
 	for _, old := range removed {
-		if err := s.remove(ctx, &old); err != nil {
+		if err := s.remove(ctx, &old, nil); err != nil {
 			return err
 		}
 	}
