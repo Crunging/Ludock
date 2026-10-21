@@ -51,10 +51,12 @@ published tags.
   URLs, and host paths never appear in logs, pages, audit details, or public
   errors (`apperr`). Console and log output goes through redaction.
 - **Operations survive restarts.** Persist them before they run, and reconcile
-  interrupted ones instead of replaying them. Hold locks until helper
-  containers are removed. Backups and restores keep the server stopped, then
-  return it to its initial running state. Requests can't take locks until
-  startup recovery finishes (`locks.Table.Fence`).
+  interrupted ones instead of replaying them. Hold locks until helpers that
+  may still be writing (any failed or uncertain command) are confirmed removed;
+  idle helpers left by a successful command exit on their own. Backups and
+  restores keep the server stopped, then return it to its initial running
+  state. Requests can't take locks until startup recovery finishes
+  (`locks.Table.Fence`).
 - **Transactions read only through themselves.** Write transactions take the
   SQLite write lock immediately and the pool has four connections, so a read
   through another connection inside one can wait on a writer queued behind it.
