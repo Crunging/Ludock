@@ -54,9 +54,11 @@ type Hub struct {
 	mu          sync.Mutex
 	subscribers map[*Subscriber]bool
 	cancel      context.CancelFunc
-	streamDone  chan struct{}
-	deliveries  sync.WaitGroup
-	stopped     bool
+	// streams counts running streams, including cancelled ones still
+	// finishing a batch after their last viewer left.
+	streams    sync.WaitGroup
+	deliveries sync.WaitGroup
+	stopped    bool
 }
 
 type dockerEvent struct {
@@ -133,10 +135,9 @@ func (h *Hub) Subscribe(subscriber *Subscriber) func() {
 func (h *Hub) startLocked() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	done := make(chan struct{})
-	h.streamDone = done
+	h.streams.Add(1)
 	go func() {
-		defer close(done)
+		defer h.streams.Done()
 		h.run(ctx)
 	}()
 }
@@ -293,12 +294,13 @@ func findByContainer(servers []identity.Server, containerID string) *identity.Se
 func (h *Hub) Stop() {
 	h.mu.Lock()
 	h.stopped = true
-	cancel, done := h.cancel, h.streamDone
+	cancel := h.cancel
 	h.cancel = nil
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()
-		<-done
 	}
+	// No stream starts once stopped; every dispatch runs inside one.
+	h.streams.Wait()
 	h.deliveries.Wait()
 }
