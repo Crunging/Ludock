@@ -405,17 +405,29 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 }
 
 // backupCompleted: the row is committed before its completion marker, so a
-// crash between the two still leaves a complete backup.
+// crash between the two still leaves a complete backup. A failed lookup
+// counts as incomplete, which keeps the server stopped.
 func (j *Jobs) backupCompleted(ctx context.Context, job *ops.Context) bool {
+	if job.Job.Recovery["backupComplete"] == true {
+		return true
+	}
 	id, ok := text(job.Job.Recovery["backupId"])
-	return job.Job.Recovery["backupComplete"] == true || (ok && j.Backups.Exists(ctx, id, true))
+	if !ok {
+		return false
+	}
+	complete, err := j.Backups.Exists(ctx, id, true)
+	return err == nil && complete
 }
 
 func (j *Jobs) removeUnpublished(ctx context.Context, job *ops.Context) error {
 	id, okID := text(job.Job.Recovery["backupId"])
 	destination, okDestination := text(job.Job.Recovery["backupDestination"])
-	if !okID || !okDestination || j.Backups.Exists(ctx, id, false) {
+	if !okID || !okDestination {
 		return nil
+	}
+	// Only a backup known to have no row is unpublished.
+	if recorded, err := j.Backups.Exists(ctx, id, false); err != nil || recorded {
+		return err
 	}
 	if err := j.Backups.Storage.Remove(destination, id, nil); err != nil {
 		return err

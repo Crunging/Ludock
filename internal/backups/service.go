@@ -468,14 +468,18 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 }
 
 // Exists reports whether a backup row exists (any state when complete is
-// false).
-func (s *Service) Exists(ctx context.Context, id string, complete bool) bool {
+// false). A failed lookup is an error, not an absent row.
+func (s *Service) Exists(ctx context.Context, id string, complete bool) (bool, error) {
 	query := "SELECT id FROM backups WHERE id=?"
 	if complete {
 		query += " AND state='complete'"
 	}
 	var found string
-	return s.DB.QueryRowContext(ctx, query, id).Scan(&found) == nil
+	err := s.DB.QueryRowContext(ctx, query, id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Prune removes complete backups beyond the retention count, keeping keep.

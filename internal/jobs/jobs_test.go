@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -236,5 +237,31 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 	}
 	if wrong := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "wrong"}); wrong.Status != ops.Failed {
 		t.Fatal("restore without confirmation ran")
+	}
+}
+
+func TestRecoveryKeepsABackupWhoseRowCannotBeRead(t *testing.T) {
+	f := setup(t)
+	backup := f.run(t, "backup", nil)
+	archives := func() []string {
+		var found []string
+		filepath.WalkDir(f.backupTo, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && !entry.IsDir() {
+				found = append(found, path)
+			}
+			return nil
+		})
+		return found
+	}
+	before := archives()
+	if _, err := f.jobs.DB.Exec("ALTER TABLE backups RENAME TO backups_unreadable"); err != nil {
+		t.Fatal(err)
+	}
+	job := &ops.Context{Job: &ops.Job{ID: backup.ID, Recovery: map[string]any{"backupId": backup.Result["backupId"], "backupDestination": f.backupTo}}}
+	if err := f.jobs.removeUnpublished(ctx, job); err == nil {
+		t.Fatal("treated an unreadable backup row as absent")
+	}
+	if after := archives(); len(before) == 0 || !slices.Equal(before, after) {
+		t.Fatal(before, after)
 	}
 }
