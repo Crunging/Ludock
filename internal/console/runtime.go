@@ -380,8 +380,13 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 			}
 		}()
 	}
-	// Starting is a mutation: a lost response cannot prove Docker rejected it.
-	conn, err := r.Docker.StartExec(context.WithoutCancel(ctx), execID)
+	// Starting is a mutation: a lost response cannot prove Docker rejected it,
+	// so the start ignores the caller's cancellation. It still has its own
+	// deadline, as Docker can accept it and never answer; a start that times
+	// out is reconciled below as already dispatched.
+	start, cancelStart := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutSeconds+execKillGrace)*time.Second+execStreamGrace)
+	conn, err := r.Docker.StartExec(start, execID)
+	cancelStart()
 	if err != nil {
 		var open *docker.StreamOpenError
 		if docker.StatusCode(err) != 0 || (errors.As(err, &open) && !open.RequestStarted) {
