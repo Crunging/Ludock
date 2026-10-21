@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -102,11 +103,28 @@ func (s *Server) backupPreflight(w http.ResponseWriter, r *http.Request, request
 }
 
 // enqueue queues work for a confirmed server and follows it in the
-// server's activity.
+// server's activity. Administrator-only work is queued only while the
+// requesting session is still an administrator's: the runner later checks
+// the account, not the session.
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Request, resolved *servers.Context, user *db.SessionUser,
 	kind string, input map[string]any) {
-	job, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
-		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)})
+	options := ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: user.ID, Kind: kind,
+		BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)}
+	var job *ops.Job
+	var err error
+	if kind == "restore" || kind == "update" {
+		err = s.App.DB.AdminMutation(r.Context(), user.ID, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
+			job, err = s.App.Runner.Enqueue(r.Context(), tx, options)
+			return err
+		})
+		if err == nil {
+			s.App.DB.PruneAuditIfNeeded(r.Context())
+			s.App.Runner.Wake()
+		}
+		err = authz.AdminMutationError(err)
+	} else {
+		job, err = s.App.Runner.Enqueue(r.Context(), nil, options)
+	}
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
