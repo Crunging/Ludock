@@ -487,7 +487,11 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 	if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
 		log.Warn("Audit retention cleanup failed after schedule creation; it will be retried")
 	}
+	// The owner's account may have been deleted since, taking the schedule.
 	r, err := s.get(ctx, s.DB, id, serverID)
+	if err == nil && r == nil {
+		err = errNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
