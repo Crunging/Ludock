@@ -338,13 +338,14 @@ func (s *Service) Mkdir(ctx context.Context, target Target, rootID, parent, name
 	if err != nil {
 		return err
 	}
-	defer access.Cleanup(false)
 	_, err = access.request(ctx, helper.FileRequest{Operation: "mkdir", Root: root.Path, Path: normalized}, nil, nil)
+	access.Cleanup(err != nil)
 	return err
 }
 
-// Delete removes a file or folder. A cancelled deletion may still be running
-// when Docker is unavailable, so its helper is removed before returning.
+// Delete removes a file or folder. A failed change, here and in Mkdir and
+// Rename, may still be running when Docker is unavailable, so its helper is
+// removed before returning.
 func (s *Service) Delete(ctx context.Context, target Target, rootID, relative string, assertAccess func() error) error {
 	root, normalized, err := resolve(target, rootID, relative)
 	if err != nil {
@@ -378,13 +379,13 @@ func (s *Service) Rename(ctx context.Context, target Target, rootID, relative, n
 	if err != nil {
 		return err
 	}
-	defer access.Cleanup(false)
 	dir := path.Dir(normalized)
 	if dir == "." {
 		dir = ""
 	}
 	_, err = access.request(ctx, helper.FileRequest{Operation: "rename", Root: root.Path, Path: normalized,
 		Destination: joinRelative(dir, newName)}, nil, nil)
+	access.Cleanup(err != nil)
 	return err
 }
 
