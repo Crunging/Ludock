@@ -219,7 +219,8 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Enter a grace period between 10 and 86400 seconds."))
 		return
 	}
-	if _, err := s.App.Monitor.Configure(r.Context(), id, policy); err != nil {
+	if _, err := s.App.Monitor.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, id, policy); err != nil {
+		err = authz.AdminMutationError(err)
 		s.fail(w, r, request, err)
 		return
 	}

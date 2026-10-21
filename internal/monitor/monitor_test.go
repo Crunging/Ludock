@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
@@ -23,7 +24,10 @@ func setup(t *testing.T) (*Service, *recorder, identity.Server) {
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
 	events := &recorder{}
 	s := &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
-	if _, err := s.Configure(ctx, list[0].ID, Policy{Enabled: true, GraceSeconds: 60}); err != nil {
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Configure(ctx, "admin", dbtest.Session(t, d, "admin"), list[0].ID, Policy{Enabled: true, GraceSeconds: 60}); err != nil {
 		t.Fatal(err)
 	}
 	return s, events, list[0]

@@ -91,15 +91,22 @@ func (s *Service) ConnectionHost(ctx context.Context) string {
 
 // SetConnectionHost stores or clears the public host.
 // An invalid host is rejected rather than stored.
-func (s *Service) SetConnectionHost(ctx context.Context, host string) error {
-	if strings.TrimSpace(host) == "" {
-		return s.DB.DeleteSetting(ctx, connectionHostSetting)
+func (s *Service) SetConnectionHost(ctx context.Context, adminID, tokenHash, host string) error {
+	normalized := ""
+	if strings.TrimSpace(host) != "" {
+		var ok bool
+		if normalized, ok = games.ConnectionHost(host); !ok {
+			return apperr.New("INVALID_REQUEST", 400, "Enter a host name or IP address, such as play.example.com or 203.0.113.10.")
+		}
 	}
-	normalized, ok := games.ConnectionHost(host)
-	if !ok {
-		return apperr.New("INVALID_REQUEST", 400, "Enter a host name or IP address, such as play.example.com or 203.0.113.10.")
-	}
-	return s.DB.SetSetting(ctx, nil, connectionHostSetting, normalized)
+	// The administrator is checked again in the transaction that saves it.
+	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		if normalized == "" {
+			_, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key=?", connectionHostSetting)
+			return err
+		}
+		return s.DB.SetSetting(ctx, tx, connectionHostSetting, normalized)
+	})
 }
 
 // Connection is the address players use. A "label" source is the owner's

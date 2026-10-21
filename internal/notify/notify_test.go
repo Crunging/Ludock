@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 )
 
@@ -26,32 +27,46 @@ func respond(status int, body string) (*http.Response, error) {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 }
 
+// adminSession is the administrator's session token hash in adminDB.
+var adminSession string
+
+// adminDB opens a database with an administrator signed in.
+func adminDB(t *testing.T) *db.DB {
+	t.Helper()
+	d := dbtest.Open(t)
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	adminSession = dbtest.Session(t, d, "admin")
+	return d
+}
+
 func setup(t *testing.T, transport roundTrip) *Service {
 	t.Helper()
-	s := &Service{DB: dbtest.Open(t), Client: &http.Client{Transport: transport}}
+	s := &Service{DB: adminDB(t), Client: &http.Client{Transport: transport}}
 	url := webhook
-	if err := s.Configure(ctx, true, &url); err != nil {
+	if err := s.Configure(ctx, "admin", adminSession, true, &url); err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
 func TestWebhookValidation(t *testing.T) {
-	s := &Service{DB: dbtest.Open(t)}
+	s := &Service{DB: adminDB(t)}
 	for _, url := range []string{"http://discord.com/api/webhooks/1/a", "https://evil.example/api/webhooks/1/a",
 		"https://discord.com:8443/api/webhooks/1/a", "https://user@discord.com/api/webhooks/1/a",
 		"https://discord.com/api/webhooks/1/a?x=1", "https://discord.com/api/webhooks/1/a#x", "https://discord.com/other", "not a url"} {
-		if err := s.Configure(ctx, true, &url); err == nil {
+		if err := s.Configure(ctx, "admin", adminSession, true, &url); err == nil {
 			t.Errorf("accepted %s", url)
 		}
 	}
-	if err := s.Configure(ctx, true, nil); !apperr.Is(err, "WEBHOOK_REQUIRED") {
+	if err := s.Configure(ctx, "admin", adminSession, true, nil); !apperr.Is(err, "WEBHOOK_REQUIRED") {
 		t.Fatal(err)
 	}
 	url := webhook
-	s.Configure(ctx, false, &url)
+	s.Configure(ctx, "admin", adminSession, false, &url)
 	// Saving without a URL keeps the saved one.
-	if err := s.Configure(ctx, true, nil); err != nil || !s.Configuration(ctx).Configured {
+	if err := s.Configure(ctx, "admin", adminSession, true, nil); err != nil || !s.Configuration(ctx).Configured {
 		t.Fatal(err)
 	}
 }
@@ -81,11 +96,11 @@ func TestBoundedRetriesKeepSecretsOut(t *testing.T) {
 	if strings.Contains(stored, "secret-token") {
 		t.Fatal("webhook secret stored")
 	}
-	retried, err := s.Retry(ctx, deliveries[0].ID)
+	retried, err := s.Retry(ctx, "admin", adminSession, deliveries[0].ID)
 	if err != nil || retried.State != "queued" || retried.Retryable {
 		t.Fatal(retried, err)
 	}
-	if _, err := s.Retry(ctx, deliveries[0].ID); !apperr.Is(err, "NOTIFICATION_NOT_RETRYABLE") {
+	if _, err := s.Retry(ctx, "admin", adminSession, deliveries[0].ID); !apperr.Is(err, "NOTIFICATION_NOT_RETRYABLE") {
 		t.Fatal(err)
 	}
 }
@@ -96,7 +111,7 @@ func TestUnsavedResultIsNotResentEveryTick(t *testing.T) {
 		calls++
 		return respond(204, "")
 	})
-	if _, err := s.QueueTest(ctx); err != nil {
+	if _, err := s.QueueTest(ctx, "admin", adminSession); err != nil {
 		t.Fatal(err)
 	}
 	// Recording the delivered state fails, as with a full or broken disk.
@@ -143,7 +158,7 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 		statuses = statuses[1:]
 		return respond(status, `{"message":"token secret-token_value"}`)
 	})
-	test, err := s.QueueTest(ctx)
+	test, err := s.QueueTest(ctx, "admin", adminSession)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,9 +174,9 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 		t.Fatalf("%+v", deliveries[0])
 	}
 	// Disabled notifications neither queue nor send.
-	s.Configure(ctx, false, nil)
+	s.Configure(ctx, "admin", adminSession, false, nil)
 	s.Notify("event-2", "ignored")
-	if _, err := s.QueueTest(ctx); !apperr.Is(err, "NOTIFICATIONS_DISABLED") {
+	if _, err := s.QueueTest(ctx, "admin", adminSession); !apperr.Is(err, "NOTIFICATIONS_DISABLED") {
 		t.Fatal(err)
 	}
 	var count int
@@ -170,4 +185,18 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 		t.Fatal(count)
 	}
 
+}
+
+func TestRevokedAdministratorCannotSaveAWebhook(t *testing.T) {
+	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
+	if err := s.DB.DeleteUserSessions(ctx, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	other := "https://discord.com/api/webhooks/456/departing-admin"
+	if err := s.Configure(ctx, "admin", adminSession, true, &other); !errors.Is(err, db.ErrSessionGone) {
+		t.Fatal(err)
+	}
+	if saved := s.settings(ctx); saved.WebhookURL != webhook {
+		t.Fatal("saved a webhook after the session was revoked")
+	}
 }

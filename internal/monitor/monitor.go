@@ -111,12 +111,16 @@ func (s *Service) Get(ctx context.Context, serverID string) (*Availability, erro
 		SuppressedUntil: r.suppressed, IntentionallyStopped: r.intentional == 1, LastState: r.lastState.String}}, nil
 }
 
-// Configure saves a policy and resets any outage.
-func (s *Service) Configure(ctx context.Context, serverID string, policy Policy) (*Availability, error) {
+// Configure saves a policy and resets any outage. The administrator's
+// session and role are checked again in the transaction that saves it.
+func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID string, policy Policy) (*Availability, error) {
 	encoded, _ := json.Marshal(policy)
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
-    ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0`,
-		serverID, string(encoded), db.Now()); err != nil {
+	if err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
+      ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0`,
+			serverID, string(encoded), db.Now())
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, serverID)

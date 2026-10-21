@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/web/views"
@@ -74,7 +75,8 @@ func (s *Server) settingStatus(w http.ResponseWriter, r *http.Request, request *
 }
 
 func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, request *Request) {
-	err := s.App.Servers.SetConnectionHost(r.Context(), r.PostFormValue("host"))
+	err := authz.AdminMutationError(s.App.Servers.SetConnectionHost(r.Context(), request.User().ID, request.Principal.TokenHash,
+		r.PostFormValue("host")))
 	status, ok := s.settingStatus(w, r, request, err)
 	if !ok {
 		return
@@ -139,7 +141,7 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 		webhook = &value
 	}
 	enabled := r.PostFormValue("enabled") == "true"
-	err := s.App.Notify.Configure(r.Context(), enabled, webhook)
+	err := authz.AdminMutationError(s.App.Notify.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, enabled, webhook))
 	status, ok := s.settingStatus(w, r, request, err)
 	if !ok {
 		return
@@ -178,11 +180,12 @@ func (s *Server) queueNotification(retry bool) func(http.ResponseWriter, *http.R
 		var err error
 		action := "notifications.test_queued"
 		if retry {
-			delivery, err = s.App.Notify.Retry(r.Context(), r.PathValue("id"))
+			delivery, err = s.App.Notify.Retry(r.Context(), request.User().ID, request.Principal.TokenHash, r.PathValue("id"))
 			action = "notifications.retry_queued"
 		} else {
-			delivery, err = s.App.Notify.QueueTest(r.Context())
+			delivery, err = s.App.Notify.QueueTest(r.Context(), request.User().ID, request.Principal.TokenHash)
 		}
+		err = authz.AdminMutationError(err)
 		if err == nil {
 			s.audit(r, request, action, "", map[string]any{"deliveryId": delivery.ID})
 		}

@@ -103,15 +103,33 @@ func (s *Service) Configuration(ctx context.Context) Configuration {
 var webhookPath = regexp.MustCompile(`^/api/webhooks/\d+/[A-Za-z0-9_-]+$`)
 
 // Configure saves settings. An empty webhookURL keeps the saved one.
-func (s *Service) Configure(ctx context.Context, enabled bool, webhookURL *string) error {
-	saved, err := s.load(ctx)
-	if err != nil {
-		return err
-	}
-	value := saved.WebhookURL
-	if webhookURL != nil {
-		value = *webhookURL
-	}
+// The administrator's session and role are checked again in the transaction
+// that saves them.
+func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, enabled bool, webhookURL *string) error {
+	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		value := ""
+		if webhookURL != nil {
+			value = *webhookURL
+		} else {
+			var saved settings
+			var raw string
+			err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
+			if err == nil {
+				err = json.Unmarshal([]byte(raw), &saved)
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			value = saved.WebhookURL
+		}
+		if err := validWebhook(enabled, value); err != nil {
+			return err
+		}
+		return s.DB.SetSetting(ctx, tx, settingKey, settings{Enabled: enabled, WebhookURL: value})
+	})
+}
+
+func validWebhook(enabled bool, value string) error {
 	if len(value) > 1024 {
 		return apperr.New("INVALID_WEBHOOK", 400, "Enter a valid Discord webhook URL")
 	}
@@ -129,7 +147,7 @@ func (s *Service) Configure(ctx context.Context, enabled bool, webhookURL *strin
 	if enabled && value == "" {
 		return apperr.New("WEBHOOK_REQUIRED", 400, "Configure a webhook before enabling notifications")
 	}
-	return s.DB.SetSetting(ctx, nil, settingKey, settings{Enabled: enabled, WebhookURL: value})
+	return nil
 }
 
 type row struct {
@@ -200,11 +218,13 @@ func truncate(message string, limit int) string {
 	return string(runes)
 }
 
-func (s *Service) enqueue(ctx context.Context, key, message, kind string) (string, error) {
+func (s *Service) enqueue(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, key, message, kind string) (string, error) {
 	id := identity.NewUUID()
 	now := db.Now()
 	payload, _ := json.Marshal(map[string]any{"content": truncate(message, 1800), "allowed_mentions": map[string]any{"parse": []string{}}})
-	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO notification_deliveries
+	_, err := q.ExecContext(ctx, `INSERT OR IGNORE INTO notification_deliveries
     (id,event_key,payload_json,next_attempt_at,created_at,kind) VALUES(?,?,?,?,?,?)`, id, key, string(payload), now, now, kind)
 	return id, err
 }
@@ -254,7 +274,7 @@ func (s *Service) queueEvent(key, message string) error {
 	if err != nil || !value.Enabled {
 		return err
 	}
-	_, err = s.enqueue(ctx, key, message, "event")
+	_, err = s.enqueue(ctx, s.DB, key, message, "event")
 	return err
 }
 
@@ -277,12 +297,18 @@ func (s *Service) assertEnabled(ctx context.Context) error {
 	return nil
 }
 
-// QueueTest queues a test message.
-func (s *Service) QueueTest(ctx context.Context) (*Delivery, error) {
+// QueueTest queues a test message, checking the administrator again in the
+// transaction that queues it.
+func (s *Service) QueueTest(ctx context.Context, adminID, tokenHash string) (*Delivery, error) {
 	if err := s.assertEnabled(ctx); err != nil {
 		return nil, err
 	}
-	id, err := s.enqueue(ctx, "test:"+identity.NewUUID(), "Ludock test notification: Discord delivery is working.", "test")
+	var id string
+	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		var err error
+		id, err = s.enqueue(ctx, tx, "test:"+identity.NewUUID(), "Ludock test notification: Discord delivery is working.", "test")
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +323,7 @@ func (s *Service) QueueTest(ctx context.Context) (*Delivery, error) {
 // Retry grants a failed delivery a fresh bounded retry cycle, keeping its
 // lifetime attempts and last failure. Clearing the cycle count also rejects
 // duplicate clicks.
-func (s *Service) Retry(ctx context.Context, id string) (*Delivery, error) {
+func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*Delivery, error) {
 	if err := s.assertEnabled(ctx); err != nil {
 		return nil, err
 	}
@@ -310,13 +336,20 @@ func (s *Service) Retry(ctx context.Context, id string) (*Delivery, error) {
 	}
 	// Only the row as read is retried: a send claimed or finished since then
 	// changes last_attempt_at or the counters, and must not be queued again.
-	result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
-    WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-		db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
+	changed := int64(0)
+	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
+      WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
+			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
+		if err == nil {
+			changed, err = result.RowsAffected()
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+	if changed != 1 {
 		return nil, apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
 	}
 	if r, err = s.row(ctx, id); err != nil {
