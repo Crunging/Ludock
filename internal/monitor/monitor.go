@@ -122,12 +122,12 @@ func (s *Service) Configure(ctx context.Context, serverID string, policy Policy)
 	return s.Get(ctx, serverID)
 }
 
+// ensureRow adds the default policy only if none exists, so it never
+// replaces one saved concurrently.
 func (s *Service) ensureRow(ctx context.Context, serverID string) error {
-	r, err := s.row(ctx, serverID)
-	if err != nil || r != nil {
-		return err
-	}
-	_, err = s.Configure(ctx, serverID, Policy{GraceSeconds: 120})
+	encoded, _ := json.Marshal(Policy{GraceSeconds: 120})
+	_, err := s.DB.ExecContext(ctx, "INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO NOTHING",
+		serverID, string(encoded), db.Now())
 	return err
 }
 
