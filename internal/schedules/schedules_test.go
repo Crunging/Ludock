@@ -353,3 +353,45 @@ func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
 		t.Fatal("a database error consumed the slot")
 	}
 }
+
+func TestScheduleRemovedRightAfterCreationIsNotFound(t *testing.T) {
+	f := setup(t)
+	// The owner's account is deleted as soon as the schedule commits, which
+	// takes the schedule with it.
+	if _, err := f.s.DB.Exec(`CREATE TRIGGER gone AFTER INSERT ON schedules BEGIN DELETE FROM schedules WHERE id = NEW.id; END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); !apperr.Is(err, "NOT_FOUND") {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentScheduleWritesDoNotStall(t *testing.T) {
+	f := setup(t)
+	var created []Schedule
+	for range 8 {
+		schedule, err := f.s.Create(ctx, admin, f.serverID, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created = append(created, *schedule)
+	}
+	// More writers than pooled connections: none may wait on another for a
+	// connection while holding the write lock.
+	started := time.Now()
+	errs := make(chan error, len(created))
+	for _, schedule := range created {
+		go func() {
+			_, err := f.s.SetEnabled(ctx, admin, f.serverID, schedule.ID, schedule.Revision, false)
+			errs <- err
+		}()
+	}
+	for range created {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatal("concurrent writes stalled for", elapsed)
+	}
+}

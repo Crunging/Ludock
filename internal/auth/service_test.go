@@ -517,3 +517,23 @@ func TestFailedSetupSessionCanBeRetried(t *testing.T) {
 		t.Fatal(principal, err)
 	}
 }
+
+func TestUserDeletedRightAfterAChangeIsNotFound(t *testing.T) {
+	s, _, principal := racingService(t)
+	// Another administrator deletes the account as soon as each change commits.
+	for _, statement := range []string{
+		`CREATE TRIGGER gone_created AFTER INSERT ON users WHEN NEW.username = 'newcomer' BEGIN DELETE FROM users WHERE id = NEW.id; END`,
+		`CREATE TRIGGER gone_changed AFTER UPDATE OF role ON users WHEN NEW.id = '` + targetID + `' BEGIN DELETE FROM users WHERE id = NEW.id; END`,
+	} {
+		if _, err := s.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := Client{IP: "127.0.0.1"}
+	if _, err := s.CreateUser(ctx, principal, "newcomer", "a long enough password", db.RoleViewer, client); !apperr.Is(err, "USER_NOT_FOUND") {
+		t.Fatal("create", err)
+	}
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleViewer, false, client); !apperr.Is(err, "USER_NOT_FOUND") {
+		t.Fatal("update", err)
+	}
+}
