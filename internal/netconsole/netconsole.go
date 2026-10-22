@@ -161,10 +161,21 @@ type readResult struct {
 	err  error
 }
 
-func reader(conn net.Conn, limit int, limitMessage string) <-chan readResult {
+// reader reads conn until it fails or done closes. The command's context
+// closes done when it returns, so a reader with unread results never waits
+// on a send no one receives.
+func reader(conn net.Conn, limit int, limitMessage string, done <-chan struct{}) <-chan readResult {
 	results := make(chan readResult, 16)
 	go func() {
 		defer close(results)
+		send := func(result readResult) bool {
+			select {
+			case results <- result:
+				return true
+			case <-done:
+				return false
+			}
+		}
 		buffer := make([]byte, 64*1024)
 		total := 0
 		for {
@@ -172,13 +183,15 @@ func reader(conn net.Conn, limit int, limitMessage string) <-chan readResult {
 			if n > 0 {
 				total += n
 				if total > limit {
-					results <- readResult{err: errors.New(limitMessage)}
+					send(readResult{err: errors.New(limitMessage)})
 					return
 				}
-				results <- readResult{data: append([]byte(nil), buffer[:n]...)}
+				if !send(readResult{data: append([]byte(nil), buffer[:n]...)}) {
+					return
+				}
 			}
 			if err != nil {
-				results <- readResult{err: err}
+				send(readResult{err: err})
 				return
 			}
 		}
@@ -209,7 +222,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 	if err := s.write(auth); err != nil {
 		return "", err
 	}
-	results := reader(conn, maxTCPReceived, "RCON response is too large")
+	results := reader(conn, maxTCPReceived, "RCON response is too large", ctx.Done())
 	var buffer []byte
 	authenticated, commandSent, received := false, false, false
 	var response bytes.Buffer
@@ -452,7 +465,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	s := &session{conn: conn, control: control, connErr: "Could not connect to the server's Telnet console"}
-	results := reader(conn, maxTCPReceived, "Telnet console response is too large")
+	results := reader(conn, maxTCPReceived, "Telnet console response is too large", ctx.Done())
 	var decoder telnetDecoder
 	var raw []byte
 	passwordSent, commandSent := false, false

@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -160,5 +162,37 @@ func TestRustWebRCON(t *testing.T) {
 func TestCleanTelnet(t *testing.T) {
 	if got := CleanTelnet("Welcome\nPassword: \r\nsay hi\nok", "say hi"); got != "ok" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestAReaderStopsWhenItsCommandEndsWithResultsUnread(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		chunk := make([]byte, 64*1024)
+		for {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	conn, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	results := reader(conn, 1<<30, "too large", done)
+	// The command reads one chunk and returns, as on a malformed first
+	// packet, while the endpoint keeps sending.
+	<-results
+	time.Sleep(200 * time.Millisecond)
+	close(done)
+	conn.Close()
+	readers := func() int {
+		stacks := make([]byte, 1<<20)
+		return strings.Count(string(stacks[:runtime.Stack(stacks, true)]), "netconsole.reader")
+	}
+	for deadline := time.Now().Add(5 * time.Second); readers() > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a reader is left waiting to send results no one reads")
+		}
 	}
 }
