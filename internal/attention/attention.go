@@ -79,7 +79,10 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		if !slices.Contains(permissions, authz.ServerView) {
 			continue
 		}
-		hasVisible = true
+		if testHook != nil {
+			testHook("checked")
+		}
+		start := len(result.Items)
 		base := Item{ServerID: server.ID, ServerName: server.DisplayName}
 		if server.Status != identity.StatusActive {
 			item := base
@@ -97,10 +100,19 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			result.Items = append(result.Items, item)
 		}
 		if slices.Contains(permissions, authz.SchedulesManage) && s.Schedules != nil {
-			// Access revoked since the check above only hides the schedules.
 			list, err := s.Schedules.List(ctx, actor, server.ID)
 			if _, public := apperr.As(err); err != nil && !public {
 				return nil, err
+			}
+			// Access changed since the check above: losing schedules.manage
+			// only hides the schedules, but losing the server hides it all.
+			if err != nil {
+				if visible, err := s.Authz.Has(ctx, actor, server.ID, authz.ServerView); err != nil {
+					return nil, err
+				} else if !visible {
+					result.Items = result.Items[:start]
+					continue
+				}
 			}
 			for _, schedule := range list {
 				if !schedule.Enabled || schedule.NextRunUnavailableReason == "" {
@@ -135,6 +147,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+		hasVisible = true
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool {
 		left, right := result.Items[i], result.Items[j]
@@ -155,3 +168,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 	}
 	return result, nil
 }
+
+// testHook, set only by tests, runs at named points in List so a test can
+// force an interleaving.
+var testHook func(point string)
