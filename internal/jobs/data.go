@@ -646,8 +646,9 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root s
 
 var errRestoreCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
 
-// assertStagingRoom refuses, before the server stops, a restore whose roots
-// cannot each fit; staging checks again as it runs.
+// assertStagingRoom refuses, before the server stops, a restore that cannot
+// fit: roots on one filesystem must fit together above the reserve. Staging
+// checks again as it runs.
 func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, job *ops.Context, roots []backups.Root,
 	staged map[string]int64, reserve int64, assertAccess func() error) error {
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
@@ -655,6 +656,7 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 		return err
 	}
 	defer data.Cleanup()
+	needed, available := map[string]int64{}, map[string]float64{}
 	for _, root := range roots {
 		destination, err := backups.HelperRoot(server, root)
 		if err != nil {
@@ -664,7 +666,19 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 		if err != nil {
 			return err
 		}
-		if available, ok := number(space["availableBytes"]); !ok || available < float64(staged[root.ID]+reserve) {
+		free, ok := number(space["availableBytes"])
+		if !ok {
+			return errRestoreCapacity
+		}
+		device, _ := text(space["device"])
+		if device == "" {
+			device = "root:" + root.ID
+		}
+		needed[device] += staged[root.ID]
+		available[device] = free
+	}
+	for device, bytes := range needed {
+		if available[device] < float64(bytes+reserve) {
 			return errRestoreCapacity
 		}
 	}

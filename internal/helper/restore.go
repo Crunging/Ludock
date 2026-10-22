@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -203,7 +204,12 @@ func (h *restoreHelper) run() (any, error) {
 		if bytes > 1<<53-1 {
 			return nil, errUnsafe
 		}
-		return map[string]int64{"availableBytes": bytes}, nil
+		// The device identifies roots that share a filesystem and its space.
+		var info unix.Stat_t
+		if err := unix.Fstat(int(root), &info); err != nil {
+			return nil, err
+		}
+		return map[string]any{"availableBytes": bytes, "device": strconv.FormatUint(uint64(info.Dev), 10)}, nil
 	case "stage":
 		if err := unix.Mkdirat(int(root), h.request.Stage, 0o700); err != nil {
 			return nil, err

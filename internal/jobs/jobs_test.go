@@ -366,8 +366,9 @@ func TestUpdateCommandStopsWhenTheOwnerLosesAuthority(t *testing.T) {
 	}
 }
 
-func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
-	f := setup(t)
+// twoRootBackup backs up two 4 MiB data roots with a 1 MiB reserve.
+func twoRootBackup(t *testing.T, f *fixture) any {
+	t.Helper()
 	world, config := filepath.Join(f.data, "world"), filepath.Join(f.data, "config")
 	if err := os.MkdirAll(config, 0o755); err != nil {
 		t.Fatal(err)
@@ -395,28 +396,57 @@ func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
 	if backup.Status != ops.Succeeded {
 		t.Fatal(backup)
 	}
-	// Both roots share a filesystem with 10 MiB free, as both checks before
-	// the server stops see: staging the first leaves 6 MiB, enough for the
-	// second and the reserve.
-	run, checks := f.engine.Exec, 0
+	return backup.Result["backupId"]
+}
+
+// spaceReports answers restore space probes with free(check), counting
+// from 1, on one shared device.
+func spaceReports(f *fixture, free func(check int) int) *int {
+	run, checks := f.engine.Exec, new(int)
 	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 		var request helper.RestoreRequest
 		if len(cmd) > 3 && cmd[0] == helper.Binary && cmd[2] == "restore" && json.Unmarshal([]byte(cmd[3]), &request) == nil &&
 			request.Operation == "space" {
-			checks++
-			available := 10 << 20
-			if checks > 3 {
-				available = 6 << 20
-			}
-			out, _ := json.Marshal(map[string]int{"availableBytes": available})
+			*checks++
+			out, _ := json.Marshal(map[string]any{"availableBytes": free(*checks), "device": "1"})
 			stdout(out)
 			return 0
 		}
 		return run(c, cmd, stdin, stdout, stderr)
 	}
-	restored := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"})
-	if restored.Status != ops.Succeeded || checks != 4 {
-		t.Fatal(restored.Status, restored.Error, checks)
+	return checks
+}
+
+func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
+	f := setup(t)
+	backupID := twoRootBackup(t, f)
+	// Both roots share a filesystem with 10 MiB free, as both checks before
+	// the server stops see: staging the first leaves 6 MiB, enough for the
+	// second and the reserve.
+	checks := spaceReports(f, func(check int) int {
+		if check > 3 {
+			return 6 << 20
+		}
+		return 10 << 20
+	})
+	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
+	if restored.Status != ops.Succeeded || *checks != 4 {
+		t.Fatal(restored.Status, restored.Error, *checks)
+	}
+}
+
+func TestRootsSharingADiskMustFitTogetherBeforeTheServerStops(t *testing.T) {
+	f := setup(t)
+	backupID := twoRootBackup(t, f)
+	before, _ := f.jobs.Backups.List(ctx, f.serverID)
+	// Each root fits in 9 MiB on its own, but not both and the reserve.
+	checks := spaceReports(f, func(int) int { return 9 << 20 })
+	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
+	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "lacks space") || *checks != 2 {
+		t.Fatal(restored.Status, restored.Error, *checks)
+	}
+	if after, _ := f.jobs.Backups.List(ctx, f.serverID); len(after) != len(before) {
+		t.Fatal("stopped the server and took a safety backup for a restore that cannot fit")
 	}
 }
 
