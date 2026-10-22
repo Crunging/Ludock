@@ -370,7 +370,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 					return err
 				}
 				if mutation == servers.Stop {
-					return record(job, "stopping", stopRecovery(info))
+					// Recovery takes these locks before checking authority again.
+					recovery := stopRecovery(info)
+					recovery["lockKeys"] = server.LockKeys
+					return record(job, "stopping", recovery)
 				}
 				return nil
 			})
@@ -410,6 +413,27 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 	})
 }
 
+// awaitStopDeadline returns err once a dispatched stop's saved deadline has
+// passed, by which Docker has finished or killed the container. Recovery
+// stops acting when authority or the binding changes, but holds its locks
+// while the stop already sent may still be running.
+func (j *Jobs) awaitStopDeadline(ctx context.Context, job *ops.Context, unsettled bool, err error) error {
+	deadline, ok := number(job.Job.Recovery["stopRecoveryDeadlineAt"])
+	if !unsettled || !ok {
+		return err
+	}
+	if wait := time.Until(time.UnixMilli(int64(deadline))); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
 func stopRecovery(info *docker.ContainerInspect) map[string]any {
 	state := servers.StopRecoveryState(info, time.Now())
 	result := map[string]any{"stopStarted": state.StopStarted, "stopRecoveryDeadlineAt": state.StopRecoveryDeadlineAt,
@@ -428,23 +452,30 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 	if job.Job.Kind != "start" && job.Job.Kind != "stop" && job.Job.Kind != "restart" {
 		return nil, apperr.New("INVALID_OPERATION_STATE", 409, "Invalid lifecycle action")
 	}
-	initial, err := j.resolve(ctx, job, permission, true)
-	if err != nil {
-		return nil, err
+	recovery := job.Job.Recovery
+	unsettled := recovery["stopStarted"] == true && recovery["stopSettled"] != true
+	// A dispatched stop may still be running in Docker, whatever its owner's
+	// authority is now: its saved locks are taken first.
+	held, saved := stringList(recovery["lockKeys"])
+	if !unsettled || !saved {
+		initial, err := j.resolve(ctx, job, permission, true)
+		if err != nil {
+			return nil, err
+		}
+		held = initial.LockKeys
 	}
-	release, err := j.Locks.AcquireForRecovery(initial.LockKeys)
+	release, err := j.Locks.AcquireForRecovery(held)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 	server, err := j.resolve(ctx, job, permission, true)
 	if err != nil {
-		return nil, err
+		return nil, j.awaitStopDeadline(ctx, job, unsettled, err)
 	}
 	defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
-	recovery := job.Job.Recovery
 	containerID, _ := text(recovery["containerId"])
-	if recovery["stopStarted"] == true && recovery["stopSettled"] != true && containerID == server.Container.ID {
+	if unsettled && containerID == server.Container.ID {
 		deadline, deadlineOK := number(recovery["stopRecoveryDeadlineAt"])
 		initialStarted, initialOK := number(recovery["stopInitialStartedAt"])
 		if err := record(job, "reconciling_stop", nil); err != nil {
@@ -468,18 +499,18 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 				break
 			}
 			if err := j.assertCapability(ctx, job, permission); err != nil {
-				return nil, err
+				return nil, j.awaitStopDeadline(ctx, job, true, err)
 			}
 			if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.Job.BindingRevision); err != nil {
-				return nil, err
+				return nil, j.awaitStopDeadline(ctx, job, true, err)
 			}
 			time.Sleep(min(j.poll(), remaining))
 			refreshed, err := j.resolve(ctx, job, permission, true)
 			if err != nil {
 				// Retry transient daemon failures within the deadline; changes to
-				// authority or the binding stop reconciliation immediately.
+				// authority or the binding stop reconciliation at once.
 				if _, public := apperr.As(err); public {
-					return nil, err
+					return nil, j.awaitStopDeadline(ctx, job, true, err)
 				}
 				continue
 			}

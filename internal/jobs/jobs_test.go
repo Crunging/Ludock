@@ -512,3 +512,32 @@ func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
 		t.Fatal("took a safety backup for a restore that cannot fit")
 	}
 }
+
+// Ludock restarts after dispatching a stop whose owner has since been
+// disabled: Docker may still be stopping the server, so recovery keeps its
+// lock until the stop's deadline before reporting the lost authority.
+func TestRecoveryHoldsADispatchedStop(t *testing.T) {
+	f := setup(t)
+	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	deadline := time.Now().Add(400 * time.Millisecond)
+	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
+		BindingRevision: logical.BindingRevision, Recovery: map[string]any{"containerId": logical.ContainerID,
+			"stopStarted": true, "stopRecoveryDeadlineAt": float64(deadline.UnixMilli()), "lockKeys": []any{"server:" + f.serverID}}}}
+	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.jobs.recoverLifecycle(ctx, job)
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if release, err := f.jobs.Locks.Acquire([]string{"server:" + f.serverID}, nil); err == nil {
+		release()
+		t.Fatal("new work could take the server while its stop may still be running")
+	}
+	err := <-done
+	if _, public := apperr.As(err); !public || time.Now().Before(deadline) {
+		t.Fatal("reported", err, "before the stop's deadline")
+	}
+}
