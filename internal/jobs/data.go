@@ -343,7 +343,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err != nil {
 			return nil, err
 		}
-		if err := j.Backups.Storage.Validate(settings.Destination, id, data.Roots, settings.MaxBytes, checksum); err != nil {
+		if _, err := j.Backups.Storage.Validate(settings.Destination, id, data.Roots, settings.MaxBytes, checksum); err != nil {
 			return nil, err
 		}
 		if err := assertCopy(); err != nil {
@@ -740,7 +740,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	if err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum); err != nil {
+	if _, err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum); err != nil {
 		return nil, err
 	}
 	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
@@ -758,7 +758,8 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
 				return nil, err
 			}
-			if err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum); err != nil {
+			staged, err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum)
+			if err != nil {
 				return nil, err
 			}
 			if err := j.stopForData(ctx, server, job); err != nil {
@@ -799,8 +800,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				if err != nil {
 					return nil, err
 				}
+				// Roots staged earlier may share this filesystem and have
+				// already taken their space, so each needs only its own.
 				available, ok := number(space["availableBytes"])
-				if !ok || available < float64(row.Size+settings.ReserveBytes) {
+				if !ok || available < float64(staged[root.ID]+settings.ReserveBytes) {
 					return nil, fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
 				}
 				if err := assertAccess(); err != nil {

@@ -141,16 +141,16 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 		t.Fatal("partial left behind")
 	}
 	roots := []Root{{ID: "root-0", Path: "/data"}}
-	if err := storage.Validate(destination, id, roots, 1<<30, checksum); err != nil {
+	if _, err := storage.Validate(destination, id, roots, 1<<30, checksum); err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.Validate(destination, id, roots, 1<<30, strings.Repeat("0", 64)); !apperr.Is(err, "BACKUP_CHECKSUM") {
+	if _, err := storage.Validate(destination, id, roots, 1<<30, strings.Repeat("0", 64)); !apperr.Is(err, "BACKUP_CHECKSUM") {
 		t.Fatal(err)
 	}
-	if err := storage.Validate(destination, id, []Root{{ID: "root-0"}, {ID: "root-1"}}, 1<<30, checksum); !apperr.Is(err, "INVALID_BACKUP") {
+	if _, err := storage.Validate(destination, id, []Root{{ID: "root-0"}, {ID: "root-1"}}, 1<<30, checksum); !apperr.Is(err, "INVALID_BACKUP") {
 		t.Fatal(err)
 	}
-	if err := storage.Validate(destination, id, roots, 100, checksum); !apperr.Is(err, "BACKUP_CAPACITY") {
+	if _, err := storage.Validate(destination, id, roots, 100, checksum); !apperr.Is(err, "BACKUP_CAPACITY") {
 		t.Fatal(err)
 	}
 	// Stage the archive into a restore stage of a writable helper.

@@ -422,9 +422,12 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 var errCapacity = fail("BACKUP_CAPACITY", "The archive exceeds the configured size limit.")
 
 // ValidateStream checks a whole archive and every recorded root.
-func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte)) error {
+func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte)) (map[string]int64, error) {
 	names := map[string]bool{}
 	found := map[string]bool{}
+	// staged is each root's share of the archive, header and padding
+	// included, which bounds the space its extraction needs.
+	staged := map[string]int64{}
 	var total, read int64
 	err := tarstream.Walk(input, func(header *tarstream.Header, _ io.Reader) error {
 		if err := ValidateEntry(header, roots); err != nil {
@@ -439,8 +442,12 @@ func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 		if total > maxBytes {
 			return errCapacity
 		}
-		if parts := strings.Split(name, "/"); len(parts) == 2 {
+		parts := strings.Split(name, "/")
+		if len(parts) == 2 {
 			found[parts[1]] = true
+		}
+		if len(parts) >= 2 {
+			staged[parts[1]] += 512 + (header.Size+511)/512*512
 		}
 		return nil
 	}, func(chunk []byte) error {
@@ -455,33 +462,35 @@ func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 	})
 	if err != nil {
 		if _, ok := apperr.As(err); ok {
-			return err
+			return nil, err
 		}
-		return fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
+		return nil, fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
 	}
 	for _, root := range roots {
 		if !found[root.ID] {
-			return fail("INVALID_BACKUP", "The archive is missing a recorded data root.")
+			return nil, fail("INVALID_BACKUP", "The archive is missing a recorded data root.")
 		}
 	}
-	return nil
+	return staged, nil
 }
 
-// Validate checks a published archive and its checksum.
-func (s *Storage) Validate(directory, id string, roots []Root, maxBytes int64, checksum string) error {
+// Validate checks a published archive and its checksum, and returns the
+// bytes each root's restore stages.
+func (s *Storage) Validate(directory, id string, roots []Root, maxBytes int64, checksum string) (map[string]int64, error) {
 	file, err := s.Open(directory, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 	hash := sha256.New()
-	if err := ValidateStream(file, roots, maxBytes, func(chunk []byte) { hash.Write(chunk) }); err != nil {
-		return err
+	staged, err := ValidateStream(file, roots, maxBytes, func(chunk []byte) { hash.Write(chunk) })
+	if err != nil {
+		return nil, err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != checksum {
-		return fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
+		return nil, fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
 	}
-	return nil
+	return staged, nil
 }
 
 // Plan is the helper layout for a server's data roots.

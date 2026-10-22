@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -362,5 +363,58 @@ func TestUpdateCommandStopsWhenTheOwnerLosesAuthority(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the command kept running after the owner lost authority")
+	}
+}
+
+func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
+	f := setup(t)
+	world, config := filepath.Join(f.data, "world"), filepath.Join(f.data, "config")
+	if err := os.MkdirAll(config, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{world, config} {
+		if err := os.WriteFile(filepath.Join(root, "large.dat"), make([]byte, 4<<20), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.engine.Update(f.game, func(c *fakedocker.Container) { c.Config.Labels["ludock.files"] = world + "," + config })
+	if _, err := f.jobs.Servers.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	if _, err := f.jobs.Identity.ReviewBinding(ctx, f.admin.ID, f.adminSession, f.serverID, logical.PendingFingerprint,
+		logical.BindingRevision); err != nil {
+		t.Fatal(err)
+	}
+	settings, _, _ := f.jobs.Backups.SavedSettings(ctx)
+	settings.ReserveBytes = 1 << 20
+	if _, err := f.jobs.Backups.SaveSettings(ctx, *settings, f.admin, f.adminSession); err != nil {
+		t.Fatal(err)
+	}
+	backup := f.run(t, "backup", nil)
+	if backup.Status != ops.Succeeded {
+		t.Fatal(backup)
+	}
+	// Both roots share a filesystem with 10 MiB free: staging the first
+	// leaves 6 MiB, enough for the second and the reserve.
+	run, checks := f.engine.Exec, 0
+	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
+		var request helper.RestoreRequest
+		if len(cmd) > 3 && cmd[0] == helper.Binary && cmd[2] == "restore" && json.Unmarshal([]byte(cmd[3]), &request) == nil &&
+			request.Operation == "space" {
+			checks++
+			available := 10 << 20
+			if checks > 1 {
+				available = 6 << 20
+			}
+			out, _ := json.Marshal(map[string]int{"availableBytes": available})
+			stdout(out)
+			return 0
+		}
+		return run(c, cmd, stdin, stdout, stderr)
+	}
+	restored := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"})
+	if restored.Status != ops.Succeeded || checks != 2 {
+		t.Fatal(restored.Status, restored.Error, checks)
 	}
 }
