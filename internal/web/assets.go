@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,37 +22,62 @@ import (
 var embedded embed.FS
 
 var (
-	assetsFS, _  = fs.Sub(embedded, "assets")
-	assetVersion sync.Map // name -> short content hash
-	assetGzip    sync.Map // name -> gzipped content
+	assetsFS, _ = fs.Sub(embedded, "assets")
+	assets      sync.Map // name -> *asset
 )
 
-// gzipped compresses a text asset once. Assets hold no secrets, so
-// compressing them cannot leak one; pages are left uncompressed.
-func gzipped(name string, data []byte) []byte {
-	if value, ok := assetGzip.Load(name); ok {
-		return value.([]byte)
-	}
-	var out bytes.Buffer
-	writer, _ := gzip.NewWriterLevel(&out, gzip.BestCompression)
-	writer.Write(data)
-	writer.Close()
-	assetGzip.Store(name, out.Bytes())
-	return out.Bytes()
+// asset is an embedded file as served, read once.
+type asset struct {
+	data    []byte
+	version string // short content hash
+	kind    string
+	gzip    func() []byte
 }
 
-func versionOf(name string) string {
-	if value, ok := assetVersion.Load(name); ok {
-		return value.(string)
+// stylesheetURL matches a stylesheet's relative url() references.
+var stylesheetURL = regexp.MustCompile(`url\("([a-z0-9][a-z0-9/._-]*)"\)`)
+
+// load reads an asset once. A stylesheet names the files it uses with their
+// versions, so they are cached as long as it is, and its own version covers
+// theirs.
+func load(name string) (*asset, bool) {
+	if value, ok := assets.Load(name); ok {
+		return value.(*asset), true
 	}
 	data, err := fs.ReadFile(assetsFS, name)
 	if err != nil {
-		return ""
+		return nil, false
+	}
+	if path.Ext(name) == ".css" {
+		data = stylesheetURL.ReplaceAllFunc(data, func(match []byte) []byte {
+			target := path.Join(path.Dir(name), string(stylesheetURL.FindSubmatch(match)[1]))
+			referenced, ok := load(target)
+			if !ok {
+				return match
+			}
+			return []byte(`url("` + string(stylesheetURL.FindSubmatch(match)[1]) + "?v=" + referenced.version + `")`)
+		})
 	}
 	sum := sha256.Sum256(data)
-	version := hex.EncodeToString(sum[:6])
-	assetVersion.Store(name, version)
-	return version
+	a := &asset{data: data, version: hex.EncodeToString(sum[:6]), kind: mime.TypeByExtension(path.Ext(name))}
+	// Assets hold no secrets, so compressing them cannot leak one; pages are
+	// left uncompressed.
+	a.gzip = sync.OnceValue(func() []byte {
+		var out bytes.Buffer
+		writer, _ := gzip.NewWriterLevel(&out, gzip.BestCompression)
+		writer.Write(a.data)
+		writer.Close()
+		return out.Bytes()
+	})
+	value, _ := assets.LoadOrStore(name, a)
+	return value.(*asset), true
+}
+
+func versionOf(name string) string {
+	if a, ok := load(name); ok {
+		return a.version
+	}
+	return ""
 }
 
 func init() {
@@ -61,40 +87,39 @@ func init() {
 // serveAsset serves embedded files. Versioned URLs are cached for a year.
 func serveAsset(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/assets/")
-	if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, "..") {
+	if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, "..") || strings.HasPrefix(path.Base(name), "LICENSE") {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := fs.ReadFile(assetsFS, name)
-	if err != nil || strings.HasPrefix(path.Base(name), "LICENSE") {
+	a, ok := load(name)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	kind := mime.TypeByExtension(path.Ext(name))
-	if kind != "" {
-		w.Header().Set("Content-Type", kind)
+	if a.kind != "" {
+		w.Header().Set("Content-Type", a.kind)
 	}
-	if r.URL.Query().Get("v") == versionOf(name) {
+	if r.URL.Query().Get("v") == a.version {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
-		// Unversioned URLs, such as fonts the stylesheet names, revalidate.
+		// Unversioned URLs revalidate.
 		w.Header().Set("Cache-Control", "no-cache")
 	}
-	tag := `"` + versionOf(name) + `"`
+	tag := `"` + a.version + `"`
 	w.Header().Set("ETag", tag)
 	if r.Header.Get("If-None-Match") == tag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	if strings.HasPrefix(kind, "text/") || strings.Contains(kind, "javascript") || strings.Contains(kind, "svg") {
+	if strings.HasPrefix(a.kind, "text/") || strings.Contains(a.kind, "javascript") || strings.Contains(a.kind, "svg") {
 		w.Header().Set("Vary", "Accept-Encoding")
 		if acceptsGzip(r.Header.Get("Accept-Encoding")) {
 			w.Header().Set("Content-Encoding", "gzip")
-			w.Write(gzipped(name, data))
+			w.Write(a.gzip())
 			return
 		}
 	}
-	w.Write(data)
+	w.Write(a.data)
 }
 
 // acceptsGzip reports whether an Accept-Encoding value allows gzip: listed,
