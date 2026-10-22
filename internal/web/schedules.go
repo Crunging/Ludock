@@ -88,7 +88,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 }
 
 func (s *Server) scheduleList(w http.ResponseWriter, r *http.Request, request *Request) {
-	d, err := s.detail(r, request, r.PathValue("id"), "schedules")
+	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
 	if err == nil && d.Tab != "schedules" {
 		err = apperr.New("FORBIDDEN", 403, "Insufficient permissions")
 	}
@@ -156,7 +156,7 @@ func draftForSave(input schedules.Input) schedules.Input {
 func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	scheduleID := r.PathValue("schedule")
-	d, err := s.detail(r, request, r.PathValue("id"), "schedules")
+	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return

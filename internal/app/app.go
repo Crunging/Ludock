@@ -103,11 +103,14 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		Sessions: &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
 		stop:     make(chan struct{})}
 	a.Events = &events.Hub{Docker: client, Identity: store, Authz: authorization, Refresh: func(ctx context.Context) error {
-		_, err := serverService.Refresh(ctx)
+		_, err := serverService.RefreshNow(ctx)
 		return err
 	}}
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
-		Refresh: a.Events.Refresh}
+		Refresh: func(ctx context.Context) error {
+			_, err := serverService.Refresh(ctx)
+			return err
+		}}
 	return a, nil
 }
 

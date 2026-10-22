@@ -311,12 +311,26 @@ func (s *Store) AssertObservedBinding(ctx context.Context, id string, o Observat
 // Reconcile applies one complete, successful snapshot of eligible containers
 // for a host. A failed or partial listing must not make healthy servers
 // missing, so callers only pass complete snapshots. now <= 0 means the
-// current time.
+// current time. It returns the host's servers afterwards.
 func (s *Store) Reconcile(ctx context.Context, observations []Observation, hostID string, now int64) ([]Server, error) {
 	if hostID == "" {
 		var err error
 		if hostID, err = s.DockerHostID(ctx, "local"); err != nil {
 			return nil, err
+		}
+	}
+	if err := s.Apply(ctx, observations, hostID, now); err != nil {
+		return nil, err
+	}
+	return s.List(ctx, hostID)
+}
+
+// Apply is Reconcile without reading the servers back.
+func (s *Store) Apply(ctx context.Context, observations []Observation, hostID string, now int64) error {
+	if hostID == "" {
+		var err error
+		if hostID, err = s.DockerHostID(ctx, "local"); err != nil {
+			return err
 		}
 	}
 	if now <= 0 {
@@ -328,11 +342,11 @@ func (s *Store) Reconcile(ctx context.Context, observations []Observation, hostI
 	for _, o := range observations {
 		key, err := ExternalIdentity(o)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		// Docker can never report one container twice in a coherent snapshot.
 		if seen[o.ContainerID] {
-			return nil, bindingError("INVALID_SERVER_SNAPSHOT", "Duplicate container in Docker snapshot", 409)
+			return bindingError("INVALID_SERVER_SNAPSHOT", "Duplicate container in Docker snapshot", 409)
 		}
 		seen[o.ContainerID] = true
 		if _, ok := groups[key]; !ok {
@@ -345,7 +359,7 @@ func (s *Store) Reconcile(ctx context.Context, observations []Observation, hostI
 		if group := groups[key]; len(group) == 1 {
 			fingerprint, err := s.BindingFingerprint(group[0])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			fingerprints[key] = fingerprint
 		}
@@ -448,10 +462,7 @@ func (s *Store) Reconcile(ctx context.Context, observations []Observation, hostI
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return s.List(ctx, hostID)
+	return err
 }
 
 func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision int64, containerID, fingerprint string, now int64, accepted bool) error {

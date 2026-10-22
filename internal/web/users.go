@@ -159,7 +159,7 @@ func (s *Server) saveUserGrants(w http.ResponseWriter, r *http.Request, request 
 	userID := r.PathValue("id")
 	inputs := views.GrantInputs(r.PostForm)
 	// Grants name logical servers; discovery applies binding changes first.
-	_, err := s.App.Servers.Refresh(r.Context())
+	_, err := s.App.Servers.RefreshNow(r.Context())
 	if err == nil {
 		_, err = s.App.Authz.SetUserGrants(r.Context(), userID, inputs, request.User(), request.Principal.TokenHash)
 	}

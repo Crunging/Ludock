@@ -186,7 +186,7 @@ func TestListFailsWholeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.Fail = 500
-	if _, err := s.Refresh(ctx); err == nil {
+	if _, err := s.RefreshNow(ctx); err == nil {
 		t.Fatal("partial snapshot accepted")
 	}
 	servers, _ := s.Identity.List(ctx, "")

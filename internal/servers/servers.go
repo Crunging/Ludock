@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -22,47 +23,100 @@ type Service struct {
 	Identity *identity.Store
 	Authz    *authz.Service
 	Observer *Observer
+	// Now returns the current time; tests replace it.
+	Now func() time.Time
 
-	mu        sync.Mutex
-	refreshes *refresh
+	mu      sync.Mutex
+	running *refresh
+	last    *refresh
 }
 
 type refresh struct {
-	done   chan struct{}
-	result map[string]Container
-	err    error
+	done    chan struct{}
+	started time.Time
+	writes  uint64
+	result  map[string]Container
+	err     error
+}
+
+const (
+	// Reads reuse a discovery that started this recently, unless Ludock
+	// changed Docker since. Docker events and mutations refresh immediately.
+	discoveryReuse = 2 * time.Second
+	// discoveryTimeout bounds one shared discovery, which no single caller
+	// can cancel.
+	discoveryTimeout = time.Minute
+)
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // Refresh discovers the fleet and reconciles logical servers. Concurrent
-// callers share one discovery.
+// callers share one discovery, and reads within a moment of it reuse it.
 func (s *Service) Refresh(ctx context.Context) (map[string]Container, error) {
-	s.mu.Lock()
-	if current := s.refreshes; current != nil {
+	return s.refresh(ctx, discoveryReuse)
+}
+
+// RefreshNow is Refresh from a discovery that starts after the call, for
+// callers that must see a change that just happened.
+func (s *Service) RefreshNow(ctx context.Context) (map[string]Container, error) {
+	return s.refresh(ctx, 0)
+}
+
+func (s *Service) refresh(ctx context.Context, reuse time.Duration) (map[string]Container, error) {
+	since := s.now().Add(-reuse)
+	for {
+		s.mu.Lock()
+		if last := s.last; last != nil && !last.started.Before(since) && last.writes == s.Observer.Docker.Writes() {
+			s.mu.Unlock()
+			return last.result, nil
+		}
+		current := s.running
+		if current == nil {
+			current = &refresh{done: make(chan struct{}), started: s.now(), writes: s.Observer.Docker.Writes()}
+			s.running = current
+			s.mu.Unlock()
+			s.discover(ctx, current)
+			return current.result, current.err
+		}
 		s.mu.Unlock()
 		select {
 		case <-current.done:
-			return current.result, current.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		// A discovery that started before the call may predate the change
+		// a forced caller needs to see.
+		if reuse > 0 || !current.started.Before(since) {
+			return current.result, current.err
+		}
 	}
-	current := &refresh{done: make(chan struct{})}
-	s.refreshes = current
-	s.mu.Unlock()
+}
+
+func (s *Service) discover(ctx context.Context, current *refresh) {
 	defer func() {
 		s.mu.Lock()
-		s.refreshes = nil
+		s.running = nil
+		if current.err == nil {
+			s.last = current
+		}
 		s.mu.Unlock()
 		close(current.done)
 	}()
 	// The shared discovery must not be cancelled by the first caller leaving.
-	observed, err := s.Observer.List(context.WithoutCancel(ctx))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout)
+	defer cancel()
+	observed, err := s.Observer.List(ctx)
 	if err == nil {
 		observations := make([]identity.Observation, len(observed))
 		for index, entry := range observed {
 			observations[index] = entry.Observation
 		}
-		if _, err = s.Identity.Reconcile(context.WithoutCancel(ctx), observations, "", 0); err == nil {
+		if err = s.Identity.Apply(ctx, observations, "", 0); err == nil {
 			current.result = map[string]Container{}
 			for _, entry := range observed {
 				current.result[entry.Container.ID] = entry.Container
@@ -70,7 +124,6 @@ func (s *Service) Refresh(ctx context.Context) (map[string]Container, error) {
 		}
 	}
 	current.err = err
-	return current.result, err
 }
 
 const connectionHostSetting = "connection.host"
@@ -263,7 +316,9 @@ func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string
 	}
 	var stats *Stats
 	liveUnavailable := refreshErr != nil
-	if withStats && refreshErr == nil && original.Status == identity.StatusActive {
+	// Only a running container has resources to sample.
+	if withStats && refreshErr == nil && original.Status == identity.StatusActive &&
+		current[original.ContainerID].State == "running" {
 		verified := false
 		binding, err := s.Identity.ResolveBinding(ctx, id, original.BindingRevision)
 		if err == nil {
@@ -324,7 +379,7 @@ type Context struct {
 
 // ResolveAuthorized refreshes discovery, then confirms the binding.
 func (s *Service) ResolveAuthorized(ctx context.Context, actor *db.SessionUser, id string, capability authz.Capability, expectedRevision int64) (*Context, error) {
-	if _, err := s.Refresh(ctx); err != nil {
+	if _, err := s.RefreshNow(ctx); err != nil {
 		return nil, err
 	}
 	return s.VerifyAuthorized(ctx, actor, id, capability, expectedRevision)

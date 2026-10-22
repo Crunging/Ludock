@@ -316,7 +316,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := job.Progress("verifying", nil, nil); err != nil {
 		return nil, err
 	}
-	if _, err := j.Servers.Refresh(ctx); err != nil {
+	if _, err := j.Servers.RefreshNow(ctx); err != nil {
 		return nil, err
 	}
 	replacement, err := j.resolve(ctx, job, capability, false)

@@ -385,7 +385,7 @@ func twoRootBackup(t *testing.T, f *fixture) any {
 		}
 	}
 	f.engine.Update(f.game, func(c *fakedocker.Container) { c.Config.Labels["ludock.files"] = world + "," + config })
-	if _, err := f.jobs.Servers.Refresh(ctx); err != nil {
+	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 		t.Fatal(err)
 	}
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)

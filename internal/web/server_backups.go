@@ -55,7 +55,7 @@ func (s *Server) backupList(w http.ResponseWriter, r *http.Request, request *Req
 		s.fail(w, r, request, err)
 		return
 	}
-	d, err := s.detail(r, request, id, "backups")
+	d, err := s.detail(r, request, id, "backups", false)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
@@ -251,7 +251,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	if admin {
 		capability = authz.ServerUpdate
 	}
-	d, err := s.detail(r, request, id, "update")
+	d, err := s.detail(r, request, id, "update", false)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return

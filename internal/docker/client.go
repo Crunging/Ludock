@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -77,6 +78,8 @@ type Client struct {
 
 	mu      sync.Mutex
 	version string
+	// writes counts completed requests that may change Docker state.
+	writes atomic.Uint64
 }
 
 // New returns a client for a unix socket path.
@@ -101,6 +104,10 @@ func New(socket string) *Client {
 
 // Socket is the daemon socket path.
 func (c *Client) Socket() string { return c.socket }
+
+// Writes counts requests that may have changed Docker state. A cached read
+// taken before the count last changed may be out of date.
+func (c *Client) Writes() uint64 { return c.writes.Load() }
 
 func apiMinor(value string) (int, error) {
 	if !regexp.MustCompile(`^1\.\d+$`).MatchString(value) {
@@ -171,6 +178,9 @@ func (c *Client) Request(ctx context.Context, method, path string, body any) (*h
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := c.http.Do(request)
+	if method != http.MethodGet && method != http.MethodHead {
+		c.writes.Add(1)
+	}
 	if err != nil {
 		return nil, errors.New("Docker request failed")
 	}
