@@ -4,11 +4,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 )
@@ -159,5 +162,32 @@ func TestFailingDeletionsDoNotBlockOthers(t *testing.T) {
 	}
 	if exists, _ := s.Exists(ctx, backup.ID, false); exists {
 		t.Fatal("its row stayed")
+	}
+}
+
+// Among many running containers, one that can write the server's data
+// refuses the backup; containers that only read it or are stopped do not.
+func TestAssertNoOtherWriters(t *testing.T) {
+	engine, client := startHelpers(t)
+	data := t.TempDir()
+	server := serverContext(data)
+	server.Container.ID = engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: "/data", RW: true}}})
+	for index := range 9 {
+		engine.AddContainer(fakedocker.GameOptions{Name: "other-" + strconv.Itoa(index), Image: "alpine", Running: true,
+			Mounts: []docker.MountPoint{{Type: "bind", Source: t.TempDir(), Destination: "/data", RW: true}}})
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "reader", Image: "alpine", Running: true,
+		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: "/data", RW: false}}})
+	engine.AddContainer(fakedocker.GameOptions{Name: "stopped", Image: "alpine",
+		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: "/data", RW: true}}})
+	s := &Service{Docker: client}
+	if err := s.AssertNoOtherWriters(ctx, server, ""); err != nil {
+		t.Fatal(err)
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "writer", Image: "alpine", Running: true,
+		Mounts: []docker.MountPoint{{Type: "bind", Source: filepath.Join(data, "world"), Destination: "/world", RW: true}}})
+	if err := s.AssertNoOtherWriters(ctx, server, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
+		t.Fatal(err)
 	}
 }

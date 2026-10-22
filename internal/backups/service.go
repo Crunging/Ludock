@@ -427,7 +427,8 @@ func MountsOverlap(left, right identity.Mount) bool {
 }
 
 // AssertNoOtherWriters refuses when another running container can write to
-// the server's data.
+// the server's data. Candidates are inspected a few at a time; the refusal
+// reported is the first in list order.
 func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Context, helperID string) error {
 	containers, err := s.Docker.ListContainers(ctx, true, nil)
 	if err != nil {
@@ -439,6 +440,7 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 			sources = append(sources, mount)
 		}
 	}
+	var candidates []string
 	for _, candidate := range containers {
 		state := ""
 		if candidate.State != nil {
@@ -447,12 +449,15 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 		if candidate.ID == server.Container.ID || candidate.ID == helperID || !slices.Contains([]string{"running", "restarting", "paused"}, state) {
 			continue
 		}
-		info, err := s.Docker.Inspect(ctx, candidate.ID)
+		candidates = append(candidates, candidate.ID)
+	}
+	check := func(id string) error {
+		info, err := s.Docker.Inspect(ctx, id)
 		if err != nil {
 			return err
 		}
 		if !info.State.Running && !info.State.Restarting && !info.State.Paused {
-			continue
+			return nil
 		}
 		for _, mount := range info.Mounts {
 			if !mount.RW {
@@ -464,6 +469,38 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 					return fail("SHARED_DATA_WRITER", "Another running container can write to this server's data. Stop shared writers before backing up or restoring.")
 				}
 			}
+		}
+		return nil
+	}
+	results := make([]error, len(candidates))
+	var mu sync.Mutex
+	next, failed := 0, false
+	var group sync.WaitGroup
+	for range min(4, len(candidates)) {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for {
+				mu.Lock()
+				index := next
+				next++
+				stop := index >= len(candidates) || failed
+				mu.Unlock()
+				if stop {
+					return
+				}
+				if err := check(candidates[index]); err != nil {
+					mu.Lock()
+					results[index], failed = err, true
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	group.Wait()
+	for _, err := range results {
+		if err != nil {
+			return err
 		}
 	}
 	return nil
