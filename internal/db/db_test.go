@@ -363,3 +363,23 @@ func TestRejectsNewerSchemaAndForeignMarker(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Reading a throttle reports an active window and removes an expired one.
+func TestGetLoginThrottleExpiry(t *testing.T) {
+	d := mustOpen(t, filepath.Join(t.TempDir(), "throttle.db"))
+	defer d.Close()
+	if _, err := d.RecordLoginFailure(bg, "key", 1000, 60_000, 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if throttle, err := d.GetLoginThrottle(bg, "key", 30_000, 60_000); err != nil || throttle.Failures != 1 {
+		t.Fatal(throttle, err)
+	}
+	if throttle, err := d.GetLoginThrottle(bg, "key", 61_000, 60_000); err != nil || throttle != (LoginThrottle{}) {
+		t.Fatal(throttle, err)
+	}
+	var rows int
+	d.QueryRow("SELECT COUNT(*) FROM login_attempts").Scan(&rows)
+	if rows != 0 {
+		t.Fatal("expired window kept")
+	}
+}

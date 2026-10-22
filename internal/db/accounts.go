@@ -375,14 +375,25 @@ func getThrottle(ctx context.Context, tx *sql.Tx, key string, now, windowMs int6
 
 // GetLoginThrottle returns the active failure count and block for a key. An
 // expired window is cleared.
+// It reads without the write lock; only an expired row is deleted, and
+// only if it is still expired.
 func (d *DB) GetLoginThrottle(ctx context.Context, key string, now, windowMs int64) (LoginThrottle, error) {
-	var result LoginThrottle
-	err := d.Tx(ctx, func(tx *sql.Tx) error {
-		var err error
-		result, _, _, err = getThrottle(ctx, tx, key, now, windowMs)
-		return err
-	})
-	return result, err
+	var failures int
+	var started, blocked int64
+	err := d.QueryRowContext(ctx, `SELECT failures, window_started_at, blocked_until
+    FROM login_attempts WHERE attempt_key = ?`, key).Scan(&failures, &started, &blocked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LoginThrottle{}, nil
+	}
+	if err != nil {
+		return LoginThrottle{}, err
+	}
+	if blocked <= now && now-started >= windowMs {
+		_, err := d.ExecContext(ctx, "DELETE FROM login_attempts WHERE attempt_key = ? AND blocked_until <= ? AND ? - window_started_at >= ?",
+			key, now, now, windowMs)
+		return LoginThrottle{}, err
+	}
+	return LoginThrottle{Failures: failures, BlockedUntil: blocked}, nil
 }
 
 const loginPruneInterval = 200
