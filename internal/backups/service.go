@@ -472,6 +472,10 @@ func (s *Service) AssertNoOtherWriters(ctx context.Context, server *servers.Cont
 		}
 		return nil
 	}
+	// One candidate is not worth the workers.
+	if len(candidates) == 1 {
+		return check(candidates[0])
+	}
 	results := make([]error, len(candidates))
 	var mu sync.Mutex
 	next, failed := 0, false

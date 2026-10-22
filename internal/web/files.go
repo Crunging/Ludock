@@ -36,9 +36,14 @@ func sortEntries(entries []helper.FileEntry, order string) {
 		entry helper.FileEntry
 		key   []byte
 	}
+	names := make([]string, len(entries))
+	for index, entry := range entries {
+		names[index] = entry.Name
+	}
+	keys := textutil.NaturalKeys(names)
 	sorted := make([]keyed, len(entries))
 	for index, entry := range entries {
-		sorted[index] = keyed{entry, textutil.NaturalKey(entry.Name)}
+		sorted[index] = keyed{entry, keys[index]}
 	}
 	slices.SortStableFunc(sorted, func(leftKeyed, rightKeyed keyed) int {
 		left, right := leftKeyed.entry, rightKeyed.entry

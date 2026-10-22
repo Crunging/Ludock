@@ -47,11 +47,18 @@ func CompareFold(left, right string) int { return compare(foldCollator, left, ri
 // compared as numbers.
 func CompareNatural(left, right string) int { return compare(naturalCollator, left, right) }
 
-// NaturalKey is a sort key that orders bytewise like CompareNatural, for
+// NaturalKeys returns sort keys that order bytewise like CompareNatural, for
 // sorting many names without collating each pair again.
-func NaturalKey(value string) []byte {
+func NaturalKeys(values []string) [][]byte {
 	c := naturalCollator.Get().(*collate.Collator)
 	defer naturalCollator.Put(c)
+	// One buffer holds every key: later keys are appended past earlier ones,
+	// or into a new array that leaves them intact.
 	var buffer collate.Buffer
-	return c.KeyFromString(&buffer, value)
+	keys := make([][]byte, len(values))
+	for index, value := range values {
+		key := c.KeyFromString(&buffer, value)
+		keys[index] = key[:len(key):len(key)]
+	}
+	return keys
 }

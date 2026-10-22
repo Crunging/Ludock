@@ -25,9 +25,10 @@ func TestCompare(t *testing.T) {
 func TestNaturalKeyMatchesCompareNatural(t *testing.T) {
 	names := []string{"map2", "Map10", "map10", "é", "E", "e", "level.dat", "Level.DAT", "world_nether", "world",
 		"10", "9", "a1b2", "a1b10", "", "Zürich", "zurich", "日本", "🙂", "file 1", "file  1", "file01", "file1"}
-	for _, left := range names {
-		for _, right := range names {
-			if got, want := sign(bytes.Compare(NaturalKey(left), NaturalKey(right))), sign(CompareNatural(left, right)); got != want {
+	keys := NaturalKeys(names)
+	for leftIndex, left := range names {
+		for rightIndex, right := range names {
+			if got, want := sign(bytes.Compare(keys[leftIndex], keys[rightIndex])), sign(CompareNatural(left, right)); got != want {
 				t.Errorf("%q vs %q: key %d, compare %d", left, right, got, want)
 			}
 		}

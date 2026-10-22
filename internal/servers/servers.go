@@ -241,13 +241,14 @@ func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, server
 		return nil, err
 	}
 	rows.Close()
-	query = `SELECT server_id,created_at,size FROM (SELECT server_id,created_at,size,
-    ROW_NUMBER() OVER (PARTITION BY server_id ORDER BY created_at DESC,id) AS position
-    FROM backups WHERE state='complete'`
+	// Each server's newest backup is one seek in backups_server_idx, however
+	// much history is kept.
+	query = `SELECT b.server_id,b.created_at,b.size FROM logical_servers s JOIN backups b ON b.rowid=(
+    SELECT rowid FROM backups WHERE server_id=s.id AND state='complete' ORDER BY created_at DESC,id LIMIT 1)`
 	if serverID != "" {
-		query += " AND server_id=?"
+		query += " WHERE s.id=?"
 	}
-	rows, err = s.DB.QueryContext(ctx, query+") WHERE position=1", args...)
+	rows, err = s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
