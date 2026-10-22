@@ -454,15 +454,22 @@ const copyChunk = 1 << 20
 func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	x := &extractor{}
 	defer x.t.closeAll()
-	if err := x.run(argument, stdin); errors.Is(err, errFull) {
-		io.WriteString(stderr, ExtractFull)
-		return ExtractFullStatus
-	} else if err != nil {
-		io.WriteString(stderr, ExtractFailure)
-		return 1
+	if err := x.run(argument, stdin); err != nil {
+		status, message := extractExit(err)
+		io.WriteString(stderr, message)
+		return status
 	}
 	io.WriteString(stdout, "ok")
 	return 0
+}
+
+// extractExit reports a full disk, whether found by a space check or by a
+// write or sync that another writer beat to the space, apart from failures.
+func extractExit(err error) (int, string) {
+	if errors.Is(err, errFull) || errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
+		return ExtractFullStatus, ExtractFull
+	}
+	return 1, ExtractFailure
 }
 
 func (x *extractor) run(argument string, stdin io.Reader) error {

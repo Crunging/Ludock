@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -417,5 +418,16 @@ func TestExtractionStopsWhenOtherWritersTakeTheReserve(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(root, stage, "new", "world.dat")); err != nil || info.Size() > copyChunk {
 		t.Fatal("kept writing into the reserve", info, err)
+	}
+}
+
+func TestAFullDiskDuringAWriteIsReportedAsFull(t *testing.T) {
+	for _, err := range []error{errFull, unix.ENOSPC, fmt.Errorf("sync: %w", unix.EDQUOT)} {
+		if status, message := extractExit(err); status != ExtractFullStatus || message != ExtractFull {
+			t.Error(err, status)
+		}
+	}
+	if status, _ := extractExit(errUnsafe); status != 1 {
+		t.Error("an unsafe archive reported as a full disk")
 	}
 }
