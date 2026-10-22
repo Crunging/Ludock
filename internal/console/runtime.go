@@ -123,9 +123,10 @@ type Target struct {
 type Runtime struct {
 	Docker *docker.Client
 	Images *launch.Images
-	// pollInterval and startLimit are shortened in tests.
+	// pollInterval, startLimit, and createLimit are shortened in tests.
 	pollInterval time.Duration
 	startLimit   time.Duration
+	createLimit  time.Duration
 }
 
 var (
@@ -620,8 +621,16 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 	}
 	name := "ludock-console-" + identity.NewUUID()
 	// Never race create/start: wait for the outcome, then remove even a
-	// late-created helper.
-	created, err := r.Docker.CreateHelper(context.WithoutCancel(ctx), docker.ContainerCreate{Name: name, Image: image,
+	// late-created helper. The wait is bounded on its own, since the server
+	// lock is held until then; a create that may pull the image gets time
+	// to.
+	limit := 2 * time.Minute
+	if r.createLimit > 0 {
+		limit = r.createLimit
+	}
+	create, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancelCreate()
+	created, err := r.Docker.CreateHelper(create, docker.ContainerCreate{Name: name, Image: image,
 		Entrypoint: []string{helper.Binary}, Cmd: []string{"helper", "network-console"}, User: "65534:65534",
 		OpenStdin: true, StdinOnce: true, Env: launch.HelperEnv,
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"},

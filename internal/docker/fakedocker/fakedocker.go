@@ -63,6 +63,9 @@ type Engine struct {
 	// HangExecStarts makes the next N exec starts accept the request and never
 	// answer, as a stalled daemon can. The exec ends when the client hangs up.
 	HangExecStarts int
+	// HangCreates makes the next N container creates make the container and
+	// never answer, as a daemon whose response is lost can.
+	HangCreates int
 	// Requests records "METHOD path" for each request.
 	Requests []string
 
@@ -344,6 +347,16 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 			c.Mounts = append(c.Mounts, mount)
 		}
 	})
+	e.mu.Lock()
+	hang := e.HangCreates > 0
+	if hang {
+		e.HangCreates--
+	}
+	e.mu.Unlock()
+	if hang {
+		<-r.Context().Done()
+		return
+	}
 	writeJSON(w, 201, map[string]string{"Id": id})
 }
 

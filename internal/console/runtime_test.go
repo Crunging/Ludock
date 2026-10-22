@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Crunging/Ludock/internal/launch"
 	"io"
 	"strings"
 	"sync"
@@ -211,5 +212,33 @@ func TestAStalledCommandStartEndsAndIsReconciled(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the command start kept waiting for Docker")
+	}
+}
+
+func TestAStalledHelperCreateEndsAndRemovesTheHelper(t *testing.T) {
+	engine, runtime, id := setup(t)
+	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
+	engine.AddImage(image)
+	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	runtime.createLimit = 200 * time.Millisecond
+	// Docker creates the helper and never answers.
+	engine.HangCreates = 1
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.networkHelper(ctx, id, helper.NetworkConsoleRequest{Transport: "source-rcon", Port: 1, Command: "c"}, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a helper whose create never answered reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the console kept waiting for Docker to create its helper")
+	}
+	for _, container := range engine.SortedIDs() {
+		if c := engine.Container(container); c != nil && c.Config.Labels["ludock.internal"] == "console-helper" {
+			t.Fatal("left the helper Docker created")
+		}
 	}
 }
