@@ -163,7 +163,9 @@ func (a *App) Tick(ctx context.Context) {
 		go func() {
 			defer a.background.Done()
 			defer a.tick.Unlock()
-			current, err := a.Servers.Refresh(ctx)
+			// Monitoring and schedules judge the fleet as it is now, not as
+			// a page read saw it a moment ago.
+			current, err := a.Servers.RefreshNow(ctx)
 			now := time.Now().UnixMilli()
 			if err != nil {
 				log.Warn("Discovery and schedules are temporarily unavailable")
