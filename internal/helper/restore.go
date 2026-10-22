@@ -372,28 +372,54 @@ func recordParts(name string) ([]string, error) {
 type extractor struct {
 	t           tracker
 	destination fd
+	// The last parent stays open: archive entries arrive grouped by
+	// directory.
+	parentKey string
+	parentFD  fd
+	// dirty holds directories, by path below the destination, whose entries
+	// changed and must be synced before extraction reports success.
+	dirty map[string][]string
 }
 
-// parent creates (0700) and pins the directories above an entry.
+// parent creates (0700) and pins the directories above an entry. The
+// descriptor stays owned by the extractor.
 func (x *extractor) parent(names []string) (fd, error) {
+	if len(names) == 0 {
+		return x.destination, nil
+	}
+	key := strings.Join(names, "/")
+	if x.parentFD > 0 && key == x.parentKey {
+		return x.parentFD, nil
+	}
 	current := x.destination
-	for _, name := range names {
-		if err := unix.Mkdirat(int(current), name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+	for index, name := range names {
+		if err := unix.Mkdirat(int(current), name, 0o700); err == nil {
+			x.changed(names[:index])
+		} else if !errors.Is(err, unix.EEXIST) {
 			return -1, err
 		}
 		next, err := x.t.openAt(current, name, directoryFlags, 0)
-		if err != nil {
-			return -1, err
-		}
-		if err := unix.Fsync(int(current)); err != nil {
-			return -1, err
-		}
 		if current != x.destination {
 			x.t.close(current)
 		}
+		if err != nil {
+			return -1, err
+		}
 		current = next
 	}
+	if x.parentFD > 0 {
+		x.t.close(x.parentFD)
+	}
+	x.parentKey, x.parentFD = key, current
 	return current, nil
+}
+
+// changed marks a directory whose entries must be synced.
+func (x *extractor) changed(names []string) {
+	if x.dirty == nil {
+		x.dirty = map[string][]string{}
+	}
+	x.dirty[strings.Join(names, "/")] = names
 }
 
 func metadata(descriptor fd, uid, gid, mode int64, mtime *float64) error {
@@ -597,13 +623,10 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			}
 			x.t.close(file)
 		}
-		if err := unix.Fsync(int(owner)); err != nil {
-			return err
-		}
-		if owner != x.destination {
-			x.t.close(owner)
-		}
+		x.changed(names[:len(names)-1])
 	}
+	// Files were synced as written; their directories are synced once here,
+	// before success is reported, rather than after every entry.
 	for index := len(directories) - 1; index >= 0; index-- {
 		record := directories[index]
 		owner, err := x.parent(record.names[:len(record.names)-1])
@@ -621,8 +644,18 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			return err
 		}
 		x.t.close(directory)
-		if owner != x.destination {
-			x.t.close(owner)
+		delete(x.dirty, strings.Join(record.names, "/"))
+	}
+	for key, names := range x.dirty {
+		if key == "" {
+			continue
+		}
+		directory, err := x.parent(names)
+		if err != nil {
+			return err
+		}
+		if err := unix.Fsync(int(directory)); err != nil {
+			return err
 		}
 	}
 	return unix.Fsync(int(x.destination))

@@ -58,7 +58,7 @@ func tarHeader(name string, info tarInfo, directory bool, kind byte, keepOwner b
 				return nil, err
 			}
 			result := append(pax, payload...)
-			result = append(result, make([]byte, (512-len(payload)%512)%512)...)
+			result = append(result, zeros[:(512-len(payload)%512)%512]...)
 			return append(result, entry...), nil
 		}
 		copy(header[345:345+155], name[:slash])
@@ -119,3 +119,6 @@ func tarHeader(name string, info tarInfo, directory bool, kind byte, keepOwner b
 	copy(header[148:156], strings.Repeat("0", max(0, 6-len(encoded)))+encoded+"\x00 ")
 	return header, nil
 }
+
+// zeros pads archive entries to whole blocks.
+var zeros [512]byte

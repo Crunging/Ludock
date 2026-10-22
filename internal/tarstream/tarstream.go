@@ -41,10 +41,16 @@ type Header struct {
 }
 
 // Padding is the zero padding after a body of size bytes.
-func Padding(size int64) []byte { return make([]byte, (blockSize-size%blockSize)%blockSize) }
+func Padding(size int64) []byte {
+	n := (blockSize - size%blockSize) % blockSize
+	return zeros[:n:n]
+}
 
 // End is the two zero blocks that end an archive.
-func End() []byte { return make([]byte, 2*blockSize) }
+func End() []byte { return zeros[: 2*blockSize : 2*blockSize] }
+
+// zeros backs Padding and End; the capacity limit keeps appends off it.
+var zeros [2 * blockSize]byte
 
 func textField(field []byte) (string, error) {
 	if end := bytes.IndexByte(field, 0); end >= 0 {

@@ -832,7 +832,8 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	}()
 	hash := sha256.New()
 	var size, checked int64
-	buffer := make([]byte, 0, 64*1024)
+	// buffer coalesces small writes; chunk carries file bodies for every entry.
+	buffer, chunk := make([]byte, 0, 64*1024), make([]byte, 64*1024)
 	stillAllowed := launch.Periodic(assertAccess)
 	flush := func() error {
 		if len(buffer) == 0 {
@@ -862,8 +863,12 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			}
 		}
 		hash.Write(chunk)
+		if len(buffer) == 0 && len(chunk) >= cap(buffer) {
+			_, err := file.Write(chunk)
+			return err
+		}
 		buffer = append(buffer, chunk...)
-		if len(buffer) >= 64*1024 {
+		if len(buffer) >= cap(buffer) {
 			return flush()
 		}
 		return nil
@@ -919,7 +924,6 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			if err := write(encoded); err != nil {
 				return err
 			}
-			chunk := make([]byte, 64*1024)
 			for {
 				n, readErr := body.Read(chunk)
 				if n > 0 {
@@ -986,54 +990,100 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 
 var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
 
-// ExtractToStage streams one root of an archive into the helper's restore
-// stage. The checksum covers the whole archive, so a changed archive is
-// detected before any game data is replaced.
-func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, root Root, rootPath, stage string,
-	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) error {
-	request := map[string]any{"root": rootPath, "stage": stage, "maxBytes": maxBytes, "reserveBytes": reserveBytes}
-	execID, err := h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
-		AttachStdin: true, AttachStdout: true, AttachStderr: true})
-	if err != nil {
-		return err
-	}
-	if assertAccess != nil {
-		if err := assertAccess(); err != nil {
-			return err
-		}
-	}
+// StageTarget is one root to stage and its path in the helper.
+type StageTarget struct {
+	Root Root
+	Path string
+}
+
+// ExtractToStage streams an archive into the helper's restore stage of
+// every target in one pass, each root through its own extraction. The
+// checksum covers the whole archive, so a changed archive is detected before
+// any game data is replaced.
+func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, targets []StageTarget, stage string,
+	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) (err error) {
 	restoreTimeout := fail("RESTORE_TIMEOUT", "Restore extraction exceeded its 30 minute execution limit.")
 	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 30*time.Minute, restoreTimeout)
 	defer cancel()
-	conn, err := h.start(deadline, helperID, execID)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	stop := context.AfterFunc(deadline, func() { conn.Close() })
-	defer stop()
 	expired := func() bool { return deadline.Err() != nil }
-	completed := make(chan error, 1)
-	go func() {
-		err := docker.Demux(conn, nil, nil)
-		result := h.waitForExit(helperID, execID, expired)
-		switch {
-		case result != nil && *result.ExitCode == helper.ExtractFullStatus:
-			err = errStagingCapacity
-		case err != nil || result == nil || *result.ExitCode != 0:
-			err = fail("RESTORE_EXTRACTION", "Restore extraction rejected a changed or unsafe data path.")
+	type extraction struct {
+		conn      *docker.Conn
+		completed chan error
+	}
+	var mu sync.Mutex
+	extractions := map[string]*extraction{}
+	closeAll := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, extraction := range extractions {
+			extraction.conn.Close()
 		}
-		completed <- err
+	}
+	// wait collects every extraction once; a helper that stopped at the
+	// reserve is why writing to it failed.
+	waited, extracted := false, error(nil)
+	wait := func() error {
+		if !waited {
+			waited = true
+			for _, extraction := range extractions {
+				err := <-extraction.completed
+				if errors.Is(err, errStagingCapacity) || (extracted == nil && err != nil) {
+					extracted = err
+				}
+			}
+		}
+		return extracted
+	}
+	defer func() {
+		if err != nil {
+			closeAll()
+			if extracted := wait(); errors.Is(extracted, errStagingCapacity) {
+				err = extracted
+			}
+		}
 	}()
+	for _, target := range targets {
+		request := map[string]any{"root": target.Path, "stage": stage, "maxBytes": maxBytes, "reserveBytes": reserveBytes}
+		execID, err := h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
+			AttachStdin: true, AttachStdout: true, AttachStderr: true})
+		if err != nil {
+			return err
+		}
+		if assertAccess != nil {
+			if err := assertAccess(); err != nil {
+				return err
+			}
+		}
+		conn, err := h.start(deadline, helperID, execID)
+		if err != nil {
+			return err
+		}
+		extraction := &extraction{conn: conn, completed: make(chan error, 1)}
+		mu.Lock()
+		extractions[target.Root.ID] = extraction
+		mu.Unlock()
+		go func() {
+			err := docker.Demux(conn, nil, nil)
+			result := h.waitForExit(helperID, execID, expired)
+			switch {
+			case result != nil && *result.ExitCode == helper.ExtractFullStatus:
+				err = errStagingCapacity
+			case err != nil || result == nil || *result.ExitCode != 0:
+				err = fail("RESTORE_EXTRACTION", "Restore extraction rejected a changed or unsafe data path.")
+			}
+			extraction.completed <- err
+		}()
+	}
+	defer closeAll()
+	stop := context.AfterFunc(deadline, closeAll)
+	defer stop()
 	archive, err := h.Storage.Open(directory, id)
 	if err != nil {
-		conn.Close()
-		<-completed
 		return err
 	}
 	defer archive.Close()
 	stillAllowed := launch.Periodic(assertAccess)
-	write := func(data []byte) error {
+	write := func(conn *docker.Conn, data []byte) error {
 		if stillAllowed != nil {
 			if err := stillAllowed(); err != nil {
 				return err
@@ -1045,7 +1095,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	names := map[string]bool{}
 	hash := sha256.New()
 	var total int64
-	prefix := "snapshot/" + root.ID + "/"
+	chunk := make([]byte, 64*1024)
 	err = tarstream.Walk(archive, func(header *tarstream.Header, body io.Reader) error {
 		if err := ValidateEntry(header, roots); err != nil {
 			return err
@@ -1055,23 +1105,24 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			return fail("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.")
 		}
 		names[name] = true
-		if !strings.HasPrefix(name, prefix) {
+		rootID, entry, found := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
+		extraction := extractions[rootID]
+		if !found || extraction == nil {
 			return nil
 		}
 		uid, gid, mtime, err := EntryMetadata(header)
 		if err != nil {
 			return err
 		}
-		record, _ := json.Marshal(map[string]any{"name": name[len(prefix):], "type": header.Type, "mode": header.Mode,
+		record, _ := json.Marshal(map[string]any{"name": entry, "type": header.Type, "mode": header.Mode,
 			"uid": uid, "gid": gid, "mtime": mtime, "size": header.Size})
-		if err := write(append(record, '\n')); err != nil {
+		if err := write(extraction.conn, append(record, '\n')); err != nil {
 			return err
 		}
-		chunk := make([]byte, 64*1024)
 		for {
 			n, readErr := body.Read(chunk)
 			if n > 0 {
-				if err := write(chunk[:n]); err != nil {
+				if err := write(extraction.conn, chunk[:n]); err != nil {
 					return err
 				}
 			}
@@ -1094,18 +1145,15 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		err = fail("BACKUP_CHECKSUM", "The archive changed while it was being staged. No existing game data was replaced.")
 	}
 	if err != nil {
-		conn.Close()
-		// A helper that stopped at the reserve is why writing to it failed.
-		if extracted := <-completed; errors.Is(extracted, errStagingCapacity) {
-			return extracted
-		}
 		if _, ok := apperr.As(err); !ok {
 			err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
 		}
 		return err
 	}
-	conn.CloseWrite()
-	return <-completed
+	for _, extraction := range extractions {
+		extraction.conn.CloseWrite()
+	}
+	return wait()
 }
 
 // ownerMount is the deepest writable bind or volume containing rootPath.

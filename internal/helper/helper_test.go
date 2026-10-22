@@ -398,6 +398,32 @@ func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {
 }
 
 // Extraction stops when other writers take the reserve.
+// Entries alternate between directories, return to an earlier one, and
+// name parents the archive never lists; each lands in its own directory.
+func TestRestoreExtractInterleavedDirectories(t *testing.T) {
+	root, _ := dataRoot(t)
+	stage := ".ludock-restore-7f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, code := restore(t, root, stage, "stage"); code != 0 {
+		t.Fatal("stage")
+	}
+	owner := `"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid())
+	files := []string{"a/one", "b/c/two", "a/three", "b/c/d/four", "five", "b/c/six"}
+	var input strings.Builder
+	for _, name := range files {
+		input.WriteString(`{"name":"` + name + `","type":"file","size":` + strconv.Itoa(len(name)) + `,` + owner + `,"mode":420}` + "\n" + name)
+	}
+	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 1000, "reserveBytes": 0})
+	var stderr bytes.Buffer
+	if code := RunRestoreExtract(string(argument), strings.NewReader(input.String()), io.Discard, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	for _, name := range files {
+		if data, err := os.ReadFile(filepath.Join(root, stage, "new", name)); err != nil || string(data) != name {
+			t.Fatal(name, string(data), err)
+		}
+	}
+}
+
 func TestExtractionKeepsReserve(t *testing.T) {
 	root := t.TempDir()
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
