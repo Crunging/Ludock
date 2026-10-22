@@ -279,14 +279,19 @@ func (s *Service) Notify(key, message string) {
 	}()
 }
 
+// queueEvent reads the settings in the transaction that queues, so an event
+// raised as notifications are turned off is not left to send once they are
+// turned on again.
 func (s *Service) queueEvent(key, message string) error {
 	ctx := context.Background()
-	value, err := s.load(ctx)
-	if err != nil || !value.Enabled {
+	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		value, err := savedIn(ctx, tx)
+		if err != nil || !value.Enabled {
+			return err
+		}
+		_, err = s.enqueue(ctx, tx, key, message, "event")
 		return err
-	}
-	_, err = s.enqueue(ctx, s.DB, key, message, "event")
-	return err
+	})
 }
 
 // Stop abandons pending queue retries, before the database closes.
