@@ -207,12 +207,14 @@ func (s *Service) row(ctx context.Context, id string) (*row, error) {
 
 // Deliveries lists the 50 newest deliveries.
 func (s *Service) Deliveries(ctx context.Context) ([]Delivery, error) {
+	// Read before the rows hold a connection: reading while they do needs a
+	// second one, and enough concurrent lists would hold the whole pool.
+	enabled := s.Configuration(ctx).Enabled
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+columns+" FROM notification_deliveries ORDER BY created_at DESC, id DESC LIMIT 50")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	enabled := s.Configuration(ctx).Enabled
 	var result []Delivery
 	for rows.Next() {
 		r, err := scan(rows)

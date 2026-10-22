@@ -225,3 +225,27 @@ func TestSavingSettingsCancelsASendInFlight(t *testing.T) {
 		t.Fatalf("%+v", deliveries)
 	}
 }
+
+func TestConcurrentDeliveryListsDoNotHoldThePool(t *testing.T) {
+	s := setup(t, func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
+	var wg sync.WaitGroup
+	failures := make(chan error, 16)
+	for range 16 {
+		wg.Go(func() {
+			for range 20 {
+				ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_, err := s.Deliveries(ctx)
+				cancel()
+				if err != nil {
+					failures <- err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal("a delivery list stalled:", err)
+	}
+}
