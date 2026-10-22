@@ -53,7 +53,18 @@ type Service struct {
 	// initMu serializes Initialize: a backup that finds no settings waits
 	// for setup already under way instead of failing as unconfigured.
 	initMu sync.Mutex
+
+	// deletionCursor is where the next FinishDeletions batch starts, so rows
+	// that keep failing cannot hold back the ones after them.
+	deletionMu     sync.Mutex
+	deletionCursor struct {
+		created int64
+		id      string
+	}
 }
+
+// deletionBatch is how many deleting rows one FinishDeletions call retries.
+var deletionBatch = 100
 
 const settingsKey = "backups"
 
@@ -519,7 +530,11 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 // It runs in the background, so an archive left behind is removed even when
 // it uses the space later backups need before they would prune.
 func (s *Service) FinishDeletions(ctx context.Context) error {
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE state='deleting' ORDER BY created_at,id LIMIT 100")
+	s.deletionMu.Lock()
+	defer s.deletionMu.Unlock()
+	cursor := s.deletionCursor
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE state='deleting' AND (created_at,id) > (?,?)
+    ORDER BY created_at,id LIMIT ?`, cursor.created, cursor.id, deletionBatch)
 	if err != nil {
 		return err
 	}
@@ -535,6 +550,14 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	// The next call continues after this batch, and a short batch means
+	// the end was reached, so it starts over.
+	if len(pending) < deletionBatch {
+		s.deletionCursor.created, s.deletionCursor.id = 0, ""
+	} else {
+		last := pending[len(pending)-1]
+		s.deletionCursor.created, s.deletionCursor.id = last.CreatedAt, last.ID
 	}
 	if testHook != nil {
 		testHook("pending")
