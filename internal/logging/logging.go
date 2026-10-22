@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -69,9 +70,11 @@ type Entry struct {
 }
 
 type sink struct {
-	mu         sync.Mutex
-	level      Level
+	mu    sync.Mutex
+	level Level
+	// entries is a ring of up to maxEntries; start is the oldest.
 	entries    []Entry
+	start      int
 	nextID     int64
 	generation string
 	stdout     io.Writer
@@ -156,11 +159,14 @@ func (s *sink) write(level Level, component, message string, fields []Field) {
 	}
 	now := s.now()
 	sanitized, context := Sanitize(message, fields)
-	s.entries = append(s.entries, Entry{ID: s.nextID, Timestamp: now.UnixMilli(), Level: level.String(),
-		Component: component, Message: sanitized, Context: context})
+	entry := Entry{ID: s.nextID, Timestamp: now.UnixMilli(), Level: level.String(),
+		Component: component, Message: sanitized, Context: context}
 	s.nextID++
-	if len(s.entries) > maxEntries {
-		s.entries = append([]Entry(nil), s.entries[len(s.entries)-maxEntries:]...)
+	if len(s.entries) < maxEntries {
+		s.entries = append(s.entries, entry)
+	} else {
+		s.entries[s.start] = entry
+		s.start = (s.start + 1) % maxEntries
 	}
 	line := fmt.Sprintf("%s %s [%s] %s", now.UTC().Format("2006-01-02T15:04:05.000Z"),
 		strings.ToUpper(level.String()), component, sanitized)
@@ -195,6 +201,13 @@ func EncodeFields(fields []Field) []byte {
 	return []byte(b.String())
 }
 
+// Latest returns the buffer's generation and its newest entry ID, or 0.
+func Latest() (string, int64) {
+	std.mu.Lock()
+	defer std.mu.Unlock()
+	return std.generation, std.nextID - 1
+}
+
 // List returns stored entries after an id. A different generation means the
 // process restarted, so the caller starts from the beginning.
 func List(after int64, limit int, generation string) (string, []Entry) {
@@ -203,14 +216,18 @@ func List(after int64, limit int, generation string) (string, []Entry) {
 	if generation != "" && generation != std.generation {
 		after = 0
 	}
+	// IDs increase from the oldest entry, so the newest limit after the
+	// cursor are a suffix of the ring.
+	count := len(std.entries)
+	at := func(index int) Entry { return std.entries[(std.start+index)%count] }
+	first := sort.Search(count, func(index int) bool { return at(index).ID > after })
+	first = max(first, count-limit)
 	var result []Entry
-	for _, entry := range std.entries {
-		if entry.ID > after {
-			result = append(result, entry)
+	if first < count {
+		result = make([]Entry, 0, count-first)
+		for index := first; index < count; index++ {
+			result = append(result, at(index))
 		}
 	}
-	if len(result) > limit {
-		result = result[len(result)-limit:]
-	}
-	return std.generation, append([]Entry(nil), result...)
+	return std.generation, result
 }

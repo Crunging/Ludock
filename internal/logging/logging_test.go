@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -88,5 +89,32 @@ func TestDebugIsFilteredByLevel(t *testing.T) {
 	}
 	if level, invalid := ParseLevel("verbose"); level != LevelInfo || invalid != "verbose" {
 		t.Fatal(level, invalid)
+	}
+}
+
+// Past its capacity the buffer keeps the newest entries in order, and
+// cursors and limits select from them.
+func TestListAfterBufferWraps(t *testing.T) {
+	SetOutput(io.Discard, io.Discard)
+	defer SetOutput(os.Stdout, os.Stderr)
+	logger := New("ring")
+	for range maxEntries + 500 {
+		logger.Info("entry")
+	}
+	_, entries := List(0, maxEntries, "")
+	if len(entries) != maxEntries {
+		t.Fatal(len(entries))
+	}
+	for index := 1; index < len(entries); index++ {
+		if entries[index].ID != entries[index-1].ID+1 {
+			t.Fatal("out of order at", index)
+		}
+	}
+	newest := entries[len(entries)-1].ID
+	if _, after := List(newest-3, maxEntries, ""); len(after) != 3 || after[0].ID != newest-2 {
+		t.Fatal(after)
+	}
+	if _, limited := List(0, 2, ""); len(limited) != 2 || limited[1].ID != newest {
+		t.Fatal(limited)
 	}
 }
