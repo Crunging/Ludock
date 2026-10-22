@@ -43,8 +43,17 @@
   terminal.loadAddon(fitAddon);
   if (window.WebLinksAddon) terminal.loadAddon(new window.WebLinksAddon.WebLinksAddon());
   terminal.open(root);
-  var fit = function () { try { fitAddon.fit(); } catch (error) { /* Hidden terminals cannot be measured. */ } };
-  requestAnimationFrame(fit);
+  // Resizes refit the terminal at most once per frame.
+  var fitQueued = false;
+  var fit = function () {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(function () {
+      fitQueued = false;
+      try { fitAddon.fit(); } catch (error) { /* Hidden terminals cannot be measured. */ }
+    });
+  };
+  fit();
   if (window.ResizeObserver) new ResizeObserver(fit).observe(root);
   window.addEventListener("resize", fit);
   if (document.fonts) {
@@ -54,19 +63,35 @@
     }, function () {});
   }
 
+  // A burst of messages reaches the terminal as one write per frame.
+  var pending = "", flushQueued = false;
+  function flush() {
+    flushQueued = false;
+    if (pending) terminal.write(pending);
+    pending = "";
+  }
+  function output(text) {
+    pending += text;
+    if (pending.length > 262144) flush();
+    else if (!flushQueued) {
+      flushQueued = true;
+      // Hidden tabs skip animation frames; a timer still drains output.
+      setTimeout(flush, 16);
+    }
+  }
   function write(raw) {
     var message;
     try { message = JSON.parse(raw); } catch (error) { message = null; }
     if (!message || typeof message.data !== "string") {
-      terminal.write("\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n");
+      output("\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n");
       return;
     }
     switch (message.type) {
-      case "stdout": terminal.write(message.data); break;
-      case "stderr": terminal.write("\x1b[31m" + message.data + "\x1b[0m"); break;
-      case "system": terminal.write("\x1b[36m[system] " + message.data + "\x1b[0m\r\n"); break;
-      case "error": terminal.write("\x1b[31;1m[error] " + message.data + "\x1b[0m\r\n"); break;
-      default: terminal.write("\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n");
+      case "stdout": output(message.data); break;
+      case "stderr": output("\x1b[31m" + message.data + "\x1b[0m"); break;
+      case "system": output("\x1b[36m[system] " + message.data + "\x1b[0m\r\n"); break;
+      case "error": output("\x1b[31;1m[error] " + message.data + "\x1b[0m\r\n"); break;
+      default: output("\x1b[31;1m[error] Received an invalid console message\x1b[0m\r\n");
     }
   }
 
@@ -75,7 +100,7 @@
   if (pauseButton) {
     pauseButton.addEventListener("click", function () {
       if (paused) {
-        if (dropped) terminal.write("\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n");
+        if (dropped) output("\x1b[33m[system] Some paused output was discarded to limit memory use\x1b[0m\r\n");
         held.splice(0).forEach(write);
         heldChars = 0;
         dropped = false;
@@ -220,7 +245,7 @@
       setFeedback("The connection could not confirm sending. Your draft is still here. Check the output before trying again.", true);
       return;
     }
-    terminal.write("\x1b[33m> " + command + "\x1b[0m\r\n");
+    output("\x1b[33m> " + command + "\x1b[0m\r\n");
     if (history[history.length - 1] !== command) history.push(command);
     if (history.length > 50) history.shift();
     cursor = null;

@@ -38,6 +38,20 @@ test("reading Ludock's logs and diagnostics", async ({ page }) => {
   await expect(page.locator(".application-log")).toHaveCount(1);
   await expect(page).toHaveURL(/q=Ludock\+listening/);
 
+  // The log list stops polling while the tab is hidden and resumes once
+  // it is shown again.
+  let polls = 0;
+  page.on("request", (request) => { if (request.url().includes("/fragments/logs")) polls++; });
+  const setHidden = (hidden) => page.evaluate((value) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+  await setHidden(true);
+  await page.waitForTimeout(4500);
+  expect(polls).toBe(0);
+  await setHidden(false);
+  await expect.poll(() => polls, { timeout: 5000 }).toBeGreaterThan(0);
+
   await page.goto("/diagnostics");
   await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
   await expect(page.getByRole("cell", { name: "Minecraft", exact: true })).toBeVisible();

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
 
 asAdmin();
@@ -68,4 +69,30 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   }
   await page.getByLabel("Filter filenames").fill("server");
   await expect(names).toHaveText(["server.properties"]);
+});
+
+test("browsing a large folder a page at a time", async ({ page }) => {
+  // The journeys' fake daemon keeps Survival's data under the e2e directory.
+  const folder = join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft", "crowded");
+  mkdirSync(folder);
+  try {
+    for (let index = 1; index <= 520; index++) writeFileSync(join(folder, `chunk-${index}.dat`), "");
+    await page.goto("/");
+    await serverRow(page, "Survival").getByRole("button", { name: /More actions/ }).click();
+    await serverRow(page, "Survival").getByRole("link", { name: "Files" }).click();
+    await page.getByRole("link", { name: "crowded" }).click();
+    const names = page.locator(".file-row__name");
+    await expect(page.getByRole("status").filter({ hasText: "entries" })).toHaveText("Showing 500 of 520 entries");
+    await expect(names).toHaveCount(500);
+    await expect(names.last()).toHaveText("chunk-500.dat");
+    await page.getByRole("button", { name: "Show 20 more" }).click();
+    await expect(names).toHaveCount(520);
+    await expect(names.last()).toHaveText("chunk-520.dat");
+    await expect(page.getByRole("button", { name: /Show \d+ more/ })).toHaveCount(0);
+    // A filter applies to the whole folder, not just the page shown.
+    await page.getByLabel("Filter filenames").fill("chunk-51");
+    await expect(names).toHaveText(["chunk-51.dat", ...Array.from({ length: 10 }, (_, index) => `chunk-${510 + index}.dat`)]);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/logging"
@@ -15,8 +16,11 @@ func logsView(r *http.Request) views.LogsView {
 	query := r.URL.Query()
 	l := views.LogsView{Search: query.Get("q"), Level: query.Get("level"), Component: query.Get("component"),
 		Paused: query.Get("paused") == "1"}
-	_, entries := logging.List(0, 1000, "")
-	l.Total = len(entries)
+	generation, entries := logging.List(0, 1000, "")
+	l.Total, l.Generation = len(entries), generation
+	if len(entries) > 0 {
+		l.Newest = entries[len(entries)-1].ID
+	}
 	search := strings.ToLower(strings.TrimSpace(l.Search))
 	components := map[string]bool{}
 	if l.Component != "" {
@@ -48,6 +52,14 @@ func (s *Server) logsPage(w http.ResponseWriter, r *http.Request, request *Reque
 }
 
 func (s *Server) logsFragment(w http.ResponseWriter, r *http.Request, request *Request) {
+	// A poll of an unchanged buffer keeps what the page shows.
+	if r.Header.Get("HX-Trigger") == "application-logs" {
+		generation, newest := logging.Latest()
+		if query := r.URL.Query(); query.Get("generation") == generation && query.Get("since") == strconv.FormatInt(newest, 10) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	l := logsView(r)
 	if r.Header.Get("HX-Trigger") != "application-logs" {
 		w.Header().Set("HX-Replace-Url", strings.TrimSuffix("/logs?"+l.Query(), "?"))

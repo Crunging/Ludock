@@ -110,6 +110,20 @@ type Observer struct {
 
 	mu          sync.Mutex
 	inspections map[string]inspection
+
+	samplesMu sync.Mutex
+	samples   map[string]*statsSample
+}
+
+// A Docker stats sample takes about a second. Viewers of the same container
+// share one sample: in flight, and for this long after it completes.
+const statsReuse = 2 * time.Second
+
+type statsSample struct {
+	done  chan struct{}
+	taken time.Time
+	stats *Stats
+	err   error
 }
 
 // A container's configuration, labels, and mounts are fixed for its ID; its
@@ -471,7 +485,8 @@ type Stats struct {
 // round2 rounds like Math.round(value * 100) / 100.
 func round2(value float64) float64 { return math.Floor(value*100+0.5) / 100 }
 
-// Stats inspects, authorizes, and samples a container.
+// Stats inspects, authorizes, and samples a container. The inspection and
+// access check are the caller's own; the sample may be shared.
 func (o *Observer) Stats(ctx context.Context, id string, assertAccess func(identity.Observation) error) (*Stats, error) {
 	observed, _, err := o.Inspect(ctx, id)
 	if err != nil {
@@ -480,6 +495,56 @@ func (o *Observer) Stats(ctx context.Context, id string, assertAccess func(ident
 	if err := assertAccess(observed.Observation); err != nil {
 		return nil, err
 	}
+	return o.sample(ctx, id)
+}
+
+func (o *Observer) sample(ctx context.Context, id string) (*Stats, error) {
+	now := o.now()
+	o.samplesMu.Lock()
+	current := o.samples[id]
+	if current != nil {
+		select {
+		case <-current.done:
+			if current.err != nil || now.Sub(current.taken) >= statsReuse {
+				current = nil
+			}
+		default:
+		}
+	}
+	if current == nil {
+		if o.samples == nil {
+			o.samples = map[string]*statsSample{}
+		}
+		for key, sample := range o.samples {
+			select {
+			case <-sample.done:
+				if now.Sub(sample.taken) >= statsReuse {
+					delete(o.samples, key)
+				}
+			default:
+			}
+		}
+		current = &statsSample{done: make(chan struct{})}
+		o.samples[id] = current
+		// The shared sample must not be cancelled by the first viewer leaving.
+		go func(ctx context.Context) {
+			current.stats, current.err = o.readStats(ctx, id)
+			current.taken = o.now()
+			close(current.done)
+		}(context.WithoutCancel(ctx))
+	}
+	o.samplesMu.Unlock()
+	select {
+	case <-current.done:
+		return current.stats, current.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (o *Observer) readStats(ctx context.Context, id string) (*Stats, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	stats, err := o.Docker.Stats(ctx, id)
 	if err != nil {
 		return nil, err

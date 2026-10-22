@@ -21,6 +21,15 @@ type LogsView struct {
 	Component        string
 	Components       []string
 	Paused           bool
+	// Generation and Newest identify the buffer state shown, so a poll can
+	// skip an unchanged response.
+	Generation string
+	Newest     int64
+}
+
+func (l LogsView) pollURL() string {
+	return "/fragments/logs?" + l.Query() + map[bool]string{true: "&", false: ""}[l.Query() != ""] +
+		url.Values{"generation": {l.Generation}, "since": {strconv.FormatInt(l.Newest, 10)}}.Encode()
 }
 
 // Query is the page URL query for these filters.
@@ -109,7 +118,7 @@ templ LogEntries(l LogsView) {
 	<div
 		id="application-logs"
 		if !l.Paused {
-			hx-get={ "/fragments/logs?" + l.Query() }
+			hx-get={ l.pollURL() }
 			hx-trigger="every 2s"
 			hx-swap="outerHTML"
 		}

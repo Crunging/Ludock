@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -218,7 +219,8 @@ func (h *Hub) run(ctx context.Context) {
 	}
 }
 
-// dispatch delivers a batch of changes after one refresh.
+// dispatch delivers a batch of changes after one refresh. Each viewer is
+// validated and its visibility read once before and once after it.
 func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	h.deliveries.Add(1)
 	defer h.deliveries.Done()
@@ -232,15 +234,18 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 		subscribers = append(subscribers, subscriber)
 	}
 	h.mu.Unlock()
+	previous := byContainer(before)
 	previouslyVisible := make([]map[*Subscriber]bool, len(changes))
-	for index, c := range changes {
+	for index := range changes {
 		previouslyVisible[index] = map[*Subscriber]bool{}
-		previous := findByContainer(before, c.containerID)
-		if previous == nil {
+	}
+	for _, subscriber := range subscribers {
+		_, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), before)
+		if err != nil {
 			continue
 		}
-		for _, subscriber := range subscribers {
-			if visible, _ := h.Authz.Has(ctx, subscriber.Validate(ctx), previous.ID, authz.ServerView); visible {
+		for index, c := range changes {
+			if server := previous[c.containerID]; server != nil && slices.Contains(visible[server.ID], authz.ServerView) {
 				previouslyVisible[index][subscriber] = true
 			}
 		}
@@ -252,27 +257,22 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	if err != nil {
 		return err
 	}
-	for index, c := range changes {
-		current := findByContainer(after, c.containerID)
-		for _, subscriber := range subscribers {
-			user, err := h.Authz.CurrentActor(ctx, subscriber.Validate(ctx))
-			if err != nil {
-				continue
-			}
-			if user == nil {
-				subscriber.Close("Authentication expired")
-				continue
-			}
-			visible := false
-			if current != nil {
-				visible, _ = h.Authz.Has(ctx, user, current.ID, authz.ServerView)
-			}
-			if !visible && !previouslyVisible[index][subscriber] {
-				continue
-			}
-			if visible {
-				subscriber.Send(Event{Action: c.action, ServerID: current.ID, Time: c.time})
-			} else {
+	current := byContainer(after)
+	for _, subscriber := range subscribers {
+		user, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), after)
+		if err != nil {
+			continue
+		}
+		if user == nil {
+			subscriber.Close("Authentication expired")
+			continue
+		}
+		for index, c := range changes {
+			server := current[c.containerID]
+			shown := server != nil && slices.Contains(visible[server.ID], authz.ServerView)
+			if shown {
+				subscriber.Send(Event{Action: c.action, ServerID: server.ID, Time: c.time})
+			} else if previouslyVisible[index][subscriber] {
 				subscriber.Send(Event{Action: "refresh", Time: c.time})
 			}
 		}
@@ -280,13 +280,15 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	return nil
 }
 
-func findByContainer(servers []identity.Server, containerID string) *identity.Server {
+// byContainer indexes servers by their bound container.
+func byContainer(servers []identity.Server) map[string]*identity.Server {
+	result := make(map[string]*identity.Server, len(servers))
 	for index := range servers {
-		if servers[index].ContainerID == containerID {
-			return &servers[index]
+		if id := servers[index].ContainerID; id != "" {
+			result[id] = &servers[index]
 		}
 	}
-	return nil
+	return result
 }
 
 // Stop ends the stream and waits for in-flight deliveries, which still use

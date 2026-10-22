@@ -63,6 +63,20 @@ type Target struct {
 type Service struct {
 	Docker *docker.Client
 	Images *launch.Images
+
+	mu sync.Mutex
+	// listers are idle read-only helpers kept for the next listing of the
+	// same root, by container and root path.
+	listers map[string]*lister
+}
+
+// A listing helper is kept this long after its last use. Search and sort
+// list the same folder again within moments.
+const listerIdle = 30 * time.Second
+
+type lister struct {
+	access *Access
+	timer  *time.Timer
 }
 
 // NormalizeRelativePath validates a path relative to a root.
@@ -119,6 +133,8 @@ type Access struct {
 	cleanupOnce  sync.Once
 	cleanupErr   error
 	proof        *launch.Proof
+	// signature is the game container the helper's mounts were proven for.
+	signature string
 }
 
 // Cleanup removes the helper and its validator. retry keeps trying until
@@ -264,7 +280,87 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		access.Cleanup(false)
 		return nil, err
 	}
+	access.signature = signature(inspection)
 	return access, nil
+}
+
+// acquireLister reuses an idle read-only helper for the root when the game
+// container is still exactly the one its mounts were proven for, or
+// acquires a new one. release returns it for reuse after a success.
+func (s *Service) acquireLister(ctx context.Context, target Target, root Root, assertAccess func() error) (*Access, func(ok bool), error) {
+	key := target.ContainerID + "\x00" + root.Path
+	s.mu.Lock()
+	idle := s.listers[key]
+	delete(s.listers, key)
+	s.mu.Unlock()
+	if idle != nil {
+		// Taken from the map, the helper is this caller's to reuse or remove.
+		if idle.timer.Stop() && s.reusable(ctx, target, root, idle.access) {
+			idle.access.assertAccess = assertAccess
+			return idle.access, s.releaser(key, idle.access), nil
+		}
+		idle.access.Cleanup(false)
+	}
+	access, err := s.Acquire(ctx, target, root, true, assertAccess)
+	if err != nil {
+		return nil, nil, err
+	}
+	return access, s.releaser(key, access), nil
+}
+
+func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
+	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
+	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
+		!games.Evaluate(inspection.Config.Image, inspection.Config.Labels).Eligible || signature(inspection) != access.signature {
+		return false
+	}
+	fresh := Roots(target.GameType, inspection.Config.Labels, toMounts(inspection.Mounts))
+	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
+		return false
+	}
+	helper, err := s.Docker.Inspect(ctx, access.container)
+	return err == nil && helper.State.Running
+}
+
+func (s *Service) releaser(key string, access *Access) func(ok bool) {
+	return func(ok bool) {
+		access.assertAccess = nil
+		s.mu.Lock()
+		if !ok || s.listers[key] != nil {
+			s.mu.Unlock()
+			access.Cleanup(false)
+			return
+		}
+		if s.listers == nil {
+			s.listers = map[string]*lister{}
+		}
+		entry := &lister{access: access}
+		entry.timer = time.AfterFunc(listerIdle, func() {
+			s.mu.Lock()
+			current := s.listers[key] == entry
+			if current {
+				delete(s.listers, key)
+			}
+			s.mu.Unlock()
+			if current {
+				access.Cleanup(false)
+			}
+		})
+		s.listers[key] = entry
+		s.mu.Unlock()
+	}
+}
+
+// Close removes idle listing helpers.
+func (s *Service) Close() {
+	s.mu.Lock()
+	listers := s.listers
+	s.listers = nil
+	s.mu.Unlock()
+	for _, entry := range listers {
+		entry.timer.Stop()
+		entry.access.Cleanup(false)
+	}
 }
 
 // RemoveLeftovers removes file helpers left by an earlier process, which
@@ -314,19 +410,18 @@ type Listing struct {
 	Entries []helper.FileEntry
 }
 
-// List lists a directory: folders first, then names ignoring case and
-// accents.
+// List lists a directory in the helper's order; callers sort what they show.
 func (s *Service) List(ctx context.Context, target Target, rootID, relative string, assertAccess func() error) (*Listing, error) {
 	root, normalized, err := resolve(target, rootID, relative)
 	if err != nil {
 		return nil, err
 	}
-	access, err := s.Acquire(ctx, target, root, true, assertAccess)
+	access, release, err := s.acquireLister(ctx, target, root, assertAccess)
 	if err != nil {
 		return nil, err
 	}
-	defer access.Cleanup(false)
 	out, err := access.request(ctx, helper.FileRequest{Operation: "list", Root: root.Path, Path: normalized}, nil, nil)
+	release(err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -339,13 +434,6 @@ func (s *Service) List(ctx context.Context, target Target, rootID, relative stri
 	if err := json.Unmarshal(out, &entries); err != nil {
 		return nil, Error("FILE_OPERATION_FAILED", 409)
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		left, right := entries[i].Type == "directory", entries[j].Type == "directory"
-		if left != right {
-			return left
-		}
-		return textutil.CompareFold(entries[i].Name, entries[j].Name) < 0
-	})
 	return &Listing{Root: root, Path: normalized, Entries: entries}, nil
 }
 

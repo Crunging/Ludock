@@ -147,6 +147,47 @@ func TestAccessRecheckAndTargetChanges(t *testing.T) {
 	}
 }
 
+// Listing again reuses the idle helper while the game container is
+// unchanged; a changed container gets a new helper, and the old one is
+// removed.
+func TestListReusesHelperUntilTargetChanges(t *testing.T) {
+	f := setup(t)
+	started := 0
+	previous := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		previous(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "file-helper" {
+			started++
+		}
+	}
+	for range 2 {
+		if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started != 1 {
+		t.Fatal("started", started, "helpers for two listings")
+	}
+	f.engine.Update(f.game, func(game *fakedocker.Container) { game.Config.Labels = map[string]string{"changed": "yes"} })
+	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if started != 2 {
+		t.Fatal("reused a helper proven for a different container")
+	}
+	helpers := 0
+	for _, id := range f.engine.SortedIDs() {
+		if c := f.engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] == "file-helper" {
+			helpers++
+		}
+	}
+	if helpers != 1 {
+		t.Fatal(helpers, "file helpers running")
+	}
+	f.service.Close()
+	f.helpersLeft(t)
+}
+
 // Failed changes remove their helper before returning.
 func TestFailedChangeRemovesHelper(t *testing.T) {
 	f := setup(t)

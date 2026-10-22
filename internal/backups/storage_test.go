@@ -165,7 +165,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: stage, Operation: "stage"}), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, roots[0], rootPath, stage, roots, 1<<30, 0, checksum, nil); err != nil {
+	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{roots[0], rootPath}}, stage, roots, 1<<30, 0, checksum, nil); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(data, stage, "new", "world", "level.dat")); string(data) != "level" {
@@ -174,7 +174,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if info, _ := os.Stat(filepath.Join(data, stage, "new", "server.properties")); info == nil || info.Mode().Perm() != 0o640 {
 		t.Fatal("mode not restored")
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, roots[0], rootPath, ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff", roots, 1<<30, 0, strings.Repeat("1", 64), nil); err == nil {
+	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{roots[0], rootPath}}, ".ludock-restore-1f9619ff-8b86-4011-b42d-00c04fc964ff", roots, 1<<30, 0, strings.Repeat("1", 64), nil); err == nil {
 		t.Fatal("changed checksum accepted")
 	}
 	// However small the estimate, extraction never writes into the reserve.
@@ -182,7 +182,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := helpers.Exec(ctx, writer.Container, helper.Command("restore", helper.RestoreRequest{Root: rootPath, Stage: full, Operation: "stage"}), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, roots[0], rootPath, full, roots, 1<<30, 1<<52, checksum, nil); !apperr.Is(err, "RESTORE_CAPACITY") {
+	if err := helpers.ExtractToStage(ctx, destination, id, writer.Container, []StageTarget{{roots[0], rootPath}}, full, roots, 1<<30, 1<<52, checksum, nil); !apperr.Is(err, "RESTORE_CAPACITY") {
 		t.Fatal("extracted into the reserve:", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(data, full, "new")); len(entries) != 0 {

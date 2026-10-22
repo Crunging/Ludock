@@ -751,6 +751,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .file-row__actions { display: flex; justify-content: flex-end; }
 .file-list__empty, .file-list__error { padding: 26px 16px; color: var(--ink-2); border-top: 1px solid var(--line); }
 .file-list__header + .file-list__empty, .file-list__header + .file-list__error { border-top: 0; }
+.file-list__more { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; justify-content: center; }
 .file-list__error { display: grid; gap: 10px; justify-items: start; }
 .file-manager__note { color: var(--ink-3); font-size: 14px; }
 

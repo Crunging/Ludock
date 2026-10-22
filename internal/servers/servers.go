@@ -3,11 +3,11 @@ package servers
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"path"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -22,47 +22,107 @@ type Service struct {
 	Identity *identity.Store
 	Authz    *authz.Service
 	Observer *Observer
+	// Now returns the current time; tests replace it.
+	Now func() time.Time
 
-	mu        sync.Mutex
-	refreshes *refresh
+	mu      sync.Mutex
+	running *refresh
+	last    *refresh
+	// discoveries counts discoveries started; each has its number as seq.
+	discoveries uint64
 }
 
 type refresh struct {
-	done   chan struct{}
-	result map[string]Container
-	err    error
+	done    chan struct{}
+	seq     uint64
+	started time.Time
+	writes  uint64
+	result  map[string]Container
+	err     error
+}
+
+const (
+	// Reads reuse a discovery that started this recently, unless Ludock
+	// changed Docker since. Docker events and mutations refresh immediately.
+	discoveryReuse = 2 * time.Second
+	// discoveryTimeout bounds one shared discovery, which no single caller
+	// can cancel.
+	discoveryTimeout = time.Minute
+)
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // Refresh discovers the fleet and reconciles logical servers. Concurrent
-// callers share one discovery.
+// callers share one discovery, and reads within a moment of it reuse it.
 func (s *Service) Refresh(ctx context.Context) (map[string]Container, error) {
+	return s.refresh(ctx, false)
+}
+
+// RefreshNow is Refresh from a discovery that starts after the call, for
+// callers that must see a change that just happened.
+func (s *Service) RefreshNow(ctx context.Context) (map[string]Container, error) {
+	return s.refresh(ctx, true)
+}
+
+func (s *Service) refresh(ctx context.Context, forced bool) (map[string]Container, error) {
 	s.mu.Lock()
-	if current := s.refreshes; current != nil {
+	// A forced caller needs a discovery numbered after every one started
+	// before the call.
+	after := s.discoveries
+	s.mu.Unlock()
+	for {
+		s.mu.Lock()
+		last := s.last
+		if !forced && last != nil && s.now().Sub(last.started) < discoveryReuse && last.writes == s.Observer.Docker.Writes() {
+			s.mu.Unlock()
+			return last.result, nil
+		}
+		current := s.running
+		if current == nil {
+			s.discoveries++
+			current = &refresh{done: make(chan struct{}), seq: s.discoveries, started: s.now(), writes: s.Observer.Docker.Writes()}
+			s.running = current
+			s.mu.Unlock()
+			s.discover(ctx, current)
+			return current.result, current.err
+		}
 		s.mu.Unlock()
 		select {
 		case <-current.done:
-			return current.result, current.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		if !forced || current.seq > after {
+			return current.result, current.err
+		}
 	}
-	current := &refresh{done: make(chan struct{})}
-	s.refreshes = current
-	s.mu.Unlock()
+}
+
+func (s *Service) discover(ctx context.Context, current *refresh) {
 	defer func() {
 		s.mu.Lock()
-		s.refreshes = nil
+		s.running = nil
+		if current.err == nil {
+			s.last = current
+		}
 		s.mu.Unlock()
 		close(current.done)
 	}()
 	// The shared discovery must not be cancelled by the first caller leaving.
-	observed, err := s.Observer.List(context.WithoutCancel(ctx))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout)
+	defer cancel()
+	observed, err := s.Observer.List(ctx)
 	if err == nil {
 		observations := make([]identity.Observation, len(observed))
 		for index, entry := range observed {
 			observations[index] = entry.Observation
 		}
-		if _, err = s.Identity.Reconcile(context.WithoutCancel(ctx), observations, "", 0); err == nil {
+		if err = s.Identity.Apply(ctx, observations, "", 0); err == nil {
 			current.result = map[string]Container{}
 			for _, entry := range observed {
 				current.result[entry.Container.ID] = entry.Container
@@ -70,7 +130,6 @@ func (s *Service) Refresh(ctx context.Context) (map[string]Container, error) {
 		}
 	}
 	current.err = err
-	return current.result, err
 }
 
 const connectionHostSetting = "connection.host"
@@ -146,7 +205,66 @@ func (v *View) Can(capability authz.Capability) bool {
 	return slices.Contains(v.Permissions, capability)
 }
 
-func (s *Service) view(ctx context.Context, actor *db.SessionUser, logical identity.Server, permissions []authz.Capability, container *Container) (*View, error) {
+// details are the saved summaries a view shows, read once for a list.
+type details struct {
+	admin      bool
+	host       *string
+	operations map[string]*ActiveOperation
+	backups    map[string]*BackupSummary
+}
+
+// readDetails reads summaries for one server, or every server when serverID
+// is "". actor is the current account.
+func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, serverID string) (*details, error) {
+	d := &details{admin: actor != nil && actor.Role == db.RoleAdmin, operations: map[string]*ActiveOperation{},
+		backups: map[string]*BackupSummary{}}
+	query, args := `SELECT server_id,id,kind,status,phase FROM operations WHERE status IN ('queued','running')`, []any{}
+	if serverID != "" {
+		query, args = query+" AND server_id=?", append(args, serverID)
+	}
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var server string
+		var operation ActiveOperation
+		if err := rows.Scan(&server, &operation.ID, &operation.Kind, &operation.Status, &operation.Phase); err != nil {
+			return nil, err
+		}
+		if d.operations[server] == nil {
+			d.operations[server] = &operation
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// Each server's newest backup is one seek in backups_server_idx, however
+	// much history is kept.
+	query = `SELECT b.server_id,b.created_at,b.size FROM logical_servers s JOIN backups b ON b.rowid=(
+    SELECT rowid FROM backups WHERE server_id=s.id AND state='complete' ORDER BY created_at DESC,id LIMIT 1)`
+	if serverID != "" {
+		query += " WHERE s.id=?"
+	}
+	rows, err = s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var server string
+		var backup BackupSummary
+		if err := rows.Scan(&server, &backup.CreatedAt, &backup.Size); err != nil {
+			return nil, err
+		}
+		d.backups[server] = &backup
+	}
+	return d, rows.Err()
+}
+
+func (s *Service) view(ctx context.Context, d *details, logical identity.Server, permissions []authz.Capability, container *Container) *View {
 	view := &View{ID: logical.ID, BindingStatus: logical.Status, BindingRevision: logical.BindingRevision, Permissions: permissions}
 	if container != nil {
 		view.Container = *container
@@ -160,37 +278,22 @@ func (s *Service) view(ctx context.Context, actor *db.SessionUser, logical ident
 	if container != nil && container.AddressLabel != nil {
 		view.Connection = &Connection{Host: container.AddressLabel.Host, Port: container.AddressLabel.Port, Source: "label"}
 	} else if container != nil && container.ConnectPort > 0 {
-		view.Connection = &Connection{Host: s.ConnectionHost(ctx), Port: container.ConnectPort, Source: "detected"}
+		if d.host == nil {
+			host := s.ConnectionHost(ctx)
+			d.host = &host
+		}
+		view.Connection = &Connection{Host: *d.host, Port: container.ConnectPort, Source: "detected"}
 	}
-	var operation ActiveOperation
-	err := s.DB.QueryRowContext(ctx, `SELECT id,kind,status,phase FROM operations
-    WHERE server_id=? AND status IN ('queued','running') LIMIT 1`, logical.ID).Scan(&operation.ID, &operation.Kind, &operation.Status, &operation.Phase)
-	if err == nil {
-		view.ActiveOperation = &operation
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
+	view.ActiveOperation = d.operations[logical.ID]
 	// Administrators keep backup history while a binding is unavailable. A
 	// create grant shows only this summary, never archive data.
-	current, err := s.Authz.CurrentActor(ctx, actor)
-	if err != nil {
-		return nil, err
-	}
-	if (current != nil && current.Role == db.RoleAdmin) || slices.Contains(permissions, authz.BackupsRead) ||
-		slices.Contains(permissions, authz.BackupsCreate) {
-		var backup BackupSummary
-		err := s.DB.QueryRowContext(ctx, `SELECT created_at,size FROM backups WHERE server_id=? AND state='complete'
-      ORDER BY created_at DESC,id LIMIT 1`, logical.ID).Scan(&backup.CreatedAt, &backup.Size)
-		if err == nil {
-			view.LatestBackup = &backup
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
+	if d.admin || slices.Contains(permissions, authz.BackupsRead) || slices.Contains(permissions, authz.BackupsCreate) {
+		view.LatestBackup = d.backups[logical.ID]
 	}
 	if !slices.Contains(permissions, authz.FilesRead) {
 		view.FileRoots = nil
 	}
-	return view, nil
+	return view
 }
 
 // List refreshes discovery and lists the servers the actor may view.
@@ -213,26 +316,49 @@ func (s *Service) listViews(ctx context.Context, actor *db.SessionUser, current 
 	if err != nil {
 		return nil, err
 	}
+	user, permissions, err := s.Authz.EffectiveAll(ctx, actor, logical)
+	if err != nil || user == nil {
+		return nil, err
+	}
+	d, err := s.readDetails(ctx, user, "")
+	if err != nil {
+		return nil, err
+	}
 	var views []View
 	for _, server := range logical {
-		permissions, err := s.Authz.Effective(ctx, actor, server.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(permissions, authz.ServerView) {
+		if !slices.Contains(permissions[server.ID], authz.ServerView) {
 			continue
 		}
 		var container *Container
 		if found, ok := current[server.ContainerID]; ok && server.ContainerID != "" {
 			container = &found
 		}
-		view, err := s.view(ctx, actor, server, permissions, container)
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, *view)
+		views = append(views, *s.view(ctx, d, server, permissions[server.ID], container))
 	}
 	return views, nil
+}
+
+// Name is a visible server's ID and saved display name.
+type Name struct{ ID, DisplayName string }
+
+// Names lists the servers the actor may view from saved metadata, without
+// the summaries a View reads.
+func (s *Service) Names(ctx context.Context, actor *db.SessionUser) ([]Name, error) {
+	logical, err := s.Identity.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	_, permissions, err := s.Authz.EffectiveAll(ctx, actor, logical)
+	if err != nil {
+		return nil, err
+	}
+	var names []Name
+	for _, server := range logical {
+		if slices.Contains(permissions[server.ID], authz.ServerView) {
+			names = append(names, Name{server.ID, server.DisplayName})
+		}
+	}
+	return names, nil
 }
 
 // Snapshot is a server detail read. Saved history stays inspectable during
@@ -263,7 +389,9 @@ func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string
 	}
 	var stats *Stats
 	liveUnavailable := refreshErr != nil
-	if withStats && refreshErr == nil && original.Status == identity.StatusActive {
+	// Only a running container has resources to sample.
+	if withStats && refreshErr == nil && original.Status == identity.StatusActive &&
+		current[original.ContainerID].State == "running" {
 		verified := false
 		binding, err := s.Identity.ResolveBinding(ctx, id, original.BindingRevision)
 		if err == nil {
@@ -299,14 +427,19 @@ func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string
 	if err != nil {
 		return nil, err
 	}
+	user, err := s.Authz.CurrentActor(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	d, err := s.readDetails(ctx, user, id)
+	if err != nil {
+		return nil, err
+	}
 	var container *Container
 	if found, ok := current[logical.ContainerID]; ok && !unavailable && logical.ContainerID != "" {
 		container = &found
 	}
-	view, err := s.view(ctx, actor, *logical, permissions, container)
-	if err != nil {
-		return nil, err
-	}
+	view := s.view(ctx, d, *logical, permissions, container)
 	if unavailable {
 		view.State, view.Status, view.Health, view.StateSince, view.Exit = "unknown", "Live status unavailable", "", 0, nil
 		stats = nil
@@ -324,7 +457,7 @@ type Context struct {
 
 // ResolveAuthorized refreshes discovery, then confirms the binding.
 func (s *Service) ResolveAuthorized(ctx context.Context, actor *db.SessionUser, id string, capability authz.Capability, expectedRevision int64) (*Context, error) {
-	if _, err := s.Refresh(ctx); err != nil {
+	if _, err := s.RefreshNow(ctx); err != nil {
 		return nil, err
 	}
 	return s.VerifyAuthorized(ctx, actor, id, capability, expectedRevision)

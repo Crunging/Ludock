@@ -49,6 +49,8 @@ type fileHelper struct {
 	out     *bufio.Writer
 	stdin   io.Reader
 	entries int
+	// buffer is reused for every file streamed.
+	buffer []byte
 
 	exit     func(int)
 	mu       sync.Mutex
@@ -159,7 +161,10 @@ func (h *fileHelper) json(value any) error {
 }
 
 func (h *fileHelper) streamFile(file fd, size int64) error {
-	buffer := make([]byte, 64*1024)
+	if h.buffer == nil {
+		h.buffer = make([]byte, 64*1024)
+	}
+	buffer := h.buffer
 	var position int64
 	for remaining := size; remaining > 0; {
 		n, err := unix.Pread(int(file), buffer[:min(int64(len(buffer)), remaining)], position)
@@ -228,7 +233,7 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 			return err
 		}
 		if info.Size%512 != 0 {
-			if _, err := h.out.Write(make([]byte, 512-info.Size%512)); err != nil {
+			if _, err := h.out.Write(zeros[:512-info.Size%512]); err != nil {
 				return err
 			}
 		}

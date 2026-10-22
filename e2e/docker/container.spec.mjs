@@ -50,8 +50,9 @@ test("file helpers from Ludock's image read and change server data", async ({ pa
   await page.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete file" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Deleted “uploaded.txt”.");
-  // Helper containers are gone once the work is done.
-  await expect.poll(() => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal")).toBe("");
+  // Helper containers are gone once the work is done; a read-only listing
+  // helper stays idle for 30 seconds first.
+  await expect.poll(() => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal"), { timeout: 45_000 }).toBe("");
 });
 
 test("a backup restores the server's data and running state", async ({ page }) => {
@@ -89,7 +90,11 @@ test("a Compose update recreates the service from its source files", async ({ pa
   await openServer(page, "Test Game");
   await page.getByRole("tab", { name: "Update" }).click();
   const form = page.locator("#update-panel form");
-  await expect(form).toContainText("game");
+  // The previous journey's shell command may hold the server for a moment.
+  await expect(async () => {
+    if (!(await form.count())) await page.getByRole("button", { name: "Check again" }).click();
+    await expect(form).toContainText("game", { timeout: 2_000 });
+  }).toPass();
   await form.getByLabel(/Recreate anyway/).check();
   await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
   await form.getByLabel(/Type Test Game to skip the backup/).fill("Test Game");

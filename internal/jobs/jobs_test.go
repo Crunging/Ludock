@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -385,7 +386,7 @@ func twoRootBackup(t *testing.T, f *fixture) any {
 		}
 	}
 	f.engine.Update(f.game, func(c *fakedocker.Container) { c.Config.Labels["ludock.files"] = world + "," + config })
-	if _, err := f.jobs.Servers.Refresh(ctx); err != nil {
+	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 		t.Fatal(err)
 	}
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -407,14 +408,15 @@ func twoRootBackup(t *testing.T, f *fixture) any {
 
 // spaceReports answers restore space probes with free(check), counting
 // from 1, on one shared device.
-func spaceReports(f *fixture, free func(check int) int) *int {
+func spaceReports(f *fixture, free func(check int) (bytes int, device string)) *int {
 	run, checks := f.engine.Exec, new(int)
 	f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 		var request helper.RestoreRequest
 		if len(cmd) > 3 && cmd[0] == helper.Binary && cmd[2] == "restore" && json.Unmarshal([]byte(cmd[3]), &request) == nil &&
 			request.Operation == "space" {
 			*checks++
-			out, _ := json.Marshal(map[string]any{"availableBytes": free(*checks), "device": "1"})
+			bytes, device := free(*checks)
+			out, _ := json.Marshal(map[string]any{"availableBytes": bytes, "device": device})
 			stdout(out)
 			return 0
 		}
@@ -452,18 +454,23 @@ func TestAuthorityLostAsCommandEnds(t *testing.T) {
 func TestRestoreSpacePerRoot(t *testing.T) {
 	f := setup(t)
 	backupID := twoRootBackup(t, f)
-	// Both roots share a filesystem with 10 MiB free, as both checks before
-	// the server stops see: staging the first leaves 6 MiB, enough for the
-	// second and the reserve.
-	checks := spaceReports(f, func(check int) int {
-		if check > 3 {
-			return 6 << 20
+	// Each root has its own disk with 6 MiB free: enough for its 4 MiB and
+	// the reserve, though not for both roots.
+	checks := spaceReports(f, func(check int) (int, string) { return 6 << 20, strconv.Itoa(check % 2) })
+	// Both roots stage from one pass over the archive.
+	for _, root := range []string{"world", "config"} {
+		if err := os.WriteFile(filepath.Join(f.data, root, "large.dat"), []byte("changed"), 0o644); err != nil {
+			t.Fatal(err)
 		}
-		return 10 << 20
-	})
+	}
 	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
 	if restored.Status != ops.Succeeded || *checks != 4 {
 		t.Fatal(restored.Status, restored.Error, *checks)
+	}
+	for _, root := range []string{"world", "config"} {
+		if info, err := os.Stat(filepath.Join(f.data, root, "large.dat")); err != nil || info.Size() != 4<<20 {
+			t.Fatal(root, "was not restored:", err)
+		}
 	}
 }
 
@@ -473,7 +480,7 @@ func TestRestoreSpacePerDisk(t *testing.T) {
 	backupID := twoRootBackup(t, f)
 	before, _ := f.jobs.Backups.List(ctx, f.serverID)
 	// Each root fits in 9 MiB on its own, but not both and the reserve.
-	checks := spaceReports(f, func(int) int { return 9 << 20 })
+	checks := spaceReports(f, func(int) (int, string) { return 9 << 20, "1" })
 	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
 	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "lacks space") || *checks != 2 {
 		t.Fatal(restored.Status, restored.Error, *checks)
@@ -519,7 +526,8 @@ func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
 func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	deadline := time.Now().Add(400 * time.Millisecond)
+	// Recovery keeps the deadline in milliseconds, so the test does too.
+	deadline := time.UnixMilli(time.Now().Add(400 * time.Millisecond).UnixMilli())
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
 		BindingRevision: logical.BindingRevision, Recovery: map[string]any{"containerId": logical.ContainerID,
 			"stopStarted": true, "stopRecoveryDeadlineAt": float64(deadline.UnixMilli()), "lockKeys": []any{"server:" + f.serverID}}}}

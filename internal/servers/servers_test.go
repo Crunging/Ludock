@@ -186,7 +186,7 @@ func TestListFailsWholeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.Fail = 500
-	if _, err := s.Refresh(ctx); err == nil {
+	if _, err := s.RefreshNow(ctx); err == nil {
 		t.Fatal("partial snapshot accepted")
 	}
 	servers, _ := s.Identity.List(ctx, "")
@@ -273,5 +273,63 @@ func TestStopTimeouts(t *testing.T) {
 	state := StopRecoveryState(info, now)
 	if !state.StopStarted || state.StopRecoveryDeadlineAt != 5*60*1000 {
 		t.Fatalf("%+v", state)
+	}
+}
+
+// Reads reuse a discovery from the last moments; a Docker write by Ludock,
+// a forced refresh, or the window passing discovers again. Viewers of one
+// container share a stats sample.
+func TestRefreshReusesRecentDiscovery(t *testing.T) {
+	engine, s := setup(t)
+	now := time.Unix(1000, 0)
+	s.Now = func() time.Time { return now }
+	s.Observer.Now = s.Now
+	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true})
+	count := func(suffix string) int {
+		n := 0
+		for _, request := range engine.Requests {
+			if strings.Contains(request, suffix) {
+				n++
+			}
+		}
+		return n
+	}
+	listings := func() int { return count("/containers/json") }
+	refresh := func(read func(context.Context) (map[string]Container, error)) {
+		t.Helper()
+		if _, err := read(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refresh(s.Refresh)
+	refresh(s.Refresh)
+	if listings() != 1 {
+		t.Fatal("listed", listings(), "times for two reads")
+	}
+	refresh(s.RefreshNow)
+	if listings() != 2 {
+		t.Fatal("forced refresh reused a discovery")
+	}
+	if err := s.Observer.ChangeState(ctx, id, Stop, nil); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Refresh(ctx)
+	if err != nil || listings() != 3 || current[id].State != "exited" {
+		t.Fatal("reused a discovery from before Ludock stopped the server", listings(), current[id].State, err)
+	}
+	now = now.Add(discoveryReuse)
+	refresh(s.Refresh)
+	if listings() != 4 {
+		t.Fatal("reused an expired discovery")
+	}
+	engine.Update(id, func(c *fakedocker.Container) { c.State.Status = "running"; c.State.Running = true })
+	allow := func(identity.Observation) error { return nil }
+	for range 2 {
+		if _, err := s.Observer.Stats(ctx, id, allow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count("/stats") != 1 {
+		t.Fatal("sampled", count("/stats"), "times for two viewers")
 	}
 }

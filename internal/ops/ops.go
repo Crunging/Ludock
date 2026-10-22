@@ -472,7 +472,8 @@ func (r *Runner) Wake() {
 
 func (r *Runner) fill(ctx context.Context) {
 	r.mu.Lock()
-	if !r.enabled || len(r.yielded) > 0 {
+	// Nothing can be claimed while every lane is busy.
+	if !r.enabled || len(r.yielded) > 0 || r.lanesFull() {
 		r.mu.Unlock()
 		return
 	}
@@ -518,6 +519,15 @@ func (r *Runner) fill(ctx context.Context) {
 			r.Wake()
 		}()
 	}
+}
+
+func (r *Runner) lanesFull() bool {
+	for lane, capacity := range laneCapacity {
+		if r.laneLoad[lane] < capacity {
+			return false
+		}
+	}
+	return true
 }
 
 // retryFill looks for queued work again shortly. Nothing else may wake the

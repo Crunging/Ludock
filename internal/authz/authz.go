@@ -189,39 +189,89 @@ func (s *Service) UserGrant(ctx context.Context, userID, serverID string) (*Gran
 
 // Effective returns the actor's current capabilities on a server.
 func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID string) ([]Capability, error) {
+	capabilities, _, err := s.Access(ctx, actor, serverID)
+	return capabilities, err
+}
+
+// Access returns the actor's current capabilities on a server and the
+// server they apply to, read together in one query. The server is nil when
+// it does not exist.
+func (s *Service) Access(ctx context.Context, actor *db.SessionUser, serverID string) ([]Capability, *identity.Server, error) {
+	if actor == nil {
+		return nil, nil, nil
+	}
+	var role, grant sql.NullString
+	var disabled sql.NullInt64
+	server, err := identity.ScanServer(s.DB.QueryRowContext(ctx, `SELECT u.role, u.disabled, g.capabilities_json, `+
+		identity.ServerColumns("s")+` FROM logical_servers s LEFT JOIN users u ON u.id = ?
+    LEFT JOIN server_grants g ON g.user_id = u.id AND g.server_id = s.id WHERE s.id = ?`, actor.ID, serverID),
+		&role, &disabled, &grant)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if !role.Valid || disabled.Int64 != 0 {
+		return nil, server, nil
+	}
+	user := &db.SessionUser{ID: actor.ID, Role: db.Role(role.String)}
+	var assigned []Capability
+	if grant.Valid {
+		assigned = parseCapabilities(grant.String)
+	}
+	return roleCapabilities(user, server, assigned), server, nil
+}
+
+// EffectiveAll is Effective for many servers, reading the account and its
+// grants once. It returns the current account, or nil once it is gone.
+func (s *Service) EffectiveAll(ctx context.Context, actor *db.SessionUser, servers []identity.Server) (*db.SessionUser, map[string][]Capability, error) {
 	user, err := s.CurrentActor(ctx, actor)
 	if err != nil || user == nil {
-		return nil, err
+		return nil, nil, err
 	}
-	server, err := s.Servers.Get(ctx, serverID)
-	if err != nil || server == nil {
-		return nil, err
+	assigned := map[string][]Capability{}
+	if user.Role != db.RoleAdmin {
+		rows, err := s.DB.QueryContext(ctx, "SELECT server_id, capabilities_json FROM server_grants WHERE user_id = ?", user.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var serverID, raw string
+			if err := rows.Scan(&serverID, &raw); err != nil {
+				return nil, nil, err
+			}
+			assigned[serverID] = parseCapabilities(raw)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
 	}
-	usable := server.Status == identity.StatusActive && !server.ReviewRequired
+	result := make(map[string][]Capability, len(servers))
+	for index := range servers {
+		result[servers[index].ID] = roleCapabilities(user, &servers[index], assigned[servers[index].ID])
+	}
+	return user, result, nil
+}
+
+func usable(server *identity.Server) bool {
+	return server.Status == identity.StatusActive && !server.ReviewRequired
+}
+
+// roleCapabilities applies the account's role to its grant on a server.
+func roleCapabilities(user *db.SessionUser, server *identity.Server, assigned []Capability) []Capability {
 	if user.Role == db.RoleAdmin {
 		// Administrators can inspect status and review metadata even when acting
 		// on the container is forbidden. This never authorizes Docker reads or
 		// mutation.
-		if usable {
-			return slices.Clone(All), nil
+		if usable(server) {
+			return slices.Clone(All)
 		}
-		return []Capability{ServerView}, nil
+		return []Capability{ServerView}
 	}
-	if !usable {
-		return nil, nil
-	}
-	var raw string
-	err = s.DB.QueryRowContext(ctx, "SELECT capabilities_json FROM server_grants WHERE user_id = ? AND server_id = ?",
-		user.ID, server.ID).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	assigned := parseCapabilities(raw)
-	if !slices.Contains(assigned, ServerView) {
-		return nil, nil
+	if !usable(server) || !slices.Contains(assigned, ServerView) {
+		return nil
 	}
 	var result []Capability
 	for _, capability := range RoleCeiling(user.Role) {
@@ -233,7 +283,7 @@ func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID
 		}
 		result = append(result, capability)
 	}
-	return result, nil
+	return result
 }
 
 // Has reports whether the actor currently has a capability.
@@ -250,7 +300,7 @@ var errInsufficient = apperr.New("FORBIDDEN", 403, "Insufficient server permissi
 
 // Assert requires a capability and returns the server.
 func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) (*identity.Server, error) {
-	capabilities, err := s.Effective(ctx, actor, serverID)
+	capabilities, server, err := s.Access(ctx, actor, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +312,7 @@ func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID st
 		s.auditDenial(ctx, actor, serverID, capability)
 		return nil, errInsufficient
 	}
-	server, err := s.Servers.Get(ctx, serverID)
-	if err == nil && server == nil {
-		err = ErrServerNotFound
-	}
-	return server, err
+	return server, nil
 }
 
 func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) {

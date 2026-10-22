@@ -656,6 +656,13 @@ func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, j
 		return err
 	}
 	defer data.Cleanup()
+	return j.stagingRoom(ctx, data, server, job, roots, staged, reserve, assertAccess)
+}
+
+// stagingRoom requires every filesystem to hold its roots' staged bytes
+// together above the reserve: all roots are staged before any is replaced.
+func (j *Jobs) stagingRoom(ctx context.Context, data *backups.DataHelper, server *servers.Context, job *ops.Context,
+	roots []backups.Root, staged map[string]int64, reserve int64, assertAccess func() error) error {
 	needed, available := map[string]int64{}, map[string]float64{}
 	for _, root := range roots {
 		destination, err := backups.HelperRoot(server, root)
@@ -781,9 +788,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	if _, err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum); err != nil {
-		return nil, err
-	}
+	// The archive is validated once its locks are held.
 	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
 		var data *backups.DataHelper
 		assertAccess := func() error { return j.dataAuthority(ctx, server, job) }
@@ -832,37 +837,38 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := job.Progress("restore_staging", map[string]any{"dataHelperId": data.Container}, nil); err != nil {
 				return nil, err
 			}
+			if err := j.assertStopped(ctx, server, job); err != nil {
+				return nil, err
+			}
+			// Extraction also stops at the reserve as it writes.
+			if err := j.stagingRoom(ctx, data, server, job, row.Roots, staged, settings.ReserveBytes, assertAccess); err != nil {
+				return nil, err
+			}
+			var targets []backups.StageTarget
 			for _, root := range row.Roots {
-				if err := j.assertStopped(ctx, server, job); err != nil {
-					return nil, err
-				}
 				destination, err := backups.HelperRoot(server, root)
 				if err != nil {
 					return nil, err
 				}
-				space, err := j.restoreStep(ctx, data, destination, job, "space", assertAccess)
-				if err != nil {
-					return nil, err
-				}
-				// Roots staged earlier may share this filesystem and have
-				// already taken their space, so each needs only its own.
-				available, ok := number(space["availableBytes"])
-				if !ok || available < float64(staged[root.ID]+settings.ReserveBytes) {
-					return nil, errRestoreCapacity
-				}
+				targets = append(targets, backups.StageTarget{Root: root, Path: destination})
+			}
+			for _, target := range targets {
 				if err := assertAccess(); err != nil {
 					return nil, err
 				}
-				if _, err := j.restoreStep(ctx, data, destination, job, "stage", assertAccess); err != nil {
+				if _, err := j.restoreStep(ctx, data, target.Path, job, "stage", assertAccess); err != nil {
 					return nil, err
 				}
-				if err := assertAccess(); err != nil {
-					return nil, err
-				}
-				if err := j.Backups.Helpers.ExtractToStage(ctx, row.Destination(), row.ID, data.Container, root, destination, stageName(job),
-					row.Roots, settings.MaxBytes, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
-					return nil, err
-				}
+			}
+			if err := j.assertStopped(ctx, server, job); err != nil {
+				return nil, err
+			}
+			if err := assertAccess(); err != nil {
+				return nil, err
+			}
+			if err := j.Backups.Helpers.ExtractToStage(ctx, row.Destination(), row.ID, data.Container, targets, stageName(job),
+				row.Roots, settings.MaxBytes, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
+				return nil, err
 			}
 			if err := assertAccess(); err != nil {
 				return nil, err

@@ -91,6 +91,27 @@
     }
   });
 
+  // Timed polls wait while the tab is hidden; events still refresh. Showing
+  // the tab again refreshes the live server views that missed a poll.
+  function polls(elt) {
+    var parts = (elt.getAttribute && elt.getAttribute("hx-trigger") || "").split(",").map(function (part) { return part.trim(); });
+    return parts.some(function (part) { return part.indexOf("every ") === 0; }) &&
+      !parts.some(function (part) { return part === "load" || part.indexOf("load ") === 0; });
+  }
+  var missedPoll = false;
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    if (document.hidden && !event.detail.requestConfig.triggeringEvent && polls(event.detail.elt)) {
+      missedPoll = true;
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && missedPoll && window.htmx) {
+      missedPoll = false;
+      htmx.trigger(document.body, "servers-changed");
+    }
+  });
+
   // Session expiry or revocation sends the browser to sign in again.
   document.addEventListener("htmx:responseError", function (event) {
     if (event.detail.xhr && event.detail.xhr.status === 401) window.location.assign("/login");

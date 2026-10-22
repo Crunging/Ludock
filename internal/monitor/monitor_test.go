@@ -44,13 +44,13 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	if len(events.events) != 0 {
 		t.Fatal("notified before grace")
 	}
-	if problem, _ := s.Problem(ctx, server.ID, 30_000); problem != nil {
+	if found, _ := problem(s, server.ID, 30_000); found != nil {
 		t.Fatal("problem before grace")
 	}
 	s.Check(ctx, state("exited", ""), 61_000)
 	s.Check(ctx, state("exited", ""), 90_000)
-	if problem, _ := s.Problem(ctx, server.ID, 90_000); problem == nil || problem.State != "exited" || problem.OutageStartedAt != 1000 {
-		t.Fatal(problem)
+	if found, _ := problem(s, server.ID, 90_000); found == nil || found.State != "exited" || found.OutageStartedAt != 1000 {
+		t.Fatal(found)
 	}
 	s.Check(ctx, state("running", "starting"), 100_000)
 	s.Check(ctx, state("running", ""), 110_000)
@@ -142,7 +142,7 @@ func TestUnreadableOperations(t *testing.T) {
 	if err := s.Check(ctx, state("exited", ""), 200_000); err == nil || len(events.events) != 0 {
 		t.Fatal(err, events.events)
 	}
-	if _, err := s.Problem(ctx, server.ID, 200_000); err == nil {
+	if _, err := problem(s, server.ID, 200_000); err == nil {
 		t.Fatal("reported an outage without reading active operations")
 	}
 }
@@ -157,7 +157,7 @@ func TestPolicySavedDuringACheckIsKept(t *testing.T) {
 	if changed, err := s.transition(ctx, server.ID, read, "outage_started_at=?,notified=1", 1000); err != nil || changed {
 		t.Fatal(changed, err)
 	}
-	if problem, _ := s.Problem(ctx, server.ID, 200_000); problem != nil {
+	if found, _ := problem(s, server.ID, 200_000); found != nil {
 		t.Fatal("restored an outage under the old policy")
 	}
 }
@@ -183,4 +183,10 @@ func TestAStopRecordedDuringACheckIsKept(t *testing.T) {
 	if len(events.events) != 0 {
 		t.Fatal(events.events)
 	}
+}
+
+// problem reads one server's outage from Problems.
+func problem(s *Service, serverID string, now int64) (*Problem, error) {
+	problems, err := s.Problems(ctx, now)
+	return problems[serverID], err
 }

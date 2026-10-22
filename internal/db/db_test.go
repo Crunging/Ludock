@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	if got := pragma(t, d.DB, "application_id"); got != "1279542091" {
 		t.Fatalf("application_id = %s", got)
 	}
-	if got := pragma(t, d.DB, "user_version"); got != "1" {
+	if got := pragma(t, d.DB, "user_version"); got != strconv.Itoa(LatestVersion()) {
 		t.Fatalf("user_version = %s", got)
 	}
 	if got := pragma(t, d.DB, "journal_mode"); got != "wal" {
@@ -181,7 +182,7 @@ func TestInterruptedKeyWrite(t *testing.T) {
 	}
 	d := mustOpen(t, durable)
 	defer d.Close()
-	if pragma(t, d.DB, "user_version") != "1" {
+	if pragma(t, d.DB, "user_version") != strconv.Itoa(LatestVersion()) {
 		t.Fatal("not migrated")
 	}
 	again, _ := os.ReadFile(filepath.Join(durable+".identity-key", "key"))
@@ -360,5 +361,25 @@ func TestRejectsNewerSchemaAndForeignMarker(t *testing.T) {
 	conn.ExecContext(bg, "PRAGMA user_version = 1; PRAGMA application_id = 123")
 	if err := ApplyMigrations(bg, conn, Migrations, testKey); !errors.Is(err, ErrIncompatible) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Reading a throttle reports an active window and removes an expired one.
+func TestGetLoginThrottleExpiry(t *testing.T) {
+	d := mustOpen(t, filepath.Join(t.TempDir(), "throttle.db"))
+	defer d.Close()
+	if _, err := d.RecordLoginFailure(bg, "key", 1000, 60_000, 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if throttle, err := d.GetLoginThrottle(bg, "key", 30_000, 60_000); err != nil || throttle.Failures != 1 {
+		t.Fatal(throttle, err)
+	}
+	if throttle, err := d.GetLoginThrottle(bg, "key", 61_000, 60_000); err != nil || throttle != (LoginThrottle{}) {
+		t.Fatal(throttle, err)
+	}
+	var rows int
+	d.QueryRow("SELECT COUNT(*) FROM login_attempts").Scan(&rows)
+	if rows != 0 {
+		t.Fatal("expired window kept")
 	}
 }

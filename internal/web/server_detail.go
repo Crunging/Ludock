@@ -18,10 +18,15 @@ import (
 )
 
 // detail reads one server for its detail page. Tabs follow the viewer's
-// capabilities; an unknown or hidden tab shows the overview.
-func (s *Server) detail(r *http.Request, request *Request, id, tab string) (*views.ServerDetail, error) {
+// capabilities; an unknown or hidden tab shows the overview. Only the
+// overview shows resource statistics, which take a Docker sample to read.
+func (s *Server) detail(r *http.Request, request *Request, id, tab string, withStats bool) (*views.ServerDetail, error) {
 	ctx := r.Context()
-	snapshot, err := s.App.Servers.Snapshot(ctx, request.User(), id)
+	read := s.App.Servers.Summary
+	if withStats {
+		read = s.App.Servers.Snapshot
+	}
+	snapshot, err := read(ctx, request.User(), id)
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +113,16 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 	return a
 }
 
+// detailTabs are the tabs other than the overview.
+var detailTabs = []string{"activity", "backups", "schedules", "update"}
+
 func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *Request) {
-	d, err := s.detail(r, request, r.PathValue("id"), r.URL.Query().Get("tab"))
+	tab := r.URL.Query().Get("tab")
+	d, err := s.detail(r, request, r.PathValue("id"), tab, !slices.Contains(detailTabs, tab))
+	if err == nil && d.Tab == "overview" && slices.Contains(detailTabs, tab) {
+		// A hidden tab falls back to the overview, which shows statistics.
+		d, err = s.detail(r, request, r.PathValue("id"), "overview", true)
+	}
 	if err == nil {
 		switch d.Tab {
 		case "activity":
@@ -134,7 +147,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 }
 
 func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Request) {
-	d, err := s.detail(r, request, r.PathValue("id"), r.URL.Query().Get("tab"))
+	d, err := s.detail(r, request, r.PathValue("id"), r.URL.Query().Get("tab"), false)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
@@ -143,7 +156,7 @@ func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Req
 }
 
 func (s *Server) detailOverview(w http.ResponseWriter, r *http.Request, request *Request) {
-	d, err := s.detail(r, request, r.PathValue("id"), "overview")
+	d, err := s.detail(r, request, r.PathValue("id"), "overview", true)
 	if err == nil {
 		err = s.overview(r, request, d)
 	}
@@ -233,7 +246,7 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 func (s *Server) reviewBinding(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
-	if _, err := s.App.Servers.Refresh(ctx); err != nil {
+	if _, err := s.App.Servers.RefreshNow(ctx); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}

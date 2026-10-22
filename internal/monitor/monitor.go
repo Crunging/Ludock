@@ -94,6 +94,44 @@ func (s *Service) row(ctx context.Context, serverID string) (*row, error) {
 	return &r, err
 }
 
+// rows reads every saved availability row by server.
+func (s *Service) rows(ctx context.Context) (map[string]*row, error) {
+	result, err := s.DB.QueryContext(ctx, `SELECT server_id,policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state
+    FROM availability`)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	rows := map[string]*row{}
+	for result.Next() {
+		var serverID string
+		var r row
+		if err := result.Scan(&serverID, &r.policy, &r.outage, &r.notified, &r.suppressed, &r.intentional, &r.lastState); err != nil {
+			return nil, err
+		}
+		rows[serverID] = &r
+	}
+	return rows, result.Err()
+}
+
+// active reads the servers with queued or running operations.
+func (s *Service) active(ctx context.Context) (map[string]bool, error) {
+	result, err := s.DB.QueryContext(ctx, "SELECT DISTINCT server_id FROM operations WHERE status IN ('queued','running')")
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	active := map[string]bool{}
+	for result.Next() {
+		var serverID string
+		if err := result.Scan(&serverID); err != nil {
+			return nil, err
+		}
+		active[serverID] = true
+	}
+	return active, result.Err()
+}
+
 // Get reads a server's availability.
 func (s *Service) Get(ctx context.Context, serverID string) (*Availability, error) {
 	r, err := s.row(ctx, serverID)
@@ -166,16 +204,8 @@ func (s *Service) Suppress(ctx context.Context, serverID string) error {
 
 // suppressed fails if active work cannot be read, rather than treating the
 // server as idle.
-func (s *Service) suppressed(ctx context.Context, serverID string, policy Policy, until, now int64) (bool, error) {
-	if !policy.Enabled || policy.Maintenance || until > now || (s.Locks != nil && s.Locks.ServerBusy(serverID)) {
-		return true, nil
-	}
-	var id string
-	err := s.DB.QueryRowContext(ctx, "SELECT id FROM operations WHERE server_id=? AND status IN ('queued','running') LIMIT 1", serverID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
+func (s *Service) suppressed(serverID string, policy Policy, until, now int64, active bool) bool {
+	return !policy.Enabled || policy.Maintenance || until > now || active || (s.Locks != nil && s.Locks.ServerBusy(serverID))
 }
 
 // Problem is a current outage.
@@ -184,27 +214,35 @@ type Problem struct {
 	OutageStartedAt int64
 }
 
-// Problem reads the persisted outage without running checks. Policy and
-// operation suppression are current even between monitor ticks.
-func (s *Service) Problem(ctx context.Context, serverID string, now int64) (*Problem, error) {
-	availability, err := s.Get(ctx, serverID)
+// Problems reads the persisted outages of every server without running
+// checks. Policy and operation suppression are current even between monitor
+// ticks.
+func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem, error) {
+	rows, err := s.rows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	state := availability.State
-	suppressed, err := s.suppressed(ctx, serverID, availability.Policy, state.SuppressedUntil, now)
+	active, err := s.active(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if suppressed || state.IntentionallyStopped ||
-		state.OutageStartedAt == 0 || now-state.OutageStartedAt < int64(availability.Policy.GraceSeconds)*1000 {
-		return nil, nil
+	problems := map[string]*Problem{}
+	for serverID, r := range rows {
+		policy, err := ParsePolicy([]byte(r.policy))
+		if err != nil {
+			return nil, err
+		}
+		if s.suppressed(serverID, policy, r.suppressed, now, active[serverID]) || r.intentional == 1 ||
+			!r.outage.Valid || r.outage.Int64 == 0 || now-r.outage.Int64 < int64(policy.GraceSeconds)*1000 {
+			continue
+		}
+		last := r.lastState.String
+		if last == "" {
+			last = "unavailable"
+		}
+		problems[serverID] = &Problem{State: last, OutageStartedAt: r.outage.Int64}
 	}
-	last := state.LastState
-	if last == "" {
-		last = "unavailable"
-	}
-	return &Problem{State: last, OutageStartedAt: state.OutageStartedAt}, nil
+	return problems, nil
 }
 
 func (s *Service) notify(key, message string) {
@@ -223,11 +261,18 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	if err != nil {
 		return err
 	}
+	// Each transition below applies only if its row is unchanged since
+	// this read.
+	rows, err := s.rows(ctx)
+	if err != nil {
+		return err
+	}
+	active, err := s.active(ctx)
+	if err != nil {
+		return err
+	}
 	for _, server := range logical {
-		r, err := s.row(ctx, server.ID)
-		if err != nil {
-			return err
-		}
+		r := rows[server.ID]
 		if r == nil {
 			continue
 		}
@@ -235,11 +280,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		if err != nil {
 			continue
 		}
-		suppressed, err := s.suppressed(ctx, server.ID, policy, r.suppressed, now)
-		if err != nil {
-			return err
-		}
-		if suppressed {
+		if s.suppressed(server.ID, policy, r.suppressed, now, active[server.ID]) {
 			continue
 		}
 		container, found := current[server.ContainerID]

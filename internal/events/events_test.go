@@ -77,7 +77,7 @@ func setup(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.hub = &Hub{Docker: docker.New(engine.Socket), Identity: store, Authz: authorization,
-		Refresh: func(ctx context.Context) error { f.refreshes.Add(1); _, err := service.Refresh(ctx); return err }}
+		Refresh: func(ctx context.Context) error { f.refreshes.Add(1); _, err := service.RefreshNow(ctx); return err }}
 	t.Cleanup(f.hub.Stop)
 	logical, _ := store.List(ctx, "")
 	for _, server := range logical {

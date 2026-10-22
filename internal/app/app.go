@@ -103,11 +103,14 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		Sessions: &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
 		stop:     make(chan struct{})}
 	a.Events = &events.Hub{Docker: client, Identity: store, Authz: authorization, Refresh: func(ctx context.Context) error {
-		_, err := serverService.Refresh(ctx)
+		_, err := serverService.RefreshNow(ctx)
 		return err
 	}}
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
-		Refresh: a.Events.Refresh}
+		Refresh: func(ctx context.Context) error {
+			_, err := serverService.Refresh(ctx)
+			return err
+		}}
 	return a, nil
 }
 
@@ -160,7 +163,9 @@ func (a *App) Tick(ctx context.Context) {
 		go func() {
 			defer a.background.Done()
 			defer a.tick.Unlock()
-			current, err := a.Servers.Refresh(ctx)
+			// Monitoring and schedules judge the fleet as it is now, not as
+			// a page read saw it a moment ago.
+			current, err := a.Servers.RefreshNow(ctx)
 			now := time.Now().UnixMilli()
 			if err != nil {
 				log.Warn("Discovery and schedules are temporarily unavailable")
@@ -212,6 +217,7 @@ func (a *App) Stop() {
 	case <-time.After(5 * time.Minute):
 		log.Error("Failed to shut down cleanly")
 	}
+	a.Files.Close()
 	// Last: operations finishing above may still queue notifications.
 	a.Notify.Stop()
 }

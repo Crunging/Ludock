@@ -175,6 +175,15 @@ var Migrations = []Migration{
     `,
 		Upgrade: initializeKeyCheck,
 	},
+	{
+		// Schedule runs look up the accepted binding of a revision, and every
+		// tick looks for backups still being deleted.
+		Version: 2,
+		SQL: `
+      CREATE INDEX server_bindings_revision_idx ON server_bindings(server_id, binding_revision) WHERE accepted = 1;
+      CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
+    `,
+	},
 }
 
 // LatestVersion is the newest schema version Ludock writes.

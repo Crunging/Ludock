@@ -44,7 +44,7 @@ func historyQuery(r *http.Request, audit bool) (history.Query, url.Values, error
 // historyServers names the servers the viewer can see, from saved metadata.
 func (s *Server) historyServers(r *http.Request, request *Request, h *views.HistoryView) {
 	h.Names = map[string]string{}
-	list, err := s.App.Servers.ListSaved(r.Context(), request.User())
+	list, err := s.App.Servers.Names(r.Context(), request.User())
 	if err != nil {
 		h.NamesError = true
 		return
