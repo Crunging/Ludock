@@ -71,11 +71,17 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 	}
 	result := &Result{Items: []Item{}}
 	hasVisible := false
+	_, visible, err := s.Authz.EffectiveAll(ctx, actor, servers)
+	if err != nil {
+		return nil, err
+	}
+	// An unreadable source fails the list instead of hiding its items.
+	problems, err := s.Monitor.Problems(ctx, now)
+	if err != nil {
+		return nil, err
+	}
 	for _, server := range servers {
-		permissions, err := s.Authz.Effective(ctx, actor, server.ID)
-		if err != nil {
-			return nil, err
-		}
+		permissions := visible[server.ID]
 		if !slices.Contains(permissions, authz.ServerView) {
 			continue
 		}
@@ -89,12 +95,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			item.ID, item.Kind, item.BindingStatus = "binding:"+server.ID, "binding", server.Status
 			result.Items = append(result.Items, item)
 		}
-		// An unreadable source fails the list instead of hiding its items.
-		problem, err := s.Monitor.Problem(ctx, server.ID, now)
-		if err != nil {
-			return nil, err
-		}
-		if problem != nil {
+		if problem := problems[server.ID]; problem != nil {
 			item := base
 			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.OutageStartedAt
 			result.Items = append(result.Items, item)
