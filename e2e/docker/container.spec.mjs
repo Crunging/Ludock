@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "../journeys/fixtures.mjs";
-import { docker } from "../docker-setup.mjs";
+import { docker, gameImage } from "../docker-setup.mjs";
 
 asAdmin();
 
@@ -11,6 +11,7 @@ const ludock = () => JSON.parse(process.env.LUDOCK_DOCKER_LUDOCK);
 const game = () => JSON.parse(process.env.LUDOCK_DOCKER_GAME);
 const stack = () => process.env.LUDOCK_DOCKER_STACK;
 const gameContainer = () => docker(...game(), "ps", "--quiet", "game");
+const healthy = async () => (await fetch("http://127.0.0.1:3000/api/v1/health").catch(() => ({ ok: false }))).ok;
 
 test("the image runs hardened and reports healthy", async ({ page }) => {
   const id = docker(...ludock(), "ps", "--quiet", "ludock");
@@ -99,13 +100,32 @@ test("a Compose update recreates the service from its source files", async ({ pa
   await expect.poll(() => docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
 });
 
+// A file command interrupted by a restart may still be writing through its
+// helper, so Ludock removes every file helper before work resumes.
+test("a file helper left by an interrupted run is removed when Ludock starts", async ({ page }) => {
+  docker(...ludock(), "stop", "ludock");
+  const leftover = docker("run", "--detach", "--label", "ludock.enable=false", "--label", "ludock.internal=file-helper",
+    "--volume", `${join(stack(), "data")}:/data`, gameImage, "sh", "-c", "while true; do date > /data/leftover; sleep 1; done");
+  const unrelated = docker("run", "--detach", "--label", "ludock.internal=other", gameImage, "sleep", "600");
+  try {
+    docker(...ludock(), "start", "ludock");
+    await expect.poll(healthy, { timeout: 60_000 }).toBe(true);
+    await expect.poll(() => docker("ps", "--all", "--quiet", "--filter", `id=${leftover}`), { timeout: 30_000 }).toBe("");
+    expect(docker("ps", "--quiet", "--filter", `id=${unrelated}`)).not.toBe("");
+    expect(docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
+    await openServer(page, "Test Game");
+  } finally {
+    docker("rm", "--force", unrelated);
+  }
+});
+
 // The documented procedure: stop Ludock, run the recovery command, start it.
 // Recovery signs every session out, so this journey runs last.
 test("an administrator password can be recovered from the console", async ({ page }) => {
   docker(...ludock(), "stop", "ludock");
   docker(...ludock(), "run", "--rm", "--no-deps", "-e", "LUDOCK_RECOVERY_PASSWORD=recovered long password", "ludock", "recover", "admin");
   docker(...ludock(), "start", "ludock");
-  await expect.poll(async () => (await fetch("http://127.0.0.1:3000/api/v1/health").catch(() => ({ ok: false }))).ok, { timeout: 60_000 }).toBe(true);
+  await expect.poll(healthy, { timeout: 60_000 }).toBe(true);
 
   await page.context().clearCookies();
   await page.goto("/login");
