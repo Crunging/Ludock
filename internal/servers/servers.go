@@ -3,7 +3,6 @@ package servers
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"path"
 	"slices"
 	"strings"
@@ -199,7 +198,65 @@ func (v *View) Can(capability authz.Capability) bool {
 	return slices.Contains(v.Permissions, capability)
 }
 
-func (s *Service) view(ctx context.Context, actor *db.SessionUser, logical identity.Server, permissions []authz.Capability, container *Container) (*View, error) {
+// details are the saved summaries a view shows, read once for a list.
+type details struct {
+	admin      bool
+	host       *string
+	operations map[string]*ActiveOperation
+	backups    map[string]*BackupSummary
+}
+
+// readDetails reads summaries for one server, or every server when serverID
+// is "". actor is the current account.
+func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, serverID string) (*details, error) {
+	d := &details{admin: actor != nil && actor.Role == db.RoleAdmin, operations: map[string]*ActiveOperation{},
+		backups: map[string]*BackupSummary{}}
+	query, args := `SELECT server_id,id,kind,status,phase FROM operations WHERE status IN ('queued','running')`, []any{}
+	if serverID != "" {
+		query, args = query+" AND server_id=?", append(args, serverID)
+	}
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var server string
+		var operation ActiveOperation
+		if err := rows.Scan(&server, &operation.ID, &operation.Kind, &operation.Status, &operation.Phase); err != nil {
+			return nil, err
+		}
+		if d.operations[server] == nil {
+			d.operations[server] = &operation
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	query = `SELECT server_id,created_at,size FROM (SELECT server_id,created_at,size,
+    ROW_NUMBER() OVER (PARTITION BY server_id ORDER BY created_at DESC,id) AS position
+    FROM backups WHERE state='complete'`
+	if serverID != "" {
+		query += " AND server_id=?"
+	}
+	rows, err = s.DB.QueryContext(ctx, query+") WHERE position=1", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var server string
+		var backup BackupSummary
+		if err := rows.Scan(&server, &backup.CreatedAt, &backup.Size); err != nil {
+			return nil, err
+		}
+		d.backups[server] = &backup
+	}
+	return d, rows.Err()
+}
+
+func (s *Service) view(ctx context.Context, d *details, logical identity.Server, permissions []authz.Capability, container *Container) *View {
 	view := &View{ID: logical.ID, BindingStatus: logical.Status, BindingRevision: logical.BindingRevision, Permissions: permissions}
 	if container != nil {
 		view.Container = *container
@@ -213,37 +270,22 @@ func (s *Service) view(ctx context.Context, actor *db.SessionUser, logical ident
 	if container != nil && container.AddressLabel != nil {
 		view.Connection = &Connection{Host: container.AddressLabel.Host, Port: container.AddressLabel.Port, Source: "label"}
 	} else if container != nil && container.ConnectPort > 0 {
-		view.Connection = &Connection{Host: s.ConnectionHost(ctx), Port: container.ConnectPort, Source: "detected"}
+		if d.host == nil {
+			host := s.ConnectionHost(ctx)
+			d.host = &host
+		}
+		view.Connection = &Connection{Host: *d.host, Port: container.ConnectPort, Source: "detected"}
 	}
-	var operation ActiveOperation
-	err := s.DB.QueryRowContext(ctx, `SELECT id,kind,status,phase FROM operations
-    WHERE server_id=? AND status IN ('queued','running') LIMIT 1`, logical.ID).Scan(&operation.ID, &operation.Kind, &operation.Status, &operation.Phase)
-	if err == nil {
-		view.ActiveOperation = &operation
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
+	view.ActiveOperation = d.operations[logical.ID]
 	// Administrators keep backup history while a binding is unavailable. A
 	// create grant shows only this summary, never archive data.
-	current, err := s.Authz.CurrentActor(ctx, actor)
-	if err != nil {
-		return nil, err
-	}
-	if (current != nil && current.Role == db.RoleAdmin) || slices.Contains(permissions, authz.BackupsRead) ||
-		slices.Contains(permissions, authz.BackupsCreate) {
-		var backup BackupSummary
-		err := s.DB.QueryRowContext(ctx, `SELECT created_at,size FROM backups WHERE server_id=? AND state='complete'
-      ORDER BY created_at DESC,id LIMIT 1`, logical.ID).Scan(&backup.CreatedAt, &backup.Size)
-		if err == nil {
-			view.LatestBackup = &backup
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
+	if d.admin || slices.Contains(permissions, authz.BackupsRead) || slices.Contains(permissions, authz.BackupsCreate) {
+		view.LatestBackup = d.backups[logical.ID]
 	}
 	if !slices.Contains(permissions, authz.FilesRead) {
 		view.FileRoots = nil
 	}
-	return view, nil
+	return view
 }
 
 // List refreshes discovery and lists the servers the actor may view.
@@ -266,26 +308,49 @@ func (s *Service) listViews(ctx context.Context, actor *db.SessionUser, current 
 	if err != nil {
 		return nil, err
 	}
+	user, permissions, err := s.Authz.EffectiveAll(ctx, actor, logical)
+	if err != nil || user == nil {
+		return nil, err
+	}
+	d, err := s.readDetails(ctx, user, "")
+	if err != nil {
+		return nil, err
+	}
 	var views []View
 	for _, server := range logical {
-		permissions, err := s.Authz.Effective(ctx, actor, server.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(permissions, authz.ServerView) {
+		if !slices.Contains(permissions[server.ID], authz.ServerView) {
 			continue
 		}
 		var container *Container
 		if found, ok := current[server.ContainerID]; ok && server.ContainerID != "" {
 			container = &found
 		}
-		view, err := s.view(ctx, actor, server, permissions, container)
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, *view)
+		views = append(views, *s.view(ctx, d, server, permissions[server.ID], container))
 	}
 	return views, nil
+}
+
+// Name is a visible server's ID and saved display name.
+type Name struct{ ID, DisplayName string }
+
+// Names lists the servers the actor may view from saved metadata, without
+// the summaries a View reads.
+func (s *Service) Names(ctx context.Context, actor *db.SessionUser) ([]Name, error) {
+	logical, err := s.Identity.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	_, permissions, err := s.Authz.EffectiveAll(ctx, actor, logical)
+	if err != nil {
+		return nil, err
+	}
+	var names []Name
+	for _, server := range logical {
+		if slices.Contains(permissions[server.ID], authz.ServerView) {
+			names = append(names, Name{server.ID, server.DisplayName})
+		}
+	}
+	return names, nil
 }
 
 // Snapshot is a server detail read. Saved history stays inspectable during
@@ -354,14 +419,19 @@ func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string
 	if err != nil {
 		return nil, err
 	}
+	user, err := s.Authz.CurrentActor(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	d, err := s.readDetails(ctx, user, id)
+	if err != nil {
+		return nil, err
+	}
 	var container *Container
 	if found, ok := current[logical.ContainerID]; ok && !unavailable && logical.ContainerID != "" {
 		container = &found
 	}
-	view, err := s.view(ctx, actor, *logical, permissions, container)
-	if err != nil {
-		return nil, err
-	}
+	view := s.view(ctx, d, *logical, permissions, container)
 	if unavailable {
 		view.State, view.Status, view.Health, view.StateSince, view.Exit = "unknown", "Live status unavailable", "", 0, nil
 		stats = nil

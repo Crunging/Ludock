@@ -197,18 +197,8 @@ func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID
 	if err != nil || server == nil {
 		return nil, err
 	}
-	usable := server.Status == identity.StatusActive && !server.ReviewRequired
-	if user.Role == db.RoleAdmin {
-		// Administrators can inspect status and review metadata even when acting
-		// on the container is forbidden. This never authorizes Docker reads or
-		// mutation.
-		if usable {
-			return slices.Clone(All), nil
-		}
-		return []Capability{ServerView}, nil
-	}
-	if !usable {
-		return nil, nil
+	if user.Role == db.RoleAdmin || !usable(server) {
+		return roleCapabilities(user, server, nil), nil
 	}
 	var raw string
 	err = s.DB.QueryRowContext(ctx, "SELECT capabilities_json FROM server_grants WHERE user_id = ? AND server_id = ?",
@@ -219,9 +209,58 @@ func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID
 	if err != nil {
 		return nil, err
 	}
-	assigned := parseCapabilities(raw)
-	if !slices.Contains(assigned, ServerView) {
-		return nil, nil
+	return roleCapabilities(user, server, parseCapabilities(raw)), nil
+}
+
+// EffectiveAll is Effective for many servers, reading the account and its
+// grants once. It returns the current account, or nil once it is gone.
+func (s *Service) EffectiveAll(ctx context.Context, actor *db.SessionUser, servers []identity.Server) (*db.SessionUser, map[string][]Capability, error) {
+	user, err := s.CurrentActor(ctx, actor)
+	if err != nil || user == nil {
+		return nil, nil, err
+	}
+	assigned := map[string][]Capability{}
+	if user.Role != db.RoleAdmin {
+		rows, err := s.DB.QueryContext(ctx, "SELECT server_id, capabilities_json FROM server_grants WHERE user_id = ?", user.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var serverID, raw string
+			if err := rows.Scan(&serverID, &raw); err != nil {
+				return nil, nil, err
+			}
+			assigned[serverID] = parseCapabilities(raw)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+	}
+	result := make(map[string][]Capability, len(servers))
+	for index := range servers {
+		result[servers[index].ID] = roleCapabilities(user, &servers[index], assigned[servers[index].ID])
+	}
+	return user, result, nil
+}
+
+func usable(server *identity.Server) bool {
+	return server.Status == identity.StatusActive && !server.ReviewRequired
+}
+
+// roleCapabilities applies the account's role to its grant on a server.
+func roleCapabilities(user *db.SessionUser, server *identity.Server, assigned []Capability) []Capability {
+	if user.Role == db.RoleAdmin {
+		// Administrators can inspect status and review metadata even when acting
+		// on the container is forbidden. This never authorizes Docker reads or
+		// mutation.
+		if usable(server) {
+			return slices.Clone(All)
+		}
+		return []Capability{ServerView}
+	}
+	if !usable(server) || !slices.Contains(assigned, ServerView) {
+		return nil
 	}
 	var result []Capability
 	for _, capability := range RoleCeiling(user.Role) {
@@ -233,7 +272,7 @@ func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID
 		}
 		result = append(result, capability)
 	}
-	return result, nil
+	return result
 }
 
 // Has reports whether the actor currently has a capability.

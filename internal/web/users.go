@@ -7,6 +7,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -112,7 +113,11 @@ func (s *Server) grantsView(r *http.Request, request *Request, userID string) (v
 		return views.GrantsView{}, apperr.New("NOT_FOUND", 404, "User not found")
 	}
 	g := views.GrantsView{UserID: user.ID, Username: user.Username, Role: user.Role, Selected: map[string][]authz.Capability{}}
-	servers, err := s.App.Servers.List(r.Context(), request.User())
+	_, err = s.App.Servers.Refresh(r.Context())
+	var names []servers.Name
+	if err == nil {
+		names, err = s.App.Servers.Names(r.Context(), request.User())
+	}
 	if err != nil {
 		g.Error = "Unable to load server access."
 		return g, nil
@@ -122,7 +127,7 @@ func (s *Server) grantsView(r *http.Request, request *Request, userID string) (v
 		g.Error = publicMessage(err)
 		return g, nil
 	}
-	for _, server := range servers {
+	for _, server := range names {
 		g.Servers = append(g.Servers, views.HistoryServer{ID: server.ID, Name: server.DisplayName})
 	}
 	ceiling := authz.RoleCeiling(user.Role)
