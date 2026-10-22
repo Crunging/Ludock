@@ -223,7 +223,12 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		return nil, err
 	}
 	runner := j.Updates.Snapshots.Runner
-	if _, err := runner.Run(ctx, append(slices.Clone(args), "pull", "--policy", "always", service), 15*time.Minute); err != nil {
+	// Compose stops as soon as the owner loses update authority, as lifecycle
+	// and data jobs do.
+	if err := j.whileAuthorized(ctx, job, capability, func(ctx context.Context) error {
+		_, err := runner.Run(ctx, append(slices.Clone(args), "pull", "--policy", "always", service), 15*time.Minute)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	pulled, err := j.Docker.InspectImage(ctx, image)
@@ -302,8 +307,6 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if request.ForceRecreate {
 		flags = append(flags, "--force-recreate")
 	}
-	// Compose stops as soon as the owner loses update authority, as lifecycle
-	// and data jobs do.
 	if err := j.whileAuthorized(ctx, job, capability, func(ctx context.Context) error {
 		_, err := runner.Run(ctx, append(append(slices.Clone(args), flags...), service), 4*time.Minute)
 		return err
