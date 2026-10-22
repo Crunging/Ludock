@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	if got := pragma(t, d.DB, "application_id"); got != "1279542091" {
 		t.Fatalf("application_id = %s", got)
 	}
-	if got := pragma(t, d.DB, "user_version"); got != "1" {
+	if got := pragma(t, d.DB, "user_version"); got != strconv.Itoa(LatestVersion()) {
 		t.Fatalf("user_version = %s", got)
 	}
 	if got := pragma(t, d.DB, "journal_mode"); got != "wal" {
@@ -181,7 +182,7 @@ func TestInterruptedKeyWrite(t *testing.T) {
 	}
 	d := mustOpen(t, durable)
 	defer d.Close()
-	if pragma(t, d.DB, "user_version") != "1" {
+	if pragma(t, d.DB, "user_version") != strconv.Itoa(LatestVersion()) {
 		t.Fatal("not migrated")
 	}
 	again, _ := os.ReadFile(filepath.Join(durable+".identity-key", "key"))
