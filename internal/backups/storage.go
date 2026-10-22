@@ -573,8 +573,9 @@ type Helpers struct {
 	Docker  *docker.Client
 	Images  *launch.Images
 	Storage *Storage
-	// pollInterval is shortened in tests.
+	// pollInterval and openLimit are shortened in tests.
 	pollInterval time.Duration
+	openLimit    time.Duration
 }
 
 // NewDataHelper starts a helper labelled with the operation, so recovery can
@@ -767,7 +768,15 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 			return nil, nil, err
 		}
 	}
-	conn, err := h.Docker.StartExec(ctx, execID)
+	// The server is stopped and its locks are held, so a start Docker never
+	// answers must not wait for the operation's lifetime.
+	limit := time.Minute
+	if h.openLimit > 0 {
+		limit = h.openLimit
+	}
+	opening, cancel := context.WithTimeoutCause(ctx, limit, errTimeout)
+	conn, err := h.start(opening, id, execID)
+	cancel()
 	if err != nil {
 		return nil, nil, err
 	}

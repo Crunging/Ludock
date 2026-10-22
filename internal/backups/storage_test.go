@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
@@ -222,4 +223,42 @@ func TestSnapshotRejectsSymlinksInData(t *testing.T) {
 		t.Fatal("left an archive behind")
 	}
 
+}
+
+// Docker accepts the archive command's start and never answers it while the
+// server is stopped and the backup holds its locks.
+func TestStalledArchiveStart(t *testing.T) {
+	engine, client := startHelpers(t)
+	base := t.TempDir()
+	data := filepath.Join(base, "game")
+	os.MkdirAll(data, 0o755)
+	destination := filepath.Join(base, "backups")
+	os.MkdirAll(destination, 0o755)
+	storage := &Storage{Docker: client, Roots: destination}
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: storage,
+		pollInterval: 1, openLimit: 200 * time.Millisecond}
+	context := serverContext(data)
+	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataHelper.Cleanup()
+	engine.HangExecStarts = 1
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := helpers.WriteSnapshot(ctx, context, dataHelper, Settings{Destination: destination, MaxBytes: 1 << 30},
+			"8f9619ff-8b86-4011-b42d-00c04fc964ff", 1<<30, func() error { return nil }, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !apperr.Is(err, "BACKUP_TIMEOUT") {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backup kept waiting for Docker to start its archive command")
+	}
+	if entries, _ := os.ReadDir(destination); len(entries) != 0 {
+		t.Fatal("left an archive behind")
+	}
 }
