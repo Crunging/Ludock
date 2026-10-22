@@ -133,7 +133,7 @@ func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
 	}
 }
 
-func TestDeletionsThatKeepFailingDoNotHoldBackLaterOnes(t *testing.T) {
+func TestFailingDeletionsDoNotBlockOthers(t *testing.T) {
 	s, backup, archive := recorded(t)
 	previous := deletionBatch
 	deletionBatch = 2
