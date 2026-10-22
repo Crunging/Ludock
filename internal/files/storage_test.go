@@ -173,6 +173,9 @@ func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
 	f := setup(t)
 	leftover := f.engine.AddContainer(fakedocker.GameOptions{Name: "leftover", Image: image, Running: true,
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "file-helper"}})
+	// Its mount validator can read the whole host.
+	validator := f.engine.AddContainer(fakedocker.GameOptions{Name: "validator", Image: image, Running: true,
+		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "mount-validator"}})
 	// Removal that Docker refuses is reported, so startup keeps the fence.
 	f.engine.FailRemoves = 100
 	if err := f.service.RemoveLeftovers(ctx); err == nil {
@@ -184,6 +187,9 @@ func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
 	}
 	if f.engine.Container(leftover) != nil {
 		t.Fatal("left a helper that may still be writing")
+	}
+	if f.engine.Container(validator) != nil {
+		t.Fatal("left a mount validator")
 	}
 	if f.engine.Container(f.game) == nil {
 		t.Fatal("removed the game")

@@ -267,21 +267,24 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	return access, nil
 }
 
-// RemoveLeftovers removes file helpers left by an earlier process: one
-// interrupted mid-command may still be writing. One Ludock runs per Docker
-// host, so at startup every file helper is left over. Startup keeps the lock
+// RemoveLeftovers removes file helpers left by an earlier process, which
+// may still be writing if a command was interrupted, and the mount
+// validators beside them, which can read the whole host. One Ludock runs per
+// Docker host, so at startup every one is left over. Startup keeps the lock
 // fence until this succeeds.
 func (s *Service) RemoveLeftovers(ctx context.Context) error {
-	helpers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=file-helper"}})
-	if err != nil {
-		return err
-	}
-	for _, candidate := range helpers {
-		if candidate.Labels["ludock.internal"] != "file-helper" {
-			continue
-		}
-		if err := s.Docker.RemoveHelper(ctx, candidate.ID); err != nil {
+	for _, kind := range []string{"file-helper", "mount-validator"} {
+		helpers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=" + kind}})
+		if err != nil {
 			return err
+		}
+		for _, candidate := range helpers {
+			if candidate.Labels["ludock.internal"] != kind {
+				continue
+			}
+			if err := s.Docker.RemoveHelper(ctx, candidate.ID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
