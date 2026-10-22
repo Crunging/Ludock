@@ -528,19 +528,40 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if testHook != nil {
+		testHook("pending")
+	}
 	var failed error
 	for _, backup := range pending {
 		release, err := s.Locks.Acquire([]string{"server:" + backup.ServerID, "backups:storage"}, nil)
 		if err != nil {
 			continue
 		}
-		if err := s.remove(ctx, backup, nil); err != nil && failed == nil {
+		if err := s.finishDeletion(ctx, backup.ID); err != nil && failed == nil {
 			failed = err
 		}
 		release()
 	}
 	return failed
 }
+
+// finishDeletion removes a backup only if it is still deleting under the
+// held locks: a Delete refused before its unlink restores the row to
+// complete after it was listed, and that backup must be kept.
+func (s *Service) finishDeletion(ctx context.Context, id string) error {
+	backup, err := scanBackup(s.DB.QueryRowContext(ctx, "SELECT "+backupColumns+" FROM backups WHERE id=? AND state='deleting'", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.remove(ctx, backup, nil)
+}
+
+// testHook, set only by tests, runs at named points so a test can force an
+// interleaving.
+var testHook func(point string)
 
 // RecordDeleting saves an unrecorded archive whose removal failed as a
 // deleting backup. It is never offered, and FinishDeletions, Prune, and
