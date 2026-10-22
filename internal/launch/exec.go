@@ -48,6 +48,26 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 
+// Periodic limits check to one call a second, for transfers that would
+// otherwise check access on every chunk: a full check costs several
+// database reads. The first call always checks, and once check refuses,
+// every later call refuses. Commit points call check itself.
+func Periodic(check func() error) func() error {
+	if check == nil {
+		return nil
+	}
+	var last time.Time
+	var refused error
+	return func() error {
+		if refused == nil && (last.IsZero() || time.Since(last) >= time.Second) {
+			if refused = check(); refused == nil {
+				last = time.Now()
+			}
+		}
+		return refused
+	}
+}
+
 // Exec runs a helper command in a helper container and returns its stdout.
 // ctx cancellation stops the command: commands without input are cut off
 // immediately, uploads get five seconds to remove their staging file.
@@ -135,12 +155,13 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		go func() {
 			defer close(written)
 			buffer := make([]byte, 64*1024)
+			periodic := Periodic(check)
 			for {
 				n, readErr := options.Input.Read(buffer)
 				if current() != nil {
 					break
 				}
-				if err := check(); err != nil {
+				if err := periodic(); err != nil {
 					fail(err)
 					break
 				}

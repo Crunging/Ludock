@@ -824,6 +824,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	hash := sha256.New()
 	var size, checked int64
 	buffer := make([]byte, 0, 64*1024)
+	stillAllowed := launch.Periodic(assertAccess)
 	flush := func() error {
 		if len(buffer) == 0 {
 			return nil
@@ -833,8 +834,8 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		return err
 	}
 	write := func(chunk []byte) error {
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
+		if stillAllowed != nil {
+			if err := stillAllowed(); err != nil {
 				return err
 			}
 		}
@@ -1022,9 +1023,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		return err
 	}
 	defer archive.Close()
+	stillAllowed := launch.Periodic(assertAccess)
 	write := func(data []byte) error {
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
+		if stillAllowed != nil {
+			if err := stillAllowed(); err != nil {
 				return err
 			}
 		}

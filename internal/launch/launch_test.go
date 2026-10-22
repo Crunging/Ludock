@@ -109,9 +109,10 @@ func TestExecRunsHelpersAndCommitsUploadsOnlyAfterTrailer(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(root, "world.dat")); string(data) != "hello" {
 		t.Fatal(string(data))
 	}
-	// Access revoked mid-upload, or after the last body write right before the
-	// trailer: the trailer is never sent, so nothing commits.
-	for _, allowed := range []int{2, 4} {
+	// Access revoked mid-upload (the first body check is the third), or after
+	// the last body write right before the trailer (the fourth): the trailer
+	// is never sent, so nothing commits.
+	for _, allowed := range []int{2, 3} {
 		checks := 0
 		_, err = Exec(ctx, client, id, ExecOptions{Cmd: upload, Input: strings.NewReader("HELLO"), Trailer: []byte(uploadID),
 			AssertAccess: func() error {
@@ -208,5 +209,33 @@ func TestMountProof(t *testing.T) {
 		if c := engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] == "mount-validator" {
 			t.Fatal("validator left behind")
 		}
+	}
+}
+
+func TestPeriodicChecksAtMostOnceASecondAndKeepsARefusal(t *testing.T) {
+	calls, refuse := 0, false
+	check := Periodic(func() error {
+		calls++
+		if refuse {
+			return errors.New("revoked")
+		}
+		return nil
+	})
+	for range 1000 {
+		if err := check(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("checked", calls, "times within a second")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	refuse = true
+	if check() == nil || calls != 2 {
+		t.Fatal("did not check again after a second", calls)
+	}
+	refuse = false
+	if check() == nil || calls != 2 {
+		t.Fatal("allowed again after a refusal")
 	}
 }
