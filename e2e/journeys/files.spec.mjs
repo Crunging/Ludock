@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
 
 asAdmin();
@@ -35,6 +36,7 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
     await page.getByRole("link", { name: "Download" }).click();
   })()]);
   expect(download.suggestedFilename()).toBe("notes.txt");
+  expect(readFileSync(await download.path(), "utf8")).toBe("uploaded notes\n");
 
   // Folders: browse into one, sort naturally, and filter.
   await page.getByRole("link", { name: "world" }).click();

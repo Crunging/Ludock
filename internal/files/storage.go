@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -513,17 +514,6 @@ func (s *Service) OpenDownload(ctx context.Context, target Target, rootID, relat
 }
 
 func (s *Service) openDownload(ctx context.Context, access *Access, root Root, normalized string, assertAccess func() error, target Target) (*Download, error) {
-	out, err := access.request(ctx, helper.FileRequest{Operation: "stat", Root: root.Path, Path: normalized}, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	var info struct {
-		Type string `json:"type"`
-		Size int64  `json:"size"`
-	}
-	if json.Unmarshal(out, &info) != nil {
-		return nil, Error("FILE_OPERATION_FAILED", 409)
-	}
 	request := helper.FileRequest{Operation: "download", Root: root.Path, Path: normalized, Blocked: access.blocked}
 	execID, err := s.Docker.CreateExec(ctx, access.container, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
 	if err != nil {
@@ -540,11 +530,28 @@ func (s *Service) openDownload(ctx context.Context, access *Access, root Root, n
 	if err != nil {
 		return nil, err
 	}
+	// The helper sends the opened file's type and size first. Until the
+	// stream is handed over, revocation or a silent helper ends the wait.
+	stdout := docker.Stdout(conn)
+	stream := bufio.NewReaderSize(stdout, 64*1024)
+	stopWaiting := context.AfterFunc(ctx, func() { conn.Close() })
+	waiting := time.AfterFunc(time.Minute, func() { conn.Close() })
+	line, err := stream.ReadSlice('\n')
+	stopWaiting()
+	waiting.Stop()
+	var info struct {
+		Type string `json:"type"`
+		Size int64  `json:"size"`
+	}
+	if err != nil || json.Unmarshal(line, &info) != nil || (info.Type != "file" && info.Type != "directory") {
+		conn.Close()
+		return nil, Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
+	}
 	name := path.Base(normalized)
 	if info.Type == "directory" {
 		name += ".tar"
 	}
-	download := &Download{Name: name, Type: info.Type, Size: info.Size, reader: docker.Stdout(conn), conn: conn,
+	download := &Download{Name: name, Type: info.Type, Size: info.Size, reader: bufferedStream{stream, stdout}, conn: conn,
 		complete: func() error {
 			status, err := s.Docker.InspectExec(context.WithoutCancel(ctx), execID)
 			if err != nil || status.Running || status.ExitCode == nil || *status.ExitCode != 0 {
@@ -562,6 +569,12 @@ func (s *Service) openDownload(ctx context.Context, access *Access, root Root, n
 	// request must end it explicitly.
 	download.unwatch = context.AfterFunc(ctx, func() { conn.Close() })
 	return download, nil
+}
+
+// bufferedStream reads a stream through its buffer and closes the stream.
+type bufferedStream struct {
+	*bufio.Reader
+	io.Closer
 }
 
 // PreviewKind says how a file can be shown.

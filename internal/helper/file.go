@@ -584,6 +584,18 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(map[string]any{"type": kind, "size": size})
 	case "download":
+		// The type and size of the file being sent lead the stream, so they
+		// describe exactly what follows even if the path changes meanwhile.
+		kind, size := "file", info.Size
+		if isDir(info) {
+			kind, size = "directory", 0
+		}
+		if err := h.json(map[string]any{"type": kind, "size": size}); err != nil {
+			return err
+		}
+		if _, err := h.out.Write([]byte{'\n'}); err != nil {
+			return err
+		}
 		if isDir(info) {
 			h.t.close(file)
 			if err := h.archiveEntry(parent, name, name, 0); err != nil {

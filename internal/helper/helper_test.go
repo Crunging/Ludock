@@ -154,6 +154,13 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 		if code != 0 {
 			t.Fatal(request.Operation)
 		}
+		if request.Operation == "download" {
+			header, rest, _ := strings.Cut(out, "\n")
+			if header != `{"size":0,"type":"directory"}` {
+				t.Fatal(header)
+			}
+			out = rest
+		}
 		reader := tar.NewReader(strings.NewReader(out))
 		found := map[string]string{}
 		for {
@@ -184,8 +191,9 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 			t.Fatalf("%s: %v", request.Operation, keys(found))
 		}
 	}
+	// A file's type and size come from the file being sent, ahead of it.
 	out, _ := runFile(t, FileRequest{Operation: "download", Root: root, Path: "world/level.dat"}, nil)
-	if out != "level" {
+	if out != `{"size":5,"type":"file"}`+"\n"+"level" {
 		t.Fatal(out)
 	}
 	stat, _ := runFile(t, FileRequest{Operation: "stat", Root: root, Path: "world"}, nil)
