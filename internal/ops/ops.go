@@ -620,8 +620,10 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 	}
 }
 
-// Start reconciles interrupted operations, then runs queued work.
-func (r *Runner) Start(ctx context.Context) error {
+// Start reconciles interrupted operations, calls recovered (if not nil),
+// then runs queued work. recovered lifts the startup lock fence, so queued
+// work never reaches the fence and fails.
+func (r *Runner) Start(ctx context.Context, recovered func()) error {
 	r.mu.Lock()
 	if r.enabled {
 		r.mu.Unlock()
@@ -637,6 +639,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.enabled = false
 		r.mu.Unlock()
 		return err
+	}
+	if recovered != nil {
+		recovered()
 	}
 	r.loop.Add(1)
 	go func() {

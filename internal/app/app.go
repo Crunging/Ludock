@@ -121,7 +121,7 @@ func (a *App) Start(ctx context.Context) {
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
-		for delay := time.Second; a.Runner.Start(ctx) != nil; delay = min(2*delay, time.Minute) {
+		for delay := time.Second; a.Runner.Start(ctx, lift) != nil; delay = min(2*delay, time.Minute) {
 			log.Error("Could not recover interrupted operations; retrying")
 			select {
 			case <-a.stop:
@@ -131,7 +131,6 @@ func (a *App) Start(ctx context.Context) {
 			case <-time.After(delay):
 			}
 		}
-		lift()
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {

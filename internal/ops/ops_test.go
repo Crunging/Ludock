@@ -81,7 +81,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	r.Register("stop", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
 		return nil, errors.New("internal detail /srv/secret")
 	}})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	a, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	b, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[1], ActorID: "admin", Kind: "update"})
 	c, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[2], ActorID: "admin", Kind: "stop"})
@@ -122,7 +122,7 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 		mu.Unlock()
 		return nil, nil
 	}})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 
 	// A job that cannot be saved as running never acts.
 	block(Running)
@@ -191,7 +191,7 @@ func TestDataLaneIsSerialAndLifecycleParallel(t *testing.T) {
 	}
 	r.Register("backup", Handler{Run: track("data")})
 	r.Register("start", Handler{Run: track("lifecycle")})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	var ids []string
 	for index, kind := range []string{"backup", "backup", "start", "start"} {
 		job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[index], ActorID: "admin", Kind: kind})
@@ -234,7 +234,7 @@ func TestJobsYieldHeldResourcesAndRetry(t *testing.T) {
 			return nil, nil
 		})
 	}})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	first, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 	if got := <-order; got != servers[0] {
 		t.Fatal(got)
@@ -261,7 +261,7 @@ func TestBackgroundHoldersAreCancelled(t *testing.T) {
 	r.Register("stop", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
 		return c.WithLocks([]string{"server:" + servers[0]}, func() (map[string]any, error) { return nil, nil })
 	}})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "stop"})
 	<-cancelled
 	waitStatus(t, r, job.ID, Succeeded)
@@ -279,7 +279,7 @@ func TestInterruptedOperationsAreReconciledNotReplayed(t *testing.T) {
 	r.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
     VALUES ('00000000-0000-4000-8000-000000000001',?,'admin','stop','running','stopping','{}','{"stopStarted":true}',1,1,1),
            ('00000000-0000-4000-8000-000000000002',?,'admin','stop','running','stopping','not json','{}',1,1,1)`, servers[0], servers[1])
-	if err := r.Start(ctx); err != nil {
+	if err := r.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	job, _ := r.Get(ctx, "00000000-0000-4000-8000-000000000001")
@@ -293,13 +293,27 @@ func TestInterruptedOperationsAreReconciledNotReplayed(t *testing.T) {
 	}
 }
 
+func TestWorkQueuedAtStartupRunsOnceRecoveryLiftsTheFence(t *testing.T) {
+	r, servers := setup(t, 1)
+	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
+		return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) { return nil, nil })
+	}})
+	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+	lift := r.Locks.Fence()
+	// Work dispatched before the fence lifts would fail as recovering.
+	if err := r.Start(ctx, func() { time.Sleep(100 * time.Millisecond); lift() }); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, r, job.ID, Succeeded)
+}
+
 func TestStopLeavesQueuedWork(t *testing.T) {
 	r, servers := setup(t, 1)
 	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, nil }})
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	r.Stop()
-	r.Start(ctx)
+	r.Start(ctx, nil)
 	waitStatus(t, r, job.ID, Succeeded)
 }
 
@@ -319,7 +333,7 @@ func TestAHolderFinishingAfterAConflictLetsTheJobRun(t *testing.T) {
 					return nil, nil
 				})
 			}})
-			r.Start(ctx)
+			r.Start(ctx, nil)
 			first, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
 			<-held
 			var once sync.Once

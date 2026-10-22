@@ -132,7 +132,7 @@ func setup(t *testing.T) *fixture {
 		f.admin, f.adminSession); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.runner.Start(ctx); err != nil {
+	if err := f.runner.Start(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(f.runner.Stop)
