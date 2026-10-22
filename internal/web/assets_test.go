@@ -46,4 +46,10 @@ func TestAssetsRevalidateAndCompressText(t *testing.T) {
 	if raw := get("/assets/ludock.css", nil); raw.Header().Get("Content-Encoding") != "" || raw.Body.String() != string(want) {
 		t.Fatal("compressed for a client that did not ask")
 	}
+	for header, want := range map[string]bool{"gzip;q=0, identity": false, "*;q=0.5": true, "*, gzip;q=0": false,
+		"GZIP; Q=0.8": true, "*;q=0": false, "br": false} {
+		if acceptsGzip(header) != want {
+			t.Error(header, "accepted:", !want)
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -87,11 +88,38 @@ func serveAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(kind, "text/") || strings.Contains(kind, "javascript") || strings.Contains(kind, "svg") {
 		w.Header().Set("Vary", "Accept-Encoding")
-		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if acceptsGzip(r.Header.Get("Accept-Encoding")) {
 			w.Header().Set("Content-Encoding", "gzip")
 			w.Write(gzipped(name, data))
 			return
 		}
 	}
 	w.Write(data)
+}
+
+// acceptsGzip reports whether an Accept-Encoding value allows gzip: listed,
+// or covered by "*", with a nonzero quality.
+func acceptsGzip(header string) bool {
+	allowed := false
+	for _, part := range strings.Split(header, ",") {
+		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "gzip" && name != "*" {
+			continue
+		}
+		quality := 1.0
+		for _, param := range strings.Split(params, ";") {
+			if key, value, ok := strings.Cut(strings.TrimSpace(param), "="); ok && strings.EqualFold(strings.TrimSpace(key), "q") {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+					quality = parsed
+				}
+			}
+		}
+		// An explicit gzip entry overrides "*".
+		if name == "gzip" {
+			return quality > 0
+		}
+		allowed = quality > 0
+	}
+	return allowed
 }
