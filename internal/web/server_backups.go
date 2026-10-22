@@ -266,7 +266,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 			if s.App.Locks.ServerBusy(id) {
 				return true
 			}
-			snapshot, err := s.App.Servers.Snapshot(r.Context(), request.User(), id)
+			snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), id)
 			return err != nil || snapshot.Server.ActiveOperation != nil
 		})
 		if err = s.recheckCapability(r, request, id, capability, admin); err == nil {

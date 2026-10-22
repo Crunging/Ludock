@@ -246,6 +246,16 @@ type Snapshot struct {
 
 // Snapshot reads one server with live statistics when they can be trusted.
 func (s *Service) Snapshot(ctx context.Context, actor *db.SessionUser, id string) (*Snapshot, error) {
+	return s.snapshot(ctx, actor, id, true)
+}
+
+// Summary is Snapshot without resource statistics, for pages that do not
+// show them: a Docker stats sample takes about a second.
+func (s *Service) Summary(ctx context.Context, actor *db.SessionUser, id string) (*Snapshot, error) {
+	return s.snapshot(ctx, actor, id, false)
+}
+
+func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string, withStats bool) (*Snapshot, error) {
 	current, refreshErr := s.Refresh(ctx)
 	original, err := s.Authz.Assert(ctx, actor, id, authz.ServerView)
 	if err != nil {
@@ -253,7 +263,7 @@ func (s *Service) Snapshot(ctx context.Context, actor *db.SessionUser, id string
 	}
 	var stats *Stats
 	liveUnavailable := refreshErr != nil
-	if refreshErr == nil && original.Status == identity.StatusActive {
+	if withStats && refreshErr == nil && original.Status == identity.StatusActive {
 		verified := false
 		binding, err := s.Identity.ResolveBinding(ctx, id, original.BindingRevision)
 		if err == nil {

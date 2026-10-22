@@ -79,7 +79,7 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	if !slices.Contains([]string{"name-asc", "name-desc", "size-desc", "size-asc", "modified-desc", "modified-asc"}, f.Sort) {
 		f.Sort = "name-asc"
 	}
-	snapshot, err := s.App.Servers.Snapshot(r.Context(), request.User(), f.ServerID)
+	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), f.ServerID)
 	if err != nil {
 		f.Error = publicMessage(err)
 		return f
@@ -163,7 +163,7 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request, request *Requ
 // fileDialog opens a new-folder, rename, or delete dialog.
 func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Request) {
 	query := r.URL.Query()
-	snapshot, err := s.App.Servers.Snapshot(r.Context(), request.User(), r.PathValue("id"))
+	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), r.PathValue("id"))
 	if err == nil && !can(snapshot.Server, authz.FilesWrite) {
 		err = apperr.New("FORBIDDEN", 403, "Insufficient permissions")
 	}

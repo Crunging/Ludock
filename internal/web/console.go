@@ -11,7 +11,7 @@ import (
 // consolePage shows Docker logs, a game console, or an administrator shell.
 // The socket authorizes on its own; the page only decides what to offer.
 func (s *Server) consolePage(w http.ResponseWriter, r *http.Request, request *Request) {
-	snapshot, err := s.App.Servers.Snapshot(r.Context(), request.User(), r.PathValue("id"))
+	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
