@@ -410,8 +410,7 @@ type Listing struct {
 	Entries []helper.FileEntry
 }
 
-// List lists a directory: folders first, then names ignoring case and
-// accents.
+// List lists a directory in the helper's order; callers sort what they show.
 func (s *Service) List(ctx context.Context, target Target, rootID, relative string, assertAccess func() error) (*Listing, error) {
 	root, normalized, err := resolve(target, rootID, relative)
 	if err != nil {
@@ -435,13 +434,6 @@ func (s *Service) List(ctx context.Context, target Target, rootID, relative stri
 	if err := json.Unmarshal(out, &entries); err != nil {
 		return nil, Error("FILE_OPERATION_FAILED", 409)
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		left, right := entries[i].Type == "directory", entries[j].Type == "directory"
-		if left != right {
-			return left
-		}
-		return textutil.CompareFold(entries[i].Name, entries[j].Name) < 0
-	})
 	return &Listing{Root: root, Path: normalized, Entries: entries}, nil
 }
 

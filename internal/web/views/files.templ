@@ -2,6 +2,7 @@ package views
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/files"
@@ -21,6 +22,9 @@ type FilesView struct {
 	Filter, Sort string
 	Entries      []helper.FileEntry
 	Total        int
+	// Matched counts the entries the filter keeps; Entries holds the first
+	// Limit of them.
+	Matched, Limit int
 	ListError    string
 	// Error replaces the browser when the server or access is unavailable.
 	Error        string
@@ -42,8 +46,18 @@ func (f FilesView) query(path string) string {
 	return values.Encode()
 }
 
+// FilePage is how many entries a folder shows at first and adds each time.
+const FilePage = 500
+
 func (f FilesView) listQuery() string {
+	return f.limitQuery(f.Limit)
+}
+
+func (f FilesView) limitQuery(limit int) string {
 	values := url.Values{"root": {f.Root.ID}, "path": {f.Path}, "q": {f.Filter}, "sort": {f.Sort}}
+	if limit > FilePage {
+		values.Set("limit", strconv.Itoa(limit))
+	}
 	return values.Encode()
 }
 
@@ -272,6 +286,11 @@ templ FileList(f FilesView) {
 							</div>
 						</div>
 					</div>
+				</div>
+			}
+			if remaining := f.Matched - len(f.Entries); remaining > 0 {
+				<div class="file-list__more">
+					<button class="secondary-btn" type="button" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.limitQuery(f.Limit+FilePage) } hx-target="#file-list" hx-swap="outerHTML" data-busy-label="Loading…">Show { intText(min(remaining, FilePage)) } more</button>
 				</div>
 			}
 		</div>

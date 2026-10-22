@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"io"
@@ -28,14 +29,23 @@ func fileTarget(action *serverAction) files.Target {
 }
 
 // sortEntries keeps folders first; a value shown as a dash stays last in
-// either direction.
+// either direction. Names are collated once each.
 func sortEntries(entries []helper.FileEntry, order string) {
 	descending := strings.HasSuffix(order, "-desc")
-	slices.SortStableFunc(entries, func(left, right helper.FileEntry) int {
+	type keyed struct {
+		entry helper.FileEntry
+		key   []byte
+	}
+	sorted := make([]keyed, len(entries))
+	for index, entry := range entries {
+		sorted[index] = keyed{entry, textutil.NaturalKey(entry.Name)}
+	}
+	slices.SortStableFunc(sorted, func(leftKeyed, rightKeyed keyed) int {
+		left, right := leftKeyed.entry, rightKeyed.entry
 		if folders := cmp.Compare(boolInt(right.Type == "directory"), boolInt(left.Type == "directory")); folders != 0 {
 			return folders
 		}
-		names := cmp.Or(textutil.CompareNatural(left.Name, right.Name), strings.Compare(left.Name, right.Name))
+		names := cmp.Or(bytes.Compare(leftKeyed.key, rightKeyed.key), strings.Compare(left.Name, right.Name))
 		direction := 1
 		if descending {
 			direction = -1
@@ -61,6 +71,9 @@ func sortEntries(entries []helper.FileEntry, order string) {
 		}
 		return cmp.Or(cmp.Compare(leftValue, rightValue)*direction, names)
 	})
+	for index := range sorted {
+		entries[index] = sorted[index].entry
+	}
 }
 
 func boolInt(value bool) int {
@@ -78,6 +91,10 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 		MaxUploadRaw: s.App.Config.MaxUploadBytes, MaxUpload: datasize.Format(s.App.Config.MaxUploadBytes)}
 	if !slices.Contains([]string{"name-asc", "name-desc", "size-desc", "size-asc", "modified-desc", "modified-asc"}, f.Sort) {
 		f.Sort = "name-asc"
+	}
+	f.Limit = views.FilePage
+	if limit, err := strconv.Atoi(query.Get("limit")); err == nil && limit > views.FilePage {
+		f.Limit = min(limit, 1<<20)
 	}
 	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), f.ServerID)
 	if err != nil {
@@ -123,6 +140,9 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 		}
 	}
 	sortEntries(f.Entries, f.Sort)
+	// Large folders render a page at a time.
+	f.Matched = len(f.Entries)
+	f.Entries = f.Entries[:min(len(f.Entries), f.Limit)]
 	return f
 }
 
