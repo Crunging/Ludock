@@ -526,7 +526,8 @@ func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
 func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	deadline := time.Now().Add(400 * time.Millisecond)
+	// Recovery keeps the deadline in milliseconds, so the test does too.
+	deadline := time.UnixMilli(time.Now().Add(400 * time.Millisecond).UnixMilli())
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
 		BindingRevision: logical.BindingRevision, Recovery: map[string]any{"containerId": logical.ContainerID,
 			"stopStarted": true, "stopRecoveryDeadlineAt": float64(deadline.UnixMilli()), "lockKeys": []any{"server:" + f.serverID}}}}
