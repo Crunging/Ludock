@@ -47,10 +47,11 @@ func (s *Server) backupSettingsView(r *http.Request) views.BackupSettingsView {
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	notifications := s.App.Notify.Configuration(r.Context())
 	view := views.SettingsView{
-		Connection:   views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
-		Backups:      s.backupSettingsView(r),
-		ComposeRoots: s.App.Config.ComposeRoots,
-		ComposeOK:    s.App.Compose.Snapshots.Runner.Available(r.Context()),
+		Connection: views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
+		Backups:    s.backupSettingsView(r),
+		// The roots are host paths, so the page says only whether any are set.
+		ComposeConfigured: len(s.App.Config.ComposeRoots) > 0,
+		ComposeOK:         s.App.Compose.Snapshots.Runner.Available(r.Context()),
 		Notifications: views.NotificationSettingsView{Configured: notifications.Configured,
 			Enabled: notifications.Enabled},
 	}

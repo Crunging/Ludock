@@ -9,11 +9,11 @@ import (
 
 // SettingsView is the settings page.
 type SettingsView struct {
-	Connection    ConnectionSettings
-	Backups       BackupSettingsView
-	ComposeRoots  []string
-	ComposeOK     bool
-	Notifications NotificationSettingsView
+	Connection        ConnectionSettings
+	Backups           BackupSettingsView
+	ComposeConfigured bool
+	ComposeOK         bool
+	Notifications     NotificationSettingsView
 }
 
 // ConnectionSettings is the public address form.
@@ -25,12 +25,12 @@ type ConnectionSettings struct {
 // BackupSettingsView is the backup storage form. Sizes are GiB text so an
 // untouched value saves the exact byte count.
 type BackupSettingsView struct {
-	Configured                   bool
-	Destination                  string
+	Configured                    bool
+	Destination                   string
 	Retention, MaxGiB, ReserveGiB string
-	Roots                        []string
-	Error                        string
-	Saved                        bool
+	Roots                         []string
+	Error                         string
+	Saved                         bool
 }
 
 // NotificationSettingsView is the Discord form.
@@ -64,17 +64,11 @@ templ SettingsPage(page Page, s SettingsView) {
 				<h2 id="compose-settings-title" tabindex="-1">Compose updates</h2>
 				<p class="section-note">Update servers from their Update tab. Ludock discovers and validates source files from Docker. Your existing manager continues to own and edit those files.</p>
 				<div class="admin-setup-help admin-compose-guidance">
-					if !s.ComposeOK && len(s.ComposeRoots) > 0 {
-						<p>Compose updates are not available yet. Verify that Ludock is running on Linux with the Docker Compose plugin and that these source roots are configured correctly. The bundled Ludock image includes the plugin.</p>
+					if !s.ComposeOK && s.ComposeConfigured {
+						<p>Compose updates are not available yet. Verify that Ludock is running on Linux with the Docker Compose plugin and that <code>LUDOCK_COMPOSE_ROOTS</code> is mounted at the same paths as on the Docker host. The bundled Ludock image includes the plugin.</p>
 					}
-					if len(s.ComposeRoots) > 0 {
-						<p>Configured Compose source roots:</p>
-						<ul class="admin-root-list">
-							for _, root := range s.ComposeRoots {
-								<li><code>{ root }</code></li>
-							}
-						</ul>
-						<p>Ludock discovers project files inside these roots automatically and validates them when you update a server.</p>
+					if s.ComposeConfigured {
+						<p>Compose source roots are set in <code>LUDOCK_COMPOSE_ROOTS</code>. Ludock discovers project files inside them automatically and validates them when you update a server.</p>
 					} else {
 						<h3>Enable Compose updates</h3>
 						<ol>
@@ -201,46 +195,46 @@ templ BackupStorage(status backups.StorageStatus) {
 		</div>
 		<p class="muted">Uses saved settings. Unsaved changes below do not affect these values.</p>
 		<dl class="backup-storage__values">
-				<div><dt>Archive usage</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
-				<div>
-					<dt>Configured limit</dt>
-					<dd>
-						if status.Configured {
-							{ FormatBytes(status.MaxBytes) }
-						} else {
-							Not configured
-						}
-					</dd>
-				</div>
-				<div>
-					<dt>Available disk space</dt>
-					<dd>
-						if status.AvailableBytes >= 0 {
-							{ FormatBytes(status.AvailableBytes) }
-						} else {
-							Unavailable
-						}
-					</dd>
-				</div>
-				<div>
-					<dt>Free-space reserve</dt>
-					<dd>
-						if status.Configured {
-							{ FormatBytes(status.ReserveBytes) }
-						} else {
-							Not configured
-						}
-					</dd>
-				</div>
-			</dl>
-			if len(status.Issues) > 0 {
-				<ul class="backup-storage__issues">
-					for _, issue := range status.Issues {
-						<li>{ issue.Message }</li>
+			<div><dt>Archive usage</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
+			<div>
+				<dt>Configured limit</dt>
+				<dd>
+					if status.Configured {
+						{ FormatBytes(status.MaxBytes) }
+					} else {
+						Not configured
 					}
-				</ul>
-			}
-			<p class="muted">Available disk space is measured before the reserve. Storage and server data roots are checked again when a backup runs.</p>
+				</dd>
+			</div>
+			<div>
+				<dt>Available disk space</dt>
+				<dd>
+					if status.AvailableBytes >= 0 {
+						{ FormatBytes(status.AvailableBytes) }
+					} else {
+						Unavailable
+					}
+				</dd>
+			</div>
+			<div>
+				<dt>Free-space reserve</dt>
+				<dd>
+					if status.Configured {
+						{ FormatBytes(status.ReserveBytes) }
+					} else {
+						Not configured
+					}
+				</dd>
+			</div>
+		</dl>
+		if len(status.Issues) > 0 {
+			<ul class="backup-storage__issues">
+				for _, issue := range status.Issues {
+					<li>{ issue.Message }</li>
+				}
+			</ul>
+		}
+		<p class="muted">Available disk space is measured before the reserve. Storage and server data roots are checked again when a backup runs.</p>
 	</section>
 }
 

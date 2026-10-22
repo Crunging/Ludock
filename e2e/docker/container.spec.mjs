@@ -1,7 +1,7 @@
 // The built image against real Docker: hardened runtime, helper containers
 // from Ludock's own image, backups, consoles, Compose updates, and recovery.
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "../journeys/fixtures.mjs";
 import { docker } from "../docker-setup.mjs";
 
@@ -24,6 +24,10 @@ test("the image runs hardened and reports healthy", async ({ page }) => {
   await page.goto("/diagnostics");
   await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
   await expect(page.locator(".metadata-list")).toContainText("Compose updatesAvailable");
+  // Compose roots are host paths: settings says they are set, not where.
+  await page.goto("/settings");
+  await expect(page.locator(".admin-compose-guidance")).toContainText("Compose source roots are set");
+  await expect(page.locator("main")).not.toContainText(dirname(stack()));
   await page.goto("/");
   await expect(page.locator(".server-row", { hasText: "Test Game" })).toContainText("Running");
 });

@@ -843,7 +843,6 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .backup-storage__values dd { font-size: 18px; font-stretch: 110%; font-weight: 700; }
 .backup-storage__issues { color: var(--halt); font-size: 14px; }
 .admin-root-options { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.admin-root-list { margin: 6px 0; }
 .admin-settings-feedback { display: grid; gap: 4px; }
 .notification-deliveries { display: grid; gap: 14px; margin-top: 24px; }
 .notification-deliveries__test { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
