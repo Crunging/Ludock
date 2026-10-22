@@ -28,10 +28,13 @@ type Service struct {
 	mu      sync.Mutex
 	running *refresh
 	last    *refresh
+	// discoveries counts discoveries started; each has its number as seq.
+	discoveries uint64
 }
 
 type refresh struct {
 	done    chan struct{}
+	seq     uint64
 	started time.Time
 	writes  uint64
 	result  map[string]Container
@@ -57,26 +60,32 @@ func (s *Service) now() time.Time {
 // Refresh discovers the fleet and reconciles logical servers. Concurrent
 // callers share one discovery, and reads within a moment of it reuse it.
 func (s *Service) Refresh(ctx context.Context) (map[string]Container, error) {
-	return s.refresh(ctx, discoveryReuse)
+	return s.refresh(ctx, false)
 }
 
 // RefreshNow is Refresh from a discovery that starts after the call, for
 // callers that must see a change that just happened.
 func (s *Service) RefreshNow(ctx context.Context) (map[string]Container, error) {
-	return s.refresh(ctx, 0)
+	return s.refresh(ctx, true)
 }
 
-func (s *Service) refresh(ctx context.Context, reuse time.Duration) (map[string]Container, error) {
-	since := s.now().Add(-reuse)
+func (s *Service) refresh(ctx context.Context, forced bool) (map[string]Container, error) {
+	s.mu.Lock()
+	// A forced caller needs a discovery numbered after every one started
+	// before the call.
+	after := s.discoveries
+	s.mu.Unlock()
 	for {
 		s.mu.Lock()
-		if last := s.last; last != nil && !last.started.Before(since) && last.writes == s.Observer.Docker.Writes() {
+		last := s.last
+		if !forced && last != nil && s.now().Sub(last.started) < discoveryReuse && last.writes == s.Observer.Docker.Writes() {
 			s.mu.Unlock()
 			return last.result, nil
 		}
 		current := s.running
 		if current == nil {
-			current = &refresh{done: make(chan struct{}), started: s.now(), writes: s.Observer.Docker.Writes()}
+			s.discoveries++
+			current = &refresh{done: make(chan struct{}), seq: s.discoveries, started: s.now(), writes: s.Observer.Docker.Writes()}
 			s.running = current
 			s.mu.Unlock()
 			s.discover(ctx, current)
@@ -88,9 +97,7 @@ func (s *Service) refresh(ctx context.Context, reuse time.Duration) (map[string]
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		// A discovery that started before the call may predate the change
-		// a forced caller needs to see.
-		if reuse > 0 || !current.started.Before(since) {
+		if !forced || current.seq > after {
 			return current.result, current.err
 		}
 	}
