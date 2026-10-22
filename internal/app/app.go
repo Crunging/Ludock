@@ -111,17 +111,24 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	return a, nil
 }
 
-// Start reconciles interrupted operations, then runs the tick every 15 s.
-// Recovery is retried with backoff until it succeeds, since background work
-// must not run before interrupted operations are reconciled.
+// Start removes leftover file helpers and reconciles interrupted operations,
+// then runs the tick every 15 s. Recovery is retried with backoff until it
+// succeeds, since no work may take locks while an earlier writer remains.
 func (a *App) Start(ctx context.Context) {
 	// Requests wait for recovery to take its operations' locks; Start runs
 	// before the server listens, so none can take them first.
 	lift := a.Locks.Fence()
+	recoverStartup := func() error {
+		// A file command interrupted by the restart may still be writing.
+		if err := a.Files.RemoveLeftovers(ctx); err != nil {
+			return err
+		}
+		return a.Runner.Start(ctx, lift)
+	}
 	a.background.Add(1)
 	go func() {
 		defer a.background.Done()
-		for delay := time.Second; a.Runner.Start(ctx, lift) != nil; delay = min(2*delay, time.Minute) {
+		for delay := time.Second; recoverStartup() != nil; delay = min(2*delay, time.Minute) {
 			log.Error("Could not recover interrupted operations; retrying")
 			select {
 			case <-a.stop:

@@ -167,3 +167,24 @@ func TestFailedChangesRemoveTheirHelperBeforeReturning(t *testing.T) {
 		f.helpersLeft(t)
 	}
 }
+
+func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
+	f := setup(t)
+	leftover := f.engine.AddContainer(fakedocker.GameOptions{Name: "leftover", Image: image, Running: true,
+		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "file-helper"}})
+	// Removal that Docker refuses is reported, so startup keeps the fence.
+	f.engine.FailRemoves = 100
+	if err := f.service.RemoveLeftovers(ctx); err == nil {
+		t.Fatal("reported a helper removed that is still there")
+	}
+	f.engine.FailRemoves = 0
+	if err := f.service.RemoveLeftovers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.engine.Container(leftover) != nil {
+		t.Fatal("left a helper that may still be writing")
+	}
+	if f.engine.Container(f.game) == nil {
+		t.Fatal("removed the game")
+	}
+}

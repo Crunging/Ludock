@@ -190,8 +190,9 @@ allow space for both.
 | Other file actions | 55 seconds |
 
 File work runs in short-lived helper containers that mount only approved data,
-run as root, and have no network. They're removed afterward, or exit after 35
-minutes if Ludock is interrupted. Bind mounts need validated host paths and
+run as root, and have no network. They're removed afterward. Any left by an
+interruption are removed when Ludock starts again, before other work runs, and
+otherwise exit after 35 minutes. Bind mounts need validated host paths and
 recursive read-only bind support; symlinked sources and Docker Desktop path
 aliases can prevent access. Named volumes must use the `local` driver without
 options that remap the host path.
