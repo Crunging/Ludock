@@ -134,27 +134,37 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 // remove marks a backup deleting before unlinking its archive, so an
 // interrupted removal leaves a row that is never offered for download or
 // restore and is retried by Delete or the next Prune, rather than a complete
-// row without its archive. assertAccess runs again right before the unlink;
-// if it refuses, the archive is kept and offered again.
+// row without its archive. assertAccess runs again right before the row is
+// marked; if it refuses, the backup is left as it was.
 func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error) error {
-	if _, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=?", backup.ID); err != nil {
-		return err
-	}
-	var denied error
-	var check func() error
-	if assertAccess != nil {
-		check = func() error {
-			denied = assertAccess()
-			return denied
-		}
-	}
-	if err := s.Storage.Remove(backup.destination, backup.ID, check); err != nil {
-		if denied != nil && backup.State == "complete" {
-			if _, restoreErr := s.DB.ExecContext(context.WithoutCancel(ctx), "UPDATE backups SET state='complete' WHERE id=?", backup.ID); restoreErr != nil {
-				return restoreErr
+	marked := false
+	mark := func() error {
+		if assertAccess != nil {
+			if err := assertAccess(); err != nil {
+				return err
 			}
 		}
+		if _, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=?", backup.ID); err != nil {
+			return err
+		}
+		marked = true
+		return nil
+	}
+	check := mark
+	if assertAccess == nil {
+		if err := mark(); err != nil {
+			return err
+		}
+		check = nil
+	}
+	if err := s.Storage.Remove(backup.destination, backup.ID, check); err != nil {
 		return err
+	}
+	// Remove checks only when the archive exists.
+	if !marked {
+		if err := mark(); err != nil {
+			return err
+		}
 	}
 	// A backup that failed before it was recorded may have left a partial file.
 	if err := s.Storage.RemovePartial(backup.destination, backup.ID); err != nil {
