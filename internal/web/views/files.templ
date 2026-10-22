@@ -1,0 +1,421 @@
+package views
+
+import (
+	"net/url"
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/files"
+	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// FilesView is the file browser for one folder.
+type FilesView struct {
+	ServerID, ServerName string
+	State, Health        string
+	Exit                 *servers.Exit
+	Roots                []files.Root
+	Root                 files.Root
+	Path                 string
+	// Filter and Sort apply to the current folder only.
+	Filter, Sort string
+	Entries      []helper.FileEntry
+	Total        int
+	ListError    string
+	// Error replaces the browser when the server or access is unavailable.
+	Error        string
+	CanManage    bool
+	Blocked      bool
+	MaxUpload    string
+	MaxUploadRaw int64
+}
+
+var fileSorts = []struct{ Value, Label string }{{"name-asc", "Name: A to Z"}, {"name-desc", "Name: Z to A"},
+	{"size-desc", "Size: largest first"}, {"size-asc", "Size: smallest first"},
+	{"modified-desc", "Modified: newest first"}, {"modified-asc", "Modified: oldest first"}}
+
+func (f FilesView) query(path string) string {
+	values := url.Values{"root": {f.Root.ID}}
+	if path != "" {
+		values.Set("path", path)
+	}
+	return values.Encode()
+}
+
+func (f FilesView) listQuery() string {
+	values := url.Values{"root": {f.Root.ID}, "path": {f.Path}, "q": {f.Filter}, "sort": {f.Sort}}
+	return values.Encode()
+}
+
+func (f FilesView) child(name string) string {
+	if f.Path == "" {
+		return name
+	}
+	return f.Path + "/" + name
+}
+
+func (f FilesView) entryQuery(name string) string {
+	return url.Values{"root": {f.Root.ID}, "path": {f.child(name)}}.Encode()
+}
+
+func (f FilesView) breadcrumbs() [][2]string {
+	var crumbs [][2]string
+	if f.Path == "" {
+		return nil
+	}
+	parts := strings.Split(f.Path, "/")
+	for index, part := range parts {
+		crumbs = append(crumbs, [2]string{part, strings.Join(parts[:index+1], "/")})
+	}
+	return crumbs
+}
+
+templ fileIcon(kind string) {
+	<svg class={ "file-row__icon", "file-row__icon--" + kind } viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+		switch kind {
+			case "directory":
+				<path d="M2.5 5.5a1 1 0 0 1 1-1h4l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z"></path>
+			case "symlink":
+				<path d="M5 2.5h7l3.5 3.5v11a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"></path>
+				<path d="M8 13l4-4m-3 0h3v3"></path>
+			default:
+				<path d="M5 2.5h7l3.5 3.5v11a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zM12 2.5V6h3.5"></path>
+		}
+	</svg>
+}
+
+templ FilesPage(page Page, f FilesView) {
+	@Shell(page) {
+		<div class="page files-page" data-files={ f.ServerID } data-files-root={ f.Root.ID } data-files-path={ f.Path } data-max-upload={ int64Text(f.MaxUploadRaw) } data-max-upload-text={ f.MaxUpload }>
+			<div class="files-header">
+				<div class="files-header__title">
+					<a class="secondary-btn files-back" href={ templ.SafeURL("/servers/" + f.ServerID) } aria-label="Back to server"><span aria-hidden="true">←</span></a>
+					<div>
+						<div class="files-header__name">
+							<h1 class="page__title" id="files-page-title" tabindex="-1">{ f.ServerName }</h1>
+							if f.State != "" {
+								@ServerState(f.State, f.Health, f.Exit)
+							}
+						</div>
+						<p class="page__subtitle">Worlds, configuration, backups, and mods</p>
+					</div>
+				</div>
+				if len(f.Roots) > 1 {
+					<form class="files-root" method="get" action={ templ.SafeURL("/files/" + f.ServerID) }>
+						<label>
+							Storage location
+							<select name="root" data-autosubmit>
+								for _, root := range f.Roots {
+									<option value={ root.ID } selected?={ root.ID == f.Root.ID }>{ root.Name } ({ root.Path })</option>
+								}
+							</select>
+						</label>
+						<noscript><button class="secondary-btn" type="submit">Open</button></noscript>
+					</form>
+				}
+			</div>
+			<div id="file-feedback" aria-live="polite"></div>
+			if f.Error != "" {
+				<div class="alert alert--error" role="alert"><span>{ f.Error }</span> <a class="text-link" href={ templ.SafeURL("/files/" + f.ServerID) }>Try again</a></div>
+			} else if f.Root.ID == "" {
+				<div class="empty-state">
+					<h2 class="empty-state__title">File access is not configured</h2>
+					<p class="empty-state__description">No approved mounts are available. An administrator can check the mount restrictions or ludock.files label.</p>
+				</div>
+			} else {
+				<section class="file-manager">
+					<div class="file-toolbar">
+						<nav class="file-breadcrumbs" aria-label="Current folder">
+							<a
+								href={ templ.SafeURL("/files/" + f.ServerID + "?" + f.query("")) }
+								if f.Path == "" {
+									aria-current="page"
+								}
+							>{ f.Root.Name }</a>
+							for index, crumb := range f.breadcrumbs() {
+								<span>
+									<b aria-hidden="true">/</b>
+									<a
+										href={ templ.SafeURL("/files/" + f.ServerID + "?" + f.query(crumb[1])) }
+										if index == len(f.breadcrumbs())-1 {
+											aria-current="page"
+										}
+									>{ crumb[0] }</a>
+								</span>
+							}
+						</nav>
+						<div class="file-toolbar__actions">
+							<button class="secondary-btn" type="button" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-target="#file-list" hx-swap="outerHTML" data-busy-label="Refreshing…">Refresh</button>
+							if f.CanManage {
+								<button class="secondary-btn" type="button" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=create&" + f.query(f.Path) } hx-target="#file-dialog">New folder</button>
+							}
+						</div>
+					</div>
+					if f.Blocked && f.CanManage {
+						<p class="file-manager__note">File changes are unavailable until an administrator reviews this server’s identity.</p>
+					}
+					if f.CanManage {
+						<div class="file-dropzone" data-dropzone aria-disabled={ boolText(f.Blocked) }>
+							<span>Drop files here to upload them to this folder</span>
+							<button class="primary-btn" type="button" data-choose-files disabled?={ f.Blocked }>Choose files</button>
+							<input type="file" aria-label="Upload files" multiple hidden data-upload-input disabled?={ f.Blocked }/>
+						</div>
+						<div class="file-upload-progress" data-upload-progress hidden>
+							<span role="status" data-upload-status></span>
+							<button class="secondary-btn" type="button" data-upload-cancel>Cancel upload</button>
+						</div>
+					}
+					<form class="file-filters" method="get" action={ templ.SafeURL("/files/" + f.ServerID) } hx-get={ "/fragments/files/" + f.ServerID } hx-target="#file-list" hx-swap="outerHTML" hx-trigger="input changed delay:250ms from:find input[name=q], change from:find select" hx-disinherit="*">
+						<input type="hidden" name="root" value={ f.Root.ID }/>
+						<input type="hidden" name="path" value={ f.Path }/>
+						<label class="file-filters__search">
+							Filter filenames
+							<input type="search" name="q" value={ f.Filter } placeholder="Search this folder" aria-describedby="file-filter-help" autocomplete="off"/>
+						</label>
+						<label class="file-filters__sort">
+							Sort by
+							<select name="sort">
+								for _, option := range fileSorts {
+									<option value={ option.Value } selected?={ f.Sort == option.Value }>{ option.Label }</option>
+								}
+							</select>
+						</label>
+						<noscript><button class="secondary-btn" type="submit">Apply</button></noscript>
+					</form>
+					@FileList(f)
+					if !f.CanManage {
+						<p class="file-manager__note">Your account can browse and download files but cannot change them.</p>
+					}
+				</section>
+			}
+			<div id="file-dialog"></div>
+		</div>
+	}
+}
+
+func boolText(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+// FileList is the current folder; it reloads after changes.
+templ FileList(f FilesView) {
+	<div id="file-list" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-trigger="files-changed from:body" hx-swap="outerHTML" hx-disinherit="*">
+		<div class="file-filter-summary">
+			<p id="file-filter-help">Current folder only · Folders first</p>
+			if f.ListError == "" {
+				<p role="status">Showing { intText(len(f.Entries)) } of { intText(f.Total) } entries</p>
+			}
+		</div>
+		<div class="file-list">
+			<div class="file-list__header">
+				<span>Name</span>
+				<span>Size</span>
+				<span>Modified</span>
+				<span>Actions</span>
+			</div>
+			if f.ListError != "" {
+				<div class="file-list__error">
+					<p role="alert">Unable to load this folder: { f.ListError }</p>
+					<button class="secondary-btn" type="button" hx-get={ "/fragments/files/" + f.ServerID + "?" + f.listQuery() } hx-target="#file-list" hx-swap="outerHTML">Try again</button>
+				</div>
+			} else if f.Total == 0 {
+				<p class="file-list__empty">This folder is empty.</p>
+			} else if len(f.Entries) == 0 {
+				<p class="file-list__empty">No filenames match “{ strings.TrimSpace(f.Filter) }”.</p>
+			}
+			for index, entry := range f.Entries {
+				<div class="file-row">
+					<div class="file-row__name">
+						@fileIcon(entry.Type)
+						switch entry.Type {
+							case "directory":
+								<a href={ templ.SafeURL("/files/" + f.ServerID + "?" + f.query(f.child(entry.Name))) }>{ entry.Name }</a>
+							case "file":
+								<button class="file-row__file" type="button" hx-get={ "/fragments/files/" + f.ServerID + "/preview?" + f.entryQuery(entry.Name) } hx-target="#file-dialog">{ entry.Name }</button>
+							default:
+								<span>{ entry.Name }</span>
+								<small title="Symbolic links cannot be opened">symbolic link</small>
+						}
+					</div>
+					<span>
+						if entry.Type == "file" {
+							{ FormatBytes(entry.Size) }
+						} else {
+							—
+						}
+					</span>
+					<span>
+						if entry.ModifiedAt > 0 {
+							@Time(int64(entry.ModifiedAt), "", "")
+						} else {
+							—
+						}
+					</span>
+					<div class="file-row__actions">
+						<div class="action-menu" data-action-menu>
+							<button type="button" class="secondary-btn action-menu__trigger action-menu__trigger--compact" aria-label={ "Actions for " + entry.Name } aria-expanded="false" aria-controls={ "file-actions-" + intText(index) }>
+								<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5"></circle><circle cx="8" cy="8" r="1.5"></circle><circle cx="13" cy="8" r="1.5"></circle></svg>
+							</button>
+							<div class="action-menu__content" id={ "file-actions-" + intText(index) } hidden>
+								if entry.Type != "symlink" {
+									<a class="action-menu__action" href={ templ.SafeURL("/files/" + f.ServerID + "/download?" + f.entryQuery(entry.Name)) } download>Download</a>
+								}
+								if f.CanManage && entry.Type != "symlink" {
+									<button type="button" class="action-menu__action" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=rename&type=" + entry.Type + "&" + f.entryQuery(entry.Name) } hx-target="#file-dialog">Rename</button>
+								}
+								if f.CanManage {
+									<button type="button" class="action-menu__action action-menu__action--danger" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=delete&type=" + entry.Type + "&" + f.entryQuery(entry.Name) } hx-target="#file-dialog">Delete</button>
+								}
+							</div>
+						</div>
+					</div>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// FileDialog is a new-folder, rename, or delete dialog.
+type FileDialog struct {
+	ServerID, ServerName string
+	Action               string // create, rename, delete
+	Root                 files.Root
+	// Path is the folder for create, else the entry.
+	Path, Name, Type string
+	Value            string
+	Error            string
+}
+
+func (d FileDialog) folderLabel() string {
+	folder := d.Path
+	if d.Action != "create" {
+		folder = parentPath(d.Path)
+	}
+	if folder == "" {
+		return d.Root.Name
+	}
+	return d.Root.Name + "/" + folder
+}
+
+func parentPath(value string) string {
+	if index := strings.LastIndex(value, "/"); index >= 0 {
+		return value[:index]
+	}
+	return ""
+}
+
+func (d FileDialog) title() string {
+	switch d.Action {
+	case "create":
+		return "New folder"
+	case "rename":
+		return "Rename “" + d.Name + "”"
+	}
+	return "Delete “" + d.Name + "”?"
+}
+
+func (d FileDialog) submitLabel() string {
+	switch {
+	case d.Action == "create":
+		return "Create folder"
+	case d.Action == "rename":
+		return "Rename"
+	case d.Type == "directory":
+		return "Delete folder"
+	case d.Type == "symlink":
+		return "Delete link"
+	}
+	return "Delete file"
+}
+
+templ FileActionDialog(d FileDialog) {
+	<dialog class="file-action-dialog" id="file-action" aria-labelledby="file-action-title" aria-describedby="file-action-description" data-open-on-load>
+		<form hx-post={ "/files/" + d.ServerID + "/" + d.Action } hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
+			<input type="hidden" name="root" value={ d.Root.ID }/>
+			<input type="hidden" name="path" value={ d.Path }/>
+			<input type="hidden" name="type" value={ d.Type }/>
+			<h2 id="file-action-title">{ d.title() }</h2>
+			<div id="file-action-description" class="file-action-dialog__description">
+				<p>{ d.ServerName } · { d.folderLabel() }</p>
+				if d.Action == "delete" {
+					<p>
+						switch d.Type {
+							case "directory":
+								This permanently deletes the folder and everything inside it.
+							case "symlink":
+								This permanently deletes the symbolic link. Its target is not changed.
+							default:
+								This permanently deletes the file.
+						}
+					</p>
+				}
+			</div>
+			if d.Action != "delete" {
+				<label class="file-action-dialog__field">
+					if d.Action == "create" {
+						Folder name
+					} else {
+						New name
+					}
+					<input name="name" value={ d.Value } required maxlength="255" autofocus/>
+				</label>
+			}
+			if d.Error != "" {
+				@Alert("error", d.Error)
+			}
+			<div class="file-action-dialog__actions">
+				<button class="secondary-btn" type="button" data-dialog-close autofocus?={ d.Action == "delete" }>Cancel</button>
+				<button class={ "primary-btn", templ.KV("secondary-btn--danger", d.Action == "delete") } type="submit" data-busy-label="Working…">{ d.submitLabel() }</button>
+			</div>
+		</form>
+	</dialog>
+}
+
+// FilePreview is a file's inline preview.
+type FilePreview struct {
+	ServerID   string
+	Name       string
+	Path       string
+	Size       int64
+	ModifiedAt int64
+	Kind       files.PreviewKind
+	Text       string
+	Error      string
+	Download   string
+	Limit      string
+}
+
+templ FilePreviewDialog(p FilePreview) {
+	<dialog class="file-action-dialog file-preview" id="file-action" aria-labelledby="file-preview-title" aria-describedby="file-preview-description" data-open-on-load>
+		<div class="file-preview__header">
+			<div>
+				<h2 id="file-preview-title">{ p.Name }</h2>
+				<p id="file-preview-description" class="file-preview__meta">
+					<code>{ p.Path }</code>
+					<span>{ FormatBytes(p.Size) }</span>
+				</p>
+			</div>
+		</div>
+		<div class="file-preview__body">
+			switch {
+				case p.Error != "":
+					<div class="alert alert--error" role="alert">{ p.Error }</div>
+				case p.Kind == files.PreviewLarge:
+					<p class="muted">Files over { p.Limit } aren’t shown here. Download it to open it.</p>
+				case p.Kind == files.PreviewBinary:
+					<p class="muted">This file can’t be shown as text. Download it to open it.</p>
+				case p.Text == "":
+					<p class="muted">This file is empty.</p>
+				default:
+					<pre tabindex="0" aria-label={ "Contents of " + p.Name }>{ p.Text }</pre>
+			}
+		</div>
+		<div class="file-action-dialog__actions">
+			<a class="secondary-btn" href={ templ.SafeURL(p.Download) } download>Download</a>
+			<button type="button" class="primary-btn" data-dialog-close autofocus>Close</button>
+		</div>
+	</dialog>
+}

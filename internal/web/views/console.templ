@@ -1,0 +1,184 @@
+package views
+
+import (
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// ConsoleView is the console page for one server and mode.
+type ConsoleView struct {
+	ServerID, ServerName string
+	State, Health        string
+	Exit                 *servers.Exit
+	// Mode is logs, game, or shell; Modes are those the viewer may open.
+	Mode  string
+	Modes []string
+	// Socket is the WebSocket path, empty when nothing can connect.
+	Socket        string
+	Running       bool
+	BindingActive bool
+	ConsoleName   string
+	Placeholder   string
+	Quick         []games.QuickCommand
+	CanStart      bool
+}
+
+var modeLabels = map[string]string{"logs": "Docker logs", "game": "Game console", "shell": "Container shell"}
+
+func (c ConsoleView) statusText() string {
+	switch c.Mode {
+	case "logs":
+		return "Docker stdout and stderr"
+	case "game":
+		if c.ConsoleName != "" {
+			return c.ConsoleName
+		}
+		return "Game console"
+	}
+	return "Administrator container shell"
+}
+
+func (c ConsoleView) allowed() bool {
+	for _, mode := range c.Modes {
+		if mode == c.Mode {
+			return true
+		}
+	}
+	return false
+}
+
+func (c ConsoleView) placeholder() string {
+	if c.Mode == "shell" {
+		return "Run a container shell command…"
+	}
+	if c.Placeholder != "" {
+		return c.Placeholder
+	}
+	return "Enter a game command…"
+}
+
+templ ConsolePage(page Page, c ConsoleView) {
+	@Shell(page) {
+		<div class="console-wrapper" data-console={ c.Socket } data-console-mode={ c.Mode } data-running?={ c.Running }>
+			<div class="console-header">
+				<div class="console-header__title">
+					<a class="console-header__back" href={ templ.SafeURL("/servers/" + c.ServerID) } title="Back to server details" aria-label="Back to server details" id="btn-console-back"><span aria-hidden="true">←</span></a>
+					<div>
+						<div class="console-header__name">
+							{ c.ServerName }
+							@ServerState(c.State, c.Health, c.Exit)
+						</div>
+						<div class="console-header__status">{ c.statusText() }</div>
+					</div>
+				</div>
+				if len(c.Modes) > 0 {
+					<nav class="console-mode-tabs" aria-label="Console mode">
+						for _, mode := range c.Modes {
+							<a
+								href={ templ.SafeURL("/console/" + c.ServerID + "?mode=" + mode) }
+								class={ templ.KV("console-mode-tab--active", mode == c.Mode) }
+								if mode == c.Mode {
+									aria-current="page"
+								}
+							>{ modeLabels[mode] }</a>
+						}
+					</nav>
+				}
+				<div class="console-header__controls">
+					if c.Mode == "logs" && c.allowed() {
+						<button class="console-pause" type="button" aria-pressed="false" data-console-pause>Pause</button>
+					}
+					<a class="console-retry" href={ templ.SafeURL("/console/" + c.ServerID + "?mode=" + c.Mode) }>Reload details</a>
+					<button class="console-retry" type="button" data-console-retry hidden>Retry connection</button>
+					<div class="connection-status connection-status--disconnected" role="status" data-console-status>
+						@Pip("attention")
+						<span>
+							if c.Socket != "" {
+								Connecting…
+							} else {
+								Unavailable
+							}
+						</span>
+					</div>
+				</div>
+			</div>
+			<div class={ "console-terminal", templ.KV("console-terminal--blocked", !c.allowed()) } id="console-output" aria-label="Console output" tabindex="0" data-console-terminal></div>
+			<div class="console-recovery console-recovery--error" role="alert" data-console-error hidden></div>
+			switch {
+				case len(c.Modes) == 0:
+					<div class="console-warning" role="alert">You do not have console or log access to this server.</div>
+				case !c.BindingActive:
+					<div class="console-warning" role="alert">
+						Server identity requires administrator review.
+						<a class="text-link" href={ templ.SafeURL("/servers/" + c.ServerID) }>Open server details</a>
+					</div>
+				case c.Mode == "logs":
+					<div class="console-warning">
+						Read-only Docker output · latest 500 lines · timestamps enabled<span data-console-paused-note hidden> · live display paused</span>
+					</div>
+				default:
+					<div class="console-warning">
+						if !c.Running {
+							Server state: { c.State }. Commands require a running server.
+						} else if c.Mode == "game" {
+							Enter commands exactly as { map[bool]string{true: c.ConsoleName, false: "the game console"}[c.ConsoleName != ""] } expects them.
+						} else {
+							Advanced access: commands run as a new process inside the container.
+						}
+						Commands are never resent automatically.
+						if !c.Running {
+							if guidance := StateGuidance(c.State); guidance != "" {
+								<p class="console-warning__guidance">{ guidance } Reload details after the state changes.</p>
+							}
+							<div class="console-warning__actions">
+								if containsMode(c.Modes, "logs") {
+									<a class="console-retry" href={ templ.SafeURL("/console/" + c.ServerID + "?mode=logs") }>View logs</a>
+								}
+								<a class="text-link" href={ templ.SafeURL("/servers/" + c.ServerID) }>
+									if c.CanStart {
+										Open server controls
+									} else {
+										Open server details
+									}
+								</a>
+							</div>
+						}
+					</div>
+					<div class="console-recovery" data-console-feedback hidden></div>
+					if len(c.Quick) > 0 {
+						<div class="console-quick" role="group" aria-label="Common commands">
+							for _, quick := range c.Quick {
+								<button type="button" title={ strings.TrimSpace(quick.Command) } data-console-command={ quick.Command } disabled>{ quick.Label }</button>
+							}
+						</div>
+					}
+					<form class="console-input" data-console-form>
+						<span class="console-input__prompt" aria-hidden="true">{ ">" }</span>
+						<input
+							class="console-input__field"
+							type="text"
+							id="console-input"
+							aria-label={ map[bool]string{true: "Game command", false: "Shell command"}[c.Mode == "game"] }
+							placeholder={ c.placeholder() }
+							maxlength={ map[bool]string{true: "1024", false: "4096"}[c.Mode == "game"] }
+							autocomplete="off"
+							spellcheck="false"
+							disabled?={ !c.allowed() }
+						/>
+						<button class="console-input__send" type="submit" id="btn-console-send" disabled>Send</button>
+					</form>
+			}
+		</div>
+	}
+}
+
+func containsMode(modes []string, mode string) bool {
+	for _, item := range modes {
+		if item == mode {
+			return true
+		}
+	}
+	return false
+}

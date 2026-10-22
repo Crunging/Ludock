@@ -90,6 +90,8 @@ jobs:
           # Refresh Alpine security fixes even when the pinned base is unchanged.
           no-cache-filters: runtime
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.image.outputs.version }}
           push: true
           provenance: mode=max
           attests: type=sbom,generator=docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9

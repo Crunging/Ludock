@@ -1,0 +1,452 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/Crunging/Ludock/internal/attention"
+	"github.com/Crunging/Ludock/internal/servers"
+)
+
+// ServerRow is one server in the list, with the controls its viewer may use.
+type ServerRow struct {
+	Server     servers.View
+	Address    string
+	ShowBackup bool
+	// Controls are off while Docker state is unavailable or work is active.
+	Disabled       bool
+	CanStart       bool
+	CanStop        bool
+	CanRestart     bool
+	CanBackup      bool
+	CanFiles       bool
+	ConsoleLabel   string // "", "Console", or "Logs"
+	BackupSummary  bool
+}
+
+// ServerList is the server list region of the dashboard.
+type ServerList struct {
+	Rows                 []ServerRow
+	Total                int
+	Search, State        string
+	States               []string
+	Admin                bool
+	Username             string
+	ShowBackup           bool
+	DiscoveryUnavailable bool
+}
+
+// Pip is a small state marker for a tone: ok, idle, active, attention, or
+// failed. It always sits next to a text label.
+templ Pip(tone string) {
+	<span class={ "marker", "marker--sm", "marker--" + tone } aria-hidden="true"></span>
+}
+
+// StateMark is a server's state marker at full size.
+templ StateMark(tone string) {
+	<span class={ "marker", "marker--" + tone } aria-hidden="true"></span>
+}
+
+templ ServerState(state, health string, exit *servers.Exit) {
+	{{ status := ServerStatus(state, health, exit) }}
+	<span class={ "server-state", "server-state--" + status.Tone }>
+		@Pip(status.Tone)
+		{ status.Label }
+	</span>
+}
+
+// Time renders a timestamp the browser formats locally; relative="sentence"
+// or "plain" shows "5 minutes ago".
+templ Time(ms int64, relative, class string) {
+	<time class={ class } datetime={ ISO(ms) } data-relative={ relative } title={ UTCText(ms) }>{ UTCText(ms) }</time>
+}
+
+templ CopyAddress(address, serverName string) {
+	<span class="copy-address">
+		<code>{ address }</code>
+		<button type="button" class="copy-address__button" aria-label={ "Copy address for " + serverName } title="Copy address" data-copy={ address } data-copied-label="✓">
+			<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"></path></svg>
+		</button>
+	</span>
+}
+
+templ discoveryHelp() {
+	<section class="help-panel" id="server-discovery-help" aria-labelledby="server-discovery-title">
+		<h2 id="server-discovery-title">Add a missing server</h2>
+		<p>
+			Ludock lists game containers on its Docker host. Images from <a href="/diagnostics" class="text-link">supported games</a> appear automatically. For any other image, add this label in the manager that owns the container, then recreate it:
+		</p>
+		<pre>labels:{ "\n" }  ludock.enable: "true"</pre>
+		<p class="muted">New servers are visible only to administrators until you <a href="/users" class="text-link">share them</a>.</p>
+	</section>
+}
+
+templ Dashboard(page Page, list ServerList) {
+	@Shell(page) {
+		<div class="page dashboard-page" sse-connect="/events">
+			<div class="page__header page__header--actions">
+				<div>
+					<h1 class="page__title">Servers</h1>
+					if !page.Admin {
+						<p class="page__subtitle">Servers shared with your account.</p>
+					}
+				</div>
+				<button class="secondary-btn" type="button" hx-get={ "/fragments/servers?" + listQuery(list) } hx-target="#servers" data-busy-label="Refreshing…">Refresh</button>
+			</div>
+			<div id="action-error" aria-live="polite"></div>
+			<div class="server-connection" role="status" data-live-status hidden>
+				<div>
+					<p>Live updates are disconnected.</p>
+					<p class="muted">Showing the last known state. Ludock reconnects automatically.</p>
+				</div>
+			</div>
+			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, sse:server delay:500ms, servers-changed from:body delay:500ms" hx-swap="innerHTML">
+				<section class="needs-attention" aria-labelledby="needs-attention-title" aria-busy="true">
+					<div class="needs-attention__heading"><h2 id="needs-attention-title">Needs attention</h2></div>
+					<p class="muted" aria-live="polite">Checking for issues…</p>
+				</section>
+			</div>
+			<div id="servers" hx-get={ "/fragments/servers?" + listQuery(list) } hx-trigger="sse:server delay:300ms, servers-changed from:body, every 60s" hx-swap="innerHTML">
+				@ServerListFragment(list)
+			</div>
+			if page.Admin && list.Total > 0 {
+				<div class="dashboard-help">
+					<details>
+						<summary class="text-link">Missing a server?</summary>
+						@discoveryHelp()
+					</details>
+				</div>
+			}
+		</div>
+	}
+}
+
+func listQuery(list ServerList) string {
+	query := "search=" + urlQuery(list.Search)
+	if list.State != "" && list.State != "all" {
+		query += "&state=" + urlQuery(list.State)
+	}
+	return query
+}
+
+templ ServerListFragment(list ServerList) {
+	if list.DiscoveryUnavailable {
+		<div class="server-connection" role="status">
+			<div>
+				<p>Live server state is unavailable.</p>
+				<p class="muted">Showing the last known state. Server controls resume after Ludock can check Docker again.</p>
+			</div>
+			if list.Admin {
+				<a class="secondary-btn" href="/diagnostics">Open diagnostics</a>
+			}
+		</div>
+	}
+	if list.Total > 0 {
+		<form class="list-toolbar" hx-get="/fragments/servers" hx-target="#servers" hx-trigger="input changed delay:250ms from:input, change from:select" hx-push-url="false">
+			<label class="search-field">
+				<span class="sr-only">Find a server</span>
+				<input name="search" value={ list.Search } placeholder="Find a server…" type="search"/>
+			</label>
+			<label class="state-filter">
+				<span>State</span>
+				<select name="state">
+					<option value="all">All states</option>
+					for _, state := range list.States {
+						<option value={ state } selected?={ list.State == state }>{ ServerStatus(state, "", nil).Label }</option>
+					}
+				</select>
+			</label>
+			<span class="list-toolbar__count muted" role="status">{ strconv.Itoa(len(list.Rows)) } of { strconv.Itoa(list.Total) } servers</span>
+		</form>
+		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup) } aria-label="Game servers">
+			<div class="server-list__header">
+				<span>Server</span>
+				<span>State</span>
+				<span>Connect</span>
+				if list.ShowBackup {
+					<span>Last backup</span>
+				}
+				<span><span class="sr-only">Actions</span></span>
+			</div>
+			for _, row := range list.Rows {
+				@ServerCard(row)
+			}
+			if len(list.Rows) == 0 {
+				<div class="server-list__empty">
+					<p>No servers match your filters.</p>
+					<a class="text-link" href="/" hx-get="/fragments/servers" hx-target="#servers">Clear filters</a>
+				</div>
+			}
+		</section>
+	} else if !list.DiscoveryUnavailable {
+		<div class="empty-state">
+			if list.Admin {
+				<h2 class="empty-state__title">No game servers found</h2>
+				<p class="empty-state__description">Ludock looks for game containers on the Docker host it’s connected to.</p>
+				<a href="/diagnostics" class="secondary-btn dashboard-empty-action">Check the Docker connection</a>
+				@discoveryHelp()
+			} else {
+				<h2 class="empty-state__title">No servers shared with you yet</h2>
+				<p class="empty-state__description">You’re signed in as { list.Username }. Ask an administrator to share the servers you need.</p>
+			}
+		</div>
+	}
+}
+
+func rowClass(row ServerRow) string {
+	class := "server-row"
+	if LifecycleAction(row.Server.State) == "start" {
+		class += " server-row--stopped"
+	}
+	if ServerStatus(row.Server.State, row.Server.Health, row.Server.Exit).Tone == "failed" {
+		class += " server-row--failed"
+	}
+	return class
+}
+
+templ ServerCard(row ServerRow) {
+	{{ server := row.Server }}
+	<article class={ rowClass(row) } aria-labelledby={ "server-" + server.ID }>
+		@StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone)
+		<div class="server-row__identity">
+			<a class="server-row__name" id={ "server-" + server.ID } href={ templ.SafeURL("/servers/" + server.ID) }>{ server.DisplayName }</a>
+			<span class="server-row__game">{ server.GameName }</span>
+			if guidance := StateGuidance(server.State); guidance != "" {
+				<p class="server-row__note">{ guidance }</p>
+			}
+			if server.BindingStatus != "active" {
+				<p class="server-row__warning">Binding { Capitalize(string(server.BindingStatus)) }. Administrator review required.</p>
+			}
+		</div>
+		<div class="server-row__state">
+			@ServerState(server.State, server.Health, server.Exit)
+			if operation := server.ActiveOperation; operation != nil {
+				<span role="status">
+					<a class="text-link" href={ templ.SafeURL("/servers/" + server.ID + "?tab=activity&operation=" + operation.ID) }>{ operationKindLabel(operation.Kind) }: { OperationLabel(operation.Status, operation.Phase) }</a>
+				</span>
+			}
+			if server.StateSince != 0 {
+				if server.State == "running" {
+					<span class="server-row__since">Started @Time(server.StateSince, "plain", "")</span>
+				} else {
+					@Time(server.StateSince, "sentence", "server-row__since")
+				}
+			}
+		</div>
+		<div class="server-row__address">
+			<span class="server-row__label">Connect</span>
+			if row.Address != "" {
+				@CopyAddress(row.Address, server.DisplayName)
+			} else {
+				<span class="muted">No public port</span>
+			}
+		</div>
+		if row.ShowBackup {
+			<div class="server-row__backup">
+				<span class="server-row__label">Last backup</span>
+				if !row.BackupSummary {
+					<span class="muted">—</span>
+				} else if server.LatestBackup != nil {
+					@Time(server.LatestBackup.CreatedAt, "sentence", "")
+				} else {
+					<span class="server-row__never">Never</span>
+				}
+			</div>
+		}
+		<div class="server-row__actions">
+			if row.ConsoleLabel != "" {
+				<a class="secondary-btn secondary-btn--accent" href={ templ.SafeURL("/console/" + server.ID) }>{ row.ConsoleLabel }</a>
+			}
+			if row.CanStart {
+				<button class="secondary-btn" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
+			}
+			if row.CanStop {
+				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } data-dialog-open={ "stop-" + server.ID }>Stop</button>
+				@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#action-error")
+			}
+			if row.CanFiles || row.CanRestart {
+				<div class="action-menu" data-action-menu>
+					<button type="button" class="secondary-btn action-menu__trigger" aria-label={ "More actions for " + server.DisplayName } aria-expanded="false" aria-controls={ "actions-" + server.ID }>More <span aria-hidden="true">⌄</span></button>
+					<div class="action-menu__content" id={ "actions-" + server.ID } hidden>
+						if row.CanFiles {
+							<a class="action-menu__action" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
+						}
+						if row.CanRestart {
+							<button type="button" class="action-menu__action" disabled?={ row.Disabled } data-dialog-open={ "restart-" + server.ID }>Restart…</button>
+						}
+					</div>
+				</div>
+				if row.CanRestart {
+					@LifecycleDialog("restart", server.ID, server.DisplayName, row.CanBackup, "#action-error")
+				}
+			}
+		</div>
+	</article>
+}
+
+func operationKindLabel(kind string) string {
+	switch kind {
+	case "restart":
+		return "Restart"
+	case "stop":
+		return "Stop"
+	}
+	return kind
+}
+
+// LifecycleDialog confirms a stop or restart; target receives errors.
+templ LifecycleDialog(action, serverID, serverName string, backupOption bool, target string) {
+	{{ label := map[string]string{"stop": "Stop", "restart": "Restart"}[action] }}
+	<dialog class="lifecycle-confirmation" id={ action + "-" + serverID } aria-labelledby={ action + "-" + serverID + "-title" }>
+		<form hx-post={ "/servers/" + serverID + "/" + action } hx-target={ target } data-close-on-success>
+			<h2 id={ action + "-" + serverID + "-title" }>{ label } { serverName }?</h2>
+			<p>
+				Connected players will be disconnected.
+				if action == "stop" {
+					The server will remain stopped until started again.
+				}
+			</p>
+			if backupOption {
+				<label class="check-label lifecycle-confirmation__option">
+					<input type="checkbox" name="createBackup" value="true"/>
+					Take a backup first
+				</label>
+				<p class="lifecycle-confirmation__help">The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped.</p>
+			}
+			<div class="lifecycle-confirmation__actions">
+				<button class="secondary-btn" type="button" data-dialog-close autofocus>Cancel</button>
+				<button class="secondary-btn secondary-btn--danger" type="submit">{ label } server</button>
+			</div>
+		</form>
+	</dialog>
+}
+
+// AttentionView is the needs-attention panel.
+type AttentionView struct {
+	Items                []attention.Item
+	DiscoveryUnavailable bool
+	Admin                bool
+	Error                string
+}
+
+var scheduleReasons = map[string]string{
+	"owner_missing":         "The schedule owner no longer exists.",
+	"owner_disabled":        "The schedule owner’s account is disabled.",
+	"owner_access_removed":  "The owner no longer has schedule access.",
+	"action_access_removed": "The owner no longer has access to this action.",
+	"binding_changed":       "Recreate the schedule after the server binding is reviewed.",
+	"binding_unavailable":   "The server binding needs administrator attention.",
+	"unavailable":           "Review the schedule settings and server state.",
+}
+
+type attentionText struct{ Title, Link, Action string }
+
+func describeAttention(item attention.Item) attentionText {
+	path := "/servers/" + item.ServerID
+	switch item.Kind {
+	case "operation":
+		title := Capitalize(item.OperationKind) + " " + item.Status
+		if item.ForceStopped {
+			title = "Force-stopped, recent progress may not have been saved."
+		}
+		return attentionText{title, path + "?tab=activity&operation=" + item.OperationID, "Review activity"}
+	case "schedule":
+		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
+	case "binding":
+		title := "Server container missing"
+		switch item.BindingStatus {
+		case "review_required":
+			title = "Binding review required"
+		case "ambiguous":
+			title = "Ambiguous server binding"
+		}
+		return attentionText{title, path, "Review server"}
+	}
+	title := "Server unavailable"
+	if item.State == "docker_unavailable" {
+		title = "Availability cannot be verified"
+	}
+	return attentionText{title, path + "?tab=overview", "Check availability"}
+}
+
+templ attentionDetail(item attention.Item) {
+	switch item.Kind {
+		case "operation":
+			@Time(item.UpdatedAt, "", "muted")
+		case "schedule":
+			<span class="muted">{ scheduleReasons[item.Reason] }</span>
+		case "binding":
+			if item.BindingStatus == "review_required" {
+				<span class="muted">Review the changed server identity before resuming controls.</span>
+			} else {
+				<span class="muted">Check the container in Docker or its owning manager, then refresh.</span>
+			}
+		default:
+			if item.State == "docker_unavailable" {
+				<span class="muted">Ludock cannot reach Docker.</span>
+			} else {
+				<span class="muted">Monitoring detected a problem since @Time(item.OutageStartedAt, "", "")<span>.</span></span>
+			}
+	}
+}
+
+templ NeedsAttention(view AttentionView) {
+	{{ clear := len(view.Items) == 0 && !view.DiscoveryUnavailable && view.Error == "" }}
+	<section class={ "needs-attention", templ.KV("needs-attention--clear", clear) } aria-labelledby="needs-attention-title">
+		<div class="needs-attention__heading">
+			<h2 id="needs-attention-title">Needs attention</h2>
+			if len(view.Items) > 0 {
+				<span class="muted">{ strconv.Itoa(len(view.Items)) } { map[bool]string{true: "item", false: "items"}[len(view.Items) == 1] }</span>
+			}
+		</div>
+		if view.Error != "" {
+			<div class="needs-attention__error" role="alert">
+				<p>Unable to load attention items: { view.Error }</p>
+				<button class="secondary-btn" type="button" hx-get="/fragments/attention" hx-target="#attention">Retry attention check</button>
+			</div>
+		}
+		if view.DiscoveryUnavailable {
+			<p class="needs-attention__warning">
+				Docker is unavailable. These items use saved state; current server availability cannot be verified.
+				if view.Admin {
+					<a href="/diagnostics" class="text-link">Check diagnostics</a>
+				}
+			</p>
+		}
+		if len(view.Items) == 0 && view.Error == "" {
+			<p class="muted">
+				if view.DiscoveryUnavailable {
+					No attention items in the saved state you can access.
+				} else {
+					Nothing right now.
+				}
+			</p>
+		}
+		if len(view.Items) > 0 {
+			<ul class="needs-attention__list" data-collapse-after="10">
+				for _, item := range view.Items {
+					{{ info := describeAttention(item) }}
+					<li>
+						<div class="needs-attention__description">
+							<span class="needs-attention__server">{ item.ServerName }</span>
+							<strong>{ info.Title }</strong>
+							@attentionDetail(item)
+						</div>
+						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + item.ServerName + " — " + info.Title }>{ info.Action }<span aria-hidden="true"> →</span></a>
+					</li>
+				}
+			</ul>
+			if hasOperation(view.Items) {
+				<p class="muted needs-attention__note">Includes issues from each server’s most recent 100 operations.</p>
+			}
+		}
+	</section>
+}
+
+func hasOperation(items []attention.Item) bool {
+	for _, item := range items {
+		if item.Kind == "operation" {
+			return true
+		}
+	}
+	return false
+}

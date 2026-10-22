@@ -1,0 +1,102 @@
+package views
+
+import "strconv"
+
+// LoginForm is the sign-in or first-administrator form.
+type LoginForm struct {
+	Setup    bool
+	Username string
+	Error    string
+	// ConfirmationError marks a password mismatch.
+	ConfirmationError bool
+	Next              string
+}
+
+const passwordMin = 15
+
+templ LoginPage(form LoginForm) {
+	@Document(map[bool]string{true: "Set up Ludock", false: "Sign in · Ludock"}[form.Setup], "", nil, nil) {
+		<main class="login-page">
+			@LudockMark("login-mark")
+			<form class="login-card" method="post" action={ templ.SafeURL(map[bool]string{true: "/setup", false: "/login"}[form.Setup]) }>
+				<h1 class="login-card__title">
+					if form.Setup {
+						Set up Ludock
+					} else {
+						Sign in to Ludock
+					}
+				</h1>
+				<p class="login-card__description">
+					if form.Setup {
+						Create your administrator account to manage existing game servers. Setup stays open for five minutes after Ludock starts.
+					} else {
+						Sign in with your Ludock account.
+					}
+				</p>
+				if form.Next != "" {
+					<input type="hidden" name="next" value={ form.Next }/>
+				}
+				if form.Setup {
+					<label class="login-card__label" for="bootstrap-code">Setup code</label>
+					<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="password" data-password autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
+					<p class="login-card__hint" id="bootstrap-code-hint">
+						Use the most recent one-time code from <code>docker compose logs ludock</code> on the Docker host.
+						If you set <code>LUDOCK_SETUP_CODE</code> in <code>.env</code>, enter that value instead; it is not printed.
+					</p>
+				}
+				<label class="login-card__label" for="username">Username</label>
+				if form.Setup {
+					<input id="username" name="username" class="login-card__input" value={ form.Username } autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" aria-describedby="username-hint" required/>
+					<p class="login-card__hint" id="username-hint">3–32 characters: letters, numbers, periods, hyphens, or underscores.</p>
+				} else {
+					<input id="username" name="username" class="login-card__input" value={ form.Username } autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" required autofocus/>
+				}
+				<label class="login-card__label" for="password">Password</label>
+				<input id="password" name="password" class="login-card__input" type="password" data-password autocomplete={ map[bool]string{true: "new-password", false: "current-password"}[form.Setup] } minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
+				if form.Setup {
+					<p class="login-card__hint" id="password-hint">Use at least { strconv.Itoa(passwordMin) } characters. A few words work well.</p>
+					<label class="login-card__label" for="confirm-password">Confirm password</label>
+					<input id="confirm-password" name="confirmation" class="login-card__input" type="password" data-password autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" aria-invalid={ map[bool]string{true: "true"}[form.ConfirmationError] } required/>
+				}
+				<label class="login-card__visibility">
+					<input type="checkbox" data-show-passwords/>
+					if form.Setup {
+						Show passwords
+					} else {
+						Show password
+					}
+				</label>
+				if form.Error != "" {
+					<div class="login-card__error" id="login-error" role="alert">{ form.Error }</div>
+				}
+				<button class="login-card__submit" type="submit" data-busy-label={ map[bool]string{true: "Creating administrator...", false: "Signing in..."}[form.Setup] }>
+					if form.Setup {
+						Create administrator
+					} else {
+						Sign in
+					}
+				</button>
+				if !form.Setup {
+					<p class="login-card__account-help">Need an account or a password reset? Ask the person who runs this Ludock panel.</p>
+				}
+			</form>
+		</main>
+	}
+}
+
+templ SetupExpired() {
+	@Document("Setup window expired · Ludock", "", nil, nil) {
+		<main class="login-page">
+			@LudockMark("login-mark")
+			<section class="login-card" aria-labelledby="setup-expired-title">
+				<h1 class="login-card__title" id="setup-expired-title">Setup window expired</h1>
+				<p class="login-card__description">On the Docker host, run these commands from Ludock’s Compose folder:</p>
+				<pre class="login-card__commands"><code>docker compose restart ludock{ "\n" }docker compose logs --tail 50 ludock</code></pre>
+				<p class="login-card__description">
+					Copy the new setup code, choose Check again, and finish within five minutes. If you configured LUDOCK_SETUP_CODE, use that code instead.
+				</p>
+				<a class="login-card__submit" href="/login">Check again</a>
+			</section>
+		</main>
+	}
+}
