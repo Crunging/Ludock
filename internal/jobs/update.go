@@ -366,8 +366,16 @@ func (j *Jobs) whileAuthorized(ctx context.Context, job *ops.Context, capability
 	err := fn(watch)
 	revoked := context.Cause(watch)
 	stopWatch(nil)
-	if err != nil && revoked != nil && ctx.Err() == nil {
+	if ctx.Err() != nil {
+		return err
+	}
+	// A loss seen as the command finished, or since the last poll, is
+	// reported even when the command itself succeeded.
+	if revoked != nil {
 		return revoked
+	}
+	if err == nil {
+		err = j.assertCapability(ctx, job, capability)
 	}
 	return err
 }

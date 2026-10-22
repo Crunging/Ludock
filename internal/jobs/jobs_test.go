@@ -417,6 +417,30 @@ func spaceReports(f *fixture, free func(check int) int) *int {
 	return checks
 }
 
+func TestALossOfAuthorityIsReportedEvenWhenTheCommandSucceeds(t *testing.T) {
+	f := setup(t)
+	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
+	// The command finishes as the watcher sees the owner demoted.
+	err := f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(ctx context.Context) error {
+		if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false); err != nil {
+			t.Fatal(err)
+		}
+		<-ctx.Done()
+		return nil
+	})
+	if _, public := apperr.As(err); !public {
+		t.Fatal("reported", err, "for a command whose owner lost authority")
+	}
+	// Or the owner is demoted after the last poll.
+	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, false)
+	err = f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(context.Context) error {
+		return f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false)
+	})
+	if _, public := apperr.As(err); !public {
+		t.Fatal("reported", err, "after a loss since the last poll")
+	}
+}
+
 func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
 	f := setup(t)
 	backupID := twoRootBackup(t, f)
