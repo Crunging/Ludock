@@ -2,6 +2,7 @@
 package textutil
 
 import (
+	"sync"
 	"unicode/utf16"
 
 	"golang.org/x/text/collate"
@@ -18,19 +19,39 @@ func Length(value string) int {
 	return n
 }
 
+// A Collator keeps iteration buffers, so each comparison takes its own.
 var (
-	collator     = collate.New(language.Und)
-	foldCollator = collate.New(language.Und, collate.IgnoreCase, collate.IgnoreDiacritics)
+	collator     = collators()
+	foldCollator = collators(collate.IgnoreCase, collate.IgnoreDiacritics)
 	// naturalCollator sorts "map2" before "map10".
-	naturalCollator = collate.New(language.Und, collate.IgnoreCase, collate.IgnoreDiacritics, collate.Numeric)
+	naturalCollator = collators(collate.IgnoreCase, collate.IgnoreDiacritics, collate.Numeric)
 )
 
+func collators(options ...collate.Option) *sync.Pool {
+	return &sync.Pool{New: func() any { return collate.New(language.Und, options...) }}
+}
+
+func compare(pool *sync.Pool, left, right string) int {
+	c := pool.Get().(*collate.Collator)
+	defer pool.Put(c)
+	return c.CompareString(left, right)
+}
+
 // Compare orders names for display with the root collation.
-func Compare(left, right string) int { return collator.CompareString(left, right) }
+func Compare(left, right string) int { return compare(collator, left, right) }
 
 // CompareFold orders names for display, ignoring case and accents.
-func CompareFold(left, right string) int { return foldCollator.CompareString(left, right) }
+func CompareFold(left, right string) int { return compare(foldCollator, left, right) }
 
 // CompareNatural orders file names: case and accents ignored, digit runs
 // compared as numbers.
-func CompareNatural(left, right string) int { return naturalCollator.CompareString(left, right) }
+func CompareNatural(left, right string) int { return compare(naturalCollator, left, right) }
+
+// NaturalKey is a sort key that orders bytewise like CompareNatural, for
+// sorting many names without collating each pair again.
+func NaturalKey(value string) []byte {
+	c := naturalCollator.Get().(*collate.Collator)
+	defer naturalCollator.Put(c)
+	var buffer collate.Buffer
+	return c.KeyFromString(&buffer, value)
+}
