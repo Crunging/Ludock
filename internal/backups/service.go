@@ -50,8 +50,9 @@ type Service struct {
 	Observer *servers.Observer
 	Locks    *locks.Table
 
-	initMu  sync.Mutex
-	initRun bool
+	// initMu serializes Initialize: a backup that finds no settings waits
+	// for setup already under way instead of failing as unconfigured.
+	initMu sync.Mutex
 }
 
 const settingsKey = "backups"
@@ -211,16 +212,13 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 // an administrator has ever saved backup settings.
 func (s *Service) Initialize(ctx context.Context) error {
 	s.initMu.Lock()
-	if s.initRun {
-		s.initMu.Unlock()
-		return nil
-	}
-	s.initRun = true
-	s.initMu.Unlock()
-	defer func() { s.initMu.Lock(); s.initRun = false; s.initMu.Unlock() }()
+	defer s.initMu.Unlock()
 	// Any saved value, including null, is an administrator decision.
 	if _, found, err := s.SavedSettings(ctx); err != nil || found {
 		return err
+	}
+	if testHook != nil {
+		testHook("initializing")
 	}
 	roots := RootList(s.Storage.Roots)
 	if len(roots) != 1 {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
@@ -54,8 +55,10 @@ func TestBackgroundDeletionKeepsABackupWhoseDeletionWasRefused(t *testing.T) {
 	// waits for the locks until that Delete is refused.
 	listed, proceed, cleaned := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	testHook = func(point string) {
-		close(listed)
-		<-proceed
+		if point == "pending" {
+			close(listed)
+			<-proceed
+		}
 	}
 	t.Cleanup(func() { testHook = nil })
 	checks := 0
@@ -96,4 +99,35 @@ func TestARefusedDeletionNeedsNoWriteToKeepTheBackup(t *testing.T) {
 		t.Fatal(err, checks)
 	}
 	kept(t, s, backup, archive)
+}
+
+func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
+	d := dbtest.Open(t)
+	s := &Service{DB: d, Storage: &Storage{Roots: t.TempDir()}, Locks: locks.New()}
+	// Background setup is saving the default settings when a backup that
+	// is due at startup looks for them.
+	entered, saved := make(chan struct{}), make(chan struct{})
+	testHook = func(point string) {
+		if point != "initializing" {
+			return
+		}
+		testHook = nil
+		close(entered)
+		time.Sleep(100 * time.Millisecond)
+		if _, err := d.Exec(`INSERT INTO settings(key,value_json) VALUES('backups',?)`,
+			`{"destination":"`+s.Storage.Roots+`","retentionCount":3,"maxBytes":1073741824,"reserveBytes":0}`); err != nil {
+			t.Error(err)
+		}
+		close(saved)
+	}
+	t.Cleanup(func() { testHook = nil })
+	go s.Initialize(ctx)
+	<-entered
+	_, err := s.ForBackup(ctx)
+	<-saved
+	// The saved settings are then validated; this test daemon has no
+	// container for Ludock, so that is where it stops.
+	if !apperr.Is(err, "BACKUP_MOUNT_UNVERIFIED") {
+		t.Fatal("did not wait for setup under way:", err)
+	}
 }
