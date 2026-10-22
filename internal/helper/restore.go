@@ -199,11 +199,11 @@ func (h *restoreHelper) run() (any, error) {
 		if err := unix.Fstatfs(int(root), &stat); err != nil {
 			return nil, err
 		}
-		bytes := uint64(stat.Bavail) * uint64(stat.Bsize)
+		bytes := FreeBytes(&stat)
 		if bytes > 1<<53-1 {
 			return nil, errUnsafe
 		}
-		return map[string]uint64{"availableBytes": bytes}, nil
+		return map[string]int64{"availableBytes": bytes}, nil
 	case "stage":
 		if err := unix.Mkdirat(int(root), h.request.Stage, 0o700); err != nil {
 			return nil, err
@@ -424,16 +424,23 @@ var errFull = errors.New("restore reserve reached")
 // and directory entry: the staging estimate cannot bound allocation.
 func (x *extractor) room(size, reserve int64) error {
 	var stat unix.Statfs_t
-	if err := unix.Fstatfs(int(x.destination), &stat); err != nil {
+	if err := statfs(int(x.destination), &stat); err != nil {
 		return err
 	}
-	block := max(int64(stat.Bsize), 1)
+	block := max(stat.Bsize, stat.Frsize, 1)
 	needed := (size+block-1)/block*block + block
-	if available := int64(min(uint64(stat.Bavail)*uint64(block), 1<<62)); available < needed+reserve {
+	if FreeBytes(&stat) < needed+reserve {
 		return errFull
 	}
 	return nil
 }
+
+// statfs is replaced in tests.
+var statfs = unix.Fstatfs
+
+// copyChunk bounds how much a file can write between space checks, so other
+// writers to the same filesystem cannot push it far into the reserve.
+const copyChunk = 1 << 20
 
 // RunRestoreExtract writes a staged restore from stdin: each entry is one
 // JSON record line followed by exactly its file bytes. Directories get their
@@ -488,6 +495,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 	}
 	var directories []directoryRecord
 	reader := bufio.NewReaderSize(stdin, 64*1024)
+	chunk := make([]byte, copyChunk)
 	count := 0
 	var total float64
 	for {
@@ -555,8 +563,18 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.CopyN(fdWriter(file), reader, size); err != nil {
-				return errUnsafe
+			for remaining := size; remaining > 0; {
+				n := min(remaining, int64(len(chunk)))
+				if _, err := io.ReadFull(reader, chunk[:n]); err != nil {
+					return errUnsafe
+				}
+				if err := x.room(remaining, reserve); err != nil {
+					return err
+				}
+				if _, err := fdWriter(file).Write(chunk[:n]); err != nil {
+					return err
+				}
+				remaining -= n
 			}
 			if err := metadata(file, uid, gid, mode, record.Mtime); err != nil {
 				return err

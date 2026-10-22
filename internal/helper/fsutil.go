@@ -122,3 +122,20 @@ func ctimeMs(info *unix.Stat_t) float64 {
 }
 
 func isNotExist(err error) bool { return errors.Is(err, unix.ENOENT) }
+
+// FreeBytes is the space an unprivileged writer may still use. Bavail counts
+// fundamental blocks (Frsize), which can be smaller than Bsize, as on SSHFS
+// mounts of FreeBSD storage. The result is capped at 2^62.
+func FreeBytes(stat *unix.Statfs_t) int64 {
+	unit := stat.Frsize
+	if unit <= 0 {
+		unit = stat.Bsize
+	}
+	if unit <= 0 {
+		return 0
+	}
+	if stat.Bavail > uint64(1<<62/unit) {
+		return 1 << 62
+	}
+	return int64(stat.Bavail) * unit
+}

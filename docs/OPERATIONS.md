@@ -246,7 +246,8 @@ If a custom container host name stops Ludock from verifying the mount, set
 ### Restore
 
 An administrator picks a backup and types the server's name to confirm. Ludock
-checks the archive, stops the server, and takes a safety backup; if that fails,
+checks the archive and that each folder's disk has room for it above the
+reserve, then stops the server and takes a safety backup; if that fails,
 nothing is replaced. Each folder is staged and swapped in with a journal, so an
 interrupted restore is finished or rolled back when Ludock starts again.
 Replacing several folders is **not atomic**. The server returns to its previous

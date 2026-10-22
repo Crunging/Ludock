@@ -232,7 +232,7 @@ func budget(directory pinned, reserve, additional int64) (int64, error) {
 	if err := unix.Fstatfs(directory.fd, &stat); err != nil {
 		return 0, err
 	}
-	available := int64(stat.Bavail)*int64(stat.Bsize) - reserve
+	available := helper.FreeBytes(&stat) - reserve
 	if available < additional {
 		return 0, fail("BACKUP_CAPACITY", "The backup destination does not have enough free space above its configured reserve.")
 	}
@@ -251,11 +251,11 @@ func (s *Storage) AvailableBytes(directory string) (int64, error) {
 	if unix.Faccessat(dir.fd, ".", unix.W_OK|unix.X_OK, 0) != nil || unix.Fstatfs(dir.fd, &stat) != nil {
 		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Available disk space could not be measured for the backup destination.")
 	}
-	bytes := uint64(stat.Bavail) * uint64(stat.Bsize)
+	bytes := helper.FreeBytes(&stat)
 	if bytes > 1<<53-1 {
 		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Available disk space could not be measured for the backup destination.")
 	}
-	return int64(bytes), nil
+	return bytes, nil
 }
 
 // AssertSpace requires additional bytes above the reserve.

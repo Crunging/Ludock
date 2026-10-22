@@ -644,6 +644,33 @@ func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root s
 	return result, nil
 }
 
+var errRestoreCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
+
+// assertStagingRoom refuses, before the server stops, a restore whose roots
+// cannot each fit; staging checks again as it runs.
+func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, job *ops.Context, roots []backups.Root,
+	staged map[string]int64, reserve int64, assertAccess func() error) error {
+	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
+	if err != nil {
+		return err
+	}
+	defer data.Cleanup()
+	for _, root := range roots {
+		destination, err := backups.HelperRoot(server, root)
+		if err != nil {
+			return err
+		}
+		space, err := j.restoreStep(ctx, data, destination, job, "space", assertAccess)
+		if err != nil {
+			return err
+		}
+		if available, ok := number(space["availableBytes"]); !ok || available < float64(staged[root.ID]+reserve) {
+			return errRestoreCapacity
+		}
+	}
+	return nil
+}
+
 func indexOf(entries []journal, id string) int {
 	return slices.IndexFunc(entries, func(entry journal) bool { return entry.Root.ID == id })
 }
@@ -762,6 +789,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err != nil {
 				return nil, err
 			}
+			if err := j.assertStagingRoom(ctx, server, job, row.Roots, staged, settings.ReserveBytes, assertAccess); err != nil {
+				return nil, err
+			}
 			if err := j.stopForData(ctx, server, job); err != nil {
 				return nil, err
 			}
@@ -804,7 +834,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				// already taken their space, so each needs only its own.
 				available, ok := number(space["availableBytes"])
 				if !ok || available < float64(staged[root.ID]+settings.ReserveBytes) {
-					return nil, fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
+					return nil, errRestoreCapacity
 				}
 				if err := assertAccess(); err != nil {
 					return nil, err

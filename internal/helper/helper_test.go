@@ -373,3 +373,49 @@ func TestRenameWithoutNoReplaceNeverClobbers(t *testing.T) {
 		t.Fatal("renamed a folder without an atomic no-replace rename")
 	}
 }
+
+func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {
+	// SSHFS reports FreeBSD storage with a transfer size far larger than
+	// the blocks Bavail counts.
+	if got := FreeBytes(&unix.Statfs_t{Bsize: 131072, Frsize: 512, Bavail: 131072}); got != 64<<20 {
+		t.Fatal(got)
+	}
+	if got := FreeBytes(&unix.Statfs_t{Bsize: 4096, Bavail: 10}); got != 40960 {
+		t.Fatal("without Frsize:", got)
+	}
+	if got := FreeBytes(&unix.Statfs_t{Frsize: 4096, Bavail: 1 << 62}); got != 1<<62 {
+		t.Fatal("not capped:", got)
+	}
+}
+
+func TestExtractionStopsWhenOtherWritersTakeTheReserve(t *testing.T) {
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	if _, code := restore(t, root, stage, "stage"); code != 0 {
+		t.Fatal("stage")
+	}
+	// The disk has room when the file starts, then another container fills
+	// it while the file is copied.
+	checks := 0
+	statfs = func(fd int, stat *unix.Statfs_t) error {
+		checks++
+		*stat = unix.Statfs_t{Bsize: 4096, Frsize: 4096, Bavail: 100 << 8}
+		if checks > 2 {
+			stat.Bavail = 1
+		}
+		return nil
+	}
+	t.Cleanup(func() { statfs = unix.Fstatfs })
+	size := 3 * copyChunk
+	record := `{"name":"world.dat","type":"file","size":` + strconv.Itoa(size) + `,"uid":` + strconv.Itoa(os.Getuid()) +
+		`,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":420}`
+	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": size, "reserveBytes": 1 << 20})
+	var stderr bytes.Buffer
+	input := strings.NewReader(record + "\n" + strings.Repeat("x", size))
+	if code := RunRestoreExtract(string(argument), input, io.Discard, &stderr); code != ExtractFullStatus || stderr.String() != ExtractFull {
+		t.Fatal(code, stderr.String())
+	}
+	if info, err := os.Stat(filepath.Join(root, stage, "new", "world.dat")); err != nil || info.Size() > copyChunk {
+		t.Fatal("kept writing into the reserve", info, err)
+	}
+}
