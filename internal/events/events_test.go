@@ -144,7 +144,8 @@ func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 	}
 }
 
-func TestRechecksGrantsAndAccountsBeforeEachEvent(t *testing.T) {
+// Rechecks grants and accounts before each event.
+func TestEventsRecheckAccess(t *testing.T) {
 	f := setup(t)
 	socket := f.client(f.friend)
 	f.authz.SetUserGrants(ctx, "friend", nil, f.admin, f.adminSession)

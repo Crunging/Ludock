@@ -41,7 +41,8 @@ func TestRedactsDenseMatches(t *testing.T) {
 	}
 }
 
-func TestHoldsBackOnlyTextThatCouldStartASecret(t *testing.T) {
+// Holds back only text that could start a secret.
+func TestRedactionHoldBack(t *testing.T) {
 	var output strings.Builder
 	redactor := NewRedactor([]string{"rcon-secret"}, func(value string) { output.WriteString(value) })
 	redactor.Push("Theo joined the game\n")

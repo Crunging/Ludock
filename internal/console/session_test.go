@@ -115,7 +115,8 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 	<-done
 }
 
-func TestConsoleRunsCommandsAndRejectsWithoutAccess(t *testing.T) {
+// Console runs commands and rejects without access.
+func TestConsoleAccess(t *testing.T) {
 	f := sessionSetup(t)
 	f.engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
 		stdout([]byte("There are 0 players (password hunter2-secret)"))

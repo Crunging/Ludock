@@ -204,7 +204,8 @@ func adminUser(t *testing.T, s *Service) *db.SessionUser {
 	return &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
 }
 
-func TestVerifyAuthorizedRejectsReplacedContainer(t *testing.T) {
+// Verify authorized rejects replaced container.
+func TestVerifyRejectsReplacedContainer(t *testing.T) {
 	engine, s := setup(t)
 	admin := adminUser(t, s)
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,

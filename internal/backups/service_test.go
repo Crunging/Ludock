@@ -50,7 +50,8 @@ func kept(t *testing.T, s *Service, backup Backup, archive string) {
 	}
 }
 
-func TestBackgroundDeletionKeepsABackupWhoseDeletionWasRefused(t *testing.T) {
+// Background deletion keeps a backup whose deletion was refused.
+func TestRefusedDeletionSurvivesCleanup(t *testing.T) {
 	s, backup, archive := recorded(t)
 	// Background cleanup lists backups while a Delete is under way, then
 	// waits for the locks until that Delete is refused.
@@ -82,7 +83,8 @@ func TestBackgroundDeletionKeepsABackupWhoseDeletionWasRefused(t *testing.T) {
 	kept(t, s, backup, archive)
 }
 
-func TestARefusedDeletionNeedsNoWriteToKeepTheBackup(t *testing.T) {
+// A refused deletion needs no write to keep the backup.
+func TestRefusedDeletionWritesNothing(t *testing.T) {
 	s, backup, archive := recorded(t)
 	// Any write that would put the backup back fails, as with a full disk.
 	if _, err := s.DB.Exec(`CREATE TRIGGER fail_restore BEFORE UPDATE OF state ON backups WHEN NEW.state='complete'

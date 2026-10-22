@@ -95,7 +95,8 @@ func TestFreshDatabaseAndReopen(t *testing.T) {
 	}
 }
 
-func TestRejectsUnrelatedDatabaseWithoutWriting(t *testing.T) {
+// Rejects unrelated database without writing.
+func TestRejectsUnrelatedDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unrelated.db")
 	raw, _ := sql.Open("sqlite", path)
@@ -119,7 +120,7 @@ func TestRejectsUnrelatedDatabaseWithoutWriting(t *testing.T) {
 
 // A database from releases up to 0.5 carries their marker and schema; it is
 // refused before anything writes to it.
-func TestRejectsOldReleaseDatabaseWithoutWriting(t *testing.T) {
+func TestRejectsOldReleaseDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "old.db")
 	raw, _ := sql.Open("sqlite", path)
@@ -141,7 +142,8 @@ func TestRejectsOldReleaseDatabaseWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestInterruptedKeyWriteNeverPublishesPartialKey(t *testing.T) {
+// Interrupted key write never publishes partial key.
+func TestInterruptedKeyWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "partial.db")
 	writeKeyFile = func(*os.File, []byte) error { return errors.New("simulated interrupted key write") }

@@ -244,7 +244,8 @@ func TestLoginSourceLockoutKeepsOtherClients(t *testing.T) {
 	}
 }
 
-func TestAccountCooldownIsCappedAndNotExtended(t *testing.T) {
+// Account cooldown is capped and not extended.
+func TestAccountCooldownCap(t *testing.T) {
 	s, c, _ := newService(t, nil)
 	addUser(t, s, "80000000-0000-4000-8000-000000000001", "admin", db.RoleAdmin, password)
 	accountKey := HashToken("login-account-failures:admin")
@@ -312,7 +313,8 @@ func racingService(t *testing.T) (*Service, *fastHasher, *Principal) {
 	return s, h, principal
 }
 
-func TestLoginRejectsAccountChangedDuringVerification(t *testing.T) {
+// Login rejects account changed during verification.
+func TestLoginDuringAccountChange(t *testing.T) {
 	for _, change := range []string{"reset", "disable"} {
 		s, h, _ := racingService(t)
 		h.beforeVerify = func() {
@@ -371,7 +373,8 @@ func TestLoginReturnsCurrentRole(t *testing.T) {
 	}
 }
 
-func TestAdminChangesRejectedAfterDemotionOrRevocation(t *testing.T) {
+// Admin changes rejected after demotion or revocation.
+func TestAdminChangesAfterDemotion(t *testing.T) {
 	for _, c := range []struct {
 		operation, change string
 		status            int
@@ -401,7 +404,8 @@ func TestAdminChangesRejectedAfterDemotionOrRevocation(t *testing.T) {
 	}
 }
 
-func TestPasswordChangeDoesNotRestoreRevokedSession(t *testing.T) {
+// Password change does not restore revoked session.
+func TestPasswordChangeKeepsRevocation(t *testing.T) {
 	s, h, principal := racingService(t)
 	reset, _ := Argon2{}.Hash("reset-password-123")
 	h.beforeHash = func() { s.DB.UpdateUserPassword(ctx, adminID, reset, resetAudit) }
@@ -518,7 +522,8 @@ func TestFailedSetupSessionCanBeRetried(t *testing.T) {
 	}
 }
 
-func TestUserDeletedRightAfterAChangeIsNotFound(t *testing.T) {
+// User deleted right after a change is not found.
+func TestUserDeletedAfterChange(t *testing.T) {
 	s, _, principal := racingService(t)
 	// Another administrator deletes the account as soon as each change commits.
 	for _, statement := range []string{

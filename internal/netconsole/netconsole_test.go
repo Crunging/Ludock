@@ -165,7 +165,8 @@ func TestCleanTelnet(t *testing.T) {
 	}
 }
 
-func TestAReaderStopsWhenItsCommandEndsWithResultsUnread(t *testing.T) {
+// A reader stops when its command ends with results unread.
+func TestReaderStopsWithCommand(t *testing.T) {
 	host, port := listen(t, func(conn net.Conn) {
 		chunk := make([]byte, 64*1024)
 		for {

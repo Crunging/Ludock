@@ -151,7 +151,8 @@ func TestRetriesStateItCouldNotSave(t *testing.T) {
 	}
 }
 
-func TestFailedCheckpointLeavesTheJobUnchanged(t *testing.T) {
+// Failed checkpoint leaves the job unchanged.
+func TestFailedCheckpoint(t *testing.T) {
 	r, servers := setup(t, 1)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "restore"})
 	if _, err := r.DB.Exec(`CREATE TRIGGER fail_phase BEFORE UPDATE OF phase ON operations WHEN NEW.phase = 'moving_old'
@@ -267,7 +268,8 @@ func TestBackgroundHoldersAreCancelled(t *testing.T) {
 	waitStatus(t, r, job.ID, Succeeded)
 }
 
-func TestInterruptedOperationsAreReconciledNotReplayed(t *testing.T) {
+// Interrupted operations are reconciled not replayed.
+func TestInterruptedOperationsReconciled(t *testing.T) {
 	r, servers := setup(t, 2)
 	ran := false
 	r.Register("stop", Handler{
@@ -293,7 +295,8 @@ func TestInterruptedOperationsAreReconciledNotReplayed(t *testing.T) {
 	}
 }
 
-func TestWorkQueuedAtStartupRunsOnceRecoveryLiftsTheFence(t *testing.T) {
+// Work queued at startup runs once recovery lifts the fence.
+func TestQueuedWorkRunsAfterRecovery(t *testing.T) {
 	r, servers := setup(t, 1)
 	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
 		return c.WithLocks([]string{"path:/srv/shared"}, func() (map[string]any, error) { return nil, nil })
@@ -319,7 +322,7 @@ func TestStopLeavesQueuedWork(t *testing.T) {
 
 // A holder that finishes at either point after a job's conflict must not
 // leave that job failed or waiting with the queue held.
-func TestAHolderFinishingAfterAConflictLetsTheJobRun(t *testing.T) {
+func TestLockReleasedDuringConflict(t *testing.T) {
 	for _, point := range []string{"conflict", "yield"} {
 		t.Run(point, func(t *testing.T) {
 			r, servers := setup(t, 2)

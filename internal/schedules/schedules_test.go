@@ -130,7 +130,8 @@ func TestRunsOncePerSlotWithoutCatchingUp(t *testing.T) {
 	}
 }
 
-func TestRevokedActionsDisabledOwnersAndBindingChanges(t *testing.T) {
+// Revoked actions disabled owners and binding changes.
+func TestScheduleAuthorityChanges(t *testing.T) {
 	f := setup(t)
 	f.s.Create(ctx, friend, f.serverID, base)
 	if f.first(t, friend).NextRunAt == 0 {
@@ -200,7 +201,8 @@ func TestStaleEditsAndOwnership(t *testing.T) {
 	}
 }
 
-func TestPausingAllowedAfterRevocationButNotResume(t *testing.T) {
+// Pausing allowed after revocation but not resume.
+func TestPauseAfterRevocation(t *testing.T) {
 	f := setup(t)
 	schedule, _ := f.s.Create(ctx, friend, f.serverID, base)
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
@@ -256,7 +258,8 @@ func TestOneTimeSchedules(t *testing.T) {
 	}
 }
 
-func TestInvalidSavedSchedulesAreReportedNotRun(t *testing.T) {
+// Invalid saved schedules are reported not run.
+func TestInvalidSavedSchedules(t *testing.T) {
 	f := setup(t)
 	f.s.DB.Exec(`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('33333333-3333-4333-8333-333333333333',?,?,'{"kind":"recurring","action":"explode"}',1,1)`,
 		f.serverID, friend.ID)
@@ -273,7 +276,8 @@ func TestInvalidSavedSchedulesAreReportedNotRun(t *testing.T) {
 
 func schedtimeGrace() int64 { return 5 * 60_000 }
 
-func TestWarningIsClaimedOnlyWhenTheClaimCommits(t *testing.T) {
+// Warning is claimed only when the claim commits.
+func TestWarningClaimCommits(t *testing.T) {
 	f := setup(t)
 	schedule, err := f.s.Create(ctx, admin, f.serverID, base)
 	if err != nil {
@@ -299,7 +303,8 @@ func TestWarningIsClaimedOnlyWhenTheClaimCommits(t *testing.T) {
 	}
 }
 
-func TestRunReadBeforeAnEditLeavesTheSlotToTheEdit(t *testing.T) {
+// Run read before an edit leaves the slot to the edit.
+func TestRunRacingAnEdit(t *testing.T) {
 	f := setup(t)
 	schedule, err := f.s.Create(ctx, friend, f.serverID, base)
 	if err != nil {
@@ -324,7 +329,8 @@ func TestRunReadBeforeAnEditLeavesTheSlotToTheEdit(t *testing.T) {
 	}
 }
 
-func TestWritesStopWhenAccessChangedAfterTheirChecks(t *testing.T) {
+// Writes stop when access changed after their checks.
+func TestWritesRecheckAccess(t *testing.T) {
 	f := setup(t)
 	before, err := authorityState(ctx, f.s.DB, f.serverID, friend.ID)
 	if err != nil {
@@ -354,7 +360,8 @@ func TestInternalErrorsLeaveTheSlotToRetry(t *testing.T) {
 	}
 }
 
-func TestScheduleRemovedRightAfterCreationIsNotFound(t *testing.T) {
+// Schedule removed right after creation is not found.
+func TestScheduleRemovedAfterCreate(t *testing.T) {
 	f := setup(t)
 	// The owner's account is deleted as soon as the schedule commits, which
 	// takes the schedule with it.

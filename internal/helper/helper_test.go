@@ -397,7 +397,8 @@ func TestFreeBytesCountsFundamentalBlocks(t *testing.T) {
 	}
 }
 
-func TestExtractionStopsWhenOtherWritersTakeTheReserve(t *testing.T) {
+// Extraction stops when other writers take the reserve.
+func TestExtractionKeepsReserve(t *testing.T) {
 	root := t.TempDir()
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
 	if _, code := restore(t, root, stage, "stage"); code != 0 {
@@ -429,7 +430,8 @@ func TestExtractionStopsWhenOtherWritersTakeTheReserve(t *testing.T) {
 	}
 }
 
-func TestAFullDiskDuringAWriteIsReportedAsFull(t *testing.T) {
+// A full disk during a write is reported as full.
+func TestExtractExitOnFullDisk(t *testing.T) {
 	for _, err := range []error{errFull, unix.ENOSPC, fmt.Errorf("sync: %w", unix.EDQUOT)} {
 		if status, message := extractExit(err); status != ExtractFullStatus || message != ExtractFull {
 			t.Error(err, status)

@@ -221,7 +221,8 @@ func (b *revokingBody) Read(buffer []byte) (int, error) {
 	return b.Reader.Read(buffer)
 }
 
-func TestSessionRevokedDuringTheBodyStopsTheAction(t *testing.T) {
+// Session revoked during the body stops the action.
+func TestSessionRevokedDuringBody(t *testing.T) {
 	p := newPages(t)
 	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
 	if err != nil {

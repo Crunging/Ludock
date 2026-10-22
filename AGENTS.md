@@ -28,7 +28,9 @@ reach in the browser. Write a Go unit test only when it is clearly the better
 fit: logic with many edge cases (time math, parsers, path and tar handling),
 requests the UI never sends (forged or cross-site requests, missing grants),
 and failures or races a journey can't trigger (a database error, a revocation
-between two steps).
+between two steps). Name Go tests after the code and behavior in a few words,
+such as `TestRestoreSpacePerDisk`, and describe the scenario in a comment above
+the test.
 
 Commit with Conventional Commits. Release Please owns versions,
 `CHANGELOG.md`, and `.release-please-manifest.json`; don't edit them or move

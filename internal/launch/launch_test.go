@@ -91,7 +91,8 @@ func fileCommand(root, operation, path string, extra map[string]any) []string {
 	return helper.Command("file", request)
 }
 
-func TestExecRunsHelpersAndCommitsUploadsOnlyAfterTrailer(t *testing.T) {
+// Exec runs helpers and commits uploads only after trailer.
+func TestExecAndUploadCommit(t *testing.T) {
 	_, client, id := setup(t)
 	root := t.TempDir()
 	out, err := Exec(ctx, client, id, ExecOptions{Cmd: fileCommand(root, "check", "", nil)})
@@ -212,7 +213,8 @@ func TestMountProof(t *testing.T) {
 	}
 }
 
-func TestPeriodicChecksAtMostOnceASecondAndKeepsARefusal(t *testing.T) {
+// Periodic checks at most once a second and keeps a refusal.
+func TestPeriodicCheckLimit(t *testing.T) {
 	calls, refuse := 0, false
 	check := Periodic(func() error {
 		calls++

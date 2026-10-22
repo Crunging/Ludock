@@ -124,7 +124,8 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 	}
 }
 
-func TestMaterialChangeSuspendsGrantsUntilReview(t *testing.T) {
+// Material change suspends grants until review.
+func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	s, servers := setup(t)
 	first := servers[slices.IndexFunc(servers, func(server identity.Server) bool { return server.GameType == "minecraft" })]
 	setGrant(t, s, operator.ID, first.ID, ServerView, ServerStop)
@@ -157,7 +158,8 @@ func TestMaterialChangeSuspendsGrantsUntilReview(t *testing.T) {
 	}
 }
 
-func TestAssertDistinguishesHiddenFromForbiddenAndAudits(t *testing.T) {
+// Assert distinguishes hidden from forbidden and audits.
+func TestAssertHiddenVersusForbidden(t *testing.T) {
 	s, servers := setup(t)
 	setGrant(t, s, viewer.ID, servers[0].ID, ServerView)
 	if _, err := s.Assert(ctx, viewer, servers[1].ID, ServerView); !apperr.Is(err, "SERVER_NOT_FOUND") {
@@ -179,7 +181,8 @@ func TestAssertDistinguishesHiddenFromForbiddenAndAudits(t *testing.T) {
 	}
 }
 
-func TestGrantsRequireTheAdminSessionStillValid(t *testing.T) {
+// Grants require the admin session still valid.
+func TestGrantsNeedAdminSession(t *testing.T) {
 	s, servers := setup(t)
 	if err := s.DB.DeleteSession(ctx, adminSession); err != nil {
 		t.Fatal(err)

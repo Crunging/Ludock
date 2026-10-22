@@ -67,7 +67,8 @@ func TestUploadChecks(t *testing.T) {
 	}
 }
 
-func TestFileSortKeepsFoldersFirstAndDashesLast(t *testing.T) {
+// File sort keeps folders first and dashes last.
+func TestFileSort(t *testing.T) {
 	entries := []helper.FileEntry{{Name: "map10", Type: "file", Size: 5, ModifiedAt: 3}, {Name: "link", Type: "symlink"},
 		{Name: "mods", Type: "directory", ModifiedAt: 1}, {Name: "map2", Type: "file", Size: 50, ModifiedAt: 2}}
 	names := func() string {

@@ -188,7 +188,8 @@ func TestRecoveryStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-func TestBackupSettingsNeedTheAdminSessionStillValid(t *testing.T) {
+// Backup settings need the admin session still valid.
+func TestBackupSettingsNeedAdminSession(t *testing.T) {
 	f := setup(t)
 	if err := f.jobs.DB.DeleteUserSessions(ctx, f.admin.ID); err != nil {
 		t.Fatal(err)
@@ -241,7 +242,8 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 	}
 }
 
-func TestRecoveryKeepsABackupWhoseRowCannotBeRead(t *testing.T) {
+// Recovery keeps a backup whose row cannot be read.
+func TestRecoveryWithUnreadableRow(t *testing.T) {
 	f := setup(t)
 	backup := f.run(t, "backup", nil)
 	archives := func() []string {
@@ -267,7 +269,8 @@ func TestRecoveryKeepsABackupWhoseRowCannotBeRead(t *testing.T) {
 	}
 }
 
-func TestInterruptedPruningIsNeverOfferedAndIsRetried(t *testing.T) {
+// Interrupted pruning is never offered and is retried.
+func TestInterruptedPruning(t *testing.T) {
 	f := setup(t)
 	if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 1, MaxBytes: 1 << 30},
 		f.admin, f.adminSession); err != nil {
@@ -291,7 +294,8 @@ func TestInterruptedPruningIsNeverOfferedAndIsRetried(t *testing.T) {
 	}
 }
 
-func TestBackupDeletionRevokedBeforeTheUnlinkKeepsTheBackup(t *testing.T) {
+// Backup deletion revoked before the unlink keeps the backup.
+func TestRevokedBackupDeletion(t *testing.T) {
 	f := setup(t)
 	id := f.run(t, "backup", nil).Result["backupId"].(string)
 	checks := 0
@@ -314,7 +318,8 @@ func TestBackupDeletionRevokedBeforeTheUnlinkKeepsTheBackup(t *testing.T) {
 	}
 }
 
-func TestUnremovedFailedArchiveIsRemovedInTheBackground(t *testing.T) {
+// Unremoved failed archive is removed in the background.
+func TestUnremovedArchiveCleanup(t *testing.T) {
 	f := setup(t)
 	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
@@ -339,7 +344,8 @@ func TestUnremovedFailedArchiveIsRemovedInTheBackground(t *testing.T) {
 	}
 }
 
-func TestUpdateCommandStopsWhenTheOwnerLosesAuthority(t *testing.T) {
+// Update command stops when the owner loses authority.
+func TestUpdateStopsOnLostAuthority(t *testing.T) {
 	f := setup(t)
 	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
 	started := make(chan struct{})
@@ -417,7 +423,8 @@ func spaceReports(f *fixture, free func(check int) int) *int {
 	return checks
 }
 
-func TestALossOfAuthorityIsReportedEvenWhenTheCommandSucceeds(t *testing.T) {
+// A loss of authority is reported even when the command succeeds.
+func TestAuthorityLostAsCommandEnds(t *testing.T) {
 	f := setup(t)
 	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
 	// The command finishes as the watcher sees the owner demoted.
@@ -441,7 +448,8 @@ func TestALossOfAuthorityIsReportedEvenWhenTheCommandSucceeds(t *testing.T) {
 	}
 }
 
-func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
+// Restore needs space for each root not the whole backup at each root.
+func TestRestoreSpacePerRoot(t *testing.T) {
 	f := setup(t)
 	backupID := twoRootBackup(t, f)
 	// Both roots share a filesystem with 10 MiB free, as both checks before
@@ -459,7 +467,8 @@ func TestRestoreNeedsSpaceForEachRootNotTheWholeBackupAtEachRoot(t *testing.T) {
 	}
 }
 
-func TestRootsSharingADiskMustFitTogetherBeforeTheServerStops(t *testing.T) {
+// Roots sharing a disk must fit together before the server stops.
+func TestRestoreSpacePerDisk(t *testing.T) {
 	f := setup(t)
 	backupID := twoRootBackup(t, f)
 	before, _ := f.jobs.Backups.List(ctx, f.serverID)
@@ -474,7 +483,8 @@ func TestRootsSharingADiskMustFitTogetherBeforeTheServerStops(t *testing.T) {
 	}
 }
 
-func TestARestoreThatCannotFitIsRefusedBeforeTheServerStops(t *testing.T) {
+// A restore that cannot fit is refused before the server stops.
+func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
 	f := setup(t)
 	backup := f.run(t, "backup", nil)
 	if backup.Status != ops.Succeeded {

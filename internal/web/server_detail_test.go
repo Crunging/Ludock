@@ -37,7 +37,8 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 	}
 }
 
-func TestMonitoringSettingsNeedAnAdministrator(t *testing.T) {
+// Monitoring settings need an administrator.
+func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView)
@@ -73,7 +74,8 @@ func TestBindingReviewNeedsAPendingReview(t *testing.T) {
 	}
 }
 
-func TestSelectedOperationFragmentStaysOnItsServer(t *testing.T) {
+// Selected operation fragment stays on its server.
+func TestOperationFragmentScope(t *testing.T) {
 	p := newPages(t)
 	job, _ := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
 		Kind: "restart", BindingRevision: 1})

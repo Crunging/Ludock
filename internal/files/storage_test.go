@@ -147,7 +147,8 @@ func TestAccessRecheckAndTargetChanges(t *testing.T) {
 	}
 }
 
-func TestFailedChangesRemoveTheirHelperBeforeReturning(t *testing.T) {
+// Failed changes remove their helper before returning.
+func TestFailedChangeRemovesHelper(t *testing.T) {
 	f := setup(t)
 	for name, change := range map[string]func() error{
 		"mkdir": func() error { return f.service.Mkdir(ctx, f.target, "root-0", "", "World", nil) },

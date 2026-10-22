@@ -246,7 +246,8 @@ func TestJSONLines(t *testing.T) {
 	}
 }
 
-func TestRemoveHelperStopsWriterBeforeGivingUp(t *testing.T) {
+// Remove helper stops writer before giving up.
+func TestRemoveHelperStopsWriter(t *testing.T) {
 	e, client := engine(t)
 	e.AddImage("ghcr.io/crunging/ludock@sha256:" + strings.Repeat("a", 64))
 	id, err := client.CreateHelper(ctx, docker.ContainerCreate{Image: "ghcr.io/crunging/ludock@sha256:" + strings.Repeat("a", 64)})

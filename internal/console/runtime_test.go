@@ -196,7 +196,8 @@ func TestNetworkConsoleHelperProtocol(t *testing.T) {
 	}
 }
 
-func TestAStalledCommandStartEndsAndIsReconciled(t *testing.T) {
+// A stalled command start ends and is reconciled.
+func TestStalledCommandStart(t *testing.T) {
 	engine, runtime, id := setup(t)
 	runtime.startLimit = 200 * time.Millisecond
 	// Docker accepts the start and never answers it.
@@ -215,7 +216,8 @@ func TestAStalledCommandStartEndsAndIsReconciled(t *testing.T) {
 	}
 }
 
-func TestAStalledHelperCreateEndsAndRemovesTheHelper(t *testing.T) {
+// A stalled helper create ends and removes the helper.
+func TestStalledHelperCreate(t *testing.T) {
 	engine, runtime, id := setup(t)
 	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
 	engine.AddImage(image)

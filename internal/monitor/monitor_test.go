@@ -60,7 +60,8 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	}
 }
 
-func TestIntentionalStopsAndOperationsSuppress(t *testing.T) {
+// Intentional stops and operations suppress.
+func TestMonitorSuppression(t *testing.T) {
 	s, events, server := setup(t)
 	s.SetIntentionalStop(ctx, server.ID, true)
 	s.Check(ctx, state("exited", ""), 1000)
@@ -83,7 +84,8 @@ func TestIntentionalStopsAndOperationsSuppress(t *testing.T) {
 	}
 }
 
-func TestDockerOutageIsReportedWithoutRebinding(t *testing.T) {
+// Docker outage is reported without rebinding.
+func TestDockerOutage(t *testing.T) {
 	s, events, server := setup(t)
 	s.Check(ctx, nil, 1000)
 	s.Check(ctx, nil, 70_000)
@@ -130,7 +132,8 @@ func TestNoAlertWithoutSavedState(t *testing.T) {
 	}
 }
 
-func TestUnreadableOperationsDoNotRaiseAnOutage(t *testing.T) {
+// Unreadable operations do not raise an outage.
+func TestUnreadableOperations(t *testing.T) {
 	s, events, server := setup(t)
 	s.Check(ctx, state("exited", ""), 1000)
 	if _, err := s.DB.Exec("ALTER TABLE operations RENAME TO operations_unreadable"); err != nil {

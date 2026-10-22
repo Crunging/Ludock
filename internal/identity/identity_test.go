@@ -39,7 +39,8 @@ func wantCode(t *testing.T, err error, code string) {
 	}
 }
 
-func TestBindingDigestCoversMaterialSettingsOnly(t *testing.T) {
+// Binding digest covers material settings only.
+func TestBindingDigestScope(t *testing.T) {
 	base := BindingDigest(observation(nil))
 	same := []func(*Observation){
 		func(o *Observation) { o.ContainerID, o.Name, o.DisplayName = "docker-b", "renamed", "Renamed" },
@@ -214,7 +215,8 @@ func TestMaterialChangesNeedReview(t *testing.T) {
 	}
 }
 
-func TestReviewSurvivesDisappearanceAndReversion(t *testing.T) {
+// Review survives disappearance and reversion.
+func TestReviewSurvivesDisappearance(t *testing.T) {
 	s := &Store{DB: dbtest.Open(t)}
 	original := reconcile(t, s, 0, observation(nil))[0]
 	reconcile(t, s, 0, observation(func(o *Observation) { o.GameType = "factorio" }))

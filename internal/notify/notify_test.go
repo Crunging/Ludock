@@ -187,7 +187,8 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 
 }
 
-func TestRevokedAdministratorCannotSaveAWebhook(t *testing.T) {
+// Revoked administrator cannot save a webhook.
+func TestRevokedAdminWebhook(t *testing.T) {
 	s := setup(t, func(*http.Request) (*http.Response, error) { return respond(204, "") })
 	if err := s.DB.DeleteUserSessions(ctx, "admin"); err != nil {
 		t.Fatal(err)
@@ -226,7 +227,8 @@ func TestSavingSettingsCancelsASendInFlight(t *testing.T) {
 	}
 }
 
-func TestConcurrentDeliveryListsDoNotHoldThePool(t *testing.T) {
+// Concurrent delivery lists do not hold the pool.
+func TestConcurrentDeliveryLists(t *testing.T) {
 	s := setup(t, func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
 	var wg sync.WaitGroup
 	failures := make(chan error, 16)
@@ -250,7 +252,8 @@ func TestConcurrentDeliveryListsDoNotHoldThePool(t *testing.T) {
 	}
 }
 
-func TestATestQueuedAsNotificationsAreTurnedOffIsRefused(t *testing.T) {
+// A test queued as notifications are turned off is refused.
+func TestQueueTestWhileDisabling(t *testing.T) {
 	s := setup(t, func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
 	// Another administrator turns notifications off after the check.
 	testHook = func(string) {
