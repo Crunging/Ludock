@@ -113,13 +113,8 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, enab
 		if webhookURL != nil {
 			value = *webhookURL
 		} else {
-			var saved settings
-			var raw string
-			err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
-			if err == nil {
-				err = json.Unmarshal([]byte(raw), &saved)
-			}
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			saved, err := savedIn(ctx, tx)
+			if err != nil {
 				return err
 			}
 			value = saved.WebhookURL
@@ -305,10 +300,39 @@ func (s *Service) Stop() {
 	s.retries.Wait()
 }
 
+var errDisabled = apperr.New("NOTIFICATIONS_DISABLED", 400, "Save an enabled Discord webhook before sending or retrying a notification")
+
 func (s *Service) assertEnabled(ctx context.Context) error {
 	configuration := s.Configuration(ctx)
 	if !configuration.Enabled || !configuration.Configured {
-		return apperr.New("NOTIFICATIONS_DISABLED", 400, "Save an enabled Discord webhook before sending or retrying a notification")
+		return errDisabled
+	}
+	return nil
+}
+
+// savedIn reads the settings through tx.
+func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
+	var saved settings
+	var raw string
+	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return saved, nil
+	}
+	if err == nil {
+		err = json.Unmarshal([]byte(raw), &saved)
+	}
+	return saved, err
+}
+
+// assertEnabledIn repeats assertEnabled in the transaction that queues, so
+// notifications turned off meanwhile queue nothing to send once re-enabled.
+func assertEnabledIn(ctx context.Context, tx *sql.Tx) error {
+	saved, err := savedIn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !saved.Enabled || saved.WebhookURL == "" {
+		return errDisabled
 	}
 	return nil
 }
@@ -319,8 +343,14 @@ func (s *Service) QueueTest(ctx context.Context, adminID, tokenHash string) (*De
 	if err := s.assertEnabled(ctx); err != nil {
 		return nil, err
 	}
+	if testHook != nil {
+		testHook("checked")
+	}
 	var id string
 	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		if err := assertEnabledIn(ctx, tx); err != nil {
+			return err
+		}
 		var err error
 		id, err = s.enqueue(ctx, tx, "test:"+identity.NewUUID(), "Ludock test notification: Discord delivery is working.", "test")
 		return err
@@ -354,6 +384,9 @@ func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*De
 	// changes last_attempt_at or the counters, and must not be queued again.
 	changed := int64(0)
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		if err := assertEnabledIn(ctx, tx); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
       WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
 			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
@@ -559,3 +592,7 @@ func (s *Service) send(ctx context.Context, client *http.Client, webhook, payloa
 	}
 	return responseFailure(response.StatusCode)
 }
+
+// testHook, set only by tests, runs at named points so a test can force an
+// interleaving.
+var testHook func(point string)

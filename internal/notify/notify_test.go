@@ -249,3 +249,20 @@ func TestConcurrentDeliveryListsDoNotHoldThePool(t *testing.T) {
 		t.Fatal("a delivery list stalled:", err)
 	}
 }
+
+func TestATestQueuedAsNotificationsAreTurnedOffIsRefused(t *testing.T) {
+	s := setup(t, func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
+	// Another administrator turns notifications off after the check.
+	testHook = func(string) {
+		if err := s.Configure(ctx, "admin", adminSession, false, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { testHook = nil })
+	if _, err := s.QueueTest(ctx, "admin", adminSession); !apperr.Is(err, "NOTIFICATIONS_DISABLED") {
+		t.Fatal(err)
+	}
+	if deliveries, _ := s.Deliveries(ctx); len(deliveries) != 0 {
+		t.Fatal("queued a test to send once notifications are re-enabled")
+	}
+}
