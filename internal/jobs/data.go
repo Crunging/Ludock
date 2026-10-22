@@ -816,7 +816,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 					return nil, err
 				}
 				if err := j.Backups.Helpers.ExtractToStage(ctx, row.Destination(), row.ID, data.Container, root, destination, stageName(job),
-					row.Roots, settings.MaxBytes, row.Checksum, assertAccess); err != nil {
+					row.Roots, settings.MaxBytes, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
 					return nil, err
 				}
 			}

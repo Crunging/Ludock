@@ -425,8 +425,9 @@ var errCapacity = fail("BACKUP_CAPACITY", "The archive exceeds the configured si
 func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte)) (map[string]int64, error) {
 	names := map[string]bool{}
 	found := map[string]bool{}
-	// staged is each root's share of the archive, header and padding
-	// included, which bounds the space its extraction needs.
+	// staged estimates each root's extracted size in 4 KiB filesystem
+	// blocks, at least one per entry, so a restore that cannot fit is
+	// refused before the server stops. Extraction enforces the reserve.
 	staged := map[string]int64{}
 	var total, read int64
 	err := tarstream.Walk(input, func(header *tarstream.Header, _ io.Reader) error {
@@ -447,7 +448,7 @@ func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 			found[parts[1]] = true
 		}
 		if len(parts) >= 2 {
-			staged[parts[1]] += 512 + (header.Size+511)/512*512
+			staged[parts[1]] += max(4096, (header.Size+4095)/4096*4096)
 		}
 		return nil
 	}, func(chunk []byte) error {
@@ -973,12 +974,14 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	return size, hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
+
 // ExtractToStage streams one root of an archive into the helper's restore
 // stage. The checksum covers the whole archive, so a changed archive is
 // detected before any game data is replaced.
 func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID string, root Root, rootPath, stage string,
-	roots []Root, maxBytes int64, checksum string, assertAccess func() error) error {
-	request := map[string]any{"root": rootPath, "stage": stage, "maxBytes": maxBytes}
+	roots []Root, maxBytes, reserveBytes int64, checksum string, assertAccess func() error) error {
+	request := map[string]any{"root": rootPath, "stage": stage, "maxBytes": maxBytes, "reserveBytes": reserveBytes}
 	execID, err := h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
 		AttachStdin: true, AttachStdout: true, AttachStderr: true})
 	if err != nil {
@@ -1004,9 +1007,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	go func() {
 		err := docker.Demux(conn, nil, nil)
 		result := h.waitForExit(helperID, execID, expired)
-		if err == nil && (result == nil || *result.ExitCode != 0) {
-			err = fail("RESTORE_EXTRACTION", "Restore extraction rejected a changed or unsafe data path.")
-		} else if err != nil {
+		switch {
+		case result != nil && *result.ExitCode == helper.ExtractFullStatus:
+			err = errStagingCapacity
+		case err != nil || result == nil || *result.ExitCode != 0:
 			err = fail("RESTORE_EXTRACTION", "Restore extraction rejected a changed or unsafe data path.")
 		}
 		completed <- err
@@ -1080,7 +1084,10 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	}
 	if err != nil {
 		conn.Close()
-		<-completed
+		// A helper that stopped at the reserve is why writing to it failed.
+		if extracted := <-completed; errors.Is(extracted, errStagingCapacity) {
+			return extracted
+		}
 		if _, ok := apperr.As(err); !ok {
 			err = fail("INVALID_BACKUP", "The backup archive is invalid or truncated.")
 		}

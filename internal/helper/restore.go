@@ -410,13 +410,41 @@ func metadata(descriptor fd, uid, gid, mode int64, mtime *float64) error {
 	return nil
 }
 
+// ExtractFull is printed, with exit status ExtractFullStatus, when an entry
+// would take the destination's free space below the reserve.
+const (
+	ExtractFull       = "Restore extraction stopped: the disk reached the configured reserve."
+	ExtractFullStatus = 3
+)
+
+var errFull = errors.New("restore reserve reached")
+
+// room fails unless the destination keeps reserve bytes free after an entry
+// of size bytes, counted in whole filesystem blocks plus one for its inode
+// and directory entry: the staging estimate cannot bound allocation.
+func (x *extractor) room(size, reserve int64) error {
+	var stat unix.Statfs_t
+	if err := unix.Fstatfs(int(x.destination), &stat); err != nil {
+		return err
+	}
+	block := max(int64(stat.Bsize), 1)
+	needed := (size+block-1)/block*block + block
+	if available := int64(min(uint64(stat.Bavail)*uint64(block), 1<<62)); available < needed+reserve {
+		return errFull
+	}
+	return nil
+}
+
 // RunRestoreExtract writes a staged restore from stdin: each entry is one
 // JSON record line followed by exactly its file bytes. Directories get their
 // metadata last so file writes cannot change their times or modes.
 func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	x := &extractor{}
 	defer x.t.closeAll()
-	if err := x.run(argument, stdin); err != nil {
+	if err := x.run(argument, stdin); errors.Is(err, errFull) {
+		io.WriteString(stderr, ExtractFull)
+		return ExtractFullStatus
+	} else if err != nil {
 		io.WriteString(stderr, ExtractFailure)
 		return 1
 	}
@@ -426,11 +454,16 @@ func RunRestoreExtract(argument string, stdin io.Reader, stdout, stderr io.Write
 
 func (x *extractor) run(argument string, stdin io.Reader) error {
 	var request struct {
-		Root     string  `json:"root"`
-		Stage    string  `json:"stage"`
-		MaxBytes float64 `json:"maxBytes"`
+		Root         string   `json:"root"`
+		Stage        string   `json:"stage"`
+		MaxBytes     float64  `json:"maxBytes"`
+		ReserveBytes *float64 `json:"reserveBytes"`
 	}
 	if json.Unmarshal([]byte(argument), &request) != nil || !strings.HasPrefix(request.Root, "/") || !extractStage.MatchString(request.Stage) {
+		return errUnsafe
+	}
+	reserve, ok := safeInteger(request.ReserveBytes, 0, 1<<53-1)
+	if !ok {
 		return errUnsafe
 	}
 	rootParts, err := recordParts(request.Root[1:])
@@ -490,6 +523,9 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		names, err := recordParts(record.Name)
 		if err != nil || len(names) > 64 {
 			return errUnsafe
+		}
+		if err := x.room(size, reserve); err != nil {
+			return err
 		}
 		for _, name := range names {
 			if strings.HasPrefix(name, ".ludock-restore-") {

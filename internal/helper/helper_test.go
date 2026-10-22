@@ -245,7 +245,7 @@ func TestRestoreSteps(t *testing.T) {
 		`{"name":"world/level.dat","type":"file","size":8,"uid":` + strconv.Itoa(os.Getuid()) + `,"gid":` + strconv.Itoa(os.Getgid()) + `,"mode":420,"mtime":1700000000.5}`,
 	}
 	input := records[0] + "\n" + records[1] + "\nrestored"
-	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 100})
+	argument, _ := json.Marshal(map[string]any{"root": root, "stage": stage, "maxBytes": 100, "reserveBytes": 0})
 	var stdout, stderr bytes.Buffer
 	if code := RunRestoreExtract(string(argument), strings.NewReader(input), &stdout, &stderr); code != 0 || stdout.String() != "ok" {
 		t.Fatal(stderr.String())
