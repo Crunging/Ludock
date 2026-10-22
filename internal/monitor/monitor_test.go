@@ -158,3 +158,26 @@ func TestPolicySavedDuringACheckIsKept(t *testing.T) {
 		t.Fatal("restored an outage under the old policy")
 	}
 }
+
+func TestAStopRecordedDuringACheckIsKept(t *testing.T) {
+	s, events, server := setup(t)
+	s.SetIntentionalStop(ctx, server.ID, true)
+	// The server was started outside Ludock; a Ludock stop finishes after
+	// the check read the row but before it saved the start it observed.
+	testHook = func(string) {
+		testHook = nil
+		s.Suppress(ctx, server.ID)
+		s.SetIntentionalStop(ctx, server.ID, true)
+	}
+	t.Cleanup(func() { testHook = nil })
+	s.Check(ctx, state("running", ""), db.Now())
+	if availability, _ := s.Get(ctx, server.ID); !availability.State.IntentionallyStopped {
+		t.Fatal("cleared a stop recorded during the check")
+	}
+	later := db.Now() + 1_000_000
+	s.Check(ctx, state("exited", ""), later)
+	s.Check(ctx, state("exited", ""), later+200_000)
+	if len(events.events) != 0 {
+		t.Fatal(events.events)
+	}
+}

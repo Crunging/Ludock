@@ -246,9 +246,18 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		running := server.Status == identity.StatusActive && found && server.ContainerID != "" && container.State == "running"
 		// An owner can start the container outside Ludock. Resume monitoring
 		// even if startup never passes its health check.
+		if testHook != nil {
+			testHook("read")
+		}
+		// The flag is cleared only if no stop was recorded since the row was
+		// read; a newer stop is kept and the server is checked next tick.
 		if running && r.intentional == 1 {
-			if _, err := s.DB.ExecContext(ctx, "UPDATE availability SET intentionally_stopped=0 WHERE server_id=?", server.ID); err != nil {
+			changed, err := s.transition(ctx, server.ID, r, "intentionally_stopped=0")
+			if err != nil {
 				log.Warn("Could not save a server's availability; it will be checked again")
+				continue
+			}
+			if !changed {
 				continue
 			}
 			r.intentional = 0
@@ -322,5 +331,9 @@ func (s *Service) transition(ctx context.Context, serverID string, r *row, set s
 	changed, err := result.RowsAffected()
 	return changed == 1, err
 }
+
+// testHook, set only by tests, runs at named points in Check so a test can
+// force an interleaving.
+var testHook func(point string)
 
 func bytesReader(data []byte) *bytes.Reader { return bytes.NewReader(data) }
