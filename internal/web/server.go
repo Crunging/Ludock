@@ -41,6 +41,8 @@ type Server struct {
 	streamsMu sync.Mutex
 	// streamsClosed closes when shutdown begins, ending every event stream.
 	streamsClosed chan struct{}
+	// openStreams counts event streams per user and per session.
+	openStreams streamCounts
 }
 
 func (s *Server) streamsDone() <-chan struct{} {

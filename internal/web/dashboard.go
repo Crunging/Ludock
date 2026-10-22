@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/authz"
@@ -232,12 +233,64 @@ func requestKey(r *http.Request) string {
 // events streams server changes as SSE. Only logical IDs are sent, after a
 // fresh discovery snapshot and grant check; the stream ends when the session
 // does.
+// Event streams stay open for a session, so like consoles they are
+// limited: a tab needs one.
+const (
+	maxStreams           = 512
+	maxStreamsPerUser    = 32
+	maxStreamsPerSession = 16
+)
+
+type streamCounts struct {
+	mu            sync.Mutex
+	total         int
+	user, session map[string]int
+}
+
+func (c *streamCounts) admit(userID, tokenHash string) (int, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.user == nil {
+		c.user, c.session = map[string]int{}, map[string]int{}
+	}
+	switch {
+	case c.session[tokenHash] >= maxStreamsPerSession:
+		return http.StatusTooManyRequests, "Event stream session limit reached"
+	case c.user[userID] >= maxStreamsPerUser:
+		return http.StatusTooManyRequests, "Event stream user limit reached"
+	case c.total >= maxStreams:
+		return http.StatusServiceUnavailable, "Event stream limit reached"
+	}
+	c.total++
+	c.user[userID]++
+	c.session[tokenHash]++
+	return 0, ""
+}
+
+func (c *streamCounts) release(userID, tokenHash string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.total--
+	if c.user[userID]--; c.user[userID] == 0 {
+		delete(c.user, userID)
+	}
+	if c.session[tokenHash]--; c.session[tokenHash] == 0 {
+		delete(c.session, tokenHash)
+	}
+}
+
 func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	user := request.User()
+	if status, message := s.openStreams.admit(user.ID, request.Principal.TokenHash); status != 0 {
+		http.Error(w, message, status)
+		return
+	}
+	defer s.openStreams.release(user.ID, request.Principal.TokenHash)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 	messages := make(chan string, 64)

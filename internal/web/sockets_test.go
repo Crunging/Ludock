@@ -162,3 +162,47 @@ func TestShutdownEndsEventStreams(t *testing.T) {
 		t.Fatal("event stream stayed open after shutdown began")
 	}
 }
+
+// Each event stream stays open for the session, so one session's streams
+// are capped.
+func TestEventStreamLimit(t *testing.T) {
+	p := newPages(t)
+	server := httptest.NewServer(p.handler)
+	t.Cleanup(server.Close)
+	open := func() *http.Response {
+		request, _ := http.NewRequest("GET", server.URL+"/events", nil)
+		request.Header.Set("Cookie", auth.SessionCookie+"="+p.admin.Token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	var streams []*http.Response
+	for range maxStreamsPerSession {
+		response := open()
+		if response.StatusCode != http.StatusOK {
+			t.Fatal(response.Status)
+		}
+		streams = append(streams, response)
+	}
+	if extra := open(); extra.StatusCode != http.StatusTooManyRequests {
+		t.Fatal("opened a stream past the session limit:", extra.Status)
+	}
+	// Closing one frees its place.
+	streams[0].Body.Close()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		response := open()
+		if response.StatusCode == http.StatusOK {
+			response.Body.Close()
+			break
+		}
+		response.Body.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("a closed stream kept its place")
+		}
+	}
+	for _, response := range streams[1:] {
+		response.Body.Close()
+	}
+}
