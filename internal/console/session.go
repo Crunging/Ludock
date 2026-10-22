@@ -128,10 +128,11 @@ func (a *Access) Allowed(required authz.Capability) bool {
 	ctx := context.Background()
 	user := a.validate(ctx)
 	var capabilities []authz.Capability
+	var binding *identity.Server
 	if user != nil {
-		capabilities, _ = a.sessions.Authz.Effective(ctx, user, a.ServerID)
+		// One query reads the grant and binding together.
+		capabilities, binding, _ = a.sessions.Authz.Access(ctx, user, a.ServerID)
 	}
-	binding, _ := a.sessions.Identity.Get(ctx, a.ServerID)
 	if user == nil || !slices.Contains(capabilities, a.capability) || !slices.Contains(capabilities, required) ||
 		binding == nil || binding.BindingRevision != a.revision || binding.ContainerID != a.Context.Logical.ContainerID {
 		a.channel.Close(ClosePolicy, "Server access changed")

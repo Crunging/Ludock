@@ -189,27 +189,38 @@ func (s *Service) UserGrant(ctx context.Context, userID, serverID string) (*Gran
 
 // Effective returns the actor's current capabilities on a server.
 func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID string) ([]Capability, error) {
-	user, err := s.CurrentActor(ctx, actor)
-	if err != nil || user == nil {
-		return nil, err
+	capabilities, _, err := s.Access(ctx, actor, serverID)
+	return capabilities, err
+}
+
+// Access returns the actor's current capabilities on a server and the
+// server they apply to, read together in one query. The server is nil when
+// it does not exist.
+func (s *Service) Access(ctx context.Context, actor *db.SessionUser, serverID string) ([]Capability, *identity.Server, error) {
+	if actor == nil {
+		return nil, nil, nil
 	}
-	server, err := s.Servers.Get(ctx, serverID)
-	if err != nil || server == nil {
-		return nil, err
-	}
-	if user.Role == db.RoleAdmin || !usable(server) {
-		return roleCapabilities(user, server, nil), nil
-	}
-	var raw string
-	err = s.DB.QueryRowContext(ctx, "SELECT capabilities_json FROM server_grants WHERE user_id = ? AND server_id = ?",
-		user.ID, server.ID).Scan(&raw)
+	var role, grant sql.NullString
+	var disabled sql.NullInt64
+	server, err := identity.ScanServer(s.DB.QueryRowContext(ctx, `SELECT u.role, u.disabled, g.capabilities_json, `+
+		identity.ServerColumns("s")+` FROM logical_servers s LEFT JOIN users u ON u.id = ?
+    LEFT JOIN server_grants g ON g.user_id = u.id AND g.server_id = s.id WHERE s.id = ?`, actor.ID, serverID),
+		&role, &disabled, &grant)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return roleCapabilities(user, server, parseCapabilities(raw)), nil
+	if !role.Valid || disabled.Int64 != 0 {
+		return nil, server, nil
+	}
+	user := &db.SessionUser{ID: actor.ID, Role: db.Role(role.String)}
+	var assigned []Capability
+	if grant.Valid {
+		assigned = parseCapabilities(grant.String)
+	}
+	return roleCapabilities(user, server, assigned), server, nil
 }
 
 // EffectiveAll is Effective for many servers, reading the account and its
@@ -289,7 +300,7 @@ var errInsufficient = apperr.New("FORBIDDEN", 403, "Insufficient server permissi
 
 // Assert requires a capability and returns the server.
 func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) (*identity.Server, error) {
-	capabilities, err := s.Effective(ctx, actor, serverID)
+	capabilities, server, err := s.Access(ctx, actor, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -301,11 +312,7 @@ func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID st
 		s.auditDenial(ctx, actor, serverID, capability)
 		return nil, errInsufficient
 	}
-	server, err := s.Servers.Get(ctx, serverID)
-	if err == nil && server == nil {
-		err = ErrServerNotFound
-	}
-	return server, err
+	return server, nil
 }
 
 func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) {

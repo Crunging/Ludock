@@ -203,14 +203,25 @@ const serverColumns = `id, host_id, external_identity, container_id, display_nam
 
 type scanner interface{ Scan(dest ...any) error }
 
-func scanServer(row scanner) (*Server, error) {
+// ServerColumns are the columns ScanServer reads, from the logical_servers
+// table under alias.
+func ServerColumns(alias string) string {
+	return alias + "." + strings.ReplaceAll(strings.Join(strings.Fields(serverColumns), " "), ", ", ", "+alias+".")
+}
+
+// ScanServer reads ServerColumns into a server after the extra destinations.
+func ScanServer(row scanner, extra ...any) (*Server, error) {
+	return scanServer(row, extra...)
+}
+
+func scanServer(row scanner, extra ...any) (*Server, error) {
 	var server Server
 	var container, pendingFingerprint, pendingGame sql.NullString
 	var status string
 	var review int
-	if err := row.Scan(&server.ID, &server.HostID, &server.ExternalIdentity, &container, &server.DisplayName,
+	if err := row.Scan(append(extra, &server.ID, &server.HostID, &server.ExternalIdentity, &container, &server.DisplayName,
 		&server.GameType, &status, &server.BindingRevision, &server.BindingFingerprint, &pendingFingerprint,
-		&pendingGame, &review, &server.FirstSeenAt, &server.LastSeenAt); err != nil {
+		&pendingGame, &review, &server.FirstSeenAt, &server.LastSeenAt)...); err != nil {
 		return nil, err
 	}
 	if !ValidID(server.ID) || (container.Valid && !ValidContainerID(container.String)) {
