@@ -3,6 +3,8 @@ package launch
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"path"
 	"regexp"
@@ -89,7 +91,12 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 		timeout = "0"
 		labels["ludock.operation"] = operationID
 	}
-	id, err := client.CreateHelper(ctx, docker.ContainerCreate{
+	// The create is bounded on its own: a backup or restore may already have
+	// stopped the game and hold its locks. The name finds a validator Docker
+	// created without answering.
+	name := "ludock-validator-" + randomSuffix()
+	creating, cancel := context.WithTimeout(context.WithoutCancel(ctx), createLimit)
+	id, err := client.CreateHelper(creating, docker.ContainerCreate{Name: name,
 		Image: image, Entrypoint: []string{helper.Binary}, Cmd: helper.Command("mount-proof", sources, timeout)[1:],
 		User: "0", Labels: labels, Env: HelperEnv,
 		HostConfig: &docker.HostConfig{
@@ -99,7 +106,12 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 			PidsLimit: helperPids, Memory: 128 * 1024 * 1024, NanoCpus: helperCPUNano,
 		},
 	})
+	cancel()
 	if err != nil {
+		// Validators only read, so removal need not hold the caller.
+		removing, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		client.RemoveHelper(removing, name)
+		done()
 		return nil, ErrUnverifiedMount
 	}
 	cleanup := func() {
@@ -163,4 +175,13 @@ func AssertMountIdentities(ctx context.Context, client *docker.Client, container
 		return ErrUnverifiedMount
 	}
 	return nil
+}
+
+// createLimit bounds a validator's create; tests shorten it.
+var createLimit = 2 * time.Minute
+
+func randomSuffix() string {
+	bytes := make([]byte, 8)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }

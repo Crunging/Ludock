@@ -241,3 +241,33 @@ func TestPeriodicCheckLimit(t *testing.T) {
 		t.Fatal("allowed again after a refusal")
 	}
 }
+
+// Docker creates a mount validator and never answers, while a backup holds
+// the stopped server's locks.
+func TestStalledValidatorCreate(t *testing.T) {
+	engine, client, _ := setup(t)
+	engine.AddImage(pinnedImage)
+	previous := createLimit
+	createLimit = 200 * time.Millisecond
+	t.Cleanup(func() { createLimit = previous })
+	engine.HangCreates = 1
+	done := make(chan error, 1)
+	go func() {
+		_, err := MountProof(ctx, client, &Images{Docker: client, Configured: pinnedImage},
+			[]Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}, "op-1")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrUnverifiedMount) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("kept waiting for Docker to create the validator")
+	}
+	for _, id := range engine.SortedIDs() {
+		if c := engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] == "mount-validator" {
+			t.Fatal("left the validator Docker created")
+		}
+	}
+}
