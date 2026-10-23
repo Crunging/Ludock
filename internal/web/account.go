@@ -66,7 +66,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request, request *
 	err := s.Auth.RevokeSession(r.Context(), request.Principal, r.PathValue("id"), request.Client)
 	if err == nil {
 		if current, _ := s.principal(r); current == nil {
-			clearSessionCookie(w)
+			clearSessionCookie(w, r)
 			s.loginRedirect(w, r)
 			return
 		}
