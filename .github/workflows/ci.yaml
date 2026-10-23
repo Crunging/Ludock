@@ -58,7 +58,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps --only-shell chromium
+      # The runner image already has Chromium's libraries. Installing them
+      # with --with-deps adds an apt download that can stall for many minutes.
+      - run: npx playwright install --only-shell chromium
       - run: npx playwright test
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -108,7 +110,7 @@ jobs:
         working-directory: e2e
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps --only-shell chromium
+          npx playwright install --only-shell chromium
       - name: Run container journeys
         working-directory: e2e
         run: npx playwright test -c docker.config.mjs
