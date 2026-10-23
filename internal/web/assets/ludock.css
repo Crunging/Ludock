@@ -429,8 +429,11 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .server-list {
   display: grid; column-gap: 22px;
   grid-template-columns: 44px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) auto;
-  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper);
 }
+/* The list doesn't clip, so row menus can open past its bottom edge; its ends round themselves instead. */
+.server-list > :first-child { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.server-list > :last-child { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 .server-list--backups { grid-template-columns: 44px minmax(170px, 1.3fr) minmax(120px, 0.8fr) minmax(236px, 1.2fr) minmax(96px, 0.7fr) auto; }
 .server-list__header, .server-row, .server-list__empty {
   grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
@@ -884,6 +887,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
   .harbor__role { display: none; }
   .server-list { display: block; }
   .server-list__header { display: none; }
+  .server-list__header + * { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .server-list__header + :last-child { border-radius: var(--radius-lg); }
   .server-row {
     display: grid; grid-template-columns: 18px 1fr; column-gap: 14px; row-gap: 10px; padding: 16px;
   }
