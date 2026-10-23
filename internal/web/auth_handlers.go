@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
@@ -16,13 +17,16 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 		SameSite: http.SameSiteStrictMode, Secure: auth.IsExternalHTTPS(r)})
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: auth.SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: auth.SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: auth.IsExternalHTTPS(r)})
 }
 
-// safeNext keeps redirects on this site.
+// safeNext keeps redirects on this site. Browsers drop tabs and newlines from
+// URLs, so "/\t/evil.example" would leave it; control characters are refused.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") || strings.HasPrefix(next, "/login") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsRune(next, '\\') ||
+		strings.ContainsFunc(next, unicode.IsControl) || strings.HasPrefix(next, "/login") {
 		return "/"
 	}
 	return next
@@ -119,7 +123,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, request *Request
 		s.fail(w, r, request, apperr.New("LOGOUT_FAILED", 503, "Ludock could not end this session. Try signing out again."))
 		return
 	}
-	clearSessionCookie(w)
+	clearSessionCookie(w, r)
 	w.Header().Set("Clear-Site-Data", `"cache", "cookies", "storage"`)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
