@@ -25,8 +25,15 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 // safeNext keeps redirects on this site. Browsers drop tabs and newlines from
 // URLs, so "/\t/evil.example" would leave it; control characters are refused.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsRune(next, '\\') ||
-		strings.ContainsFunc(next, unicode.IsControl) || strings.HasPrefix(next, "/login") {
+	if len(next) == 0 || next[0] != '/' {
+		return "/"
+	}
+	// "//host" and "/\host" leave the site. The backslash case is also refused
+	// below; this explicit form is the one CodeQL recognizes.
+	if len(next) > 1 && (next[1] == '/' || next[1] == '\\') {
+		return "/"
+	}
+	if strings.ContainsRune(next, '\\') || strings.ContainsFunc(next, unicode.IsControl) || strings.HasPrefix(next, "/login") {
 		return "/"
 	}
 	return next
