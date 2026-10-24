@@ -109,7 +109,10 @@
       button.disabled = false;
     }
     var form = event.detail.elt;
-    if (event.detail.successful && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
+    // htmx leaves "successful" unset when the response moves the page with
+    // HX-Location, which follows queued work.
+    var moved = event.detail.xhr && event.detail.xhr.status < 400 && event.detail.xhr.getResponseHeader("HX-Location");
+    if ((event.detail.successful || moved) && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
       form.closest("dialog").close();
     }
   });

@@ -996,7 +996,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if activeStatus(operation.Status) {
+		if ActiveStatus(operation.Status) {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, " hx-get=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -1032,7 +1032,7 @@ func OperationSummary(o OperationDetailView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if activeStatus(operation.Status) {
+		if ActiveStatus(operation.Status) {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 84, " role=\"status\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err

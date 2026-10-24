@@ -8,6 +8,8 @@ import (
 
 // BackupsView is the backups tab of a server.
 type BackupsView struct {
+	// Operation is a backup or restore the tab follows.
+	Operation            ActivityView
 	ServerID, ServerName string
 	Admin                bool
 	CanRead, CanCreate   bool
@@ -25,6 +27,17 @@ type BackupsView struct {
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
 
 templ BackupsTab(b BackupsView) {
+	if b.Operation.SelectedID != "" {
+		@SelectedOperation(b.Operation)
+	}
+	// The rest reloads when the followed operation finishes, so readiness,
+	// the create button, and the list catch up.
+	<div id="backups-tab" hx-get={ string(detailURL(b.ServerID, "tab=backups")) } hx-select="#backups-tab" hx-trigger="operation-finished from:body" hx-swap="outerHTML" hx-disinherit="*">
+		@backupsTabBody(b)
+	</div>
+}
+
+templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
 		if b.CanCreate {

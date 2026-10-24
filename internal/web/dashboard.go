@@ -230,8 +230,7 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 			return
 		}
 		if fromDetail(r) {
-			// Follow the queued work in the server's activity.
-			w.Header().Set("HX-Redirect", "/servers/"+resolved.Logical.ID+"?tab=activity&operation="+job.ID)
+			followOperation(w, resolved.Logical.ID, job)
 		}
 		changed(w)
 	}

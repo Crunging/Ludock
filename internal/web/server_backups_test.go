@@ -36,7 +36,7 @@ func TestCreateBackupNeedsTheGrant(t *testing.T) {
 	}
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
 	response := p.action("/servers/"+p.server+"/backups", operator, nil)
-	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("HX-Redirect"), "tab=activity&operation=") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("HX-Location"), "tab=backups&operation=") {
 		t.Fatal(response.StatusCode, response.Header)
 	}
 	if kind, _ := p.queued(t); kind != "backup" {

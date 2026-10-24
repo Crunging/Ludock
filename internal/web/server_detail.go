@@ -80,7 +80,7 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 // activity reads the recent operations of a server, filtered in the page.
 func (s *Server) activity(r *http.Request, request *Request, id string, query url.Values) views.ActivityView {
 	a := views.ActivityView{ServerID: id, Status: query.Get("status"), Kind: query.Get("kind"), SelectedID: query.Get("operation"),
-		Admin: request.User().Role == db.RoleAdmin}
+		Admin: request.User().Role == db.RoleAdmin, Tab: "activity"}
 	operations, _, err := s.App.History.Operations(r.Context(), request.User(), history.Query{ServerID: id, From: -1, To: -1})
 	if err != nil {
 		a.Error = publicMessage(err)
@@ -141,6 +141,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
+	d.Operation = r.URL.Query().Get("operation")
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"
 	render(w, r, http.StatusOK, views.ServerDetailPage(page, *d))
@@ -152,6 +153,7 @@ func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Req
 		s.fail(w, r, request, err)
 		return
 	}
+	d.Operation = r.URL.Query().Get("operation")
 	render(w, r, http.StatusOK, views.DetailLive(*d))
 }
 
@@ -173,8 +175,16 @@ func (s *Server) detailOperation(w http.ResponseWriter, r *http.Request, request
 		s.fail(w, r, request, err)
 		return
 	}
-	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation")}
+	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation"), Admin: request.User().Role == db.RoleAdmin, Tab: "activity"}
+	if r.URL.Query().Get("tab") == "backups" {
+		a.Tab = "backups"
+	}
 	s.selectOperation(r, &a)
+	// The panel polls only while the work is active, so this is the first
+	// answer since it finished: the tab and the server's state catch up.
+	if a.Selected != nil && !views.ActiveStatus(a.Selected.Status) {
+		w.Header().Set("HX-Trigger", "operation-finished, servers-changed")
+	}
 	render(w, r, http.StatusOK, views.SelectedOperation(a))
 }
 

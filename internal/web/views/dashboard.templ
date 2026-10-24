@@ -252,7 +252,7 @@ templ ServerCard(row ServerRow) {
 			@ServerState(server.State, server.Health, server.Exit)
 			if operation := server.ActiveOperation; operation != nil {
 				<span role="status">
-					<a class="text-link" href={ templ.SafeURL("/servers/" + server.ID + "?tab=activity&operation=" + operation.ID) }>{ operationKindLabel(operation.Kind) }: { OperationLabel(operation.Status, operation.Phase) }</a>
+					<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) }>{ Capitalize(operation.Kind) }: { OperationLabel(operation.Status, operation.Phase) }</a>
 				</span>
 			}
 			if server.StateSince != 0 {
@@ -312,16 +312,6 @@ templ ServerCard(row ServerRow) {
 			}
 		</div>
 	</article>
-}
-
-func operationKindLabel(kind string) string {
-	switch kind {
-	case "restart":
-		return "Restart"
-	case "stop":
-		return "Stop"
-	}
-	return kind
 }
 
 // LifecycleDialog confirms a stop or restart; target receives errors.
