@@ -8,6 +8,7 @@ import (
 	"context"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -33,6 +34,8 @@ var (
 		"Docker Swarm manages this container. Update its service through Swarm.")
 	errDependents = apperr.New("SERVICE_DEPENDENCY", 409,
 		"Another container shares this server's network, process, or IPC namespace and would lose it. Update them together through the tool that created them.")
+	errVolumeUnknown = apperr.New("VOLUME_UNKNOWN", 409,
+		"Docker doesn't say which volume one of this server's mounts uses, so Ludock can't keep its data. Recreate it through the tool that created it.")
 	errImageGone = apperr.New("IMAGE_UNAVAILABLE", 409,
 		"Docker no longer has the image this server's container was created from, so Ludock can't tell its settings from the image's defaults. Recreate it once through the tool that created it.")
 )
@@ -103,6 +106,9 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 	if err := s.assertNoDependents(ctx, spec); err != nil {
 		return nil, err
 	}
+	if err := s.nameVolumes(ctx, spec); err != nil {
+		return nil, err
+	}
 	inherited := map[string]bool{}
 	for _, entry := range host.VolumesFrom {
 		source, _, _ := strings.Cut(entry, ":")
@@ -162,6 +168,33 @@ func (s *Service) assertNoDependents(ctx context.Context, spec *docker.Container
 				return errDependents
 			}
 		}
+	}
+	return nil
+}
+
+// nameVolumes fills in the names Docker leaves out of some volume mounts,
+// such as the anonymous volume of a destination-only bind, from the volume
+// mounted at the same place. A volume Ludock can't name could not be
+// reused, so the update is refused instead.
+func (s *Service) nameVolumes(ctx context.Context, spec *docker.ContainerSpec) error {
+	var volumes []docker.VolumeInspect
+	for index, mount := range spec.Mounts {
+		if mount.Type != "volume" || mount.Name != "" {
+			continue
+		}
+		if volumes == nil {
+			var err error
+			if volumes, err = s.Docker.ListVolumes(ctx); err != nil {
+				return err
+			}
+		}
+		found := slices.IndexFunc(volumes, func(volume docker.VolumeInspect) bool {
+			return volume.Mountpoint != "" && volume.Mountpoint == mount.Source
+		})
+		if found < 0 {
+			return errVolumeUnknown
+		}
+		spec.Mounts[index].Name = volumes[found].Name
 	}
 	return nil
 }

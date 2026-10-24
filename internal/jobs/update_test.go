@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -362,5 +363,39 @@ func TestUpdateRecoveryNeverPromotesUncheckedReplacement(t *testing.T) {
 	})
 	if job.Status != ops.Interrupted || !strings.Contains(job.Error, "administrator attention") || f.engine.Container(replacement) != nil {
 		t.Fatalf("%+v", job)
+	}
+}
+
+// A destination-only bind from an API client makes an anonymous volume that
+// Docker reports without its name. The update finds the volume by where it
+// is mounted and has the replacement's bind name it, so the data carries
+// over.
+func TestUpdateKeepsVolumeOfDestinationOnlyBind(t *testing.T) {
+	f := setup(t)
+	f.engine.AddImage("itzg/minecraft-server")
+	original, err := f.jobs.Docker.Create(ctx, "state", "", map[string]any{"Image": "itzg/minecraft-server",
+		"Labels": map[string]string{"ludock.enable": "true"}, "HostConfig": map[string]any{"Binds": []string{"/state"}}})
+	if err != nil || f.jobs.Docker.Start(ctx, original) != nil {
+		t.Fatal(err)
+	}
+	volume := f.engine.Container(original).Mounts[0]
+	if volume.Name != "" {
+		t.Fatal("the fake should leave the name out, as Docker does")
+	}
+	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	views, _ := f.jobs.Servers.List(ctx, f.admin)
+	for _, view := range views {
+		if view.Name == "state" {
+			f.serverID = view.ID
+		}
+	}
+	if job := f.run(t, "update", map[string]any{"request": map[string]any{"skipBackupConfirmation": "state"}}); job.Status != ops.Succeeded {
+		t.Fatalf("%+v", job)
+	}
+	current := f.containerNamed("state")
+	if current == nil || current.ID == original || len(current.Mounts) != 1 || current.Mounts[0].Name != path.Base(path.Dir(volume.Source)) {
+		t.Fatalf("volume not carried over: %+v", current)
 	}
 }

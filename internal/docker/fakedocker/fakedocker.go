@@ -270,6 +270,14 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.create(w, r)
 	case path == "/events":
 		e.streamEvents(w, r)
+	case path == "/volumes" && r.Method == "GET":
+		e.mu.Lock()
+		volumes := []docker.VolumeInspect{}
+		for _, info := range e.volumes {
+			volumes = append(volumes, info)
+		}
+		e.mu.Unlock()
+		writeJSON(w, 200, map[string]any{"Volumes": volumes})
 	case path == "/volumes/create" && r.Method == "POST":
 		var body struct{ Name string }
 		json.NewDecoder(r.Body).Decode(&body)
@@ -834,6 +842,15 @@ func (e *Engine) mountsOf(body docker.ContainerCreate, config map[string]any) []
 		for _, bind := range body.HostConfig.Binds {
 			parts := strings.Split(bind, ":")
 			if len(parts) < 2 {
+				// A destination-only bind is an anonymous volume, which Docker
+				// reports without its name.
+				name := newID()
+				info := docker.VolumeInspect{Name: name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data"}
+				e.mu.Lock()
+				e.volumes[name] = info
+				e.mu.Unlock()
+				mounts = append(mounts, docker.MountPoint{Type: "volume", Source: info.Mountpoint, Destination: parts[0], RW: true})
+				mounted[parts[0]] = true
 				continue
 			}
 			mount := docker.MountPoint{Type: "bind", Source: parts[0], Destination: parts[1], RW: !slices.Contains(parts[2:], "ro")}

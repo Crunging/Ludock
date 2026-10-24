@@ -190,9 +190,12 @@ func (p *Plan) Replacement(image *docker.ImageInspect, operationID string) (map[
 		host["Links"] = encode(links)
 	}
 
-	mounts, err := p.mounts()
+	binds, mounts, err := p.mounts()
 	if err != nil {
 		return nil, err
+	}
+	if binds != nil {
+		host["Binds"] = encode(binds)
 	}
 	if mounts != nil {
 		host["Mounts"] = encode(mounts)
@@ -295,16 +298,15 @@ func (p *Plan) Platform() string {
 // RestartPolicy is the container's restart policy as Docker reports it.
 func (p *Plan) RestartPolicy() json.RawMessage { return p.Spec.HostConfig["RestartPolicy"] }
 
-// mounts returns HostConfig.Mounts with every anonymous volume mounted by
-// name at its destination, or nil when nothing changes. A volume is
-// anonymous when no bind or mount names its source: one the image declared,
-// one from `docker run -v /path`, or Compose's `- /path`.
-func (p *Plan) mounts() ([]map[string]any, error) {
-	var binds []string
-	var mounts []map[string]any
+// mounts returns HostConfig.Binds and Mounts with every anonymous volume
+// mounted by name at its destination, or nil for a list that doesn't change.
+// A volume is anonymous when no bind or mount names its source: one the
+// image declared, one from `docker run -v /path`, Compose's `- /path`, or an
+// API client's destination-only bind.
+func (p *Plan) mounts() (binds []string, mounts []map[string]any, err error) {
 	json.Unmarshal(p.Spec.HostConfig["Binds"], &binds)
 	if raw := p.Spec.HostConfig["Mounts"]; len(raw) > 0 && json.Unmarshal(raw, &mounts) != nil {
-		return nil, fmt.Errorf("invalid mounts")
+		return nil, nil, fmt.Errorf("invalid mounts")
 	}
 	named := map[string]bool{}
 	for _, bind := range binds {
@@ -318,10 +320,17 @@ func (p *Plan) mounts() ([]map[string]any, error) {
 			named[path.Clean(target)] = true
 		}
 	}
-	changed := false
+	bindsChanged, mountsChanged := false, false
 	for _, mount := range p.Spec.Mounts {
 		destination := path.Clean(mount.Destination)
 		if mount.Type != "volume" || mount.Name == "" || named[destination] {
+			continue
+		}
+		// A destination-only bind takes no options; Docker would refuse the
+		// same destination in both lists, so the bind names the volume.
+		if index := slices.IndexFunc(binds, func(bind string) bool { return path.Clean(bind) == destination }); index >= 0 {
+			binds[index] = mount.Name + ":" + binds[index]
+			bindsChanged = true
 			continue
 		}
 		index := slices.IndexFunc(mounts, func(entry map[string]any) bool {
@@ -332,19 +341,22 @@ func (p *Plan) mounts() ([]map[string]any, error) {
 		// even where another container also supplies the destination.
 		if index >= 0 {
 			mounts[index]["Source"] = mount.Name
-			changed = true
+			mountsChanged = true
 			continue
 		}
 		if p.inherited[destination] {
 			continue
 		}
-		changed = true
+		mountsChanged = true
 		mounts = append(mounts, map[string]any{"Type": "volume", "Source": mount.Name, "Target": mount.Destination, "ReadOnly": !mount.RW})
 	}
-	if !changed {
-		return nil, nil
+	if !bindsChanged {
+		binds = nil
 	}
-	return mounts, nil
+	if !mountsChanged {
+		mounts = nil
+	}
+	return binds, mounts, nil
 }
 
 type endpoint struct {

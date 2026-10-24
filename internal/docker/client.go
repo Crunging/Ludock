@@ -556,6 +556,13 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInspect
 	return &info, c.getJSON(ctx, "/volumes/"+escaped, nil, &info)
 }
 
+// ListVolumes lists every volume.
+func (c *Client) ListVolumes(ctx context.Context) ([]VolumeInspect, error) {
+	var result struct{ Volumes []VolumeInspect }
+	err := c.getJSON(ctx, "/volumes", nil, &result)
+	return result.Volumes, err
+}
+
 // CreateVolume creates a named volume.
 func (c *Client) CreateVolume(ctx context.Context, name string) (*VolumeInspect, error) {
 	var info VolumeInspect

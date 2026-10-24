@@ -160,6 +160,14 @@ func TestReplacementKeepsAnonymousVolumes(t *testing.T) {
 	if !reflect.DeepEqual(mountsOf(body), want) {
 		t.Errorf("mounts = %v, want %v", mountsOf(body), want)
 	}
+	// An API client's destination-only bind made it; Docker refuses one
+	// destination in both lists, so the bind itself names the volume.
+	body = replacement(t, spec(map[string]any{"Binds": []string{"/state", "worlds:/worlds"}},
+		docker.MountPoint{Type: "volume", Name: "a1b2", Destination: "/state", RW: true},
+		docker.MountPoint{Type: "volume", Name: "worlds", Destination: "/worlds", RW: true}))
+	if binds := body["HostConfig"].(map[string]any)["Binds"]; mountsOf(body) != nil || !reflect.DeepEqual(binds, []any{"a1b2:/state", "worlds:/worlds"}) {
+		t.Errorf("binds = %v, mounts = %v", binds, mountsOf(body))
+	}
 	// Volumes from another container come from it again; mounting them too
 	// would duplicate the destination.
 	inherited := spec(map[string]any{"VolumesFrom": []string{"data"}}, docker.MountPoint{Type: "volume", Name: "c3d4", Destination: "/shared", RW: true})
