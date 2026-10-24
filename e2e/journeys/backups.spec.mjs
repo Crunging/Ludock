@@ -7,8 +7,23 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
   await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  // A readiness check that answers while the confirmation is open leaves
+  // the button it would send in place, so confirming still starts the backup.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route("**/backups/preflight", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Check again" }).click();
   await page.getByRole("button", { name: "Create backup" }).click();
-  await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+  const confirm = page.getByRole("dialog", { name: "Back up Survival?" });
+  await expect(confirm).toBeVisible();
+  const preflight = page.waitForResponse("**/backups/preflight");
+  release();
+  await preflight;
+  await page.unroute("**/backups/preflight");
+  await confirm.getByRole("button", { name: "Create backup" }).click();
   // Progress shows where the backup started, and the tab catches up once
   // it finishes.
   await expect(page).toHaveURL(/\?tab=backups&operation=/);

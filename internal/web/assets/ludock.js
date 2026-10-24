@@ -380,6 +380,34 @@
     }, { once: true });
   });
 
+  // In-page navigation on a server's page (tabs and links that swap
+  // #detail-body): only the newest one swaps, so a slow earlier response
+  // can't replace the page under a later click. A failed one loads the
+  // address as a page, so the error shows in full instead of an empty body.
+  var navigation = 0;
+  function navigates(detail) {
+    var target = detail.target || (detail.requestConfig && detail.requestConfig.target);
+    return target && target.id === "detail-body";
+  }
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    if (navigates(event.detail) && event.detail.xhr) event.detail.xhr.ludockNavigation = ++navigation;
+  });
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    if (!navigates(event.detail) || !event.detail.xhr) return;
+    if (event.detail.xhr.ludockNavigation !== navigation) {
+      event.detail.shouldSwap = false;
+    } else if (event.detail.xhr.status >= 400) {
+      event.detail.shouldSwap = false;
+      window.location.assign(event.detail.pathInfo.finalRequestPath || event.detail.pathInfo.requestPath);
+    }
+  });
+
+  // An out-of-band swap never replaces the element a confirmation will send.
+  document.addEventListener("htmx:oobBeforeSwap", function (event) {
+    var target = event.detail.target;
+    if (confirming && target && (target === confirming || target.contains(confirming))) event.detail.shouldSwap = false;
+  });
+
   // A refresh never replaces a select whose choice it didn't see, such as a
   // filter changed while the list was loading: that choice's own request is
   // queued, and htmx drops queued requests whose element left the page.

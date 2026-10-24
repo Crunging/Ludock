@@ -58,4 +58,31 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
   await page.goForward();
   await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+
+  // Quick clicks: the last tab wins even when the one before it answers
+  // first. Both requests are held until both are sent.
+  const holds = {};
+  const sent = (name) => new Promise((resolve) => { holds[name] = { resolve }; });
+  const sentBoth = Promise.all([sent("schedules"), sent("activity")]);
+  const gates = {};
+  await page.route(/\?tab=(schedules|activity)$/, async (route) => {
+    const name = new URL(route.request().url()).searchParams.get("tab");
+    const gate = new Promise((resolve) => { gates[name] = resolve; });
+    holds[name].resolve();
+    await gate;
+    await route.continue();
+  });
+  await page.getByRole("tab", { name: "Schedules" }).click();
+  await page.getByRole("tab", { name: "Activity" }).click();
+  await sentBoth;
+  const schedules = page.waitForResponse(/\?tab=schedules$/);
+  gates.schedules();
+  await schedules;
+  const activityAnswer = page.waitForResponse(/\?tab=activity$/);
+  gates.activity();
+  await activityAnswer;
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\?tab=activity$/);
+  await page.unroute(/\?tab=(schedules|activity)$/);
 });
