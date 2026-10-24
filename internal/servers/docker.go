@@ -4,6 +4,8 @@ package servers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -164,7 +166,7 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 	}
 	var eligible []docker.ContainerSummary
 	for _, container := range containers {
-		if games.Evaluate(container.Image, container.Labels).Eligible {
+		if games.Evaluate(container.Image, container.Labels).Eligible && !isReplacement(container.Names) {
 			eligible = append(eligible, container)
 		}
 	}
@@ -231,6 +233,31 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 		}
 	}
 	return observed, nil
+}
+
+// An update creates and checks its replacement container under a temporary
+// name before removing the original. Until then the original stays the
+// server, so the replacement is not discovered as a second one.
+const replacementSuffix = "-ludock-update-"
+
+var replacementName = regexp.MustCompile(`-ludock-update-[0-9a-f]{8}$`)
+
+// ReplacementName is the temporary name of an update's replacement for the
+// container named name. Long names are shortened to fit Docker's limit.
+func ReplacementName(name, operationID string) string {
+	sum := sha256.Sum256([]byte(operationID))
+	suffix := replacementSuffix + hex.EncodeToString(sum[:4])
+	name = strings.TrimPrefix(name, "/")
+	return name[:min(len(name), 128-len(suffix))] + suffix
+}
+
+func isReplacement(names []string) bool {
+	for _, name := range names {
+		if replacementName.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Observer) observeSummary(ctx context.Context, container docker.ContainerSummary, previous map[string]inspection) (*Observed, *inspection, error) {
@@ -417,7 +444,6 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 		GameType: container.GameType, GameConfiguration: map[string]string{}}
 	if project, service, number, ok := games.ComposeLabels(labels); ok {
 		observation.Compose = &identity.ComposeIdentity{Project: project, Service: service, ContainerNumber: number}
-		observation.ComposeSourceLabels = games.ComposeSourceLabels(labels)
 	}
 	adapter := games.ResolveAdapter(container.GameType, container.Labels)
 	credentials := map[string]bool{}

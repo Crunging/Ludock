@@ -38,8 +38,6 @@ type Config struct {
 	// BackupRoots are approved backup destinations (LUDOCK_BACKUP_ROOTS,
 	// ':'-separated, default /backups; set it empty to turn backups off).
 	BackupRoots []string
-	// ComposeRoots are approved Compose source folders (LUDOCK_COMPOSE_ROOTS).
-	ComposeRoots []string
 	// DockerConfig is a read-only Docker client config folder for private
 	// registries (LUDOCK_DOCKER_CONFIG).
 	DockerConfig string
@@ -143,9 +141,6 @@ func Load() (Config, error) {
 	}
 	var err error
 	if c.BackupRoots, err = pathList("LUDOCK_BACKUP_ROOTS", backups); err != nil {
-		problems = append(problems, err)
-	}
-	if c.ComposeRoots, err = pathList("LUDOCK_COMPOSE_ROOTS", os.Getenv("LUDOCK_COMPOSE_ROOTS")); err != nil {
 		problems = append(problems, err)
 	}
 	if c.SensitivePaths, err = pathList("LUDOCK_SENSITIVE_PATHS", os.Getenv("LUDOCK_SENSITIVE_PATHS")); err != nil {

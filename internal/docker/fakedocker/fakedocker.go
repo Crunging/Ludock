@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +30,16 @@ type Container struct {
 	docker.ContainerInspect
 	// Created is the create request of a container made through the API.
 	CreateRequest docker.ContainerCreate
+	// ExtraConfig holds configuration fields ContainerInspect doesn't model,
+	// such as Cmd and Volumes; inspection reports them inside Config.
+	ExtraConfig map[string]any
+	// HostConfig and Networks are reported on inspection.
+	HostConfig map[string]any
+	Networks   map[string]docker.EndpointSettings
+	// ImageManifestDescriptor is reported on inspection when set.
+	ImageManifestDescriptor *docker.ManifestDescriptor
+	// Platform is the platform a create request selected.
+	Platform string
 	// Logs are emitted on /logs as stdout lines.
 	Logs []string
 	// Stats is returned by /stats.
@@ -47,8 +59,12 @@ type Engine struct {
 	order      []string
 	volumes    map[string]docker.VolumeInspect
 	images     map[string]string
-	execs      map[string]*exec
-	events     []chan []byte
+	// imageConfigs are the container defaults of each image ID.
+	imageConfigs map[string]map[string]any
+	// pulls are the image IDs pulling a reference yields.
+	pulls  map[string]string
+	execs  map[string]*exec
+	events []chan []byte
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
@@ -91,7 +107,8 @@ func Start(dir string) (*Engine, error) {
 		return nil, err
 	}
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
-		images: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
+		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, pulls: map[string]string{},
+		execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
 	engine.server = &http.Server{Handler: http.HandlerFunc(engine.serve)}
 	go engine.server.Serve(listener)
 	return engine, nil
@@ -262,8 +279,13 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.mu.Unlock()
 		writeJSON(w, 201, info)
 	case path == "/images/create" && r.Method == "POST":
+		reference := r.URL.Query().Get("fromImage")
 		e.mu.Lock()
-		e.images[r.URL.Query().Get("fromImage")] = "sha256:" + strings.Repeat("1", 64)
+		pulled, ok := e.pulls[reference]
+		if !ok {
+			pulled = "sha256:" + strings.Repeat("1", 64)
+		}
+		e.images[reference] = pulled
 		e.mu.Unlock()
 		w.Write([]byte(`{"status":"Pulled"}` + "\n"))
 	case container.MatchString(path):
@@ -291,11 +313,19 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		reference := image.FindStringSubmatch(path)[1]
 		e.mu.Lock()
 		id, ok := e.images[reference]
+		// Every image ID a container reports exists.
+		if !ok && strings.HasPrefix(reference, "sha256:") {
+			id, ok = reference, true
+		}
+		config := e.imageConfigs[id]
+		if variant, ok := e.imageConfigs[id+" "+r.URL.Query().Get("platform")]; ok {
+			config = variant
+		}
 		e.mu.Unlock()
 		if !ok {
 			fail(w, 404)
 		} else {
-			writeJSON(w, 200, map[string]string{"Id": id})
+			writeJSON(w, 200, map[string]any{"Id": id, "Config": config})
 		}
 	default:
 		fail(w, 404)
@@ -306,6 +336,30 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 func (e *Engine) AddImage(reference string) {
 	e.mu.Lock()
 	e.images[reference] = "sha256:" + strings.Repeat("2", 64)
+	e.mu.Unlock()
+}
+
+// SetImageConfig sets the container defaults of an image ID, as its
+// Dockerfile would.
+func (e *Engine) SetImageConfig(id string, config map[string]any) {
+	e.mu.Lock()
+	e.imageConfigs[id] = config
+	e.mu.Unlock()
+}
+
+// SetVariantConfig sets the container defaults of one platform variant of
+// an image ID, which inspection returns when asked for that platform.
+func (e *Engine) SetVariantConfig(id string, platform docker.Platform, config map[string]any) {
+	encoded, _ := json.Marshal(platform)
+	e.mu.Lock()
+	e.imageConfigs[id+" "+string(encoded)] = config
+	e.mu.Unlock()
+}
+
+// SetPull makes pulling reference yield the image ID id.
+func (e *Engine) SetPull(reference, id string) {
+	e.mu.Lock()
+	e.pulls[reference] = id
 	e.mu.Unlock()
 }
 
@@ -327,25 +381,49 @@ func (e *Engine) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
+	raw, _ := io.ReadAll(r.Body)
 	var body docker.ContainerCreate
-	if json.NewDecoder(r.Body).Decode(&body) != nil {
+	var fields map[string]any
+	if json.Unmarshal(raw, &body) != nil || json.Unmarshal(raw, &fields) != nil {
 		fail(w, 400)
 		return
 	}
+	name := r.URL.Query().Get("name")
 	e.mu.Lock()
-	_, known := e.images[body.Image]
+	imageID, known := e.images[body.Image]
+	defaults := e.imageConfigs[imageID]
+	taken := name != "" && e.find(name) != nil
 	e.mu.Unlock()
 	if !known {
 		fail(w, 404)
 		return
 	}
-	id := e.AddContainer(GameOptions{Name: r.URL.Query().Get("name"), Image: body.Image, Labels: body.Labels, Env: body.Env})
+	if taken {
+		fail(w, 409)
+		return
+	}
+	host, _ := fields["HostConfig"].(map[string]any)
+	var networking struct {
+		EndpointsConfig map[string]docker.EndpointSettings
+	}
+	if encoded, err := json.Marshal(fields["NetworkingConfig"]); err == nil {
+		json.Unmarshal(encoded, &networking)
+	}
+	delete(fields, "HostConfig")
+	delete(fields, "NetworkingConfig")
+	config := mergeDefaults(fields, defaults)
+	var labels map[string]string
+	var env []string
+	remarshal(config["Labels"], &labels)
+	remarshal(config["Env"], &env)
+	mounts := e.mountsOf(body, config)
+	id := e.AddContainer(GameOptions{Name: name, Image: body.Image, Labels: labels, Env: env})
 	e.Update(id, func(c *Container) {
+		c.Image = imageID
 		c.Config.OpenStdin, c.Config.StdinOnce, c.Config.Tty = body.OpenStdin, body.StdinOnce, body.Tty
-		c.CreateRequest = body
-		for _, mount := range mountsOf(body) {
-			c.Mounts = append(c.Mounts, mount)
-		}
+		c.CreateRequest, c.ExtraConfig, c.HostConfig, c.Networks = body, config, host, networking.EndpointsConfig
+		c.Platform = r.URL.Query().Get("platform")
+		c.Mounts = append(c.Mounts, mounts...)
 	})
 	e.mu.Lock()
 	hang := e.HangCreates > 0
@@ -358,6 +436,101 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, map[string]string{"Id": id})
+}
+
+func remarshal(value, target any) {
+	if encoded, err := json.Marshal(value); err == nil {
+		json.Unmarshal(encoded, target)
+	}
+}
+
+// mergeDefaults applies an image's defaults to a create request as Docker
+// does.
+func mergeDefaults(config, image map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range config {
+		result[key] = value
+	}
+	set := func(key string) bool {
+		value, ok := result[key]
+		if !ok || value == nil || value == "" {
+			return false
+		}
+		if list, isList := value.([]any); isList {
+			return len(list) > 0
+		}
+		return true
+	}
+	if !set("Entrypoint") && !set("Cmd") {
+		result["Cmd"] = image["Cmd"]
+	}
+	for _, key := range []string{"Entrypoint", "WorkingDir", "User", "StopSignal", "Healthcheck"} {
+		if !set(key) && image[key] != nil {
+			result[key] = image[key]
+		}
+	}
+	var env, imageEnv []string
+	remarshal(result["Env"], &env)
+	remarshal(image["Env"], &imageEnv)
+	var merged []string
+	for _, entry := range imageEnv {
+		key, _, _ := strings.Cut(entry, "=")
+		if !slices.ContainsFunc(env, func(own string) bool { return strings.HasPrefix(own, key+"=") || own == key }) {
+			merged = append(merged, entry)
+		}
+	}
+	result["Env"] = append(merged, env...)
+	for _, key := range []string{"Labels", "Volumes", "ExposedPorts"} {
+		union := map[string]any{}
+		imageValues, _ := image[key].(map[string]any)
+		ownValues, _ := result[key].(map[string]any)
+		for name, value := range imageValues {
+			union[name] = value
+		}
+		for name, value := range ownValues {
+			union[name] = value
+		}
+		result[key] = union
+	}
+	return result
+}
+
+// inspection is the container's /json body.
+func (c *Container) inspection() map[string]any {
+	var result map[string]any
+	remarshal(c.ContainerInspect, &result)
+	config, _ := result["Config"].(map[string]any)
+	for key, value := range c.ExtraConfig {
+		if _, modeled := config[key]; !modeled {
+			config[key] = value
+		}
+	}
+	host := c.HostConfig
+	if host == nil {
+		// Docker reports the binds that made a container's bind and named
+		// volume mounts.
+		binds := []string{}
+		for _, mount := range c.Mounts {
+			source := mount.Source
+			if mount.Type == "volume" {
+				source = mount.Name
+			}
+			bind := source + ":" + mount.Destination
+			if !mount.RW {
+				bind += ":ro"
+			}
+			binds = append(binds, bind)
+		}
+		host = map[string]any{"NetworkMode": "bridge", "Binds": binds}
+	}
+	result["HostConfig"] = host
+	if settings, ok := result["NetworkSettings"].(map[string]any); ok {
+		settings["Networks"] = c.Networks
+	}
+	if c.ImageManifestDescriptor != nil {
+		result["ImageManifestDescriptor"] = c.ImageManifestDescriptor
+	}
+	return result
 }
 
 func (e *Engine) find(reference string) *Container {
@@ -384,9 +557,36 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	switch {
 	case action == "/json" && r.Method == "GET":
-		info := c.ContainerInspect
+		info := c.inspection()
 		e.mu.Unlock()
 		writeJSON(w, 200, info)
+	case action == "/update" && r.Method == "POST":
+		if c.State.Status == "dead" {
+			e.mu.Unlock()
+			fail(w, 409)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if c.HostConfig == nil {
+			c.HostConfig = c.inspection()["HostConfig"].(map[string]any)
+		}
+		if policy, ok := body["RestartPolicy"]; ok {
+			c.HostConfig["RestartPolicy"] = policy
+		}
+		e.mu.Unlock()
+		writeJSON(w, 200, map[string]any{"Warnings": []string{}})
+	case action == "/rename" && r.Method == "POST":
+		name := r.URL.Query().Get("name")
+		if other := e.find(name); other != nil && other != c {
+			e.mu.Unlock()
+			fail(w, 409)
+			return
+		}
+		c.Name = "/" + name
+		e.emitLocked("rename", id)
+		e.mu.Unlock()
+		w.WriteHeader(204)
 	case action == "/start" && r.Method == "POST":
 		if c.State.Running {
 			e.mu.Unlock()
@@ -394,6 +594,12 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			return
 		}
 		c.State.Status, c.State.Running, c.State.StartedAt = "running", true, now
+		// Healthchecks pass at once.
+		if check, _ := c.ExtraConfig["Healthcheck"].(map[string]any); check != nil {
+			if test, _ := check["Test"].([]any); len(test) > 0 && test[0] != "NONE" {
+				c.State.Health = &docker.HealthState{Status: "healthy"}
+			}
+		}
 		e.emitLocked("start", id)
 		hook := e.OnStart
 		e.mu.Unlock()
@@ -408,6 +614,11 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			return
 		}
 		c.State.Status, c.State.Running, c.State.FinishedAt, c.State.ExitCode = "exited", false, now, 0
+		// Docker releases a stopped container's addresses.
+		for name, endpoint := range c.Networks {
+			endpoint.IPAddress, endpoint.MacAddress = "", ""
+			c.Networks[name] = endpoint
+		}
 		e.emitLocked("stop", id)
 		e.emitLocked("die", id)
 		e.mu.Unlock()
@@ -608,14 +819,43 @@ func (e *Engine) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func mountsOf(body docker.ContainerCreate) []docker.MountPoint {
-	if body.HostConfig == nil {
-		return nil
-	}
+// mountsOf lists the mounts Docker would report for a created container:
+// its mounts and binds, and an anonymous volume for each other declared
+// volume.
+func (e *Engine) mountsOf(body docker.ContainerCreate, config map[string]any) []docker.MountPoint {
 	var mounts []docker.MountPoint
-	for _, mount := range body.HostConfig.Mounts {
-		mounts = append(mounts, docker.MountPoint{Type: mount.Type, Source: mount.Source, Destination: mount.Target,
-			RW: !mount.ReadOnly, Name: mount.Source})
+	mounted := map[string]bool{}
+	if body.HostConfig != nil {
+		for _, mount := range body.HostConfig.Mounts {
+			mounts = append(mounts, docker.MountPoint{Type: mount.Type, Source: mount.Source, Destination: mount.Target,
+				RW: !mount.ReadOnly, Name: mount.Source})
+			mounted[mount.Target] = true
+		}
+		for _, bind := range body.HostConfig.Binds {
+			parts := strings.Split(bind, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			mount := docker.MountPoint{Type: "bind", Source: parts[0], Destination: parts[1], RW: !slices.Contains(parts[2:], "ro")}
+			if !strings.HasPrefix(parts[0], "/") {
+				mount.Type, mount.Name = "volume", parts[0]
+			}
+			mounts = append(mounts, mount)
+			mounted[parts[1]] = true
+		}
+	}
+	volumes, _ := config["Volumes"].(map[string]any)
+	destinations := slices.Sorted(maps.Keys(volumes))
+	for _, destination := range destinations {
+		if mounted[destination] {
+			continue
+		}
+		name := newID()
+		info := docker.VolumeInspect{Name: name, Driver: "local", Mountpoint: "/var/lib/docker/volumes/" + name + "/_data"}
+		e.mu.Lock()
+		e.volumes[name] = info
+		e.mu.Unlock()
+		mounts = append(mounts, docker.MountPoint{Type: "volume", Source: info.Mountpoint, Destination: destination, RW: true, Name: name})
 	}
 	return mounts
 }

@@ -103,7 +103,8 @@ func Capitalize(value string) string {
 }
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
-	"stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server"}
+	"stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
+	"pulling": "Pulling image", "creating": "Creating updated container", "replacing": "Replacing previous container"}
 
 // OperationLabel describes an operation's progress.
 func OperationLabel(status, phase string) string {

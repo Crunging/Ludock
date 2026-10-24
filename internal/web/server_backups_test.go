@@ -9,6 +9,7 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 )
 
 func (p *pages) action(target string, principal *auth.Principal, values url.Values) *http.Response {
@@ -109,16 +110,20 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusBadRequest {
 		t.Fatal(response.StatusCode)
 	}
-	// Without Compose labels there is nothing to update.
-	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode < 400 {
-		t.Fatal(response.StatusCode)
-	}
 	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", operator, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if !strings.Contains(panel, "Pull a newer image through the tool that created this container") || strings.Contains(panel, "/updates") {
+	if !strings.Contains(panel, "Pulling a newer image needs an administrator") || strings.Contains(panel, "/updates") {
 		t.Fatal(panel)
 	}
+	// Docker removes a --rm container when it stops, so it can't be replaced:
+	// the form is not offered and a forged request is refused.
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"AutoRemove": true} })
 	panel = p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if !strings.Contains(panel, "Update container image") || !strings.Contains(panel, "Check again") {
+	if !strings.Contains(panel, "removes this container when it stops") || !strings.Contains(panel, "Check again") || strings.Contains(panel, "/updates") {
 		t.Fatal(panel)
+	}
+	values.Set("skipBackupConfirmation", "valheim")
+	values.Set("createBackup", "false")
+	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode != http.StatusConflict {
+		t.Fatal(response.StatusCode)
 	}
 }

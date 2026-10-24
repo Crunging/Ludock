@@ -49,9 +49,6 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *R
 	view := views.SettingsView{
 		Connection: views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
 		Backups:    s.backupSettingsView(r),
-		// The roots are host paths, so the page says only whether any are set.
-		ComposeConfigured: len(s.App.Config.ComposeRoots) > 0,
-		ComposeOK:         s.App.Compose.Snapshots.Runner.Available(r.Context()),
 		Notifications: views.NotificationSettingsView{Configured: notifications.Configured,
 			Enabled: notifications.Enabled},
 	}
@@ -208,8 +205,7 @@ func (s *Server) queueNotification(retry bool) func(http.ResponseWriter, *http.R
 
 func (s *Server) diagnosticsPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	diagnostics, err := s.App.Observer.Diagnostics(r.Context())
-	d := views.DiagnosticsView{DockerConnected: err == nil, Diagnostics: diagnostics,
-		ComposeOK: s.App.Compose.Snapshots.Runner.Available(r.Context())}
+	d := views.DiagnosticsView{DockerConnected: err == nil, Diagnostics: diagnostics}
 	if err := s.recheckAdmin(r.Context(), request); err != nil {
 		s.fail(w, r, request, err)
 		return

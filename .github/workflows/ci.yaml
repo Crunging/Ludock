@@ -85,7 +85,7 @@ jobs:
   container:
     name: Container (${{ matrix.platform }})
     # The built image against the runner's disposable Docker daemon: hardened
-    # runtime, helper containers, backups, consoles, Compose updates, recovery.
+    # runtime, helper containers, backups, consoles, image updates, recovery.
     strategy:
       fail-fast: false
       matrix:

@@ -11,8 +11,6 @@ import (
 type SettingsView struct {
 	Connection        ConnectionSettings
 	Backups           BackupSettingsView
-	ComposeConfigured bool
-	ComposeOK         bool
 	Notifications     NotificationSettingsView
 }
 
@@ -49,7 +47,6 @@ templ SettingsPage(page Page, s SettingsView) {
 			<nav class="settings-jump-links" aria-label="Settings sections">
 				<a class="text-link" href="#connection-settings-title">Server address</a>
 				<a class="text-link" href="#backup-settings-title">Backup storage</a>
-				<a class="text-link" href="#compose-settings-title">Compose updates</a>
 				<a class="text-link" href="#notification-settings-title">Discord notifications</a>
 			</nav>
 			<section class="settings-section settings-section--divided" aria-labelledby="connection-settings-title">
@@ -59,25 +56,6 @@ templ SettingsPage(page Page, s SettingsView) {
 			<section class="settings-section settings-section--divided" aria-labelledby="backup-settings-title">
 				<h2 id="backup-settings-title" tabindex="-1">Backup storage</h2>
 				@BackupSettingsForm(s.Backups)
-			</section>
-			<section class="settings-section settings-section--divided" aria-labelledby="compose-settings-title">
-				<h2 id="compose-settings-title" tabindex="-1">Compose updates</h2>
-				<p class="section-note">Update servers from their Update tab. Ludock discovers and validates source files from Docker. Your existing manager continues to own and edit those files.</p>
-				<div class="admin-setup-help admin-compose-guidance">
-					if !s.ComposeOK && s.ComposeConfigured {
-						<p>Compose updates are not available yet. Verify that Ludock is running on Linux with the Docker Compose plugin and that <code>LUDOCK_COMPOSE_ROOTS</code> is mounted at the same paths as on the Docker host. The bundled Ludock image includes the plugin.</p>
-					}
-					if s.ComposeConfigured {
-						<p>Compose source roots are set in <code>LUDOCK_COMPOSE_ROOTS</code>. Ludock discovers project files inside them automatically and validates them when you update a server.</p>
-					} else {
-						<h3>Enable Compose updates</h3>
-						<ol>
-							<li>Mount the project folder read-only into Ludock at the same absolute path as on the Docker host, for example <code>/srv/game-stacks:/srv/game-stacks:ro</code>.</li>
-							<li>Set <code>LUDOCK_COMPOSE_ROOTS=/srv/game-stacks</code> in Ludock’s <code>.env</code>, then run <code>docker compose up -d --force-recreate ludock</code> from its Compose folder.</li>
-							<li>Open the server’s Update tab and click Check again. Project registration is not needed.</li>
-						</ol>
-					}
-				</div>
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
 				<h2 id="notification-settings-title" tabindex="-1">Discord notifications</h2>

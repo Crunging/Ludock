@@ -1,5 +1,7 @@
 package docker
 
+import "encoding/json"
+
 // Engine API fields Ludock uses. Field names follow the daemon.
 
 // ContainerSummary is one /containers/json entry.
@@ -75,6 +77,79 @@ type ContainerInspect struct {
 	State           ContainerState  `json:"State"`
 	Mounts          []MountPoint    `json:"Mounts"`
 	NetworkSettings NetworkSettings `json:"NetworkSettings"`
+}
+
+// ContainerSpec is an inspection that keeps the configuration Docker reports
+// verbatim, including fields Ludock never reads, so a container can be
+// recreated without losing settings.
+type ContainerSpec struct {
+	ID              string                     `json:"Id"`
+	Image           string                     `json:"Image"`
+	Name            string                     `json:"Name"`
+	Created         string                     `json:"Created"`
+	State           ContainerState             `json:"State"`
+	Config          map[string]json.RawMessage `json:"Config"`
+	HostConfig      map[string]json.RawMessage `json:"HostConfig"`
+	Mounts          []MountPoint               `json:"Mounts"`
+	NetworkSettings struct {
+		Networks map[string]EndpointSettings `json:"Networks"`
+	} `json:"NetworkSettings"`
+	// ImageManifestDescriptor is the platform manifest the container runs,
+	// on engines with the containerd image store.
+	ImageManifestDescriptor *ManifestDescriptor `json:"ImageManifestDescriptor,omitempty"`
+}
+
+// Platform is an image platform.
+type Platform struct {
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+	Variant      string `json:"variant,omitempty"`
+}
+
+// ManifestDescriptor identifies one platform manifest of an image.
+type ManifestDescriptor struct {
+	Digest   string    `json:"digest"`
+	Platform *Platform `json:"platform,omitempty"`
+}
+
+// ImageManifest is one manifest of an image on the containerd image store.
+type ImageManifest struct {
+	ID        string `json:"ID"`
+	Kind      string `json:"Kind"`
+	Available bool   `json:"Available"`
+	ImageData *struct {
+		Platform Platform `json:"Platform"`
+	} `json:"ImageData,omitempty"`
+}
+
+// EndpointIPAMConfig is a static address on one network.
+type EndpointIPAMConfig struct {
+	IPv4Address  string   `json:"IPv4Address,omitempty"`
+	IPv6Address  string   `json:"IPv6Address,omitempty"`
+	LinkLocalIPs []string `json:"LinkLocalIPs,omitempty"`
+}
+
+// EndpointSettings is a container's endpoint on one network: the fields a
+// create request accepts, and the runtime address that explains its MAC.
+type EndpointSettings struct {
+	IPAMConfig *EndpointIPAMConfig `json:"IPAMConfig,omitempty"`
+	Links      []string            `json:"Links,omitempty"`
+	Aliases    []string            `json:"Aliases,omitempty"`
+	MacAddress string              `json:"MacAddress,omitempty"`
+	DriverOpts map[string]string   `json:"DriverOpts,omitempty"`
+	GwPriority int                 `json:"GwPriority,omitempty"`
+	IPAddress  string              `json:"IPAddress,omitempty"`
+}
+
+// ImageInspect is /images/{name}/json: the image ID, the defaults it gives
+// containers, and its platform manifests where the engine lists them.
+type ImageInspect struct {
+	ID           string                     `json:"Id"`
+	OS           string                     `json:"Os"`
+	Architecture string                     `json:"Architecture"`
+	Variant      string                     `json:"Variant"`
+	Config       map[string]json.RawMessage `json:"Config"`
+	Manifests    []ImageManifest            `json:"Manifests"`
 }
 
 // ContainerStats is a one-shot stats sample.

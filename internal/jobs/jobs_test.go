@@ -30,6 +30,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 var ctx = context.Background()
@@ -118,7 +119,8 @@ func setup(t *testing.T) *fixture {
 	f.runner = &ops.Runner{DB: d, Locks: table}
 	f.jobs = &Jobs{DB: d, Authz: authorization, Identity: store, Servers: service, Docker: client, Locks: table,
 		Monitor: &monitor.Service{DB: d, Locks: table, Store: store}, Console: &console.Runtime{Docker: client},
-		Backups: backupService, SaveSettle: time.Millisecond, Poll: 20 * time.Millisecond}
+		Backups: backupService, Updates: &update.Service{Docker: client}, SaveSettle: time.Millisecond, ReplacementSettle: 100 * time.Millisecond,
+		Poll: 20 * time.Millisecond}
 	f.jobs.Register(f.runner)
 	f.adminSession = dbtest.Session(t, d, f.admin.ID)
 	views, err := service.List(ctx, f.admin)

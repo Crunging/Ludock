@@ -15,10 +15,8 @@ COPY internal/ internal/
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/ludock ./cmd/ludock
 
 FROM ${ALPINE_IMAGE} AS runtime
-# The Docker CLI and Compose plugin run Compose updates; helper containers
-# reuse this image and run `ludock helper` directly.
-RUN apk upgrade --no-cache \
-    && apk add --no-cache docker-cli docker-cli-compose
+# Helper containers reuse this image and run `ludock helper` directly.
+RUN apk upgrade --no-cache
 COPY --from=build /out/ludock /usr/local/bin/ludock
 
 ENV LUDOCK_DATA_DIR=/data
