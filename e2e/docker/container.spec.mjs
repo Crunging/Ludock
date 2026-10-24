@@ -57,10 +57,10 @@ test("a backup restores the server's data and running state", async ({ page }) =
   await page.getByRole("tab", { name: "Backups" }).click();
   await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
   await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("dialog", { name: "Back up Test Game?" }).getByRole("button", { name: "Create backup" }).click();
   await expectOperationSucceeded(page);
 
   writeFileSync(properties, "motd=changed after the backup\n");
-  await page.getByRole("tab", { name: "Backups" }).click();
   await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Restore…" }).click();
   await page.locator("form.danger-panel").getByLabel(/Type Test Game to confirm/).fill("Test Game");
   await page.getByRole("button", { name: "Restore game data" }).click();
