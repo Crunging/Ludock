@@ -119,6 +119,11 @@ var detailTabs = []string{"activity", "backups", "schedules", "update"}
 func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *Request) {
 	tab := r.URL.Query().Get("tab")
 	d, err := s.detail(r, request, r.PathValue("id"), tab, !slices.Contains(detailTabs, tab))
+	if err == nil && d.Tab != tab && r.URL.Query().Get("operation") != "" {
+		// Work linked to a tab the viewer can't open shows in Activity.
+		tab = "activity"
+		d, err = s.detail(r, request, r.PathValue("id"), tab, false)
+	}
 	if err == nil && d.Tab == "overview" && slices.Contains(detailTabs, tab) {
 		// A hidden tab falls back to the overview, which shows statistics.
 		d, err = s.detail(r, request, r.PathValue("id"), "overview", true)

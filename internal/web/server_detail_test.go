@@ -88,3 +88,20 @@ func TestOperationFragmentScope(t *testing.T) {
 		t.Fatal(fragment)
 	}
 }
+
+// Someone who can't open the Backups tab follows a backup linked there,
+// such as from the server list, in Activity instead.
+func TestOperationLinkFallsBackToActivity(t *testing.T) {
+	p := newPages(t)
+	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	p.grant(viewer, authz.ServerView)
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	var operation string
+	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&operation)
+	body := p.do("GET", "/servers/"+p.server+"?tab=backups&operation="+operation, viewer, nil, nil).Body.String()
+	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `id="tab-activity" role="tab" aria-selected="true"`) {
+		t.Fatal(body)
+	}
+}
