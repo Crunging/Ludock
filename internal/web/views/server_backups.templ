@@ -200,7 +200,7 @@ templ BackupList(b BackupsView) {
 									<a class="secondary-btn" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
 								}
 								if b.CanRestore && !b.Blocked && !b.Active && backup.State == "complete" {
-									<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage(detailURL(b.ServerID, "tab=backups&restore="+backup.ID))... }>Restore…</a>
+									<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
 								} else {
 									<button class="secondary-btn secondary-btn--danger" type="button" disabled>Restore…</button>
 								}
@@ -241,7 +241,7 @@ templ RestoreForm(b BackupsView) {
 		<div id="restore-status" aria-live="polite"></div>
 		<div class="inline-actions">
 			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore game data</button>
-			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage(detailURL(b.ServerID, "tab=backups"))... }>Cancel</a>
+			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>Cancel</a>
 		</div>
 	</form>
 }

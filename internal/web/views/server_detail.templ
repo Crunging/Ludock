@@ -70,10 +70,11 @@ func detailURL(id, query string) templ.SafeURL {
 }
 
 // inPage moves between views of a server inside the page: the address bar
-// changes, but the page and its live connection stay.
-func inPage(url templ.SafeURL) templ.Attributes {
-	return templ.Attributes{"hx-get": string(url), "hx-target": "#detail-body", "hx-select": "#detail-body",
-		"hx-swap": "outerHTML", "hx-push-url": "true"}
+// changes, but the page and its live connection stay. Boosting keeps the
+// link's own address and lets modified clicks open a new tab.
+func inPage() templ.Attributes {
+	return templ.Attributes{"hx-boost": "true", "hx-target": "#detail-body", "hx-select": "#detail-body",
+		"hx-swap": "outerHTML show:none"}
 }
 
 func liveTrigger(id string, active bool) string {
@@ -122,7 +123,7 @@ templ detailBody(d ServerDetail) {
 	<div id="detail-status" aria-live="polite"></div>
 	<nav class="section-tabs" aria-label="Server management">
 		for _, tab := range d.Tabs {
-			<a href={ detailURL(server.ID, "tab="+tab.ID) } { inPage(detailURL(server.ID, "tab="+tab.ID))... } id={ "tab-" + tab.ID } role="tab" aria-selected={ strconv.FormatBool(tab.ID == d.Tab) } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
+			<a href={ detailURL(server.ID, "tab="+tab.ID) } { inPage()... } id={ "tab-" + tab.ID } role="tab" aria-selected={ strconv.FormatBool(tab.ID == d.Tab) } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
 		}
 	</nav>
 	<section class="section-tab-panel" aria-label={ tabLabel(d) }>
@@ -222,7 +223,7 @@ templ DetailLive(d ServerDetail) {
 				<p role="status">
 					<strong>{ Capitalize(operation.Kind) }</strong>: { OperationLabel(operation.Status, operation.Phase) }. Server controls, backups, and updates are paused until it finishes.
 				</p>
-				<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) } { inPage(templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)))... }>View progress</a>
+				<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) } { inPage()... }>View progress</a>
 			</div>
 		}
 	</div>
@@ -358,7 +359,7 @@ templ OverviewLive(d ServerDetail) {
 							Never
 						}
 						if hasTab(d, "backups") {
-							<a class="text-link" href={ detailURL(server.ID, "tab=backups") } { inPage(detailURL(server.ID, "tab=backups"))... }>Backups</a>
+							<a class="text-link" href={ detailURL(server.ID, "tab=backups") } { inPage()... }>Backups</a>
 						}
 					</dd>
 				</div>
@@ -373,7 +374,7 @@ templ OverviewLive(d ServerDetail) {
 						} else {
 							Nothing scheduled
 						}
-						<a class="text-link" href={ detailURL(server.ID, "tab=schedules") } { inPage(detailURL(server.ID, "tab=schedules"))... }>Schedules</a>
+						<a class="text-link" href={ detailURL(server.ID, "tab=schedules") } { inPage()... }>Schedules</a>
 					</dd>
 				</div>
 			}
@@ -559,7 +560,7 @@ templ ActivityPanel(a ActivityView) {
 			</select>
 		</label>
 		if a.Status != "" || a.Kind != "" {
-			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab=activity") } { inPage(detailURL(a.ServerID, "tab=activity"))... }>Clear filters</a>
+			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Clear filters</a>
 		}
 		<noscript><button class="secondary-btn" type="submit">Apply filters</button></noscript>
 	</form>
@@ -578,14 +579,14 @@ templ ActivityList(a ActivityView) {
 		if a.HiddenActive {
 			<p class="section-note activity-filter-notice">
 				An active operation is hidden by these filters. Server controls remain paused.
-				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") } { inPage(detailURL(a.ServerID, "tab=activity"))... }>Show active work</a>
+				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Show active work</a>
 			</p>
 		}
 		@OperationList(a.Visible, map[bool]string{true: "No recent operations match these filters.", false: "No operations yet."}[a.Total > 0], false, nil)
 		if a.Admin && a.AlreadyCurrent {
 			<p class="section-note">
 				The configured image is current. Game software may update during startup.
-				<a class="text-link" href={ detailURL(a.ServerID, "tab=update&recreate=1") } { inPage(detailURL(a.ServerID, "tab=update&recreate=1"))... }>Recreate anyway</a>
+				<a class="text-link" href={ detailURL(a.ServerID, "tab=update&recreate=1") } { inPage()... }>Recreate anyway</a>
 			</p>
 		}
 	</div>
@@ -611,7 +612,7 @@ templ SelectedOperation(a ActivityView) {
 	>
 		<div class="section-heading">
 			<h2 id="scheduled-operation-title" tabindex="-1">Operation details</h2>
-			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage(detailURL(a.ServerID, "tab="+a.Tab))... }>Dismiss</a>
+			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage()... }>Dismiss</a>
 		</div>
 		if a.SelectedError != "" {
 			<p role="alert">{ a.SelectedError }</p>

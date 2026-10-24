@@ -45,6 +45,13 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
   expect(await page.evaluate(() => window.stayedOnPage)).toBe(true);
 
+  // A modified click opens the tab in a new browser tab and leaves this one.
+  const [opened] = await Promise.all([page.context().waitForEvent("page"),
+    page.getByRole("tab", { name: "Schedules" }).click({ modifiers: ["ControlOrMeta"] })]);
+  await expect(opened).toHaveURL(/\?tab=schedules$/);
+  await opened.close();
+  await expect(page).toHaveURL(/\?tab=backups$/);
+
   // Back and forward still land on the right tab.
   await page.goBack();
   await expect(page).toHaveURL(/\?tab=activity$/);
