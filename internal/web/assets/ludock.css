@@ -605,6 +605,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .activity-filter-count { font-size: 14px; color: var(--ink-3); }
 .scheduled-operation { margin-bottom: 32px; padding: 18px 20px; border-radius: var(--radius-lg); background: var(--paper); border: 1px solid var(--line); box-shadow: inset 4px 0 0 var(--busy); }
 .scheduled-operation .metadata-list { margin-top: 12px; }
+.scheduled-operation .inline-actions { margin-top: 16px; }
 .operation-server p { margin-top: 2px; font-size: 13px; }
 
 .backup-readiness {
