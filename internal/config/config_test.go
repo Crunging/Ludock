@@ -8,7 +8,7 @@ import (
 
 func clearEnv(t *testing.T) {
 	for _, name := range []string{"LUDOCK_LISTEN", "LUDOCK_DATA_DIR", "LUDOCK_LOG_LEVEL", "LUDOCK_TRUSTED_PROXIES", "LUDOCK_SETUP_CODE",
-		"LUDOCK_DOCKER_SOCKET", "LUDOCK_SELF_CONTAINER", "LUDOCK_COMPOSE_ROOTS", "LUDOCK_DOCKER_CONFIG", "LUDOCK_SENSITIVE_PATHS",
+		"LUDOCK_DOCKER_SOCKET", "LUDOCK_SELF_CONTAINER", "LUDOCK_DOCKER_CONFIG", "LUDOCK_SENSITIVE_PATHS",
 		"LUDOCK_HELPER_IMAGE", "LUDOCK_MAX_UPLOAD_SIZE"} {
 		t.Setenv(name, "")
 	}
@@ -46,19 +46,19 @@ func TestValuesAndErrors(t *testing.T) {
 	t.Setenv("LUDOCK_LISTEN", "127.0.0.1:8080")
 	t.Setenv("LUDOCK_LOG_LEVEL", "DEBUG")
 	t.Setenv("LUDOCK_MAX_UPLOAD_SIZE", "500 MB")
-	t.Setenv("LUDOCK_COMPOSE_ROOTS", "/srv/game-stacks")
+	t.Setenv("LUDOCK_SENSITIVE_PATHS", "/srv/secrets")
 	cfg, err := Load()
 	if err != nil || cfg.LogLevel != "debug" || cfg.MaxUploadBytes != 500_000_000 || cfg.HealthURL() != "http://127.0.0.1:8080/api/v1/health" ||
-		!slices.Equal(cfg.ComposeRoots, []string{"/srv/game-stacks"}) {
+		!slices.Equal(cfg.SensitivePaths, []string{"/srv/secrets"}) {
 		t.Fatal(cfg, err)
 	}
 	t.Setenv("LUDOCK_LISTEN", "3000")
 	t.Setenv("LUDOCK_LOG_LEVEL", "verbose")
 	t.Setenv("LUDOCK_MAX_UPLOAD_SIZE", "lots")
-	t.Setenv("LUDOCK_COMPOSE_ROOTS", "relative/stacks")
+	t.Setenv("LUDOCK_SENSITIVE_PATHS", "relative/secrets")
 	t.Setenv("LUDOCK_SETUP_CODE", "secret-value-never-printed")
 	_, err = Load()
-	for _, name := range []string{"LUDOCK_LISTEN", "LUDOCK_LOG_LEVEL", "LUDOCK_MAX_UPLOAD_SIZE", "LUDOCK_COMPOSE_ROOTS"} {
+	for _, name := range []string{"LUDOCK_LISTEN", "LUDOCK_LOG_LEVEL", "LUDOCK_MAX_UPLOAD_SIZE", "LUDOCK_SENSITIVE_PATHS"} {
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s not reported: %v", name, err)
 		}

@@ -1,5 +1,5 @@
 // Package jobs implements the persisted server operations: start, stop,
-// restart (optionally with a backup), backup, restore, and Compose update.
+// restart (optionally with a backup), backup, restore, and image update.
 // Each acts only after rechecking its owner's current access and the
 // server's binding, and records enough recovery state to reconcile an
 // interruption instead of replaying it.
@@ -17,7 +17,6 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
-	"github.com/Crunging/Ludock/internal/compose"
 	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
@@ -29,6 +28,7 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 var log = logging.New("jobs")
@@ -45,9 +45,13 @@ type Jobs struct {
 	Notify   func(key, message string)
 	Console  *console.Runtime
 	Backups  *backups.Service
-	Updates  *compose.Updates
+	Updates  *update.Service
 	// SaveSettle is how long to wait after a save command; tests shorten it.
 	SaveSettle time.Duration
+	// ReplacementSettle is how long an updated container without a
+	// healthcheck must keep running before it replaces the original; tests
+	// shorten it.
+	ReplacementSettle time.Duration
 	// Poll is the reconciliation poll interval; tests shorten it.
 	Poll time.Duration
 }

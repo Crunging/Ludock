@@ -36,7 +36,6 @@ export default async function setup() {
   if (process.env.LUDOCK_DOCKER_E2E !== "disposable-daemon") {
     throw new Error("Set LUDOCK_DOCKER_E2E=disposable-daemon to confirm this Docker daemon runs no real game servers.");
   }
-  // Compose sources must have the same absolute path inside Ludock.
   const dir = realpathSync(mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "ludock-docker-e2e-")));
   const stack = join(dir, "stacks", "game");
   mkdirSync(join(stack, "data"), { recursive: true });
@@ -51,6 +50,8 @@ export default async function setup() {
       ludock.files: /data
     volumes:
       - ./data:/data
+      # An unnamed volume, whose data an update must keep.
+      - /state
 `);
   const override = join(dir, "compose.override.yaml");
   writeFileSync(override, `services:
@@ -59,9 +60,6 @@ export default async function setup() {
     pull_policy: never
     environment:
       LUDOCK_SETUP_CODE: ${setupCode}
-      LUDOCK_COMPOSE_ROOTS: ${join(dir, "stacks")}
-    volumes:
-      - ${join(dir, "stacks")}:${join(dir, "stacks")}:ro
 `);
   const ludock = ["compose", "--project-name", "ludock-e2e", "-f", join(root, "compose.yaml"), "-f", override];
   const game = ["compose", "--project-name", "game", "--project-directory", stack, "-f", join(stack, "compose.yaml")];

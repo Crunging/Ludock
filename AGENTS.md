@@ -47,7 +47,7 @@ published tags.
 - **Admin writes recheck the admin.** Admin-only changes run inside
   `db.AdminMutation`, which checks the exact session and role in the same
   transaction.
-- **Paths stay inside approved roots.** File and Compose reads go through file
+- **Paths stay inside approved roots.** File reads go through file
   descriptors that don't follow symlinks.
 - **Secrets stay out of output.** Environment values, labels, tokens, webhook
   URLs, and host paths never appear in logs, pages, audit details, or public
@@ -63,8 +63,10 @@ published tags.
   SQLite write lock immediately and the pool has four connections, so a read
   through another connection inside one can wait on a writer queued behind it.
   Run checks before the transaction and verify inside it through `tx`.
-- **Updates need an admin** and a Compose source discovered from container
-  labels, and run `docker compose` with argument arrays, never a shell.
+- **Updates need an admin** and go through the Engine API alone. The
+  replacement is created under a temporary name discovery ignores and must
+  start cleanly before the original is removed; until then the original stays
+  the server and a failure restores it.
 - **Forms are same-origin.** Every unsafe request carries the session's CSRF
   token and is re-authenticated after its body is read; pages never run inline
   scripts.

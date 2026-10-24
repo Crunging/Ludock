@@ -161,11 +161,6 @@ func (d *DB) BindingFingerprint(digest string) (string, error) {
 	return protectDigest(digest, d.key, "binding:v2")
 }
 
-// ComposeSourceFingerprint protects a Compose source digest.
-func (d *DB) ComposeSourceFingerprint(digest string) (string, error) {
-	return protectDigest(digest, d.key, "compose-source:v1")
-}
-
 // Tx runs fn in an immediate transaction.
 func (d *DB) Tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := d.BeginTx(ctx, nil)

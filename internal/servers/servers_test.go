@@ -333,3 +333,14 @@ func TestRefreshReusesRecentDiscovery(t *testing.T) {
 		t.Fatal("sampled", count("/stats"), "times for two viewers")
 	}
 }
+
+// An update's temporary name fits Docker's 128-character limit for any
+// container name, and discovery still hides it.
+func TestReplacementNameFitsAndIsHidden(t *testing.T) {
+	for _, name := range []string{"mc", "/" + strings.Repeat("a", 127)} {
+		temporary := ReplacementName(name, "operation")
+		if len(temporary) > 128 || !isReplacement([]string{"/" + temporary}) || isReplacement([]string{name}) {
+			t.Error(name, temporary)
+		}
+	}
+}

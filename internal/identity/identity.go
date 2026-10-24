@@ -45,9 +45,7 @@ type Observation struct {
 	DisplayName string           `json:"displayName"`
 	GameType    string           `json:"gameType"`
 	Compose     *ComposeIdentity `json:"compose,omitempty"`
-	// ComposeSourceLabels are internal source hints, never shown.
-	ComposeSourceLabels map[string]string `json:"-"`
-	Mounts              []Mount           `json:"mounts"`
+	Mounts      []Mount          `json:"mounts"`
 	// GameConfiguration is input only: values are keyed-hashed, never stored
 	// or returned by this package.
 	GameConfiguration map[string]string `json:"gameConfiguration,omitempty"`

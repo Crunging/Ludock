@@ -1,7 +1,8 @@
 // The built image against real Docker: hardened runtime, helper containers
-// from Ludock's own image, backups, consoles, Compose updates, and recovery.
+// from Ludock's own image, backups, consoles, image updates, and recovery.
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "../journeys/fixtures.mjs";
 import { docker, gameImage } from "../docker-setup.mjs";
 
@@ -24,11 +25,6 @@ test("the image runs hardened and reports healthy", async ({ page }) => {
 
   await page.goto("/diagnostics");
   await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
-  await expect(page.locator(".metadata-list")).toContainText("Compose updatesAvailable");
-  // Compose roots are host paths: settings says they are set, not where.
-  await page.goto("/settings");
-  await expect(page.locator(".admin-compose-guidance")).toContainText("Compose source roots are set");
-  await expect(page.locator("main")).not.toContainText(dirname(stack()));
   await page.goto("/");
   await expect(page.locator(".server-row", { hasText: "Test Game" })).toContainText("Running");
 });
@@ -85,15 +81,19 @@ test("the shell runs commands and logs follow the container", async ({ page }) =
   await expect(page.locator(".xterm-rows")).toContainText("motd=Hello from the container test");
 });
 
-test("a Compose update recreates the service from its source files", async ({ page }) => {
+test("an update recreates the server with its settings and unnamed volume", async ({ page }) => {
   const before = gameContainer();
+  docker("exec", before, "sh", "-c", "echo kept > /state/marker");
+  const inspect = (id) => JSON.parse(docker("inspect", id))[0];
+  const old = inspect(before);
   await openServer(page, "Test Game");
   await page.getByRole("tab", { name: "Update" }).click();
   const form = page.locator("#update-panel form");
   // The previous journey's shell command may hold the server for a moment.
+  const checkAgain = page.locator("#update-panel").getByRole("button", { name: "Check again" });
   await expect(async () => {
-    if (!(await form.count())) await page.getByRole("button", { name: "Check again" }).click();
-    await expect(form).toContainText("game", { timeout: 2_000 });
+    if (await checkAgain.count()) await checkAgain.click();
+    await expect(form).toContainText(gameImage, { timeout: 2_000 });
   }).toPass();
   await form.getByLabel(/Recreate anyway/).check();
   await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
@@ -102,7 +102,23 @@ test("a Compose update recreates the service from its source files", async ({ pa
   await form.getByRole("button").last().click();
   await expectOperationSucceeded(page);
   await expect.poll(gameContainer).not.toBe(before);
-  await expect.poll(() => docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
+  const replacement = inspect(gameContainer());
+  expect(replacement.State.Running).toBe(true);
+  expect(replacement.Name).toBe(old.Name);
+  expect(replacement.Config.Cmd).toEqual(old.Config.Cmd);
+  // Compose's image label is checked by asking Compose below.
+  const labels = ({ Config: { Labels } }) => ({ ...Labels, "com.docker.compose.image": undefined, "ludock.update": undefined });
+  expect(labels(replacement)).toEqual(labels(old));
+  expect(replacement.Config.Labels["ludock.update"]).toMatch(/^[0-9a-f-]{36}$/);
+  expect(Object.keys(replacement.NetworkSettings.Networks)).toEqual(Object.keys(old.NetworkSettings.Networks));
+  const volume = (container) => container.Mounts.find((mount) => mount.Destination === "/state").Name;
+  expect(volume(replacement)).toBe(volume(old));
+  expect(docker("exec", replacement.Id, "cat", "/state/marker")).toBe("kept");
+  expect(docker("ps", "--all", "--quiet", "--filter", `id=${before}`)).toBe("");
+  // Compose sees the replacement as its own, up-to-date container.
+  const plan = spawnSync("docker", [...game(), "up", "--detach", "--dry-run", "game"], { encoding: "utf8" });
+  expect(plan.status).toBe(0);
+  expect(plan.stdout + plan.stderr).not.toMatch(/Recreat/);
 });
 
 // A file command interrupted by a restart may still be writing through its

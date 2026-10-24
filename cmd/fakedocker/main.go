@@ -106,7 +106,15 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		Env:    []string{"RCON_PASSWORD=dev-rcon-secret", "EULA=TRUE"},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: mc, Destination: mc, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "25565"}}}})
+	// Like the real image, every version of the fake one has a healthcheck,
+	// and pulling it yields a newer version.
+	healthcheck := map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD-SHELL", "mc-health"}}}
+	for _, version := range []string{"0", "1"} {
+		engine.SetImageConfig("sha256:"+strings.Repeat(version, 64), healthcheck)
+	}
 	engine.Update(id, func(c *fakedocker.Container) {
+		c.ExtraConfig = healthcheck
+		c.State.Health = &docker.HealthState{Status: "healthy"}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21", "[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
 	})
 	valheim := data("valheim")

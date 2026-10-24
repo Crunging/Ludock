@@ -6,7 +6,7 @@
 
 Ludock is a self-hosted web panel for the Docker game servers you already run.
 Start and stop them, use their consoles, manage their files, take backups,
-schedule restarts, get outage alerts, and update Compose services from your
+schedule restarts, get outage alerts, and update server images from your
 browser. Compose, Portainer, Dockge, or the Docker CLI stays in charge of each
 server's configuration; Ludock never creates or edits it.
 
@@ -62,9 +62,7 @@ storage**. Backups stop the server while they copy.
 
 Most settings live in the browser. For deployment options, copy
 [`.env.example`](./.env.example) to `.env`, uncomment what you need, and run
-`docker compose up -d --force-recreate ludock`. Updating servers through Compose
-also needs a read-only mount of their Compose files; see
-[Compose updates](./docs/OPERATIONS.md#compose-updates).
+`docker compose up -d --force-recreate ludock`.
 
 ## Security
 

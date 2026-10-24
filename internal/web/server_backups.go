@@ -262,7 +262,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		Recreate: r.URL.Query().Get("recreate") == "1"}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
-		result := s.App.Compose.Capability(r.Context(), resolved, admin, func() bool {
+		result := s.App.Updates.Capability(r.Context(), resolved, admin, func() bool {
 			if s.App.Locks.ServerBusy(id) {
 				return true
 			}
@@ -296,7 +296,8 @@ func (s *Server) recheckCapability(r *http.Request, request *Request, id string,
 	return err
 }
 
-// queueUpdate pulls and recreates a Compose service (administrators only).
+// queueUpdate pulls a server's image and recreates its container
+// (administrators only).
 func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Request) {
 	id := r.PathValue("id")
 	createBackup := r.PostFormValue("createBackup") == "true"
@@ -319,12 +320,10 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping backup"))
 		return
 	}
-	selected, err := s.App.Compose.Validated(r.Context(), resolved)
-	if err != nil {
+	if _, err := s.App.Updates.Check(r.Context(), resolved); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
-	defer selected.Snapshot.Cleanup()
 	if err := s.recheckCapability(r, request, id, capability, true); err != nil {
 		s.fail(w, r, request, err)
 		return
@@ -334,12 +333,10 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		s.fail(w, r, request, err)
 		return
 	}
-	fingerprint := selected.Snapshot.Fingerprint
-	s.audit(r, request, "server.update.confirmed", id, map[string]any{"createBackup": createBackup, "forceRecreate": forceRecreate,
-		"sourceFingerprint": fingerprint})
+	s.audit(r, request, "server.update.confirmed", id, map[string]any{"createBackup": createBackup, "forceRecreate": forceRecreate})
 	updateRequest := map[string]any{"createBackup": createBackup, "forceRecreate": forceRecreate}
 	if !createBackup {
 		updateRequest["skipBackupConfirmation"] = skip
 	}
-	s.enqueue(w, r, request, resolved, &current.User, "update", map[string]any{"request": updateRequest, "sourceFingerprint": fingerprint})
+	s.enqueue(w, r, request, resolved, &current.User, "update", map[string]any{"request": updateRequest})
 }

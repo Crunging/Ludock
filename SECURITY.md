@@ -26,7 +26,7 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
   from.
 - Administrators see every managed server. Other users see only the servers and
   actions shared with them.
-- Approve narrow Compose and backup folders, and keep registry and webhook
-  credentials out of game file folders.
+- Approve narrow backup folders, and keep registry and webhook credentials out
+  of game file folders.
 
 See [Deployment](./docs/OPERATIONS.md#deployment) for proxy and network settings.

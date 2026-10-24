@@ -95,6 +95,16 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 // assertStopped confirms the server is still the stopped instance and that
 // no other container writes to its data.
 func (j *Jobs) assertStopped(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	if err := j.assertStillStopped(ctx, server, job); err != nil {
+		return err
+	}
+	helperID, _ := text(job.Job.Recovery["dataHelperId"])
+	return j.Backups.AssertNoOtherWriters(ctx, server, helperID)
+}
+
+// assertStillStopped confirms the server is still the instance this
+// operation stopped, under the same binding.
+func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, job *ops.Context) error {
 	observed, info, err := j.Servers.Observer.Inspect(ctx, server.Container.ID)
 	if err != nil {
 		return err
@@ -106,8 +116,7 @@ func (j *Jobs) assertStopped(ctx context.Context, server *servers.Context, job *
 	if info.State.Running || info.State.Status == "running" || info.State.Paused || info.State.Restarting || info.State.StartedAt != expected {
 		return fail("EXTERNAL_SERVER_CHANGE", "The server was started or changed by another manager during the operation. Review its state before retrying.")
 	}
-	helperID, _ := text(job.Job.Recovery["dataHelperId"])
-	return j.Backups.AssertNoOtherWriters(ctx, server, helperID)
+	return nil
 }
 
 func stopPending(job *ops.Context) bool {
@@ -233,12 +242,16 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 // keepStoppedAfterFailedBackup leaves the server stopped, since starting
 // could update the game and change the world, and says so once stopped.
 func (j *Jobs) keepStoppedAfterFailedBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	return j.keepStopped(ctx, server, job, "the backup failed, so the server was left stopped. Review the operation, then start it.")
+}
+
+func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *ops.Context, reason string) error {
 	observed, err := j.settleInterruptedStop(ctx, server, job)
 	if err != nil || observed == nil || !slices.Contains(stoppedStates, observed.Container.State) {
 		return err
 	}
 	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
-	j.notify("operation:"+job.Job.ID, observed.Container.DisplayName+": the backup failed, so the server was left stopped. Review the operation, then start it.")
+	j.notify("operation:"+job.Job.ID, observed.Container.DisplayName+": "+reason)
 	return nil
 }
 

@@ -260,51 +260,50 @@ container in Docker, and its owning manager's logs.
 > Don't delete `.ludock-restore-*` folders or operation records after a failed
 > restore; they may be needed to recover the previous game data.
 
-## Compose updates
+## Image updates
 
 Minecraft, Palworld, Counter-Strike 2, Conan Exiles, Rust, and Valheim images
 download the latest game files when they start, so every **Restart** updates the
 game, as **Update** notes. Choose **Take a backup first** to back up before it.
 
-**Update server** pulls a newer image and recreates the service. It needs the
-Linux Ludock image, an administrator, and the Compose project folders mounted
-read-only at their **original absolute paths on the Docker host**:
+**Update server** pulls a newer version of the server's image and recreates its
+container with the same settings. It needs an administrator and nothing else:
+Ludock works through the Docker socket alone, whichever tool created the
+container.
 
-```yaml
-services:
-  ludock:
-    environment:
-      LUDOCK_COMPOSE_ROOTS: /srv/game-stacks
-    volumes:
-      - /srv/game-stacks:/srv/game-stacks:ro
-```
+- Ludock pulls the image tag the container was created from. If the image
+  hasn't changed, nothing else happens; **Recreate anyway** recreates the
+  container regardless.
+- It stops the server, optionally takes a backup, and creates the new
+  container beside the stopped original. The new container keeps the original's
+  environment, command, ports, networks, static addresses, restart policy,
+  mounted folders, and volumes, including unnamed ones, so their data carries
+  over. Settings that only repeated the old image's defaults come from the new
+  image instead.
+- A running server's new container must start cleanly: become healthy if the
+  image has a healthcheck, or otherwise keep running for 10 seconds. Only then
+  does Ludock remove the original and give the new container its name and
+  restart policy. Until then neither container restarts on its own, so a Docker
+  restart can't run both. A stopped server stays stopped.
+- If the new container stops, restarts, or reports itself unhealthy, Ludock
+  removes it and restores the original, but leaves it stopped: the new version
+  may already have changed the game data. Check the operation, restore the
+  backup if needed, then start the server.
+- Ludock never edits Compose files or other definitions. Compose recognizes the
+  new container as its own, so a later `docker compose up` doesn't recreate it.
+  The new container's `ludock.update` label names the update that created it.
+  A change you make to the definition still applies the next time you run your
+  own tool.
+- Files changed inside the container but outside its mounts and volumes are
+  lost, as with any recreation.
+- For private registries, set `LUDOCK_DOCKER_CONFIG` to a read-only folder,
+  outside game file folders, holding a Docker `config.json` with inline `auths`
+  entries, as `docker login` writes them without a credential helper.
 
-Ludock finds the project folder, its Compose files, and its environment files
-from Docker's labels, using the project's `.env` if none were recorded. Every
-file must be inside an approved folder, not a symlink, and under 2 MiB.
-Variables that exist only in your shell must be added to those files.
-
-- **Update server** pulls the image, optionally takes a backup first, and
-  recreates only that service. **Recreate anyway** does the same when the image
-  hasn't changed.
-- Skipping the backup requires typing the server's name. A stopped server
-  stays stopped.
-- Ludock snapshots the files first and stops if they change. It never edits
-  them; recreated containers get a `ludock.compose.source` label recording
-  where their files are.
-- For private registries, mount a read-only folder for `LUDOCK_DOCKER_CONFIG`
-  outside game file folders.
-
-Not supported: `include`, `extends`, secrets, configs, `label_file`, credential
-specs, lifecycle hooks, providers, development settings, `volumes_from`, and the
-`!reset` and `!override` tags (anchors and `<<` merge keys work); build-only
-services, images pinned by digest, multiple replicas, and services sharing
-another service's namespace; and containers not started by Compose or missing
-their Compose labels. Update those through the tool that created them.
-
-If the pull fails, the container is unchanged. If recreation fails, recover the
-service with its owning manager; a data backup can't roll back the image or the
-Compose file.
+Not supported: images pinned by digest or ID, containers Docker removes when
+they stop (`--rm`), Swarm services, and containers whose network, process, or
+IPC namespace another container shares. Update those through the tool that
+created them.
 
 ## Schedules
 

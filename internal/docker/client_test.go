@@ -133,7 +133,7 @@ func TestPullChecksEveryRecord(t *testing.T) {
 		socket := fakeSocket(t, func(conn net.Conn) {
 			respond(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"+c.body)
 		})
-		err := docker.New(socket).Pull(ctx, "alpine:3")
+		err := docker.New(socket).Pull(ctx, "alpine:3", "", "")
 		if (err == nil) != c.ok {
 			t.Errorf("%q: %v", c.body, err)
 		}

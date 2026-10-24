@@ -162,6 +162,10 @@ func (c *Client) path(ctx context.Context, path string, query url.Values) (strin
 // Request sends a request and returns a successful response. The caller
 // closes its body. Long streams have no deadline; their owners control it.
 func (c *Client) Request(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	return c.request(ctx, method, path, body, nil)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, body any, header http.Header) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -173,6 +177,9 @@ func (c *Client) Request(ctx context.Context, method, path string, body any) (*h
 	request, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reader)
 	if err != nil {
 		return nil, err
+	}
+	for name, values := range header {
+		request.Header[name] = values
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
@@ -323,6 +330,39 @@ func (c *Client) Inspect(ctx context.Context, id string) (*ContainerInspect, err
 	return &info, c.getJSON(ctx, path, nil, &info)
 }
 
+// InspectSpec inspects a container keeping its configuration verbatim, for
+// recreating it.
+func (c *Client) InspectSpec(ctx context.Context, id string) (*ContainerSpec, error) {
+	path, err := containerPath(id, "/json")
+	if err != nil {
+		return nil, err
+	}
+	var spec ContainerSpec
+	return &spec, c.getJSON(ctx, path, nil, &spec)
+}
+
+// Rename renames a container.
+func (c *Client) Rename(ctx context.Context, id, name string) error {
+	path, err := containerPath(id, "/rename")
+	if err != nil {
+		return err
+	}
+	if !ContainerIDPattern.MatchString(name) {
+		return errors.New("invalid Docker container name")
+	}
+	return c.empty(ctx, http.MethodPost, path, url.Values{"name": {name}})
+}
+
+// SetRestartPolicy replaces a container's restart policy, given as Docker
+// reports it in HostConfig.RestartPolicy.
+func (c *Client) SetRestartPolicy(ctx context.Context, id string, policy json.RawMessage) error {
+	path, err := containerPath(id, "/update")
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, path, nil, map[string]json.RawMessage{"RestartPolicy": policy}, nil)
+}
+
 // Stats takes a one-shot stats sample.
 func (c *Client) Stats(ctx context.Context, id string) (*ContainerStats, error) {
 	path, err := containerPath(id, "/stats")
@@ -420,12 +460,22 @@ func (c *Client) Logs(ctx context.Context, id string, options LogsOptions) (io.R
 
 // CreateContainer creates a container and returns its ID.
 func (c *Client) CreateContainer(ctx context.Context, options ContainerCreate) (string, error) {
-	var query url.Values
-	if options.Name != "" {
-		query = url.Values{"name": {options.Name}}
+	return c.Create(ctx, options.Name, "", options)
+}
+
+// Create creates a container from any /containers/create body, such as one
+// built from another container's inspection, and returns its ID. platform
+// selects an image variant, or "" for the daemon's own.
+func (c *Client) Create(ctx context.Context, name, platform string, body any) (string, error) {
+	query := url.Values{}
+	if name != "" {
+		query.Set("name", name)
+	}
+	if platform != "" {
+		query.Set("platform", platform)
 	}
 	var result struct{ Id string }
-	if err := c.postJSON(ctx, "/containers/create", query, options, &result); err != nil {
+	if err := c.postJSON(ctx, "/containers/create", query, body, &result); err != nil {
 		return "", err
 	}
 	if !ContainerIDPattern.MatchString(result.Id) {
@@ -506,6 +556,13 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInspect
 	return &info, c.getJSON(ctx, "/volumes/"+escaped, nil, &info)
 }
 
+// ListVolumes lists every volume.
+func (c *Client) ListVolumes(ctx context.Context) ([]VolumeInspect, error) {
+	var result struct{ Volumes []VolumeInspect }
+	err := c.getJSON(ctx, "/volumes", nil, &result)
+	return result.Volumes, err
+}
+
 // CreateVolume creates a named volume.
 func (c *Client) CreateVolume(ctx context.Context, name string) (*VolumeInspect, error) {
 	var info VolumeInspect
@@ -528,9 +585,34 @@ func (c *Client) InspectImage(ctx context.Context, reference string) (string, er
 	if reference == "" || reference == "." || reference == ".." {
 		return "", errors.New("invalid Docker image reference")
 	}
-	var info struct{ Id string }
-	err := c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", nil, &info)
-	return info.Id, err
+	info, err := c.InspectImageConfig(ctx, reference)
+	if err != nil {
+		return "", err
+	}
+	return info.ID, nil
+}
+
+// InspectImageConfig returns an image's ID, the defaults it gives
+// containers, and its platform manifests. The reference is escaped as
+// InspectImage's is.
+func (c *Client) InspectImageConfig(ctx context.Context, reference string) (*ImageInspect, error) {
+	return c.inspectImage(ctx, reference, url.Values{"manifests": {"1"}})
+}
+
+// InspectImageVariant returns the defaults one platform variant of an image
+// gives containers. With several variants stored, Docker otherwise answers
+// for its own platform. Its ID is the variant's, not the image's.
+func (c *Client) InspectImageVariant(ctx context.Context, reference string, platform Platform) (*ImageInspect, error) {
+	encoded, _ := json.Marshal(platform)
+	return c.inspectImage(ctx, reference, url.Values{"platform": {string(encoded)}})
+}
+
+func (c *Client) inspectImage(ctx context.Context, reference string, query url.Values) (*ImageInspect, error) {
+	if reference == "" || reference == "." || reference == ".." {
+		return nil, errors.New("invalid Docker image reference")
+	}
+	var info ImageInspect
+	return &info, c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", query, &info)
 }
 
 // Events streams container events.
@@ -542,12 +624,22 @@ func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, er
 
 // Pull pulls an image and checks every progress record. HTTP 200 alone does
 // not mean a pull succeeded; Docker reports registry errors in the body.
-func (c *Client) Pull(ctx context.Context, image string) error {
-	full, err := c.path(ctx, "/images/create", url.Values{"fromImage": {image}})
+// registryAuth is an X-Registry-Auth value, or "" for anonymous access;
+// platform selects an image variant, or "" for the daemon's own.
+func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string) error {
+	query := url.Values{"fromImage": {image}}
+	if platform != "" {
+		query.Set("platform", platform)
+	}
+	full, err := c.path(ctx, "/images/create", query)
 	if err != nil {
 		return err
 	}
-	response, err := c.Request(ctx, http.MethodPost, full, nil)
+	var header http.Header
+	if registryAuth != "" {
+		header = http.Header{"X-Registry-Auth": {registryAuth}}
+	}
+	response, err := c.request(ctx, http.MethodPost, full, nil, header)
 	if err != nil {
 		return err
 	}

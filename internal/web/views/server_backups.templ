@@ -2,7 +2,7 @@ package views
 
 import (
 	"github.com/Crunging/Ludock/internal/backups"
-	"github.com/Crunging/Ludock/internal/compose"
+	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -213,7 +213,7 @@ templ RestoreForm(b BackupsView) {
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
 		<details class="disclosure">
 			<summary>More about restoring</summary>
-			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t roll back the container image or Compose settings.</p>
+			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t roll back the container image or its settings.</p>
 		</details>
 		<input type="hidden" name="backupId" value={ b.Restore.ID }/>
 		<label>
@@ -234,7 +234,7 @@ type UpdateView struct {
 	Admin, CanBackup     bool
 	Blocked, Active      bool
 	Recreate             bool
-	Capability           *compose.Capability
+	Capability           *update.Capability
 	Error                string
 }
 
@@ -268,29 +268,16 @@ templ UpdatePanel(u UpdateView) {
 			}
 			if !u.Admin {
 				if capability.UpdatesOnStart {
-					<p class="section-note">
-						if capability.Manager == "compose" {
-							Pulling a newer image needs an administrator.
-						} else {
-							Pull a newer image through the tool that created this container.
-						}
-					</p>
+					<p class="section-note">Pulling a newer image needs an administrator.</p>
 				} else {
 					<p class="section-note">This image is not known to update the game on startup. Update it through its owning manager.</p>
 				}
 			} else {
 				<h3>Update container image</h3>
 				if !capability.Available {
-					<p class="section-note">
-						if capability.UnavailableReason != "" {
-							{ capability.UnavailableReason }
-						} else {
-							Ludock discovers Compose source files automatically. Check source access in Settings if updates are unavailable.
-						}
-					</p>
+					<p class="section-note">{ capability.UnavailableReason }</p>
 					<div class="inline-actions">
 						@reloadUpdate(u.ServerID, "Check again")
-						<a class="text-link" href="/settings">Check source access</a>
 					</div>
 				} else {
 					@UpdateForm(u)
@@ -308,19 +295,16 @@ templ UpdateForm(u UpdateView) {
 	{{ capability := u.Capability }}
 	<form class="stack-form" hx-post={ "/servers/" + u.ServerID + "/updates" } hx-target="#update-status">
 		<p class="section-lede">
-			Pull the newest image for this service and recreate it with Docker Compose. This updates the image itself, including its system packages and startup scripts.
+			Pull the newest version of this server’s image and recreate its container with the same settings. This updates the image itself, including its system packages and startup scripts.
 		</p>
 		<dl class="metadata-list">
-			<dt>Project</dt>
-			<dd>{ capability.ProjectName }</dd>
-			<dt>Service</dt>
-			<dd>{ capability.ServiceName }</dd>
 			<dt>Configured image</dt>
 			<dd>{ capability.Image }</dd>
 		</dl>
 		<details class="disclosure">
 			<summary>What gets replaced</summary>
-			<p>Ludock follows your Compose files exactly. Changes made to the running container that aren’t saved in those files are lost. Only this service is recreated; other services and dependencies aren’t touched.</p>
+			<p>The new container keeps the old one’s settings, ports, networks, mounted folders, and volumes, including unnamed ones. Files changed inside the container outside those are lost. Other containers aren’t touched, and the tool that created this one still owns its settings.</p>
+			<p>If the new container stops or reports itself unhealthy right after starting, Ludock restores the previous container and leaves it stopped, since the new version may already have changed the game data.</p>
 		</details>
 		<label class="check-label">
 			<input type="checkbox" name="createBackup" value="true" id="update-backup" checked?={ u.CanBackup } disabled?={ !u.CanBackup }/>
@@ -338,7 +322,7 @@ templ UpdateForm(u UpdateView) {
 		</label>
 		<label class="check-label">
 			<input type="checkbox" name="confirmed" value="true" required/>
-			I understand that connected players will be disconnected and the selected service will be recreated.
+			I understand that connected players will be disconnected and the server’s container will be recreated.
 		</label>
 		<div id="update-status" aria-live="polite"></div>
 		<button class="primary-btn" type="submit" disabled?={ u.Blocked || u.Active } data-busy-label="Working…">{ capability.ActionLabel }</button>

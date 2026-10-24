@@ -55,7 +55,7 @@ keeps their temporary data.
 `e2e/docker` runs the built image against real Docker. It deploys
 [`compose.yaml`](../compose.yaml) with a test override, starts a small Compose
 game stack, and checks the hardened runtime, file helpers started from Ludock's
-own image, backup and restore, the shell, a Compose update, and account
+own image, backup and restore, the shell, an image update, and account
 recovery. Run them only against a disposable daemon:
 
 ```sh
@@ -66,7 +66,7 @@ cd e2e && LUDOCK_DOCKER_E2E=disposable-daemon npx playwright test -c docker.conf
 ## CI and releases
 
 The image cross-compiles a static binary (`CGO_ENABLED=0`) and copies it into
-Alpine with the Docker CLI and Compose plugin. The binary's subcommands are
+Alpine. The binary's subcommands are
 `serve` (the default), `recover <username>`, `healthcheck`, `helper …` (run
 inside helper containers), and `version`.
 

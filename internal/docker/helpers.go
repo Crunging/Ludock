@@ -18,7 +18,7 @@ func (c *Client) CreateHelper(ctx context.Context, options ContainerCreate) (str
 	if err == nil || StatusCode(err) != http.StatusNotFound || !strings.Contains(options.Image, "@sha256:") {
 		return id, err
 	}
-	if err := c.Pull(ctx, options.Image); err != nil {
+	if err := c.Pull(ctx, options.Image, "", ""); err != nil {
 		return "", err
 	}
 	return c.CreateContainer(ctx, options)
