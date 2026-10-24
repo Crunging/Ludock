@@ -65,3 +65,24 @@ test("the More menu on the last server opens past the end of the list", async ({
   await files.click();
   await expect(page).toHaveURL(/\/files\//);
 });
+
+test("list refreshes show local times from the first frame", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".server-row time").first()).toBeVisible();
+  // Records every time label the list shows while a refresh swaps it in.
+  const shown = await page.evaluate(() => new Promise((resolve) => {
+    const servers = document.getElementById("servers");
+    const texts = [];
+    const observer = new MutationObserver(() => servers.querySelectorAll("time").forEach((time) => texts.push(time.textContent)));
+    observer.observe(servers, { childList: true, subtree: true, characterData: true });
+    document.body.addEventListener("htmx:afterSettle", function settled(event) {
+      if (event.detail.target !== servers) return;
+      document.body.removeEventListener("htmx:afterSettle", settled);
+      observer.disconnect();
+      resolve(texts);
+    });
+    window.htmx.trigger(document.body, "servers-changed");
+  }));
+  expect(shown.length).toBeGreaterThan(0);
+  expect(shown.filter((text) => text.includes("UTC"))).toEqual([]);
+});

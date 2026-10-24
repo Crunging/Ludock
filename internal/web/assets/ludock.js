@@ -415,6 +415,9 @@
     });
   }
   setInterval(function () { formatTimes(); }, 30000);
+  // Swapped content is formatted in the same task that inserts it, before
+  // the browser paints; htmx:load comes only after settling, a frame later.
+  document.addEventListener("htmx:afterSwap", function () { formatTimes(); });
 
   // data-clear-filters="form-id" empties a filter form and applies it.
   document.addEventListener("click", function (event) {
