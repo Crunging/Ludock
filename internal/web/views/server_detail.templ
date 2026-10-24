@@ -495,7 +495,8 @@ templ AvailabilityStatus(d ServerDetail) {
 }
 
 templ AvailabilityForm(serverID string, policy monitor.Policy) {
-	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result">
+	// Each change saves right away; the result says so.
+	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
 		<p class="muted">
 			Alert when this server is down. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.
 		</p>
@@ -519,7 +520,6 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 		</div>
 		<p class="muted">Alerts go to Discord. <a class="text-link" href="/settings">Set up Discord in Settings</a></p>
 		<div id="availability-result" aria-live="polite"></div>
-		<button class="primary-btn" type="submit" data-busy-label="Saving…">Save monitoring</button>
 	</form>
 }
 

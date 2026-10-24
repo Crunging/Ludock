@@ -26,11 +26,11 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 	page := p.do("GET", "/servers/"+p.server+"?tab=backups", viewer, nil, nil)
 	body := page.Body.String()
 	if page.Code != http.StatusOK || !strings.Contains(body, "valheim") || strings.Contains(body, "tab=backups") ||
-		strings.Contains(body, "/servers/"+p.server+"/start") || strings.Contains(body, "Save monitoring") {
+		strings.Contains(body, "/servers/"+p.server+"/start") || strings.Contains(body, "/availability") {
 		t.Fatal(page.Code, body)
 	}
 	admin := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String()
-	for _, want := range []string{"tab=backups", "tab=schedules", "tab=update", "/servers/" + p.server + "/start", "Save monitoring"} {
+	for _, want := range []string{"tab=backups", "tab=schedules", "tab=update", "/servers/" + p.server + "/start", "/servers/" + p.server + "/availability"} {
 		if !strings.Contains(admin, want) {
 			t.Error("admin page lacks", want)
 		}

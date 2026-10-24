@@ -28,7 +28,7 @@ test("sharing one server with an operator, then removing access", async ({ sessi
   await expect(operator.getByRole("tab")).toHaveText(["Overview", "Activity"]);
   await expect(operator.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(operator.locator(".detail-actions").getByRole("link", { name: "Logs" })).toBeVisible();
-  await expect(operator.getByRole("button", { name: "Save monitoring" })).toHaveCount(0);
+  await expect(operator.getByLabel("Monitor this server")).toHaveCount(0);
 
   // Administrator pages and other servers stay out of reach.
   await operator.goto("/users");

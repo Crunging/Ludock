@@ -1603,13 +1603,13 @@ func AvailabilityForm(serverID string, policy monitor.Policy) templ.Component {
 		var templ_7745c5c3_Var57 string
 		templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + serverID + "/availability")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 498, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 499, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "\" hx-target=\"#availability-result\"><p class=\"muted\">Alert when this server is down. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.</p><label class=\"check-label\"><input type=\"checkbox\" name=\"enabled\" value=\"true\" id=\"availability-enabled\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "\" hx-target=\"#availability-result\" hx-trigger=\"change, submit\" hx-sync=\"this:replace\"><p class=\"muted\">Alert when this server is down. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.</p><label class=\"check-label\"><input type=\"checkbox\" name=\"enabled\" value=\"true\" id=\"availability-enabled\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1636,7 +1636,7 @@ func AvailabilityForm(serverID string, policy monitor.Policy) templ.Component {
 		var templ_7745c5c3_Var58 string
 		templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.Itoa(policy.GraceSeconds))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 509, Col: 177}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 510, Col: 177}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var58)
 		if templ_7745c5c3_Err != nil {
@@ -1652,7 +1652,7 @@ func AvailabilityForm(serverID string, policy monitor.Policy) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 150, "> Maintenance mode</label><p class=\"muted check-help\">Pauses alerts until you turn it off. The server and its schedules keep running.</p></div><p class=\"muted\">Alerts go to Discord. <a class=\"text-link\" href=\"/settings\">Set up Discord in Settings</a></p><div id=\"availability-result\" aria-live=\"polite\"></div><button class=\"primary-btn\" type=\"submit\" data-busy-label=\"Saving…\">Save monitoring</button></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 150, "> Maintenance mode</label><p class=\"muted check-help\">Pauses alerts until you turn it off. The server and its schedules keep running.</p></div><p class=\"muted\">Alerts go to Discord. <a class=\"text-link\" href=\"/settings\">Set up Discord in Settings</a></p><div id=\"availability-result\" aria-live=\"polite\"></div></form>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

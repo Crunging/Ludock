@@ -9,11 +9,16 @@ test("reviewing a server, setting up monitoring, and following a restart", async
   await expect(facts).toContainText("25565/tcp");
   await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
 
+  // Monitoring settings save as they change.
   await page.getByLabel("Monitor this server").check();
-  await page.getByLabel("Failure grace period (seconds)").fill("180");
-  await page.getByRole("button", { name: "Save monitoring" }).click();
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await expect(page.locator("#availability-title + p")).not.toHaveText("Monitoring disabled.");
+  await page.locator("#availability-result").evaluate((result) => result.replaceChildren());
+  await page.getByLabel("Failure grace period (seconds)").fill("180");
+  await page.getByLabel("Failure grace period (seconds)").press("Tab");
+  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
+  await page.reload();
+  await expect(page.getByLabel("Failure grace period (seconds)")).toHaveValue("180");
 
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
