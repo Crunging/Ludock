@@ -399,16 +399,22 @@
     });
   }
 
-  // Copy buttons: data-copy="text".
+  // Copy buttons: data-copy="text". The button's own markup, such as an
+  // icon, comes back after the confirmation, even after repeated clicks.
+  var copyIdle = new WeakMap();
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-copy]");
     if (!button || !navigator.clipboard) return;
     event.preventDefault();
     navigator.clipboard.writeText(button.getAttribute("data-copy")).then(function () {
-      var label = button.getAttribute("data-copied-label") || "Copied";
-      var original = button.textContent;
-      button.textContent = label;
-      setTimeout(function () { button.textContent = original; }, 1500);
+      if (!copyIdle.has(button)) copyIdle.set(button, { html: button.innerHTML });
+      var idle = copyIdle.get(button);
+      clearTimeout(idle.timer);
+      button.textContent = button.getAttribute("data-copied-label") || "Copied";
+      idle.timer = setTimeout(function () {
+        button.innerHTML = idle.html;
+        copyIdle.delete(button);
+      }, 1500);
     });
   });
 

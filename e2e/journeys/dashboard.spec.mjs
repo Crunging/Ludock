@@ -110,3 +110,14 @@ test("on a phone, the menu holds the navigation and servers stay compact", async
   await diagnostics.click();
   await expect(page).toHaveURL(/\/diagnostics$/);
 });
+
+test("copying a server's address", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  const copy = serverRow(page, "Survival").getByRole("button", { name: "Copy address for Survival" });
+  await copy.click();
+  await expect(copy).toHaveText("✓");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/:25565$/);
+  // The icon comes back, ready for another copy.
+  await expect(copy.locator("svg")).toBeVisible();
+});
