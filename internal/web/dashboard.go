@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -97,8 +98,25 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, request *Requ
 }
 
 func (s *Server) serversFragment(w http.ResponseWriter, r *http.Request, request *Request) {
+	list := s.serverList(r, request)
+	// Filtering keeps the address bar on the page, so going back to the
+	// list or reloading it keeps the filters.
+	if r.Header.Get("HX-Trigger") == "server-filters" {
+		page := url.Values{}
+		if list.Search != "" {
+			page.Set("search", list.Search)
+		}
+		if list.State != "" && list.State != "all" {
+			page.Set("state", list.State)
+		}
+		target := "/"
+		if len(page) > 0 {
+			target += "?" + page.Encode()
+		}
+		w.Header().Set("HX-Replace-Url", target)
+	}
 	html(w)
-	views.ServerListFragment(s.serverList(r, request)).Render(r.Context(), w)
+	views.ServerListResponse(list).Render(r.Context(), w)
 }
 
 func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, request *Request) {

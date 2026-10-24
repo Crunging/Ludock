@@ -90,7 +90,7 @@ templ Dashboard(page Page, list ServerList) {
 						<p class="page__subtitle">Servers shared with your account.</p>
 					}
 				</div>
-				<button class="secondary-btn" type="button" hx-get={ "/fragments/servers?" + listQuery(list) } hx-target="#servers" data-busy-label="Refreshing…">Refresh</button>
+				<button class="secondary-btn" type="button" hx-get="/fragments/servers" hx-include="#server-filters" hx-target="#servers" hx-sync="#servers:replace" data-busy-label="Refreshing…">Refresh</button>
 			</div>
 			<div id="action-error" aria-live="polite"></div>
 			<div class="server-connection" role="status" data-live-status hidden>
@@ -105,7 +105,10 @@ templ Dashboard(page Page, list ServerList) {
 					<p class="muted" aria-live="polite">Checking for issues…</p>
 				</section>
 			</div>
-			<div id="servers" hx-get={ "/fragments/servers?" + listQuery(list) } hx-trigger="sse:server delay:300ms, servers-changed from:body, every 60s" hx-swap="innerHTML">
+			@serverFilters(list)
+			// Refreshes carry the filters as they are now; the filters stay
+			// outside the swap so typing is never interrupted.
+			<div id="servers" hx-get="/fragments/servers" hx-include="#server-filters" hx-sync="this:replace" hx-trigger="sse:server delay:300ms, servers-changed from:body, every 60s" hx-swap="innerHTML">
 				@ServerListFragment(list)
 			</div>
 			if page.Admin && list.Total > 0 {
@@ -120,12 +123,56 @@ templ Dashboard(page Page, list ServerList) {
 	}
 }
 
-func listQuery(list ServerList) string {
-	query := "search=" + urlQuery(list.Search)
-	if list.State != "" && list.State != "all" {
-		query += "&state=" + urlQuery(list.State)
-	}
-	return query
+// serverFilters narrows the list. Without scripts it submits to the page;
+// the page hides it while there is no list to filter.
+templ serverFilters(list ServerList) {
+	<form class="list-toolbar" id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-sync="#servers:replace" hx-trigger="submit, input changed delay:250ms from:input, change from:select">
+		<label class="search-field">
+			<span class="sr-only">Find a server</span>
+			<input name="search" value={ list.Search } placeholder="Find a server…" type="search"/>
+		</label>
+		<label class="state-filter">
+			<span>State</span>
+			@stateSelect(list, false)
+		</label>
+		@serverCount(list, false)
+	</form>
+}
+
+// stateSelect is replaced whole when the states change: moving options
+// into a live select one at a time would change its selection.
+templ stateSelect(list ServerList, oob bool) {
+	<select
+		name="state"
+		id="server-state"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<option value="all">All states</option>
+		for _, state := range list.States {
+			<option value={ state } selected?={ list.State == state }>{ ServerStatus(state, "", nil).Label }</option>
+		}
+	</select>
+}
+
+templ serverCount(list ServerList, oob bool) {
+	<span
+		class="list-toolbar__count muted"
+		id="server-count"
+		role="status"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>{ strconv.Itoa(len(list.Rows)) } of { strconv.Itoa(list.Total) } servers</span>
+}
+
+// ServerListResponse is a list refresh: the rows, plus the filter count and
+// state choices, which leave the search box in place.
+templ ServerListResponse(list ServerList) {
+	@ServerListFragment(list)
+	@serverCount(list, true)
+	@stateSelect(list, true)
 }
 
 templ ServerListFragment(list ServerList) {
@@ -141,22 +188,6 @@ templ ServerListFragment(list ServerList) {
 		</div>
 	}
 	if list.Total > 0 {
-		<form class="list-toolbar" hx-get="/fragments/servers" hx-target="#servers" hx-trigger="input changed delay:250ms from:input, change from:select" hx-push-url="false">
-			<label class="search-field">
-				<span class="sr-only">Find a server</span>
-				<input name="search" value={ list.Search } placeholder="Find a server…" type="search"/>
-			</label>
-			<label class="state-filter">
-				<span>State</span>
-				<select name="state">
-					<option value="all">All states</option>
-					for _, state := range list.States {
-						<option value={ state } selected?={ list.State == state }>{ ServerStatus(state, "", nil).Label }</option>
-					}
-				</select>
-			</label>
-			<span class="list-toolbar__count muted" role="status">{ strconv.Itoa(len(list.Rows)) } of { strconv.Itoa(list.Total) } servers</span>
-		</form>
 		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup) } aria-label="Game servers">
 			<div class="server-list__header">
 				<span>Server</span>
@@ -173,7 +204,7 @@ templ ServerListFragment(list ServerList) {
 			if len(list.Rows) == 0 {
 				<div class="server-list__empty">
 					<p>No servers match your filters.</p>
-					<a class="text-link" href="/" hx-get="/fragments/servers" hx-target="#servers">Clear filters</a>
+					<button type="button" class="text-link" data-clear-filters="server-filters">Clear filters</button>
 				</div>
 			}
 		</section>

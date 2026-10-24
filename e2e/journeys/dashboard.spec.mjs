@@ -8,14 +8,40 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await expect(serverRow(page, "Survival")).toContainText("Running");
   await expect(serverRow(page, "Survival")).toContainText("25565");
 
-  await page.getByPlaceholder("Find a server…").fill("valh");
+  // Typing keeps going while results arrive: the keyboard types into
+  // whatever has focus, so a replaced search box would lose the "e".
+  const search = page.getByPlaceholder("Find a server…");
+  await search.click();
+  await page.keyboard.type("valh");
   await expect(page.locator(".server-row")).toHaveCount(1);
-  await page.getByPlaceholder("Find a server…").fill("");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
+  await page.keyboard.type("e");
+  await expect(search).toHaveValue("valhe");
+  await expect(search).toBeFocused();
+  await expect(page).toHaveURL(/\/\?search=valhe$/);
 
+  // Live refreshes after an action keep the filter.
   const valheim = serverRow(page, "valheim");
   await valheim.getByRole("button", { name: "Start" }).click();
   await expect(valheim).toContainText("Running");
+  await expect(page.locator(".server-row")).toHaveCount(1);
+  await expect(search).toHaveValue("valhe");
+
+  // The filter survives a reload, and clearing it shows everything again.
+  await page.reload();
+  await expect(page.locator(".server-row")).toHaveCount(1);
+  await search.fill("");
+  await page.getByLabel("State").selectOption("running");
+  await expect(page).toHaveURL(/\/\?state=running$/);
+  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.getByLabel("State")).toHaveValue("running");
+  await search.fill("no such server");
+  await expect(page.locator(".server-list__empty")).toContainText("No servers match your filters.");
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+  await expect(page).toHaveURL(/\/$/);
 
   await valheim.getByRole("button", { name: "Stop" }).click();
   const dialog = page.getByRole("dialog");

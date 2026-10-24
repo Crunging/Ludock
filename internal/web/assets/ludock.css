@@ -425,6 +425,8 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .state-filter { display: flex; align-items: center; gap: 8px; }
 .state-filter select { width: auto; min-width: 150px; }
 .list-toolbar__count { margin-left: auto; font-size: 14px; }
+/* Server filters show only while there is a list to filter. */
+.dashboard-page:not(:has(#servers .server-list)) #server-filters { display: none; }
 
 .server-list {
   display: grid; column-gap: 22px;

@@ -416,6 +416,20 @@
   }
   setInterval(function () { formatTimes(); }, 30000);
 
+  // data-clear-filters="form-id" empties a filter form and applies it.
+  document.addEventListener("click", function (event) {
+    var clear = event.target.closest && event.target.closest("[data-clear-filters]");
+    var form = clear && document.getElementById(clear.getAttribute("data-clear-filters"));
+    if (!form) return;
+    Array.prototype.forEach.call(form.elements, function (field) {
+      if (field.tagName === "SELECT") field.selectedIndex = 0;
+      else if (field.type === "search" || field.type === "text") field.value = "";
+    });
+    form.requestSubmit();
+    var first = form.querySelector("input[type=search], input[type=text]");
+    if (first) first.focus();
+  });
+
   // Disclosure menus: [data-action-menu] > button + content.
   document.addEventListener("click", function (event) {
     var trigger = event.target.closest && event.target.closest("[data-action-menu] > button");
