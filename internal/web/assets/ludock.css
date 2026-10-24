@@ -719,7 +719,6 @@ dialog[open] { animation: rise 0.16s ease-out; }
 
 .files-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
 .files-header__title { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.files-back { width: 38px; padding: 0; font-size: 18px; }
 .files-header__name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .files-header .page__subtitle { margin-top: 2px; }
 .files-root label { display: grid; gap: 4px; }

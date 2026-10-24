@@ -101,12 +101,12 @@ templ fileIcon(kind string) {
 templ FilesPage(page Page, f FilesView) {
 	@Shell(page) {
 		<div class="page files-page" data-files={ f.ServerID } data-files-root={ f.Root.ID } data-files-path={ f.Path } data-max-upload={ int64Text(f.MaxUploadRaw) } data-max-upload-text={ f.MaxUpload }>
+			<a class="text-link back-link" href={ templ.SafeURL("/servers/" + f.ServerID) }><span aria-hidden="true">←</span> { f.ServerName }</a>
 			<div class="files-header">
 				<div class="files-header__title">
-					<a class="secondary-btn files-back" href={ templ.SafeURL("/servers/" + f.ServerID) } aria-label="Back to server"><span aria-hidden="true">←</span></a>
 					<div>
 						<div class="files-header__name">
-							<h1 class="page__title" id="files-page-title" tabindex="-1">{ f.ServerName }</h1>
+							<h1 class="page__title" id="files-page-title" tabindex="-1">Files</h1>
 							if f.State != "" {
 								@ServerState(f.State, f.Health, f.Exit)
 							}

@@ -69,6 +69,11 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   }
   await page.getByLabel("Filter filenames").fill("server");
   await expect(names).toHaveText(["server.properties"]);
+
+  // The page names the server it belongs to and leads back to it.
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Files");
+  await page.getByRole("link", { name: "Survival", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Survival" })).toBeVisible();
 });
 
 test("browsing a large folder a page at a time", async ({ page }) => {
