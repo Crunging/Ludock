@@ -99,9 +99,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, request *Requ
 
 func (s *Server) serversFragment(w http.ResponseWriter, r *http.Request, request *Request) {
 	list := s.serverList(r, request)
-	// Filtering keeps the address bar on the page, so going back to the
-	// list or reloading it keeps the filters.
-	if r.Header.Get("HX-Trigger") == "server-filters" {
+	// Every list request carries the filters as they are, so each keeps the
+	// address bar in step; going back to the list or reloading it keeps them.
+	if r.Header.Get("HX-Target") == "servers" {
 		page := url.Values{}
 		if list.Search != "" {
 			page.Set("search", list.Search)

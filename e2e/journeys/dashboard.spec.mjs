@@ -30,7 +30,9 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   // The filter survives a reload, and clearing it shows everything again.
   await page.reload();
   await expect(page.locator(".server-row")).toHaveCount(1);
+  // Refreshes replace the state choices; choosing one afterwards still filters.
   await search.fill("");
+  await expect(page.locator(".server-row")).toHaveCount(2);
   await page.getByLabel("State").selectOption("running");
   await expect(page).toHaveURL(/\/\?state=running$/);
   await expect(page.locator(".server-row")).toHaveCount(2);
