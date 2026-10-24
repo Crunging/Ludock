@@ -614,7 +614,10 @@ templ SelectedOperation(a ActivityView) {
 	>
 		<div class="section-heading">
 			<h2 id="scheduled-operation-title" tabindex="-1">Operation details</h2>
-			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage()... }>Dismiss</a>
+			// The Backups tab follows running work until it ends.
+			if a.Tab != "backups" || a.Selected == nil || !ActiveStatus(a.Selected.Status) {
+				<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage()... }>Dismiss</a>
+			}
 		</div>
 		if a.SelectedError != "" {
 			<p role="alert">{ a.SelectedError }</p>

@@ -135,6 +135,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 			d.Activity.Archives = d.Admin && can(&d.Row.Server, authz.BackupsRead)
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
+			d.Operation = d.Backups.Operation.SelectedID
 		case "schedules":
 			d.Schedules = s.schedulesView(r, request, d)
 		case "update":
@@ -147,7 +148,9 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	d.Operation = r.URL.Query().Get("operation")
+	if d.Operation == "" {
+		d.Operation = r.URL.Query().Get("operation")
+	}
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"
 	render(w, r, http.StatusOK, views.ServerDetailPage(page, *d))
