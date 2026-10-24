@@ -482,6 +482,27 @@
     });
   });
 
+  // Phones fold the navigation into a menu; without this script it wraps.
+  document.querySelectorAll("[data-harbor]").forEach(function (harbor) { harbor.classList.add("harbor--menu"); });
+  function harborMenu(open) {
+    document.querySelectorAll("[data-harbor]").forEach(function (harbor) {
+      harbor.classList.toggle("harbor--open", open);
+      var button = harbor.querySelector("[data-harbor-menu]");
+      if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  }
+  document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest("[data-harbor-menu]")) {
+      harborMenu(event.target.closest("[data-harbor-menu]").getAttribute("aria-expanded") !== "true");
+    }
+  });
+  document.addEventListener("keydown", function (event) {
+    var button = document.querySelector("[data-harbor-menu][aria-expanded=true]");
+    if (event.key !== "Escape" || !button) return;
+    harborMenu(false);
+    button.focus();
+  });
+
   // Live update connection status and session expiry over SSE.
   function liveStatus(connected) {
     document.querySelectorAll("[data-live-status]").forEach(function (element) { element.hidden = connected; });

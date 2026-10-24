@@ -263,26 +263,30 @@ templ ServerCard(row ServerRow) {
 				}
 			}
 		</div>
-		<div class="server-row__address">
-			<span class="server-row__label">Connect</span>
-			if row.Address != "" {
-				@CopyAddress(row.Address, server.DisplayName)
-			} else {
-				<span class="muted">No public port</span>
-			}
-		</div>
-		if row.ShowBackup {
-			<div class="server-row__backup">
-				<span class="server-row__label">Last backup</span>
-				if !row.BackupSummary {
-					<span class="muted">—</span>
-				} else if server.LatestBackup != nil {
-					@Time(server.LatestBackup.CreatedAt, "sentence", "")
+		// Address and last backup share a line on phones; elsewhere they are
+		// columns of the list.
+		<div class="server-row__facts">
+			<div class="server-row__address">
+				<span class="server-row__label">Connect</span>
+				if row.Address != "" {
+					@CopyAddress(row.Address, server.DisplayName)
 				} else {
-					<span class="server-row__never">Never</span>
+					<span class="muted">No public port</span>
 				}
 			</div>
-		}
+			if row.ShowBackup {
+				<div class="server-row__backup">
+					<span class="server-row__label">Last backup</span>
+					if !row.BackupSummary {
+						<span class="muted">—</span>
+					} else if server.LatestBackup != nil {
+						@Time(server.LatestBackup.CreatedAt, "sentence", "")
+					} else {
+						<span class="server-row__never">Never</span>
+					}
+				</div>
+			}
+		</div>
 		<div class="server-row__actions">
 			if row.ConsoleLabel != "" {
 				<a class="secondary-btn secondary-btn--accent" href={ templ.SafeURL("/console/" + server.ID) }>{ row.ConsoleLabel }</a>

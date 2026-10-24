@@ -94,35 +94,42 @@ templ Shell(page Page) {
 		<div class={ "app", templ.KV("app--console", page.Console) } hx-headers={ csrfHeaders(page.CSRF) }>
 			<a class="skip-link" href="#main-content">Skip to content</a>
 			if !page.Console {
-				<header class="harbor">
+				<header class="harbor" data-harbor>
 					<a class="harbor__brand" href="/" aria-label="Ludock servers">
 						@LudockMark("harbor__mark")
 						<span>Ludock</span>
 					</a>
-					<nav class="harbor__nav" aria-label="Primary navigation">
-						<div class="harbor__group">
-							@navLink(page, "/", "Servers")
-							@navLink(page, "/operations", "Operations")
-						</div>
-						if page.Admin {
-							<div class="harbor__group" role="group" aria-label="Administration">
-								@navLink(page, "/users", "Users")
-								@navLink(page, "/settings", "Settings")
-								@navLink(page, "/diagnostics", "Diagnostics")
-								@navLink(page, "/audit", "Audit log")
-								@navLink(page, "/logs", "Ludock logs")
+					// Phones fold the navigation and session behind this button.
+					<button type="button" class="harbor__menu-button" aria-expanded="false" aria-controls="harbor-menu" data-harbor-menu>
+						<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+						Menu
+					</button>
+					<div class="harbor__menu" id="harbor-menu">
+						<nav class="harbor__nav" aria-label="Primary navigation">
+							<div class="harbor__group">
+								@navLink(page, "/", "Servers")
+								@navLink(page, "/operations", "Operations")
 							</div>
-						}
-					</nav>
-					<div class="harbor__session">
-						<a href="/account" class={ "harbor__account", templ.KV("harbor__account--current", page.Path == "/account") } aria-current={ navCurrent(page, "/account") }>
-							<span class="harbor__username">{ page.Username }</span>
-							<span class="harbor__role">{ page.RoleName }</span>
-						</a>
-						<form method="post" action="/logout" class="harbor__signout">
-							<input type="hidden" name="_csrf" value={ page.CSRF }/>
-							<button type="submit">Sign out</button>
-						</form>
+							if page.Admin {
+								<div class="harbor__group" role="group" aria-label="Administration">
+									@navLink(page, "/users", "Users")
+									@navLink(page, "/settings", "Settings")
+									@navLink(page, "/diagnostics", "Diagnostics")
+									@navLink(page, "/audit", "Audit log")
+									@navLink(page, "/logs", "Ludock logs")
+								</div>
+							}
+						</nav>
+						<div class="harbor__session">
+							<a href="/account" class={ "harbor__account", templ.KV("harbor__account--current", page.Path == "/account") } aria-current={ navCurrent(page, "/account") }>
+								<span class="harbor__username">{ page.Username }</span>
+								<span class="harbor__role">{ page.RoleName }</span>
+							</a>
+							<form method="post" action="/logout" class="harbor__signout">
+								<input type="hidden" name="_csrf" value={ page.CSRF }/>
+								<button type="submit">Sign out</button>
+							</form>
+						</div>
 					</div>
 				</header>
 			}

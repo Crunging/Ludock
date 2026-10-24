@@ -86,3 +86,27 @@ test("list refreshes show local times from the first frame", async ({ page }) =>
   expect(shown.length).toBeGreaterThan(0);
   expect(shown.filter((text) => text.includes("UTC"))).toEqual([]);
 });
+
+test("on a phone, the menu holds the navigation and servers stay compact", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const menu = page.getByRole("button", { name: "Menu" });
+  const diagnostics = page.getByRole("link", { name: "Diagnostics" });
+  await expect(diagnostics).toBeHidden();
+  await menu.click();
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await expect(diagnostics).toBeInViewport();
+  await page.keyboard.press("Escape");
+  await expect(diagnostics).toBeHidden();
+  await expect(menu).toBeFocused();
+
+  // A server's name, state, address, last backup, and actions fit in a
+  // short card, so several fit on one screen.
+  for (const row of await page.locator(".server-row").all()) {
+    expect((await row.boundingBox()).height).toBeLessThan(220);
+  }
+
+  await menu.click();
+  await diagnostics.click();
+  await expect(page).toHaveURL(/\/diagnostics$/);
+});
