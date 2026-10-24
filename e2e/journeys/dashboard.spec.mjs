@@ -123,3 +123,25 @@ test("copying a server's address", async ({ page, context }) => {
   // The icon comes back, ready for another copy.
   await expect(copy.locator("svg")).toBeVisible();
 });
+
+test("a state chosen while the list is loading still applies", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".server-row").first()).toBeVisible();
+  // Holds the next list response, so the choice lands while it loads.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let waiting = false;
+  await page.route("**/fragments/servers?*", async (route) => {
+    if (!waiting) {
+      waiting = true;
+      await held;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => waiting).toBe(true);
+  await page.getByLabel("State").selectOption("running");
+  release();
+  await expect(page).toHaveURL(/\/\?state=running$/);
+  await expect(page.getByLabel("State")).toHaveValue("running");
+});

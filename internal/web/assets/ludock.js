@@ -380,6 +380,17 @@
     }, { once: true });
   });
 
+  // A refresh never replaces a select whose choice it didn't see, such as a
+  // filter changed while the list was loading: that choice's own request is
+  // queued, and htmx drops queued requests whose element left the page.
+  document.addEventListener("htmx:oobBeforeSwap", function (event) {
+    var live = event.detail.target;
+    var incoming = event.detail.fragment && event.detail.fragment.querySelector && event.detail.fragment.querySelector("select");
+    if (!live || live.tagName !== "SELECT" || !incoming || incoming.id !== live.id) return;
+    var chosen = incoming.querySelector("option[selected]") || incoming.querySelector("option");
+    if (chosen && chosen.value !== live.value) event.detail.shouldSwap = false;
+  });
+
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
   document.addEventListener("change", function (event) {
