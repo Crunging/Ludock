@@ -60,6 +60,8 @@ type ActivityView struct {
 	AlreadyCurrent bool
 	// Tab is the tab showing the selected operation.
 	Tab string
+	// Archives offers the download of a backup the operation made.
+	Archives bool
 }
 
 func detailURL(id, query string) templ.SafeURL {
@@ -643,7 +645,7 @@ templ SelectedOperation(a ActivityView) {
 			if text := guidance(operation.Result); text != "" {
 				<p class="section-note">{ text }</p>
 			}
-			if id := newBackup(operation); id != "" && a.Admin {
+			if id := newBackup(operation); id != "" && a.Archives {
 				<p class="inline-actions">
 					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download") } download>Download backup</a>
 				</p>

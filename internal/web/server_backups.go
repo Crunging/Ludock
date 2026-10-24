@@ -29,7 +29,8 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup}
 	// A backup or restore started here shows its progress here.
-	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation")}
+	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
+		Archives: d.Admin && can(view, authz.BackupsRead)}
 	if b.Operation.SelectedID != "" {
 		s.selectOperation(r, &b.Operation)
 	}

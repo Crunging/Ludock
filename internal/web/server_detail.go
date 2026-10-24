@@ -132,6 +132,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		switch d.Tab {
 		case "activity":
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
+			d.Activity.Archives = d.Admin && can(&d.Row.Server, authz.BackupsRead)
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
 		case "schedules":
@@ -180,7 +181,11 @@ func (s *Server) detailOperation(w http.ResponseWriter, r *http.Request, request
 		s.fail(w, r, request, err)
 		return
 	}
-	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation"), Admin: request.User().Role == db.RoleAdmin, Tab: "activity"}
+	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation"), Tab: "activity"}
+	if request.User().Role == db.RoleAdmin {
+		_, err := s.App.Authz.Assert(r.Context(), request.User(), id, authz.BackupsRead)
+		a.Archives = err == nil
+	}
 	if r.URL.Query().Get("tab") == "backups" {
 		a.Tab = "backups"
 	}
