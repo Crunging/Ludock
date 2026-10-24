@@ -53,5 +53,6 @@ test("sharing one server with an operator, then removing access", async ({ sessi
   await expect(operator).toHaveURL(/\/login/);
 
   await adminPage.locator(".user-row", { hasText: "operator1" }).getByRole("button", { name: "Delete" }).click();
+  await adminPage.getByRole("dialog", { name: "Delete operator1?" }).getByRole("button", { name: "Delete user" }).click();
   await expect(adminPage.locator("#users .alert--success")).toHaveText("Deleted operator1.");
 });

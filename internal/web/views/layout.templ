@@ -128,6 +128,24 @@ templ Shell(page Page) {
 			<main id="main-content" tabindex="-1" class="main">
 				{ children... }
 			</main>
+			@ConfirmDialog()
 		</div>
 	}
+}
+
+// ConfirmDialog asks before requests with hx-confirm. The requesting
+// element fills it in: hx-confirm is the question, data-confirm-detail the
+// explanation, data-confirm-action the button, and data-confirm-danger marks
+// an action that can't be undone.
+templ ConfirmDialog() {
+	<dialog class="lifecycle-confirmation" id="confirm-dialog" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-detail">
+		<form method="dialog">
+			<h2 id="confirm-dialog-title"></h2>
+			<p id="confirm-dialog-detail"></p>
+			<div class="lifecycle-confirmation__actions">
+				<button class="secondary-btn" type="submit" value="cancel" autofocus>Cancel</button>
+				<button class="primary-btn" type="submit" value="confirm" data-confirm-button>Confirm</button>
+			</div>
+		</form>
+	</dialog>
 }

@@ -12,7 +12,11 @@ function watch(page, problems) {
     // assert on the page instead.
     if (message.type() === "error" && !/Failed to load resource|\[object Event\]/.test(message.text())) problems.push(message.text());
   });
-  page.on("dialog", (dialog) => dialog.accept());
+  // Ludock asks in its own dialogs; a browser dialog is a regression.
+  page.on("dialog", (dialog) => {
+    problems.push(`browser ${dialog.type()} dialog: ${dialog.message()}`);
+    dialog.dismiss();
+  });
   return page;
 }
 

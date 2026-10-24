@@ -273,6 +273,9 @@ templ ScheduleList(v SchedulesView) {
 									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete" }
 									hx-target="#detail-status"
 									hx-confirm="Delete this schedule?"
+									data-confirm-detail="It won’t run again. This can’t be undone."
+									data-confirm-action="Delete schedule"
+									data-confirm-danger
 									data-busy-label="Deleting…"
 								>Delete</button>
 							</div>

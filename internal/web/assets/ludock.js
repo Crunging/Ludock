@@ -42,6 +42,29 @@
     }
   });
 
+  // hx-confirm asks in the page's own dialog instead of the browser's.
+  var confirming = null;
+  document.addEventListener("htmx:confirm", function (event) {
+    var dialog = document.getElementById("confirm-dialog");
+    var elt = event.detail.elt;
+    if (!event.detail.question || !dialog || !dialog.showModal) return;
+    event.preventDefault();
+    var detail = elt.getAttribute("data-confirm-detail") || "";
+    var button = dialog.querySelector("[data-confirm-button]");
+    dialog.querySelector("h2").textContent = event.detail.question;
+    dialog.querySelector("p").textContent = detail;
+    dialog.querySelector("p").hidden = !detail;
+    button.textContent = elt.getAttribute("data-confirm-action") || "Confirm";
+    button.className = elt.hasAttribute("data-confirm-danger") ? "secondary-btn secondary-btn--danger" : "primary-btn";
+    dialog.returnValue = "";
+    confirming = elt;
+    dialog.addEventListener("close", function () {
+      confirming = null;
+      if (dialog.returnValue === "confirm") event.detail.issueRequest(true);
+    }, { once: true });
+    dialog.showModal();
+  });
+
   // Open and close native dialogs: data-dialog-open="id", data-dialog-close.
   document.addEventListener("click", function (event) {
     var opener = event.target.closest && event.target.closest("[data-dialog-open]");
@@ -338,10 +361,12 @@
   });
 
   // A live refresh never replaces an open dialog (such as a stop
-  // confirmation in the server list); it refreshes once the dialog closes.
+  // confirmation in the server list), or the element a confirmation will
+  // send; it refreshes once the dialog closes.
   document.addEventListener("htmx:beforeSwap", function (event) {
     var target = event.detail.target;
     var open = target && target.querySelector && target.querySelector("dialog[open]");
+    if (!open && confirming && target && target.contains && target.contains(confirming)) open = document.getElementById("confirm-dialog");
     if (!open || event.detail.requestConfig.elt.closest("dialog") === open) return;
     event.detail.shouldSwap = false;
     if (open.hasAttribute("data-refresh-pending")) return;

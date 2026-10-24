@@ -83,7 +83,9 @@ templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
 		disabled?={ !ready }
 		hx-post={ "/servers/" + serverID + "/backups" }
 		hx-target="#detail-status"
-		hx-confirm={ "Create a backup of " + serverName + "? The server stops for the entire copy and returns to its previous running state afterward." }
+		hx-confirm={ "Back up " + serverName + "?" }
+		data-confirm-detail="The server stops for the whole copy, then returns to how it was."
+		data-confirm-action="Create backup"
 		data-busy-label="Working…"
 		if oob {
 			hx-swap-oob="true"
@@ -195,7 +197,10 @@ templ BackupList(b BackupsView) {
 									disabled?={ !b.CanDelete || b.Active }
 									hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 									hx-target="#detail-status"
-									hx-confirm="Permanently delete this backup archive?"
+									hx-confirm="Delete this backup?"
+									data-confirm-detail="The archive is deleted permanently."
+									data-confirm-action="Delete backup"
+									data-confirm-danger
 									data-busy-label="Deleting…"
 								>Delete</button>
 							</div>

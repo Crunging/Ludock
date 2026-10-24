@@ -65,6 +65,14 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(row).toContainText("07:15, weekdays");
   await expect(row.locator("td").nth(2)).toHaveText("Paused");
 
+  // Cancelling the confirmation keeps the schedule.
+  const confirm = page.getByRole("dialog", { name: "Delete this schedule?" });
   await row.getByRole("button", { name: "Delete" }).click();
+  await expect(confirm).toContainText("It won’t run again.");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await confirm.getByRole("button", { name: "Delete schedule" }).click();
   await expect(page.locator("#schedule-list")).toContainText("No schedules.");
 });
