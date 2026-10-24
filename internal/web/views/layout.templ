@@ -28,7 +28,8 @@ templ Document(title, csrf string, scripts, styles []string) {
 			<meta name="color-scheme" content="dark"/>
 			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
 			// Eval stays off: the CSP allows no inline or string-evaluated script.
-			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"selfRequestsOnly":true}'/>
+			// Back and forward reload pages, since htmx keeps no snapshots.
+			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"selfRequestsOnly":true}'/>
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 			}

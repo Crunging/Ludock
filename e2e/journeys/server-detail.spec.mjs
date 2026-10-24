@@ -24,3 +24,26 @@ test("reviewing a server, setting up monitoring, and following a restart", async
   await expect(page.locator(".activity-filter-count")).toHaveText(/Showing 0 of \d+ recent operations\./);
   await expect(page).toHaveURL(/status=failed/);
 });
+
+test("switching a server's tabs keeps the page loaded", async ({ page }) => {
+  await openServer(page, "Survival");
+  // A full page load would drop this marker.
+  await page.evaluate(() => { window.stayedOnPage = true; });
+  const activity = page.getByRole("tab", { name: "Activity" });
+  await activity.click();
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page).toHaveURL(/\?tab=activity$/);
+  await expect(activity).toHaveAttribute("aria-selected", "true");
+  await expect(activity).toBeFocused();
+
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  expect(await page.evaluate(() => window.stayedOnPage)).toBe(true);
+
+  // Back and forward still land on the right tab.
+  await page.goBack();
+  await expect(page).toHaveURL(/\?tab=activity$/);
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await page.goForward();
+  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+});
