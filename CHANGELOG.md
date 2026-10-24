@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.0](https://github.com/Crunging/Ludock/compare/v0.5.0...v0.6.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* Ludock no longer opens databases from 0.5 and earlier. Start with a new application data volume (or LUDOCK_DATA_DIR) and complete first-administrator setup again; the old database and game data are left unchanged. The JSON API and LUDOCK_API_TOKEN are removed (only /api/v1/health remains), as is AUDIT_LOG_MAX_ROWS. Renamed settings: MAX_UPLOAD_SIZE is LUDOCK_MAX_UPLOAD_SIZE, LOG_LEVEL is LUDOCK_LOG_LEVEL, DOCKER_SOCKET is LUDOCK_DOCKER_SOCKET, FILE_HELPER_IMAGE is LUDOCK_HELPER_IMAGE, and LUDOCK_DB_PATH is replaced by LUDOCK_DATA_DIR.
+
+### Features
+
+* rewrite Ludock in Go ([#50](https://github.com/Crunging/Ludock/issues/50)) ([a600acd](https://github.com/Crunging/Ludock/commit/a600acd7a22fe6f84e6ef5648aa8bce9a4d80814))
+* update servers through the Docker API without Compose mounts ([#57](https://github.com/Crunging/Ludock/issues/57)) ([1891590](https://github.com/Crunging/Ludock/commit/1891590104085b5c5f2e2c55382593b843c9aa1e))
+
+
+### Bug Fixes
+
+* keep sign-in redirects on site when next contains a tab ([#54](https://github.com/Crunging/Ludock/issues/54)) ([da72079](https://github.com/Crunging/Ludock/commit/da7207919ca83f5ad6837c722dd1b3458508505c))
+* show the whole More menu on the last server in the list ([#53](https://github.com/Crunging/Ludock/issues/53)) ([2f636d8](https://github.com/Crunging/Ludock/commit/2f636d80617d6055331faba2d54ee467e6cd114c))
+
+
+### Performance Improvements
+
+* reduce repeated Docker, database, and browser work ([#52](https://github.com/Crunging/Ludock/issues/52)) ([8f3d9ad](https://github.com/Crunging/Ludock/commit/8f3d9ad59e614a78c3deba0874b9dbc7904edb83))
+
+
+### Code Refactoring
+
+* check the second character of next explicitly in safeNext ([#55](https://github.com/Crunging/Ludock/issues/55)) ([cac3fed](https://github.com/Crunging/Ludock/commit/cac3fede3c4b3f0c0e05f76348e1205bd755933a))
+
 ## [0.5.0](https://github.com/Crunging/Ludock/compare/v0.4.0...v0.5.0) (2026-10-18)
 
 
