@@ -195,3 +195,32 @@ test("clicking a tab again while its page loads still opens it", async ({ page }
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(activity|backups)$/);
 });
+
+test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
+  await openServer(page, "Survival");
+  // Hold every tab page until all four clicks are made.
+  const gates = [];
+  await page.route(/\?tab=(activity|backups)$/, async (route) => {
+    await new Promise((resolve) => gates.push(resolve));
+    await route.continue();
+  });
+  const activity = page.getByRole("tab", { name: "Activity" });
+  const backups = page.getByRole("tab", { name: "Backups" });
+  for (const [index, tab] of [activity, backups, activity, backups].entries()) {
+    await tab.click();
+    await expect.poll(() => gates.length).toBe(index + 1);
+  }
+  // The third answers before the fourth, then the first two.
+  const third = page.waitForResponse(/\?tab=activity$/);
+  gates[2]();
+  await third;
+  const fourth = page.waitForResponse(/\?tab=backups$/);
+  gates[3]();
+  await fourth;
+  gates[0]();
+  gates[1]();
+  await expect(page.locator("#backup-readiness")).toBeVisible();
+  await expect(backups).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\?tab=backups$/);
+  await page.unroute(/\?tab=(activity|backups)$/);
+});

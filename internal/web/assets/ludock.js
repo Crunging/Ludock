@@ -404,9 +404,14 @@
     });
   });
   document.addEventListener("htmx:beforeRequest", function (event) {
-    var target = event.detail.target, xhr = event.detail.xhr, body = document.getElementById("detail-body");
-    if (!target || !xhr || !body || (target !== body && !body.contains(target))) return;
-    var navigates = target === body;
+    var target = event.detail.target, xhr = event.detail.xhr;
+    if (!target || !xhr || !target.closest || !target.closest("#detail-body")) return;
+    // A request queued for a view that is gone has nothing left to update.
+    if (!target.isConnected) {
+      event.preventDefault();
+      return;
+    }
+    var navigates = target.id === "detail-body";
     if (navigates && followStale && event.target === document.body) {
       followStale = false;
       event.preventDefault();
@@ -426,14 +431,19 @@
   });
   // A second click on a link whose request is still pending would queue on
   // that link, and htmx drops the queued request once a newer view replaces
-  // the link; such a click starts its own request instead.
+  // the link; such a click starts its own request instead, from a source of
+  // its own so it doesn't queue behind another such click either.
   document.addEventListener("click", function (event) {
     var link = event.target.closest && event.target.closest("#detail-body a[hx-boost]");
     if (!link || !link.classList.contains("htmx-request") || !window.htmx) return;
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    window.htmx.ajax("GET", link.getAttribute("href"), { target: "#detail-body", select: "#detail-body", swap: "outerHTML show:none", push: "true" });
+    var source = document.createElement("span");
+    source.hidden = true;
+    document.body.appendChild(source);
+    window.htmx.ajax("GET", link.getAttribute("href"), { source: source, target: "#detail-body", select: "#detail-body", swap: "outerHTML show:none", push: "true" })
+      .finally(function () { source.remove(); });
   }, true);
 
   // An out-of-band swap never replaces the element a confirmation will send.
