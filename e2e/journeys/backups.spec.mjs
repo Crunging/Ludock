@@ -69,9 +69,16 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   const restart = page.getByRole("dialog", { name: "Restart Survival?" });
   await expect(survival.locator(".action-menu__content")).toBeHidden();
   await restart.getByLabel("Take a backup first").check();
+  // Leaving the page before the restart is accepted would cancel it.
+  const queued = page.waitForResponse((response) => response.request().method() === "POST" && /\/restart$/.test(response.url()));
   await restart.getByRole("button", { name: "Restart server" }).click();
-  await expect(restart).toBeHidden();
+  expect((await queued).ok()).toBe(true);
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(rows).toHaveCount(2, { timeout: 45_000 });
+  await expect(page).toHaveURL(/\?tab=backups$/);
+  // The backup appears once the restart has taken it.
+  await expect(async () => {
+    await page.reload();
+    await expect(rows).toHaveCount(2, { timeout: 1_000 });
+  }).toPass({ timeout: 45_000 });
 });
