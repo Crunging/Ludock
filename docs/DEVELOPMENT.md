@@ -94,8 +94,8 @@ this repository with Contents, Issues, and Pull requests write access.
 ```sh
 go list -u -m all
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-cd e2e && npm outdated
-cd third_party/browser && npm outdated
+(cd e2e && npm outdated)
+(cd third_party/browser && npm outdated)
 ```
 
 - **Go:** update `go.mod`'s `go` line and the Go image digest in the Dockerfile
