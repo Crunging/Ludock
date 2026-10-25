@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 var bg = context.Background()
@@ -91,10 +91,7 @@ func open(path string, migrations []Migration) (result *DB, err error) {
 	} else {
 		dsn = fileURI(path, query)
 	}
-	pool, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
+	pool := sql.OpenDB(statementConnector{driver: &sqlite.Driver{}, dsn: dsn})
 	var key []byte
 	defer func() {
 		if err != nil {
@@ -102,12 +99,15 @@ func open(path string, migrations []Migration) (result *DB, err error) {
 			pool.Close()
 		}
 	}()
+	connections := 4
 	if memory {
 		// Every in-memory connection is a separate database.
-		pool.SetMaxOpenConns(1)
-	} else {
-		pool.SetMaxOpenConns(4)
+		connections = 1
 	}
+	// Keep every connection open: a new one parses the schema again and
+	// starts without its cached statements.
+	pool.SetMaxOpenConns(connections)
+	pool.SetMaxIdleConns(connections)
 	conn, err := pool.Conn(bg)
 	if err != nil {
 		return nil, err
