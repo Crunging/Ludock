@@ -52,30 +52,35 @@
     var detail = elt.getAttribute("data-confirm-detail") || "";
     var button = dialog.querySelector("[data-confirm-button]");
     dialog.querySelector("h2").textContent = event.detail.question;
-    dialog.querySelector("p").textContent = detail;
-    dialog.querySelector("p").hidden = !detail;
+    dialog.querySelector("#confirm-dialog-detail").textContent = detail;
+    dialog.querySelector("#confirm-dialog-detail").hidden = !detail;
+    var optionName = elt.getAttribute("data-confirm-option");
+    var option = dialog.querySelector("[data-confirm-option]");
+    var checkbox = option.querySelector("input");
+    option.hidden = !optionName;
+    checkbox.checked = false;
+    option.querySelector("span").textContent = elt.getAttribute("data-confirm-option-label") || "";
+    option.querySelector("p").textContent = elt.getAttribute("data-confirm-option-help") || "";
     button.textContent = elt.getAttribute("data-confirm-action") || "Confirm";
     button.className = elt.hasAttribute("data-confirm-danger") ? "secondary-btn secondary-btn--danger" : "primary-btn";
     dialog.returnValue = "";
     confirming = elt;
     dialog.addEventListener("close", function () {
       confirming = null;
-      if (dialog.returnValue === "confirm") event.detail.issueRequest(true);
+      if (dialog.returnValue !== "confirm") return;
+      // htmx reads hx-vals as it builds the request.
+      if (optionName) {
+        var values = {};
+        if (checkbox.checked) values[optionName] = "true";
+        elt.setAttribute("hx-vals", JSON.stringify(values));
+      }
+      event.detail.issueRequest(true);
     }, { once: true });
     dialog.showModal();
   });
 
-  // Open and close native dialogs: data-dialog-open="id", data-dialog-close.
+  // data-dialog-close closes its native dialog.
   document.addEventListener("click", function (event) {
-    var opener = event.target.closest && event.target.closest("[data-dialog-open]");
-    if (opener) {
-      var dialog = document.getElementById(opener.getAttribute("data-dialog-open"));
-      if (dialog && dialog.showModal) {
-        event.preventDefault();
-        dialog.showModal();
-      }
-      return;
-    }
     var closer = event.target.closest && event.target.closest("[data-dialog-close]");
     if (closer) {
       var parent = closer.closest("dialog");
@@ -557,7 +562,7 @@
       var button = menu.querySelector(":scope > button");
       var content = menu.querySelector(".action-menu__content");
       var open = trigger && trigger === button ? button.getAttribute("aria-expanded") !== "true" : false;
-      if (!trigger && menu.contains(event.target) && !event.target.closest("[data-dialog-open], a")) return;
+      if (!trigger && menu.contains(event.target) && !event.target.closest("[hx-confirm], a")) return;
       button.setAttribute("aria-expanded", open ? "true" : "false");
       content.hidden = !open;
     });

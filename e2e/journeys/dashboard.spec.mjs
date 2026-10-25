@@ -3,7 +3,9 @@ import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
 asAdmin();
 
 test("finding servers and starting and stopping one from the list", async ({ page }) => {
-  await page.goto("/");
+  // Pages are compressed; the server list repeats its markup for each server.
+  const response = await page.goto("/");
+  expect(response.headers()["content-encoding"]).toBe("gzip");
   await expect(page.locator(".server-row")).toHaveCount(2);
   await expect(serverRow(page, "Survival")).toContainText("Running");
   await expect(serverRow(page, "Survival")).toContainText("25565");

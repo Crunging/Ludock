@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -60,4 +60,18 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
   await page.getByRole("dialog", { name: "Delete this backup?" }).getByRole("button", { name: "Delete backup" }).click();
   await expect(page.locator("#detail-status")).toHaveText("Backup deleted.");
   await expect(rows).toHaveCount(1);
+
+  // A restart from the server list can take a backup first.
+  await page.goto("/");
+  const survival = serverRow(page, "Survival");
+  await survival.getByRole("button", { name: /More actions/ }).click();
+  await survival.getByRole("button", { name: "Restart…" }).click();
+  const restart = page.getByRole("dialog", { name: "Restart Survival?" });
+  await expect(survival.locator(".action-menu__content")).toBeHidden();
+  await restart.getByLabel("Take a backup first").check();
+  await restart.getByRole("button", { name: "Restart server" }).click();
+  await expect(restart).toBeHidden();
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(rows).toHaveCount(2, { timeout: 45_000 });
 });

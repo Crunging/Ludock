@@ -1,11 +1,13 @@
 package web
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -136,6 +138,39 @@ func TestActionsRequireTheSessionCSRFToken(t *testing.T) {
 		map[string]string{"HX-Request": "true", "X-CSRF-Token": CSRFToken(admin.Token)})
 	if response.Code != http.StatusOK || response.Header().Get("HX-Trigger") != "servers-changed" || !p.running() {
 		t.Fatal(response.Code, response.Header(), response.Body.String())
+	}
+}
+
+// Pages are compressed, so each one masks the CSRF token differently. A
+// token read from a page works; another session's token fails masked too.
+func TestCSRFTokenMaskedPerPage(t *testing.T) {
+	p := newPages(t)
+	other := p.user("u-other", "other", db.RoleAdmin)
+	pageToken := func(principal *auth.Principal) string {
+		response := p.do("GET", "/", principal, nil, map[string]string{"Accept-Encoding": "gzip"})
+		if response.Header().Get("Content-Encoding") != "gzip" {
+			t.Fatal("page is not compressed", response.Header())
+		}
+		reader, err := gzip.NewReader(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, _ := io.ReadAll(reader)
+		token := regexp.MustCompile(`<meta name="csrf-token" content="([0-9a-f]+)"`).FindSubmatch(page)
+		if token == nil {
+			t.Fatal("page has no CSRF token")
+		}
+		return string(token[1])
+	}
+	first, second := pageToken(p.admin), pageToken(p.admin)
+	if first == second || first == CSRFToken(p.admin.Token) {
+		t.Fatal("pages share a token", first, second)
+	}
+	if response := p.post("/servers/"+p.server+"/start", p.admin, pageToken(other)); response.Code != http.StatusForbidden || p.running() {
+		t.Fatal("another session's masked token", response.Code, p.running())
+	}
+	if response := p.post("/servers/"+p.server+"/start", p.admin, second); response.Code != http.StatusOK || !p.running() {
+		t.Fatal(response.Code, response.Body.String())
 	}
 }
 
