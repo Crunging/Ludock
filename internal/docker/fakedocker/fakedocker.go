@@ -4,6 +4,7 @@
 package fakedocker
 
 import (
+	"archive/tar"
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
@@ -46,6 +47,9 @@ type Container struct {
 	Stats docker.ContainerStats
 	// Stdin collects data written to attached stdin.
 	Stdin []byte
+	// Files are served by /archive: regular files by absolute path, and
+	// symbolic links whose value starts with "->", such as "-> /etc".
+	Files map[string]string
 }
 
 // ExecHandler runs a fake exec. It reads stdin and writes stdout/stderr and
@@ -70,6 +74,9 @@ type Engine struct {
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
 	// the logs a helper process would print.
 	OnStart func(c *Container)
+	// Attach runs a container's process on an attached stream, under no
+	// lock; nil collects stdin in Container.Stdin.
+	Attach func(c *Container, stdin *bufio.Reader, stdout func([]byte))
 	// APIVersion is reported by /version.
 	APIVersion string
 	// Fail makes every API request return this status when non-zero.
@@ -685,8 +692,31 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		e.execs[execID] = &exec{id: execID, container: id, options: options}
 		e.mu.Unlock()
 		writeJSON(w, 201, map[string]string{"Id": execID})
-	case action == "/attach" && r.Method == "POST":
+	case action == "/archive" && r.Method == "GET":
+		content, ok := c.Files[r.URL.Query().Get("path")]
 		e.mu.Unlock()
+		if !ok {
+			fail(w, 404)
+			return
+		}
+		header := &tar.Header{Name: filepath.Base(r.URL.Query().Get("path")), Mode: 0o600, Typeflag: tar.TypeReg, Size: int64(len(content))}
+		if target, link := strings.CutPrefix(content, "->"); link {
+			header.Typeflag, header.Linkname, header.Size, content = tar.TypeSymlink, strings.TrimSpace(target), 0, ""
+		}
+		w.Header().Set("Content-Type", "application/x-tar")
+		archive := tar.NewWriter(w)
+		archive.WriteHeader(header)
+		archive.Write([]byte(content))
+		archive.Close()
+	case action == "/attach" && r.Method == "POST":
+		attach := e.Attach
+		e.mu.Unlock()
+		if attach != nil {
+			e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
+				attach(c, reader, func(data []byte) { conn.Write(Frame(1, data)) })
+			})
+			return
+		}
 		e.hijack(w, r, func(conn net.Conn, reader *bufio.Reader) {
 			data, _ := io.ReadAll(reader)
 			e.mu.Lock()

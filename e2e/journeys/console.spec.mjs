@@ -13,7 +13,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
 
   await page.getByLabel("Game command").fill("list");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(output).toContainText("There are 0 of a max of 10 players online.");
+  await expect(output).toContainText("There are 0 of a max of 10 players online:");
   await expect(page.locator("[data-console-feedback]")).toHaveText("Command sent. Check the output for its result.");
   await page.getByLabel("Game command").press("ArrowUp");
   await expect(page.getByLabel("Game command")).toHaveValue("list");

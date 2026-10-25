@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/Crunging/Ludock/internal/launch"
 	"io"
 	"strings"
@@ -34,8 +35,8 @@ func setup(t *testing.T) (*fakedocker.Engine, *Runtime, string) {
 
 // wrapped returns the user command behind the bounded exec wrapper.
 func wrapped(cmd []string) []string {
-	if len(cmd) > 8 && cmd[0] == "/bin/sh" && cmd[3] == "ludock-console" {
-		return cmd[8:]
+	if len(cmd) > 7 && cmd[0] == "/bin/sh" && cmd[3] == "ludock-console" {
+		return cmd[7:]
 	}
 	return nil
 }
@@ -55,36 +56,32 @@ func (c *collected) output() Output {
 	}
 }
 
-func TestDockerExecAdapterAndExitCodes(t *testing.T) {
+func TestShellCommandAndExitCodes(t *testing.T) {
 	engine, runtime, id := setup(t)
 	exitCode := 0
 	engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
 		user := wrapped(cmd)
-		if strings.Join(user, " ") != "rcon-cli list" {
+		if strings.Join(user, " ") != "timeout -k 5 60 /bin/sh -c ls" {
 			t.Errorf("command %v", cmd)
 		}
 		// A rune split across frames must arrive intact.
-		stdout([]byte("There are 2 players: Zoë"[:22]))
-		stdout([]byte("There are 2 players: Zoë"[22:]))
+		stdout([]byte("world Zoë"[:7]))
+		stdout([]byte("world Zoë"[7:]))
 		return exitCode
 	}
-	adapter := games.ResolveAdapter("minecraft", nil)
 	out := &collected{}
-	if err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, adapter, "/list", out.output(), nil); err != nil {
+	if err := runtime.Shell(ctx, id, "ls", out.output(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if out.stdout.String() != "There are 2 players: Zoë" || !out.completed {
+	if out.stdout.String() != "world Zoë" || !out.completed {
 		t.Fatalf("%q", out.stdout.String())
 	}
 	for code, want := range map[int]string{124: "timed out", 125: "cancelled", 1: "command failed"} {
 		exitCode = code
-		err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, adapter, "list", Discard, nil)
+		err := runtime.Shell(ctx, id, "ls", Discard, nil)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("exit %d: %v", code, err)
 		}
-	}
-	if err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "exited"}, adapter, "list", Discard, nil); err == nil {
-		t.Fatal("ran on a stopped server")
 	}
 }
 
@@ -106,13 +103,12 @@ func TestOutputLimitAndRevocationCancel(t *testing.T) {
 		}
 		return 0
 	}
-	adapter := games.ResolveAdapter("minecraft", nil)
-	if err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, adapter, "list", Discard, nil); !errors.Is(err, errLimited) {
+	if err := runtime.Shell(ctx, id, "ls", Discard, nil); !errors.Is(err, errLimited) {
 		t.Fatal(err)
 	}
 	chunks = 2
 	calls := 0
-	err := runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, adapter, "list", Discard, func() error {
+	err := runtime.Shell(ctx, id, "ls", Discard, func() error {
 		calls++
 		if calls > 2 {
 			return errors.New("revoked")
@@ -176,6 +172,61 @@ func TestNetworkTargetResolution(t *testing.T) {
 	}
 }
 
+// Minecraft's console password comes from RCON_PASSWORD, else from the file
+// the image writes for rcon-cli, which also holds a password it generated.
+// Only a small regular file is read, and the password never shows in
+// command output.
+func TestMinecraftConsolePassword(t *testing.T) {
+	engine, runtime, id := setup(t)
+	adapter := games.ResolveAdapter("minecraft", nil)
+	target := Target{ContainerID: id, Labels: map[string]string{}}
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Files = map[string]string{"/data/.rcon-cli.env": "port=25575\r\npassword=generated-secret\r\n"}
+	})
+	host, port, password, err := runtime.networkTarget(ctx, target, adapter)
+	if err != nil || host != "" || port != 25575 || password != "generated-secret" {
+		t.Fatal(host, port, password, err)
+	}
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Config.Env = []string{"RCON_PASSWORD=given-secret", "RCON_PORT=25580"}
+	})
+	if _, port, password, err = runtime.networkTarget(ctx, target, adapter); err != nil || port != 25580 || password != "given-secret" {
+		t.Fatal(port, password, err)
+	}
+	for name, content := range map[string]string{"link": "-> /etc/shadow", "large": "password=" + strings.Repeat("x", 5000),
+		"no password": "port=25575\n", "missing": ""} {
+		engine.Update(id, func(c *fakedocker.Container) {
+			c.Config.Env, c.Files = nil, map[string]string{"/data/.rcon-cli.env": content}
+			if content == "" {
+				c.Files = nil
+			}
+		})
+		_, _, _, err := runtime.networkTarget(ctx, target, adapter)
+		if err == nil || !strings.Contains(err.Error(), "could not read the console password") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	var sent string
+	rcon, err := fakedocker.ServeRCON("generated-secret", func(command string) string {
+		sent = command
+		return "rcon password is generated-secret"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Files = map[string]string{"/data/.rcon-cli.env": "password=generated-secret\n"}
+	})
+	out := &collected{}
+	direct := Target{ContainerID: id, State: "running", Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(rcon)}}
+	if err := runtime.GameCommand(ctx, direct, adapter, "/list", out.output(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if sent != "list" || out.stdout.String() != "rcon password is [redacted]" {
+		t.Fatalf("%q %q", sent, out.stdout.String())
+	}
+}
+
 func TestNetworkConsoleHelperProtocol(t *testing.T) {
 	// The helper asks for authorization before each write; a refusal stops it.
 	stdinReader, stdinWriter := io.Pipe()
@@ -204,7 +255,7 @@ func TestStalledCommandStart(t *testing.T) {
 	engine.HangExecStarts = 1
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.GameCommand(ctx, Target{ContainerID: id, State: "running"}, games.ResolveAdapter("minecraft", nil), "list", Discard, nil)
+		done <- runtime.Shell(ctx, id, "ls", Discard, nil)
 	}()
 	select {
 	case err := <-done:

@@ -66,6 +66,13 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			engine.Update(c.ID, func(c *fakedocker.Container) { c.Logs = []string{strings.TrimSpace(out.String())} })
 		}
 	}
+	// Console helpers run for real, so commands reach the fake game consoles
+	// on 127.0.0.1.
+	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
+		if c.CreateRequest.Labels["ludock.internal"] == "console-helper" {
+			helper.RunNetworkConsole(stdin, writer(stdout))
+		}
+	}
 	engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 		if len(cmd) > 2 && cmd[0] == helper.Binary {
 			args := append([]string(nil), cmd[2:]...)
@@ -82,12 +89,35 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			stderr(errs.Bytes())
 			return code
 		}
-		// Console commands behind the bounded wrapper.
-		if len(cmd) > 8 && cmd[3] == "ludock-console" {
-			stdout([]byte("> " + strings.Join(cmd[8:], " ") + "\nThere are 0 of a max of 10 players online.\n"))
+		// Shell commands behind the bounded wrapper: timeout -k 5 60 /bin/sh -c command.
+		if len(cmd) > 7 && cmd[3] == "ludock-console" {
+			if text, ok := strings.CutPrefix(cmd[len(cmd)-1], "echo "); ok {
+				stdout([]byte(text + "\n"))
+			}
 		}
 		return 0
 	}
+}
+
+type writer func([]byte)
+
+func (w writer) Write(data []byte) (int, error) {
+	w(data)
+	return len(data), nil
+}
+
+// minecraftRCON serves a Minecraft RCON console and returns its port.
+func minecraftRCON(password string) string {
+	port, err := fakedocker.ServeRCON(password, func(command string) string {
+		if command == "list" {
+			return "There are 0 of a max of 10 players online: "
+		}
+		return ""
+	})
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprint(port)
 }
 
 // seedDev adds the servers the journeys and local development use.
@@ -103,7 +133,7 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server:java21", Running: true,
 		Labels: map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games", "com.docker.compose.service": "minecraft",
 			"com.docker.compose.container-number": "1"},
-		Env: []string{"RCON_PASSWORD=dev-rcon-secret", "EULA=TRUE", "DB_PASS=dev-db-secret",
+		Env: []string{"RCON_PORT=" + minecraftRCON("dev-rcon-secret"), "EULA=TRUE", "DB_PASS=dev-db-secret",
 			"STATS_URL=postgres://stats:dev-url-secret@db/stats"},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: mc, Destination: mc, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "25565"}}}})
@@ -116,6 +146,8 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.ExtraConfig = healthcheck
 		c.State.Health = &docker.HealthState{Status: "healthy"}
+		// Like the real image, which generates a password when given none.
+		c.Files = map[string]string{"/data/.rcon-cli.env": "password=dev-rcon-secret\n"}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21",
 			"[Server thread/INFO]: Stats plugin using dev-db-secret for postgres://stats:dev-url-secret@db/stats",
 			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
@@ -165,7 +197,7 @@ func seedDemo(engine *fakedocker.Engine, dir string) {
 
 	id, minecraft := server("minecraft", "Friends\u2019 survival world", "itzg/minecraft-server:java21", "25565/tcp", true, 3*time.Hour)
 	engine.Update(id, func(c *fakedocker.Container) {
-		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret"}
+		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + minecraftRCON("demo-rcon-secret")}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21.4",
 			"[Server thread/INFO]: Preparing level \"world\"", "[Server thread/INFO]: Done (4.1s)! For help, type \"help\"",
 			"[Server thread/INFO]: Mara joined the game", "[Server thread/INFO]: Theo joined the game"}
