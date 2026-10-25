@@ -537,9 +537,10 @@ func secrets(env []string, labels map[string]string, credentials map[string]bool
 }
 
 // escapedPassword is the password of a URL with credentials as written in
-// it, before percent-decoding.
+// it, before percent-decoding. The authority follows the first "//", with
+// or without a scheme before it.
 func escapedPassword(value string) string {
-	_, authority, _ := strings.Cut(value, "://")
+	_, authority, _ := strings.Cut(value, "//")
 	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
 		authority = authority[:end]
 	}
