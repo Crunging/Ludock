@@ -8,6 +8,9 @@ const (
 	LabelConsolePort        = "ludock.console.port"
 	LabelConsoleHost        = "ludock.console.host"
 	LabelConsolePasswordEnv = "ludock.console.password-env"
+	// LabelSecretEnv names more environment variables, comma-separated,
+	// whose values never reach console or log output.
+	LabelSecretEnv = "ludock.secret-env"
 )
 
 // AdapterID names a console adapter.

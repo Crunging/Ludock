@@ -22,6 +22,11 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await expect(status).toHaveText("Connected");
   await expect(output).toContainText("Following Docker logs");
   await expect(output).toContainText("Starting minecraft server version 1.21");
+  // Credentials in the container's environment never reach the browser,
+  // whatever the variable is called.
+  await expect(output).toContainText("Stats plugin using [redacted] for postgres://stats:[redacted]@db/stats");
+  await expect(output).not.toContainText("dev-db-secret");
+  await expect(output).not.toContainText("dev-url-secret");
   await page.getByRole("button", { name: "Pause" }).click();
   await expect(page.getByText("· live display paused")).toBeVisible();
 

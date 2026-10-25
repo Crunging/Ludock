@@ -103,7 +103,8 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server:java21", Running: true,
 		Labels: map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games", "com.docker.compose.service": "minecraft",
 			"com.docker.compose.container-number": "1"},
-		Env:    []string{"RCON_PASSWORD=dev-rcon-secret", "EULA=TRUE"},
+		Env: []string{"RCON_PASSWORD=dev-rcon-secret", "EULA=TRUE", "DB_PASS=dev-db-secret",
+			"STATS_URL=postgres://stats:dev-url-secret@db/stats"},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: mc, Destination: mc, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "25565"}}}})
 	// Like the real image, every version of the fake one has a healthcheck,
@@ -115,7 +116,9 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.ExtraConfig = healthcheck
 		c.State.Health = &docker.HealthState{Status: "healthy"}
-		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21", "[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
+		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21",
+			"[Server thread/INFO]: Stats plugin using dev-db-secret for postgres://stats:dev-url-secret@db/stats",
+			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
 	})
 	valheim := data("valheim")
 	engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,

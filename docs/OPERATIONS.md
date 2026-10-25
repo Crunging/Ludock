@@ -71,6 +71,7 @@ labels:
 | `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
 | `ludock.console.host` / `ludock.console.port` | Direct console address, or the console port inside the container |
 | `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
+| `ludock.secret-env` | Comma-separated **names** of more environment variables whose values are hidden from logs and consoles. Names that look like credentials, such as `RCON_PASSWORD`, `DB_PASS`, `API_KEY`, or `ACCESS_CODE`, and passwords inside URLs are hidden already |
 | `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
 ### Supported games

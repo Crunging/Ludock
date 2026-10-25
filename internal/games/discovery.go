@@ -149,7 +149,7 @@ func ParseAddress(value string) *Address {
 // third-party integration secrets and are never passed on.
 var configurationLabels = map[string]bool{
 	LabelEnable: true, LabelName: true, LabelGame: true, LabelAddress: true, LabelFiles: true,
-	LabelConsole: true, LabelConsolePort: true, LabelConsoleHost: true, LabelConsolePasswordEnv: true,
+	LabelConsole: true, LabelConsolePort: true, LabelConsoleHost: true, LabelConsolePasswordEnv: true, LabelSecretEnv: true,
 }
 
 // ApprovedLabels keeps only the configuration labels Ludock reads.
