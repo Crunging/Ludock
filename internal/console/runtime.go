@@ -26,7 +26,6 @@ import (
 // Limits.
 const (
 	MaxExecOutput      = 4 * 1024 * 1024
-	execTimeoutSeconds = 15
 	execKillGrace      = 3
 	execStreamGrace    = 5 * time.Second
 	execCreateTimeout  = 5 * time.Second
@@ -37,15 +36,13 @@ const (
 // boundedExecScript keeps the watchdog inside the container. Docker cannot
 // signal an exec and closing its stream does not stop it, so the command
 // really terminates even if Ludock disconnects. User input stays a
-// positional argument to "$@" and is never shell source.
+// positional argument to "$@" and is never shell source. Without a
+// writable /tmp the command runs alone, bounded by its own timeout(1).
 const boundedExecScript = `
-control="$1"; deadline="$2"; grace="$3"; independent_timeout="$4"; shift 4
+control="$1"; deadline="$2"; grace="$3"; shift 3
 ready="$control/ready"; cancel="$control/cancel"; reason="$control/reason"
 umask 077
-if ! mkdir "$control" 2>/dev/null; then
-  if [ "$independent_timeout" = 1 ]; then exec "$@"; fi
-  exit 126
-fi
+if ! mkdir "$control" 2>/dev/null; then exec "$@"; fi
 cleanup() {
   rm -f "$ready" "$cancel" "$reason"
   rmdir "$control" 2>/dev/null || true
@@ -142,7 +139,7 @@ func IsTimeout(err error) bool {
 // Shell runs a shell command, bounded by timeout(1) inside the container.
 func (r *Runtime) Shell(ctx context.Context, containerID, command string, out Output, assertAccess func() error) error {
 	return r.exec(ctx, containerID, docker.ExecCreate{Cmd: []string{"timeout", "-k", "5", "60", "/bin/sh", "-c", command},
-		AttachStdout: true, AttachStderr: true}, out, assertAccess, 65, true)
+		AttachStdout: true, AttachStderr: true}, out, assertAccess, 65)
 }
 
 // GameCommand sends one command through the server's console adapter.
@@ -155,13 +152,8 @@ func (r *Runtime) GameCommand(ctx context.Context, target Target, adapter *games
 	if target.State != "running" {
 		return errors.New("The game server must be running to accept console commands")
 	}
+	command = adapter.Command(command)
 	switch adapter.Transport {
-	case games.TransportDockerExec:
-		if err := r.exec(ctx, target.ContainerID, docker.ExecCreate{Cmd: games.MinecraftExec(command), AttachStdout: true, AttachStderr: true},
-			out, assertAccess, execTimeoutSeconds, false); err != nil {
-			return err
-		}
-		return nil
 	case games.TransportContainerStdin:
 		if err := r.stdin(ctx, target.ContainerID, command, out, assertAccess); err != nil {
 			return err
@@ -200,7 +192,9 @@ func (r *Runtime) GameCommand(ctx context.Context, target Target, adapter *games
 		if response == "" {
 			response = "Command completed with no response"
 		}
-		out.stdout(response)
+		// A password read from a file is not among the server's redacted
+		// environment values.
+		out.stdout(strings.ReplaceAll(response, password, "[redacted]"))
 	}
 	out.complete()
 	return nil
@@ -236,31 +230,56 @@ func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *gam
 	if port < 1 || port > 65535 {
 		return "", 0, "", errors.New("Set " + games.LabelConsolePort + " to the container's console port (1-65535)")
 	}
-	name := target.Labels[games.LabelConsolePasswordEnv]
-	if name != "" {
-		if !envName.MatchString(name) {
-			return "", 0, "", errors.New(games.LabelConsolePasswordEnv + " is not a valid environment name")
-		}
-	} else {
-		for _, candidate := range adapter.PasswordEnvCandidates {
-			if env[candidate] != "" {
-				name = candidate
-				break
-			}
-		}
-		if name == "" {
-			return "", 0, "", errors.New("Set " + games.LabelConsolePasswordEnv + " to the name of the container environment variable that holds its console password")
-		}
-	}
-	password := env[name]
-	if password == "" {
-		return "", 0, "", errors.New("Console credential environment variable " + name + " is empty or unavailable")
+	password, err := r.password(ctx, target, adapter, env)
+	if err != nil {
+		return "", 0, "", err
 	}
 	host := strings.TrimSpace(target.Labels[games.LabelConsoleHost])
 	if host != "" && (len(host) > 253 || strings.Contains(host, "://") || badHost.MatchString(host) || !hostChars.MatchString(host)) {
 		return "", 0, "", errors.New(games.LabelConsoleHost + " must be an IP address or plain hostname")
 	}
 	return host, port, password, nil
+}
+
+// password is the console password: from the variable the label names,
+// else the first candidate variable that is set, else the adapter's file.
+func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Adapter, env map[string]string) (string, error) {
+	name := target.Labels[games.LabelConsolePasswordEnv]
+	if name != "" && !envName.MatchString(name) {
+		return "", errors.New(games.LabelConsolePasswordEnv + " is not a valid environment name")
+	}
+	for _, candidate := range adapter.PasswordEnvCandidates {
+		if name == "" && env[candidate] != "" {
+			name = candidate
+		}
+	}
+	if name == "" && adapter.PasswordFile != "" {
+		return r.passwordFile(ctx, target.ContainerID, adapter.PasswordFile)
+	}
+	if name == "" {
+		return "", errors.New("Set " + games.LabelConsolePasswordEnv + " to the name of the container environment variable that holds its console password")
+	}
+	if env[name] == "" {
+		return "", errors.New("Console credential environment variable " + name + " is empty or unavailable")
+	}
+	return env[name], nil
+}
+
+// passwordFile reads a "password=<value>" line from a small file in the
+// container.
+func (r *Runtime) passwordFile(ctx context.Context, containerID, file string) (string, error) {
+	unavailable := errors.New("Ludock could not read the console password from " + file +
+		". Check that the game's console is on, or set " + games.LabelConsolePasswordEnv)
+	data, err := r.Docker.ReadFile(ctx, containerID, file, 4096)
+	if err != nil {
+		return "", unavailable
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if password, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "password="); ok && password != "" {
+			return password, nil
+		}
+	}
+	return "", unavailable
 }
 
 type exitInfo = docker.ExecInspect
@@ -329,7 +348,7 @@ func (f funcWriter) Write(p []byte) (int, error) {
 var errLimited = errors.New("Game console output exceeded its limit")
 
 func (r *Runtime) exec(ctx context.Context, containerID string, options docker.ExecCreate, out Output, assertAccess func() error,
-	timeoutSeconds int, independentTimeout bool) error {
+	timeoutSeconds int) error {
 	if len(options.Cmd) == 0 {
 		return errors.New("The console adapter is missing its command configuration")
 	}
@@ -337,13 +356,9 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 		return errCancelled
 	}
 	control := "/tmp/.ludock-console-" + identity.NewUUID()
-	independent := "0"
-	if independentTimeout {
-		independent = "1"
-	}
 	user := options.User
 	options.Cmd = append([]string{"/bin/sh", "-c", boundedExecScript, "ludock-console", control, strconv.Itoa(timeoutSeconds),
-		strconv.Itoa(execKillGrace), independent}, options.Cmd...)
+		strconv.Itoa(execKillGrace)}, options.Cmd...)
 	createCtx, cancelCreate := context.WithTimeout(ctx, execCreateTimeout)
 	execID, err := r.Docker.CreateExec(createCtx, containerID, options)
 	cancelCreate()

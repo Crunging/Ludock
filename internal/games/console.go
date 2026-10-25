@@ -28,7 +28,6 @@ const (
 type Transport string
 
 const (
-	TransportDockerExec     Transport = "docker-exec"
 	TransportSourceRCON     Transport = "source-rcon"
 	TransportRustWebRCON    Transport = "rust-webrcon"
 	TransportTelnet         Transport = "telnet"
@@ -44,12 +43,21 @@ type Adapter struct {
 	Commands              []QuickCommand
 	DefaultPort           int
 	PasswordEnvCandidates []string
+	// PasswordFile is a file in the container holding "password=<value>",
+	// read when no candidate variable is set.
+	PasswordFile string
+	// TrimSlash drops a leading "/" from commands, which the game's console
+	// doesn't take.
+	TrimSlash bool
 }
 
 var adapters = map[AdapterID]Adapter{
-	MinecraftRCON: {ID: MinecraftRCON, Name: "Minecraft RCON", Transport: TransportDockerExec,
-		CommandPlaceholder: "difficulty hard, whitelist add PlayerName, say Hello",
-		Commands:           []QuickCommand{{"List players", "list"}, {"Save world", "save-all"}, {"Message players", "say "}}},
+	// The itzg image writes the password it was given, or generated, to
+	// /data/.rcon-cli.env for rcon-cli.
+	MinecraftRCON: {ID: MinecraftRCON, Name: "Minecraft RCON", Transport: TransportSourceRCON, DefaultPort: 25575,
+		CommandPlaceholder:    "difficulty hard, whitelist add PlayerName, say Hello",
+		Commands:              []QuickCommand{{"List players", "list"}, {"Save world", "save-all"}, {"Message players", "say "}},
+		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", TrimSlash: true},
 	SourceRCON: {ID: SourceRCON, Name: "RCON", Transport: TransportSourceRCON, CommandPlaceholder: "status, save, broadcast Hello",
 		Commands:              []QuickCommand{},
 		PasswordEnvCandidates: []string{"RCON_PASSWORD", "ADMIN_PASSWORD", "SERVER_ADMIN_PASSWORD", "ARK_ADMIN_PASSWORD", "SRCDS_RCONPW"}},
@@ -63,9 +71,12 @@ var adapters = map[AdapterID]Adapter{
 		CommandPlaceholder: "help, playing, save", Commands: []QuickCommand{}},
 }
 
-// MinecraftExec is the exec command for a Minecraft RCON console command.
-func MinecraftExec(command string) []string {
-	return []string{"rcon-cli", strings.TrimPrefix(command, "/")}
+// Command is a console command as the game takes it.
+func (a *Adapter) Command(command string) string {
+	if a.TrimSlash {
+		return strings.TrimPrefix(command, "/")
+	}
+	return command
 }
 
 // ResolveAdapter picks the console adapter for a game type and its approved

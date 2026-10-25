@@ -1,8 +1,8 @@
 package console
 
 import (
-	"bufio"
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -54,6 +54,8 @@ type sessionFixture struct {
 	// adminSession is the admin's token hash.
 	adminSession string
 	authz        *authz.Service
+	// respond answers the server's RCON commands.
+	respond func(command string) string
 }
 
 func sessionSetup(t *testing.T) *sessionFixture {
@@ -63,8 +65,15 @@ func sessionSetup(t *testing.T) *sessionFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
+	f := &sessionFixture{respond: func(string) string { return "" }}
+	port, err := fakedocker.ServeRCON("hunter2-secret", func(command string) string { return f.respond(command) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The console connects directly, without a helper container.
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
-		Env: []string{"RCON_PASSWORD=hunter2-secret"}})
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port)},
+		Env:    []string{"RCON_PASSWORD=hunter2-secret"}})
 	engine.Update(id, func(c *fakedocker.Container) { c.Logs = []string{"joined", "rcon password hunter2-secret ok"} })
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
@@ -83,9 +92,10 @@ func sessionSetup(t *testing.T) *sessionFixture {
 	}
 	authorization.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: views[0].ID,
 		Capabilities: []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute}}}, admin, adminSession)
-	return &sessionFixture{engine: engine, serverID: views[0].ID, friend: friend, admin: admin, adminSession: adminSession, authz: authorization,
-		sessions: &Sessions{DB: d, Authz: authorization, Identity: store, Servers: service, Locks: locks.New(),
-			Runtime: &Runtime{Docker: client, pollInterval: time.Millisecond}, IdleCheck: 20 * time.Millisecond}}
+	f.engine, f.serverID, f.friend, f.admin, f.adminSession, f.authz = engine, views[0].ID, friend, admin, adminSession, authorization
+	f.sessions = &Sessions{DB: d, Authz: authorization, Identity: store, Servers: service, Locks: locks.New(),
+		Runtime: &Runtime{Docker: client, pollInterval: time.Millisecond}, IdleCheck: 20 * time.Millisecond}
+	return f
 }
 
 func (f *sessionFixture) validate(user *db.SessionUser) func(context.Context) *db.SessionUser {
@@ -118,10 +128,7 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 // Console runs commands and rejects without access.
 func TestConsoleAccess(t *testing.T) {
 	f := sessionSetup(t)
-	f.engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
-		stdout([]byte("There are 0 players (password hunter2-secret)"))
-		return 0
-	}
+	f.respond = func(string) string { return "There are 0 players (password hunter2-secret)" }
 	channel := &fakeChannel{}
 	input := make(chan string, 2)
 	input <- `{"type":"input","data":"list"}`
@@ -148,9 +155,9 @@ func TestConsoleAccess(t *testing.T) {
 func TestCommandsRunOnlyOnceAudited(t *testing.T) {
 	f := sessionSetup(t)
 	ran := false
-	f.engine.Exec = func(*fakedocker.Container, []string, *bufio.Reader, func([]byte), func([]byte)) int {
+	f.respond = func(string) string {
 		ran = true
-		return 0
+		return ""
 	}
 	if _, err := f.sessions.DB.Exec(`CREATE TRIGGER no_command_audit BEFORE INSERT ON audit_log
 		WHEN NEW.action = 'server.game-command.started' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {

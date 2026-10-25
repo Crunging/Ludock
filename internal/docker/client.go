@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -328,6 +329,47 @@ func (c *Client) Inspect(ctx context.Context, id string) (*ContainerInspect, err
 	}
 	var info ContainerInspect
 	return &info, c.getJSON(ctx, path, nil, &info)
+}
+
+// ErrNotRegularFile reports a container path that is not a regular file, or
+// one larger than the caller allows.
+var ErrNotRegularFile = errors.New("Not a regular file of the expected size")
+
+// ReadFile reads a regular file inside a container through Docker's archive
+// API, without running anything in the container. Links are refused, not
+// followed.
+func (c *Client) ReadFile(ctx context.Context, id, file string, limit int64) ([]byte, error) {
+	path, err := containerPath(id, "/archive")
+	if err != nil {
+		return nil, err
+	}
+	full, err := c.path(ctx, path, url.Values{"path": {file}})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.readTimeout)
+	defer cancel()
+	response, err := c.Request(ctx, http.MethodGet, full, nil)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, ErrReadTimeout
+		}
+		return nil, err
+	}
+	defer response.Body.Close()
+	archive := tar.NewReader(response.Body)
+	header, err := archive.Next()
+	if err != nil {
+		return nil, errors.New("Docker returned an invalid archive")
+	}
+	if header.Typeflag != tar.TypeReg || header.Size > limit {
+		return nil, ErrNotRegularFile
+	}
+	data := make([]byte, header.Size)
+	if _, err := io.ReadFull(archive, data); err != nil {
+		return nil, errors.New("Docker returned an invalid archive")
+	}
+	return data, nil
 }
 
 // InspectSpec inspects a container keeping its configuration verbatim, for

@@ -82,7 +82,7 @@ where Ludock sends commands, not the port players use.
 
 | Game | Recognized images | Console | Console port |
 | --- | --- | --- | --- |
-| Minecraft | `itzg/minecraft-server` | `rcon-cli` in the container | Set inside the container |
+| Minecraft | `itzg/minecraft-server` | Minecraft RCON | 25575 |
 | Factorio | `factoriotools/factorio` | Source RCON | 27015 |
 | Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Source RCON | 25575 |
 | ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | Source RCON | 27020 |
@@ -155,9 +155,10 @@ non-default port. `ludock.console.host` makes Ludock connect directly instead;
 these protocols aren't encrypted, so point it only at a trusted host or an
 authenticated tunnel.
 
-- **Minecraft** runs `rcon-cli` inside the game container, so no RCON port is
-  published. The image must provide `rcon-cli`, `/bin/sh`, `sleep`, `mkdir`,
-  `rm`, and `rmdir`.
+- **Minecraft** uses `RCON_PASSWORD` when it is set. Otherwise Ludock reads
+  the password the image saved in `/data/.rcon-cli.env`, including one it
+  generated, through Docker without running anything in the container. RCON
+  must be on, as it is by default (`ENABLE_RCON`).
 - **Terraria** reads commands from the process's input, which needs
   `stdin_open: true`, `StdinOnce` off, and an image that forwards input to the
   server.
