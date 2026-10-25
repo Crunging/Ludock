@@ -26,6 +26,9 @@ jobs:
       - name: Audit journey dependencies
         working-directory: e2e
         run: npm audit --audit-level=high
+      - name: Audit browser libraries Ludock serves
+        working-directory: third_party/browser
+        run: npm audit --audit-level=high
       - name: Scan the latest published image
         shell: bash
         run: scripts/scan-image.sh "ghcr.io/${GITHUB_REPOSITORY,,}:latest"

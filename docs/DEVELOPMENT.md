@@ -95,13 +95,18 @@ this repository with Contents, Issues, and Pull requests write access.
 go list -u -m all
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 cd e2e && npm outdated
+cd third_party/browser && npm outdated
 ```
 
 - **Go:** update `go.mod`'s `go` line and the Go image digest in the Dockerfile
   together. Helpers reuse the running Ludock image, so they always match it.
 - **Vendored scripts:** htmx, its SSE extension, and xterm.js live in
-  `internal/web/assets/vendor` with their licenses; update them deliberately
-  and rerun the journeys.
+  `internal/web/assets/vendor` with their licenses. Each file is an exact copy
+  of the published file `third_party/browser/package.json` maps it to, so the
+  security scan can audit those versions. To update one, change its version
+  there, run `npm install --package-lock-only` in that folder, copy the new
+  file from the package, run `scripts/check-vendor.sh`, and rerun the
+  journeys.
 - **Pins:** workflows pin every action to a commit SHA (with its release as a
   comment) and every image to a digest; `scripts/check-pins.sh` enforces this.
 - **Image scans:** [`scripts/scan-image.sh`](../scripts/scan-image.sh) rejects
