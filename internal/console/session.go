@@ -202,7 +202,7 @@ func (s *Sessions) Logs(ctx context.Context, channel Channel, validate func(cont
 		}
 	}
 	send("system", "Following Docker logs")
-	err := Follow(ctx, s.Runtime.Docker, containerID, FollowOptions{Tail: 500, Timestamps: true, Secrets: servers.Secrets(access.Context.Observation),
+	err := Follow(ctx, s.Runtime.Docker, containerID, FollowOptions{Tail: 500, Timestamps: true, Secrets: access.Context.Observation.Secrets,
 		Allowed: func() bool { return access.Allowed(authz.LogsRead) }, Send: send,
 		EndedMessage: "Log stream ended (container may have stopped)"})
 	if err != nil {
@@ -242,7 +242,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 		return
 	}
 	containerID := access.Context.Logical.ContainerID
-	secrets := servers.Secrets(access.Context.Observation)
+	secrets := access.Context.Observation.Secrets
 	send := func(kind, data string) {
 		if access.Allowed(capability) {
 			channel.Send(kind, data)

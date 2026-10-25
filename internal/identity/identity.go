@@ -49,6 +49,9 @@ type Observation struct {
 	// GameConfiguration is input only: values are keyed-hashed, never stored
 	// or returned by this package.
 	GameConfiguration map[string]string `json:"gameConfiguration,omitempty"`
+	// Secrets are values to redact from console and log output, longest
+	// first. They are not part of the identity and are never stored.
+	Secrets []string `json:"-"`
 }
 
 // Status of a logical server's binding.

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -456,8 +457,9 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 		credentials[name] = true
 	}
 	for key, value := range container.Labels {
-		// Presentation labels can change without a review of the identity.
-		if key != games.LabelEnable && key != games.LabelName && key != games.LabelAddress {
+		// Presentation labels can change without a review of the identity,
+		// and so can a longer list of values to redact.
+		if key != games.LabelEnable && key != games.LabelName && key != games.LabelAddress && key != games.LabelSecretEnv {
 			observation.GameConfiguration[key] = value
 		}
 	}
@@ -470,6 +472,7 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 			observation.GameConfiguration["env:"+key] = value
 		}
 	}
+	observation.Secrets = secrets(info.Config.Env, labels, credentials, observation.GameConfiguration)
 	if adapter != nil && adapter.ID == games.StdinConsole {
 		observation.GameConfiguration["stdin:open"] = strconv.FormatBool(info.Config.OpenStdin)
 		observation.GameConfiguration["stdin:once"] = strconv.FormatBool(info.Config.StdinOnce)
@@ -481,25 +484,72 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 	return observation
 }
 
-// Secrets lists credential values from an observation, longest first, for
-// console output redaction.
-func Secrets(observation identity.Observation) []string {
-	configuration := observation.GameConfiguration
-	custom := configuration[games.LabelConsolePasswordEnv]
+// secretEnv names environment variables that hold credentials, beyond the
+// names logging already treats as sensitive.
+var secretEnv = regexp.MustCompile(`(?i)pass|pwd|private|salt|webhook|gslt|(^|_)(key|pin|code)($|_)`)
+
+// secrets lists the values console and log output must not show: credential
+// environment variables by name, the console password, variables named by
+// ludock.secret-env, sensitive configuration labels, and passwords inside
+// URLs. Containers print their configuration in ways Ludock can't predict,
+// so a value is redacted wherever it appears.
+func secrets(env []string, labels map[string]string, credentials map[string]bool, configuration map[string]string) []string {
+	listed := map[string]bool{}
+	for _, name := range strings.Split(labels[games.LabelSecretEnv], ",") {
+		listed[strings.TrimSpace(name)] = true
+	}
 	seen := map[string]bool{}
-	var secrets []string
-	for key, value := range configuration {
-		if key == games.LabelConsolePasswordEnv || value == "" || seen[value] {
+	var values []string
+	add := func(value string, guessed bool) {
+		// A guessed name can hold a flag such as "true" or "1"; hiding it
+		// would hide ordinary output and protect nothing.
+		if value == "" || seen[value] || (guessed && (len(value) < 3 || plainValue[strings.ToLower(value)])) {
+			return
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	for _, entry := range env {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
 			continue
 		}
-		if logging.IsSensitiveKey(key) || (custom != "" && (key == "env:"+custom || key == custom)) {
-			seen[value] = true
-			secrets = append(secrets, value)
+		if credentials[key] || listed[key] || logging.IsSensitiveKey(key) {
+			add(value, false)
+		} else if secretEnv.MatchString(key) && key != "PWD" && key != "OLDPWD" {
+			add(value, true)
+		}
+		if parsed, err := url.Parse(value); err == nil && parsed.User != nil {
+			if password, ok := parsed.User.Password(); ok {
+				// The container may print the URL as written, escapes and all.
+				add(password, false)
+				add(escapedPassword(value), false)
+			}
 		}
 	}
-	sortByLengthDesc(secrets)
-	return secrets
+	for key, value := range configuration {
+		if !strings.HasPrefix(key, "env:") && key != games.LabelConsolePasswordEnv && logging.IsSensitiveKey(key) {
+			add(value, false)
+		}
+	}
+	sortByLengthDesc(values)
+	return values
 }
+
+// escapedPassword is the password of a URL with credentials as written in
+// it, before percent-decoding. The authority follows the first "//", with
+// or without a scheme before it.
+func escapedPassword(value string) string {
+	_, authority, _ := strings.Cut(value, "//")
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	userinfo := authority[:max(0, strings.LastIndex(authority, "@"))]
+	_, password, _ := strings.Cut(userinfo, ":")
+	return password
+}
+
+var plainValue = map[string]bool{"true": true, "false": true, "yes": true, "off": true, "none": true, "null": true}
 
 // Stats are rounded resource figures.
 type Stats struct {
