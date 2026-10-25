@@ -23,10 +23,7 @@ type ServerDetail struct {
 	Admin                bool
 	Tab                  string
 	Tabs                 []DetailTab
-	// Stop and restart dialogs stay in the page while the live header
-	// reloads, so they exist whenever the capability does.
-	StopDialog, RestartDialog bool
-	Availability              *monitor.Availability
+	Availability         *monitor.Availability
 	// ShowSchedule shows the next run; SchedulesReady is false when the list
 	// could not be read.
 	ShowSchedule   bool
@@ -122,12 +119,6 @@ templ ServerDetailPage(page Page, d ServerDetail) {
 templ detailBody(d ServerDetail) {
 	{{ server := d.Row.Server }}
 	@DetailLive(d)
-	if d.StopDialog {
-		@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#detail-status")
-	}
-	if d.RestartDialog {
-		@LifecycleDialog("restart", server.ID, server.DisplayName, d.Row.CanBackup, "#detail-status")
-	}
 	if d.Admin && server.BindingStatus == "review_required" {
 		@BindingReview(server.ID, server.DisplayName, server.BindingRevision)
 	}
@@ -201,10 +192,10 @@ templ DetailLive(d ServerDetail) {
 								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#detail-status" data-busy-label="Working…">Start</button>
 							}
 							if d.Row.CanStop {
-								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } data-dialog-open={ "stop-" + server.ID }>Stop</button>
+								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false)... }>Stop</button>
 							}
 							if d.Row.CanRestart {
-								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } data-dialog-open={ "restart-" + server.ID }>Restart</button>
+								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup)... }>Restart</button>
 							}
 						</div>
 					}

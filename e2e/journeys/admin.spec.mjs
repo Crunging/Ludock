@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, createUser } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -100,4 +100,27 @@ test("changing the public address and backup limits", async ({ page }) => {
   await page.locator("#connection-form").getByLabel("Public address").fill("");
   await page.locator("#connection-form").getByRole("button", { name: "Save address" }).click();
   await expect(page.locator("#connection-form .alert--success")).toHaveText("Server address cleared.");
+});
+
+test("a role changed while a deletion is answering stays changed", async ({ page }) => {
+  await createUser(page, "alice", "alice-password-123", "viewer");
+  await createUser(page, "bob", "bob-password-1234", "viewer");
+  // Alice's deletion is done on the server, but its answer arrives last.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/users\/[^/]+\/delete$/, async (route) => {
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  });
+  const alice = page.locator(".user-row", { hasText: "alice" });
+  await alice.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog", { name: "Delete alice?" }).getByRole("button", { name: "Delete user" }).click();
+  const promoted = page.waitForResponse(/\/users\/[^/]+\/access$/);
+  await page.getByLabel("Role for bob").selectOption("operator");
+  await promoted;
+  const deleted = page.waitForResponse(/\/users\/[^/]+\/delete$/);
+  release();
+  await deleted;
+  await expect(page.getByLabel("Role for bob")).toHaveValue("operator");
 });

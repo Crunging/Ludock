@@ -300,8 +300,7 @@ templ ServerCard(row ServerRow) {
 				<button class="secondary-btn" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
 			}
 			if row.CanStop {
-				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } data-dialog-open={ "stop-" + server.ID }>Stop</button>
-				@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#action-error")
+				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false)... }>Stop</button>
 			}
 			if row.CanFiles || row.CanRestart {
 				<div class="action-menu" data-action-menu>
@@ -311,43 +310,31 @@ templ ServerCard(row ServerRow) {
 							<a class="action-menu__action" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
 						}
 						if row.CanRestart {
-							<button type="button" class="action-menu__action" disabled?={ row.Disabled } data-dialog-open={ "restart-" + server.ID }>Restart…</button>
+							<button type="button" class="action-menu__action" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#action-error" { LifecycleConfirm("restart", server.DisplayName, row.CanBackup)... }>Restart…</button>
 						}
 					</div>
 				</div>
-				if row.CanRestart {
-					@LifecycleDialog("restart", server.ID, server.DisplayName, row.CanBackup, "#action-error")
-				}
 			}
 		</div>
 	</article>
 }
 
-// LifecycleDialog confirms a stop or restart; target receives errors.
-templ LifecycleDialog(action, serverID, serverName string, backupOption bool, target string) {
-	{{ label := map[string]string{"stop": "Stop", "restart": "Restart"}[action] }}
-	<dialog class="lifecycle-confirmation" id={ action + "-" + serverID } aria-labelledby={ action + "-" + serverID + "-title" }>
-		<form hx-post={ "/servers/" + serverID + "/" + action } hx-target={ target } data-close-on-success>
-			<h2 id={ action + "-" + serverID + "-title" }>{ label } { serverName }?</h2>
-			<p>
-				Connected players will be disconnected.
-				if action == "stop" {
-					The server will remain stopped until started again.
-				}
-			</p>
-			if backupOption {
-				<label class="check-label lifecycle-confirmation__option">
-					<input type="checkbox" name="createBackup" value="true"/>
-					Take a backup first
-				</label>
-				<p class="lifecycle-confirmation__help">The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped.</p>
-			}
-			<div class="lifecycle-confirmation__actions">
-				<button class="secondary-btn" type="button" data-dialog-close autofocus>Cancel</button>
-				<button class="secondary-btn secondary-btn--danger" type="submit">{ label } server</button>
-			</div>
-		</form>
-	</dialog>
+// LifecycleConfirm asks in the page's confirmation dialog before a stop or
+// restart. A restart can offer to take a backup first.
+func LifecycleConfirm(action, serverName string, backupOption bool) templ.Attributes {
+	label := map[string]string{"stop": "Stop", "restart": "Restart"}[action]
+	detail := "Connected players will be disconnected."
+	if action == "stop" {
+		detail += " The server will remain stopped until started again."
+	}
+	attributes := templ.Attributes{"hx-confirm": label + " " + serverName + "?", "data-confirm-detail": detail,
+		"data-confirm-action": label + " server", "data-confirm-danger": true}
+	if backupOption {
+		attributes["data-confirm-option"] = "createBackup"
+		attributes["data-confirm-option-label"] = "Take a backup first"
+		attributes["data-confirm-option-help"] = "The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."
+	}
+	return attributes
 }
 
 // AttentionView is the needs-attention panel.

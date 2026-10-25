@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -42,6 +43,34 @@ type contextKey struct{}
 func CSRFToken(sessionToken string) string {
 	sum := sha256.Sum256([]byte("ludock:csrf:v1:" + sessionToken))
 	return hex.EncodeToString(sum[:])
+}
+
+// maskCSRF hides the token under a fresh random pad for each page. Pages are
+// compressed, and a token that changed with every response can't be guessed
+// from compressed sizes (BREACH).
+func maskCSRF(token string) string {
+	raw, err := hex.DecodeString(token)
+	if err != nil {
+		return token
+	}
+	masked := make([]byte, 2*len(raw))
+	rand.Read(masked[:len(raw)])
+	for index, value := range raw {
+		masked[len(raw)+index] = masked[index] ^ value
+	}
+	return hex.EncodeToString(masked)
+}
+
+// csrfMatches accepts the session's token, masked or not.
+func csrfMatches(sent, token string) bool {
+	if masked, err := hex.DecodeString(sent); err == nil && len(masked) == len(token) {
+		half := len(masked) / 2
+		for index := range half {
+			masked[half+index] ^= masked[index]
+		}
+		sent = hex.EncodeToString(masked[half:])
+	}
+	return subtle.ConstantTimeCompare([]byte(sent), []byte(token)) == 1
 }
 
 func (s *Server) client(r *http.Request) auth.Client {
@@ -125,7 +154,7 @@ func (s *Server) authed(handler func(http.ResponseWriter, *http.Request, *Reques
 			if token == "" {
 				token = r.PostFormValue("_csrf")
 			}
-			if subtle.ConstantTimeCompare([]byte(token), []byte(CSRFToken(principal.Token))) != 1 {
+			if !csrfMatches(token, CSRFToken(principal.Token)) {
 				http.Error(w, "Cross-site request rejected", http.StatusForbidden)
 				return
 			}
@@ -160,7 +189,7 @@ func (s *Server) page(r *http.Request, request *Request, title string) views.Pag
 	if role == "admin" {
 		role = "Administrator"
 	}
-	return views.Page{Title: title, CSRF: request.CSRF, Username: request.Principal.User.Username,
+	return views.Page{Title: title, CSRF: maskCSRF(request.CSRF), Username: request.Principal.User.Username,
 		Admin: request.Principal.User.Role == db.RoleAdmin, RoleName: role, Path: r.URL.Path}
 }
 

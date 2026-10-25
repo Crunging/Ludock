@@ -193,6 +193,10 @@ func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID
 	return capabilities, err
 }
 
+var accessQuery = `SELECT u.role, u.disabled, g.capabilities_json, ` + identity.ServerColumns("s") +
+	` FROM logical_servers s LEFT JOIN users u ON u.id = ?
+    LEFT JOIN server_grants g ON g.user_id = u.id AND g.server_id = s.id WHERE s.id = ?`
+
 // Access returns the actor's current capabilities on a server and the
 // server they apply to, read together in one query. The server is nil when
 // it does not exist.
@@ -202,10 +206,7 @@ func (s *Service) Access(ctx context.Context, actor *db.SessionUser, serverID st
 	}
 	var role, grant sql.NullString
 	var disabled sql.NullInt64
-	server, err := identity.ScanServer(s.DB.QueryRowContext(ctx, `SELECT u.role, u.disabled, g.capabilities_json, `+
-		identity.ServerColumns("s")+` FROM logical_servers s LEFT JOIN users u ON u.id = ?
-    LEFT JOIN server_grants g ON g.user_id = u.id AND g.server_id = s.id WHERE s.id = ?`, actor.ID, serverID),
-		&role, &disabled, &grant)
+	server, err := identity.ScanServer(s.DB.QueryRowContext(ctx, accessQuery, actor.ID, serverID), &role, &disabled, &grant)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}

@@ -52,30 +52,40 @@
     var detail = elt.getAttribute("data-confirm-detail") || "";
     var button = dialog.querySelector("[data-confirm-button]");
     dialog.querySelector("h2").textContent = event.detail.question;
-    dialog.querySelector("p").textContent = detail;
-    dialog.querySelector("p").hidden = !detail;
+    dialog.querySelector("#confirm-dialog-detail").textContent = detail;
+    dialog.querySelector("#confirm-dialog-detail").hidden = !detail;
+    var optionName = elt.getAttribute("data-confirm-option");
+    var option = dialog.querySelector("[data-confirm-option]");
+    var checkbox = option.querySelector("input");
+    option.hidden = !optionName;
+    checkbox.checked = false;
+    option.querySelector("span").textContent = elt.getAttribute("data-confirm-option-label") || "";
+    option.querySelector("p").textContent = elt.getAttribute("data-confirm-option-help") || "";
     button.textContent = elt.getAttribute("data-confirm-action") || "Confirm";
     button.className = elt.hasAttribute("data-confirm-danger") ? "secondary-btn secondary-btn--danger" : "primary-btn";
     dialog.returnValue = "";
     confirming = elt;
     dialog.addEventListener("close", function () {
       confirming = null;
-      if (dialog.returnValue === "confirm") event.detail.issueRequest(true);
+      // An action in a menu closed the menu; focus returns to its button.
+      var menu = elt.closest("[data-action-menu]");
+      if (menu && elt.closest("[hidden]")) menu.querySelector(":scope > button").focus();
+      if (dialog.returnValue !== "confirm") return;
+      // htmx reads hx-vals as it builds the request.
+      if (optionName) {
+        var values = {};
+        if (checkbox.checked) values[optionName] = "true";
+        elt.setAttribute("hx-vals", JSON.stringify(values));
+      }
+      elt.setAttribute("data-confirmed-sending", "");
+      elt.addEventListener("htmx:afterRequest", function () { elt.removeAttribute("data-confirmed-sending"); }, { once: true });
+      event.detail.issueRequest(true);
     }, { once: true });
     dialog.showModal();
   });
 
-  // Open and close native dialogs: data-dialog-open="id", data-dialog-close.
+  // data-dialog-close closes its native dialog.
   document.addEventListener("click", function (event) {
-    var opener = event.target.closest && event.target.closest("[data-dialog-open]");
-    if (opener) {
-      var dialog = document.getElementById(opener.getAttribute("data-dialog-open"));
-      if (dialog && dialog.showModal) {
-        event.preventDefault();
-        dialog.showModal();
-      }
-      return;
-    }
     var closer = event.target.closest && event.target.closest("[data-dialog-close]");
     if (closer) {
       var parent = closer.closest("dialog");
@@ -380,6 +390,26 @@
     }, { once: true });
   });
 
+  // A live server view's refresh waits while a confirmed request from
+  // inside it is on its way, such as a Stop from the server list: the
+  // response's events, like the redirect to sign in, reach the page only
+  // while the element that sent it is there. The view reloads once it
+  // answers. Other responses, such as another change, always swap.
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail.target;
+    if (!target || !target.querySelector || event.detail.requestConfig.verb !== "get" ||
+      (target.getAttribute("hx-trigger") || "").indexOf("servers-changed") === -1) return;
+    var sending = target.querySelector("[data-confirmed-sending]");
+    if (!sending || sending === event.detail.requestConfig.elt) return;
+    event.detail.shouldSwap = false;
+    if (sending.hasAttribute("data-refresh-pending")) return;
+    sending.setAttribute("data-refresh-pending", "");
+    sending.addEventListener("htmx:afterRequest", function () {
+      sending.removeAttribute("data-refresh-pending");
+      if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
+    }, { once: true });
+  });
+
   // In-page navigation on a server's page (tabs and links that swap
   // #detail-body): only the newest one swaps, so a slow earlier response
   // can't replace the page or its address under a later click, and a
@@ -557,7 +587,7 @@
       var button = menu.querySelector(":scope > button");
       var content = menu.querySelector(".action-menu__content");
       var open = trigger && trigger === button ? button.getAttribute("aria-expanded") !== "true" : false;
-      if (!trigger && menu.contains(event.target) && !event.target.closest("[data-dialog-open], a")) return;
+      if (!trigger && menu.contains(event.target) && !event.target.closest("[hx-confirm], a")) return;
       button.setAttribute("aria-expanded", open ? "true" : "false");
       content.hidden = !open;
     });
