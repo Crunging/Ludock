@@ -390,13 +390,15 @@
     }, { once: true });
   });
 
-  // A refresh also waits while a confirmed request is on its way, such as
-  // a Stop from the server list: the response's events, like the redirect
-  // to sign in, reach the page only while the element that sent it is
-  // there. Navigating a server's page doesn't wait (see below).
+  // A live server view's refresh waits while a confirmed request from
+  // inside it is on its way, such as a Stop from the server list: the
+  // response's events, like the redirect to sign in, reach the page only
+  // while the element that sent it is there. The view reloads once it
+  // answers. Other responses, such as another change, always swap.
   document.addEventListener("htmx:beforeSwap", function (event) {
     var target = event.detail.target;
-    if (!target || !target.querySelector || target.id === "detail-body") return;
+    if (!target || !target.querySelector || event.detail.requestConfig.verb !== "get" ||
+      (target.getAttribute("hx-trigger") || "").indexOf("servers-changed") === -1) return;
     var sending = target.querySelector("[data-confirmed-sending]");
     if (!sending || sending === event.detail.requestConfig.elt) return;
     event.detail.shouldSwap = false;
