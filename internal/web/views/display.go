@@ -121,7 +121,17 @@ func OperationLabel(status, phase string) string {
 	if label, ok := phaseLabels[phase]; ok {
 		return label
 	}
-	return strings.ReplaceAll(phase, "_", " ")
+	return Capitalize(phase)
+}
+
+// OperationPath is where a server's page follows an operation: the Backups
+// tab for backups and restores, the Activity tab for anything else.
+func OperationPath(serverID, kind, operationID string) string {
+	tab := "activity"
+	if kind == "backup" || kind == "restore" {
+		tab = "backups"
+	}
+	return "/servers/" + serverID + "?tab=" + tab + "&operation=" + operationID
 }
 
 // OperationStatusLabels names operation outcomes.

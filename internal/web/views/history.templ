@@ -271,7 +271,7 @@ templ OperationSummary(o OperationDetailView) {
 	{{ operation := o.Operation }}
 	<div
 		id="operation-summary"
-		if activeStatus(operation.Status) {
+		if ActiveStatus(operation.Status) {
 			hx-get={ "/fragments/operations/" + operation.ID }
 			hx-trigger="every 2s"
 			hx-swap="outerHTML"
@@ -282,7 +282,7 @@ templ OperationSummary(o OperationDetailView) {
 			<dd>{ Capitalize(operation.Kind) }</dd>
 			<dt>Status</dt>
 			<dd
-				if activeStatus(operation.Status) {
+				if ActiveStatus(operation.Status) {
 					role="status"
 				}
 			>

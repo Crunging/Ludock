@@ -26,11 +26,11 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 	page := p.do("GET", "/servers/"+p.server+"?tab=backups", viewer, nil, nil)
 	body := page.Body.String()
 	if page.Code != http.StatusOK || !strings.Contains(body, "valheim") || strings.Contains(body, "tab=backups") ||
-		strings.Contains(body, "/servers/"+p.server+"/start") || strings.Contains(body, "Save monitoring") {
+		strings.Contains(body, "/servers/"+p.server+"/start") || strings.Contains(body, "/availability") {
 		t.Fatal(page.Code, body)
 	}
 	admin := p.do("GET", "/servers/"+p.server, p.admin, nil, nil).Body.String()
-	for _, want := range []string{"tab=backups", "tab=schedules", "tab=update", "/servers/" + p.server + "/start", "Save monitoring"} {
+	for _, want := range []string{"tab=backups", "tab=schedules", "tab=update", "/servers/" + p.server + "/start", "/servers/" + p.server + "/availability"} {
 		if !strings.Contains(admin, want) {
 			t.Error("admin page lacks", want)
 		}
@@ -86,5 +86,50 @@ func TestOperationFragmentScope(t *testing.T) {
 	fragment := p.do("GET", "/fragments/servers/"+p.server+"/operations/"+job.ID, p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
 	if !strings.Contains(fragment, `hx-trigger="every 2s"`) || !strings.Contains(fragment, "Restart") {
 		t.Fatal(fragment)
+	}
+}
+
+// Someone who can't open the Backups tab follows a backup linked there,
+// such as from the server list, in Activity instead.
+func TestOperationLinkFallsBackToActivity(t *testing.T) {
+	p := newPages(t)
+	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	p.grant(viewer, authz.ServerView)
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	var operation string
+	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&operation)
+	body := p.do("GET", "/servers/"+p.server+"?tab=backups&operation="+operation, viewer, nil, nil).Body.String()
+	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `id="tab-activity" role="tab" aria-selected="true"`) {
+		t.Fatal(body)
+	}
+}
+
+// The live header sends back the operation it showed; once that work has
+// ended, its refresh tells paused tabs such as Backups to catch up, whatever
+// operation the page links to.
+func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
+	p := newPages(t)
+	live := func(query string) string {
+		response := p.do("GET", "/fragments/servers/"+p.server+"/live?"+query, p.admin, nil, map[string]string{"HX-Request": "true"})
+		if response.Code != http.StatusOK {
+			t.Fatal(query, response.Code)
+		}
+		return response.Header().Get("HX-Trigger")
+	}
+	if trigger := live("tab=backups"); trigger != "" {
+		t.Fatal("no work seen:", trigger)
+	}
+	if trigger := live("tab=backups&active=11111111-1111-4111-8111-111111111111"); trigger != "operation-finished" {
+		t.Fatal("ended work:", trigger)
+	}
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	var running string
+	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&running)
+	if trigger := live("tab=backups&active=" + running); trigger != "" {
+		t.Fatal("work still running:", trigger)
 	}
 }

@@ -28,7 +28,7 @@ test("sharing one server with an operator, then removing access", async ({ sessi
   await expect(operator.getByRole("tab")).toHaveText(["Overview", "Activity"]);
   await expect(operator.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(operator.locator(".detail-actions").getByRole("link", { name: "Logs" })).toBeVisible();
-  await expect(operator.getByRole("button", { name: "Save monitoring" })).toHaveCount(0);
+  await expect(operator.getByLabel("Monitor this server")).toHaveCount(0);
 
   // Administrator pages and other servers stay out of reach.
   await operator.goto("/users");
@@ -36,11 +36,16 @@ test("sharing one server with an operator, then removing access", async ({ sessi
   const hidden = await operator.request.get("/servers/00000000-0000-4000-8000-000000000000");
   expect(hidden.status()).toBe(404);
 
-  // Removing access takes effect immediately.
+  // Removing access takes effect immediately, even for a page already open:
+  // its next tab shows the error page instead of an empty one.
+  await operator.goto(survivalURL);
   await adminPage.locator(".user-row", { hasText: "operator1" }).getByRole("button", { name: "Server access", exact: true }).click();
   await editor.locator(".grants-server", { hasText: "Survival" }).getByRole("button", { name: "Remove access" }).click();
   await editor.getByRole("button", { name: "Save server access" }).click();
   await expect(editor.locator(".alert--success")).toBeVisible();
+  await operator.getByRole("tab", { name: "Activity" }).click();
+  await expect(operator).toHaveURL(/\?tab=activity$/);
+  await expect(operator.getByText("Server not found")).toBeVisible();
   await operator.goto("/");
   await expect(operator.getByText("No servers shared with you yet")).toBeVisible();
   await operator.goto(survivalURL);
@@ -53,5 +58,6 @@ test("sharing one server with an operator, then removing access", async ({ sessi
   await expect(operator).toHaveURL(/\/login/);
 
   await adminPage.locator(".user-row", { hasText: "operator1" }).getByRole("button", { name: "Delete" }).click();
+  await adminPage.getByRole("dialog", { name: "Delete operator1?" }).getByRole("button", { name: "Delete user" }).click();
   await expect(adminPage.locator("#users .alert--success")).toHaveText("Deleted operator1.");
 });

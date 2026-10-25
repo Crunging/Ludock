@@ -151,7 +151,10 @@ templ userRow(u UsersView, user db.User) {
 			hx-post={ "/users/" + user.ID + "/delete" }
 			hx-target="#users"
 			hx-swap="outerHTML"
-			hx-confirm={ "Delete " + user.Username + "? This revokes their sessions and cannot be undone." }
+			hx-confirm={ "Delete " + user.Username + "?" }
+			data-confirm-detail="This signs them out everywhere and can’t be undone."
+			data-confirm-action="Delete user"
+			data-confirm-danger
 		>Delete</button>
 		<div
 			id={ "server-grants-" + user.ID }

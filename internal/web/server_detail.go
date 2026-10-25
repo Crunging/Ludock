@@ -80,7 +80,7 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 // activity reads the recent operations of a server, filtered in the page.
 func (s *Server) activity(r *http.Request, request *Request, id string, query url.Values) views.ActivityView {
 	a := views.ActivityView{ServerID: id, Status: query.Get("status"), Kind: query.Get("kind"), SelectedID: query.Get("operation"),
-		Admin: request.User().Role == db.RoleAdmin}
+		Admin: request.User().Role == db.RoleAdmin, Tab: "activity"}
 	operations, _, err := s.App.History.Operations(r.Context(), request.User(), history.Query{ServerID: id, From: -1, To: -1})
 	if err != nil {
 		a.Error = publicMessage(err)
@@ -119,6 +119,11 @@ var detailTabs = []string{"activity", "backups", "schedules", "update"}
 func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *Request) {
 	tab := r.URL.Query().Get("tab")
 	d, err := s.detail(r, request, r.PathValue("id"), tab, !slices.Contains(detailTabs, tab))
+	if err == nil && d.Tab != tab && r.URL.Query().Get("operation") != "" {
+		// Work linked to a tab the viewer can't open shows in Activity.
+		tab = "activity"
+		d, err = s.detail(r, request, r.PathValue("id"), tab, false)
+	}
 	if err == nil && d.Tab == "overview" && slices.Contains(detailTabs, tab) {
 		// A hidden tab falls back to the overview, which shows statistics.
 		d, err = s.detail(r, request, r.PathValue("id"), "overview", true)
@@ -127,8 +132,10 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		switch d.Tab {
 		case "activity":
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
+			d.Activity.Archives = d.Admin && can(&d.Row.Server, authz.BackupsRead)
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
+			d.Operation = d.Backups.Operation.SelectedID
 		case "schedules":
 			d.Schedules = s.schedulesView(r, request, d)
 		case "update":
@@ -141,6 +148,9 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
+	if d.Operation == "" {
+		d.Operation = r.URL.Query().Get("operation")
+	}
 	page := s.page(r, request, d.Row.Server.DisplayName)
 	page.Path = "/"
 	render(w, r, http.StatusOK, views.ServerDetailPage(page, *d))
@@ -151,6 +161,12 @@ func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Req
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
+	}
+	d.Operation = r.URL.Query().Get("operation")
+	// The work this header last showed has ended: tabs paused by it, such
+	// as Backups, catch up.
+	if was := r.URL.Query().Get("active"); was != "" && (d.Row.Server.ActiveOperation == nil || d.Row.Server.ActiveOperation.ID != was) {
+		w.Header().Set("HX-Trigger", "operation-finished")
 	}
 	render(w, r, http.StatusOK, views.DetailLive(*d))
 }
@@ -173,8 +189,20 @@ func (s *Server) detailOperation(w http.ResponseWriter, r *http.Request, request
 		s.fail(w, r, request, err)
 		return
 	}
-	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation")}
+	a := views.ActivityView{ServerID: id, SelectedID: r.PathValue("operation"), Tab: "activity"}
+	if request.User().Role == db.RoleAdmin {
+		_, err := s.App.Authz.Assert(r.Context(), request.User(), id, authz.BackupsRead)
+		a.Archives = err == nil
+	}
+	if r.URL.Query().Get("tab") == "backups" {
+		a.Tab = "backups"
+	}
 	s.selectOperation(r, &a)
+	// The panel polls only while the work is active, so this is the first
+	// answer since it finished: the tab and the server's state catch up.
+	if a.Selected != nil && !views.ActiveStatus(a.Selected.Status) {
+		w.Header().Set("HX-Trigger", "operation-finished, servers-changed")
+	}
 	render(w, r, http.StatusOK, views.SelectedOperation(a))
 }
 

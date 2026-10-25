@@ -36,7 +36,7 @@ func TestCreateBackupNeedsTheGrant(t *testing.T) {
 	}
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
 	response := p.action("/servers/"+p.server+"/backups", operator, nil)
-	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("HX-Redirect"), "tab=activity&operation=") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("HX-Location"), "tab=backups&operation=") {
 		t.Fatal(response.StatusCode, response.Header)
 	}
 	if kind, _ := p.queued(t); kind != "backup" {
@@ -125,5 +125,20 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	values.Set("createBackup", "false")
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, values); response.StatusCode != http.StatusConflict {
 		t.Fatal(response.StatusCode)
+	}
+}
+
+// The Backups tab follows work that is still running even without a link
+// to it, such as after Dismiss, so the tab hears when the work ends and
+// brings back the controls it paused.
+func TestBackupsTabFollowsRunningWork(t *testing.T) {
+	p := newPages(t)
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	body := p.do("GET", "/servers/"+p.server+"?tab=backups", p.admin, nil, nil).Body.String()
+	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `hx-trigger="every 2s"`) ||
+		strings.Contains(body, ">Dismiss</a>") {
+		t.Fatal(body)
 	}
 }

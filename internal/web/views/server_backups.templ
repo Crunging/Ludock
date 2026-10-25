@@ -8,6 +8,8 @@ import (
 
 // BackupsView is the backups tab of a server.
 type BackupsView struct {
+	// Operation is a backup or restore the tab follows.
+	Operation            ActivityView
 	ServerID, ServerName string
 	Admin                bool
 	CanRead, CanCreate   bool
@@ -25,6 +27,17 @@ type BackupsView struct {
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
 
 templ BackupsTab(b BackupsView) {
+	if b.Operation.SelectedID != "" {
+		@SelectedOperation(b.Operation)
+	}
+	// The rest reloads when the followed operation finishes, so readiness,
+	// the create button, and the list catch up.
+	<div id="backups-tab" hx-get={ string(detailURL(b.ServerID, "tab=backups")) } hx-select="#backups-tab" hx-trigger="operation-finished from:body" hx-swap="outerHTML" hx-disinherit="*">
+		@backupsTabBody(b)
+	</div>
+}
+
+templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
 		if b.CanCreate {
@@ -83,7 +96,9 @@ templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
 		disabled?={ !ready }
 		hx-post={ "/servers/" + serverID + "/backups" }
 		hx-target="#detail-status"
-		hx-confirm={ "Create a backup of " + serverName + "? The server stops for the entire copy and returns to its previous running state afterward." }
+		hx-confirm={ "Back up " + serverName + "?" }
+		data-confirm-detail="The server stops for the whole copy, then returns to how it was."
+		data-confirm-action="Create backup"
 		data-busy-label="Working…"
 		if oob {
 			hx-swap-oob="true"
@@ -185,7 +200,7 @@ templ BackupList(b BackupsView) {
 									<a class="secondary-btn" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
 								}
 								if b.CanRestore && !b.Blocked && !b.Active && backup.State == "complete" {
-									<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) }>Restore…</a>
+									<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
 								} else {
 									<button class="secondary-btn secondary-btn--danger" type="button" disabled>Restore…</button>
 								}
@@ -195,7 +210,10 @@ templ BackupList(b BackupsView) {
 									disabled?={ !b.CanDelete || b.Active }
 									hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 									hx-target="#detail-status"
-									hx-confirm="Permanently delete this backup archive?"
+									hx-confirm="Delete this backup?"
+									data-confirm-detail="The archive is deleted permanently."
+									data-confirm-action="Delete backup"
+									data-confirm-danger
 									data-busy-label="Deleting…"
 								>Delete</button>
 							</div>
@@ -223,7 +241,7 @@ templ RestoreForm(b BackupsView) {
 		<div id="restore-status" aria-live="polite"></div>
 		<div class="inline-actions">
 			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore game data</button>
-			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") }>Cancel</a>
+			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>Cancel</a>
 		</div>
 	</form>
 }

@@ -26,7 +26,7 @@ type ServerDetail struct {
 	// Stop and restart dialogs stay in the page while the live header
 	// reloads, so they exist whenever the capability does.
 	StopDialog, RestartDialog bool
-	Availability         *monitor.Availability
+	Availability              *monitor.Availability
 	// ShowSchedule shows the next run; SchedulesReady is false when the list
 	// could not be read.
 	ShowSchedule   bool
@@ -38,6 +38,8 @@ type ServerDetail struct {
 	Schedules      SchedulesView
 	// Recreate preselects "Recreate anyway" in the update tab.
 	Recreate bool
+	// Operation is the operation the page shows, if any.
+	Operation string
 }
 
 // ActivityView is the activity tab of a server.
@@ -56,6 +58,10 @@ type ActivityView struct {
 	SelectedError string
 	// AlreadyCurrent offers recreation after an update found nothing new.
 	AlreadyCurrent bool
+	// Tab is the tab showing the selected operation.
+	Tab string
+	// Archives offers the download of a backup the operation made.
+	Archives bool
 }
 
 func detailURL(id, query string) templ.SafeURL {
@@ -65,12 +71,29 @@ func detailURL(id, query string) templ.SafeURL {
 	return templ.SafeURL("/servers/" + id + "?" + query)
 }
 
+// inPage moves between views of a server inside the page: the address bar
+// changes, but the page and its live connection stay. Boosting keeps the
+// link's own address and lets modified clicks open a new tab.
+func inPage() templ.Attributes {
+	return templ.Attributes{"hx-boost": "true", "hx-target": "#detail-body", "hx-select": "#detail-body",
+		"hx-swap": "outerHTML show:none"}
+}
+
 func liveTrigger(id string, active bool) string {
 	every := "every 10s"
 	if active {
 		every = "every 2s"
 	}
 	return "sse:server-" + id + ", sse:refresh, servers-changed from:body, " + every
+}
+
+// activeID is the server's running operation, if any. The live header
+// sends it back, so its next refresh can tell when that work has ended.
+func activeID(server servers.View) string {
+	if server.ActiveOperation == nil {
+		return ""
+	}
+	return server.ActiveOperation.ID
 }
 
 func headerClass(d ServerDetail) string {
@@ -86,46 +109,53 @@ func headerClass(d ServerDetail) string {
 
 templ ServerDetailPage(page Page, d ServerDetail) {
 	@Shell(page) {
-		{{ server := d.Row.Server }}
 		<div class="page server-detail" sse-connect="/events">
 			<a class="text-link back-link" href="/"><span aria-hidden="true">←</span> All servers</a>
-			@DetailLive(d)
-			if d.StopDialog {
-				@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#detail-status")
-			}
-			if d.RestartDialog {
-				@LifecycleDialog("restart", server.ID, server.DisplayName, d.Row.CanBackup, "#detail-status")
-			}
-			if d.Admin && server.BindingStatus == "review_required" {
-				@BindingReview(server.ID, server.DisplayName, server.BindingRevision)
-			}
-			<div id="detail-status" aria-live="polite"></div>
-			<nav class="section-tabs" aria-label="Server management">
-				for _, tab := range d.Tabs {
-					<a href={ detailURL(server.ID, "tab="+tab.ID) } role="tab" aria-selected={ strconv.FormatBool(tab.ID == d.Tab) } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
-				}
-			</nav>
-			<section class="section-tab-panel" aria-label={ tabLabel(d) }>
-				switch d.Tab {
-					case "activity":
-						@ActivityPanel(d.Activity)
-					case "backups":
-						@BackupsTab(d.Backups)
-					case "schedules":
-						@SchedulesTab(d.Schedules)
-					case "update":
-						@UpdateTab(server.ID, d.Recreate)
-					default:
-						@OverviewLive(d)
-						if d.Admin && d.Availability != nil {
-							@AvailabilityForm(server.ID, d.Availability.Policy)
-						} else if d.Availability != nil {
-							<p class="muted">Ask an administrator to investigate availability problems or change monitoring settings.</p>
-						}
-				}
-			</section>
+			// In-page links replace only this part, so the event stream stays open.
+			<div id="detail-body">
+				@detailBody(d)
+			</div>
 		</div>
 	}
+}
+
+templ detailBody(d ServerDetail) {
+	{{ server := d.Row.Server }}
+	@DetailLive(d)
+	if d.StopDialog {
+		@LifecycleDialog("stop", server.ID, server.DisplayName, false, "#detail-status")
+	}
+	if d.RestartDialog {
+		@LifecycleDialog("restart", server.ID, server.DisplayName, d.Row.CanBackup, "#detail-status")
+	}
+	if d.Admin && server.BindingStatus == "review_required" {
+		@BindingReview(server.ID, server.DisplayName, server.BindingRevision)
+	}
+	<div id="detail-status" aria-live="polite"></div>
+	<nav class="section-tabs" aria-label="Server management">
+		for _, tab := range d.Tabs {
+			<a href={ detailURL(server.ID, "tab="+tab.ID) } { inPage()... } id={ "tab-" + tab.ID } role="tab" aria-selected={ strconv.FormatBool(tab.ID == d.Tab) } aria-current={ map[bool]string{true: "page"}[tab.ID == d.Tab] }>{ tab.Label }</a>
+		}
+	</nav>
+	<section class="section-tab-panel" aria-label={ tabLabel(d) }>
+		switch d.Tab {
+			case "activity":
+				@ActivityPanel(d.Activity)
+			case "backups":
+				@BackupsTab(d.Backups)
+			case "schedules":
+				@SchedulesTab(d.Schedules)
+			case "update":
+				@UpdateTab(server.ID, d.Recreate)
+			default:
+				@OverviewLive(d)
+				if d.Admin && d.Availability != nil {
+					@AvailabilityForm(server.ID, d.Availability.Policy)
+				} else if d.Availability != nil {
+					<p class="muted">Ask an administrator to investigate availability problems or change monitoring settings.</p>
+				}
+		}
+	</section>
 }
 
 func tabLabel(d ServerDetail) string {
@@ -140,7 +170,7 @@ func tabLabel(d ServerDetail) string {
 // DetailLive is the header and server-wide notices; it reloads itself.
 templ DetailLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
-	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?tab=" + d.Tab } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
+	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}}.Encode() } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
 		<header class={ headerClass(d) }>
 			@StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone)
 			<div class="detail-header__title">
@@ -198,12 +228,13 @@ templ DetailLive(d ServerDetail) {
 				This server’s binding is { Capitalize(string(server.BindingStatus)) }. Operations are blocked until an administrator reviews the identity.
 			</div>
 		}
-		if operation := server.ActiveOperation; operation != nil && d.Tab != "activity" {
+		// The notice points to progress the page doesn't already show.
+		if operation := server.ActiveOperation; operation != nil && d.Tab != "activity" && operation.ID != d.Operation {
 			<div class="detail-operation-notice">
 				<p role="status">
 					<strong>{ Capitalize(operation.Kind) }</strong>: { OperationLabel(operation.Status, operation.Phase) }. Server controls, backups, and updates are paused until it finishes.
 				</p>
-				<a class="text-link" href={ detailURL(server.ID, "tab=activity&operation="+operation.ID) }>View progress</a>
+				<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) } { inPage()... }>View progress</a>
 			</div>
 		}
 	</div>
@@ -339,7 +370,7 @@ templ OverviewLive(d ServerDetail) {
 							Never
 						}
 						if hasTab(d, "backups") {
-							<a class="text-link" href={ detailURL(server.ID, "tab=backups") }>Backups</a>
+							<a class="text-link" href={ detailURL(server.ID, "tab=backups") } { inPage()... }>Backups</a>
 						}
 					</dd>
 				</div>
@@ -354,7 +385,7 @@ templ OverviewLive(d ServerDetail) {
 						} else {
 							Nothing scheduled
 						}
-						<a class="text-link" href={ detailURL(server.ID, "tab=schedules") }>Schedules</a>
+						<a class="text-link" href={ detailURL(server.ID, "tab=schedules") } { inPage()... }>Schedules</a>
 					</dd>
 				</div>
 			}
@@ -476,7 +507,8 @@ templ AvailabilityStatus(d ServerDetail) {
 }
 
 templ AvailabilityForm(serverID string, policy monitor.Policy) {
-	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result">
+	// Each change saves right away; the result says so.
+	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
 		<p class="muted">
 			Alert when this server is down. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.
 		</p>
@@ -500,7 +532,6 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 		</div>
 		<p class="muted">Alerts go to Discord. <a class="text-link" href="/settings">Set up Discord in Settings</a></p>
 		<div id="availability-result" aria-live="polite"></div>
-		<button class="primary-btn" type="submit" data-busy-label="Saving…">Save monitoring</button>
 	</form>
 }
 
@@ -540,7 +571,7 @@ templ ActivityPanel(a ActivityView) {
 			</select>
 		</label>
 		if a.Status != "" || a.Kind != "" {
-			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab=activity") }>Clear filters</a>
+			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Clear filters</a>
 		}
 		<noscript><button class="secondary-btn" type="submit">Apply filters</button></noscript>
 	</form>
@@ -559,14 +590,14 @@ templ ActivityList(a ActivityView) {
 		if a.HiddenActive {
 			<p class="section-note activity-filter-notice">
 				An active operation is hidden by these filters. Server controls remain paused.
-				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") }>Show active work</a>
+				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Show active work</a>
 			</p>
 		}
 		@OperationList(a.Visible, map[bool]string{true: "No recent operations match these filters.", false: "No operations yet."}[a.Total > 0], false, nil)
 		if a.Admin && a.AlreadyCurrent {
 			<p class="section-note">
 				The configured image is current. Game software may update during startup.
-				<a class="text-link" href={ detailURL(a.ServerID, "tab=update&recreate=1") }>Recreate anyway</a>
+				<a class="text-link" href={ detailURL(a.ServerID, "tab=update&recreate=1") } { inPage()... }>Recreate anyway</a>
 			</p>
 		}
 	</div>
@@ -583,8 +614,8 @@ templ SelectedOperation(a ActivityView) {
 		class="scheduled-operation"
 		id="selected-operation"
 		aria-labelledby="scheduled-operation-title"
-		if a.Selected != nil && activeStatus(a.Selected.Status) {
-			hx-get={ "/fragments/servers/" + a.ServerID + "/operations/" + a.SelectedID }
+		if a.Selected != nil && ActiveStatus(a.Selected.Status) {
+			hx-get={ "/fragments/servers/" + a.ServerID + "/operations/" + a.SelectedID + "?tab=" + a.Tab }
 			hx-trigger="every 2s"
 			hx-swap="outerHTML"
 			hx-disinherit="*"
@@ -592,13 +623,16 @@ templ SelectedOperation(a ActivityView) {
 	>
 		<div class="section-heading">
 			<h2 id="scheduled-operation-title" tabindex="-1">Operation details</h2>
-			<a class="secondary-btn" href={ detailURL(a.ServerID, "tab=activity") }>Close operation</a>
+			// The Backups tab follows running work until it ends.
+			if a.Tab != "backups" || a.Selected == nil || !ActiveStatus(a.Selected.Status) {
+				<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage()... }>Dismiss</a>
+			}
 		</div>
 		if a.SelectedError != "" {
 			<p role="alert">{ a.SelectedError }</p>
 		}
 		if operation := a.Selected; operation != nil {
-			<p><a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>Open operation details</a></p>
+			<p><a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>Open in operation history</a></p>
 			<dl class="metadata-list">
 				<dt>Action</dt>
 				<dd>{ Capitalize(operation.Kind) }</dd>
@@ -623,11 +657,26 @@ templ SelectedOperation(a ActivityView) {
 			if text := guidance(operation.Result); text != "" {
 				<p class="section-note">{ text }</p>
 			}
+			if id := newBackup(operation); id != "" && a.Archives {
+				<p class="inline-actions">
+					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download") } download>Download backup</a>
+				</p>
+			}
 		}
 	</section>
 }
 
-func activeStatus(status string) bool { return status == "queued" || status == "running" }
+// ActiveStatus reports work that hasn't finished.
+func ActiveStatus(status string) bool { return status == "queued" || status == "running" }
+
+// newBackup is the backup a finished operation made, if any.
+func newBackup(operation *ops.Job) string {
+	id, _ := operation.Result["backupId"].(string)
+	if operation.Status != "succeeded" {
+		return ""
+	}
+	return id
+}
 
 // OperationList is a table of operations; showContext adds the server and
 // actor column for the history page.
@@ -666,7 +715,7 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 						<td>@Time(operation.CreatedAt, "", "")</td>
 						<td>
 							<span
-								if activeStatus(operation.Status) {
+								if ActiveStatus(operation.Status) {
 									role="status"
 								}
 							>

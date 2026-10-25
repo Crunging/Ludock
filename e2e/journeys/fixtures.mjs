@@ -12,7 +12,11 @@ function watch(page, problems) {
     // assert on the page instead.
     if (message.type() === "error" && !/Failed to load resource|\[object Event\]/.test(message.text())) problems.push(message.text());
   });
-  page.on("dialog", (dialog) => dialog.accept());
+  // Ludock asks in its own dialogs; a browser dialog is a regression.
+  page.on("dialog", (dialog) => {
+    problems.push(`browser ${dialog.type()} dialog: ${dialog.message()}`);
+    dialog.dismiss();
+  });
   return page;
 }
 
@@ -59,9 +63,9 @@ export async function openServer(page, name) {
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
 }
 
-/** Waits for the operation shown in the server's activity to finish. */
+/** Waits for the operation the server's page follows to finish. */
 export async function expectOperationSucceeded(page) {
-  await expect(page).toHaveURL(/tab=activity&operation=/);
+  await expect(page).toHaveURL(/[?&]operation=/);
   await expect(page.locator("#selected-operation")).toContainText("Succeeded", { timeout: 45_000 });
 }
 

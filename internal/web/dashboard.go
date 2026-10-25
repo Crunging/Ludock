@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -97,8 +98,25 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, request *Requ
 }
 
 func (s *Server) serversFragment(w http.ResponseWriter, r *http.Request, request *Request) {
+	list := s.serverList(r, request)
+	// Every list request carries the filters as they are, so each keeps the
+	// address bar in step; going back to the list or reloading it keeps them.
+	if r.Header.Get("HX-Target") == "servers" {
+		page := url.Values{}
+		if list.Search != "" {
+			page.Set("search", list.Search)
+		}
+		if list.State != "" && list.State != "all" {
+			page.Set("state", list.State)
+		}
+		target := "/"
+		if len(page) > 0 {
+			target += "?" + page.Encode()
+		}
+		w.Header().Set("HX-Replace-Url", target)
+	}
 	html(w)
-	views.ServerListFragment(s.serverList(r, request)).Render(r.Context(), w)
+	views.ServerListResponse(list).Render(r.Context(), w)
 }
 
 func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -212,8 +230,7 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 			return
 		}
 		if fromDetail(r) {
-			// Follow the queued work in the server's activity.
-			w.Header().Set("HX-Redirect", "/servers/"+resolved.Logical.ID+"?tab=activity&operation="+job.ID)
+			followOperation(w, resolved.Logical.ID, job)
 		}
 		changed(w)
 	}

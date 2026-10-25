@@ -3,9 +3,11 @@ package web
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -26,6 +28,17 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup}
+	// A backup or restore started here shows its progress here, and so does
+	// any work still running: its panel reports when it ends, which brings
+	// back readiness and the controls the work paused.
+	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
+		Archives: d.Admin && can(view, authz.BackupsRead)}
+	if b.Operation.SelectedID == "" && view.ActiveOperation != nil {
+		b.Operation.SelectedID = view.ActiveOperation.ID
+	}
+	if b.Operation.SelectedID != "" {
+		s.selectOperation(r, &b.Operation)
+	}
 	if b.Admin && b.CanRead {
 		s.readBackups(r, &b)
 		if id := r.URL.Query().Get("restore"); id != "" {
@@ -129,8 +142,19 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Reques
 		s.fail(w, r, request, err)
 		return
 	}
-	w.Header().Set("HX-Redirect", "/servers/"+resolved.Logical.ID+"?tab=activity&operation="+job.ID)
+	followOperation(w, resolved.Logical.ID, job)
 	changed(w)
+}
+
+// followOperation shows queued work on the server's page, swapping the page
+// body in place like its tabs do.
+func followOperation(w http.ResponseWriter, serverID string, job *ops.Job) {
+	var location strings.Builder
+	encoder := json.NewEncoder(&location)
+	encoder.SetEscapeHTML(false)
+	encoder.Encode(map[string]string{"path": views.OperationPath(serverID, job.Kind, job.ID),
+		"target": "#detail-body", "select": "#detail-body", "swap": "outerHTML"})
+	w.Header().Set("HX-Location", strings.TrimSpace(location.String()))
 }
 
 func (s *Server) createBackup(w http.ResponseWriter, r *http.Request, request *Request) {

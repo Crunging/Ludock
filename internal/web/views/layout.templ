@@ -28,7 +28,8 @@ templ Document(title, csrf string, scripts, styles []string) {
 			<meta name="color-scheme" content="dark"/>
 			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
 			// Eval stays off: the CSP allows no inline or string-evaluated script.
-			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"selfRequestsOnly":true}'/>
+			// Back and forward reload pages, since htmx keeps no snapshots.
+			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"selfRequestsOnly":true}'/>
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 			}
@@ -93,41 +94,66 @@ templ Shell(page Page) {
 		<div class={ "app", templ.KV("app--console", page.Console) } hx-headers={ csrfHeaders(page.CSRF) }>
 			<a class="skip-link" href="#main-content">Skip to content</a>
 			if !page.Console {
-				<header class="harbor">
+				<header class="harbor" data-harbor>
 					<a class="harbor__brand" href="/" aria-label="Ludock servers">
 						@LudockMark("harbor__mark")
 						<span>Ludock</span>
 					</a>
-					<nav class="harbor__nav" aria-label="Primary navigation">
-						<div class="harbor__group">
-							@navLink(page, "/", "Servers")
-							@navLink(page, "/operations", "Operations")
-						</div>
-						if page.Admin {
-							<div class="harbor__group" role="group" aria-label="Administration">
-								@navLink(page, "/users", "Users")
-								@navLink(page, "/settings", "Settings")
-								@navLink(page, "/diagnostics", "Diagnostics")
-								@navLink(page, "/audit", "Audit log")
-								@navLink(page, "/logs", "Ludock logs")
+					// Phones fold the navigation and session behind this button.
+					<button type="button" class="harbor__menu-button" aria-expanded="false" aria-controls="harbor-menu" data-harbor-menu>
+						<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4h12M2 8h12M2 12h12"></path></svg>
+						Menu
+					</button>
+					<div class="harbor__menu" id="harbor-menu">
+						<nav class="harbor__nav" aria-label="Primary navigation">
+							<div class="harbor__group">
+								@navLink(page, "/", "Servers")
+								@navLink(page, "/operations", "Operations")
 							</div>
-						}
-					</nav>
-					<div class="harbor__session">
-						<a href="/account" class={ "harbor__account", templ.KV("harbor__account--current", page.Path == "/account") } aria-current={ navCurrent(page, "/account") }>
-							<span class="harbor__username">{ page.Username }</span>
-							<span class="harbor__role">{ page.RoleName }</span>
-						</a>
-						<form method="post" action="/logout" class="harbor__signout">
-							<input type="hidden" name="_csrf" value={ page.CSRF }/>
-							<button type="submit">Sign out</button>
-						</form>
+							if page.Admin {
+								<div class="harbor__group" role="group" aria-label="Administration">
+									@navLink(page, "/users", "Users")
+									@navLink(page, "/settings", "Settings")
+									@navLink(page, "/diagnostics", "Diagnostics")
+									@navLink(page, "/audit", "Audit log")
+									@navLink(page, "/logs", "Ludock logs")
+								</div>
+							}
+						</nav>
+						<div class="harbor__session">
+							<a href="/account" class={ "harbor__account", templ.KV("harbor__account--current", page.Path == "/account") } aria-current={ navCurrent(page, "/account") }>
+								<span class="harbor__username">{ page.Username }</span>
+								<span class="harbor__role">{ page.RoleName }</span>
+							</a>
+							<form method="post" action="/logout" class="harbor__signout">
+								<input type="hidden" name="_csrf" value={ page.CSRF }/>
+								<button type="submit">Sign out</button>
+							</form>
+						</div>
 					</div>
 				</header>
 			}
 			<main id="main-content" tabindex="-1" class="main">
 				{ children... }
 			</main>
+			@ConfirmDialog()
 		</div>
 	}
+}
+
+// ConfirmDialog asks before requests with hx-confirm. The requesting
+// element fills it in: hx-confirm is the question, data-confirm-detail the
+// explanation, data-confirm-action the button, and data-confirm-danger marks
+// an action that can't be undone.
+templ ConfirmDialog() {
+	<dialog class="lifecycle-confirmation" id="confirm-dialog" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-detail">
+		<form method="dialog">
+			<h2 id="confirm-dialog-title"></h2>
+			<p id="confirm-dialog-detail"></p>
+			<div class="lifecycle-confirmation__actions">
+				<button class="secondary-btn" type="submit" value="cancel" autofocus>Cancel</button>
+				<button class="primary-btn" type="submit" value="confirm" data-confirm-button>Confirm</button>
+			</div>
+		</form>
+	</dialog>
 }

@@ -42,6 +42,29 @@
     }
   });
 
+  // hx-confirm asks in the page's own dialog instead of the browser's.
+  var confirming = null;
+  document.addEventListener("htmx:confirm", function (event) {
+    var dialog = document.getElementById("confirm-dialog");
+    var elt = event.detail.elt;
+    if (!event.detail.question || !dialog || !dialog.showModal) return;
+    event.preventDefault();
+    var detail = elt.getAttribute("data-confirm-detail") || "";
+    var button = dialog.querySelector("[data-confirm-button]");
+    dialog.querySelector("h2").textContent = event.detail.question;
+    dialog.querySelector("p").textContent = detail;
+    dialog.querySelector("p").hidden = !detail;
+    button.textContent = elt.getAttribute("data-confirm-action") || "Confirm";
+    button.className = elt.hasAttribute("data-confirm-danger") ? "secondary-btn secondary-btn--danger" : "primary-btn";
+    dialog.returnValue = "";
+    confirming = elt;
+    dialog.addEventListener("close", function () {
+      confirming = null;
+      if (dialog.returnValue === "confirm") event.detail.issueRequest(true);
+    }, { once: true });
+    dialog.showModal();
+  });
+
   // Open and close native dialogs: data-dialog-open="id", data-dialog-close.
   document.addEventListener("click", function (event) {
     var opener = event.target.closest && event.target.closest("[data-dialog-open]");
@@ -86,7 +109,10 @@
       button.disabled = false;
     }
     var form = event.detail.elt;
-    if (event.detail.successful && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
+    // htmx leaves "successful" unset when the response moves the page with
+    // HX-Location, which follows queued work.
+    var moved = event.detail.xhr && event.detail.xhr.status < 400 && event.detail.xhr.getResponseHeader("HX-Location");
+    if ((event.detail.successful || moved) && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
       form.closest("dialog").close();
     }
   });
@@ -338,10 +364,12 @@
   });
 
   // A live refresh never replaces an open dialog (such as a stop
-  // confirmation in the server list); it refreshes once the dialog closes.
+  // confirmation in the server list), or the element a confirmation will
+  // send; it refreshes once the dialog closes.
   document.addEventListener("htmx:beforeSwap", function (event) {
     var target = event.detail.target;
     var open = target && target.querySelector && target.querySelector("dialog[open]");
+    if (!open && confirming && target && target.contains && target.contains(confirming)) open = document.getElementById("confirm-dialog");
     if (!open || event.detail.requestConfig.elt.closest("dialog") === open) return;
     event.detail.shouldSwap = false;
     if (open.hasAttribute("data-refresh-pending")) return;
@@ -350,6 +378,89 @@
       open.removeAttribute("data-refresh-pending");
       if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
     }, { once: true });
+  });
+
+  // In-page navigation on a server's page (tabs and links that swap
+  // #detail-body): only the newest one swaps, so a slow earlier response
+  // can't replace the page or its address under a later click, and a
+  // response for anything else in the page, such as an Activity filter,
+  // is dropped once a newer navigation started. A failed navigation loads
+  // the address as a page, so the error shows in full instead of an empty
+  // body. htmx fires beforeSwap on the target, which a newer response may
+  // already have replaced, so each request guards its own target.
+  //
+  // An action, such as Create backup, follows its work with HX-Location
+  // only if nothing navigated since it was sent; otherwise the follow-up
+  // would take the user away from the view they chose. The navigation may
+  // have replaced the action's button, so the check listens on the button.
+  var navigation = 0, followStale = false;
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var xhr = event.detail.xhr, config = event.detail.requestConfig, elt = event.target, sent = navigation;
+    if (!xhr || !config || config.verb === "get") return;
+    elt.addEventListener("htmx:beforeOnLoad", function check(load) {
+      if (load.detail.xhr !== xhr) return;
+      elt.removeEventListener("htmx:beforeOnLoad", check);
+      followStale = sent !== navigation && !!xhr.getResponseHeader("HX-Location");
+    });
+  });
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var target = event.detail.target, xhr = event.detail.xhr;
+    if (!target || !xhr || !target.closest || !target.closest("#detail-body")) return;
+    // A request queued for a view that is gone has nothing left to update.
+    if (!target.isConnected) {
+      event.preventDefault();
+      return;
+    }
+    var navigates = target.id === "detail-body";
+    if (navigates && followStale && event.target === document.body) {
+      followStale = false;
+      event.preventDefault();
+      return;
+    }
+    var view = navigates ? ++navigation : navigation;
+    target.addEventListener("htmx:beforeSwap", function guard(swap) {
+      if (swap.detail.xhr !== xhr) return;
+      target.removeEventListener("htmx:beforeSwap", guard);
+      if (view !== navigation) {
+        swap.detail.shouldSwap = false;
+      } else if (navigates && xhr.status >= 400) {
+        swap.detail.shouldSwap = false;
+        window.location.assign(swap.detail.pathInfo.finalRequestPath || swap.detail.pathInfo.requestPath);
+      }
+    });
+  });
+  // A second click on a link whose request is still pending would queue on
+  // that link, and htmx drops the queued request once a newer view replaces
+  // the link; such a click starts its own request instead, from a source of
+  // its own so it doesn't queue behind another such click either.
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("#detail-body a[hx-boost]");
+    if (!link || !link.classList.contains("htmx-request") || !window.htmx) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    var source = document.createElement("span");
+    source.hidden = true;
+    document.body.appendChild(source);
+    window.htmx.ajax("GET", link.getAttribute("href"), { source: source, target: "#detail-body", select: "#detail-body", swap: "outerHTML show:none", push: "true" })
+      .finally(function () { source.remove(); });
+  }, true);
+
+  // An out-of-band swap never replaces the element a confirmation will send.
+  document.addEventListener("htmx:oobBeforeSwap", function (event) {
+    var target = event.detail.target;
+    if (confirming && target && (target === confirming || target.contains(confirming))) event.detail.shouldSwap = false;
+  });
+
+  // A refresh never replaces a select whose choice it didn't see, such as a
+  // filter changed while the list was loading: the form's queued request
+  // reads the select when it runs, so the choice must still be there.
+  document.addEventListener("htmx:oobBeforeSwap", function (event) {
+    var live = event.detail.target;
+    var incoming = event.detail.fragment && event.detail.fragment.querySelector && event.detail.fragment.querySelector("select");
+    if (!live || live.tagName !== "SELECT" || !incoming || incoming.id !== live.id) return;
+    var chosen = incoming.querySelector("option[selected]") || incoming.querySelector("option");
+    if (chosen && chosen.value !== live.value) event.detail.shouldSwap = false;
   });
 
   // data-autosubmit submits its form on change (a GET form keeps working
@@ -371,16 +482,22 @@
     });
   }
 
-  // Copy buttons: data-copy="text".
+  // Copy buttons: data-copy="text". The button's own markup, such as an
+  // icon, comes back after the confirmation, even after repeated clicks.
+  var copyIdle = new WeakMap();
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-copy]");
     if (!button || !navigator.clipboard) return;
     event.preventDefault();
     navigator.clipboard.writeText(button.getAttribute("data-copy")).then(function () {
-      var label = button.getAttribute("data-copied-label") || "Copied";
-      var original = button.textContent;
-      button.textContent = label;
-      setTimeout(function () { button.textContent = original; }, 1500);
+      if (!copyIdle.has(button)) copyIdle.set(button, { html: button.innerHTML });
+      var idle = copyIdle.get(button);
+      clearTimeout(idle.timer);
+      button.textContent = button.getAttribute("data-copied-label") || "Copied";
+      idle.timer = setTimeout(function () {
+        button.innerHTML = idle.html;
+        copyIdle.delete(button);
+      }, 1500);
     });
   });
 
@@ -415,6 +532,23 @@
     });
   }
   setInterval(function () { formatTimes(); }, 30000);
+  // Swapped content is formatted in the same task that inserts it, before
+  // the browser paints; htmx:load comes only after settling, a frame later.
+  document.addEventListener("htmx:afterSwap", function () { formatTimes(); });
+
+  // data-clear-filters="form-id" empties a filter form and applies it.
+  document.addEventListener("click", function (event) {
+    var clear = event.target.closest && event.target.closest("[data-clear-filters]");
+    var form = clear && document.getElementById(clear.getAttribute("data-clear-filters"));
+    if (!form) return;
+    Array.prototype.forEach.call(form.elements, function (field) {
+      if (field.tagName === "SELECT") field.selectedIndex = 0;
+      else if (field.type === "search" || field.type === "text") field.value = "";
+    });
+    form.requestSubmit();
+    var first = form.querySelector("input[type=search], input[type=text]");
+    if (first) first.focus();
+  });
 
   // Disclosure menus: [data-action-menu] > button + content.
   document.addEventListener("click", function (event) {
@@ -435,6 +569,27 @@
       button.parentElement.querySelector(".action-menu__content").hidden = true;
       button.focus();
     });
+  });
+
+  // Phones fold the navigation into a menu; without this script it wraps.
+  document.querySelectorAll("[data-harbor]").forEach(function (harbor) { harbor.classList.add("harbor--menu"); });
+  function harborMenu(open) {
+    document.querySelectorAll("[data-harbor]").forEach(function (harbor) {
+      harbor.classList.toggle("harbor--open", open);
+      var button = harbor.querySelector("[data-harbor-menu]");
+      if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  }
+  document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest("[data-harbor-menu]")) {
+      harborMenu(event.target.closest("[data-harbor-menu]").getAttribute("aria-expanded") !== "true");
+    }
+  });
+  document.addEventListener("keydown", function (event) {
+    var button = document.querySelector("[data-harbor-menu][aria-expanded=true]");
+    if (event.key !== "Escape" || !button) return;
+    harborMenu(false);
+    button.focus();
   });
 
   // Live update connection status and session expiry over SSE.
