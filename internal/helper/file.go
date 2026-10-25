@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Crunging/Ludock/internal/tarstream"
 )
 
 // FileRequest is the file helper protocol, shared with the backend.
@@ -183,12 +185,21 @@ func (h *fileHelper) streamFile(file fd, size int64) error {
 	return nil
 }
 
-func infoOf(stat *unix.Stat_t) tarInfo {
-	return tarInfo{size: stat.Size, uid: int64(stat.Uid), gid: int64(stat.Gid), mode: int64(stat.Mode), mtimeMs: mtimeMs(stat)}
-}
-
+// header writes an entry's archive header. Ownership is kept only for
+// backups.
 func (h *fileHelper) header(name string, stat *unix.Stat_t, directory bool) error {
-	header, err := tarHeader(name, infoOf(stat), directory, 0, h.request.Operation == "backup")
+	if len(name) > 4096 {
+		return errors.New("an archive path is too long")
+	}
+	entry := tarstream.Header{Name: name, Type: "file", Size: stat.Size, Mode: int64(stat.Mode) & 0o777,
+		MtimeSeconds: float64(max(0, stat.Mtim.Sec))}
+	if directory {
+		entry.Type, entry.Size = "directory", 0
+	}
+	if h.request.Operation == "backup" {
+		entry.UID, entry.GID = int64(stat.Uid), int64(stat.Gid)
+	}
+	header, err := tarstream.EncodeHeader(entry)
 	if err != nil {
 		return err
 	}
@@ -232,10 +243,8 @@ func (h *fileHelper) archiveEntry(parent fd, name, relative string, depth int) e
 		if err := h.streamFile(file, info.Size); err != nil {
 			return err
 		}
-		if info.Size%512 != 0 {
-			if _, err := h.out.Write(zeros[:512-info.Size%512]); err != nil {
-				return err
-			}
+		if _, err := h.out.Write(tarstream.Padding(info.Size)); err != nil {
+			return err
 		}
 	}
 	h.t.close(file)
@@ -465,7 +474,7 @@ func (h *fileHelper) run() error {
 				return err
 			}
 		}
-		_, err = h.out.Write(make([]byte, 1024))
+		_, err = h.out.Write(tarstream.End())
 		return err
 	case "list":
 		directory, err := h.pinDirectory(root, relative)
@@ -606,7 +615,7 @@ func (h *fileHelper) run() error {
 			if err := h.archiveEntry(parent, name, name, 0); err != nil {
 				return err
 			}
-			_, err := h.out.Write(make([]byte, 1024))
+			_, err := h.out.Write(tarstream.End())
 			return err
 		}
 		return h.streamFile(file, info.Size)
