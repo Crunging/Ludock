@@ -382,24 +382,25 @@
 
   // In-page navigation on a server's page (tabs and links that swap
   // #detail-body): only the newest one swaps, so a slow earlier response
-  // can't replace the page under a later click. A failed one loads the
-  // address as a page, so the error shows in full instead of an empty body.
+  // can't replace the page or its address under a later click. A failed one
+  // loads the address as a page, so the error shows in full instead of an
+  // empty body. htmx fires beforeSwap on the target, which a newer response
+  // may already have replaced, so each request guards its own target.
   var navigation = 0;
-  function navigates(detail) {
-    var target = detail.target || (detail.requestConfig && detail.requestConfig.target);
-    return target && target.id === "detail-body";
-  }
   document.addEventListener("htmx:beforeRequest", function (event) {
-    if (navigates(event.detail) && event.detail.xhr) event.detail.xhr.ludockNavigation = ++navigation;
-  });
-  document.addEventListener("htmx:beforeSwap", function (event) {
-    if (!navigates(event.detail) || !event.detail.xhr) return;
-    if (event.detail.xhr.ludockNavigation !== navigation) {
-      event.detail.shouldSwap = false;
-    } else if (event.detail.xhr.status >= 400) {
-      event.detail.shouldSwap = false;
-      window.location.assign(event.detail.pathInfo.finalRequestPath || event.detail.pathInfo.requestPath);
-    }
+    var target = event.detail.target, xhr = event.detail.xhr;
+    if (!target || target.id !== "detail-body" || !xhr) return;
+    var mine = ++navigation;
+    target.addEventListener("htmx:beforeSwap", function guard(swap) {
+      if (swap.detail.xhr !== xhr) return;
+      target.removeEventListener("htmx:beforeSwap", guard);
+      if (mine !== navigation) {
+        swap.detail.shouldSwap = false;
+      } else if (xhr.status >= 400) {
+        swap.detail.shouldSwap = false;
+        window.location.assign(swap.detail.pathInfo.finalRequestPath || swap.detail.pathInfo.requestPath);
+      }
+    });
   });
 
   // An out-of-band swap never replaces the element a confirmation will send.
@@ -409,8 +410,8 @@
   });
 
   // A refresh never replaces a select whose choice it didn't see, such as a
-  // filter changed while the list was loading: that choice's own request is
-  // queued, and htmx drops queued requests whose element left the page.
+  // filter changed while the list was loading: the form's queued request
+  // reads the select when it runs, so the choice must still be there.
   document.addEventListener("htmx:oobBeforeSwap", function (event) {
     var live = event.detail.target;
     var incoming = event.detail.fragment && event.detail.fragment.querySelector && event.detail.fragment.querySelector("select");

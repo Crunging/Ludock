@@ -142,16 +142,14 @@ templ serverFilters(list ServerList) {
 }
 
 // stateSelect is replaced whole when the states change: moving options
-// into a live select one at a time would change its selection. It requests
-// on its own, so each replacement listens again.
+// into a live select one at a time would change its selection. A choice
+// submits the form, which stays in place, so a refresh replacing the select
+// can't drop the request.
 templ stateSelect(list ServerList, oob bool) {
 	<select
 		name="state"
 		id="server-state"
-		hx-get="/fragments/servers"
-		hx-include="#server-filters"
-		hx-target="#servers"
-		hx-sync="#servers:queue last"
+		data-autosubmit
 		if oob {
 			hx-swap-oob="true"
 		}

@@ -145,3 +145,28 @@ test("a state chosen while the list is loading still applies", async ({ page }) 
   await expect(page).toHaveURL(/\/\?state=running$/);
   await expect(page.getByLabel("State")).toHaveValue("running");
 });
+
+test("filters changed while the list is loading all apply", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".server-row").first()).toBeVisible();
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let waiting = false;
+  await page.route("**/fragments/servers?*", async (route) => {
+    if (!waiting) {
+      waiting = true;
+      await held;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => waiting).toBe(true);
+  // A search, then a state chosen and set back, while the refresh loads.
+  await page.getByPlaceholder("Find a server…").fill("valh");
+  await page.waitForTimeout(400);
+  await page.getByLabel("State").selectOption("running");
+  await page.getByLabel("State").selectOption("all");
+  release();
+  await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
+  await expect(page).toHaveURL(/\/\?search=valh$/);
+});
