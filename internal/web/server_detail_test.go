@@ -105,3 +105,31 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 		t.Fatal(body)
 	}
 }
+
+// The live header sends back the operation it showed; once that work has
+// ended, its refresh tells paused tabs such as Backups to catch up, whatever
+// operation the page links to.
+func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
+	p := newPages(t)
+	live := func(query string) string {
+		response := p.do("GET", "/fragments/servers/"+p.server+"/live?"+query, p.admin, nil, map[string]string{"HX-Request": "true"})
+		if response.Code != http.StatusOK {
+			t.Fatal(query, response.Code)
+		}
+		return response.Header().Get("HX-Trigger")
+	}
+	if trigger := live("tab=backups"); trigger != "" {
+		t.Fatal("no work seen:", trigger)
+	}
+	if trigger := live("tab=backups&active=11111111-1111-4111-8111-111111111111"); trigger != "operation-finished" {
+		t.Fatal("ended work:", trigger)
+	}
+	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	var running string
+	p.app.DB.QueryRow("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1").Scan(&running)
+	if trigger := live("tab=backups&active=" + running); trigger != "" {
+		t.Fatal("work still running:", trigger)
+	}
+}

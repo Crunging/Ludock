@@ -163,6 +163,11 @@ func (s *Server) detailLive(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	d.Operation = r.URL.Query().Get("operation")
+	// The work this header last showed has ended: tabs paused by it, such
+	// as Backups, catch up.
+	if was := r.URL.Query().Get("active"); was != "" && (d.Row.Server.ActiveOperation == nil || d.Row.Server.ActiveOperation.ID != was) {
+		w.Header().Set("HX-Trigger", "operation-finished")
+	}
 	render(w, r, http.StatusOK, views.DetailLive(*d))
 }
 

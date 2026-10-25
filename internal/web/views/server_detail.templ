@@ -87,6 +87,15 @@ func liveTrigger(id string, active bool) string {
 	return "sse:server-" + id + ", sse:refresh, servers-changed from:body, " + every
 }
 
+// activeID is the server's running operation, if any. The live header
+// sends it back, so its next refresh can tell when that work has ended.
+func activeID(server servers.View) string {
+	if server.ActiveOperation == nil {
+		return ""
+	}
+	return server.ActiveOperation.ID
+}
+
 func headerClass(d ServerDetail) string {
 	class := "detail-header"
 	if LifecycleAction(d.Row.Server.State) == "start" {
@@ -161,7 +170,7 @@ func tabLabel(d ServerDetail) string {
 // DetailLive is the header and server-wide notices; it reloads itself.
 templ DetailLive(d ServerDetail) {
 	{{ server := d.Row.Server }}
-	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}}.Encode() } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
+	<div id="detail-live" hx-get={ "/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}}.Encode() } hx-trigger={ liveTrigger(server.ID, server.ActiveOperation != nil) } hx-swap="outerHTML" hx-disinherit="*">
 		<header class={ headerClass(d) }>
 			@StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone)
 			<div class="detail-header__title">

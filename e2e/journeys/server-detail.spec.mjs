@@ -86,3 +86,30 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(schedules|activity)$/);
 });
+
+test("a later tab wins over following earlier work", async ({ page }) => {
+  await openServer(page, "Survival");
+  // Hold the page that would follow the restart until Backups has opened.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\?tab=activity&operation=/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  const follow = page.waitForRequest(/\?tab=activity&operation=/);
+  await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
+  await follow;
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page).toHaveURL(/\?tab=backups$/);
+  await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+  const followed = page.waitForResponse(/\?tab=activity&operation=/);
+  release();
+  await followed;
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(/\?tab=backups$/);
+  await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+  await page.unroute(/\?tab=activity&operation=/);
+  // Let the restart finish before the next journey.
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
+});
