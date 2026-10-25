@@ -54,6 +54,39 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await expect(valheim).toContainText("Stopped", { timeout: 30_000 });
 });
 
+test("a stop answered after a refresh still reaches the page", async ({ page }) => {
+  await page.goto("/");
+  // The stop is refused as unauthenticated after the list has refreshed. The
+  // page's own handler sends a bare 401 to sign-in, which needs the button
+  // that sent the stop to still be in the page.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/servers\/[^/]+\/stop$/, async (route) => {
+    await held;
+    await route.fulfill({ status: 401, body: "" });
+  });
+  await serverRow(page, "Survival").getByRole("button", { name: "Stop" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+  const refreshed = page.waitForResponse(/\/fragments\/servers/);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshed;
+  const signIn = page.waitForRequest(/\/login$/);
+  release();
+  await signIn;
+});
+
+test("cancelling a restart from the More menu keeps the keyboard in place", async ({ page }) => {
+  await page.goto("/");
+  const survival = serverRow(page, "Survival");
+  const more = survival.getByRole("button", { name: /More actions/ });
+  await more.click();
+  await survival.getByRole("button", { name: "Restart…" }).click();
+  await expect(page.getByRole("dialog", { name: "Restart Survival?" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(more).toBeFocused();
+});
+
 test("the More menu on the last server opens past the end of the list", async ({ page }) => {
   await page.goto("/");
   await page.getByPlaceholder("Find a server…").fill("valh");

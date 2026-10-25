@@ -8,9 +8,10 @@ export const admin = { username: "admin", password: "correct horse battery stapl
 function watch(page, problems) {
   page.on("pageerror", (error) => problems.push(String(error)));
   page.on("console", (message) => {
-    // Browsers log failed responses and closed event streams; journeys
-    // assert on the page instead.
-    if (message.type() === "error" && !/Failed to load resource|\[object Event\]/.test(message.text())) problems.push(message.text());
+    // Browsers log failed responses and closed event streams, and htmx logs
+    // the 401 that sends the page to sign in; journeys assert on the page
+    // instead.
+    if (message.type() === "error" && !/Failed to load resource|\[object Event\]|^Response Status Error Code 401 /.test(message.text())) problems.push(message.text());
   });
   // Ludock asks in its own dialogs; a browser dialog is a regression.
   page.on("dialog", (dialog) => {

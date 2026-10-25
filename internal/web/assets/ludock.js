@@ -67,6 +67,9 @@
     confirming = elt;
     dialog.addEventListener("close", function () {
       confirming = null;
+      // An action in a menu closed the menu; focus returns to its button.
+      var menu = elt.closest("[data-action-menu]");
+      if (menu && elt.closest("[hidden]")) menu.querySelector(":scope > button").focus();
       if (dialog.returnValue !== "confirm") return;
       // htmx reads hx-vals as it builds the request.
       if (optionName) {
@@ -74,6 +77,8 @@
         if (checkbox.checked) values[optionName] = "true";
         elt.setAttribute("hx-vals", JSON.stringify(values));
       }
+      elt.setAttribute("data-confirmed-sending", "");
+      elt.addEventListener("htmx:afterRequest", function () { elt.removeAttribute("data-confirmed-sending"); }, { once: true });
       event.detail.issueRequest(true);
     }, { once: true });
     dialog.showModal();
@@ -381,6 +386,24 @@
     open.setAttribute("data-refresh-pending", "");
     open.addEventListener("close", function () {
       open.removeAttribute("data-refresh-pending");
+      if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
+    }, { once: true });
+  });
+
+  // A refresh also waits while a confirmed request is on its way, such as
+  // a Stop from the server list: the response's events, like the redirect
+  // to sign in, reach the page only while the element that sent it is
+  // there. Navigating a server's page doesn't wait (see below).
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail.target;
+    if (!target || !target.querySelector || target.id === "detail-body") return;
+    var sending = target.querySelector("[data-confirmed-sending]");
+    if (!sending || sending === event.detail.requestConfig.elt) return;
+    event.detail.shouldSwap = false;
+    if (sending.hasAttribute("data-refresh-pending")) return;
+    sending.setAttribute("data-refresh-pending", "");
+    sending.addEventListener("htmx:afterRequest", function () {
+      sending.removeAttribute("data-refresh-pending");
       if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
     }, { once: true });
   });
