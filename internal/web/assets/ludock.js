@@ -382,10 +382,13 @@
 
   // In-page navigation on a server's page (tabs and links that swap
   // #detail-body): only the newest one swaps, so a slow earlier response
-  // can't replace the page or its address under a later click. A failed one
-  // loads the address as a page, so the error shows in full instead of an
-  // empty body. htmx fires beforeSwap on the target, which a newer response
-  // may already have replaced, so each request guards its own target.
+  // can't replace the page or its address under a later click, and a
+  // response for anything else in the page, such as an Activity filter,
+  // is dropped once a newer navigation started. A failed navigation loads
+  // the address as a page, so the error shows in full instead of an empty
+  // body. htmx fires beforeSwap on the target, which a newer response may
+  // already have replaced, so each request guards its own target.
+  //
   // An action, such as Create backup, follows its work with HX-Location
   // only if nothing navigated since it was sent; otherwise the follow-up
   // would take the user away from the view they chose. The navigation may
@@ -401,25 +404,37 @@
     });
   });
   document.addEventListener("htmx:beforeRequest", function (event) {
-    var target = event.detail.target, xhr = event.detail.xhr;
-    if (!target || target.id !== "detail-body" || !xhr) return;
-    if (followStale && event.target === document.body) {
+    var target = event.detail.target, xhr = event.detail.xhr, body = document.getElementById("detail-body");
+    if (!target || !xhr || !body || (target !== body && !body.contains(target))) return;
+    var navigates = target === body;
+    if (navigates && followStale && event.target === document.body) {
       followStale = false;
       event.preventDefault();
       return;
     }
-    var mine = ++navigation;
+    var view = navigates ? ++navigation : navigation;
     target.addEventListener("htmx:beforeSwap", function guard(swap) {
       if (swap.detail.xhr !== xhr) return;
       target.removeEventListener("htmx:beforeSwap", guard);
-      if (mine !== navigation) {
+      if (view !== navigation) {
         swap.detail.shouldSwap = false;
-      } else if (xhr.status >= 400) {
+      } else if (navigates && xhr.status >= 400) {
         swap.detail.shouldSwap = false;
         window.location.assign(swap.detail.pathInfo.finalRequestPath || swap.detail.pathInfo.requestPath);
       }
     });
   });
+  // A second click on a link whose request is still pending would queue on
+  // that link, and htmx drops the queued request once a newer view replaces
+  // the link; such a click starts its own request instead.
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("#detail-body a[hx-boost]");
+    if (!link || !link.classList.contains("htmx-request") || !window.htmx) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.htmx.ajax("GET", link.getAttribute("href"), { target: "#detail-body", select: "#detail-body", swap: "outerHTML show:none", push: "true" });
+  }, true);
 
   // An out-of-band swap never replaces the element a confirmation will send.
   document.addEventListener("htmx:oobBeforeSwap", function (event) {

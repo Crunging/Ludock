@@ -142,3 +142,56 @@ test("a tab opened while an action is sending stays open", async ({ page }) => {
   // The backup still runs; let it finish before the next journey.
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
 });
+
+test("a filter answering after another tab opened leaves that tab alone", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Activity" }).click();
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  // htmx wires up a new view once it settles, a moment after showing it.
+  await expect(page.locator("#detail-body")).not.toHaveClass(/htmx-added/);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/fragments\/servers\/[^/]+\/activity\?/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  const filtered = page.waitForRequest(/\/activity\?.*status=failed/);
+  await page.getByLabel("Status").selectOption("failed");
+  await filtered;
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#backup-readiness")).toBeVisible();
+  const answered = page.waitForResponse(/\/activity\?.*status=failed/);
+  release();
+  await answered;
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(/\?tab=backups$/);
+  await page.unroute(/\/fragments\/servers\/[^/]+\/activity\?/);
+});
+
+test("clicking a tab again while its page loads still opens it", async ({ page }) => {
+  await openServer(page, "Survival");
+  // Hold every tab page until all three clicks are made.
+  const gates = [];
+  await page.route(/\?tab=(activity|backups)$/, async (route) => {
+    const tab = new URL(route.request().url()).searchParams.get("tab");
+    await new Promise((resolve) => gates.push({ tab, resolve }));
+    await route.continue();
+  });
+  const activity = page.getByRole("tab", { name: "Activity" });
+  await activity.click();
+  await expect.poll(() => gates.length).toBe(1);
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect.poll(() => gates.length).toBe(2);
+  await activity.click();
+  // The third click has a request of its own; Backups answers first.
+  const activities = () => gates.filter((gate) => gate.tab === "activity");
+  await expect.poll(() => activities().length).toBe(2);
+  const backups = page.waitForResponse(/\?tab=backups$/);
+  gates.find((gate) => gate.tab === "backups").resolve();
+  await backups;
+  for (const gate of activities()) gate.resolve();
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\?tab=activity$/);
+  await page.unroute(/\?tab=(activity|backups)$/);
+});
