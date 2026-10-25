@@ -521,7 +521,9 @@ func secrets(env []string, labels map[string]string, credentials map[string]bool
 		}
 		if parsed, err := url.Parse(value); err == nil && parsed.User != nil {
 			if password, ok := parsed.User.Password(); ok {
-				add(password, true)
+				// The container may print the URL as written, escapes and all.
+				add(password, false)
+				add(escapedPassword(value), false)
 			}
 		}
 	}
@@ -532,6 +534,18 @@ func secrets(env []string, labels map[string]string, credentials map[string]bool
 	}
 	sortByLengthDesc(values)
 	return values
+}
+
+// escapedPassword is the password of a URL with credentials as written in
+// it, before percent-decoding.
+func escapedPassword(value string) string {
+	_, authority, _ := strings.Cut(value, "://")
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	userinfo := authority[:max(0, strings.LastIndex(authority, "@"))]
+	_, password, _ := strings.Cut(userinfo, ":")
+	return password
 }
 
 var plainValue = map[string]bool{"true": true, "false": true, "yes": true, "off": true, "none": true, "null": true}

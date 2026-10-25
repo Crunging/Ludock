@@ -73,23 +73,24 @@ func TestPublicMetadataExcludesSecrets(t *testing.T) {
 }
 
 // Values of credential-like variables, variables named by ludock.secret-env,
-// and URL passwords are redacted; flags, working directories, and the
-// console password's variable name are ordinary output. The longer list of
-// redacted names leaves the identity unchanged.
+// and URL passwords, decoded and as written, are redacted; flags, working
+// directories, and the console password's variable name are ordinary output.
+// The longer list of redacted names leaves the identity unchanged.
 func TestSecretsFromEnvironment(t *testing.T) {
 	engine, s := setup(t)
 	env := []string{"RCON_PASSWORD=ab", "DB_PASS=db-secret", "ACCESS_CODE=4321", "PRIVATE_KEY=-----BEGIN KEY", "ENABLE_AUTH_KEY=true",
-		"SERVER_PASS=1", "PWD=/data", "MOTD=Welcome", "STATS=postgres://stats:url-secret@db/stats", "INVITE=hunter22"}
+		"SERVER_PASS=1", "PWD=/data", "MOTD=Welcome", "STATS=postgres://stats:url-secret@db/stats", "INVITE=hunter22",
+		"CACHE=redis://:ab@cache", "QUEUE=amqp://queue:p%40ss@mq/"}
 	labels := map[string]string{"ludock.console.password-env": "RCON_PASSWORD"}
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true, Labels: labels, Env: env})
 	before := inspectTest(t, s, id).Observation
 	got := strings.Join(before.Secrets, ",")
-	if got != "-----BEGIN KEY,url-secret,db-secret,4321,ab" {
+	if got != "-----BEGIN KEY,url-secret,db-secret,p%40ss,4321,p@ss,ab" {
 		t.Fatal(got)
 	}
 	engine.Update(id, func(c *fakedocker.Container) { c.Config.Labels["ludock.secret-env"] = "INVITE, MOTD" })
 	after := inspectTest(t, s, id).Observation
-	if got := strings.Join(after.Secrets, ","); got != "-----BEGIN KEY,url-secret,db-secret,hunter22,Welcome,4321,ab" {
+	if got := strings.Join(after.Secrets, ","); got != "-----BEGIN KEY,url-secret,db-secret,hunter22,Welcome,p%40ss,4321,p@ss,ab" {
 		t.Fatal(got)
 	}
 	if identity.BindingDigest(before) != identity.BindingDigest(after) {
