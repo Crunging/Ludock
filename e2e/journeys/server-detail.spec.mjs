@@ -113,3 +113,32 @@ test("a later tab wins over following earlier work", async ({ page }) => {
   // Let the restart finish before the next journey.
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
 });
+
+test("a tab opened while an action is sending stays open", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  // Hold the backup request until the user has moved to Activity.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/backups$/, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await held;
+    await route.continue();
+  });
+  const sent = page.waitForRequest((request) => request.method() === "POST" && /\/backups$/.test(request.url()));
+  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+  await sent;
+  await page.getByRole("tab", { name: "Activity" }).click();
+  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  const answered = page.waitForResponse((response) => response.request().method() === "POST" && /\/backups$/.test(response.url()));
+  release();
+  await answered;
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\?tab=activity$/);
+  await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  await page.unroute(/\/backups$/);
+  // The backup still runs; let it finish before the next journey.
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Restart" })).toBeEnabled({ timeout: 45_000 });
+});

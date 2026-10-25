@@ -386,10 +386,28 @@
   // loads the address as a page, so the error shows in full instead of an
   // empty body. htmx fires beforeSwap on the target, which a newer response
   // may already have replaced, so each request guards its own target.
-  var navigation = 0;
+  // An action, such as Create backup, follows its work with HX-Location
+  // only if nothing navigated since it was sent; otherwise the follow-up
+  // would take the user away from the view they chose. The navigation may
+  // have replaced the action's button, so the check listens on the button.
+  var navigation = 0, followStale = false;
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var xhr = event.detail.xhr, config = event.detail.requestConfig, elt = event.target, sent = navigation;
+    if (!xhr || !config || config.verb === "get") return;
+    elt.addEventListener("htmx:beforeOnLoad", function check(load) {
+      if (load.detail.xhr !== xhr) return;
+      elt.removeEventListener("htmx:beforeOnLoad", check);
+      followStale = sent !== navigation && !!xhr.getResponseHeader("HX-Location");
+    });
+  });
   document.addEventListener("htmx:beforeRequest", function (event) {
     var target = event.detail.target, xhr = event.detail.xhr;
     if (!target || target.id !== "detail-body" || !xhr) return;
+    if (followStale && event.target === document.body) {
+      followStale = false;
+      event.preventDefault();
+      return;
+    }
     var mine = ++navigation;
     target.addEventListener("htmx:beforeSwap", function guard(swap) {
       if (swap.detail.xhr !== xhr) return;
