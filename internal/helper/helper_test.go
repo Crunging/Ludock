@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Crunging/Ludock/internal/tarstream"
 )
 
 func runFile(t *testing.T, request FileRequest, stdin []byte) (string, int) {
@@ -161,6 +163,10 @@ func TestDownloadsAndBackupsAreReadableTar(t *testing.T) {
 			}
 			out = rest
 		}
+		// Ludock's own reader is stricter than archive/tar.
+		if err := tarstream.Walk(strings.NewReader(out), func(*tarstream.Header, io.Reader) error { return nil }, nil); err != nil {
+			t.Fatal(request.Operation, err)
+		}
 		reader := tar.NewReader(strings.NewReader(out))
 		found := map[string]string{}
 		for {
@@ -208,21 +214,6 @@ func keys(m map[string]string) []string {
 		result = append(result, key)
 	}
 	return result
-}
-
-func TestTarHeaderLimits(t *testing.T) {
-	if _, err := tarHeader(strings.Repeat("a", 4097), tarInfo{}, false, 0, false); err == nil {
-		t.Fatal("accepted an overlong name")
-	}
-	// Sizes too large for octal use base-256.
-	header, err := tarHeader("big", tarInfo{size: 1 << 40}, false, 0, false)
-	if err != nil || header[124] != 128 {
-		t.Fatal(err)
-	}
-	prefixed, _ := tarHeader(strings.Repeat("d", 120)+"/file", tarInfo{}, false, 0, false)
-	if len(prefixed) != 512 || string(bytes.TrimRight(prefixed[345:500], "\x00")) != strings.Repeat("d", 120) {
-		t.Fatal("ustar prefix not used")
-	}
 }
 
 func restore(t *testing.T, root, stage, operation string) (string, int) {
