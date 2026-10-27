@@ -3,14 +3,17 @@
    L-block mark, and block-shaped state markers that echo it. Yellow means
    attention and nothing else. Archivo carries the
    voice (wide and heavy for names, normal width for reading); Atkinson
-   Hyperlegible Mono is only for things that are literally code. */
+   Hyperlegible Mono is only for things that are literally code.
+   The Archivo files keep only the widths used here, 100% to 125%
+   (fonttools varLib.instancer wdth=100:125), which makes them a third
+   smaller. */
 
 @font-face {
   font-family: "Archivo";
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  font-stretch: 62% 125%;
+  font-stretch: 100% 125%;
   src: url("fonts/archivo-latin-wdth-normal.woff2") format("woff2-variations");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
@@ -20,7 +23,7 @@
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  font-stretch: 62% 125%;
+  font-stretch: 100% 125%;
   src: url("fonts/archivo-latin-ext-wdth-normal.woff2") format("woff2-variations");
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF,
     U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
@@ -286,6 +289,11 @@ input[type=checkbox], input[type=radio] { width: 17px; height: 17px; margin: 0; 
 .alert--success { border-left-color: var(--go); background: var(--go-soft); }
 .alert--warning { border-left-color: var(--caution); background: var(--caution-soft); }
 .alert > button:not(.secondary-btn):not(.text-link) { padding: 0 4px; border: 0; background: none; font-size: 20px; line-height: 1; color: var(--ink-2); }
+.connection-notice {
+  position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 40;
+  max-width: 640px; margin: 0 auto; pointer-events: none;
+}
+.connection-notice .alert { margin: 0; box-shadow: 0 8px 24px var(--deep); pointer-events: auto; }
 .operation-error { color: var(--halt); font-size: 14px; margin-top: 4px; }
 .help-panel, .admin-setup-help {
   padding: 16px 18px; border-radius: var(--radius-lg);

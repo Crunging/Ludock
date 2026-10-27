@@ -84,7 +84,7 @@ func (s *Server) Handler() http.Handler {
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not found", http.StatusNotFound)
 	})
-	return s.policy(compressPages(s.mux))
+	return s.policy(compressPages(tagFragments(s.mux)))
 }
 
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +

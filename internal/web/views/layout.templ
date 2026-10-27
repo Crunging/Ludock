@@ -136,6 +136,8 @@ templ Shell(page Page) {
 			<main id="main-content" tabindex="-1" class="main">
 				{ children... }
 			</main>
+			// ludock.js says here when a request can't reach Ludock.
+			<div class="connection-notice" role="status" data-connection-notice></div>
 			@ConfirmDialog()
 		</div>
 	}

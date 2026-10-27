@@ -3,6 +3,8 @@ package identity
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -260,5 +262,42 @@ func TestRejectsInvalidSnapshots(t *testing.T) {
 	b, _ := ExternalIdentity(observation(func(o *Observation) { o.Compose = &ComposeIdentity{"a", "b:c", "1"} }))
 	if a == b {
 		t.Fatal("ambiguous encoding")
+	}
+}
+
+// The ID checks agree with the patterns they replaced, at the boundaries
+// and on random strings over the characters that matter.
+func TestIDChecksMatchPatterns(t *testing.T) {
+	logical := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	container := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+	cases := []string{"", "a", "-", ".a", "_a", "a-", "a.b_c-d", strings.Repeat("a", 128), strings.Repeat("a", 129),
+		"a b", "a\n", "é", "aé", NewUUID(), strings.ToUpper(NewUUID()), NewUUID() + "\n", NewUUID()[1:], NewUUID() + "0",
+		"0123456789abcdef0123456789abcdef0123", "01234567-89ab-cdef-0123-456789abcdeg", "01234567_89ab-cdef-0123-456789abcdef",
+		"0123456789-ab-cdef-0123-456789abcdef", "01234567-89ab-cdef-0123-456789abcdef"}
+	random := rand.New(rand.NewPCG(1, 2))
+	alphabet := "09afAFgzGZ-_.\n é"
+	for range 20000 {
+		length := random.IntN(40)
+		if random.IntN(4) == 0 {
+			length = 120 + random.IntN(12)
+		}
+		var value strings.Builder
+		for range length {
+			value.WriteByte(alphabet[random.IntN(len(alphabet))])
+		}
+		cases = append(cases, value.String())
+	}
+	for range 2000 {
+		value := []byte(NewUUID())
+		value[random.IntN(len(value))] = alphabet[random.IntN(len(alphabet))]
+		cases = append(cases, string(value))
+	}
+	for _, value := range cases {
+		if ValidID(value) != logical.MatchString(value) {
+			t.Errorf("ValidID(%q) = %v", value, ValidID(value))
+		}
+		if ValidContainerID(value) != container.MatchString(value) {
+			t.Errorf("ValidContainerID(%q) = %v", value, ValidContainerID(value))
+		}
 	}
 }
