@@ -1,8 +1,8 @@
-import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, createUser } from "./fixtures.mjs";
+import { test, expect, admin, asAdmin, signIn, serverRow, openServer, expectOperationSucceeded, createUser } from "./fixtures.mjs";
 
 asAdmin();
 
-test("searching operation history and the audit log", async ({ page }) => {
+test("searching operation history and the audit log", async ({ page, session }) => {
   await openServer(page, "Survival");
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
@@ -27,6 +27,10 @@ test("searching operation history and the audit log", async ({ page }) => {
   await page.getByRole("link", { name: "Related audit events" }).click();
   await expect(page.locator(".audit-entry").first()).toContainText(".succeeded");
 
+  // A sign-in on another device, for the audit log to find.
+  const other = await session({ storageState: { cookies: [], origins: [] } });
+  await signIn(other, admin.username, admin.password);
+  await expect(other.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
   await page.goto("/audit?action=auth.login");
   await expect(page.locator(".audit-entry").first()).toContainText("auth.login");
 });

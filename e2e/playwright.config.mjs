@@ -1,5 +1,6 @@
-// Journeys run the real Ludock binary against cmd/fakedocker. They share one
-// server and one fake daemon, so they run in order in a single worker.
+// Journeys run the real Ludock binary against cmd/fakedocker. Each worker has
+// its own server and fake daemon, and runs whole files in order, so a file's
+// journeys share state but never see another worker's.
 import { defineConfig } from "@playwright/test";
 
 export const port = Number(process.env.LUDOCK_E2E_PORT || 39871);
@@ -7,7 +8,7 @@ export const port = Number(process.env.LUDOCK_E2E_PORT || 39871);
 export default defineConfig({
   testDir: "journeys",
   fullyParallel: false,
-  workers: 1,
+  workers: 4,
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
@@ -15,7 +16,6 @@ export default defineConfig({
   globalSetup: "./setup.mjs",
   outputDir: "test-results",
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 1280, height: 860 },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

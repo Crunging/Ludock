@@ -89,6 +89,9 @@ jobs:
           pull: true
           # Refresh Alpine security fixes even when the pinned base is unchanged.
           no-cache-filters: runtime
+          # Layers from the previous publish, such as the compiled dependencies.
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.image.outputs.version }}

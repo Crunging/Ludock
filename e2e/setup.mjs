@@ -1,7 +1,8 @@
-// Builds and starts Ludock and the fake Docker daemon on fresh data, completes
-// first-administrator setup, and saves the administrator's signed-in state.
+// Builds Ludock and the fake Docker daemon, then starts one of each on fresh
+// data for every worker, completes first-administrator setup, and saves the
+// administrator's signed-in state.
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { port } from "./playwright.config.mjs";
@@ -38,12 +39,9 @@ function start(command, args, env, log) {
   return child;
 }
 
-export default async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-"));
-  const bin = join(dir, "bin");
-  const env = { ...process.env, CGO_ENABLED: "0" };
-  execFileSync("go", ["build", "-o", bin + "/", "./cmd/ludock", "./cmd/fakedocker"], { cwd: root, env, stdio: "inherit" });
-
+// startStack starts one Ludock and fake daemon on fresh data under dir and
+// signs in the setup administrator. Each worker gets its own stack.
+async function startStack(bin, dir, port) {
   const dockerDir = join(dir, "docker");
   const backups = join(dir, "backups");
   const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", backups], {}, "fakedocker");
@@ -75,15 +73,31 @@ export default async function setup() {
   const state = join(dir, "admin.json");
   writeFileSync(state, JSON.stringify({ cookies: [{ name: "ludock_session", value: token, domain: "127.0.0.1", path: "/",
     expires: -1, httpOnly: true, secure: false, sameSite: "Strict" }], origins: [] }));
-  process.env.LUDOCK_E2E_ADMIN_STATE = state;
-  process.env.LUDOCK_E2E_DIR = dir;
+  return { children: [ludock, fake], env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
+}
+
+export default async function setup(config) {
+  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-"));
+  const bin = join(dir, "bin");
+  const env = { ...process.env, CGO_ENABLED: "0" };
+  execFileSync("go", ["build", "-o", bin + "/", "./cmd/ludock", "./cmd/fakedocker"], { cwd: root, env, stdio: "inherit" });
+
+  const stacks = await Promise.all(Array.from({ length: config.workers }, (_, index) => {
+    const stackDir = join(dir, String(index));
+    mkdirSync(stackDir);
+    return startStack(bin, stackDir, port + index);
+  }));
+  // fixtures.mjs picks the stack for its worker's parallel index.
+  process.env.LUDOCK_E2E_STACKS = JSON.stringify(stacks.map((stack) => stack.env));
 
   return async () => {
-    for (const child of [ludock, fake]) {
-      child.stopping = true;
-      child.kill("SIGTERM");
-      await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
-    }
+    await Promise.all(stacks.map(async (stack) => {
+      for (const child of stack.children) {
+        child.stopping = true;
+        child.kill("SIGTERM");
+        await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
+      }
+    }));
     if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });
   };
 }

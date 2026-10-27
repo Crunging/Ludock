@@ -13,10 +13,12 @@ while IFS= read -r line; do
   echo "Unpinned: $line"
   status=1
 done < <(grep -Hn "uses:" .github/workflows/*.yaml)
+# FROM a stage of the Dockerfile itself needs no pin.
+stages="$(sed -n -E 's/^FROM .* AS ([a-z0-9_-]+)$/\1/p' Dockerfile | paste -sd '|')"
 while IFS= read -r line; do
   [[ "$line" =~ @sha256:[0-9a-f]{64} ]] && continue
   echo "Unpinned: $line"
   status=1
-done < <(grep -Hn -E "^ARG [A-Z_]+_IMAGE=|^FROM " Dockerfile | grep -v -E "FROM (--platform=\S+ )?\\\$\{" )
+done < <(grep -Hn -E "^ARG [A-Z_]+_IMAGE=|^FROM " Dockerfile | grep -v -E "FROM (--platform=\S+ )?(\\\$\{|($stages) )" )
 grep -q 'aquasec/trivy:[^@]*@sha256:[0-9a-f]\{64\}' scripts/scan-image.sh || { echo "Unpinned: scanner image"; status=1; }
 exit $status

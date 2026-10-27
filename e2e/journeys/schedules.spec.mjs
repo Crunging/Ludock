@@ -6,6 +6,9 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
+  // The page fills in the browser's time zone once it loads; typing earlier
+  // would add to it.
+  await expect(form.getByRole("button", { name: /^Use my time zone \(/ })).toBeVisible();
   await form.getByLabel("Time zone").fill("Europe/Berlin");
 
   // A one-time run in the past is refused and the draft stays.
