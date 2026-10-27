@@ -560,8 +560,7 @@
   function catchUp() {
     if (window.htmx) htmx.trigger(document.body, "servers-changed");
   }
-  function failed(event) {
-    var config = event.detail.requestConfig || {};
+  function failed(config) {
     var refresh = refreshesItself(config) || timed(config.elt);
     if (config.verb !== "get" && !refresh) {
       notice("change", "Ludock didn’t answer, so your change may not have been made. Check your connection, then check the result before trying again.");
@@ -572,14 +571,20 @@
       notice("refresh", "Can’t reach Ludock. Showing the last known state until the connection is back.");
     }
   }
-  document.addEventListener("htmx:sendError", failed);
-  document.addEventListener("htmx:timeout", failed);
-  document.addEventListener("htmx:afterRequest", function (event) {
-    var xhr = event.detail.xhr, config = event.detail.requestConfig || {};
-    if (!unreachable || !xhr || !xhr.status || (unreachable === "change" && (config.verb === "get" || timed(config.elt)))) return;
+  function answered(config) {
+    if (!unreachable || (unreachable === "change" && (config.verb === "get" || timed(config.elt)))) return;
     var missed = unreachable === "refresh";
     notice(null);
     if (missed) catchUp();
+  }
+  // htmx reports a request's end on the element that sent it, which a
+  // refresh may have replaced by then, so these listen on the request.
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var xhr = event.detail.xhr, config = event.detail.requestConfig;
+    if (!xhr || !config) return;
+    xhr.addEventListener("load", function () { answered(config); });
+    xhr.addEventListener("error", function () { failed(config); });
+    xhr.addEventListener("timeout", function () { failed(config); });
   });
   window.addEventListener("online", catchUp);
 

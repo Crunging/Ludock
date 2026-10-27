@@ -58,3 +58,22 @@ test("losing the connection says so, and the page catches up when it returns", a
   await expect(notice).toBeEmpty();
   await expect(valheim).toContainText("Stopped");
 });
+
+test("a change that fails after a refresh replaced its button still says so", async ({ page }) => {
+  expectOffline(page);
+  await page.goto("/");
+  let fail;
+  const failing = new Promise((resolve) => { fail = resolve; });
+  await page.route(/\/servers\/[^/]+\/start$/, async (route) => {
+    await failing;
+    await route.abort("internetdisconnected");
+  });
+  const valheim = serverRow(page, "valheim");
+  await valheim.getByRole("button", { name: "Start" }).click();
+  await expect(valheim.getByRole("button", { name: "Working…" })).toBeDisabled();
+  // The refresh replaces the busy button with a fresh one.
+  expect((await refreshList(page)).status()).toBe(200);
+  await expect(valheim.getByRole("button", { name: "Start" })).toBeEnabled();
+  fail();
+  await expect(page.locator("[data-connection-notice]")).toContainText("your change may not have been made");
+});
