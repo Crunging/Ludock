@@ -26,6 +26,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -56,11 +57,13 @@ type App struct {
 	Notify    *notify.Service
 	History   *history.Service
 	Attention *attention.Service
+	Resources *resources.Service
 	Console   *console.Runtime
 	Sessions  *console.Sessions
 	Updates   *update.Service
 
 	tick       sync.Mutex
+	sampling   sync.Mutex
 	background sync.WaitGroup
 	storage    sync.Mutex
 	delivering sync.Mutex
@@ -98,9 +101,10 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Observer: observer, Servers: serverService,
 		Images: images, Files: &files.Service{Docker: client, Images: images}, Backups: backupService, Runner: runner, Jobs: jobService,
 		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates,
-		History:  &history.Service{DB: database, Authz: authorization, Identity: store},
-		Sessions: &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
-		stop:     make(chan struct{})}
+		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
+		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
+		Resources: &resources.Service{DB: database, Identity: store, Authz: authorization, Sample: serverService.Sample},
+		stop:      make(chan struct{})}
 	a.Events = &events.Hub{Docker: client, Identity: store, Authz: authorization, Refresh: func(ctx context.Context) error {
 		_, err := serverService.RefreshNow(ctx)
 		return err
@@ -153,9 +157,9 @@ func (a *App) Start(ctx context.Context) {
 	}()
 }
 
-// Tick runs discovery, schedules, and monitoring once. Backup storage setup
-// can wait on Docker and notification delivery can outlast a minute, so
-// both run beside it.
+// Tick runs discovery, schedules, and monitoring once. Resource samples,
+// backup storage setup, and notification delivery can each wait on Docker
+// or the network, so they run beside it.
 func (a *App) Tick(ctx context.Context) {
 	if a.tick.TryLock() {
 		a.background.Add(1)
@@ -175,6 +179,7 @@ func (a *App) Tick(ctx context.Context) {
 			if err := a.Monitor.Check(ctx, current, now); err != nil {
 				log.Warn("Availability checks are temporarily unavailable")
 			}
+			a.record(ctx, current, now)
 		}()
 	}
 	if a.storage.TryLock() {
@@ -200,6 +205,21 @@ func (a *App) Tick(ctx context.Context) {
 			}
 		}()
 	}
+}
+
+// record samples resources beside the tick, at most once per minute.
+func (a *App) record(ctx context.Context, current map[string]servers.Container, now int64) {
+	if !a.sampling.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		defer a.sampling.Unlock()
+		if err := a.Resources.Record(ctx, current, now); err != nil {
+			log.Warn("Could not record resource history; it will be recorded again next minute")
+		}
+	}()
 }
 
 // Stop ends background work. Console commands and streamed file requests

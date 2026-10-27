@@ -361,6 +361,15 @@ func (s *Service) Names(ctx context.Context, actor *db.SessionUser) ([]Name, err
 	return names, nil
 }
 
+// Sample reads a server's statistics for its resource history, after
+// confirming the container is still the one bound to the server.
+func (s *Service) Sample(ctx context.Context, server identity.Server) (*Stats, error) {
+	return s.Observer.Stats(ctx, server.ContainerID, func(observation identity.Observation) error {
+		_, err := s.Identity.AssertObservedBinding(ctx, server.ID, observation, server.BindingRevision)
+		return err
+	})
+}
+
 // Snapshot is a server detail read. Saved history stays inspectable during
 // a Docker outage; a saved binding does not establish the current
 // container's identity or live state.

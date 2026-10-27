@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -140,7 +141,10 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		case "update":
 			d.Recreate = r.URL.Query().Get("recreate") == "1"
 		case "overview":
-			err = s.overview(r, request, d)
+			if err = s.overview(r, request, d); err == nil {
+				d.Resources, err = s.App.Resources.History(r.Context(), request.User(), d.Row.Server.ID,
+					resources.RangeFor(r.URL.Query().Get("range")), db.Now())
+			}
 		}
 	}
 	if err != nil {
@@ -180,6 +184,17 @@ func (s *Server) detailOverview(w http.ResponseWriter, r *http.Request, request 
 		return
 	}
 	render(w, r, http.StatusOK, views.OverviewLive(*d))
+}
+
+// detailResources is the resource history over the requested range.
+func (s *Server) detailResources(w http.ResponseWriter, r *http.Request, request *Request) {
+	history, err := s.App.Resources.History(r.Context(), request.User(), r.PathValue("id"),
+		resources.RangeFor(r.URL.Query().Get("range")), db.Now())
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	render(w, r, http.StatusOK, views.ResourceHistory(*history))
 }
 
 func (s *Server) detailOperation(w http.ResponseWriter, r *http.Request, request *Request) {

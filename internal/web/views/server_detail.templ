@@ -8,6 +8,7 @@ import (
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -24,6 +25,9 @@ type ServerDetail struct {
 	Tab                  string
 	Tabs                 []DetailTab
 	Availability         *monitor.Availability
+	// Resources is the resource history; overview refreshes leave it nil
+	// and keep the one on the page.
+	Resources *resources.History
 	// ShowSchedule shows the next run; SchedulesReady is false when the list
 	// could not be read.
 	ShowSchedule   bool
@@ -393,6 +397,11 @@ templ OverviewLive(d ServerDetail) {
 				</dd>
 			</div>
 		</dl>
+		if d.Resources != nil {
+			@ResourceHistory(*d.Resources)
+		} else {
+			<section id="resource-history" hx-preserve="true"></section>
+		}
 		if d.Availability != nil {
 			@AvailabilityStatus(d)
 		}

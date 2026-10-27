@@ -14,6 +14,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /servers/{id}", s.authed(s.serverDetail))
 	m.HandleFunc("GET /fragments/servers/{id}/live", s.authed(s.detailLive))
 	m.HandleFunc("GET /fragments/servers/{id}/overview", s.authed(s.detailOverview))
+	m.HandleFunc("GET /fragments/servers/{id}/resources", s.authed(s.detailResources))
 	m.HandleFunc("GET /fragments/servers/{id}/activity", s.authed(s.detailActivity))
 	m.HandleFunc("GET /fragments/servers/{id}/operations/{operation}", s.authed(s.detailOperation))
 	m.HandleFunc("POST /servers/{id}/availability", s.admin(s.configureAvailability))
