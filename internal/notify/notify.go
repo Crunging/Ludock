@@ -1,17 +1,17 @@
-// Package notify queues and delivers Discord webhook notifications. The
-// webhook URL is write-only: it never appears in output, logs, or stored
+// Package notify queues and delivers alerts to Discord, ntfy, Gotify,
+// Telegram, email, and generic webhooks. Webhook URLs, tokens, topics, and
+// passwords are write-only: they never appear in output, logs, or stored
 // failure details.
 package notify
 
 import (
-	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
-	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,31 +26,65 @@ var log = logging.New("notifications")
 
 const settingKey = "notifications"
 
-type settings struct {
-	Enabled    bool   `json:"enabled"`
-	WebhookURL string `json:"webhookUrl"`
+// settings are every destination's saved settings.
+type settings map[Destination]Config
+
+// ready lists the destinations that are on and configured.
+func (all settings) ready() []Destination {
+	var ready []Destination
+	for _, d := range Destinations {
+		if d.ready(all[d]) {
+			ready = append(ready, d)
+		}
+	}
+	return ready
 }
 
-// Configuration is the public notification state.
+// Configuration is one destination's public state: its settings without
+// secrets, and which secrets are saved.
 type Configuration struct {
-	Enabled    bool
-	Configured bool
+	Destination Destination
+	Enabled     bool
+	Configured  bool
+	Config      Config
+	Saved       map[string]bool
+}
+
+// Ready reports whether the destination is on and configured.
+func (c Configuration) Ready() bool { return c.Enabled && c.Configured }
+
+func public(d Destination, c Config) Configuration {
+	configured := d.configured(c)
+	saved := map[string]bool{}
+	for name, field := range d.secrets(&c) {
+		saved[name] = *field != ""
+		*field = ""
+	}
+	return Configuration{Destination: d, Enabled: c.Enabled, Configured: configured, Config: c, Saved: saved}
 }
 
 var failureMessages = map[string]string{
-	"invalid_request": "Discord rejected the notification. Check the webhook configuration.",
-	"unauthorized":    "Discord refused webhook access. Replace the saved webhook URL.",
-	"not_found":       "Discord could not find the webhook. It may have been deleted; replace the saved URL.",
-	"rate_limited":    "Discord rate limited delivery. Wait before trying again.",
-	"unavailable":     "Discord is temporarily unavailable. Try again later.",
-	"rejected":        "Discord rejected delivery. Check the webhook configuration and try again.",
-	"timeout":         "Discord did not respond in time. Check network access and try again.",
-	"network":         "Unable to reach Discord. Check network access and try again.",
+	"invalid_request": "Delivery to %s was rejected as invalid. Check the destination settings.",
+	"unauthorized":    "Delivery to %s was refused. Replace the saved credentials.",
+	"not_found":       "Delivery to %s failed because the destination was not found. It may have been deleted; check the saved settings.",
+	"rate_limited":    "Delivery to %s was rate limited. Wait before trying again.",
+	"unavailable":     "Delivery to %s failed because it is temporarily unavailable. Try again later.",
+	"rejected":        "Delivery to %s was rejected. Check the destination settings and try again.",
+	"timeout":         "Delivery to %s timed out. Check network access and try again.",
+	"network":         "Unable to reach %s. Check network access and try again.",
+	"tls":             "Could not open a secure connection to %s. Check the security setting and the server’s certificate.",
+	"recipient":       "Delivery to %s failed because it refused the sender or a recipient. Check the addresses.",
 }
 
-// Delivery is one queued or sent notification.
+func failureMessage(d Destination, code string) (string, bool) {
+	message, ok := failureMessages[code]
+	return fmt.Sprintf(message, d.name()), ok
+}
+
+// Delivery is one queued or sent notification to one destination.
 type Delivery struct {
 	ID            string
+	Destination   Destination
 	Kind          string // event or test
 	State         string // queued, delivered, failed
 	Attempts      int
@@ -59,32 +93,61 @@ type Delivery struct {
 	DeliveredAt   int64
 	NextAttemptAt int64 // only while queued
 	LastFailure   string
-	Retryable     bool
+	// Paused is a queued delivery whose destination is off.
+	Paused    bool
+	Retryable bool
 }
 
 // Service delivers notifications.
 type Service struct {
 	DB *db.DB
-	// Client sends webhook requests; nil uses a default client.
+	// Client sends HTTP requests; nil uses a default client.
 	Client *http.Client
+	// TLS is the base TLS configuration for mail servers; nil uses the
+	// system roots.
+	TLS *tls.Config
 
 	mu         sync.Mutex
 	active     string
+	activeTo   Destination
 	delivering bool
-	// cancelSend ends the request in flight when the settings change.
+	// cancelSend ends the request in flight when its destination's settings
+	// change.
 	cancelSend context.CancelCauseFunc
 	// retries are event notifications waiting to be queued again.
 	retries sync.WaitGroup
 	quit    chan struct{}
 	stopped bool
+	wake    chan struct{}
 }
 
 // retryDelay is the first wait before queueing an event again; tests
 // shorten it.
 var retryDelay = time.Second
 
+// Wake receives when a notification was queued and delivery should run
+// soon rather than at the next tick.
+func (s *Service) Wake() <-chan struct{} { return s.wakeChannel() }
+
+func (s *Service) wakeChannel() chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.wake == nil {
+		s.wake = make(chan struct{}, 1)
+	}
+	return s.wake
+}
+
+func (s *Service) poke() {
+	wake := s.wakeChannel()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
 func (s *Service) load(ctx context.Context) (settings, error) {
-	var value settings
+	value := settings{}
 	_, err := s.DB.Setting(ctx, settingKey, &value)
 	return value, err
 }
@@ -92,103 +155,107 @@ func (s *Service) load(ctx context.Context) (settings, error) {
 // settings reads the saved settings; an unreadable value counts as off,
 // which only ever withholds a send.
 func (s *Service) settings(ctx context.Context) settings {
-	value, _ := s.load(ctx)
+	value, err := s.load(ctx)
+	if err != nil {
+		return settings{}
+	}
 	return value
 }
 
-// Configuration reports whether notifications are on and configured.
-func (s *Service) Configuration(ctx context.Context) Configuration {
-	value := s.settings(ctx)
-	return Configuration{Enabled: value.Enabled, Configured: value.WebhookURL != ""}
+// Configurations reports every destination's public state, in display
+// order.
+func (s *Service) Configurations(ctx context.Context) []Configuration {
+	all := s.settings(ctx)
+	result := make([]Configuration, len(Destinations))
+	for i, d := range Destinations {
+		result[i] = public(d, all[d])
+	}
+	return result
 }
 
-var webhookPath = regexp.MustCompile(`^/api/webhooks/\d+/[A-Za-z0-9_-]+$`)
+// Configuration reports one destination's public state.
+func (s *Service) Configuration(ctx context.Context, d Destination) Configuration {
+	return public(d, s.settings(ctx)[d])
+}
 
-// Configure saves settings. An empty webhookURL keeps the saved one.
-// The administrator's session and role are checked again in the transaction
-// that saves them.
-func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, enabled bool, webhookURL *string) error {
+// Configure saves one destination's settings. Empty secret fields keep the
+// saved values; clearToken removes an optional saved token. The
+// administrator's session and role are checked again in the transaction that
+// saves them.
+func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, d Destination, input Config, clearToken bool) error {
+	if _, ok := Parse(string(d)); !ok {
+		return apperr.New("NOTIFICATION_DESTINATION_NOT_FOUND", 404, "Notification destination not found")
+	}
 	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		value := ""
-		if webhookURL != nil {
-			value = *webhookURL
-		} else {
-			saved, err := savedIn(ctx, tx)
-			if err != nil {
-				return err
-			}
-			value = saved.WebhookURL
-		}
-		if err := validWebhook(enabled, value); err != nil {
+		all, err := savedIn(ctx, tx)
+		if err != nil {
 			return err
 		}
-		return s.DB.SetSetting(ctx, tx, settingKey, settings{Enabled: enabled, WebhookURL: value})
+		saved := all[d]
+		next := input
+		previous := d.secrets(&saved)
+		for name, field := range d.secrets(&next) {
+			if *field == "" {
+				*field = *previous[name]
+			}
+		}
+		if clearToken {
+			next.Token = ""
+		}
+		if next, err = d.normalize(next); err != nil {
+			return err
+		}
+		all[d] = next
+		return s.DB.SetSetting(ctx, tx, settingKey, all)
 	})
 	if err == nil {
 		// A send in flight may target the old settings; it is released and
 		// sent again under the new ones.
 		s.mu.Lock()
-		if s.cancelSend != nil {
+		if s.cancelSend != nil && s.activeTo == d {
 			s.cancelSend(errSettingsChanged)
 		}
 		s.mu.Unlock()
+		s.poke()
 	}
 	return err
 }
 
 var errSettingsChanged = errors.New("notification settings changed")
 
-func validWebhook(enabled bool, value string) error {
-	if len(value) > 1024 {
-		return apperr.New("INVALID_WEBHOOK", 400, "Enter a valid Discord webhook URL")
-	}
-	if value != "" {
-		parsed, err := url.Parse(value)
-		if err != nil || parsed.Host == "" {
-			return apperr.New("INVALID_WEBHOOK", 400, "Enter a valid Discord webhook URL")
-		}
-		if parsed.Scheme != "https" || parsed.Hostname() != "discord.com" || parsed.Port() != "" || parsed.User != nil ||
-			parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(value, "#") ||
-			!webhookPath.MatchString(parsed.EscapedPath()) {
-			return apperr.New("INVALID_WEBHOOK", 400, "Use a Discord HTTPS webhook URL")
-		}
-	}
-	if enabled && value == "" {
-		return apperr.New("WEBHOOK_REQUIRED", 400, "Configure a webhook before enabling notifications")
-	}
-	return nil
-}
-
 type row struct {
-	id, payload, kind, state string
-	attempts, retries        int
-	createdAt, next          int64
-	lastAttempt, delivered   sql.NullInt64
-	failure                  sql.NullString
+	id, destination, message, kind, state string
+	attempts, retries                     int
+	createdAt, next                       int64
+	lastAttempt, delivered                sql.NullInt64
+	failure                               sql.NullString
 }
 
-const columns = "id,payload_json,kind,state,attempts,retry_attempts,created_at,next_attempt_at,last_attempt_at,delivered_at,failure_code"
+const columns = "id,destination,message,kind,state,attempts,retry_attempts,created_at,next_attempt_at,last_attempt_at,delivered_at,failure_code"
 
 func scan(s interface{ Scan(...any) error }) (*row, error) {
 	var r row
-	return &r, s.Scan(&r.id, &r.payload, &r.kind, &r.state, &r.attempts, &r.retries, &r.createdAt, &r.next, &r.lastAttempt, &r.delivered, &r.failure)
+	return &r, s.Scan(&r.id, &r.destination, &r.message, &r.kind, &r.state, &r.attempts, &r.retries, &r.createdAt, &r.next,
+		&r.lastAttempt, &r.delivered, &r.failure)
 }
 
-func (s *Service) public(r *row, enabled bool) Delivery {
+func (s *Service) public(r *row, all settings) Delivery {
 	s.mu.Lock()
 	active := s.active
 	s.mu.Unlock()
-	delivery := Delivery{ID: r.id, Kind: r.kind, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
-		LastAttemptAt: r.lastAttempt.Int64, DeliveredAt: r.delivered.Int64}
+	d := Destination(r.destination)
+	ready := d.ready(all[d])
+	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
+		LastAttemptAt: r.lastAttempt.Int64, DeliveredAt: r.delivered.Int64, Paused: r.state == "queued" && !ready}
 	if r.state == "queued" {
 		delivery.NextAttemptAt = r.next
 	}
-	if message, ok := failureMessages[r.failure.String]; ok && r.failure.Valid {
+	if message, ok := failureMessage(d, r.failure.String); ok && r.failure.Valid {
 		delivery.LastFailure = message
 	} else if r.state != "delivered" && r.attempts > 0 {
 		delivery.LastFailure = "Failure details are unavailable for this delivery."
 	}
-	delivery.Retryable = enabled && active != r.id && (r.state == "failed" || (r.state == "queued" && r.retries > 0))
+	delivery.Retryable = ready && active != r.id && (r.state == "failed" || (r.state == "queued" && r.retries > 0))
 	return delivery
 }
 
@@ -204,7 +271,7 @@ func (s *Service) row(ctx context.Context, id string) (*row, error) {
 func (s *Service) Deliveries(ctx context.Context) ([]Delivery, error) {
 	// Read before the rows hold a connection: reading while they do needs a
 	// second one, and enough concurrent lists would hold the whole pool.
-	enabled := s.Configuration(ctx).Enabled
+	all := s.settings(ctx)
 	rows, err := s.DB.QueryContext(ctx, "SELECT "+columns+" FROM notification_deliveries ORDER BY created_at DESC, id DESC LIMIT 50")
 	if err != nil {
 		return nil, err
@@ -216,7 +283,7 @@ func (s *Service) Deliveries(ctx context.Context) ([]Delivery, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, s.public(r, enabled))
+		result = append(result, s.public(r, all))
 	}
 	return result, rows.Err()
 }
@@ -229,18 +296,16 @@ func truncate(message string, limit int) string {
 	return string(runes)
 }
 
-func (s *Service) enqueue(ctx context.Context, q interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, key, message, kind string) (string, error) {
+func enqueue(ctx context.Context, tx *sql.Tx, key string, d Destination, message, kind string) (string, error) {
 	id := identity.NewUUID()
 	now := db.Now()
-	payload, _ := json.Marshal(map[string]any{"content": truncate(message, 1800), "allowed_mentions": map[string]any{"parse": []string{}}})
-	_, err := q.ExecContext(ctx, `INSERT OR IGNORE INTO notification_deliveries
-    (id,event_key,payload_json,next_attempt_at,created_at,kind) VALUES(?,?,?,?,?,?)`, id, key, string(payload), now, now, kind)
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO notification_deliveries
+    (id,event_key,destination,message,next_attempt_at,created_at,kind) VALUES(?,?,?,?,?,?,?)`,
+		id, key, string(d), truncate(message, 1800), now, now, kind)
 	return id, err
 }
 
-// Notify queues an event once per key, when notifications are enabled.
+// Notify queues an event once per key for each destination that is on.
 // Callers fire and forget, and most events never recur, so a failed queue
 // is retried in the background instead of dropping the alert.
 func (s *Service) Notify(key, message string) {
@@ -280,18 +345,28 @@ func (s *Service) Notify(key, message string) {
 }
 
 // queueEvent reads the settings in the transaction that queues, so an event
-// raised as notifications are turned off is not left to send once they are
+// raised as a destination is turned off is not left to send once it is
 // turned on again.
 func (s *Service) queueEvent(key, message string) error {
 	ctx := context.Background()
-	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		value, err := savedIn(ctx, tx)
-		if err != nil || !value.Enabled {
+	queued := false
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		all, err := savedIn(ctx, tx)
+		if err != nil {
 			return err
 		}
-		_, err = s.enqueue(ctx, tx, key, message, "event")
-		return err
+		for _, d := range all.ready() {
+			if _, err := enqueue(ctx, tx, key, d, message, "event"); err != nil {
+				return err
+			}
+			queued = true
+		}
+		return nil
 	})
+	if err == nil && queued {
+		s.poke()
+	}
+	return err
 }
 
 // Stop abandons pending queue retries, before the database closes.
@@ -305,19 +380,13 @@ func (s *Service) Stop() {
 	s.retries.Wait()
 }
 
-var errDisabled = apperr.New("NOTIFICATIONS_DISABLED", 400, "Save an enabled Discord webhook before sending or retrying a notification")
-
-func (s *Service) assertEnabled(ctx context.Context) error {
-	configuration := s.Configuration(ctx)
-	if !configuration.Enabled || !configuration.Configured {
-		return errDisabled
-	}
-	return nil
+func errDisabled(d Destination) error {
+	return apperr.New("NOTIFICATIONS_DISABLED", 400, "Save and turn on "+d.Label()+" before sending or retrying a notification")
 }
 
 // savedIn reads the settings through tx.
 func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
-	var saved settings
+	saved := settings{}
 	var raw string
 	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -329,67 +398,71 @@ func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
 	return saved, err
 }
 
-// assertEnabledIn repeats assertEnabled in the transaction that queues, so
-// notifications turned off meanwhile queue nothing to send once re-enabled.
-func assertEnabledIn(ctx context.Context, tx *sql.Tx) error {
-	saved, err := savedIn(ctx, tx)
+// assertReadyIn checks d in the transaction that queues, so a destination
+// turned off meanwhile queues nothing to send once it is turned on again.
+func assertReadyIn(ctx context.Context, tx *sql.Tx, d Destination) error {
+	all, err := savedIn(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if !saved.Enabled || saved.WebhookURL == "" {
-		return errDisabled
+	if !d.ready(all[d]) {
+		return errDisabled(d)
 	}
 	return nil
 }
 
-// QueueTest queues a test message, checking the administrator again in the
-// transaction that queues it.
-func (s *Service) QueueTest(ctx context.Context, adminID, tokenHash string) (*Delivery, error) {
-	if err := s.assertEnabled(ctx); err != nil {
-		return nil, err
+// QueueTest queues a test message to d, checking the administrator again in
+// the transaction that queues it.
+func (s *Service) QueueTest(ctx context.Context, adminID, tokenHash string, d Destination) (*Delivery, error) {
+	if !s.Configuration(ctx, d).Ready() {
+		return nil, errDisabled(d)
 	}
 	if testHook != nil {
 		testHook("checked")
 	}
 	var id string
 	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		if err := assertEnabledIn(ctx, tx); err != nil {
+		if err := assertReadyIn(ctx, tx, d); err != nil {
 			return err
 		}
 		var err error
-		id, err = s.enqueue(ctx, tx, "test:"+identity.NewUUID(), "Ludock test notification: Discord delivery is working.", "test")
+		id, err = enqueue(ctx, tx, "test:"+identity.NewUUID(), d, "Ludock test notification: "+d.Label()+" delivery is working.", "test")
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.poke()
 	r, err := s.row(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	delivery := s.public(r, true)
+	delivery := s.public(r, s.settings(ctx))
 	return &delivery, nil
 }
+
+var errNotRetryable = apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
 
 // Retry grants a failed delivery a fresh bounded retry cycle, keeping its
 // lifetime attempts and last failure. Clearing the cycle count also rejects
 // duplicate clicks.
 func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*Delivery, error) {
-	if err := s.assertEnabled(ctx); err != nil {
-		return nil, err
-	}
 	r, err := s.row(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if !s.public(r, true).Retryable {
-		return nil, apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
+	d := Destination(r.destination)
+	if !s.Configuration(ctx, d).Ready() {
+		return nil, errDisabled(d)
+	}
+	if !s.public(r, s.settings(ctx)).Retryable {
+		return nil, errNotRetryable
 	}
 	// Only the row as read is retried: a send claimed or finished since then
 	// changes last_attempt_at or the counters, and must not be queued again.
 	changed := int64(0)
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		if err := assertEnabledIn(ctx, tx); err != nil {
+		if err := assertReadyIn(ctx, tx, d); err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
@@ -404,12 +477,13 @@ func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*De
 		return nil, err
 	}
 	if changed != 1 {
-		return nil, apperr.New("NOTIFICATION_NOT_RETRYABLE", 409, "This delivery is already queued, being sent, or has been delivered")
+		return nil, errNotRetryable
 	}
+	s.poke()
 	if r, err = s.row(ctx, id); err != nil {
 		return nil, err
 	}
-	delivery := s.public(r, true)
+	delivery := s.public(r, s.settings(ctx))
 	return &delivery, nil
 }
 
@@ -429,8 +503,8 @@ func responseFailure(status int) string {
 	return "rejected"
 }
 
-// Deliver sends up to ten due notifications. Overlapping calls return
-// immediately.
+// Deliver sends up to ten due notifications to destinations that are on.
+// Overlapping calls return immediately.
 func (s *Service) Deliver(ctx context.Context) error {
 	s.mu.Lock()
 	if s.delivering {
@@ -444,11 +518,19 @@ func (s *Service) Deliver(ctx context.Context) error {
 		s.delivering = false
 		s.mu.Unlock()
 	}()
-	if !s.Configuration(ctx).Enabled {
+	ready := s.settings(ctx).ready()
+	if len(ready) == 0 {
 		return nil
 	}
+	// Deliveries to a destination that is off wait without taking the
+	// batch from the others.
+	args := []any{db.Now()}
+	for _, d := range ready {
+		args = append(args, string(d))
+	}
 	rows, err := s.DB.QueryContext(ctx, `SELECT id FROM notification_deliveries
-    WHERE state='queued' AND next_attempt_at<=? ORDER BY created_at, rowid LIMIT 10`, db.Now())
+    WHERE state='queued' AND next_attempt_at<=? AND destination IN (?`+strings.Repeat(",?", len(ready)-1)+`)
+    ORDER BY created_at, rowid LIMIT 10`, args...)
 	if err != nil {
 		return err
 	}
@@ -473,14 +555,18 @@ func (s *Service) Deliver(ctx context.Context) error {
 	noRedirects := *client
 	noRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }
 	for _, id := range ids {
-		config := s.settings(ctx)
-		if !config.Enabled {
+		if ctx.Err() != nil {
 			break
 		}
 		// An administrator may retry another row while a send is waiting; read
 		// the current counters right before sending, not from the batch.
 		r, err := s.row(ctx, id)
 		if err != nil || r.state != "queued" || r.next > db.Now() {
+			continue
+		}
+		d := Destination(r.destination)
+		config := s.settings(ctx)[d]
+		if !d.ready(config) {
 			continue
 		}
 		attempts, retries := r.attempts+1, r.retries+1
@@ -491,7 +577,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 		// cannot be saved, the message is sent again after the backoff, not
 		// on every tick.
 		s.mu.Lock()
-		s.active = id
+		s.active, s.activeTo = id, d
 		s.mu.Unlock()
 		claimedAt := db.Now()
 		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
@@ -506,14 +592,14 @@ func (s *Service) Deliver(ctx context.Context) error {
 				log.Warn("Could not claim a notification delivery; it will be retried")
 			}
 			s.mu.Lock()
-			s.active = ""
+			s.active, s.activeTo = "", ""
 			s.mu.Unlock()
 			continue
 		}
-		// An administrator who disables notifications or replaces the webhook
-		// gets nothing more sent to the old one: settings saved before the
+		// An administrator who turns a destination off or changes its settings
+		// gets nothing more sent under the old ones: settings saved before the
 		// reread below are seen by it, and a save after it cancels the send.
-		// Either way the claim is released untouched, and the next pass uses
+		// Either way the claim is released untouched, and a later pass uses
 		// the current settings.
 		sendCtx, cancelSend := context.WithCancelCause(ctx)
 		s.mu.Lock()
@@ -521,7 +607,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 		s.mu.Unlock()
 		finishSend := func() {
 			s.mu.Lock()
-			s.active, s.cancelSend = "", nil
+			s.active, s.activeTo, s.cancelSend = "", "", nil
 			s.mu.Unlock()
 			cancelSend(nil)
 		}
@@ -532,14 +618,14 @@ func (s *Service) Deliver(ctx context.Context) error {
 			}
 			finishSend()
 		}
-		if current := s.settings(ctx); !current.Enabled || current.WebhookURL != config.WebhookURL {
+		if current := s.settings(ctx)[d]; current != config {
 			release()
-			break
+			continue
 		}
-		failure := s.send(sendCtx, &noRedirects, config.WebhookURL, r.payload)
+		failure := s.send(sendCtx, &noRedirects, d, config, message{id: r.id, kind: r.kind, text: r.message, createdAt: r.createdAt})
 		if failure != "" && errors.Is(context.Cause(sendCtx), errSettingsChanged) {
 			release()
-			break
+			continue
 		}
 		finished := db.Now()
 		state := "queued"
@@ -572,18 +658,18 @@ func (s *Service) Deliver(ctx context.Context) error {
 	return err
 }
 
-// send posts one payload. Neither the response body nor transport errors are
-// kept: any of them could include the webhook secret.
-func (s *Service) send(ctx context.Context, client *http.Client, webhook, payload string) string {
+// send delivers one message. Neither response bodies nor transport errors
+// are kept: any of them could include a secret.
+func (s *Service) send(ctx context.Context, client *http.Client, d Destination, c Config, m message) string {
+	if d == Email {
+		return s.sendEmail(ctx, c, m)
+	}
 	timeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	// Discord confirms it saved the message only with wait=true. Saved URLs
-	// reject query strings, so this option is controlled here.
-	request, err := http.NewRequestWithContext(timeout, http.MethodPost, webhook+"?wait=true", bytes.NewReader([]byte(payload)))
+	request, err := d.request(timeout, c, m)
 	if err != nil {
 		return "network"
 	}
-	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
 		if timeout.Err() != nil {

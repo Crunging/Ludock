@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/attention"
@@ -70,7 +71,9 @@ type App struct {
 	storage    sync.Mutex
 	delivering sync.Mutex
 	polling    sync.Mutex
-	stop       chan struct{}
+	// deliverAgain asks the running delivery pass for another.
+	deliverAgain atomic.Bool
+	stop         chan struct{}
 }
 
 // New builds the services on an open database.
@@ -154,10 +157,17 @@ func (a *App) Start(ctx context.Context) {
 		defer ticker.Stop()
 		for {
 			a.Tick(ctx)
-			select {
-			case <-a.stop:
-				return
-			case <-ticker.C:
+		wait:
+			for {
+				select {
+				case <-a.stop:
+					return
+				case <-ticker.C:
+					break wait
+				case <-a.Notify.Wake():
+					// A notification was just queued; send it now.
+					a.deliver(ctx)
+				}
 			}
 		}
 	}()
@@ -209,16 +219,33 @@ func (a *App) Tick(ctx context.Context) {
 			a.Players.Poll(ctx)
 		}()
 	}
-	if a.delivering.TryLock() {
-		a.background.Add(1)
-		go func() {
-			defer a.background.Done()
-			defer a.delivering.Unlock()
-			if err := a.Notify.Deliver(ctx); err != nil {
-				log.Warn("Notification delivery is temporarily unavailable")
-			}
-		}()
+	a.deliver(ctx)
+}
+
+// deliver sends due notifications beside other work. A call while a pass
+// runs makes that pass run once more, so nothing queued meanwhile waits for
+// the next tick.
+func (a *App) deliver(ctx context.Context) {
+	a.deliverAgain.Store(true)
+	if !a.delivering.TryLock() {
+		return
 	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		for {
+			for a.deliverAgain.Swap(false) {
+				if err := a.Notify.Deliver(ctx); err != nil {
+					log.Warn("Notification delivery is temporarily unavailable")
+				}
+			}
+			a.delivering.Unlock()
+			// A call between the last pass and the unlock found the lock held.
+			if !a.deliverAgain.Load() || !a.delivering.TryLock() {
+				return
+			}
+		}
+	}()
 }
 
 // record samples resources beside the tick, at most once per minute.
