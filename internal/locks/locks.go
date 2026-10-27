@@ -200,12 +200,13 @@ func (t *Table) NextRelease() <-chan struct{} {
 	return t.released
 }
 
-// ServerBusy reports whether work holds a server.
+// ServerBusy reports whether work holds a server. Background holders don't
+// count: whatever needs the server cancels them.
 func (t *Table) ServerBusy(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, busy := t.active["server:"+id]
-	return busy
+	owner, busy := t.active["server:"+id]
+	return busy && owner.background == nil
 }
 
 // Drained is closed once no keys are held. Call it after stopping new

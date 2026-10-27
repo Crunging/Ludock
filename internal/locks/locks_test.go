@@ -38,6 +38,9 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	table := New()
 	cancelled := false
 	release, _ := table.Acquire([]string{"server:a"}, func() { cancelled = true })
+	if table.ServerBusy("a") {
+		t.Fatal("background holder reported as busy")
+	}
 	_, err := table.Acquire([]string{"server:a"}, nil)
 	var background *BackgroundConflict
 	if !errors.As(err, &background) || !errors.Is(err, ErrConflict) {
@@ -49,6 +52,9 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	}
 	release()
 	foreground, _ := table.Acquire([]string{"server:a"}, nil)
+	if !table.ServerBusy("a") {
+		t.Fatal("foreground holder not reported as busy")
+	}
 	if _, err := table.Acquire([]string{"server:a"}, func() {}); errors.As(err, &background) {
 		t.Fatal("foreground holder reported as background")
 	}
