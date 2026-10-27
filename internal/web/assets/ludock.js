@@ -493,6 +493,92 @@
     if (chosen && chosen.value !== live.value) event.detail.shouldSwap = false;
   });
 
+  // Live regions (elements that refresh themselves, by timer or event)
+  // send the ETag of the fragment they show. The server answers an
+  // unchanged fragment with 304 and no body, and the region stays as it
+  // is, open menus and all. Any other swap into or over a region forgets
+  // its tag. These handlers come after the others, so they see swaps the
+  // others cancelled. A timed refresh that hangs gives up after 30
+  // seconds, so the next one can run.
+  var shown = {};
+  function refreshesItself(config) {
+    return config && config.verb === "get" && config.elt === config.target && !config.boosted && !!config.elt.id;
+  }
+  function forget(target) {
+    if (!target) return;
+    Object.keys(shown).forEach(function (id) {
+      var node = shown[id].node;
+      if (!node.isConnected || node === target || node.contains(target) || (target.contains && target.contains(node))) delete shown[id];
+    });
+  }
+  document.addEventListener("htmx:configRequest", function (event) {
+    var config = event.detail;
+    if (!refreshesItself(config)) return;
+    if ((config.elt.getAttribute("hx-trigger") || "").indexOf("every ") !== -1) config.timeout = 30000;
+    var last = shown[config.elt.id];
+    if (last && last.node === config.elt) config.headers["If-None-Match"] = last.tag;
+  });
+  document.addEventListener("htmx:beforeSwap", function (event) { if (event.detail.shouldSwap) forget(event.detail.target); });
+  document.addEventListener("htmx:oobBeforeSwap", function (event) { if (event.detail.shouldSwap) forget(event.detail.target); });
+  document.addEventListener("htmx:afterSwap", function (event) {
+    var detail = event.detail, xhr = detail.xhr, config = detail.requestConfig;
+    if (!xhr || xhr.status !== 200 || !refreshesItself(config)) return;
+    var tag = xhr.getResponseHeader("ETag"), node = document.getElementById(config.elt.id);
+    if (tag && node) shown[node.id] = { node: node, tag: tag };
+  });
+
+  // A request that can't reach Ludock says so at the bottom of the page.
+  // Refreshes keep the last known state and the notice clears once
+  // anything answers; a change the user sent may or may not have been made,
+  // so that notice stays until the next change answers or it is dismissed.
+  // When the connection returns, live views catch up on what they missed.
+  var unreachable = null;
+  function notice(kind, message) {
+    var region = document.querySelector("[data-connection-notice]");
+    if (!region) return;
+    region.textContent = "";
+    unreachable = kind;
+    if (!kind) return;
+    var alert = document.createElement("div");
+    alert.className = "alert alert--" + (kind === "change" ? "error" : "warning");
+    var text = document.createElement("p");
+    text.textContent = message;
+    alert.appendChild(text);
+    if (kind === "change") {
+      var dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.setAttribute("aria-label", "Dismiss");
+      dismiss.textContent = "×";
+      dismiss.addEventListener("click", function () { notice(null); });
+      alert.appendChild(dismiss);
+    }
+    region.appendChild(alert);
+  }
+  function catchUp() {
+    if (window.htmx) htmx.trigger(document.body, "servers-changed");
+  }
+  function failed(event) {
+    var config = event.detail.requestConfig || {};
+    if (config.verb !== "get") {
+      notice("change", "Ludock didn’t answer, so your change may not have been made. Check your connection, then check the result before trying again.");
+    } else if (!refreshesItself(config)) {
+      if (unreachable !== "change") notice("refresh", "Can’t reach Ludock. Check your connection and try again.");
+    } else if (!unreachable && !document.querySelector("[data-live-status]:not([hidden])")) {
+      // A page whose own banner says live updates are disconnected says enough.
+      notice("refresh", "Can’t reach Ludock. Showing the last known state until the connection is back.");
+    }
+  }
+  document.addEventListener("htmx:sendError", failed);
+  document.addEventListener("htmx:timeout", failed);
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var xhr = event.detail.xhr, config = event.detail.requestConfig || {};
+    if (!unreachable || !xhr || !xhr.status || (unreachable === "change" && config.verb === "get")) return;
+    var missed = unreachable === "refresh";
+    notice(null);
+    if (missed) catchUp();
+  });
+  window.addEventListener("online", catchUp);
+
   // data-autosubmit submits its form on change (a GET form keeps working
   // without scripts through its submit button).
   document.addEventListener("change", function (event) {
@@ -705,8 +791,17 @@
   function liveStatus(connected) {
     document.querySelectorAll("[data-live-status]").forEach(function (element) { element.hidden = connected; });
   }
-  document.addEventListener("htmx:sseOpen", function () { liveStatus(true); });
-  document.addEventListener("htmx:sseError", function () { liveStatus(false); });
+  // A stream that reconnects may have missed events, so live views refresh.
+  var streamLost = false;
+  document.addEventListener("htmx:sseOpen", function () {
+    liveStatus(true);
+    if (streamLost) catchUp();
+    streamLost = false;
+  });
+  document.addEventListener("htmx:sseError", function () {
+    liveStatus(false);
+    streamLost = true;
+  });
   document.addEventListener("htmx:sseMessage", function (event) {
     if (event.detail && event.detail.type === "expired") window.location.assign("/login");
   });
@@ -752,10 +847,12 @@
     timezones();
     msFields();
     followLogs();
-    // Error and success responses both render into their targets.
+    // Error and success responses both render into their targets; a 304
+    // keeps the region a refresh found unchanged.
     if (window.htmx) {
       htmx.config.responseHandling = [
         { code: "204", swap: false },
+        { code: "304", swap: false },
         { code: "[23]..", swap: true },
         { code: "401", swap: false, error: true },
         { code: "[45]..", swap: true, error: false },

@@ -88,17 +88,46 @@ type Store struct{ DB *db.DB }
 // Matches session activity: coarse enough that polling causes no routine writes.
 const lastSeenWriteInterval = 60_000
 
-var (
-	logicalIDPattern   = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	containerIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-	replicaPattern     = regexp.MustCompile(`^[1-9][0-9]*$`)
-)
+var replicaPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 
-// ValidID reports whether value is a logical server ID (a UUID).
-func ValidID(value string) bool { return logicalIDPattern.MatchString(value) }
+// ValidID reports whether value is a logical server ID (a UUID). Lists
+// check every row's IDs, so these checks avoid regular expressions.
+func ValidID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index := range len(value) {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if value[index] != '-' {
+				return false
+			}
+		} else if !isHex(value[index]) {
+			return false
+		}
+	}
+	return true
+}
 
-// ValidContainerID reports whether value is an Engine container reference.
-func ValidContainerID(value string) bool { return containerIDPattern.MatchString(value) }
+// ValidContainerID reports whether value is an Engine container reference:
+// up to 128 letters, digits, "_", ".", or "-", starting with a letter or
+// digit.
+func ValidContainerID(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for index := range len(value) {
+		char := value[index]
+		alphanumeric := char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
+		if !alphanumeric && (index == 0 || char != '_' && char != '.' && char != '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(char byte) bool {
+	return char >= '0' && char <= '9' || char >= 'a' && char <= 'f' || char >= 'A' && char <= 'F'
+}
 
 // NewUUID returns a random version 4 UUID.
 func NewUUID() string {
