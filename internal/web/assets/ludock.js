@@ -511,10 +511,13 @@
       if (!node.isConnected || node === target || node.contains(target) || (target.contains && target.contains(node))) delete shown[id];
     });
   }
+  function timed(elt) {
+    return !!elt && !!elt.getAttribute && (elt.getAttribute("hx-trigger") || "").indexOf("every ") !== -1;
+  }
   document.addEventListener("htmx:configRequest", function (event) {
     var config = event.detail;
+    if (timed(config.elt)) config.timeout = 30000;
     if (!refreshesItself(config)) return;
-    if ((config.elt.getAttribute("hx-trigger") || "").indexOf("every ") !== -1) config.timeout = 30000;
     var last = shown[config.elt.id];
     if (last && last.node === config.elt) config.headers["If-None-Match"] = last.tag;
   });
@@ -559,9 +562,10 @@
   }
   function failed(event) {
     var config = event.detail.requestConfig || {};
-    if (config.verb !== "get") {
+    var refresh = refreshesItself(config) || timed(config.elt);
+    if (config.verb !== "get" && !refresh) {
       notice("change", "Ludock didn’t answer, so your change may not have been made. Check your connection, then check the result before trying again.");
-    } else if (!refreshesItself(config)) {
+    } else if (!refresh) {
       if (unreachable !== "change") notice("refresh", "Can’t reach Ludock. Check your connection and try again.");
     } else if (!unreachable && !document.querySelector("[data-live-status]:not([hidden])")) {
       // A page whose own banner says live updates are disconnected says enough.
@@ -572,7 +576,7 @@
   document.addEventListener("htmx:timeout", failed);
   document.addEventListener("htmx:afterRequest", function (event) {
     var xhr = event.detail.xhr, config = event.detail.requestConfig || {};
-    if (!unreachable || !xhr || !xhr.status || (unreachable === "change" && config.verb === "get")) return;
+    if (!unreachable || !xhr || !xhr.status || (unreachable === "change" && (config.verb === "get" || timed(config.elt)))) return;
     var missed = unreachable === "refresh";
     notice(null);
     if (missed) catchUp();
