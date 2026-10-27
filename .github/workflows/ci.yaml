@@ -34,6 +34,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+      # Runs start from the build cache of main's latest run, so only changed
+      # packages compile; main saves a new one after each merge.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ github.sha }}
+          restore-keys: go-test-
       - name: Check formatting
         run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
       - name: Check generated templates
@@ -41,7 +51,15 @@ jobs:
           go tool templ generate -path internal/web/views
           git diff --exit-code -- internal/web/views
       - run: go vet ./...
-      - run: go test -race ./...
+      # -count=1 runs every test, never results cached for an unchanged package.
+      - run: go test -race -count=1 ./...
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ github.sha }}
 
   journeys:
     name: Journeys
@@ -57,11 +75,27 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+      # Like the Go job's, for the static build the journeys run.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-journeys-${{ github.sha }}
+          restore-keys: go-journeys-
       - run: npm ci --no-audit --no-fund
       # The runner image already has Chromium's libraries. Installing them
       # with --with-deps adds an apt download that can stall for many minutes.
       - run: npx playwright install --only-shell chromium
       - run: npx playwright test
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-journeys-${{ github.sha }}
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -105,9 +139,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The default docker driver can't use the Actions cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          cleanup: false
       - name: Build image
-        # Refresh Alpine security fixes even when the pinned base is unchanged.
-        run: docker build --pull --no-cache-filter runtime --tag "$LUDOCK_TEST_IMAGE" .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          pull: true
+          # Refresh Alpine security fixes even when the pinned base is unchanged.
+          no-cache-filters: runtime
+          load: true
+          tags: ${{ env.LUDOCK_TEST_IMAGE }}
+          # Layers from main's latest run, such as the compiled dependencies.
+          cache-from: type=gha,scope=container-${{ matrix.platform }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=container-{0}', matrix.platform) || '' }}
+      - name: Start the image scan
+        if: matrix.platform == 'linux/amd64'
+        # It runs alongside the container journeys; a later step reports it.
+        run: |
+          (
+            status=0
+            scripts/scan-image.sh "$LUDOCK_TEST_IMAGE" || status=$?
+            echo "$status" > "$RUNNER_TEMP/scan.tmp" && mv "$RUNNER_TEMP/scan.tmp" "$RUNNER_TEMP/scan.status"
+          ) > "$RUNNER_TEMP/scan.log" 2>&1 &
       - name: Install journey dependencies
         working-directory: e2e
         run: |
@@ -118,7 +178,10 @@ jobs:
         run: npx playwright test -c docker.config.mjs
       - name: Scan image for vulnerabilities
         if: matrix.platform == 'linux/amd64'
-        run: scripts/scan-image.sh "$LUDOCK_TEST_IMAGE"
+        run: |
+          until [ -f "$RUNNER_TEMP/scan.status" ]; do sleep 1; done
+          cat "$RUNNER_TEMP/scan.log"
+          exit "$(cat "$RUNNER_TEMP/scan.status")"
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

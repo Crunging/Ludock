@@ -3,6 +3,12 @@
 import { test as base, expect } from "@playwright/test";
 
 export { expect };
+
+// Each worker has its own Ludock and fake daemon (setup.mjs); this sets
+// LUDOCK_E2E_URL, LUDOCK_E2E_ADMIN_STATE, and LUDOCK_E2E_DIR to its stack.
+if (process.env.LUDOCK_E2E_STACKS) {
+  Object.assign(process.env, JSON.parse(process.env.LUDOCK_E2E_STACKS)[Number(process.env.TEST_PARALLEL_INDEX)]);
+}
 export const admin = { username: "admin", password: "correct horse battery staple" };
 
 const offline = new WeakSet();
@@ -31,6 +37,7 @@ function watch(page, problems) {
 }
 
 export const test = base.extend({
+  baseURL: async ({ baseURL }, use) => use(process.env.LUDOCK_E2E_URL || baseURL),
   page: async ({ page }, use) => {
     const problems = [];
     await use(watch(page, problems));

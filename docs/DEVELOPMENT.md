@@ -37,13 +37,15 @@ cd e2e && npm ci && npx playwright test
 ```
 
 The Playwright journeys in `e2e/journeys` are the main suite. They build the
-real binary and `cmd/fakedocker`, start both on fresh temporary data, and use
-the product as people do: signing in, the dashboard, a server's page, backups
-and restores, schedules, consoles, files, sharing a server with an operator,
-account changes, and the administrator pages. Add or extend a journey for
+real binary and `cmd/fakedocker`, start one of each on fresh temporary data for
+every worker, and use the product as people do: signing in, the dashboard, a
+server's page, backups and restores, schedules, consoles, files, sharing a
+server with an operator, account changes, and the administrator pages. Add or extend a journey for
 anything a user can reach in the browser. Go unit tests are for what a journey
 can't reach: logic with many edge cases, requests the UI never sends, and
-failures or races between two steps.
+failures or races between two steps. Workers run whole files, so a file must
+pass on a fresh server without the files before it; `--workers=1` runs every
+file on one server.
 
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`
@@ -73,8 +75,9 @@ inside helper containers), and `version`.
 - **CI** runs on every PR and every push to `main` that changes more than
   Markdown or the license: formatting, vet, generated
   templates, race-enabled Go tests, the journeys, the pin check, and the
-  container journeys with an image scan on AMD64 and ARM64. Builds skip the
-  runtime stage's cache so `apk upgrade` picks up security fixes.
+  container journeys with an image scan on AMD64 and ARM64. Runs reuse the Go
+  build cache and image layers from `main`'s latest run, except the runtime
+  stage, so `apk upgrade` picks up security fixes.
 - **Weekly:** `govulncheck`, `npm audit` for the journey dependencies, and a
   scan of the latest published image.
 - **Nightly:** every push to `main` publishes the image to `ghcr.io` as
