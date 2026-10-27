@@ -21,6 +21,8 @@ type ServerRow struct {
 	CanFiles       bool
 	ConsoleLabel   string // "", "Console", or "Logs"
 	BackupSummary  bool
+	ShowPlayers    bool
+	Players        PlayersView
 }
 
 // ServerList is the server list region of the dashboard.
@@ -32,6 +34,8 @@ type ServerList struct {
 	Admin                bool
 	Username             string
 	ShowBackup           bool
+	// ShowPlayers: some server in the list can list its players.
+	ShowPlayers          bool
 	DiscoveryUnavailable bool
 }
 
@@ -193,10 +197,13 @@ templ ServerListFragment(list ServerList) {
 		</div>
 	}
 	if list.Total > 0 {
-		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup) } aria-label="Game servers">
+		<section class={ "server-list", templ.KV("server-list--backups", list.ShowBackup), templ.KV("server-list--players", list.ShowPlayers) } aria-label="Game servers">
 			<div class="server-list__header">
 				<span>Server</span>
 				<span>State</span>
+				if list.ShowPlayers {
+					<span>Players</span>
+				}
 				<span>Connect</span>
 				if list.ShowBackup {
 					<span>Last backup</span>
@@ -268,9 +275,12 @@ templ ServerCard(row ServerRow) {
 				}
 			}
 		</div>
-		// Address and last backup share a line on phones; elsewhere they are
-		// columns of the list.
+		// Players, address, and last backup share a line on phones; elsewhere
+		// they are columns of the list.
 		<div class="server-row__facts">
+			if row.ShowPlayers {
+				@PlayersCell(row.Players)
+			}
 			<div class="server-row__address">
 				<span class="server-row__label">Connect</span>
 				if row.Address != "" {

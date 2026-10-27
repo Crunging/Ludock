@@ -1,6 +1,9 @@
 package games
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseAddress(t *testing.T) {
 	for input, want := range map[string]Address{
@@ -82,5 +85,34 @@ func TestComposeIdentity(t *testing.T) {
 		if !InvalidComposeIdentity(labels) {
 			t.Errorf("accepted %v", labels)
 		}
+	}
+}
+
+// The list command's wording differs across Minecraft versions and plugins;
+// anything else is not a player list.
+func TestParseMinecraftList(t *testing.T) {
+	for response, want := range map[string]Players{
+		"There are 0 of a max of 20 players online: ":           {0, 20, nil},
+		"There are 2 of a max of 20 players online: Mara, Theo": {2, 20, []string{"Mara", "Theo"}},
+		"There are 1/10 players online:Steve":                   {1, 10, []string{"Steve"}},
+		"There are 2/10 players online:\nAlex, Steve\n":         {2, 10, []string{"Alex", "Steve"}},
+		"§6There are §c3§6 out of maximum §c50§6 players online.\n§6Admins§r: §fMara\n§6Default§r: Theo, Juno": {3, 50,
+			[]string{"Mara", "Theo", "Juno"}},
+		// Some servers hide names; the count still stands.
+		"There are 4 of a max of 8 players online:": {4, 8, nil},
+	} {
+		got, ok := ParseMinecraftList(response)
+		if !ok || got.Online != want.Online || got.Max != want.Max || strings.Join(got.Names, "|") != strings.Join(want.Names, "|") {
+			t.Errorf("%q: %+v %v", response, got, ok)
+		}
+	}
+	for _, response := range []string{"", "Unknown command", "Command completed with no response", "There are many players online"} {
+		if got, ok := ParseMinecraftList(response); ok {
+			t.Errorf("%q parsed as %+v", response, got)
+		}
+	}
+	long, _ := ParseMinecraftList("There are 300 of a max of 500 players online: " + strings.Repeat(strings.Repeat("x", 80)+", ", 300))
+	if len(long.Names) != maxPlayerNames || len([]rune(long.Names[0])) != maxNameRunes {
+		t.Fatalf("%d names, first %d runes", len(long.Names), len([]rune(long.Names[0])))
 	}
 }

@@ -10,7 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -106,11 +109,35 @@ func (w writer) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// minecraftRCON serves a Minecraft RCON console and returns its port.
-func minecraftRCON(password string) string {
+// minecraftRCON serves a Minecraft RCON console and returns its port. Besides
+// list, it takes commands only the fake has: "fake-join NAME" and
+// "fake-leave NAME" change who is online, and "fake-outage SECONDS" makes
+// list fail for that long.
+func minecraftRCON(password string, online ...string) string {
+	var mu sync.Mutex
+	var outageUntil time.Time
 	port, err := fakedocker.ServeRCON(password, func(command string) string {
-		if command == "list" {
-			return "There are 0 of a max of 10 players online: "
+		mu.Lock()
+		defer mu.Unlock()
+		verb, argument, _ := strings.Cut(command, " ")
+		switch verb {
+		case "list":
+			if time.Now().Before(outageUntil) {
+				return "An unexpected error occurred trying to execute that command"
+			}
+			return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
+		case "fake-join":
+			if !slices.Contains(online, argument) {
+				online = append(online, argument)
+			}
+			return argument + " joined the game"
+		case "fake-leave":
+			online = slices.DeleteFunc(online, func(name string) bool { return name == argument })
+			return argument + " left the game"
+		case "fake-outage":
+			seconds, _ := strconv.Atoi(argument)
+			outageUntil = time.Now().Add(time.Duration(seconds) * time.Second)
+			return "RCON player lists fail for " + argument + " seconds"
 		}
 		return ""
 	})
@@ -200,7 +227,7 @@ func seedDemo(engine *fakedocker.Engine, dir string) {
 
 	id, minecraft := server("minecraft", "Friends\u2019 survival world", "itzg/minecraft-server:java21", "25565/tcp", true, 3*time.Hour)
 	engine.Update(id, func(c *fakedocker.Container) {
-		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + minecraftRCON("demo-rcon-secret")}
+		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + minecraftRCON("demo-rcon-secret", "Mara", "Theo")}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21.4",
 			"[Server thread/INFO]: Preparing level \"world\"", "[Server thread/INFO]: Done (4.1s)! For help, type \"help\"",
 			"[Server thread/INFO]: Mara joined the game", "[Server thread/INFO]: Theo joined the game"}

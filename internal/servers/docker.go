@@ -45,6 +45,8 @@ type Console struct {
 	CommandPlaceholder string
 	Commands           []games.QuickCommand
 	SupportsBroadcast  bool
+	// ListsPlayers: Ludock can read who is online through this console.
+	ListsPlayers bool
 }
 
 // Container is the live state of a managed container.
@@ -423,7 +425,8 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 	container.ConnectPort = connectPort(bindings, gamePort)
 	if adapter := games.ResolveAdapter(gameType, container.Labels); adapter != nil {
 		container.Console = &Console{ID: adapter.ID, Name: adapter.Name, CommandPlaceholder: adapter.CommandPlaceholder,
-			Commands: adapter.Commands, SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != ""}
+			Commands: adapter.Commands, SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != "",
+			ListsPlayers: adapter.Players != nil}
 	}
 	container.FileRoots = files.Roots(gameType, container.Labels, fileMounts(info.Mounts))
 	return container, nil

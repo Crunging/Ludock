@@ -132,6 +132,23 @@ func TestScopedDelivery(t *testing.T) {
 	}
 }
 
+// A change Ludock read itself, such as who is online, reaches only the
+// server's current viewers.
+func TestChangedReachesOnlyViewers(t *testing.T) {
+	f := setup(t)
+	owner, allowed, denied := f.client(f.admin), f.client(f.friend), f.client(f.stranger)
+	logical, _ := f.hub.Identity.List(ctx, "")
+	for _, server := range logical {
+		f.hub.Changed(ctx, server.ID)
+	}
+	if len(owner.events()) != 2 || len(denied.events()) != 0 {
+		t.Fatal(owner.events(), denied.events())
+	}
+	if events := allowed.events(); len(events) != 1 || events[0].Action != "changed" || !identity.ValidID(events[0].ServerID) {
+		t.Fatal(events)
+	}
+}
+
 func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 	if _, ok := stateChange(dockerEvent{Action: "exec_create: secret-password"}); ok {
 		t.Fatal("exec event accepted")

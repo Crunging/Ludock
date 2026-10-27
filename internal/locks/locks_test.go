@@ -1,8 +1,10 @@
 package locks
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestPathsConflictWithParentsAndChildren(t *testing.T) {
@@ -49,6 +51,27 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	foreground, _ := table.Acquire([]string{"server:a"}, nil)
 	if _, err := table.Acquire([]string{"server:a"}, func() {}); errors.As(err, &background) {
 		t.Fatal("foreground holder reported as background")
+	}
+	foreground()
+}
+
+// Foreground work cancels a background holder and takes the keys once its
+// cleanup releases them; another foreground holder still conflicts at once.
+func TestAcquireForegroundWaitsForBackground(t *testing.T) {
+	table := New()
+	var release func()
+	release, _ = table.Acquire([]string{"server:a"}, func() {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			release()
+		}()
+	})
+	foreground, err := table.AcquireForeground(context.Background(), []string{"server:a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.AcquireForeground(context.Background(), []string{"server:a"}); err != ErrConflict {
+		t.Fatal(err)
 	}
 	foreground()
 }

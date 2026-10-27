@@ -26,6 +26,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/players"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -61,12 +62,14 @@ type App struct {
 	Console   *console.Runtime
 	Sessions  *console.Sessions
 	Updates   *update.Service
+	Players   *players.Service
 
 	tick       sync.Mutex
 	sampling   sync.Mutex
 	background sync.WaitGroup
 	storage    sync.Mutex
 	delivering sync.Mutex
+	polling    sync.Mutex
 	stop       chan struct{}
 }
 
@@ -109,6 +112,9 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		_, err := serverService.RefreshNow(ctx)
 		return err
 	}}
+	a.Players = &players.Service{Servers: serverService, Identity: store, Observer: observer, Runtime: runtime, Locks: table,
+		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) }}
+	a.Sessions.Commanded = func(serverID string) { a.Players.Check(context.Background(), serverID) }
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
 		Refresh: func(ctx context.Context) error {
 			_, err := serverService.Refresh(ctx)
@@ -158,8 +164,8 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // Tick runs discovery, schedules, and monitoring once. Resource samples,
-// backup storage setup, and notification delivery can each wait on Docker
-// or the network, so they run beside it.
+// backup storage setup, notification delivery, and player readings can each
+// wait on Docker, the network, or a game console, so they run beside it.
 func (a *App) Tick(ctx context.Context) {
 	if a.tick.TryLock() {
 		a.background.Add(1)
@@ -193,6 +199,14 @@ func (a *App) Tick(ctx context.Context) {
 			if err := a.Backups.FinishDeletions(ctx); err != nil {
 				log.Warn("Could not remove deleted backup archives; they will be retried")
 			}
+		}()
+	}
+	if a.polling.TryLock() {
+		a.background.Add(1)
+		go func() {
+			defer a.background.Done()
+			defer a.polling.Unlock()
+			a.Players.Poll(ctx)
 		}()
 	}
 	if a.delivering.TryLock() {
@@ -231,6 +245,7 @@ func (a *App) Stop() {
 	a.Runner.Stop()
 	a.background.Wait()
 	a.Schedules.Wait()
+	a.Players.Stop()
 	select {
 	case <-a.Locks.Drained():
 	case <-time.After(5 * time.Minute):

@@ -35,6 +35,7 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	admin := request.User().Role == db.RoleAdmin
 	d := &views.ServerDetail{Row: s.serverRow(r, request, *view, false, snapshot.DiscoveryUnavailable), Stats: snapshot.Stats,
 		DiscoveryUnavailable: snapshot.DiscoveryUnavailable, Admin: admin, Now: db.Now()}
+	d.Row.ShowPlayers = true
 	manageSchedules := can(view, authz.SchedulesManage) || (admin && view.Can(authz.ServerView))
 	d.Tabs = []views.DetailTab{{ID: "overview", Label: "Overview"}, {ID: "activity", Label: "Activity"}}
 	if admin || can(view, authz.BackupsCreate) {
@@ -310,7 +311,7 @@ func (s *Server) reviewBinding(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, err)
 		return
 	}
-	release, err := s.App.Locks.Acquire([]string{"server:" + id}, nil)
+	release, err := s.App.Locks.AcquireForeground(ctx, []string{"server:" + id})
 	if err != nil {
 		s.fail(w, r, request, err)
 		return

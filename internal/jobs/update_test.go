@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
@@ -397,5 +398,32 @@ func TestUpdateKeepsVolumeOfDestinationOnlyBind(t *testing.T) {
 	current := f.containerNamed("state")
 	if current == nil || current.ID == original || len(current.Mounts) != 1 || current.Mounts[0].Name != path.Base(path.Dir(volume.Source)) {
 		t.Fatalf("volume not carried over: %+v", current)
+	}
+}
+
+// A console helper on the server's network, such as a player reading's,
+// holds the server lock until it is removed, so it doesn't block an update;
+// any other container on that network does.
+func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
+	f := setup(t)
+	onNetwork := func(name string, labels map[string]string) {
+		id := f.engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "example/sidecar", Running: true, Labels: labels})
+		f.engine.Update(id, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"NetworkMode": "container:" + f.game} })
+	}
+	check := func() error {
+		server, err := f.jobs.Servers.ResolveAuthorized(ctx, f.admin, f.serverID, authz.ServerUpdate, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.jobs.Updates.Check(ctx, server)
+		return err
+	}
+	onNetwork("ludock-console-reading", map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"})
+	if err := check(); err != nil {
+		t.Fatal(err)
+	}
+	onNetwork("sidecar", nil)
+	if err := check(); err == nil || !strings.Contains(err.Error(), "shares this server's network") {
+		t.Fatal(err)
 	}
 }

@@ -130,7 +130,7 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 	if err != nil {
 		return err
 	}
-	release, err := s.Locks.Acquire([]string{"server:" + serverID, "backups:storage"}, nil)
+	release, err := s.Locks.AcquireForeground(ctx, []string{"server:" + serverID, "backups:storage"})
 	if err != nil {
 		return err
 	}

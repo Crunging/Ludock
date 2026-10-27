@@ -140,6 +140,9 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 
 // assertNoDependents refuses when another container joined one of this
 // container's namespaces: replacing it would cut that container off.
+// Ludock's own console helpers, such as a player reading's, are skipped:
+// each holds the server lock until it is removed, so none is left once the
+// update holds it, and one seen before then is gone within seconds.
 func (s *Service) assertNoDependents(ctx context.Context, spec *docker.ContainerSpec) error {
 	containers, err := s.Docker.ListContainers(ctx, true, nil)
 	if err != nil {
@@ -147,7 +150,7 @@ func (s *Service) assertNoDependents(ctx context.Context, spec *docker.Container
 	}
 	name := strings.TrimPrefix(spec.Name, "/")
 	for _, candidate := range containers {
-		if candidate.ID == spec.ID {
+		if candidate.ID == spec.ID || candidate.Labels["ludock.internal"] == "console-helper" {
 			continue
 		}
 		other, err := s.Docker.InspectSpec(ctx, candidate.ID)

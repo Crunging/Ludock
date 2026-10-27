@@ -295,6 +295,9 @@ templ OverviewLive(d ServerDetail) {
 					}
 				</dd>
 			</div>
+			if d.Row.ShowPlayers {
+				@PlayersFact(d.Row.Players)
+			}
 			<div>
 				<dt>Connect</dt>
 				<dd>

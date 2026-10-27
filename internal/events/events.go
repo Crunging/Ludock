@@ -280,6 +280,33 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	return nil
 }
 
+// Changed tells a server's current viewers that something Ludock reads from
+// it, rather than from Docker, changed, such as who is online.
+func (h *Hub) Changed(ctx context.Context, serverID string) {
+	h.mu.Lock()
+	if h.stopped {
+		h.mu.Unlock()
+		return
+	}
+	h.deliveries.Add(1)
+	defer h.deliveries.Done()
+	subscribers := make([]*Subscriber, 0, len(h.subscribers))
+	for subscriber := range h.subscribers {
+		subscribers = append(subscribers, subscriber)
+	}
+	h.mu.Unlock()
+	for _, subscriber := range subscribers {
+		user := subscriber.Validate(ctx)
+		if user == nil {
+			subscriber.Close("Authentication expired")
+			continue
+		}
+		if visible, err := h.Authz.Has(ctx, user, serverID, authz.ServerView); err == nil && visible {
+			subscriber.Send(Event{Action: "changed", ServerID: serverID, Time: time.Now().Unix()})
+		}
+	}
+}
+
 // byContainer indexes servers by their bound container.
 func byContainer(servers []identity.Server) map[string]*identity.Server {
 	result := make(map[string]*identity.Server, len(servers))

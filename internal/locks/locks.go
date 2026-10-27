@@ -3,10 +3,13 @@
 package locks
 
 import (
+	"context"
+	"errors"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 )
@@ -89,6 +92,35 @@ func (t *Table) Fence() (lift func()) {
 // as cancellable background work.
 func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 	return t.acquire(keys, background, false)
+}
+
+// backgroundYield bounds how long foreground work waits for background
+// holders to finish their cleanup.
+const backgroundYield = 10 * time.Second
+
+// AcquireForeground is Acquire for work a person is waiting on. Background
+// holders, such as a player reading, are cancelled and waited for; they hold
+// their keys until their cleanup finishes. It fails if they don't finish
+// within 10 seconds.
+func (t *Table) AcquireForeground(ctx context.Context, keys []string) (func(), error) {
+	deadline := time.NewTimer(backgroundYield)
+	defer deadline.Stop()
+	for {
+		released := t.NextRelease()
+		release, err := t.Acquire(keys, nil)
+		var background *BackgroundConflict
+		if !errors.As(err, &background) {
+			return release, err
+		}
+		background.Cancel()
+		select {
+		case <-released:
+		case <-deadline.C:
+			return nil, ErrConflict
+		case <-ctx.Done():
+			return nil, ErrConflict
+		}
+	}
 }
 
 // AcquireForRecovery is Acquire for reconciling interrupted operations, which
