@@ -45,12 +45,12 @@ func (s *Server) backupSettingsView(r *http.Request) views.BackupSettingsView {
 }
 
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *Request) {
-	notifications := s.App.Notify.Configuration(r.Context())
 	view := views.SettingsView{
 		Connection: views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
 		Backups:    s.backupSettingsView(r),
-		Notifications: views.NotificationSettingsView{Configured: notifications.Configured,
-			Enabled: notifications.Enabled},
+	}
+	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
+		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration})
 	}
 	render(w, r, http.StatusOK, views.SettingsPage(s.page(r, request, "Settings"), view))
 }
@@ -133,32 +133,60 @@ func (s *Server) backupStorage(w http.ResponseWriter, r *http.Request, request *
 	render(w, r, http.StatusOK, views.BackupStorage(status))
 }
 
-func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, request *Request) {
-	var webhook *string
-	if value := strings.TrimSpace(r.PostFormValue("webhookUrl")); value != "" {
-		webhook = &value
+// destination is the destination named in the path; false means the
+// response is already written.
+func (s *Server) destination(w http.ResponseWriter, r *http.Request, request *Request) (notify.Destination, bool) {
+	d, ok := notify.Parse(r.PathValue("destination"))
+	if !ok {
+		s.fail(w, r, request, apperr.New("NOTIFICATION_DESTINATION_NOT_FOUND", 404, "Notification destination not found"))
 	}
-	enabled := r.PostFormValue("enabled") == "true"
-	err := authz.AdminMutationError(s.App.Notify.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, enabled, webhook))
+	return d, ok
+}
+
+func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, request *Request) {
+	d, ok := s.destination(w, r, request)
+	if !ok {
+		return
+	}
+	value := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
+	input := notify.Config{Enabled: r.PostFormValue("enabled") == "true", URL: value("url"), Token: value("token"),
+		Topic: value("topic"), ChatID: value("chatId"), Host: value("host"), Security: value("security"),
+		Username: value("username"), Password: r.PostFormValue("password"), From: value("sender"), To: value("recipients")}
+	var err error
+	if port := value("port"); port != "" {
+		if input.Port, err = strconv.Atoi(port); err != nil || input.Port < 1 {
+			err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Enter a mail server port from 1 to 65535")
+		}
+	}
+	if err == nil {
+		err = authz.AdminMutationError(s.App.Notify.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, d,
+			input, r.PostFormValue("clearToken") == "true"))
+	}
 	status, ok := s.settingStatus(w, r, request, err)
 	if !ok {
 		return
 	}
-	current := s.App.Notify.Configuration(r.Context())
-	n := views.NotificationSettingsView{Configured: current.Configured, Enabled: current.Enabled}
+	n := views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(r.Context(), d), Open: true}
 	if err != nil {
-		n.Error, n.Enabled = publicMessage(err), enabled
+		// The visible fields keep what was entered; secrets are never echoed.
+		saved := n.Saved
+		n.Configuration = notify.Configuration{Destination: d, Enabled: input.Enabled, Configured: n.Configured, Saved: saved,
+			Config: notify.Config{Enabled: input.Enabled, URL: input.URL, ChatID: input.ChatID, Host: input.Host,
+				Port: input.Port, Security: input.Security, Username: input.Username, From: input.From, To: input.To}}
+		if d == notify.Discord || d == notify.Webhook {
+			n.Config.URL = ""
+		}
+		n.Error = publicMessage(err)
 	} else {
-		s.audit(r, request, "notifications.configured", "", nil)
-		n.Notice = "Notification settings saved."
+		s.audit(r, request, "notifications.configured", "", map[string]any{"destination": string(d)})
+		n.Notice = d.Label() + " settings saved."
 		w.Header().Set("HX-Trigger", "notifications-changed")
 	}
-	render(w, r, status, views.NotificationForm(n))
+	render(w, r, status, views.NotificationDestination(n))
 }
 
 func (s *Server) deliveriesView(r *http.Request) views.DeliveriesView {
-	configuration := s.App.Notify.Configuration(r.Context())
-	d := views.DeliveriesView{Configured: configuration.Configured, Enabled: configuration.Enabled}
+	var d views.DeliveriesView
 	deliveries, err := s.App.Notify.Deliveries(r.Context())
 	if err != nil {
 		d.Error = publicMessage(err)
@@ -171,36 +199,48 @@ func (s *Server) deliveries(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.Deliveries(s.deliveriesView(r)))
 }
 
-// queueNotification sends a test or retries a delivery, then shows the list.
-func (s *Server) queueNotification(retry bool) func(http.ResponseWriter, *http.Request, *Request) {
-	return func(w http.ResponseWriter, r *http.Request, request *Request) {
-		var delivery *notify.Delivery
-		var err error
-		action := "notifications.test_queued"
-		if retry {
-			delivery, err = s.App.Notify.Retry(r.Context(), request.User().ID, request.Principal.TokenHash, r.PathValue("id"))
-			action = "notifications.retry_queued"
-		} else {
-			delivery, err = s.App.Notify.QueueTest(r.Context(), request.User().ID, request.Principal.TokenHash)
-		}
-		err = authz.AdminMutationError(err)
-		if err == nil {
-			s.audit(r, request, action, "", map[string]any{"deliveryId": delivery.ID})
-		}
-		if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
-			s.fail(w, r, request, err)
-			return
-		}
-		d := s.deliveriesView(r)
-		if err != nil {
-			d.Error = publicMessage(err)
-		} else if retry {
-			d.Notice = "Notification queued for retry. Delivery status will update below."
-		} else {
-			d.Notice = "Test notification queued. Delivery status will update below."
-		}
-		render(w, r, http.StatusOK, views.Deliveries(d))
+// testNotification queues a test to one destination.
+func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, request *Request) {
+	d, ok := s.destination(w, r, request)
+	if !ok {
+		return
 	}
+	delivery, err := s.App.Notify.QueueTest(r.Context(), request.User().ID, request.Principal.TokenHash, d)
+	err = authz.AdminMutationError(err)
+	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
+		s.fail(w, r, request, err)
+		return
+	}
+	n := views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(r.Context(), d)}
+	if err != nil {
+		n.TestError = publicMessage(err)
+	} else {
+		s.audit(r, request, "notifications.test_queued", "", map[string]any{"deliveryId": delivery.ID, "destination": string(d)})
+		n.TestNotice = "Test notification queued. Its delivery status appears in Recent deliveries."
+		w.Header().Set("HX-Trigger", "notifications-changed")
+	}
+	render(w, r, http.StatusOK, views.NotificationTest(n))
+}
+
+// retryNotification retries a delivery, then shows the list.
+func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request, request *Request) {
+	delivery, err := s.App.Notify.Retry(r.Context(), request.User().ID, request.Principal.TokenHash, r.PathValue("id"))
+	err = authz.AdminMutationError(err)
+	if public, ok := apperr.As(err); ok && public.Status == http.StatusUnauthorized {
+		s.fail(w, r, request, err)
+		return
+	}
+	if err == nil {
+		s.audit(r, request, "notifications.retry_queued", "", map[string]any{"deliveryId": delivery.ID,
+			"destination": string(delivery.Destination)})
+	}
+	d := s.deliveriesView(r)
+	if err != nil {
+		d.Error = publicMessage(err)
+	} else {
+		d.Notice = "Notification queued for retry. Delivery status will update below."
+	}
+	render(w, r, http.StatusOK, views.Deliveries(d))
 }
 
 func (s *Server) diagnosticsPage(w http.ResponseWriter, r *http.Request, request *Request) {

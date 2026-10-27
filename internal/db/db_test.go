@@ -330,6 +330,40 @@ func TestFutureMigrationKeepsRecords(t *testing.T) {
 	}
 }
 
+// A database with Discord-only notifications keeps its webhook and queue
+// when notifications gain more destinations.
+func TestNotificationDestinationsMigration(t *testing.T) {
+	_, conn := memoryConn(t)
+	if err := ApplyMigrations(bg, conn, Migrations[:3], testKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO settings VALUES ('notifications', '{"enabled":true,"webhookUrl":"https://discord.com/api/webhooks/1/a"}')`,
+		`INSERT INTO notification_deliveries (id,event_key,payload_json,next_attempt_at,created_at,attempts,failure_code)
+		  VALUES ('d1','outage:1','{"content":"Survival is unavailable.","allowed_mentions":{"parse":[]}}',5,4,2,'network')`,
+	} {
+		if _, err := conn.ExecContext(bg, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ApplyMigrations(bg, conn, Migrations[:4], testKey); err != nil {
+		t.Fatal(err)
+	}
+	var settings, row string
+	conn.QueryRowContext(bg, "SELECT value_json FROM settings WHERE key='notifications'").Scan(&settings)
+	conn.QueryRowContext(bg, `SELECT event_key||'|'||destination||'|'||message||'|'||attempts||'|'||failure_code
+	  FROM notification_deliveries WHERE id='d1'`).Scan(&row)
+	if settings != `{"discord":{"enabled":true,"url":"https://discord.com/api/webhooks/1/a"}}` ||
+		row != "outage:1|discord|Survival is unavailable.|2|network" {
+		t.Fatal(settings, row)
+	}
+	// Each destination gets its own delivery of an event.
+	if _, err := conn.ExecContext(bg, `INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at)
+	  VALUES ('d2','outage:1','ntfy','Survival is unavailable.',5,4)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInterruptedMigrationRollsBack(t *testing.T) {
 	_, conn := memoryConn(t)
 	if err := ApplyMigrations(bg, conn, Migrations, testKey); err != nil {

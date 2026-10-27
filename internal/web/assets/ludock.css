@@ -928,6 +928,27 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .backup-storage__issues { color: var(--halt); font-size: 14px; }
 .admin-root-options { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .admin-settings-feedback { display: grid; gap: 4px; }
+.notification-destinations { display: grid; gap: 10px; }
+.notification-destination { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
+.notification-destination > summary {
+  display: grid; grid-template-columns: 14px minmax(96px, max-content) minmax(0, 1fr) auto; align-items: center; gap: 4px 14px;
+  padding: 13px 16px; list-style: none; cursor: pointer; border-radius: var(--radius-lg);
+}
+.notification-destination > summary::-webkit-details-marker { display: none; }
+.notification-destination > summary::before {
+  content: ""; width: 7px; height: 7px; margin-left: 2px; border: solid var(--ink-3); border-width: 0 1.6px 1.6px 0;
+  transform: rotate(-45deg); transition: transform 0.12s;
+}
+.notification-destination[open] > summary::before { transform: rotate(45deg); }
+.notification-destination > summary:hover { background: var(--sunk); }
+.notification-destination[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.notification-destination__name { font-weight: 650; color: var(--ink); }
+.notification-destination__summary { color: var(--ink-2); font-size: 14px; }
+.notification-destination__state { display: inline-flex; align-items: center; font-size: 14px; font-weight: 560; color: var(--ink-2); white-space: nowrap; }
+.notification-destination__body { display: grid; gap: 18px; padding: 18px 18px 20px 44px; max-width: 800px; }
+.notification-destination__body .muted { font-size: 14px; }
+.notification-destination__test { display: grid; gap: 4px; padding-top: 16px; border-top: 1px dashed var(--line); }
+.notification-destination__test .alert { margin-bottom: 0; }
 .notification-deliveries { display: grid; gap: 14px; margin-top: 24px; }
 .notification-deliveries__test { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .notification-deliveries__test p { font-size: 14px; }
@@ -965,6 +986,10 @@ dialog[open] { animation: rise 0.16s ease-out; }
   .server-row__actions { grid-column: 2 / -1; justify-content: flex-start; }
 }
 @media (max-width: 760px) {
+  .notification-destination > summary { grid-template-columns: 14px minmax(0, 1fr) auto; }
+  .notification-destination__summary { grid-column: 2 / -1; }
+  .notification-destination__state { grid-row: 1; grid-column: 3; }
+  .notification-destination__body { padding-left: 18px; }
   body { font-size: 15px; }
   h1 { font-size: 26px; }
   .page { padding: 24px 16px 48px; }

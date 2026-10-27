@@ -2,6 +2,7 @@ package views
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/notify"
@@ -11,7 +12,7 @@ import (
 type SettingsView struct {
 	Connection        ConnectionSettings
 	Backups           BackupSettingsView
-	Notifications     NotificationSettingsView
+	Notifications     []NotificationDestinationView
 }
 
 // ConnectionSettings is the public address form.
@@ -31,10 +32,13 @@ type BackupSettingsView struct {
 	Saved                         bool
 }
 
-// NotificationSettingsView is the Discord form.
-type NotificationSettingsView struct {
-	Configured, Enabled bool
-	Error, Notice       string
+// NotificationDestinationView is one destination's card.
+type NotificationDestinationView struct {
+	notify.Configuration
+	Open bool
+	// Error and Notice report a save; the Test ones report a test send.
+	Error, Notice         string
+	TestError, TestNotice string
 }
 
 templ SettingsPage(page Page, s SettingsView) {
@@ -47,7 +51,7 @@ templ SettingsPage(page Page, s SettingsView) {
 			<nav class="settings-jump-links" aria-label="Settings sections">
 				<a class="text-link" href="#connection-settings-title">Server address</a>
 				<a class="text-link" href="#backup-settings-title">Backup storage</a>
-				<a class="text-link" href="#notification-settings-title">Discord notifications</a>
+				<a class="text-link" href="#notification-settings-title">Notifications</a>
 			</nav>
 			<section class="settings-section settings-section--divided" aria-labelledby="connection-settings-title">
 				<h2 id="connection-settings-title" tabindex="-1">Server address</h2>
@@ -58,8 +62,13 @@ templ SettingsPage(page Page, s SettingsView) {
 				@BackupSettingsForm(s.Backups)
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
-				<h2 id="notification-settings-title" tabindex="-1">Discord notifications</h2>
-				@NotificationForm(s.Notifications)
+				<h2 id="notification-settings-title" tabindex="-1">Notifications</h2>
+				<p class="section-lede">Receive outage and recovery alerts, backup or schedule failures, and restore and update results. Turn on as many destinations as you like; each gets every alert. Enable availability monitoring separately on each server’s Overview for outage alerts.</p>
+				<div class="notification-destinations">
+					for _, n := range s.Notifications {
+						@NotificationDestination(n)
+					}
+				</div>
 				<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:body" hx-swap="innerHTML">
 					<p class="muted" role="status">Loading notification deliveries…</p>
 				</div>
@@ -216,72 +225,238 @@ templ BackupStorage(status backups.StorageStatus) {
 	</section>
 }
 
-templ NotificationForm(n NotificationSettingsView) {
-	<form class="stack-form" id="notification-form" hx-post="/settings/notifications" hx-target="this" hx-swap="outerHTML" hx-disinherit="*">
-		<p>Receive outage and recovery alerts, backup or schedule failures, and restore and update results. Enable availability monitoring separately on each server’s Overview for outage alerts.</p>
-		if !n.Configured {
-			<p class="muted" id="discord-webhook-setup">
-				In Discord, open your server’s Settings → Integrations, create a webhook, choose the channel, and copy its URL here. Enable delivery and save, then send a test notification below.
-				<a class="text-link" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord webhook guide</a>
+func destinationID(d notify.Destination, part string) string {
+	return "notification-" + string(d) + "-" + part
+}
+
+func destinationSummary(d notify.Destination) string {
+	return map[notify.Destination]string{
+		notify.Discord:  "A channel in your Discord server, through a webhook.",
+		notify.Ntfy:     "Push notifications to phones and desktops from ntfy.sh or your own ntfy server.",
+		notify.Gotify:   "Push notifications from your self-hosted Gotify server.",
+		notify.Telegram: "Messages from a Telegram bot to you, a group, or a channel.",
+		notify.Email:    "Email through any SMTP mail server or provider.",
+		notify.Webhook:  "A JSON POST to any URL, for Home Assistant, n8n, or your own scripts.",
+	}[d]
+}
+
+func destinationState(n NotificationDestinationView) (string, string) {
+	switch {
+	case n.Ready():
+		return "On", "ok"
+	case n.Configured:
+		return "Off", "idle"
+	}
+	return "Not set up", "idle"
+}
+
+func enableLabel(d notify.Destination) string {
+	switch d {
+	case notify.Email:
+		return "Send alerts by email"
+	case notify.Webhook:
+		return "Send alerts to the webhook"
+	}
+	return "Send alerts to " + d.Label()
+}
+
+func portText(port int) string {
+	if port == 0 {
+		return ""
+	}
+	return strconv.Itoa(port)
+}
+
+// NotificationDestination is one destination's settings and test button.
+templ NotificationDestination(n NotificationDestinationView) {
+	<details class="notification-destination" id={ destinationID(n.Destination, "card") } open?={ n.Open }>
+		<summary>
+			<span class="notification-destination__name">{ n.Destination.Label() }</span>
+			<span class="notification-destination__summary">{ destinationSummary(n.Destination) }</span>
+			{{ state, tone := destinationState(n) }}
+			<span class="notification-destination__state">
+				@Pip(tone)
+				{ state }
+			</span>
+		</summary>
+		<div class="notification-destination__body">
+			<form class="stack-form" hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML" hx-disinherit="*">
+				@destinationFields(n)
+				<label class="check-label">
+					<input type="checkbox" name="enabled" value="true" checked?={ n.Enabled }/>
+					{ enableLabel(n.Destination) }
+				</label>
+				<p class="muted">Ludock keeps tokens, topics, passwords, and webhook URLs private: they are never shown again. Leave a saved field blank to keep it. Turning a destination off pauses its alerts without deleting its settings.</p>
+				if n.Error != "" {
+					@Alert("error", n.Error)
+				}
+				if n.Notice != "" {
+					@Alert("success", n.Notice)
+				}
+				<button class="primary-btn" type="submit" data-busy-label="Saving…">{ "Save " + n.Destination.Label() }</button>
+			</form>
+			@NotificationTest(n)
+		</div>
+	</details>
+}
+
+// NotificationTest is a destination's test button and its result.
+templ NotificationTest(n NotificationDestinationView) {
+	<div class="notification-destination__test" id={ destinationID(n.Destination, "test") } hx-disinherit="*">
+		<div class="inline-actions">
+			<button type="button" class="secondary-btn" disabled?={ !n.Ready() } aria-describedby={ destinationID(n.Destination, "test-help") } hx-post={ "/settings/notifications/" + string(n.Destination) + "/test" } hx-target={ "#" + destinationID(n.Destination, "test") } hx-swap="outerHTML" data-busy-label="Queuing test…">Send test notification</button>
+			<p class="muted" id={ destinationID(n.Destination, "test-help") }>
+				if n.Ready() {
+					Sends a test with the saved settings. Its result appears in Recent deliveries.
+				} else {
+					Save the settings with this destination turned on to send a test.
+				}
 			</p>
+		</div>
+		if n.TestError != "" {
+			@Alert("error", n.TestError)
 		}
-		<label class="check-label">
-			<input type="checkbox" name="enabled" value="true" checked?={ n.Enabled }/>
-			Enable Discord delivery
-		</label>
-		<label>
-			if n.Configured {
-				Replace webhook URL
-			} else {
-				Webhook URL
+		if n.TestNotice != "" {
+			@Alert("success", n.TestNotice)
+		}
+	</div>
+}
+
+// secretField is a write-only input: a saved value is never sent back.
+templ secretField(n NotificationDestinationView, name, label, placeholder, help string, maxlength int) {
+	<label>
+		if n.Saved[name] {
+			{ "Replace " + strings.ToLower(label[:1]) + label[1:] }
+		} else {
+			{ label }
+		}
+		<input
+			type="password"
+			name={ name }
+			autocomplete="new-password"
+			autocapitalize="none"
+			spellcheck="false"
+			maxlength={ strconv.Itoa(maxlength) }
+			if help != "" {
+				aria-describedby={ destinationID(n.Destination, name+"-help") }
 			}
-			<input
-				type="password"
-				name="webhookUrl"
-				autocomplete="new-password"
-				autocapitalize="none"
-				spellcheck="false"
-				maxlength="1024"
-				aria-describedby="discord-webhook-help"
-				placeholder={ map[bool]string{true: "Saved — leave blank to keep existing URL", false: "https://discord.com/api/webhooks/…"}[n.Configured] }
-			/>
+			placeholder={ map[bool]string{true: "Saved — leave blank to keep it", false: placeholder}[n.Saved[name]] }
+		/>
+	</label>
+	if help != "" {
+		<p class="muted" id={ destinationID(n.Destination, name+"-help") }>{ help }</p>
+	}
+}
+
+templ clearTokenField(n NotificationDestinationView, label string) {
+	if n.Saved["token"] {
+		<label class="check-label">
+			<input type="checkbox" name="clearToken" value="true"/>
+			{ label }
 		</label>
-		<p class="muted" id="discord-webhook-help">Ludock keeps the saved URL private. Leave the replacement field blank to keep it. Turning delivery off pauses notifications without deleting the URL.</p>
-		if n.Error != "" {
-			@Alert("error", n.Error)
-		}
-		if n.Notice != "" {
-			@Alert("success", n.Notice)
-		}
-		<button class="primary-btn" type="submit" data-busy-label="Saving…">Save notifications</button>
-	</form>
+	}
+}
+
+templ destinationFields(n NotificationDestinationView) {
+	switch n.Destination {
+		case notify.Discord:
+			if !n.Configured {
+				<p class="muted">
+					In Discord, open your server’s Settings → Integrations, create a webhook, choose the channel, and copy its URL here.
+					<a class="text-link" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord webhook guide</a>
+				</p>
+			}
+			@secretField(n, "url", "Webhook URL", "https://discord.com/api/webhooks/…", "", 1024)
+		case notify.Ntfy:
+			<label>
+				Server URL
+				<input name="url" type="url" value={ n.Config.URL } placeholder={ notify.DefaultNtfyServer } maxlength="1024" autocapitalize="none" spellcheck="false" aria-describedby={ destinationID(n.Destination, "url-help") }/>
+			</label>
+			<p class="muted" id={ destinationID(n.Destination, "url-help") }>Leave empty for ntfy.sh, or enter your own server’s address. Subscribe to the topic in the ntfy app.</p>
+			@secretField(n, "topic", "Topic", "ludock-alerts-7f3k", "Anyone who knows a topic on a public server can read it, so choose one that is hard to guess.", 64)
+			@secretField(n, "token", "Access token (optional)", "tk_…", "Needed only when the topic is protected.", 256)
+			@clearTokenField(n, "Remove the saved access token")
+		case notify.Gotify:
+			<label>
+				Server URL
+				<input name="url" type="url" value={ n.Config.URL } placeholder="https://gotify.example.com" maxlength="1024" autocapitalize="none" spellcheck="false"/>
+			</label>
+			@secretField(n, "token", "Application token", "A…", "In Gotify, open Apps, create an application for Ludock, and copy its token.", 256)
+		case notify.Telegram:
+			@secretField(n, "token", "Bot token", "123456789:AA…", "Create a bot with @BotFather and copy the token it gives you.", 100)
+			<label>
+				Chat ID
+				<input name="chatId" value={ n.Config.ChatID } placeholder="123456789" maxlength="33" autocapitalize="none" spellcheck="false" aria-describedby={ destinationID(n.Destination, "chat-help") }/>
+			</label>
+			<p class="muted" id={ destinationID(n.Destination, "chat-help") }>Your user, group, or channel ID, or a public channel’s { "@name" }. Send the bot a message, or add it to the group or channel, before testing.</p>
+		case notify.Email:
+			<div class="form-columns">
+				<label>
+					Mail server
+					<input name="host" value={ n.Config.Host } placeholder="smtp.example.com" maxlength="255" autocapitalize="none" spellcheck="false"/>
+				</label>
+				<label>
+					Security
+					<select name="security">
+						<option value="starttls" selected?={ n.Config.Security == "" || n.Config.Security == "starttls" }>STARTTLS (port 587)</option>
+						<option value="tls" selected?={ n.Config.Security == "tls" }>TLS (port 465)</option>
+						<option value="none" selected?={ n.Config.Security == "none" }>None (local relay)</option>
+					</select>
+				</label>
+				<label>
+					Port
+					<input name="port" type="number" min="1" max="65535" inputmode="numeric" value={ portText(n.Config.Port) } placeholder="Default"/>
+				</label>
+			</div>
+			<div class="form-columns">
+				<label>
+					Username (optional)
+					<input name="username" value={ n.Config.Username } maxlength="256" autocomplete="off" autocapitalize="none" spellcheck="false"/>
+				</label>
+				<div>
+					@secretField(n, "password", "Password", "", "", 256)
+				</div>
+			</div>
+			<div class="form-columns">
+				<label>
+					From
+					<input name="sender" value={ n.Config.From } placeholder="ludock@example.com" maxlength="320" autocapitalize="none" spellcheck="false"/>
+				</label>
+				<label>
+					To
+					<input name="recipients" value={ n.Config.To } placeholder="you@example.com" maxlength="2000" autocapitalize="none" spellcheck="false" aria-describedby={ destinationID(n.Destination, "to-help") }/>
+				</label>
+			</div>
+			<p class="muted" id={ destinationID(n.Destination, "to-help") }>Separate up to 10 recipients with commas. Leave the username empty when the server needs no sign-in. Many providers need an app password.</p>
+		case notify.Webhook:
+			@secretField(n, "url", "Webhook URL", "https://example.com/hooks/ludock", "Ludock sends a POST with a JSON body: source (\"ludock\"), id, kind (\"event\" or \"test\"), message, and createdAt. The id stays the same when a delivery is retried.", 1024)
+			@secretField(n, "token", "Authorization header (optional)", "Bearer …", "Sent as the request’s Authorization header.", 1024)
+			@clearTokenField(n, "Remove the saved Authorization header")
+	}
 }
 
 // DeliveriesView is the recent notification list.
 type DeliveriesView struct {
-	Deliveries          []notify.Delivery
-	Configured, Enabled bool
-	Error, Notice       string
+	Deliveries    []notify.Delivery
+	Error, Notice string
 }
-
-func (d DeliveriesView) canSend() bool { return d.Configured && d.Enabled }
 
 func (d DeliveriesView) pending() bool {
 	for _, delivery := range d.Deliveries {
-		if delivery.State == "queued" {
+		if delivery.State == "queued" && !delivery.Paused {
 			return true
 		}
 	}
 	return false
 }
 
-func deliveryStatus(delivery notify.Delivery, enabled bool) string {
+func deliveryStatus(delivery notify.Delivery) string {
 	switch {
 	case delivery.State == "delivered":
 		return "Delivered"
 	case delivery.State == "failed":
 		return "Failed"
-	case !enabled:
+	case delivery.Paused:
 		return "Paused"
 	case delivery.Attempts > 0:
 		return "Pending retry"
@@ -289,13 +464,13 @@ func deliveryStatus(delivery notify.Delivery, enabled bool) string {
 	return "Queued"
 }
 
-func deliveryTone(delivery notify.Delivery, enabled bool) string {
+func deliveryTone(delivery notify.Delivery) string {
 	switch {
 	case delivery.State == "delivered":
 		return "ok"
 	case delivery.State == "failed":
 		return "failed"
-	case enabled:
+	case !delivery.Paused:
 		return "active"
 	}
 	return "idle"
@@ -305,22 +480,12 @@ templ Deliveries(d DeliveriesView) {
 	<div
 		class="notification-deliveries"
 		hx-disinherit="*"
-		if d.pending() && d.canSend() {
+		if d.pending() {
 			hx-get="/fragments/settings/deliveries"
 			hx-trigger="every 5s"
 			hx-target="#notification-deliveries"
 		}
 	>
-		<div class="notification-deliveries__test">
-			<button type="button" class="secondary-btn" disabled?={ !d.canSend() } aria-describedby="notification-test-help" hx-post="/settings/notifications/test" hx-target="#notification-deliveries" data-busy-label="Queuing test…">Send test notification</button>
-			<p class="muted" id="notification-test-help">
-				if !d.canSend() {
-					Save a webhook URL and enable Discord delivery before sending a test or retrying a delivery.
-				} else {
-					Send a test to the saved Discord webhook. Delivery may take a few seconds.
-				}
-			</p>
-		</div>
 		if d.Error != "" {
 			@Alert("error", d.Error)
 		}
@@ -331,21 +496,15 @@ templ Deliveries(d DeliveriesView) {
 			<h3>Recent deliveries</h3>
 			<button type="button" class="secondary-btn" hx-get="/fragments/settings/deliveries" hx-target="#notification-deliveries" data-busy-label="Refreshing…">Refresh deliveries</button>
 		</div>
-		<p class="muted notification-deliveries__help">
-			The latest 50 notifications.
-			if d.Enabled {
-				Pending deliveries refresh every five seconds.
-			} else {
-				Discord delivery is disabled. Queued notifications resume when delivery is enabled.
-			}
-			Failed deliveries can be retried after fixing and saving the configuration.
+		<p class="muted notification-deliveries__help" id="notification-deliveries-help">
+			The latest 50 notifications, one row for each destination. Pending deliveries refresh every five seconds; a destination that is turned off holds its deliveries until it is turned on again. Failed deliveries can be retried after fixing and saving the destination.
 		</p>
 		<div class="table-scroll">
 			<table class="data-table notification-deliveries-table" aria-label="Recent notification deliveries" role="table">
-				<thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Notification</th><th scope="col" role="columnheader">Delivery</th><th scope="col" role="columnheader">Action</th></tr></thead>
+				<thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Notification</th><th scope="col" role="columnheader">Destination</th><th scope="col" role="columnheader">Delivery</th><th scope="col" role="columnheader">Action</th></tr></thead>
 				<tbody role="rowgroup">
 					if len(d.Deliveries) == 0 {
-						<tr role="row"><td role="cell" colspan="3" class="muted">No notifications have been queued yet. Send a test to check delivery.</td></tr>
+						<tr role="row"><td role="cell" colspan="4" class="muted">No notifications have been queued yet. Send a test to check delivery.</td></tr>
 					}
 					for _, delivery := range d.Deliveries {
 						<tr role="row">
@@ -357,10 +516,11 @@ templ Deliveries(d DeliveriesView) {
 								}
 								<span class="table-detail">Queued @Time(delivery.CreatedAt, "", "")</span>
 							</td>
+							<td role="cell">{ delivery.Destination.Label() }</td>
 							<td role="cell">
 								<strong class={ "notification-delivery-status", "notification-delivery-status--" + delivery.State }>
-									@Pip(deliveryTone(delivery, d.Enabled))
-									{ deliveryStatus(delivery, d.Enabled) }
+									@Pip(deliveryTone(delivery))
+									{ deliveryStatus(delivery) }
 								</strong>
 								<span class="table-detail">{ strconv.Itoa(delivery.Attempts) } { map[bool]string{true: "attempt", false: "attempts"}[delivery.Attempts == 1] }</span>
 								if delivery.DeliveredAt != 0 {
@@ -368,7 +528,7 @@ templ Deliveries(d DeliveriesView) {
 								} else if delivery.LastAttemptAt != 0 {
 									<span class="table-detail">Last attempt @Time(delivery.LastAttemptAt, "", "")</span>
 								}
-								if delivery.NextAttemptAt != 0 && d.Enabled {
+								if delivery.NextAttemptAt != 0 && !delivery.Paused {
 									<span class="table-detail">
 										if delivery.Attempts > 0 {
 											Next retry
@@ -384,7 +544,7 @@ templ Deliveries(d DeliveriesView) {
 							</td>
 							<td role="cell">
 								if delivery.Retryable {
-									<button type="button" class="secondary-btn" disabled?={ !d.canSend() } aria-label="Retry notification" aria-describedby="notification-test-help" hx-post={ "/settings/notifications/deliveries/" + delivery.ID + "/retry" } hx-target="#notification-deliveries" data-busy-label="Queuing…">Retry</button>
+									<button type="button" class="secondary-btn" aria-label={ "Retry " + delivery.Destination.Label() + " notification" } aria-describedby="notification-deliveries-help" hx-post={ "/settings/notifications/deliveries/" + delivery.ID + "/retry" } hx-target="#notification-deliveries" data-busy-label="Queuing…">Retry</button>
 								}
 							</td>
 						</tr>

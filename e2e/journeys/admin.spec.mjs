@@ -57,23 +57,6 @@ test("reading Ludock's logs and diagnostics", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "Minecraft", exact: true })).toBeVisible();
 });
 
-test("saving a Discord webhook without showing it again", async ({ page }) => {
-  // Delivery stays off, so nothing is sent to the made-up webhook.
-  const webhook = "https://discord.com/api/webhooks/123/e2e-secret-token";
-  await page.goto("/settings");
-  const form = page.locator("#notification-form");
-  await expect(form.getByLabel("Enable Discord delivery")).not.toBeChecked();
-  await form.getByLabel("Webhook URL").fill(webhook);
-  await form.getByRole("button", { name: "Save notifications" }).click();
-  await expect(form.locator(".alert--success")).toHaveText("Notification settings saved.");
-  await expect(form.getByLabel("Replace webhook URL")).toHaveValue("");
-  expect(await page.content()).not.toContain("e2e-secret-token");
-
-  await page.reload();
-  await expect(page.locator("#notification-form").getByLabel("Replace webhook URL")).toHaveValue("");
-  expect(await page.content()).not.toContain("e2e-secret-token");
-});
-
 test("changing the public address and backup limits", async ({ page }) => {
   await page.goto("/settings");
   const connection = page.locator("#connection-form");

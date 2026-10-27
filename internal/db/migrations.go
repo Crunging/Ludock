@@ -197,6 +197,37 @@ var Migrations = []Migration{
       ) STRICT, WITHOUT ROWID;
     `,
 	},
+	{
+		// Notifications go to several destinations: each event is delivered to
+		// each one separately, and the message is formatted when it is sent.
+		// Discord, the only earlier destination, keeps its settings and queue.
+		Version: 4,
+		SQL: `
+      CREATE TABLE notification_deliveries_v4 (
+        id TEXT PRIMARY KEY, event_key TEXT NOT NULL, destination TEXT NOT NULL, message TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
+        state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','test')),
+        retry_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempts >= 0),
+        last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+        delivered_at INTEGER CHECK (delivered_at >= 0),
+        failure_code TEXT,
+        UNIQUE (event_key, destination)
+      ) STRICT;
+      INSERT INTO notification_deliveries_v4 (id, event_key, destination, message, attempts, next_attempt_at, state, created_at,
+        kind, retry_attempts, last_attempt_at, delivered_at, failure_code)
+        SELECT id, event_key, 'discord', COALESCE(json_extract(payload_json, '$.content'), ''), attempts, next_attempt_at, state,
+          created_at, kind, retry_attempts, last_attempt_at, delivered_at, failure_code FROM notification_deliveries;
+      DROP TABLE notification_deliveries;
+      ALTER TABLE notification_deliveries_v4 RENAME TO notification_deliveries;
+      CREATE INDEX notification_deliveries_recent_idx ON notification_deliveries(created_at DESC, id DESC);
+      CREATE INDEX notification_deliveries_due_idx ON notification_deliveries(state, next_attempt_at);
+      UPDATE settings SET value_json = json_object('discord', json_object(
+          'enabled', json(CASE WHEN json_extract(value_json, '$.enabled') THEN 'true' ELSE 'false' END),
+          'url', COALESCE(json_extract(value_json, '$.webhookUrl'), '')))
+        WHERE key = 'notifications';
+    `,
+	},
 }
 
 // LatestVersion is the newest schema version Ludock writes.
