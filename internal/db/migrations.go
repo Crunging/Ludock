@@ -184,6 +184,19 @@ var Migrations = []Migration{
       CREATE INDEX backups_deleting_idx ON backups(created_at, id) WHERE state = 'deleting';
     `,
 	},
+	{
+		// Resource history: one sample per running server a minute, kept for a
+		// day. CPU is in hundredths of a percent and memory in KiB, so a row
+		// stays a few dozen bytes.
+		Version: 3,
+		SQL: `
+      CREATE TABLE resource_samples (
+        server_id TEXT NOT NULL REFERENCES logical_servers(id) ON DELETE CASCADE,
+        at INTEGER NOT NULL, cpu INTEGER NOT NULL CHECK (cpu >= 0), memory INTEGER NOT NULL CHECK (memory >= 0),
+        PRIMARY KEY (server_id, at)
+      ) STRICT, WITHOUT ROWID;
+    `,
+	},
 }
 
 // LatestVersion is the newest schema version Ludock writes.

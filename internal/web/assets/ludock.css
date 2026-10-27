@@ -597,6 +597,54 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .overview-ports { list-style: none; padding: 0; display: grid; gap: 2px; }
 .overview-ports li { display: flex; gap: 8px; align-items: baseline; }
 #overview-live > section { margin-top: 32px; }
+
+/* Resource history continues the manifest: one ruled panel, a cell per
+   measure. The line is the only colored ink; a crosshair reads out the same
+   minute in both cells. */
+.range-switch { display: flex; gap: 16px; }
+.range-switch a {
+  display: inline-flex; align-items: center; min-height: 36px; white-space: nowrap;
+  color: var(--ink-3); text-decoration: none; font-weight: 600; font-size: 14px;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.range-switch a:hover { color: var(--ink); }
+.range-switch a[aria-current=true] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
+.resource-history__empty { max-width: var(--measure); }
+.resource-charts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden;
+  transition: opacity 0.15s;
+}
+.resource-history.htmx-request .resource-charts { opacity: 0.6; }
+.resource-chart { margin: 0; padding: 16px 18px 12px; min-width: 0; box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
+.resource-chart__head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.resource-chart__summary { display: flex; gap: 14px; color: var(--ink-3); font-size: 13px; }
+.resource-chart__summary strong { color: var(--ink); font-size: 15px; font-weight: 650; margin-left: 2px; }
+/* The value axis sits in a gutter so labels never cross the line. */
+.resource-chart__plot { position: relative; height: 132px; margin: 22px 0 0 52px; touch-action: pan-y; }
+.resource-chart__plot:focus-visible { outline-offset: 6px; border-radius: 2px; }
+.resource-chart__plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.resource-chart__tick { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--line); }
+.resource-chart__tick > span {
+  position: absolute; right: calc(100% + 8px); top: 0; transform: translateY(-50%);
+  color: var(--ink-3); font-size: 12px; line-height: 1; white-space: nowrap;
+}
+.resource-chart__area { fill: var(--tide); fill-opacity: 0.1; stroke: none; }
+.resource-chart__line, .resource-chart__dots {
+  fill: none; stroke: var(--tide); stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke;
+}
+.resource-chart__line { stroke-width: 2px; }
+.resource-chart__dots { stroke-width: 7px; }
+.resource-chart__cursor { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--ink-2); pointer-events: none; }
+.resource-chart__readout {
+  position: absolute; top: 0; transform: translateX(10px); z-index: 1; pointer-events: none;
+  display: grid; padding: 6px 10px; border-radius: var(--radius); white-space: nowrap;
+  background: var(--harbor); border: 1px solid var(--line-strong); color: var(--ink-3); font-size: 12.5px; line-height: 1.35;
+}
+.resource-chart__readout--flip { transform: translateX(calc(-100% - 10px)); }
+.resource-chart__readout strong { color: var(--ink); font-size: 15px; font-weight: 650; }
+.resource-chart__axis { display: flex; justify-content: space-between; margin: 8px 0 0 52px; color: var(--ink-3); font-size: 12px; }
+.resource-history > .section-note { margin-top: 10px; }
 .server-detail #overview-live + form { margin-top: 14px; max-width: 640px; }
 #availability-title + p { font-weight: 620; }
 

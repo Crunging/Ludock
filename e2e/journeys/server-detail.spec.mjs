@@ -30,6 +30,46 @@ test("reviewing a server, setting up monitoring, and following a restart", async
   await expect(page).toHaveURL(/status=failed/);
 });
 
+test("reading a server's resource history over an hour and a day", async ({ page }) => {
+  await openServer(page, "Survival");
+  // Ludock sampled the running server as it started.
+  const history = page.locator("#resource-history");
+  await expect(history.getByRole("heading", { name: "Resource history" })).toBeVisible();
+  const cpu = history.getByRole("img", { name: "CPU over the last hour: average 25.0%, peak 25.0%." });
+  const memory = history.getByRole("img", { name: "Memory over the last hour: average 1.5 GiB, peak 1.5 GiB." });
+  await expect(cpu).toBeVisible();
+  await expect(memory).toBeVisible();
+  await expect(history.getByRole("link", { name: "Hour", exact: true })).toHaveAttribute("aria-current", "true");
+
+  // Focusing a chart reads out the latest minute in both charts, and the
+  // pointer does the same where it rests.
+  await cpu.focus();
+  await expect(history.locator(".resource-chart__readout").first()).toContainText("25.0%");
+  await expect(history.locator(".resource-chart__readout").last()).toContainText("1.5 GiB");
+  await cpu.blur();
+  await expect(history.locator(".resource-chart__readout").first()).toBeHidden();
+  const box = await memory.boundingBox();
+  await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2);
+  await expect(history.locator(".resource-chart__readout").first()).toContainText("25.0%");
+
+  // The range changes in place and stays in the address.
+  await page.evaluate(() => { window.stayedOnPage = true; });
+  await history.getByRole("link", { name: "Day", exact: true }).click();
+  await expect(history.getByRole("img", { name: /^CPU over the last day: / })).toBeVisible();
+  await expect(history.getByRole("link", { name: "Day", exact: true })).toHaveAttribute("aria-current", "true");
+  await expect(page).toHaveURL(/\?range=day$/);
+  expect(await page.evaluate(() => window.stayedOnPage)).toBe(true);
+
+  // The overview's own refresh keeps the chosen range.
+  const refreshed = page.waitForResponse(/\/fragments\/servers\/[^/]+\/overview$/);
+  await page.evaluate(() => document.body.dispatchEvent(new Event("availability-changed")));
+  await refreshed;
+  await expect(history.getByRole("img", { name: /^CPU over the last day: / })).toBeVisible();
+
+  await page.reload();
+  await expect(history.getByRole("link", { name: "Day", exact: true })).toHaveAttribute("aria-current", "true");
+});
+
 test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await openServer(page, "Survival");
   // A full page load would drop this marker.

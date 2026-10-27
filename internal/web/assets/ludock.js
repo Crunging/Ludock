@@ -566,6 +566,85 @@
   // the browser paints; htmx:load comes only after settling, a frame later.
   document.addEventListener("htmx:afterSwap", function () { formatTimes(); });
 
+  // Resource charts: a crosshair follows the pointer, or the arrow keys on a
+  // focused chart, and reads out the nearest sample in every chart of the
+  // section, so CPU and memory show the same minute.
+  var clock = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+  function chartPoints(chart) {
+    if (!chart.resourcePoints) chart.resourcePoints = JSON.parse(chart.getAttribute("data-points") || "[]");
+    return chart.resourcePoints;
+  }
+  function nearestIndex(points, at) {
+    var best = -1;
+    points.forEach(function (point, index) {
+      if (best < 0 || Math.abs(point[0] - at) < Math.abs(points[best][0] - at)) best = index;
+    });
+    return best;
+  }
+  function readOut(section, at) {
+    section.querySelectorAll(".resource-chart").forEach(function (chart) {
+      var points = chartPoints(chart), step = Number(chart.dataset.step);
+      var start = Number(chart.dataset.start), span = Number(chart.dataset.span);
+      var cursor = chart.querySelector(".resource-chart__cursor"), readout = chart.querySelector(".resource-chart__readout");
+      var index = at === null ? -1 : nearestIndex(points, at);
+      // The pointer is in a gap: show nothing rather than a distant sample.
+      if (index < 0 || Math.abs(points[index][0] - at) > 1.5 * step) {
+        cursor.hidden = readout.hidden = true;
+        return;
+      }
+      var point = points[index], left = (point[0] - start) / span * 100;
+      var value = document.createElement("strong");
+      value.textContent = point[1];
+      var time = document.createElement("span");
+      time.textContent = step > 60000 && clock.formatRange ? clock.formatRange(point[0], point[0] + step) : clock.format(point[0]);
+      readout.replaceChildren(value, time);
+      if (point[2]) {
+        var peak = document.createElement("span");
+        peak.textContent = point[2];
+        readout.append(peak);
+      }
+      cursor.style.left = readout.style.left = left + "%";
+      readout.classList.toggle("resource-chart__readout--flip", left > 55);
+      cursor.hidden = readout.hidden = false;
+    });
+  }
+  function pointerAt(plot, event) {
+    var chart = plot.closest(".resource-chart"), box = plot.getBoundingClientRect();
+    var share = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    return Number(chart.dataset.start) + share * Number(chart.dataset.span);
+  }
+  var readingSection = null;
+  function followPointer(event) {
+    var plot = event.target.closest && event.target.closest(".resource-chart__plot");
+    var section = plot && plot.closest(".resource-history");
+    if (readingSection && readingSection !== section) readOut(readingSection, null);
+    readingSection = section;
+    if (section) readOut(section, pointerAt(plot, event));
+  }
+  document.addEventListener("pointermove", followPointer);
+  document.addEventListener("pointerdown", followPointer);
+  document.addEventListener("focusin", function (event) {
+    var plot = event.target.closest && event.target.closest(".resource-chart__plot");
+    if (!plot) return;
+    var points = chartPoints(plot.closest(".resource-chart"));
+    plot.readingAt = points.length ? points[points.length - 1][0] : null;
+    readOut(plot.closest(".resource-history"), plot.readingAt);
+  });
+  document.addEventListener("focusout", function (event) {
+    var plot = event.target.closest && event.target.closest(".resource-chart__plot");
+    if (plot) readOut(plot.closest(".resource-history"), null);
+  });
+  document.addEventListener("keydown", function (event) {
+    var plot = event.target.closest && event.target.closest(".resource-chart__plot");
+    var moves = { ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity };
+    if (!plot || !(event.key in moves) || plot.readingAt === null) return;
+    event.preventDefault();
+    var points = chartPoints(plot.closest(".resource-chart"));
+    var index = Math.min(points.length - 1, Math.max(0, nearestIndex(points, plot.readingAt) + moves[event.key]));
+    plot.readingAt = points[index][0];
+    readOut(plot.closest(".resource-history"), plot.readingAt);
+  });
+
   // data-clear-filters="form-id" empties a filter form and applies it.
   document.addEventListener("click", function (event) {
     var clear = event.target.closest && event.target.closest("[data-clear-filters]");

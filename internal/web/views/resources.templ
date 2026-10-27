@@ -1,0 +1,214 @@
+package views
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/resources"
+)
+
+// chart is one measure of the resource history, drawn in a 1000×100 box
+// that stretches to the plot.
+type chart struct {
+	Title, Average, Peak string
+	Line, Area, Dots     string
+	Ticks                []chartTick
+	// Points are [time, value, peak] for the readout; peak is empty when a
+	// bucket holds one sample.
+	Points string
+	Label  string
+}
+
+type chartTick struct{ Label, Bottom string }
+
+// axisLabels mark the start, middle, and end of each range.
+var axisLabels = map[string][3]string{
+	"hour": {"1 hour ago", "30 minutes ago", "Now"},
+	"6h":   {"6 hours ago", "3 hours ago", "Now"},
+	"day":  {"24 hours ago", "12 hours ago", "Now"},
+}
+
+// rangePhrases name each range in a sentence.
+var rangePhrases = map[string]string{"hour": "the last hour", "6h": "the last 6 hours", "day": "the last day"}
+
+const gib = 1024 * mib
+
+// niceCeil rounds up to 1, 2, 2.5, or 5 times a power of ten, leaving a
+// little room above the highest value.
+func niceCeil(value float64) float64 {
+	if value <= 0 {
+		return 1
+	}
+	value *= 1.05
+	power := math.Pow(10, math.Floor(math.Log10(value)))
+	for _, step := range []float64{1, 2, 2.5, 5, 10} {
+		if value <= step*power {
+			return step * power
+		}
+	}
+	return 10 * power
+}
+
+func trimFloat(value float64) string { return strconv.FormatFloat(value, 'f', -1, 64) }
+
+func percentText(value float64) string { return fmt.Sprintf("%.1f%%", value) }
+
+// separated reports whether two neighboring buckets have missing samples
+// between them, so the line breaks there. A sample or two missed is bridged.
+func separated(h resources.History, previous, next int64) bool {
+	return next-previous > h.Range.Step+2*resources.Interval
+}
+
+// resourceGaps reports whether the history has a break in it.
+func resourceGaps(h resources.History) bool {
+	for index := 1; index < len(h.Points); index++ {
+		if separated(h, h.Points[index-1].At, h.Points[index].At) {
+			return true
+		}
+	}
+	return false
+}
+
+// plot draws values against scale: a line and its area for each run of
+// connected buckets, and a dot for a bucket that stands alone.
+func plot(h resources.History, values []float64, scale float64) (line, area, dots string) {
+	var lineText, areaText, dotText strings.Builder
+	x := func(index int) float64 { return float64(h.Points[index].At-h.Start) / float64(h.Range.Span) * 1000 }
+	y := func(index int) float64 { return 100 - min(values[index], scale)/scale*100 }
+	for first := 0; first < len(values); {
+		last := first
+		for last+1 < len(values) && !separated(h, h.Points[last].At, h.Points[last+1].At) {
+			last++
+		}
+		if first == last {
+			fmt.Fprintf(&dotText, "M%.1f %.2fh0", x(first), y(first))
+		} else {
+			fmt.Fprintf(&areaText, "M%.1f 100", x(first))
+			for index := first; index <= last; index++ {
+				command := "L"
+				if index == first {
+					command = "M"
+				}
+				fmt.Fprintf(&lineText, "%s%.1f %.2f", command, x(index), y(index))
+				fmt.Fprintf(&areaText, "L%.1f %.2f", x(index), y(index))
+			}
+			fmt.Fprintf(&areaText, "L%.1f 100Z", x(last))
+		}
+		first = last + 1
+	}
+	return lineText.String(), areaText.String(), dotText.String()
+}
+
+// newChart draws values against scale. Ticks are round numbers, so they
+// have their own format.
+func newChart(h resources.History, title string, values, peaks []float64, scale float64, format, tick func(float64) string,
+	average, peak float64) chart {
+	c := chart{Title: title, Average: format(average), Peak: format(peak)}
+	c.Line, c.Area, c.Dots = plot(h, values, scale)
+	for _, share := range []float64{0, 0.5, 1} {
+		c.Ticks = append(c.Ticks, chartTick{Label: tick(scale * share), Bottom: fmt.Sprintf("bottom: %g%%", share*100)})
+	}
+	points := make([][3]any, len(values))
+	for index, point := range h.Points {
+		peakText := ""
+		if h.Range.Step > resources.Interval {
+			peakText = "Peak " + format(peaks[index])
+		}
+		points[index] = [3]any{point.At, format(values[index]), peakText}
+	}
+	encoded, _ := json.Marshal(points)
+	c.Points = string(encoded)
+	c.Label = fmt.Sprintf("%s over %s: average %s, peak %s.", title, rangePhrases[h.Range.Key], c.Average, c.Peak)
+	return c
+}
+
+// resourceCharts are the CPU and memory charts. CPU is scaled to at least
+// 10% of a core and memory to the larger of MiB or GiB, so a quiet server
+// still shows its shape.
+func resourceCharts(h resources.History) []chart {
+	cpu, cpuPeaks := make([]float64, len(h.Points)), make([]float64, len(h.Points))
+	memory, memoryPeaks := make([]float64, len(h.Points)), make([]float64, len(h.Points))
+	cpuTop, memoryTop := 0.0, 0.0
+	for index, point := range h.Points {
+		cpu[index], cpuPeaks[index] = point.CPU, point.CPUPeak
+		memory[index], memoryPeaks[index] = float64(point.Memory), float64(point.MemoryPeak)
+		cpuTop, memoryTop = max(cpuTop, point.CPU), max(memoryTop, float64(point.Memory))
+	}
+	unit, unitName, precision := float64(mib), "MiB", 1.0
+	if memoryTop >= gib {
+		unit, unitName, precision = gib, "GiB", 100
+	}
+	memoryText := func(value float64) string {
+		return trimFloat(math.Round(value/unit*precision)/precision) + " " + unitName
+	}
+	memoryTick := func(value float64) string {
+		if value == 0 {
+			return "0"
+		}
+		return memoryText(value)
+	}
+	cpuTick := func(value float64) string { return trimFloat(value) + "%" }
+	return []chart{
+		newChart(h, "CPU", cpu, cpuPeaks, max(10, niceCeil(cpuTop)), percentText, cpuTick, h.CPU, h.CPUPeak),
+		newChart(h, "Memory", memory, memoryPeaks, niceCeil(memoryTop/unit)*unit, memoryText, memoryTick, float64(h.Memory), float64(h.MemoryPeak)),
+	}
+}
+
+func resourcesURL(serverID, key string) string {
+	return "/fragments/servers/" + serverID + "/resources?range=" + key
+}
+
+// ResourceHistory is the CPU and memory history of a server; it reloads
+// itself each minute, as samples arrive.
+templ ResourceHistory(h resources.History) {
+	<section id="resource-history" class="resource-history" aria-labelledby="resource-history-title" hx-get={ resourcesURL(h.ServerID, h.Range.Key) } hx-trigger="every 60s" hx-swap="outerHTML" hx-disinherit="*">
+		<div class="section-heading">
+			<h2 id="resource-history-title">Resource history</h2>
+			<nav class="range-switch" aria-label="History range">
+				for _, item := range resources.Ranges {
+					<a href={ detailURL(h.ServerID, "range="+item.Key) } hx-get={ resourcesURL(h.ServerID, item.Key) } hx-target="#resource-history" hx-swap="outerHTML" hx-push-url={ string(detailURL(h.ServerID, "range="+item.Key)) } hx-indicator="#resource-history" aria-current={ map[bool]string{true: "true"}[item.Key == h.Range.Key] }>{ item.Label }</a>
+				}
+			</nav>
+		</div>
+		if len(h.Points) == 0 {
+			<p class="muted resource-history__empty">No samples from { rangePhrases[h.Range.Key] }. Ludock records CPU and memory once a minute while the server is running.</p>
+		} else {
+			<div class="resource-charts">
+				for _, c := range resourceCharts(h) {
+					<figure class="resource-chart" data-points={ c.Points } data-start={ strconv.FormatInt(h.Start, 10) } data-span={ strconv.FormatInt(h.Range.Span, 10) } data-step={ strconv.FormatInt(h.Range.Step, 10) }>
+						<figcaption class="resource-chart__head">
+							<h3>{ c.Title }</h3>
+							<span class="resource-chart__summary">
+								<span>Average <strong>{ c.Average }</strong></span>
+								<span>Peak <strong>{ c.Peak }</strong></span>
+							</span>
+						</figcaption>
+						<div class="resource-chart__plot" tabindex="0" role="img" aria-label={ c.Label }>
+							for _, tick := range c.Ticks {
+								<span class="resource-chart__tick" style={ tick.Bottom }><span>{ tick.Label }</span></span>
+							}
+							<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+								<path class="resource-chart__area" d={ c.Area }></path>
+								<path class="resource-chart__line" d={ c.Line }></path>
+								<path class="resource-chart__dots" d={ c.Dots }></path>
+							</svg>
+							<span class="resource-chart__cursor" hidden></span>
+							<span class="resource-chart__readout" hidden></span>
+						</div>
+						<div class="resource-chart__axis" aria-hidden="true">
+							for _, label := range axisLabels[h.Range.Key] {
+								<span>{ label }</span>
+							}
+						</div>
+					</figure>
+				}
+			</div>
+			if resourceGaps(h) {
+				<p class="section-note">Gaps are times the server was stopped or Ludock couldn’t reach Docker.</p>
+			}
+		}
+	</section>
+}

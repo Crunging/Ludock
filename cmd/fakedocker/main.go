@@ -146,6 +146,9 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.ExtraConfig = healthcheck
 		c.State.Health = &docker.HealthState{Status: "healthy"}
+		// A quarter of one core of four, and 1.5 GiB of a 4 GiB limit.
+		c.Stats.CPUStats.CPUUsage.TotalUsage, c.Stats.CPUStats.SystemCPUUsage, c.Stats.CPUStats.OnlineCPUs = 125e6, 2e9, 4
+		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit = 1.5*(1<<30), 4*(1<<30)
 		// Like the real image, which generates a password when given none.
 		c.Files = map[string]string{"/data/.rcon-cli.env": "password=dev-rcon-secret\n"}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21",
