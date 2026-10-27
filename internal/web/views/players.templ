@@ -1,0 +1,133 @@
+package views
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/Crunging/Ludock/internal/players"
+)
+
+// PlayersView is who is online on one server.
+type PlayersView struct {
+	// Listed: Ludock can read this server's players over its console.
+	Listed bool
+	// Running: the server is running and its live state is known.
+	Running bool
+	// Reading is nil until the first one after the server started.
+	Reading *players.Reading
+}
+
+// Limits on the names a page shows; the rest are counted.
+const (
+	rowNames    = 3
+	detailNames = 50
+	// maxSlots is the largest capacity drawn as one block per player.
+	maxSlots = 64
+)
+
+// playersKnown: the view has a player count to show.
+func playersKnown(p PlayersView) bool {
+	return p.Listed && p.Running && p.Reading != nil && !p.Reading.Failed
+}
+
+// unlisted counts players beyond the first limit names, including any the
+// game didn't name.
+func unlisted(reading *players.Reading, limit int) int {
+	return max(reading.Online, len(reading.Names)) - min(limit, len(reading.Names))
+}
+
+func someNames(reading *players.Reading, limit int) []string {
+	return reading.Names[:min(limit, len(reading.Names))]
+}
+
+func capacity(reading *players.Reading) string {
+	if reading.Max == 0 {
+		return ""
+	}
+	return "/" + strconv.Itoa(reading.Max)
+}
+
+func onlineText(reading *players.Reading) string {
+	if reading.Max == 0 {
+		return "online"
+	}
+	return "of " + strconv.Itoa(reading.Max) + " online"
+}
+
+func playerShare(reading *players.Reading) string {
+	return "width: " + strconv.FormatFloat(min(100, float64(reading.Online)/float64(reading.Max)*100), 'f', 1, 64) + "%"
+}
+
+// PlayersCell is the server list's players column.
+templ PlayersCell(p PlayersView) {
+	<div class={ "server-row__players", templ.KV("server-row__players--quiet", !p.Listed || !p.Running) }>
+		<span class="server-row__label">Players</span>
+		switch {
+			case !p.Listed:
+				<span class="muted" title="Ludock can’t list players for this server">—<span class="sr-only">Not available</span></span>
+			case !p.Running:
+				<span class="muted">—<span class="sr-only">Not running</span></span>
+			case p.Reading == nil:
+				<span class="muted">Checking…</span>
+			case p.Reading.Failed:
+				<span class="muted" title="Ludock couldn’t read players over the server’s console">Unavailable</span>
+			default:
+				<span class={ "player-count", templ.KV("player-count--empty", p.Reading.Online == 0) }>
+					// One line, so the count and capacity read as "2/10".
+					<strong>{ strconv.Itoa(p.Reading.Online) }</strong><span aria-hidden="true">{ capacity(p.Reading) }</span><span class="sr-only">{ " " + onlineText(p.Reading) }</span>
+				</span>
+				if len(p.Reading.Names) > 0 {
+					<span class="server-row__player-names">
+						{ strings.Join(someNames(p.Reading, rowNames), ", ") }
+						if more := unlisted(p.Reading, rowNames); more > 0 {
+							<span class="muted">+{ strconv.Itoa(more) }</span>
+						}
+					</span>
+				}
+		}
+	</div>
+}
+
+// PlayersFact is the overview's players entry: a count, the server's
+// capacity drawn as one block per player slot, and the names.
+templ PlayersFact(p PlayersView) {
+	<div class="overview-players">
+		<dt>Players</dt>
+		<dd>
+			switch {
+				case !p.Listed:
+					<span class="muted">Not available. Ludock lists players for Minecraft servers with RCON.</span>
+				case !p.Running:
+					<span class="muted">Shown while the server is running</span>
+				case p.Reading == nil:
+					<span class="muted">Checking who’s online…</span>
+				case p.Reading.Failed:
+					<span>Couldn’t read players</span>
+					<span class="muted">Ludock reads them over RCON. Check that RCON is on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+				default:
+					<span class="overview-figure">{ strconv.Itoa(p.Reading.Online) }</span>
+					<span class="muted">{ onlineText(p.Reading) }</span>
+					if p.Reading.Max > 0 && p.Reading.Max <= maxSlots {
+						<span class="player-slots" aria-hidden="true">
+							for slot := range p.Reading.Max {
+								<span class={ "player-slot", templ.KV("player-slot--taken", slot < p.Reading.Online) }></span>
+							}
+						</span>
+					} else if p.Reading.Max > 0 {
+						<span class="overview-meter overview-meter--players" aria-hidden="true"><span style={ playerShare(p.Reading) }></span></span>
+					}
+					if len(p.Reading.Names) > 0 {
+						<ul class="player-names" aria-label="Online players">
+							for _, name := range someNames(p.Reading, detailNames) {
+								<li>{ name }</li>
+							}
+						</ul>
+					}
+					if more := unlisted(p.Reading, detailNames); more > 0 && len(p.Reading.Names) > 0 {
+						<span class="muted">and { strconv.Itoa(more) } more</span>
+					}
+					<span class="overview-players__checked muted">Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+			}
+		</dd>
+	</div>
+}

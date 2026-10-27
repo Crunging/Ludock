@@ -52,6 +52,9 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		if backupSummary(request.User(), view) {
 			list.ShowBackup = true
 		}
+		if view.Console != nil && view.Console.ListsPlayers {
+			list.ShowPlayers = true
+		}
 	}
 	if list.State != "" && list.State != "all" {
 		states[list.State] = true
@@ -68,7 +71,9 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		if !strings.Contains(strings.ToLower(view.DisplayName+" "+view.GameName+" "+view.GameType+" "+view.Image), search) {
 			continue
 		}
-		list.Rows = append(list.Rows, s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable))
+		row := s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable)
+		row.ShowPlayers = list.ShowPlayers
+		list.Rows = append(list.Rows, row)
 	}
 	return list
 }
@@ -82,6 +87,12 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && can(&view, authz.ServerStop),
 		CanRestart: view.State == "running" && can(&view, authz.ServerRestart), CanBackup: can(&view, authz.BackupsCreate),
 		CanFiles: can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
+	// A saved state is not live, so it has no players.
+	row.Players = views.PlayersView{Listed: view.Console != nil && view.Console.ListsPlayers,
+		Running: view.State == "running" && active && !stale}
+	if row.Players.Listed && row.Players.Running {
+		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
+	}
 	if consoleAvailable {
 		row.ConsoleLabel = "Console"
 	} else if can(&view, authz.LogsRead) {

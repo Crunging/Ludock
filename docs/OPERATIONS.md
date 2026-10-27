@@ -165,6 +165,18 @@ authenticated tunnel.
 - **The administrator shell** needs `/bin/sh` and `timeout` in the image. Each
   command gets 60 seconds, plus five to force it to stop.
 
+### Players online
+
+For Minecraft servers, or any server with `ludock.console: minecraft-rcon`,
+the server list and the server's overview show who is online. Ludock sends
+`list` over RCON about every 30 seconds while the server runs, and again right
+after a console command, using the same helper and password as the console.
+Anyone who can see the server sees the player count and names. Readings stay in
+memory and are never stored. When RCON is off or doesn't answer, the server's
+players show as unavailable. Other games show no player list. A reading gives
+way to anything else that needs the server, such as a console command or a
+backup.
+
 ## Files
 
 Writable bind mounts and local named volumes that are safe to expose become file

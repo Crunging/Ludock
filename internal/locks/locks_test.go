@@ -1,8 +1,10 @@
 package locks
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestPathsConflictWithParentsAndChildren(t *testing.T) {
@@ -36,6 +38,9 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	table := New()
 	cancelled := false
 	release, _ := table.Acquire([]string{"server:a"}, func() { cancelled = true })
+	if table.ServerBusy("a") {
+		t.Fatal("background holder reported as busy")
+	}
 	_, err := table.Acquire([]string{"server:a"}, nil)
 	var background *BackgroundConflict
 	if !errors.As(err, &background) || !errors.Is(err, ErrConflict) {
@@ -47,10 +52,41 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 	}
 	release()
 	foreground, _ := table.Acquire([]string{"server:a"}, nil)
+	if !table.ServerBusy("a") {
+		t.Fatal("foreground holder not reported as busy")
+	}
 	if _, err := table.Acquire([]string{"server:a"}, func() {}); errors.As(err, &background) {
 		t.Fatal("foreground holder reported as background")
 	}
 	foreground()
+}
+
+// Preempting work cancels a background holder and takes the keys once its
+// cleanup releases them; a foreground holder still conflicts at once.
+func TestAcquirePreemptingWaitsForBackground(t *testing.T) {
+	table := New()
+	var release func()
+	release, _ = table.Acquire([]string{"server:a"}, func() {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			release()
+		}()
+	})
+	foreground, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, nil); err != ErrConflict {
+		t.Fatal(err)
+	}
+	foreground()
+	// Background work can preempt other background work and stay cancellable.
+	release, _ = table.Acquire([]string{"server:a"}, func() { go release() })
+	warning, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, func() {})
+	if err != nil || table.ServerBusy("a") {
+		t.Fatal(err)
+	}
+	warning()
 }
 
 func TestFenceHoldsBackAllButRecovery(t *testing.T) {

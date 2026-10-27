@@ -41,6 +41,9 @@ type Sessions struct {
 	Runtime  *Runtime
 	// IdleCheck is how often an idle stream inspects its container.
 	IdleCheck time.Duration
+	// Commanded, when set, is told after a game command succeeds, since it
+	// may have changed who is online. It must not block.
+	Commanded func(serverID string)
 }
 
 // Access keeps a stream attached to the exact binding used when it opened.
@@ -297,26 +300,30 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 		if !access.Allowed(capability) {
 			continue
 		}
-		s.execute(ctx, access, mode, raw, secrets, send, prefix, ip)
+		// The command's lock is released by now, so a reading can take it.
+		if s.execute(ctx, access, mode, raw, secrets, send, prefix, ip) && mode == GameMode && s.Commanded != nil {
+			s.Commanded(serverID)
+		}
 	}
 }
 
-func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw string, secrets []string, send func(string, string), prefix, ip string) {
+// execute runs one command and reports whether it succeeded.
+func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw string, secrets []string, send func(string, string), prefix, ip string) bool {
 	var message struct {
 		Type string  `json:"type"`
 		Data *string `json:"data"`
 	}
 	if json.Unmarshal([]byte(raw), &message) != nil {
 		send("error", "Invalid message format (expected JSON)")
-		return
+		return false
 	}
 	if message.Type != "input" || message.Data == nil {
 		send("error", `Expected { type: "input", data: "..." }`)
-		return
+		return false
 	}
 	command := strings.TrimSpace(*message.Data)
 	if command == "" {
-		return
+		return false
 	}
 	limit := 1024
 	if mode == ShellMode {
@@ -324,7 +331,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	}
 	if len([]rune(command)) > limit {
 		send("error", "Command exceeds the "+itoa(limit)+" character limit")
-		return
+		return false
 	}
 	failed := func() {
 		log.Warn("Console command could not complete", logging.F("serverId", access.ServerID), logging.F("mode", string(mode)))
@@ -334,16 +341,16 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 			send("error", "Shell command failed. Ensure timeout is installed; commands are limited to 60 seconds.")
 		}
 	}
-	release, err := s.Locks.Acquire(access.Context.LockKeys, nil)
+	release, err := s.Locks.AcquirePreempting(ctx, access.Context.LockKeys, nil)
 	if err != nil {
 		failed()
-		return
+		return false
 	}
 	defer release()
 	current, err := access.Refresh(ctx)
 	if err != nil {
 		failed()
-		return
+		return false
 	}
 	capability := authz.ConsoleExecute
 	if mode == ShellMode {
@@ -358,7 +365,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	adapter := games.ResolveAdapter(current.Container.GameType, current.Container.Labels)
 	if mode == GameMode && adapter == nil {
 		failed()
-		return
+		return false
 	}
 	stdout := NewRedactor(secrets, func(value string) { send("stdout", value) })
 	stderr := NewRedactor(secrets, func(value string) { send("stderr", value) })
@@ -373,7 +380,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	if err := s.audit(user, prefix+".started", access.ServerID, map[string]any{"containerId": current.Logical.ContainerID,
 		"bindingRevision": current.Logical.BindingRevision}, ip); err != nil {
 		send("error", "Ludock could not record this command, so it was not sent. Try again.")
-		return
+		return false
 	}
 	if mode == GameMode {
 		err = s.Runtime.GameCommand(ctx, Target{ContainerID: current.Logical.ContainerID, Labels: current.Container.Labels,
@@ -384,9 +391,10 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	if err != nil {
 		s.audit(user, prefix+".failed", access.ServerID, nil, "")
 		failed()
-		return
+		return false
 	}
 	s.audit(user, prefix+".succeeded", access.ServerID, nil, "")
+	return true
 }
 
 func itoa(value int) string {

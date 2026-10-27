@@ -49,6 +49,8 @@ type Adapter struct {
 	// TrimSlash drops a leading "/" from commands, which the game's console
 	// doesn't take.
 	TrimSlash bool
+	// Players lists who is online, or is nil when Ludock can't.
+	Players *PlayerQuery
 }
 
 var adapters = map[AdapterID]Adapter{
@@ -57,7 +59,8 @@ var adapters = map[AdapterID]Adapter{
 	MinecraftRCON: {ID: MinecraftRCON, Name: "Minecraft RCON", Transport: TransportSourceRCON, DefaultPort: 25575,
 		CommandPlaceholder:    "difficulty hard, whitelist add PlayerName, say Hello",
 		Commands:              []QuickCommand{{"List players", "list"}, {"Save world", "save-all"}, {"Message players", "say "}},
-		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", TrimSlash: true},
+		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", TrimSlash: true,
+		Players: &PlayerQuery{Command: "list", Parse: ParseMinecraftList}},
 	SourceRCON: {ID: SourceRCON, Name: "RCON", Transport: TransportSourceRCON, CommandPlaceholder: "status, save, broadcast Hello",
 		Commands:              []QuickCommand{},
 		PasswordEnvCandidates: []string{"RCON_PASSWORD", "ADMIN_PASSWORD", "SERVER_ADMIN_PASSWORD", "ARK_ADMIN_PASSWORD", "SRCDS_RCONPW"}},

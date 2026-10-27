@@ -3,10 +3,13 @@
 package locks
 
 import (
+	"context"
+	"errors"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 )
@@ -91,6 +94,36 @@ func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 	return t.acquire(keys, background, false)
 }
 
+// backgroundYield bounds how long foreground work waits for background
+// holders to finish their cleanup.
+const backgroundYield = 10 * time.Second
+
+// AcquirePreempting is Acquire for work that background work must not hold
+// up, such as a request someone is waiting on. Background holders, such as a
+// player reading, are cancelled and waited for; they hold their keys until
+// their cleanup finishes. It fails if they don't finish within 10 seconds.
+// background, when set, marks this holder as background work too.
+func (t *Table) AcquirePreempting(ctx context.Context, keys []string, background func()) (func(), error) {
+	deadline := time.NewTimer(backgroundYield)
+	defer deadline.Stop()
+	for {
+		released := t.NextRelease()
+		release, err := t.Acquire(keys, background)
+		var holders *BackgroundConflict
+		if !errors.As(err, &holders) {
+			return release, err
+		}
+		holders.Cancel()
+		select {
+		case <-released:
+		case <-deadline.C:
+			return nil, ErrConflict
+		case <-ctx.Done():
+			return nil, ErrConflict
+		}
+	}
+}
+
 // AcquireForRecovery is Acquire for reconciling interrupted operations, which
 // a Fence does not hold back.
 func (t *Table) AcquireForRecovery(keys []string) (func(), error) {
@@ -168,12 +201,13 @@ func (t *Table) NextRelease() <-chan struct{} {
 	return t.released
 }
 
-// ServerBusy reports whether work holds a server.
+// ServerBusy reports whether work holds a server. Background holders don't
+// count: whatever needs the server cancels them.
 func (t *Table) ServerBusy(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, busy := t.active["server:"+id]
-	return busy
+	owner, busy := t.active["server:"+id]
+	return busy && owner.background == nil
 }
 
 // Drained is closed once no keys are held. Call it after stopping new

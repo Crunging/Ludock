@@ -159,45 +159,71 @@ func (r *Runtime) GameCommand(ctx context.Context, target Target, adapter *games
 			return err
 		}
 	default:
-		host, port, password, err := r.networkTarget(ctx, target, adapter)
+		response, err := r.query(ctx, target, adapter, command, assertAccess)
 		if err != nil {
 			return err
-		}
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
-				return err
-			}
-		}
-		if ctx.Err() != nil {
-			return errCancelled
-		}
-		var response string
-		if host != "" {
-			response, err = netconsole.Execute(ctx, string(adapter.Transport), host, port, password, command, netconsole.Control{AssertAccess: assertAccess})
-		} else {
-			response, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(adapter.Transport),
-				Port: port, Password: password, Command: command}, assertAccess)
-		}
-		if err != nil {
-			return err
-		}
-		if assertAccess != nil {
-			if err := assertAccess(); err != nil {
-				return err
-			}
-		}
-		if ctx.Err() != nil {
-			return errCancelled
 		}
 		if response == "" {
 			response = "Command completed with no response"
 		}
-		// A password read from a file is not among the server's redacted
-		// environment values.
-		out.stdout(strings.ReplaceAll(response, password, "[redacted]"))
+		out.stdout(response)
 	}
 	out.complete()
 	return nil
+}
+
+// Query sends one command through a network console adapter and returns the
+// response with the console password removed. Other secrets are left for
+// the caller to redact.
+func (r *Runtime) Query(ctx context.Context, target Target, adapter *games.Adapter, command string, assertAccess func() error) (string, error) {
+	if assertAccess != nil {
+		if err := assertAccess(); err != nil {
+			return "", err
+		}
+	}
+	if target.State != "running" {
+		return "", errors.New("The game server must be running to accept console commands")
+	}
+	if adapter.Transport == games.TransportContainerStdin {
+		return "", errors.New("This game console does not return responses")
+	}
+	return r.query(ctx, target, adapter, adapter.Command(command), assertAccess)
+}
+
+func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapter, command string, assertAccess func() error) (string, error) {
+	host, port, password, err := r.networkTarget(ctx, target, adapter)
+	if err != nil {
+		return "", err
+	}
+	if assertAccess != nil {
+		if err := assertAccess(); err != nil {
+			return "", err
+		}
+	}
+	if ctx.Err() != nil {
+		return "", errCancelled
+	}
+	var response string
+	if host != "" {
+		response, err = netconsole.Execute(ctx, string(adapter.Transport), host, port, password, command, netconsole.Control{AssertAccess: assertAccess})
+	} else {
+		response, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(adapter.Transport),
+			Port: port, Password: password, Command: command}, assertAccess)
+	}
+	if err != nil {
+		return "", err
+	}
+	if assertAccess != nil {
+		if err := assertAccess(); err != nil {
+			return "", err
+		}
+	}
+	if ctx.Err() != nil {
+		return "", errCancelled
+	}
+	// A password read from a file is not among the server's redacted
+	// environment values.
+	return strings.ReplaceAll(response, password, "[redacted]"), nil
 }
 
 var (
