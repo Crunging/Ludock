@@ -341,7 +341,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 			send("error", "Shell command failed. Ensure timeout is installed; commands are limited to 60 seconds.")
 		}
 	}
-	release, err := s.Locks.AcquireForeground(ctx, access.Context.LockKeys)
+	release, err := s.Locks.AcquirePreempting(ctx, access.Context.LockKeys, nil)
 	if err != nil {
 		failed()
 		return false

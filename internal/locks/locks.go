@@ -98,21 +98,22 @@ func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 // holders to finish their cleanup.
 const backgroundYield = 10 * time.Second
 
-// AcquireForeground is Acquire for work a person is waiting on. Background
-// holders, such as a player reading, are cancelled and waited for; they hold
-// their keys until their cleanup finishes. It fails if they don't finish
-// within 10 seconds.
-func (t *Table) AcquireForeground(ctx context.Context, keys []string) (func(), error) {
+// AcquirePreempting is Acquire for work that background work must not hold
+// up, such as a request someone is waiting on. Background holders, such as a
+// player reading, are cancelled and waited for; they hold their keys until
+// their cleanup finishes. It fails if they don't finish within 10 seconds.
+// background, when set, marks this holder as background work too.
+func (t *Table) AcquirePreempting(ctx context.Context, keys []string, background func()) (func(), error) {
 	deadline := time.NewTimer(backgroundYield)
 	defer deadline.Stop()
 	for {
 		released := t.NextRelease()
-		release, err := t.Acquire(keys, nil)
-		var background *BackgroundConflict
-		if !errors.As(err, &background) {
+		release, err := t.Acquire(keys, background)
+		var holders *BackgroundConflict
+		if !errors.As(err, &holders) {
 			return release, err
 		}
-		background.Cancel()
+		holders.Cancel()
 		select {
 		case <-released:
 		case <-deadline.C:

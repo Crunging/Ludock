@@ -67,7 +67,7 @@ func (s *Server) startAction(r *http.Request, request *Request, serverID string,
 		cancel(nil)
 		return nil, err
 	}
-	release, err := app.Locks.AcquireForeground(ctx, resolved.LockKeys)
+	release, err := app.Locks.AcquirePreempting(ctx, resolved.LockKeys, nil)
 	if err != nil {
 		cancel(nil)
 		return nil, err

@@ -311,7 +311,7 @@ func (s *Server) reviewBinding(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, err)
 		return
 	}
-	release, err := s.App.Locks.AcquireForeground(ctx, []string{"server:" + id})
+	release, err := s.App.Locks.AcquirePreempting(ctx, []string{"server:" + id}, nil)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
