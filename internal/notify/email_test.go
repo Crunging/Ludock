@@ -170,8 +170,10 @@ func TestEmailDelivery(t *testing.T) {
 	s.Deliver(ctx)
 	<-server.finished
 	deliveries, _ = s.Deliveries(ctx)
-	if deliveries[1].LastFailure != "Delivery to the mail server was refused. Replace the saved credentials." ||
-		deliveries[0].LastFailure != "Delivery to the mail server failed because it refused the sender or a recipient. Check the addresses." {
+	// Both may be queued in the same millisecond, so their order varies.
+	failures := map[string]bool{deliveries[0].LastFailure: true, deliveries[1].LastFailure: true}
+	if !failures["Delivery to the mail server was refused. Replace the saved credentials."] ||
+		!failures["Delivery to the mail server failed because it refused the sender or a recipient. Check the addresses."] {
 		t.Fatalf("%+v", deliveries[:2])
 	}
 	var stored string
