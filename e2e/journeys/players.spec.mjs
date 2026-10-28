@@ -47,7 +47,10 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   // A console that stops answering is reported, not shown as empty.
   await command(console, "fake-outage 20");
   await openServer(page, "Survival");
-  await expect(players).toContainText("Couldn’t read players");
+  // The page can render just before the failed reading, and its live
+  // events start a moment later; its next refresh, within 10 seconds,
+  // shows the reading.
+  await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
   await expect(players).toContainText("Check that RCON is on");
   await page.goto("/");
   await expect(survival).toContainText("Unavailable");

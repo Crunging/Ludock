@@ -10,6 +10,7 @@ import (
 )
 
 func TestSettingsNeedAnAdministrator(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	for _, target := range []string{"/settings", "/diagnostics"} {

@@ -14,6 +14,7 @@ import (
 )
 
 func TestFilesFollowGrants(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
 	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); strings.Contains(page, "valheim") {
@@ -43,6 +44,7 @@ func TestFilesFollowGrants(t *testing.T) {
 }
 
 func TestUploadChecks(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	upload := func(headers map[string]string, body string) int {
 		request, _ := http.NewRequest("PUT", "http://panel.example/files/"+p.server+"/upload?root=0&name=a.txt", strings.NewReader(body))
@@ -69,6 +71,7 @@ func TestUploadChecks(t *testing.T) {
 
 // File sort keeps folders first and dashes last.
 func TestFileSort(t *testing.T) {
+	t.Parallel()
 	entries := []helper.FileEntry{{Name: "map10", Type: "file", Size: 5, ModifiedAt: 3}, {Name: "link", Type: "symlink"},
 		{Name: "mods", Type: "directory", ModifiedAt: 1}, {Name: "map2", Type: "file", Size: 50, ModifiedAt: 2}}
 	names := func() string {

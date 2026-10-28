@@ -52,6 +52,7 @@ func readMessage(t *testing.T, conn *websocket.Conn) (map[string]string, error) 
 }
 
 func TestConsoleSocketAuthorization(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.Logs = []string{"world loaded"} })
 	server := httptest.NewServer(p.handler)
@@ -112,6 +113,7 @@ func TestConsoleSocketAuthorization(t *testing.T) {
 }
 
 func TestConsoleSocketCaps(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	server := httptest.NewServer(p.handler)
 	t.Cleanup(server.Close)
@@ -126,6 +128,7 @@ func TestConsoleSocketCaps(t *testing.T) {
 }
 
 func TestShutdownSkipsPendingAdmissions(t *testing.T) {
+	t.Parallel()
 	server := &Server{}
 	// A request between admission and the upgrade has no connection yet.
 	pending := &socketChannel{userID: "u", tokenHash: "t"}
@@ -140,6 +143,7 @@ func TestShutdownSkipsPendingAdmissions(t *testing.T) {
 }
 
 func TestShutdownEndsEventStreams(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	server := httptest.NewServer(p.handler)
 	t.Cleanup(server.Close)
@@ -166,6 +170,7 @@ func TestShutdownEndsEventStreams(t *testing.T) {
 // Each event stream stays open for the session, so one session's streams
 // are capped.
 func TestEventStreamLimit(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	server := httptest.NewServer(p.handler)
 	t.Cleanup(server.Close)

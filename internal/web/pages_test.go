@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/app"
@@ -61,11 +62,24 @@ func newPages(t *testing.T) *pages {
 	return p
 }
 
+// hashes holds one password hash per password across tests: hashing takes
+// most of this package's test time, and any hash of a password verifies.
+var hashes sync.Map
+
+func passwordHash(password string) string {
+	if hash, ok := hashes.Load(password); ok {
+		return hash.(string)
+	}
+	hash, _ := auth.Argon2{}.Hash(password)
+	actual, _ := hashes.LoadOrStore(password, hash)
+	return actual.(string)
+}
+
 // user creates an account and returns a signed-in session.
 func (p *pages) user(id, username string, role db.Role) *auth.Principal {
 	p.t.Helper()
 	ctx := context.Background()
-	hash, _ := auth.Argon2{}.Hash("password-" + id)
+	hash := passwordHash("password-" + id)
 	if err := p.app.DB.CreateUser(ctx, db.UserRecord{User: db.User{ID: id, Username: username, Role: role, CreatedAt: 1},
 		PasswordHash: hash}); err != nil {
 		p.t.Fatal(err)
@@ -110,6 +124,7 @@ func (p *pages) running() bool {
 }
 
 func TestPagesRequireASession(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	response := p.do("GET", "/fragments/servers", nil, nil, map[string]string{"HX-Request": "true"})
 	if response.Code != http.StatusUnauthorized || response.Header().Get("HX-Redirect") != "/login" {
@@ -122,6 +137,7 @@ func TestPagesRequireASession(t *testing.T) {
 }
 
 func TestActionsRequireTheSessionCSRFToken(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
 	if err != nil {
@@ -144,6 +160,7 @@ func TestActionsRequireTheSessionCSRFToken(t *testing.T) {
 // Pages are compressed, so each one masks the CSRF token differently. A
 // token read from a page works; another session's token fails masked too.
 func TestCSRFTokenMaskedPerPage(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	other := p.user("u-other", "other", db.RoleAdmin)
 	pageToken := func(principal *auth.Principal) string {
@@ -175,6 +192,7 @@ func TestCSRFTokenMaskedPerPage(t *testing.T) {
 }
 
 func TestFormsRejectMultipartBodies(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
 	if err != nil {
@@ -190,6 +208,7 @@ func TestFormsRejectMultipartBodies(t *testing.T) {
 }
 
 func TestFailedSignOutKeepsTheCookie(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
 	if err != nil {
@@ -214,6 +233,7 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 }
 
 func TestDiscoveryIsNotPermission(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
 	page := p.do("GET", "/fragments/servers", viewer, nil, map[string]string{"HX-Request": "true"})
@@ -258,6 +278,7 @@ func (b *revokingBody) Read(buffer []byte) (int, error) {
 
 // Session revoked during the body stops the action.
 func TestSessionRevokedDuringBody(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	admin, err := p.app.Auth.Login(context.Background(), "admin", "password-u-admin", auth.Client{})
 	if err != nil {

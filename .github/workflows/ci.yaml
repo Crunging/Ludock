@@ -24,19 +24,20 @@ concurrency:
 
 jobs:
   go:
-    name: Go (${{ matrix.part }})
+    name: Go and repository checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        # internal/web's tests take about as long as every other package's, so
-        # they get a job of their own.
-        part: [checks, web]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # These need no Go, so they run alongside the rest.
+      - name: Start linting workflows and checking vendored browser libraries
+        run: |
+          scripts/background.sh start actionlint docker run --rm --volume "$PWD:/repo" --workdir /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          scripts/background.sh start vendor scripts/check-vendor.sh
+      - name: Check action and image pins
+        run: scripts/check-pins.sh
       - id: go
         run: echo "version=$(sed -n 's/^go //p' go.mod)" >> "$GITHUB_OUTPUT"
       # Runs start from the build cache of main's latest run, so only changed
@@ -48,36 +49,27 @@ jobs:
             ~/.cache/go-build
             ~/go/pkg/mod
             /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
-          key: go-${{ matrix.part }}-${{ github.sha }}
-          restore-keys: go-${{ matrix.part }}-
+          key: go-test-${{ github.sha }}
+          restore-keys: |
+            go-test-
+            go-checks-
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - name: Check formatting
-        if: matrix.part == 'checks'
         run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
       - name: Check generated templates
-        if: matrix.part == 'checks'
         run: |
           go tool templ generate -path internal/web/views
           git diff --exit-code -- internal/web/views
-      - if: matrix.part == 'checks'
-        run: go vet ./...
+      - run: go vet ./...
       # -count=1 runs every test, never results cached for an unchanged package.
-      - name: Test every package but internal/web
-        if: matrix.part == 'checks'
-        run: |
-          mapfile -t packages < <(go list ./... | grep -vx github.com/Crunging/Ludock/internal/web)
-          go test -race -count=1 "${packages[@]}"
-      # Its tests run one at a time, so two processes each run half by name.
-      - name: Test internal/web
-        if: matrix.part == 'web'
-        run: |
-          go test -race -count=1 -run '^Test[A-L]' ./internal/web &
-          first=$!
-          go test -race -count=1 -run '^Test[^A-L]' ./internal/web
-          wait "$first"
+      - run: go test -race -count=1 ./...
+      - name: Lint workflows
+        run: scripts/background.sh wait actionlint
+      - name: Check vendored browser libraries
+        run: scripts/background.sh wait vendor
       # Go marks the build results it uses, so dropping the rest keeps the
       # cache the size of one build instead of growing with every save.
       - if: github.event_name == 'push'
@@ -89,7 +81,7 @@ jobs:
             ~/.cache/go-build
             ~/go/pkg/mod
             /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
-          key: go-${{ matrix.part }}-${{ github.sha }}
+          key: go-test-${{ github.sha }}
 
   journeys:
     name: Journeys (${{ matrix.shard }}/2)
@@ -114,7 +106,7 @@ jobs:
       - id: go
         working-directory: .
         run: echo "version=$(sed -n 's/^go //p' go.mod)" >> "$GITHUB_OUTPUT"
-      # Like the Go jobs', for the static build the journeys run.
+      # Like the Go job's, for the static build the journeys run.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -147,20 +139,6 @@ jobs:
           name: journey-results-${{ matrix.shard }}
           path: e2e/test-results/
           retention-days: 7
-
-  workflows:
-    name: Workflows
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
-      - name: Check action and image pins
-        run: scripts/check-pins.sh
-      - name: Check vendored browser libraries
-        run: scripts/check-vendor.sh
 
   container:
     name: Container (${{ matrix.platform }}, ${{ matrix.part }})

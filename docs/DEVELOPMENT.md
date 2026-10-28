@@ -46,7 +46,9 @@ can't reach: logic with many edge cases, requests the UI never sends, and
 failures or races between two steps. Workers run whole files, so a file must
 pass on a fresh server without the files before it. A file whose journeys each
 pass on their own can set `test.describe.configure({ mode: "parallel" })` to
-spread them across workers. `--workers=1` runs every file on one server.
+spread them across workers. `--workers=1` runs every file on one server. CI
+retries a failed journey once to show whether it's flaky, but a flaky journey
+still fails the run.
 
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`

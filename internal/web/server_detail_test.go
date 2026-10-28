@@ -13,6 +13,7 @@ import (
 )
 
 func TestServerDetailFollowsGrants(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
 	for _, target := range []string{"/servers/" + p.server, "/fragments/servers/" + p.server + "/live",
@@ -39,6 +40,7 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 
 // Monitoring settings need an administrator.
 func TestMonitoringSettingsNeedAdmin(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView)
@@ -65,6 +67,7 @@ func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 }
 
 func TestBindingReviewNeedsAPendingReview(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	form := url.Values{"_csrf": {CSRFToken(p.admin.Token)}, "confirmation": {"valheim"}, "bindingRevision": {"1"}}
 	response := p.do("POST", "/servers/"+p.server+"/binding-review", p.admin, strings.NewReader(form.Encode()),
@@ -76,6 +79,7 @@ func TestBindingReviewNeedsAPendingReview(t *testing.T) {
 
 // Selected operation fragment stays on its server.
 func TestOperationFragmentScope(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	job, _ := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
 		Kind: "restart", BindingRevision: 1})
@@ -92,6 +96,7 @@ func TestOperationFragmentScope(t *testing.T) {
 // Someone who can't open the Backups tab follows a backup linked there,
 // such as from the server list, in Activity instead.
 func TestOperationLinkFallsBackToActivity(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
 	p.grant(viewer, authz.ServerView)
@@ -110,6 +115,7 @@ func TestOperationLinkFallsBackToActivity(t *testing.T) {
 // ended, its refresh tells paused tabs such as Backups to catch up, whatever
 // operation the page links to.
 func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	live := func(query string) string {
 		response := p.do("GET", "/fragments/servers/"+p.server+"/live?"+query, p.admin, nil, map[string]string{"HX-Request": "true"})

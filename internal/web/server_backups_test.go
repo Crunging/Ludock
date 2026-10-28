@@ -28,6 +28,7 @@ func (p *pages) queued(t *testing.T) (kind string, input string) {
 }
 
 func TestCreateBackupNeedsTheGrant(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView)
@@ -50,6 +51,7 @@ func TestCreateBackupNeedsTheGrant(t *testing.T) {
 }
 
 func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	p.app.DB.Exec(`INSERT INTO backups (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
     VALUES ('11111111-1111-4111-8111-111111111111',?,'f','/backups','[]',10,'c',1,'complete')`, p.server)
@@ -80,6 +82,7 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 }
 
 func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
@@ -100,6 +103,7 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 }
 
 func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView, authz.ServerRestart)
@@ -132,6 +136,7 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 // to it, such as after Dismiss, so the tab hears when the work ends and
 // brings back the controls it paused.
 func TestBackupsTabFollowsRunningWork(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)

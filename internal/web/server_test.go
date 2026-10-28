@@ -12,6 +12,7 @@ import (
 )
 
 func TestPolicyHeadersAndCrossOriginRejection(t *testing.T) {
+	t.Parallel()
 	clientIP, _ := auth.NewClientIP("")
 	dockerUp := true
 	s := &Server{DB: dbtest.Open(t), ClientIP: clientIP, Docker: func(context.Context) error {
