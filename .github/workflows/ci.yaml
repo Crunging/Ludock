@@ -24,47 +24,82 @@ concurrency:
 
 jobs:
   go:
-    name: Go
+    name: Go (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # internal/web's tests take about as long as every other package's, so
+        # they get a job of their own.
+        part: [checks, web]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
+      - id: go
+        run: echo "version=$(sed -n 's/^go //p' go.mod)" >> "$GITHUB_OUTPUT"
       # Runs start from the build cache of main's latest run, so only changed
-      # packages compile; main saves a new one after each merge.
+      # packages compile; main saves a new one after each merge. It holds the
+      # Go toolchain too, so setup-go finds it instead of downloading it.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-test-${{ github.sha }}
-          restore-keys: go-test-
+            /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
+          key: go-${{ matrix.part }}-${{ github.sha }}
+          restore-keys: go-${{ matrix.part }}-
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Check formatting
+        if: matrix.part == 'checks'
         run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
       - name: Check generated templates
+        if: matrix.part == 'checks'
         run: |
           go tool templ generate -path internal/web/views
           git diff --exit-code -- internal/web/views
-      - run: go vet ./...
+      - if: matrix.part == 'checks'
+        run: go vet ./...
       # -count=1 runs every test, never results cached for an unchanged package.
-      - run: go test -race -count=1 ./...
+      - name: Test every package but internal/web
+        if: matrix.part == 'checks'
+        run: |
+          mapfile -t packages < <(go list ./... | grep -vx github.com/Crunging/Ludock/internal/web)
+          go test -race -count=1 "${packages[@]}"
+      # Its tests run one at a time, so two processes each run half by name.
+      - name: Test internal/web
+        if: matrix.part == 'web'
+        run: |
+          go test -race -count=1 -run '^Test[A-L]' ./internal/web &
+          first=$!
+          go test -race -count=1 -run '^Test[^A-L]' ./internal/web
+          wait "$first"
+      # Go marks the build results it uses, so dropping the rest keeps the
+      # cache the size of one build instead of growing with every save.
+      - if: github.event_name == 'push'
+        run: find ~/.cache/go-build -type f -mmin +90 -delete
       - if: github.event_name == 'push'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-test-${{ github.sha }}
+            /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
+          key: go-${{ matrix.part }}-${{ github.sha }}
 
   journeys:
-    name: Journeys
+    name: Journeys (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each job runs half the journeys, four workers at a time.
+        shard: [1, 2]
     defaults:
       run:
         working-directory: e2e
@@ -72,37 +107,46 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      # Like the Go job's, for the static build the journeys run.
+      # The runner image already has Chromium's libraries. Installing them
+      # with --with-deps adds an apt download that can stall for many minutes.
+      - name: Start installing journey dependencies
+        run: ../scripts/background.sh start install sh -c "npm ci --no-audit --no-fund && npx playwright install --only-shell chromium"
+      - id: go
+        working-directory: .
+        run: echo "version=$(sed -n 's/^go //p' go.mod)" >> "$GITHUB_OUTPUT"
+      # Like the Go jobs', for the static build the journeys run.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
+            /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
           key: go-journeys-${{ github.sha }}
           restore-keys: go-journeys-
-      - run: npm ci --no-audit --no-fund
-      # The runner image already has Chromium's libraries. Installing them
-      # with --with-deps adds an apt download that can stall for many minutes.
-      - run: npx playwright install --only-shell chromium
-      - run: npx playwright test
-      - if: github.event_name == 'push'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: ../scripts/background.sh wait install
+      - run: npx playwright test --shard=${{ matrix.shard }}/2
+      # Go marks the build results it uses, so dropping the rest keeps the
+      # cache the size of one build instead of growing with every save.
+      - if: github.event_name == 'push' && matrix.shard == 1
+        run: find ~/.cache/go-build -type f -mmin +90 -delete
+      - if: github.event_name == 'push' && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
+            /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
           key: go-journeys-${{ github.sha }}
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: journey-results
+          name: journey-results-${{ matrix.shard }}
           path: e2e/test-results/
           retention-days: 7
-
 
   workflows:
     name: Workflows
@@ -119,17 +163,24 @@ jobs:
         run: scripts/check-vendor.sh
 
   container:
-    name: Container (${{ matrix.platform }})
+    name: Container (${{ matrix.platform }}, ${{ matrix.part }})
     # The built image against the runner's disposable Docker daemon: hardened
     # runtime, helper containers, backups, consoles, image updates, recovery.
+    # Each journey file runs in its own job on each architecture.
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64]
+        part: [container, lifecycle]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+          # The scan gets a job of its own, since its downloads slow the rest.
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            part: scan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     env:
@@ -139,11 +190,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Start installing journey dependencies
+        if: matrix.part != 'scan'
+        working-directory: e2e
+        run: ../scripts/background.sh start install sh -c "npm ci --no-audit --no-fund && npx playwright install --only-shell chromium"
       # The default docker driver can't use the Actions cache.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver-opts: image=moby/buildkit:buildx-stable-1@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
           cleanup: false
+      - name: Start fetching the image scanner
+        if: matrix.part == 'scan'
+        run: scripts/background.sh start prepare scripts/scan-image.sh --prepare
       - name: Build image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
@@ -158,33 +216,26 @@ jobs:
           tags: ${{ env.LUDOCK_TEST_IMAGE }}
           # Layers from main's latest run, such as the compiled dependencies.
           cache-from: type=gha,scope=container-${{ matrix.platform }}
-          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=container-{0}', matrix.platform) || '' }}
-      - name: Start the image scan
-        if: matrix.platform == 'linux/amd64'
-        # It runs alongside the container journeys; a later step reports it.
-        run: |
-          (
-            status=0
-            scripts/scan-image.sh "$LUDOCK_TEST_IMAGE" || status=$?
-            echo "$status" > "$RUNNER_TEMP/scan.tmp" && mv "$RUNNER_TEMP/scan.tmp" "$RUNNER_TEMP/scan.status"
-          ) > "$RUNNER_TEMP/scan.log" 2>&1 &
-      - name: Install journey dependencies
-        working-directory: e2e
-        run: |
-          npm ci --no-audit --no-fund
-          npx playwright install --only-shell chromium
+          cache-to: ${{ github.event_name == 'push' && matrix.part == 'container' && format('type=gha,mode=max,scope=container-{0}', matrix.platform) || '' }}
       - name: Run container journeys
+        if: matrix.part != 'scan'
         working-directory: e2e
-        run: npx playwright test -c docker.config.mjs
-      - name: Scan image for vulnerabilities
-        if: matrix.platform == 'linux/amd64'
+        env:
+          JOURNEYS: ${{ matrix.part }}
         run: |
-          until [ -f "$RUNNER_TEMP/scan.status" ]; do sleep 1; done
-          cat "$RUNNER_TEMP/scan.log"
-          exit "$(cat "$RUNNER_TEMP/scan.status")"
-      - if: failure()
+          # A new journey file needs its own entry in the matrix above.
+          files=(docker/*.spec.mjs)
+          [[ "${files[*]}" == "docker/container.spec.mjs docker/lifecycle.spec.mjs" ]]
+          ../scripts/background.sh wait install
+          npx playwright test -c docker.config.mjs "docker/$JOURNEYS.spec.mjs"
+      - name: Scan image for vulnerabilities
+        if: matrix.part == 'scan'
+        run: |
+          scripts/background.sh wait prepare
+          scripts/scan-image.sh "$LUDOCK_TEST_IMAGE"
+      - if: failure() && matrix.part != 'scan'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: container-results-${{ matrix.runner }}
+          name: container-results-${{ matrix.runner }}-${{ matrix.part }}
           path: e2e/test-results/
           retention-days: 7

@@ -3,6 +3,8 @@ import { createServer as createTCPServer } from "node:net";
 import { test, expect, asAdmin } from "./fixtures.mjs";
 
 asAdmin();
+// Each journey here passes on its own, so they spread across workers.
+test.describe.configure({ mode: "parallel" });
 
 // receiver records the HTTP requests ntfy, Gotify, and webhook deliveries
 // make. Paths under /status/<code> answer with that status.

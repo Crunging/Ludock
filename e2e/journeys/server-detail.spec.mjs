@@ -1,6 +1,8 @@
 import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "./fixtures.mjs";
 
 asAdmin();
+// Each journey here passes on its own, so they spread across workers.
+test.describe.configure({ mode: "parallel" });
 
 test("reviewing a server, setting up monitoring, and following a restart", async ({ page }) => {
   await openServer(page, "Survival");

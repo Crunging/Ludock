@@ -204,7 +204,9 @@ allow space for both.
 | Other file actions | 55 seconds |
 
 File work runs in short-lived helper containers that mount only approved data,
-run as root, and have no network. They're removed afterward. Any left by an
+run as root, and have no network. They're removed afterward, except that a
+listing helper is kept for the next listing until it has been idle for 30
+seconds (`LUDOCK_FILE_HELPER_IDLE`, such as `10s` or `2m`). Any left by an
 interruption are removed when Ludock starts again, before other work runs, and
 otherwise exit after 35 minutes. Bind mounts need validated host paths and
 recursive read-only bind support; symlinked sources and Docker Desktop path
@@ -295,10 +297,11 @@ container.
   over. Settings that only repeated the old image's defaults come from the new
   image instead.
 - A running server's new container must start cleanly: become healthy if the
-  image has a healthcheck, or otherwise keep running for 10 seconds. Only then
-  does Ludock remove the original and give the new container its name and
-  restart policy. Until then neither container restarts on its own, so a Docker
-  restart can't run both. A stopped server stays stopped.
+  image has a healthcheck, or otherwise keep running for 10 seconds
+  (`LUDOCK_UPDATE_SETTLE`, such as `30s`). Only then does Ludock remove the
+  original and give the new container its name and restart policy. Until then
+  neither container restarts on its own, so a Docker restart can't run both. A
+  stopped server stays stopped.
 - If the new container stops, restarts, or reports itself unhealthy, Ludock
   removes it and restores the original, but leaves it stopped: the new version
   may already have changed the game data. Check the operation, restore the

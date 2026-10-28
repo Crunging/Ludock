@@ -49,8 +49,8 @@ type Jobs struct {
 	// SaveSettle is how long to wait after a save command; tests shorten it.
 	SaveSettle time.Duration
 	// ReplacementSettle is how long an updated container without a
-	// healthcheck must keep running before it replaces the original; tests
-	// shorten it.
+	// healthcheck must keep running before it replaces the original
+	// (LUDOCK_UPDATE_SETTLE); zero means 10 seconds.
 	ReplacementSettle time.Duration
 	// Poll is the reconciliation poll interval; tests shorten it.
 	Poll time.Duration

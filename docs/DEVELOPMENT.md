@@ -44,8 +44,9 @@ server with an operator, account changes, and the administrator pages. Add or ex
 anything a user can reach in the browser. Go unit tests are for what a journey
 can't reach: logic with many edge cases, requests the UI never sends, and
 failures or races between two steps. Workers run whole files, so a file must
-pass on a fresh server without the files before it; `--workers=1` runs every
-file on one server.
+pass on a fresh server without the files before it. A file whose journeys each
+pass on their own can set `test.describe.configure({ mode: "parallel" })` to
+spread them across workers. `--workers=1` runs every file on one server.
 
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`
@@ -73,9 +74,9 @@ Alpine. The binary's subcommands are
 inside helper containers), and `version`.
 
 - **CI** runs on every PR and every push to `main` that changes more than
-  Markdown or the license: formatting, vet, generated
-  templates, race-enabled Go tests, the journeys, the pin check, and the
-  container journeys with an image scan on AMD64 and ARM64. Runs reuse the Go
+  Markdown or the license: formatting, vet, generated templates, race-enabled
+  Go tests, the journeys, the pin check, the container journeys on AMD64 and
+  ARM64 (one job per journey file), and an image scan. Runs reuse the Go
   build cache and image layers from `main`'s latest run, except the runtime
   stage, so `apk upgrade` picks up security fixes.
 - **Weekly:** `govulncheck`, `npm audit` for the journey dependencies, and a
