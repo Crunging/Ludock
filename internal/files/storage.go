@@ -63,6 +63,10 @@ type Target struct {
 type Service struct {
 	Docker *docker.Client
 	Images *launch.Images
+	// ListerIdle is how long a listing helper is kept after its last use;
+	// zero means 30 seconds. Search and sort list the same folder again
+	// within moments.
+	ListerIdle time.Duration
 
 	mu sync.Mutex
 	// listers are idle read-only helpers kept for the next listing of the
@@ -70,8 +74,6 @@ type Service struct {
 	listers map[string]*lister
 }
 
-// A listing helper is kept this long after its last use. Search and sort
-// list the same folder again within moments.
 const listerIdle = 30 * time.Second
 
 type lister struct {
@@ -335,7 +337,11 @@ func (s *Service) releaser(key string, access *Access) func(ok bool) {
 			s.listers = map[string]*lister{}
 		}
 		entry := &lister{access: access}
-		entry.timer = time.AfterFunc(listerIdle, func() {
+		idle := s.ListerIdle
+		if idle <= 0 {
+			idle = listerIdle
+		}
+		entry.timer = time.AfterFunc(idle, func() {
 			s.mu.Lock()
 			current := s.listers[key] == entry
 			if current {

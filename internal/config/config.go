@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/datasize"
 )
@@ -49,14 +50,23 @@ type Config struct {
 	// MaxUploadBytes limits each uploaded file (LUDOCK_MAX_UPLOAD_SIZE,
 	// default 2 GiB).
 	MaxUploadBytes int64
+	// FileHelperIdle is how long an idle file-listing helper is kept for the
+	// next listing (LUDOCK_FILE_HELPER_IDLE, default 30s).
+	FileHelperIdle time.Duration
+	// UpdateSettle is how long an updated server without a healthcheck must
+	// keep running before it replaces the original (LUDOCK_UPDATE_SETTLE,
+	// default 10s).
+	UpdateSettle time.Duration
 }
 
 // Defaults.
 const (
-	DefaultListen        = ":3000"
-	DefaultDockerSocket  = "/var/run/docker.sock"
-	DefaultBackupRoot    = "/backups"
-	DefaultMaxUploadSize = 2 << 30
+	DefaultListen         = ":3000"
+	DefaultDockerSocket   = "/var/run/docker.sock"
+	DefaultBackupRoot     = "/backups"
+	DefaultMaxUploadSize  = 2 << 30
+	DefaultFileHelperIdle = 30 * time.Second
+	DefaultUpdateSettle   = 10 * time.Second
 )
 
 // DBPath is the database file inside the data directory.
@@ -122,6 +132,8 @@ func Load() (Config, error) {
 		DockerConfig:   value("LUDOCK_DOCKER_CONFIG", ""),
 		HelperImage:    value("LUDOCK_HELPER_IMAGE", ""),
 		MaxUploadBytes: DefaultMaxUploadSize,
+		FileHelperIdle: DefaultFileHelperIdle,
+		UpdateSettle:   DefaultUpdateSettle,
 	}
 	var problems []error
 	if host, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
@@ -154,6 +166,18 @@ func Load() (Config, error) {
 			problems = append(problems, errors.New("LUDOCK_MAX_UPLOAD_SIZE must be a positive size such as 500 MB, 2 GiB, or 1.5 GiB"))
 		} else {
 			c.MaxUploadBytes = size
+		}
+	}
+	for _, setting := range []struct {
+		name string
+		into *time.Duration
+	}{{"LUDOCK_FILE_HELPER_IDLE", &c.FileHelperIdle}, {"LUDOCK_UPDATE_SETTLE", &c.UpdateSettle}} {
+		if raw := value(setting.name, ""); raw != "" {
+			if duration, err := time.ParseDuration(raw); err != nil || duration <= 0 {
+				problems = append(problems, fmt.Errorf("%s must be a positive duration such as 30s or 2m", setting.name))
+			} else {
+				*setting.into = duration
+			}
 		}
 	}
 	return c, errors.Join(problems...)

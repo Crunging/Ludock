@@ -1,7 +1,8 @@
 // Container journeys: the built image, deployed with the repository's
 // compose.yaml, against a disposable Docker daemon and real game containers.
-// CI runs them on amd64 and arm64. Never run them against a daemon that hosts
-// real game servers.
+// CI runs them on amd64 and arm64, each file in its own job, so a file must
+// pass on its own deployment. Never run them against a daemon that
+// hosts real game servers.
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
