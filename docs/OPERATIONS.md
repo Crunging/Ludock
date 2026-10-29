@@ -111,8 +111,9 @@ in time, so recent progress may not have been saved.
 ### Stop and restart
 
 Stops and restarts run as operations in **Activity**. If the game's console has
-a **Save world** shortcut, Ludock sends it and waits five seconds first; if the
-console isn't available, the stop goes ahead. Docker then allows 120 seconds to
+a **Save world** shortcut, Ludock sends it and waits five seconds first
+(`LUDOCK_SAVE_SETTLE`, such as `15s` for a large world); if the console isn't
+available, the stop goes ahead. Docker then allows 120 seconds to
 shut down, or 180 for ARK, Palworld, Valheim, and 7 Days to Die; a longer
 `stop_grace_period` on the container wins. If Ludock restarts during a stop, it
 waits for that stop to finish without sending it again, for at least five

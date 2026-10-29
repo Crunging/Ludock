@@ -10,6 +10,7 @@ import (
 )
 
 func TestAssetsRevalidateAndCompressText(t *testing.T) {
+	t.Parallel()
 	get := func(path string, headers map[string]string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		for name, value := range headers {

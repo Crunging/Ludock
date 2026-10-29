@@ -12,6 +12,7 @@ import (
 )
 
 func TestOperationHistoryFollowsGrants(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	job, err := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
 		Kind: "restart", BindingRevision: 1})
@@ -44,6 +45,7 @@ func TestOperationHistoryFollowsGrants(t *testing.T) {
 }
 
 func TestAuditNeedsAnAdministrator(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	if response := p.do("GET", "/audit", operator, nil, nil); response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/" {

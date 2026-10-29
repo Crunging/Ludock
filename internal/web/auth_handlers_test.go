@@ -12,6 +12,7 @@ import (
 // drop tabs and newlines from a Location, so "/\t/evil.example" would become
 // "//evil.example".
 func TestLoginNextStaysOnSite(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	for next, want := range map[string]string{
 		"/servers?view=list":    "/servers?view=list",
@@ -33,6 +34,7 @@ func TestLoginNextStaysOnSite(t *testing.T) {
 // Signing out over HTTPS clears the session cookie with the same Secure
 // attribute it was set with.
 func TestLogoutClearsSecureCookie(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	response := p.do("POST", "/logout", p.admin, nil, map[string]string{
 		"X-Forwarded-Proto": "https", "Origin": "https://panel.example", "X-CSRF-Token": CSRFToken(p.admin.Token)})

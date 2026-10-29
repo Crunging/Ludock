@@ -9,7 +9,9 @@ export default defineConfig({
   testDir: "journeys",
   fullyParallel: false,
   workers: 4,
+  // A retry shows whether a failure is flaky, but a flaky journey still fails.
   retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: !!process.env.CI,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? [["github"], ["list"]] : "list",

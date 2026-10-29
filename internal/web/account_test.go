@@ -20,6 +20,7 @@ func (p *pages) postForm(target string, principal *auth.Principal, values url.Va
 // Revoking a session from the account page is covered by the account journey.
 // This covers what it can't: revocation stays within the account and is audited.
 func TestRevokeSessions(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	phone, _ := p.app.Auth.Login(context.Background(), "operator", "password-u-operator", auth.Client{IP: "192.0.2.7", UserAgent: "Phone"})

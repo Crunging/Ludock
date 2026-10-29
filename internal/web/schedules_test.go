@@ -21,6 +21,7 @@ func scheduleForm(values map[string][]string) url.Values {
 }
 
 func TestSchedulesFollowActionGrants(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView, authz.SchedulesManage, authz.ServerStart)

@@ -100,7 +100,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
 		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates,
-		ReplacementSettle: cfg.UpdateSettle}
+		ReplacementSettle: cfg.UpdateSettle, SaveSettle: cfg.SaveSettle}
 	jobService.Register(runner)
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
 		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}

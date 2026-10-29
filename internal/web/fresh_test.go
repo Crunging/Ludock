@@ -14,6 +14,7 @@ import (
 // tag. Changed htmx headers change the tag. Pages, posts, errors, other
 // types, and fragments too large to hold go out untagged and unchanged.
 func TestTagFragments(t *testing.T) {
+	t.Parallel()
 	body := "<div id=\"servers\">" + strings.Repeat("row ", 100) + "</div>"
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

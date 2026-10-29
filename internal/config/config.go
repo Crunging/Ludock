@@ -57,6 +57,9 @@ type Config struct {
 	// keep running before it replaces the original (LUDOCK_UPDATE_SETTLE,
 	// default 10s).
 	UpdateSettle time.Duration
+	// SaveSettle is how long Ludock waits after a game's save command before
+	// it stops the server (LUDOCK_SAVE_SETTLE, default 5s).
+	SaveSettle time.Duration
 }
 
 // Defaults.
@@ -67,6 +70,7 @@ const (
 	DefaultMaxUploadSize  = 2 << 30
 	DefaultFileHelperIdle = 30 * time.Second
 	DefaultUpdateSettle   = 10 * time.Second
+	DefaultSaveSettle     = 5 * time.Second
 )
 
 // DBPath is the database file inside the data directory.
@@ -134,6 +138,7 @@ func Load() (Config, error) {
 		MaxUploadBytes: DefaultMaxUploadSize,
 		FileHelperIdle: DefaultFileHelperIdle,
 		UpdateSettle:   DefaultUpdateSettle,
+		SaveSettle:     DefaultSaveSettle,
 	}
 	var problems []error
 	if host, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
@@ -171,7 +176,8 @@ func Load() (Config, error) {
 	for _, setting := range []struct {
 		name string
 		into *time.Duration
-	}{{"LUDOCK_FILE_HELPER_IDLE", &c.FileHelperIdle}, {"LUDOCK_UPDATE_SETTLE", &c.UpdateSettle}} {
+	}{{"LUDOCK_FILE_HELPER_IDLE", &c.FileHelperIdle}, {"LUDOCK_UPDATE_SETTLE", &c.UpdateSettle},
+		{"LUDOCK_SAVE_SETTLE", &c.SaveSettle}} {
 		if raw := value(setting.name, ""); raw != "" {
 			if duration, err := time.ParseDuration(raw); err != nil || duration <= 0 {
 				problems = append(problems, fmt.Errorf("%s must be a positive duration such as 30s or 2m", setting.name))

@@ -24,6 +24,7 @@ type postResult struct {
 }
 
 func TestUsersPageNeedsAnAdministrator(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	if response := p.do("GET", "/users", operator, nil, nil); response.Code != http.StatusSeeOther {
@@ -36,6 +37,7 @@ func TestUsersPageNeedsAnAdministrator(t *testing.T) {
 }
 
 func TestGrantsStayWithinRoleCeiling(t *testing.T) {
+	t.Parallel()
 	p := newPages(t)
 	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
 	tooMuch := p.adminPost("/users/"+viewer.User.ID+"/grants", url.Values{"grant:" + p.server: {"server.view", "server.start"}})
@@ -51,6 +53,7 @@ func TestGrantsStayWithinRoleCeiling(t *testing.T) {
 }
 
 func TestGrantInputsNormalize(t *testing.T) {
+	t.Parallel()
 	inputs := views.GrantInputs(map[string][]string{
 		"grant:a": {"files.write"},                // no view: no access
 		"grant:b": {"server.view", "files.write"}, // writing implies reading

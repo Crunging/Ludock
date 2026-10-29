@@ -21,4 +21,5 @@ while IFS= read -r line; do
   status=1
 done < <(grep -Hn -E "^ARG [A-Z_]+_IMAGE=|^FROM " Dockerfile | grep -v -E "FROM (--platform=\S+ )?(\\\$\{|($stages) )" )
 grep -q 'aquasec/trivy:[^@]*@sha256:[0-9a-f]\{64\}' scripts/scan-image.sh || { echo "Unpinned: scanner image"; status=1; }
+grep -q 'rhysd/actionlint@sha256:[0-9a-f]\{64\}' .github/workflows/ci.yaml || { echo "Unpinned: workflow linter image"; status=1; }
 exit $status
