@@ -31,7 +31,7 @@ type Plan struct {
 	Roots   []Root
 	Mounts  []docker.MountSettings
 	Aliases []string
-	Checked []launch.Mount
+	Checked []identity.Mount
 }
 
 // PlanRoots maps each data root to a private alias. Roots that contain a
@@ -51,7 +51,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 		if slices.ContainsFunc(mounts, func(mount identity.Mount) bool { return strings.HasPrefix(mount.Destination, root.Path+"/") }) {
 			return nil, fail("NESTED_BACKUP_MOUNT", "A selected root contains a nested mount. Restrict ludock.files to a data subdirectory without nested mounts before backing up.")
 		}
-		source := ownerMount(mounts, root.Path)
+		source := writableOwnerMount(mounts, root.Path)
 		if source == nil {
 			return nil, fail("BACKUP_ROOT_CHANGED", "A selected data root no longer belongs to a writable mount.")
 		}
@@ -72,12 +72,12 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 			mountSource = source.Name
 		}
 		plan.Mounts = append(plan.Mounts, docker.MountSettings{Type: source.Type, Source: mountSource, Target: alias, ReadOnly: readOnly})
-		checked := launch.Mount{Type: source.Type, Source: mountSource, Destination: alias}
+		checked := identity.Mount{Type: source.Type, Source: mountSource, Destination: alias, Writable: true}
 		if source.Type == "volume" {
 			checked.Name = mountSource
 		}
 		plan.Checked = append(plan.Checked, checked)
-		if !files.SafeWritableDataMount(files.Mount{Type: checked.Type, Source: checked.Source, Destination: checked.Destination, RW: true, Name: checked.Name}) {
+		if !files.SafeWritableDataMount(checked) {
 			return nil, fail("UNSAFE_BACKUP_ROOT", "A selected data mount is unsafe.")
 		}
 	}
@@ -86,7 +86,7 @@ func PlanRoots(context *servers.Context, readOnly bool) (*Plan, error) {
 
 // HelperRoot is a root's path inside the data helper.
 func HelperRoot(context *servers.Context, root Root) (string, error) {
-	mount := ownerMount(context.Observation.Mounts, root.Path)
+	mount := writableOwnerMount(context.Observation.Mounts, root.Path)
 	if mount == nil {
 		return "", fail("BACKUP_ROOT_CHANGED", "The selected data root changed.")
 	}
@@ -685,8 +685,8 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	return wait()
 }
 
-// ownerMount is the deepest writable bind or volume containing rootPath.
-func ownerMount(mounts []identity.Mount, rootPath string) *identity.Mount {
+// writableOwnerMount is the deepest writable bind or volume containing rootPath.
+func writableOwnerMount(mounts []identity.Mount, rootPath string) *identity.Mount {
 	var owner *identity.Mount
 	for index := range mounts {
 		mount := &mounts[index]

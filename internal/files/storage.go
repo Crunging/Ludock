@@ -156,14 +156,6 @@ func (a *Access) request(ctx context.Context, request helper.FileRequest, input 
 		Input: input, Trailer: trailer, AssertAccess: a.assertAccess})
 }
 
-func toMounts(points []docker.MountPoint) []Mount {
-	var mounts []Mount
-	for _, point := range points {
-		mounts = append(mounts, Mount{Type: point.Type, Source: point.Source, Destination: point.Destination, RW: point.RW, Name: point.Name})
-	}
-	return mounts
-}
-
 // signature is what must not change while file access is prepared.
 func signature(info *docker.ContainerInspect) string {
 	labels := make([][2]string, 0, len(info.Config.Labels))
@@ -178,8 +170,8 @@ func signature(info *docker.ContainerInspect) string {
 }
 
 // OwnerMount is the deepest mount containing rootPath.
-func OwnerMount(rootPath string, mounts []Mount) *Mount {
-	var owner *Mount
+func OwnerMount(rootPath string, mounts []identity.Mount) *identity.Mount {
+	var owner *identity.Mount
 	for index := range mounts {
 		mount := &mounts[index]
 		if Within(rootPath, normalizedMountPath(mount.Destination)) &&
@@ -204,7 +196,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		!games.Evaluate(inspection.Config.Image, inspection.Config.Labels).Eligible {
 		return nil, Error("FILE_TARGET_CHANGED", 409)
 	}
-	mounts := toMounts(inspection.Mounts)
+	mounts := identity.DockerMounts(inspection.Mounts)
 	fresh := Roots(target.GameType, inspection.Config.Labels, mounts)
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return nil, Error("FILE_ROOT_CHANGED", 409)
@@ -213,7 +205,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	if owner == nil || !SafeWritableDataMount(*owner) {
 		return nil, Error("FILE_ROOT_CHANGED", 409)
 	}
-	var children []Mount
+	var children []identity.Mount
 	for _, mount := range mounts {
 		if mount != *owner && Within(normalizedMountPath(mount.Destination), root.Path) {
 			children = append(children, mount)
@@ -225,7 +217,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 			blocked = append(blocked, normalizedMountPath(mount.Destination))
 		}
 	}
-	selected := []Mount{*owner}
+	selected := []identity.Mount{*owner}
 	for _, mount := range children {
 		destination := normalizedMountPath(mount.Destination)
 		if SafeWritableDataMount(mount) && !slices.ContainsFunc(blocked, func(b string) bool { return Within(destination, b) }) {
@@ -233,7 +225,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		}
 	}
 	var projections []docker.MountSettings
-	var proofMounts []launch.Mount
+	var proofMounts []identity.Mount
 	for _, mount := range selected {
 		source := mount.Source
 		if mount.Type == "volume" {
@@ -249,7 +241,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 			projection.BindOptions = &docker.BindOptions{Propagation: "rprivate", NonRecursive: true}
 		}
 		projections = append(projections, projection)
-		proofMounts = append(proofMounts, launch.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Name: mount.Name})
+		proofMounts = append(proofMounts, identity.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, Name: mount.Name})
 	}
 	image, err := s.Images.Resolve(ctx)
 	if err != nil {
@@ -313,7 +305,7 @@ func (s *Service) reusable(ctx context.Context, target Target, root Root, access
 		!games.Evaluate(inspection.Config.Image, inspection.Config.Labels).Eligible || signature(inspection) != access.signature {
 		return false
 	}
-	fresh := Roots(target.GameType, inspection.Config.Labels, toMounts(inspection.Mounts))
+	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection.Mounts))
 	if !slices.ContainsFunc(fresh, func(candidate Root) bool { return candidate.Path == root.Path }) {
 		return false
 	}

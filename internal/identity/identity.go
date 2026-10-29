@@ -19,6 +19,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
@@ -34,6 +35,14 @@ type Mount struct {
 	Destination string `json:"destination"`
 	Writable    bool   `json:"writable"`
 	Name        string `json:"name,omitempty"`
+}
+
+func DockerMounts(points []docker.MountPoint) []Mount {
+	var mounts []Mount
+	for _, point := range points {
+		mounts = append(mounts, Mount{Type: point.Type, Source: point.Source, Destination: point.Destination, Writable: point.RW, Name: point.Name})
+	}
+	return mounts
 }
 
 // Observation is one inspected container that Ludock can manage.

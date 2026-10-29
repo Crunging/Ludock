@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
@@ -19,14 +20,6 @@ type Root struct {
 	ID   string
 	Name string
 	Path string
-}
-
-type Mount struct {
-	Type        string
-	Source      string
-	Destination string
-	RW          bool
-	Name        string
 }
 
 func normalizedMountPath(value string) string {
@@ -46,8 +39,8 @@ var socketSuffix = regexp.MustCompile(`(?i)\.sock$`)
 
 // SafeWritableDataMount reports a writable bind or volume that is not a
 // system path or socket.
-func SafeWritableDataMount(mount Mount) bool {
-	if !mount.RW || (mount.Type != "bind" && mount.Type != "volume") {
+func SafeWritableDataMount(mount identity.Mount) bool {
+	if !mount.Writable || (mount.Type != "bind" && mount.Type != "volume") {
 		return false
 	}
 	destination := normalizedMountPath(mount.Destination)
@@ -101,7 +94,7 @@ func SensitiveSystemPath(value string) bool {
 // otherwise every safe writable mount is a root. The deepest actual mount
 // owns each path, so a label cannot bypass a read-only or sensitive nested
 // mount by naming its parent.
-func Roots(gameType string, labels map[string]string, mounts []Mount) []Root {
+func Roots(gameType string, labels map[string]string, mounts []identity.Mount) []Root {
 	var candidates []string
 	if configured, ok := labels[games.LabelFiles]; ok {
 		for _, value := range strings.Split(configured, ",") {
@@ -123,7 +116,7 @@ func Roots(gameType string, labels map[string]string, mounts []Mount) []Root {
 		if normalized == "" || textutil.Length(normalized) > 512 || slices.Contains(paths, normalized) || SensitiveSystemPath(normalized) {
 			continue
 		}
-		var owners []Mount
+		var owners []identity.Mount
 		for _, mount := range mounts {
 			if Within(normalized, normalizedMountPath(mount.Destination)) {
 				owners = append(owners, mount)

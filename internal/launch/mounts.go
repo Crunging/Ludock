@@ -15,17 +15,11 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 )
 
 var ErrUnverifiedMount = apperr.New("UNVERIFIED_DATA_MOUNT", 409,
 	"A data mount could not be verified. Bind source paths must contain no symbolic links and must be accessible to the Docker host validator; named volumes must use the local driver without host remapping options.")
-
-type Mount struct {
-	Type        string
-	Source      string
-	Destination string
-	Name        string
-}
 
 // Proof keeps a validator alive. Its pinned descriptors prevent source
 // inode reuse until Cleanup.
@@ -53,7 +47,7 @@ func trimSlash(value string) string { return strings.TrimSuffix(path.Clean(value
 // user commands, reads game files, or exposes its host mount to a file
 // endpoint. operationID, when set, labels the validator for recovery and
 // makes cleanup retry until it is gone.
-func MountProof(ctx context.Context, client *docker.Client, images *Images, mounts []Mount, operationID string) (*Proof, error) {
+func MountProof(ctx context.Context, client *docker.Client, images *Images, mounts []identity.Mount, operationID string) (*Proof, error) {
 	for _, mount := range mounts {
 		if mount.Type != "volume" {
 			continue
