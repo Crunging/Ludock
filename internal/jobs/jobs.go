@@ -46,12 +46,11 @@ type Jobs struct {
 	Console  *console.Runtime
 	Backups  *backups.Service
 	Updates  *update.Service
-	// SaveSettle is how long to wait after a save command
-	// (LUDOCK_SAVE_SETTLE); zero means 5 seconds.
+	// SaveSettle is how long to wait after a save command; tests shorten it.
 	SaveSettle time.Duration
 	// ReplacementSettle is how long an updated container without a
-	// healthcheck must keep running before it replaces the original
-	// (LUDOCK_UPDATE_SETTLE); zero means 10 seconds.
+	// healthcheck must keep running before it replaces the original; tests
+	// shorten it.
 	ReplacementSettle time.Duration
 	// Poll is the reconciliation poll interval; tests shorten it.
 	Poll time.Duration

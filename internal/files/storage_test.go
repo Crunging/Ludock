@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
@@ -186,6 +187,34 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 	}
 	f.service.Close()
 	f.helpersLeft(t)
+}
+
+// A listing helper left idle for ListerIdle is removed, with its mount
+// proof, without another listing or Close.
+func TestIdleListingHelperIsRemoved(t *testing.T) {
+	f := setup(t)
+	f.service.ListerIdle = 50 * time.Millisecond
+	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	helpers := func(kind string) int {
+		count := 0
+		for _, id := range f.engine.SortedIDs() {
+			if c := f.engine.Container(id); c != nil && c.Config.Labels["ludock.internal"] != "" &&
+				(kind == "" || c.Config.Labels["ludock.internal"] == kind) {
+				count++
+			}
+		}
+		return count
+	}
+	if helpers("file-helper") != 1 {
+		t.Fatal(helpers("file-helper"), "listing helpers after a listing")
+	}
+	for deadline := time.Now().Add(5 * time.Second); helpers("") != 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal(helpers(""), "helpers left after the listing helper went idle")
+		}
+	}
 }
 
 // Failed changes remove their helper before returning.

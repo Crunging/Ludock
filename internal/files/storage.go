@@ -64,8 +64,8 @@ type Service struct {
 	Docker *docker.Client
 	Images *launch.Images
 	// ListerIdle is how long a listing helper is kept after its last use;
-	// zero means 30 seconds. Search and sort list the same folder again
-	// within moments.
+	// zero means 30 seconds, and tests shorten it. Search and sort list the
+	// same folder again within moments.
 	ListerIdle time.Duration
 
 	mu sync.Mutex

@@ -67,9 +67,6 @@ export default async function setup() {
     pull_policy: never
     environment:
       LUDOCK_SETUP_CODE: ${setupCode}
-      # Shorter waits than the defaults of 30 and 10 seconds.
-      LUDOCK_FILE_HELPER_IDLE: 3s
-      LUDOCK_UPDATE_SETTLE: 2s
 `);
   const ludock = ["compose", "--project-name", "ludock-e2e", "-f", join(root, "compose.yaml"), "-f", override];
   const game = ["compose", "--project-name", "game", "--project-directory", stack, "-f", join(stack, "compose.yaml")];

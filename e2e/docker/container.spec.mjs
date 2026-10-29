@@ -8,6 +8,21 @@ import { docker, ludock, stack, gameContainer } from "../docker-setup.mjs";
 
 asAdmin();
 
+test("the image runs hardened and reports healthy", async ({ page }) => {
+  const id = docker(...ludock(), "ps", "--quiet", "ludock");
+  await expect.poll(() => docker("inspect", "--format", "{{.State.Health.Status}}", id), { timeout: 60_000 }).toBe("healthy");
+  const status = docker("exec", id, "cat", "/proc/1/status");
+  expect(status).toMatch(/^CapEff:\s+0+2$/m);
+  expect(status).toMatch(/^NoNewPrivs:\s+1$/m);
+  expect(docker("inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", id)).toBe("true");
+  expect(docker("exec", id, "ludock", "version")).not.toBe("");
+
+  await page.goto("/diagnostics");
+  await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
+  await page.goto("/");
+  await expect(page.locator(".server-row", { hasText: "Test Game" })).toContainText("Running");
+});
+
 test("file helpers from Ludock's image read and change server data", async ({ page }) => {
   await openServer(page, "Test Game");
   await page.locator(".detail-actions").getByRole("link", { name: "Files" }).click();
@@ -25,9 +40,13 @@ test("file helpers from Ludock's image read and change server data", async ({ pa
   await page.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete file" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Deleted “uploaded.txt”.");
-  // Helper containers are gone once the work is done; a read-only listing
-  // helper stays idle for LUDOCK_FILE_HELPER_IDLE (3 seconds here) first.
-  await expect.poll(() => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal"), { timeout: 20_000 }).toBe("");
+  // Helper containers are gone once the work is done, except the read-only
+  // listing helper and its mount proof, kept for the next listing until they
+  // have been idle for 30 seconds (the files package's tests cover removal).
+  const format = '{{$kind := index .Config.Labels "ludock.internal"}}{{$kind}}{{if eq $kind "file-helper"}} {{range .Mounts}}{{.RW}}{{end}}{{end}}';
+  const helpers = () => docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n").filter(Boolean)
+    .map((id) => docker("inspect", "--format", format, id)).sort();
+  await expect.poll(helpers, { timeout: 20_000 }).toEqual(["file-helper false", "mount-validator"]);
 });
 
 test("a backup restores the server's data and running state", async ({ page }) => {
@@ -46,20 +65,4 @@ test("a backup restores the server's data and running state", async ({ page }) =
   await expectOperationSucceeded(page);
   expect(readFileSync(properties, "utf8")).toBe("motd=Hello from the container test\n");
   expect(docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
-});
-
-// Last, so Docker has run its first healthcheck by now.
-test("the image runs hardened and reports healthy", async ({ page }) => {
-  const id = docker(...ludock(), "ps", "--quiet", "ludock");
-  await expect.poll(() => docker("inspect", "--format", "{{.State.Health.Status}}", id), { timeout: 60_000 }).toBe("healthy");
-  const status = docker("exec", id, "cat", "/proc/1/status");
-  expect(status).toMatch(/^CapEff:\s+0+2$/m);
-  expect(status).toMatch(/^NoNewPrivs:\s+1$/m);
-  expect(docker("inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", id)).toBe("true");
-  expect(docker("exec", id, "ludock", "version")).not.toBe("");
-
-  await page.goto("/diagnostics");
-  await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
-  await page.goto("/");
-  await expect(page.locator(".server-row", { hasText: "Test Game" })).toContainText("Running");
 });

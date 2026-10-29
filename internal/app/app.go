@@ -99,14 +99,13 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	files.SetSensitivePaths(cfg.SensitivePaths)
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
-		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates,
-		ReplacementSettle: cfg.UpdateSettle, SaveSettle: cfg.SaveSettle}
+		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates}
 	jobService.Register(runner)
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
 		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Observer: observer, Servers: serverService,
-		Images: images, Files: &files.Service{Docker: client, Images: images, ListerIdle: cfg.FileHelperIdle}, Backups: backupService, Runner: runner, Jobs: jobService,
+		Images: images, Files: &files.Service{Docker: client, Images: images}, Backups: backupService, Runner: runner, Jobs: jobService,
 		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates,
 		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
 		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
