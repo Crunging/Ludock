@@ -543,18 +543,27 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		}
 	}
 	for {
+		// A job runs only once it is saved as running: a restart then
+		// reconciles it instead of running it a second time. The row may be
+		// a stale read of a job that already ran, so only a queued one is
+		// claimed.
+		claimed := false
+		if !r.persist(ctx, "start", func() error {
+			result, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=? AND status='queued'",
+				db.Now(), rw.id)
+			if err != nil {
+				return err
+			}
+			changed, err := result.RowsAffected()
+			claimed = changed == 1
+			return err
+		}) || !claimed {
+			return
+		}
 		// Damaged saved state fails this job without wedging the runner.
 		job, err := rw.job()
 		if err != nil {
 			fail(err)
-			return
-		}
-		// A job runs only once it is saved as running: a restart then
-		// reconciles it instead of running it a second time.
-		if !r.persist(ctx, "start", func() error {
-			_, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='running', phase='validating', updated_at=? WHERE id=?", db.Now(), job.ID)
-			return err
-		}) {
 			return
 		}
 		handler, ok := r.handler(job.Kind)

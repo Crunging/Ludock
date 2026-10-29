@@ -364,3 +364,28 @@ func TestLockReleasedDuringConflict(t *testing.T) {
 		})
 	}
 }
+
+// The runner reads queued rows before claiming them, so a job can finish
+// between the read and the claim. Running that stale row again must not run
+// the job a second time.
+func TestStaleQueuedRowDoesNotRunAgain(t *testing.T) {
+	r, servers := setup(t, 1)
+	runs := 0
+	r.Register("stop", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+		runs++
+		return nil, nil
+	}})
+	queued, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "stop"})
+	stale, err := r.row(ctx, queued.ID)
+	if err != nil || stale == nil {
+		t.Fatal(stale, err)
+	}
+	r.Start(ctx, nil)
+	waitStatus(t, r, queued.ID, Succeeded)
+	r.run(ctx, stale)
+	var audits int
+	r.DB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='server.stop.succeeded'").Scan(&audits)
+	if runs != 1 || audits != 1 {
+		t.Fatal(runs, audits)
+	}
+}
