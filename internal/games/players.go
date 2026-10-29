@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 )
 
-// Players is who a game says is online.
 type Players struct {
 	Online int
 	Max    int // 0 when the game doesn't say

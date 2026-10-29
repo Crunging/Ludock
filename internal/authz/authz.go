@@ -18,7 +18,6 @@ import (
 
 var log = logging.New("authorization")
 
-// Capability is one server permission.
 type Capability string
 
 const (
@@ -70,20 +69,17 @@ func RoleCeiling(role db.Role) []Capability {
 	return result
 }
 
-// Grant is one server assignment.
 type Grant struct {
 	ServerID     string
 	Capabilities []Capability
 	UpdatedAt    int64
 }
 
-// GrantInput is a requested assignment.
 type GrantInput struct {
 	ServerID     string
 	Capabilities []Capability
 }
 
-// Service checks and edits authorization.
 type Service struct {
 	DB      *db.DB
 	Servers *identity.Store
@@ -149,7 +145,6 @@ func encodeCapabilities(capabilities []Capability) string {
 	return string(encoded)
 }
 
-// UserGrants lists a user's assignments.
 func (s *Service) UserGrants(ctx context.Context, userID string) ([]Grant, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT server_id, capabilities_json, updated_at
     FROM server_grants WHERE user_id = ? ORDER BY server_id`, userID)
@@ -187,7 +182,6 @@ func (s *Service) UserGrant(ctx context.Context, userID, serverID string) (*Gran
 	return &grant, nil
 }
 
-// Effective returns the actor's current capabilities on a server.
 func (s *Service) Effective(ctx context.Context, actor *db.SessionUser, serverID string) ([]Capability, error) {
 	capabilities, _, err := s.Access(ctx, actor, serverID)
 	return capabilities, err
@@ -287,7 +281,6 @@ func roleCapabilities(user *db.SessionUser, server *identity.Server, assigned []
 	return result
 }
 
-// Has reports whether the actor currently has a capability.
 func (s *Service) Has(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) (bool, error) {
 	capabilities, err := s.Effective(ctx, actor, serverID)
 	return slices.Contains(capabilities, capability), err
@@ -363,10 +356,9 @@ func (s *Service) validateGrant(ctx context.Context, q interface {
 	return capabilities, nil
 }
 
-// SetUserGrants replaces a user's complete assignment set atomically. Empty
-// grants revoke access. It does not infer permissions from UI presets. The
-// actor's session (tokenHash) and admin role are checked again inside the
-// transaction that writes the grants.
+// SetUserGrants atomically replaces a user's assignments; empty grants revoke
+// access. The actor's session and admin role are rechecked inside the
+// transaction.
 func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []GrantInput, actor *db.SessionUser, tokenHash string) ([]Grant, error) {
 	administrator, err := s.AssertAdministrator(ctx, actor)
 	if err != nil {

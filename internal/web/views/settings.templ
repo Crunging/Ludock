@@ -8,14 +8,12 @@ import (
 	"github.com/Crunging/Ludock/internal/notify"
 )
 
-// SettingsView is the settings page.
 type SettingsView struct {
 	Connection        ConnectionSettings
 	Backups           BackupSettingsView
 	Notifications     []NotificationDestinationView
 }
 
-// ConnectionSettings is the public address form.
 type ConnectionSettings struct {
 	Host, PageHost string
 	Error, Notice  string
@@ -435,7 +433,6 @@ templ destinationFields(n NotificationDestinationView) {
 	}
 }
 
-// DeliveriesView is the recent notification list.
 type DeliveriesView struct {
 	Deliveries    []notify.Delivery
 	Error, Notice string

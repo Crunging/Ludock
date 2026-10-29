@@ -138,9 +138,8 @@ func (j *Jobs) waitForStopDeadline(ctx context.Context, job *ops.Context) error 
 	}
 }
 
-// observeDuringStop confirms the binding. While an interrupted stop may still
-// run, a daemon failure is not evidence it settled: retry until the saved
-// deadline, but never across an identity mismatch.
+// observeDuringStop confirms the binding, retrying daemon failures until the
+// saved stop deadline.
 func (j *Jobs) observeDuringStop(ctx context.Context, job *ops.Context, containerID string, logical *identity.Server) (*servers.Observed, error) {
 	for {
 		observed, _, err := j.Servers.Observer.Inspect(ctx, containerID)
@@ -289,7 +288,6 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if data != nil {
 			data.Cleanup()
 		}
-		// Recovery removes helpers by label, so a stale ID only costs a lookup.
 		if err := job.Progress(job.Job.Phase, map[string]any{"dataHelperId": nil}, nil); err != nil {
 			log.Warn("Could not save a backup helper's removal; recovery will look for it again")
 		}
@@ -368,8 +366,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 			return nil, err
 		}
 		recorded = true
-		// The committed backup row is what recovery trusts; this marker only
-		// saves it a lookup.
+		// Saved only after the row commits; backupCompleted trusts it.
 		if err := job.Progress("backup_complete", map[string]any{"backupComplete": true}, nil); err != nil {
 			log.Warn("Could not save a backup's completion marker; its record is already saved")
 		}
@@ -384,9 +381,8 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if removeErr == nil {
 			removeErr = j.Backups.Storage.RemovePartial(settings.Destination, id)
 		}
-		// An archive that is neither recorded nor removed would use storage
-		// unseen by retention and capacity checks; recording it as deleting
-		// leaves its removal to Prune and Delete.
+		// Record an archive that could not be removed as deleting, so Prune and
+		// Delete retry it.
 		if removeErr != nil {
 			if recordErr := j.Backups.RecordDeleting(context.WithoutCancel(ctx), id, server.Logical.ID, server.Logical.BindingFingerprint,
 				settings.Destination); recordErr != nil {
@@ -428,9 +424,9 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 	})
 }
 
-// backupCompleted: the row is committed before its completion marker, so a
-// crash between the two still leaves a complete backup. A failed lookup
-// counts as incomplete, which keeps the server stopped.
+// backupCompleted trusts the completion marker, which is saved only after the
+// backup row commits, and otherwise checks the row. A failed lookup counts as
+// incomplete, which keeps the server stopped.
 func (j *Jobs) backupCompleted(ctx context.Context, job *ops.Context) bool {
 	if job.Job.Recovery["backupComplete"] == true {
 		return true
@@ -560,8 +556,6 @@ func (j *Jobs) recoverBackup(ctx context.Context, job *ops.Context, startServer 
 		return j.keepStoppedAfterFailedBackup(ctx, server, job)
 	})
 }
-
-// Restore journals.
 
 type journal struct {
 	Root  backups.Root `json:"root"`

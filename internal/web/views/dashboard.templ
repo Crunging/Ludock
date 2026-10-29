@@ -25,7 +25,6 @@ type ServerRow struct {
 	Players        PlayersView
 }
 
-// ServerList is the server list region of the dashboard.
 type ServerList struct {
 	Rows                 []ServerRow
 	Total                int
@@ -45,7 +44,6 @@ templ Pip(tone string) {
 	<span class={ "marker", "marker--sm", "marker--" + tone } aria-hidden="true"></span>
 }
 
-// StateMark is a server's state marker at full size.
 templ StateMark(tone string) {
 	<span class={ "marker", "marker--" + tone } aria-hidden="true"></span>
 }
@@ -110,10 +108,10 @@ templ Dashboard(page Page, list ServerList) {
 				</section>
 			</div>
 			@serverFilters(list)
-			// Refreshes carry the filters as they are now; the filters stay
-			// outside the swap so typing is never interrupted. Requests from
-			// outside queue behind the list's own (htmx's default for an element),
-			// so the newest filters win. Controls inside must not inherit that.
+			// Refreshes carry the current filters, which stay outside the swap
+			// so typing is never interrupted. Outside requests queue behind the
+			// list's own, so the newest filters win; controls inside must not
+			// inherit that.
 			<div id="servers" hx-get="/fragments/servers" hx-include="#server-filters" hx-trigger="sse:server delay:300ms, servers-changed from:body, every 60s" hx-swap="innerHTML">
 				@ServerListFragment(list)
 			</div>
@@ -347,7 +345,6 @@ func LifecycleConfirm(action, serverName string, backupOption bool) templ.Attrib
 	return attributes
 }
 
-// AttentionView is the needs-attention panel.
 type AttentionView struct {
 	Items                []attention.Item
 	DiscoveryUnavailable bool

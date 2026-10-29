@@ -191,7 +191,6 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 	changed(w)
 }
 
-// fromDetail reports an action submitted from the server detail page.
 func fromDetail(r *http.Request) bool { return r.Header.Get("HX-Target") == "detail-status" }
 
 func (s *Server) audit(r *http.Request, request *Request, action, serverID string, details map[string]any) {
@@ -258,11 +257,7 @@ func requestKey(r *http.Request) string {
 	return key
 }
 
-// events streams server changes as SSE. Only logical IDs are sent, after a
-// fresh discovery snapshot and grant check; the stream ends when the session
-// does.
-// Event streams stay open for a session, so like consoles they are
-// limited: a tab needs one.
+// Event streams stay open for a session, so like consoles they are limited.
 const (
 	maxStreams           = 512
 	maxStreamsPerUser    = 32
@@ -307,6 +302,8 @@ func (c *streamCounts) release(userID, tokenHash string) {
 	}
 }
 
+// events streams server changes as SSE until the session ends. Only logical
+// IDs are sent.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

@@ -51,7 +51,6 @@ func Error(code string, status int) *apperr.Error {
 // downloaded instead.
 const PreviewLimit = 512 * 1024
 
-// Target is the server whose files are accessed.
 type Target struct {
 	ContainerID string
 	Name        string
@@ -63,9 +62,8 @@ type Target struct {
 type Service struct {
 	Docker *docker.Client
 	Images *launch.Images
-	// ListerIdle is how long a listing helper is kept after its last use;
-	// zero means 30 seconds, and tests shorten it. Search and sort list the
-	// same folder again within moments.
+	// ListerIdle is how long a listing helper is kept after its last use; zero
+	// means 30 seconds.
 	ListerIdle time.Duration
 
 	mu sync.Mutex
@@ -81,7 +79,6 @@ type lister struct {
 	timer  *time.Timer
 }
 
-// NormalizeRelativePath validates a path relative to a root.
 func NormalizeRelativePath(value string) (string, error) {
 	if strings.Contains(value, "\x00") || strings.HasPrefix(value, "/") || slices.Contains(strings.Split(value, "/"), "..") {
 		return "", Error("INVALID_PATH", 400)
@@ -357,7 +354,6 @@ func (s *Service) releaser(key string, access *Access) func(ok bool) {
 	}
 }
 
-// Close removes idle listing helpers.
 func (s *Service) Close() {
 	s.mu.Lock()
 	listers := s.listers
@@ -369,11 +365,10 @@ func (s *Service) Close() {
 	}
 }
 
-// RemoveLeftovers removes file helpers left by an earlier process, which
-// may still be writing if a command was interrupted, and the mount
-// validators beside them, which can read the whole host. One Ludock runs per
-// Docker host, so at startup every one is left over. Startup keeps the lock
-// fence until this succeeds.
+// RemoveLeftovers removes file helpers left by an earlier process, which may
+// still be writing, and their mount validators, which can read the whole host.
+// One Ludock runs per Docker host, so at startup every one is left over.
+// Startup keeps the lock fence until this succeeds.
 func (s *Service) RemoveLeftovers(ctx context.Context) error {
 	for _, kind := range []string{"file-helper", "mount-validator"} {
 		helpers, err := s.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=" + kind}})
@@ -409,7 +404,6 @@ func (s *Service) prepare(ctx context.Context, access *Access, root Root, inspec
 	return nil
 }
 
-// Listing is a directory listing.
 type Listing struct {
 	Root    Root
 	Path    string
@@ -577,7 +571,6 @@ func (d *Download) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Close ends the stream and removes the helper.
 func (d *Download) Close() error {
 	d.once.Do(func() {
 		d.unwatch()
@@ -668,13 +661,11 @@ func (s *Service) openDownload(ctx context.Context, access *Access, root Root, n
 	return download, nil
 }
 
-// bufferedStream reads a stream through its buffer and closes the stream.
 type bufferedStream struct {
 	*bufio.Reader
 	io.Closer
 }
 
-// PreviewKind says how a file can be shown.
 type PreviewKind string
 
 const (
@@ -683,7 +674,6 @@ const (
 	PreviewBinary PreviewKind = "binary"
 )
 
-// Preview is a file's inline preview.
 type Preview struct {
 	Kind PreviewKind
 	Text string

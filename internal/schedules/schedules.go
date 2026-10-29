@@ -25,7 +25,6 @@ import (
 
 var log = logging.New("schedules")
 
-// Limits.
 const (
 	MaxPayloadBytes = 4 * 1024
 	MaxPerServer    = 100
@@ -34,7 +33,6 @@ const (
 	announceMinimum = 15 * time.Second
 )
 
-// Reasons a schedule cannot run.
 const (
 	OwnerMissing        = "owner_missing"
 	OwnerDisabled       = "owner_disabled"
@@ -55,7 +53,6 @@ var unavailableMessages = map[string]string{
 	Unavailable:         "Suspended: this schedule cannot currently run; review the server and schedule",
 }
 
-// UnavailableError explains why a schedule cannot run.
 type UnavailableError struct {
 	Reason string
 	Public *apperr.Error
@@ -74,7 +71,6 @@ func unavailable(reason string) *UnavailableError {
 
 func (e *UnavailableError) Error() string { return e.Public.Message }
 
-// Unwrap exposes the public error.
 func (e *UnavailableError) Unwrap() error { return e.Public }
 
 func missed(nonexistent bool) error {
@@ -90,7 +86,6 @@ type Broadcaster interface {
 	Broadcast(ctx context.Context, server *servers.Context, command string, assertAccess func() error) error
 }
 
-// Service manages schedules.
 type Service struct {
 	DB       *db.DB
 	Authz    *authz.Service
@@ -195,7 +190,6 @@ func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) 
 	return actor, binding, nil
 }
 
-// Schedule is a saved schedule as shown.
 type Schedule struct {
 	Input
 	ID                       string
@@ -292,13 +286,10 @@ func (s *Service) manager(ctx context.Context, actor *db.SessionUser, serverID s
 	return current, nil
 }
 
-// authorityState reads, on q alone, every row the authority checks depend
+// authorityState reads, through q alone, every row the authority checks depend
 // on: each user's role, status, and grant on the server, and the server's
-// binding. A write reads it before its checks and again inside its
-// transaction, and stops if anything changed. Transactions take the write
-// lock at once, so the checks themselves, which read through the shared
-// pool, must not run inside one: with every connection held by writers
-// queued behind it, the lock holder would wait for a free connection.
+// binding. Writes read it before their checks and again inside their
+// transaction, and stop if anything changed.
 func authorityState(ctx context.Context, q queryer, serverID string, userIDs ...string) (string, error) {
 	var state []any
 	for _, id := range userIDs {
@@ -422,7 +413,6 @@ func payloadSize(input any) error {
 	return nil
 }
 
-// Create saves a schedule owned by the actor.
 func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID string, data Input) (*Schedule, error) {
 	if err := payloadSize(data); err != nil {
 		return nil, err
@@ -500,7 +490,6 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 
 var errNotFound = apperr.New("NOT_FOUND", 404, "Schedule not found")
 
-// Delete removes a schedule.
 func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, id string) error {
 	state, err := authorityState(ctx, s.DB, serverID, actor.ID)
 	if err != nil {
@@ -571,9 +560,9 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		}
 		return nil
 	}
-	// Requester checks can write denial audits, and every check reads through
-	// the shared pool, so they run before the transaction; it re-reads the
-	// same revision and authority state.
+	// Requester checks can write denial audits and read through the shared
+	// pool, so they run before the transaction, which re-reads the same
+	// revision and authority state.
 	if err := check(first); err != nil {
 		return nil, err
 	}

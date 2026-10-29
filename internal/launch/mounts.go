@@ -17,11 +17,9 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 )
 
-// ErrUnverifiedMount reports a data mount that could not be proven.
 var ErrUnverifiedMount = apperr.New("UNVERIFIED_DATA_MOUNT", 409,
 	"A data mount could not be verified. Bind source paths must contain no symbolic links and must be accessible to the Docker host validator; named volumes must use the local driver without host remapping options.")
 
-// Mount is a game container mount to prove.
 type Mount struct {
 	Type        string
 	Source      string

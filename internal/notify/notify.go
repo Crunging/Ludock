@@ -26,7 +26,6 @@ var log = logging.New("notifications")
 
 const settingKey = "notifications"
 
-// settings are every destination's saved settings.
 type settings map[Destination]Config
 
 // ready lists the destinations that are on and configured.
@@ -50,7 +49,6 @@ type Configuration struct {
 	Saved       map[string]bool
 }
 
-// Ready reports whether the destination is on and configured.
 func (c Configuration) Ready() bool { return c.Enabled && c.Configured }
 
 func public(d Destination, c Config) Configuration {
@@ -81,7 +79,6 @@ func failureMessage(d Destination, code string) (string, bool) {
 	return fmt.Sprintf(message, d.name()), ok
 }
 
-// Delivery is one queued or sent notification to one destination.
 type Delivery struct {
 	ID            string
 	Destination   Destination
@@ -98,7 +95,6 @@ type Delivery struct {
 	Retryable bool
 }
 
-// Service delivers notifications.
 type Service struct {
 	DB *db.DB
 	// Client sends HTTP requests; nil uses a default client.
@@ -162,7 +158,6 @@ func (s *Service) settings(ctx context.Context) settings {
 	return value
 }
 
-// Configurations reports every destination's public state, in display
 // order.
 func (s *Service) Configurations(ctx context.Context) []Configuration {
 	all := s.settings(ctx)
@@ -173,7 +168,6 @@ func (s *Service) Configurations(ctx context.Context) []Configuration {
 	return result
 }
 
-// Configuration reports one destination's public state.
 func (s *Service) Configuration(ctx context.Context, d Destination) Configuration {
 	return public(d, s.settings(ctx)[d])
 }
@@ -384,7 +378,6 @@ func errDisabled(d Destination) error {
 	return apperr.New("NOTIFICATIONS_DISABLED", 400, "Save and turn on "+d.Label()+" before sending or retrying a notification")
 }
 
-// savedIn reads the settings through tx.
 func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
 	saved := settings{}
 	var raw string
@@ -571,11 +564,9 @@ func (s *Service) Deliver(ctx context.Context) error {
 		}
 		attempts, retries := r.attempts+1, r.retries+1
 		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
-		// Marked active first, so Retry refuses the row from here on, and
-		// claimed only as read: a retry that already reset it wins, and the
-		// row is sent with fresh counters on a later pass. If the result
-		// cannot be saved, the message is sent again after the backoff, not
-		// on every tick.
+		// Mark active first so Retry refuses the row, and claim only the row as
+		// read so a retry that already reset it wins. If the result cannot be
+		// saved, the message is sent again after the backoff.
 		s.mu.Lock()
 		s.active, s.activeTo = id, d
 		s.mu.Unlock()
@@ -596,11 +587,9 @@ func (s *Service) Deliver(ctx context.Context) error {
 			s.mu.Unlock()
 			continue
 		}
-		// An administrator who turns a destination off or changes its settings
-		// gets nothing more sent under the old ones: settings saved before the
-		// reread below are seen by it, and a save after it cancels the send.
-		// Either way the claim is released untouched, and a later pass uses
-		// the current settings.
+		// Settings saved before the reread below are seen by it, and a save
+		// after it cancels the send, so nothing more goes out under the old
+		// settings.
 		sendCtx, cancelSend := context.WithCancelCause(ctx)
 		s.mu.Lock()
 		s.cancelSend = cancelSend

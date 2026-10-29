@@ -114,7 +114,6 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 	return a
 }
 
-// detailTabs are the tabs other than the overview.
 var detailTabs = []string{"activity", "backups", "schedules", "update"}
 
 func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -187,7 +186,6 @@ func (s *Server) detailOverview(w http.ResponseWriter, r *http.Request, request 
 	render(w, r, http.StatusOK, views.OverviewLive(*d))
 }
 
-// detailResources is the resource history over the requested range.
 func (s *Server) detailResources(w http.ResponseWriter, r *http.Request, request *Request) {
 	history, err := s.App.Resources.History(r.Context(), request.User(), r.PathValue("id"),
 		resources.RangeFor(r.URL.Query().Get("range")), db.Now())

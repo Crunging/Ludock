@@ -13,10 +13,8 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// DetailTab is one section of the server detail page.
 type DetailTab struct{ ID, Label string }
 
-// ServerDetail is the server detail page state.
 type ServerDetail struct {
 	Row                  ServerRow
 	Stats                *servers.Stats
@@ -43,7 +41,6 @@ type ServerDetail struct {
 	Operation string
 }
 
-// ActivityView is the activity tab of a server.
 type ActivityView struct {
 	ServerID      string
 	Total         int
@@ -669,7 +666,6 @@ templ SelectedOperation(a ActivityView) {
 	</section>
 }
 
-// ActiveStatus reports work that hasn't finished.
 func ActiveStatus(status string) bool { return status == "queued" || status == "running" }
 
 // newBackup is the backup a finished operation made, if any.
@@ -742,7 +738,6 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 	</div>
 }
 
-// ActorLabel names who started an operation.
 func ActorLabel(actor *history.Actor) string {
 	switch {
 	case actor == nil:

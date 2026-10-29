@@ -19,7 +19,6 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
-// Actor is a public actor reference.
 type Actor struct {
 	ID   string
 	Name string
@@ -45,7 +44,6 @@ type Query struct {
 	From, To    int64  // inclusive Unix ms; -1 when unset
 }
 
-// Statuses are operation outcomes.
 var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Failed, ops.Interrupted}
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -131,7 +129,6 @@ func nextCursor(scopeKey string, createdAt int64, id any) string {
 	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
-// Operation is a history entry.
 type Operation struct {
 	ID, ServerID, Kind, Status, Phase string
 	Actor                             *Actor
@@ -140,7 +137,6 @@ type Operation struct {
 	Result                            map[string]any
 }
 
-// Service reads history.
 type Service struct {
 	DB       *db.DB
 	Authz    *authz.Service
@@ -229,7 +225,6 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	return result, next, rows.Err()
 }
 
-// AuditEntry is an audit history entry.
 type AuditEntry struct {
 	ID          int64
 	Username    string

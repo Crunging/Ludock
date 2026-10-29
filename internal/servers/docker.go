@@ -25,20 +25,17 @@ import (
 	"github.com/Crunging/Ludock/internal/logging"
 )
 
-// Port is a published port.
 type Port struct {
 	Private int
 	Public  int
 	Type    string
 }
 
-// Exit describes how an exited container ended.
 type Exit struct {
 	Code      int
 	OOMKilled bool
 }
 
-// Console summarizes a console adapter.
 type Console struct {
 	ID                 games.AdapterID
 	Name               string
@@ -49,7 +46,6 @@ type Console struct {
 	ListsPlayers bool
 }
 
-// Container is the live state of a managed container.
 type Container struct {
 	ID          string
 	ShortID     string
@@ -77,7 +73,6 @@ type Container struct {
 	Labels map[string]string
 }
 
-// Observed pairs a container with its identity observation.
 type Observed struct {
 	Container   Container
 	Observation identity.Observation
@@ -107,7 +102,6 @@ func assertEligible(info *docker.ContainerInspect) error {
 	return nil
 }
 
-// Observer reads managed containers from Docker.
 type Observer struct {
 	Docker *docker.Client
 	// Now returns the current time; tests replace it.
@@ -554,7 +548,6 @@ func escapedPassword(value string) string {
 
 var plainValue = map[string]bool{"true": true, "false": true, "yes": true, "off": true, "none": true, "null": true}
 
-// Stats are rounded resource figures.
 type Stats struct {
 	CPUPercent float64
 	MemUsageMB float64
@@ -642,7 +635,6 @@ func (o *Observer) readStats(ctx context.Context, id string) (*Stats, error) {
 		MemLimitMB: round2(stats.MemoryStats.Limit / (1024 * 1024))}, nil
 }
 
-// Action is a container state change.
 type Action string
 
 const (
@@ -736,7 +728,6 @@ type Diagnostic struct {
 	Message     string
 }
 
-// Diagnostics lists discovery problems.
 func (o *Observer) Diagnostics(ctx context.Context) ([]Diagnostic, error) {
 	containers, err := o.Docker.ListContainers(ctx, true, nil)
 	if err != nil {

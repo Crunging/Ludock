@@ -49,7 +49,6 @@ func (r *Reading) same(other *Reading) bool {
 		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names)
 }
 
-// Service polls players.
 type Service struct {
 	Servers  *servers.Service
 	Identity *identity.Store

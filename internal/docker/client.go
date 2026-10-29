@@ -30,14 +30,12 @@ const (
 	minAPIMinor = 44
 )
 
-// APIError keeps only the HTTP status of a failed request.
 type APIError struct{ Status int }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("Docker API request failed (HTTP %d)", e.Status)
 }
 
-// StatusCode returns the HTTP status of a Docker API error, or 0.
 func StatusCode(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {
@@ -46,7 +44,6 @@ func StatusCode(err error) int {
 	return 0
 }
 
-// IsNotFound reports a 404 from Docker.
 func IsNotFound(err error) bool { return StatusCode(err) == http.StatusNotFound }
 
 // StreamOpenError reports a failed hijacked stream. A failed opening may
@@ -56,12 +53,10 @@ type StreamOpenError struct{ RequestStarted bool }
 
 func (e *StreamOpenError) Error() string { return "Docker stream connection failed" }
 
-// ErrReadTimeout reports a bounded read that took too long.
 var ErrReadTimeout = errors.New("Docker read timed out")
 
 var resourcePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
-// ContainerIDPattern matches Engine container references.
 var ContainerIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 func resource(value string) (string, error) {
@@ -71,7 +66,6 @@ func resource(value string) (string, error) {
 	return url.PathEscape(value), nil
 }
 
-// Client talks to one Docker daemon.
 type Client struct {
 	socket      string
 	http        *http.Client
@@ -79,11 +73,9 @@ type Client struct {
 
 	mu      sync.Mutex
 	version string
-	// writes counts completed requests that may change Docker state.
-	writes atomic.Uint64
+	writes  atomic.Uint64
 }
 
-// New returns a client for a unix socket path.
 func New(socket string) *Client {
 	transport := &http.Transport{
 		// Daemon requests keep their own pool. Ambient proxy settings must
@@ -97,13 +89,11 @@ func New(socket string) *Client {
 		IdleConnTimeout: 30 * time.Second,
 	}
 	return &Client{socket: socket, readTimeout: 15 * time.Second, http: &http.Client{
-		Transport: transport,
-		// Never follow redirects from the daemon.
+		Transport:     transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
 }
 
-// Socket is the daemon socket path.
 func (c *Client) Socket() string { return c.socket }
 
 // Writes counts requests that may have changed Docker state. A cached read
@@ -321,7 +311,6 @@ func containerPath(id, suffix string) (string, error) {
 	return "/containers/" + escaped + suffix, err
 }
 
-// Inspect inspects a container.
 func (c *Client) Inspect(ctx context.Context, id string) (*ContainerInspect, error) {
 	path, err := containerPath(id, "/json")
 	if err != nil {
@@ -383,7 +372,6 @@ func (c *Client) InspectSpec(ctx context.Context, id string) (*ContainerSpec, er
 	return &spec, c.getJSON(ctx, path, nil, &spec)
 }
 
-// Rename renames a container.
 func (c *Client) Rename(ctx context.Context, id, name string) error {
 	path, err := containerPath(id, "/rename")
 	if err != nil {
@@ -415,7 +403,6 @@ func (c *Client) Stats(ctx context.Context, id string) (*ContainerStats, error) 
 	return &stats, c.getJSON(ctx, path, url.Values{"stream": {"false"}}, &stats)
 }
 
-// Start starts a container.
 func (c *Client) Start(ctx context.Context, id string) error {
 	path, err := containerPath(id, "/start")
 	if err != nil {
@@ -440,7 +427,6 @@ func (c *Client) Stop(ctx context.Context, id string, seconds *int) error {
 	return c.empty(ctx, http.MethodPost, path, timeoutQuery(seconds))
 }
 
-// Restart restarts a container.
 func (c *Client) Restart(ctx context.Context, id string, seconds *int) error {
 	path, err := containerPath(id, "/restart")
 	if err != nil {
@@ -449,7 +435,6 @@ func (c *Client) Restart(ctx context.Context, id string, seconds *int) error {
 	return c.empty(ctx, http.MethodPost, path, timeoutQuery(seconds))
 }
 
-// Remove removes a container.
 func (c *Client) Remove(ctx context.Context, id string, force, volumes bool) error {
 	path, err := containerPath(id, "")
 	if err != nil {
@@ -465,7 +450,6 @@ func (c *Client) Remove(ctx context.Context, id string, force, volumes bool) err
 	return c.empty(ctx, http.MethodDelete, path, query)
 }
 
-// Wait waits for a container to stop and returns its exit status.
 func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 	path, err := containerPath(id, "/wait")
 	if err != nil {
@@ -475,7 +459,6 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 	return result.StatusCode, c.postJSON(ctx, path, nil, nil, &result)
 }
 
-// LogsOptions selects container log output.
 type LogsOptions struct {
 	Follow, Stdout, Stderr, Timestamps bool
 	Tail                               int // < 0 means all
@@ -500,7 +483,6 @@ func (c *Client) Logs(ctx context.Context, id string, options LogsOptions) (io.R
 	return c.stream(ctx, path, query)
 }
 
-// CreateContainer creates a container and returns its ID.
 func (c *Client) CreateContainer(ctx context.Context, options ContainerCreate) (string, error) {
 	return c.Create(ctx, options.Name, "", options)
 }
@@ -526,7 +508,6 @@ func (c *Client) Create(ctx context.Context, name, platform string, body any) (s
 	return result.Id, nil
 }
 
-// CreateExec creates an exec instance.
 func (c *Client) CreateExec(ctx context.Context, id string, options ExecCreate) (string, error) {
 	path, err := containerPath(id, "/exec")
 	if err != nil {
@@ -542,7 +523,6 @@ func (c *Client) CreateExec(ctx context.Context, id string, options ExecCreate) 
 	return result.Id, nil
 }
 
-// InspectExec reads an exec's status.
 func (c *Client) InspectExec(ctx context.Context, execID string) (*ExecInspect, error) {
 	escaped, err := resource(execID)
 	if err != nil {
@@ -552,7 +532,6 @@ func (c *Client) InspectExec(ctx context.Context, execID string) (*ExecInspect, 
 	return &info, c.getJSON(ctx, "/exec/"+escaped+"/json", nil, &info)
 }
 
-// StartExec starts an exec and hijacks its stream.
 func (c *Client) StartExec(ctx context.Context, execID string) (*Conn, error) {
 	escaped, err := resource(execID)
 	if err != nil {
@@ -565,10 +544,8 @@ func (c *Client) StartExec(ctx context.Context, execID string) (*Conn, error) {
 	return c.hijack(ctx, path, map[string]bool{"Detach": false, "Tty": false})
 }
 
-// AttachOptions selects attached streams.
 type AttachOptions struct{ Stream, Stdin, Stdout, Stderr bool }
 
-// Attach hijacks a container's stdio.
 func (c *Client) Attach(ctx context.Context, id string, options AttachOptions) (*Conn, error) {
 	path, err := containerPath(id, "/attach")
 	if err != nil {
@@ -588,7 +565,6 @@ func (c *Client) Attach(ctx context.Context, id string, options AttachOptions) (
 	return c.hijack(ctx, full, nil)
 }
 
-// InspectVolume inspects a named volume.
 func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInspect, error) {
 	escaped, err := resource(name)
 	if err != nil {
@@ -598,20 +574,17 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInspect
 	return &info, c.getJSON(ctx, "/volumes/"+escaped, nil, &info)
 }
 
-// ListVolumes lists every volume.
 func (c *Client) ListVolumes(ctx context.Context) ([]VolumeInspect, error) {
 	var result struct{ Volumes []VolumeInspect }
 	err := c.getJSON(ctx, "/volumes", nil, &result)
 	return result.Volumes, err
 }
 
-// CreateVolume creates a named volume.
 func (c *Client) CreateVolume(ctx context.Context, name string) (*VolumeInspect, error) {
 	var info VolumeInspect
 	return &info, c.postJSON(ctx, "/volumes/create", nil, map[string]string{"Name": name}, &info)
 }
 
-// RemoveVolume removes a named volume.
 func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	escaped, err := resource(name)
 	if err != nil {
@@ -634,9 +607,8 @@ func (c *Client) InspectImage(ctx context.Context, reference string) (string, er
 	return info.ID, nil
 }
 
-// InspectImageConfig returns an image's ID, the defaults it gives
-// containers, and its platform manifests. The reference is escaped as
-// InspectImage's is.
+// InspectImageConfig returns an image's ID, the defaults it gives containers,
+// and its platform manifests.
 func (c *Client) InspectImageConfig(ctx context.Context, reference string) (*ImageInspect, error) {
 	return c.inspectImage(ctx, reference, url.Values{"manifests": {"1"}})
 }
@@ -657,7 +629,6 @@ func (c *Client) inspectImage(ctx context.Context, reference string, query url.V
 	return &info, c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", query, &info)
 }
 
-// Events streams container events.
 func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, error) {
 	query := url.Values{}
 	filtersQuery(query, filters)
@@ -718,13 +689,10 @@ type Conn struct {
 	reader *bufio.Reader
 }
 
-// Read reads raw (possibly multiplexed) output.
 func (c *Conn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
-// Write writes stdin.
 func (c *Conn) Write(p []byte) (int, error) { return c.conn.Write(p) }
 
-// CloseWrite sends stdin EOF.
 func (c *Conn) CloseWrite() error {
 	if closer, ok := c.conn.(interface{ CloseWrite() error }); ok {
 		return closer.CloseWrite()
@@ -732,7 +700,6 @@ func (c *Conn) CloseWrite() error {
 	return nil
 }
 
-// Close terminates both directions.
 func (c *Conn) Close() error { return c.conn.Close() }
 
 var rawStreamType = regexp.MustCompile(`(?i)^application/vnd\.docker\.(?:raw|multiplexed)-stream(?:;|$)`)

@@ -15,10 +15,8 @@ var (
 	quotedSecretPattern = regexp.MustCompile(`(?i)(` + SensitiveKeySource + `)(["']?\s*[=:]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$))`)
 )
 
-// IsSensitiveKey reports whether a field or variable name names a credential.
 func IsSensitiveKey(key string) bool { return sensitiveKey.MatchString(key) }
 
-// Redact removes credentials from free-form log text.
 func Redact(value string) string {
 	// Consume quoted values before token-oriented passes can remove a closing
 	// quote. Escaped quotes are credential content, not the end of the value.

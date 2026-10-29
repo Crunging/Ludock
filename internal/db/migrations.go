@@ -230,7 +230,6 @@ var Migrations = []Migration{
 	},
 }
 
-// LatestVersion is the newest schema version Ludock writes.
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
 
 type queryer interface {

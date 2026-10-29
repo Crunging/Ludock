@@ -20,14 +20,12 @@ import (
 
 var log = logging.New("monitor")
 
-// Policy is a server's availability policy.
 type Policy struct {
 	Enabled      bool `json:"enabled"`
 	Maintenance  bool `json:"maintenance"`
 	GraceSeconds int  `json:"graceSeconds"`
 }
 
-// State is the persisted outage state.
 type State struct {
 	OutageStartedAt      int64 // 0 when none
 	Notified             bool
@@ -36,13 +34,11 @@ type State struct {
 	LastState            string
 }
 
-// Availability is a policy and its state.
 type Availability struct {
 	Policy Policy
 	State  State
 }
 
-// Service persists availability.
 type Service struct {
 	DB     *db.DB
 	Locks  *locks.Table
@@ -94,7 +90,6 @@ func (s *Service) row(ctx context.Context, serverID string) (*row, error) {
 	return &r, err
 }
 
-// rows reads every saved availability row by server.
 func (s *Service) rows(ctx context.Context) (map[string]*row, error) {
 	result, err := s.DB.QueryContext(ctx, `SELECT server_id,policy_json,outage_started_at,notified,suppressed_until,intentionally_stopped,last_state
     FROM availability`)
@@ -132,7 +127,6 @@ func (s *Service) active(ctx context.Context) (map[string]bool, error) {
 	return active, result.Err()
 }
 
-// Get reads a server's availability.
 func (s *Service) Get(ctx context.Context, serverID string) (*Availability, error) {
 	r, err := s.row(ctx, serverID)
 	if err != nil {
@@ -202,13 +196,10 @@ func (s *Service) Suppress(ctx context.Context, serverID string) error {
 	return err
 }
 
-// suppressed fails if active work cannot be read, rather than treating the
-// server as idle.
 func (s *Service) suppressed(serverID string, policy Policy, until, now int64, active bool) bool {
 	return !policy.Enabled || policy.Maintenance || until > now || active || (s.Locks != nil && s.Locks.ServerBusy(serverID))
 }
 
-// Problem is a current outage.
 type Problem struct {
 	State           string
 	OutageStartedAt int64

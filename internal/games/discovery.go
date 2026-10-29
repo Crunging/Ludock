@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// Discovery labels.
 const (
 	LabelEnable        = "ludock.enable"
 	LabelName          = "ludock.name"
@@ -18,7 +17,6 @@ const (
 	labelComposeOneoff = "com.docker.compose.oneoff"
 )
 
-// Eligibility reasons.
 const (
 	ReasonInvalidEnableLabel = "invalid-enable-label"
 	ReasonOptedOut           = "opted-out"

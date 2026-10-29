@@ -153,11 +153,10 @@
     if (event.detail.xhr && event.detail.xhr.status === 401) window.location.assign("/login");
   });
 
-  // data-shown-by="checkbox-id" shows an element while the box is checked;
-  // data-hidden-by hides it.
-  // A radio's siblings change too, without their own events.
-  // data-shown-when="field=value" shows an element while the form's field
-  // has that value.
+  // data-shown-by="checkbox-id" shows an element while the box is checked and
+  // data-hidden-by hides it; data-shown-when="field=value" shows it while the
+  // form's field has that value. A radio's siblings change too, without their
+  // own events.
   function toggles(input) {
     var inputs = input.type === "radio" && input.form ? input.form.querySelectorAll('input[type=radio][name="' + input.name + '"]') : [input];
     inputs.forEach(function (box) {
@@ -390,11 +389,9 @@
     }, { once: true });
   });
 
-  // A live server view's refresh waits while a confirmed request from
-  // inside it is on its way, such as a Stop from the server list: the
-  // response's events, like the redirect to sign in, reach the page only
-  // while the element that sent it is there. The view reloads once it
-  // answers. Other responses, such as another change, always swap.
+  // A live server view's refresh waits while a confirmed request from inside it
+  // is on its way, since that response's events only reach the page while the
+  // sending element is there. The view reloads once it answers.
   document.addEventListener("htmx:beforeSwap", function (event) {
     var target = event.detail.target;
     if (!target || !target.querySelector || event.detail.requestConfig.verb !== "get" ||
@@ -411,18 +408,12 @@
   });
 
   // In-page navigation on a server's page (tabs and links that swap
-  // #detail-body): only the newest one swaps, so a slow earlier response
-  // can't replace the page or its address under a later click, and a
-  // response for anything else in the page, such as an Activity filter,
-  // is dropped once a newer navigation started. A failed navigation loads
-  // the address as a page, so the error shows in full instead of an empty
-  // body. htmx fires beforeSwap on the target, which a newer response may
-  // already have replaced, so each request guards its own target.
-  //
-  // An action, such as Create backup, follows its work with HX-Location
-  // only if nothing navigated since it was sent; otherwise the follow-up
-  // would take the user away from the view they chose. The navigation may
-  // have replaced the action's button, so the check listens on the button.
+  // #detail-body): only the newest navigation swaps, so a slow earlier response
+  // can't replace a later click, and a failed one loads the address as a full
+  // page so its error shows. Each request guards its own target, since a newer
+  // response may already have replaced it. An action follows its work with
+  // HX-Location only if nothing navigated since it was sent; the check listens
+  // on the action's button, which a navigation may have replaced.
   var navigation = 0, followStale = false;
   document.addEventListener("htmx:beforeRequest", function (event) {
     var xhr = event.detail.xhr, config = event.detail.requestConfig, elt = event.target, sent = navigation;
@@ -459,10 +450,8 @@
       }
     });
   });
-  // A second click on a link whose request is still pending would queue on
-  // that link, and htmx drops the queued request once a newer view replaces
-  // the link; such a click starts its own request instead, from a source of
-  // its own so it doesn't queue behind another such click either.
+  // A second click on a link whose request is still pending starts its own
+  // request, since htmx drops a queued one once a newer view replaces the link.
   document.addEventListener("click", function (event) {
     var link = event.target.closest && event.target.closest("#detail-body a[hx-boost]");
     if (!link || !link.classList.contains("htmx-request") || !window.htmx) return;
@@ -493,13 +482,11 @@
     if (chosen && chosen.value !== live.value) event.detail.shouldSwap = false;
   });
 
-  // Live regions (elements that refresh themselves, by timer or event)
-  // send the ETag of the fragment they show. The server answers an
-  // unchanged fragment with 304 and no body, and the region stays as it
-  // is, open menus and all. Any other swap into or over a region forgets
-  // its tag. These handlers come after the others, so they see swaps the
-  // others cancelled. A timed refresh that hangs gives up after 30
-  // seconds, so the next one can run.
+  // Live regions send the ETag of the fragment they show, and the server
+  // answers an unchanged fragment with a bodiless 304. Any other swap into or
+  // over a region forgets its tag. These handlers come after the others so they
+  // see swaps the others cancelled. A hung timed refresh gives up after 30
+  // seconds.
   var shown = {};
   function refreshesItself(config) {
     return config && config.verb === "get" && config.elt === config.target && !config.boosted && !!config.elt.id;
@@ -530,11 +517,10 @@
     if (tag && node) shown[node.id] = { node: node, tag: tag };
   });
 
-  // A request that can't reach Ludock says so at the bottom of the page.
-  // Refreshes keep the last known state and the notice clears once
-  // anything answers; a change the user sent may or may not have been made,
-  // so that notice stays until the next change answers or it is dismissed.
-  // When the connection returns, live views catch up on what they missed.
+  // A request that can't reach Ludock shows a notice at the bottom of the page.
+  // Refresh notices clear once anything answers; a notice for a change the user
+  // sent stays until the next change answers or it is dismissed. When the
+  // connection returns, live views catch up.
   var unreachable = null;
   function notice(kind, message) {
     var region = document.querySelector("[data-connection-notice]");

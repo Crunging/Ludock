@@ -22,7 +22,6 @@
   var feedback = document.querySelector("[data-console-feedback]");
   var quickButtons = document.querySelectorAll("[data-console-command]");
 
-  // Terminal, themed from the page's CSS variables.
   var colors = getComputedStyle(document.documentElement);
   var css = function (name, fallback) { return colors.getPropertyValue(name).trim() || fallback; };
   var background = css("--terminal", "#0b1017");

@@ -15,7 +15,6 @@ import (
 	"github.com/Crunging/Ludock/internal/players"
 )
 
-// PlayersView is who is online on one server.
 type PlayersView struct {
 	// Listed: Ludock can read this server's players over its console.
 	Listed bool
@@ -157,7 +156,7 @@ func PlayersCell(p PlayersView) templ.Component {
 			var templ_7745c5c3_Var6 string
 			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(p.Reading.Online))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 77, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 76, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
@@ -170,7 +169,7 @@ func PlayersCell(p PlayersView) templ.Component {
 			var templ_7745c5c3_Var7 string
 			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(capacity(p.Reading))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 77, Col: 102}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 76, Col: 102}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
@@ -183,7 +182,7 @@ func PlayersCell(p PlayersView) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(" " + onlineText(p.Reading))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 77, Col: 162}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 76, Col: 162}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
@@ -201,7 +200,7 @@ func PlayersCell(p PlayersView) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(strings.Join(someNames(p.Reading, rowNames), ", "))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 81, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 80, Col: 58}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
@@ -219,7 +218,7 @@ func PlayersCell(p PlayersView) templ.Component {
 					var templ_7745c5c3_Var10 string
 					templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(more))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 83, Col: 48}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 82, Col: 48}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 					if templ_7745c5c3_Err != nil {
@@ -308,7 +307,7 @@ func PlayersFact(p PlayersView) templ.Component {
 			var templ_7745c5c3_Var12 string
 			templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(p.Reading.Online))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 108, Col: 67}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 107, Col: 67}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 			if templ_7745c5c3_Err != nil {
@@ -321,7 +320,7 @@ func PlayersFact(p PlayersView) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(onlineText(p.Reading))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 109, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 108, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -372,7 +371,7 @@ func PlayersFact(p PlayersView) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(playerShare(p.Reading))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 117, Col: 114}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 116, Col: 114}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -400,7 +399,7 @@ func PlayersFact(p PlayersView) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 122, Col: 18}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 121, Col: 18}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -428,7 +427,7 @@ func PlayersFact(p PlayersView) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(more))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 127, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `players.templ`, Line: 126, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {

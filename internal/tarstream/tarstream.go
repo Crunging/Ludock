@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 )
 
-// ErrInvalid reports a malformed or truncated archive.
 var ErrInvalid = errors.New("Invalid or truncated backup archive")
 
 const (

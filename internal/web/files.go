@@ -22,7 +22,6 @@ import (
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
-// fileTarget is the confirmed container of a file action.
 func fileTarget(action *serverAction) files.Target {
 	return files.Target{ContainerID: action.Container.ID, Name: action.Container.Name, GameType: action.Container.GameType,
 		Roots: action.Container.FileRoots}
@@ -185,7 +184,6 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request, request *Requ
 	render(w, r, http.StatusOK, views.FileList(f))
 }
 
-// fileDialog opens a new-folder, rename, or delete dialog.
 func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Request) {
 	query := r.URL.Query()
 	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), r.PathValue("id"))

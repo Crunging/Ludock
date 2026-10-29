@@ -21,10 +21,8 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// DetailTab is one section of the server detail page.
 type DetailTab struct{ ID, Label string }
 
-// ServerDetail is the server detail page state.
 type ServerDetail struct {
 	Row                  ServerRow
 	Stats                *servers.Stats
@@ -51,7 +49,6 @@ type ServerDetail struct {
 	Operation string
 }
 
-// ActivityView is the activity tab of a server.
 type ActivityView struct {
 	ServerID      string
 	Total         int
@@ -215,7 +212,7 @@ func detailBody(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var4 templ.SafeURL
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(server.ID, "tab="+tab.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 129, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -236,7 +233,7 @@ func detailBody(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var5 string
 			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue("tab-" + tab.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 129, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 			if templ_7745c5c3_Err != nil {
@@ -249,7 +246,7 @@ func detailBody(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var6 string
 			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.FormatBool(tab.ID == d.Tab))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 152}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 129, Col: 152}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
 			if templ_7745c5c3_Err != nil {
@@ -262,7 +259,7 @@ func detailBody(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var7 string
 			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(map[bool]string{true: "page"}[tab.ID == d.Tab])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 216}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 129, Col: 216}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 			if templ_7745c5c3_Err != nil {
@@ -275,7 +272,7 @@ func detailBody(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(tab.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 230}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 129, Col: 230}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
@@ -293,7 +290,7 @@ func detailBody(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(tabLabel(d))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 135, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 132, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 		if templ_7745c5c3_Err != nil {
@@ -388,7 +385,7 @@ func DetailLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + server.ID + "/live?" + url.Values{"tab": {d.Tab}, "operation": {d.Operation}, "active": {activeID(server)}}.Encode())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 168, Col: 172}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 165, Col: 172}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 		if templ_7745c5c3_Err != nil {
@@ -401,7 +398,7 @@ func DetailLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(liveTrigger(server.ID, server.ActiveOperation != nil))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 168, Col: 241}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 165, Col: 241}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 		if templ_7745c5c3_Err != nil {
@@ -444,7 +441,7 @@ func DetailLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var15 string
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(server.DisplayName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 172, Col: 87}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 169, Col: 87}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
@@ -465,7 +462,7 @@ func DetailLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(server.GameName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 175, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 172, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -483,7 +480,7 @@ func DetailLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var17 string
 			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(server.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 177, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 174, Col: 61}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 			if templ_7745c5c3_Err != nil {
@@ -516,7 +513,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var18 templ.SafeURL
 					templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/console/" + server.ID))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 186, Col: 76}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 183, Col: 76}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 					if templ_7745c5c3_Err != nil {
@@ -529,7 +526,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var19 string
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(d.Row.ConsoleLabel)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 186, Col: 99}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 183, Col: 99}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
@@ -548,7 +545,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var20 templ.SafeURL
 					templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/files/" + server.ID))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 189, Col: 76}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 186, Col: 76}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 					if templ_7745c5c3_Err != nil {
@@ -587,7 +584,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var21 string
 					templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + server.ID + "/start")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 196, Col: 125}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 193, Col: 125}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 					if templ_7745c5c3_Err != nil {
@@ -616,7 +613,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var22 string
 					templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + server.ID + "/stop")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 199, Col: 146}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 196, Col: 146}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 					if templ_7745c5c3_Err != nil {
@@ -653,7 +650,7 @@ func DetailLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var23 string
 					templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + server.ID + "/restart")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 202, Col: 127}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 199, Col: 127}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 					if templ_7745c5c3_Err != nil {
@@ -711,7 +708,7 @@ func DetailLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(guidance)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 219, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 216, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
@@ -730,7 +727,7 @@ func DetailLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(string(server.BindingStatus)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 223, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 220, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -749,7 +746,7 @@ func DetailLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(operation.Kind))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 230, Col: 41}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 227, Col: 41}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -762,7 +759,7 @@ func DetailLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(OperationLabel(operation.Status, operation.Phase))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 230, Col: 105}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 227, Col: 105}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -775,7 +772,7 @@ func DetailLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var28 templ.SafeURL
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 232, Col: 101}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 229, Col: 101}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {
@@ -830,7 +827,7 @@ func BindingReview(serverID, serverName string, revision int64) templ.Component 
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + serverID + "/binding-review")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 239, Col: 91}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 236, Col: 91}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 		if templ_7745c5c3_Err != nil {
@@ -843,7 +840,7 @@ func BindingReview(serverID, serverName string, revision int64) templ.Component 
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.FormatInt(revision, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 244, Col: 85}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 241, Col: 85}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 		if templ_7745c5c3_Err != nil {
@@ -856,7 +853,7 @@ func BindingReview(serverID, serverName string, revision int64) templ.Component 
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(serverName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 246, Col: 34}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 243, Col: 34}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 		if templ_7745c5c3_Err != nil {
@@ -869,7 +866,7 @@ func BindingReview(serverID, serverName string, revision int64) templ.Component 
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue(serverName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 247, Col: 89}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 244, Col: 89}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 		if templ_7745c5c3_Err != nil {
@@ -932,7 +929,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + server.ID + "/overview")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 276, Col: 81}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 273, Col: 81}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var35)
 		if templ_7745c5c3_Err != nil {
@@ -945,7 +942,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var36 string
 		templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.ResolveAttributeValue(liveTrigger(server.ID, false) + ", availability-changed from:body")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 276, Col: 163}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 273, Col: 163}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var36)
 		if templ_7745c5c3_Err != nil {
@@ -988,7 +985,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(healthNotes[server.Health])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 291, Col: 54}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 288, Col: 54}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
@@ -1007,7 +1004,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var38 string
 			templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 294, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 291, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 			if templ_7745c5c3_Err != nil {
@@ -1071,7 +1068,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(port.Public))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 323, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 320, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
@@ -1084,7 +1081,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(port.Type)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 323, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 320, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -1102,7 +1099,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 					var templ_7745c5c3_Var41 string
 					templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(port.Private))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 325, Col: 73}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 322, Col: 73}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 					if templ_7745c5c3_Err != nil {
@@ -1140,7 +1137,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var42 string
 			templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%.1f%%", d.Stats.CPUPercent))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 339, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 336, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 			if templ_7745c5c3_Err != nil {
@@ -1158,7 +1155,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var43 string
 			templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(resourcesUnavailable(d))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 342, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 339, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 			if templ_7745c5c3_Err != nil {
@@ -1181,7 +1178,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var44 string
 			templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(FormatBytes(int64(d.Stats.MemUsageMB*mib + 0.5)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 350, Col: 86}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 347, Col: 86}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 			if templ_7745c5c3_Err != nil {
@@ -1199,7 +1196,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var45 string
 				templ_7745c5c3_Var45, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(memoryShare(d.Stats))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 352, Col: 89}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 349, Col: 89}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 				if templ_7745c5c3_Err != nil {
@@ -1212,7 +1209,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var46 string
 				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(FormatBytes(int64(d.Stats.MemLimitMB*mib + 0.5)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 353, Col: 80}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 350, Col: 80}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 				if templ_7745c5c3_Err != nil {
@@ -1231,7 +1228,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var47 string
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(resourcesUnavailable(d))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 356, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 353, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 			if templ_7745c5c3_Err != nil {
@@ -1263,7 +1260,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var48 string
 				templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(FormatBytes(backup.Size))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 366, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 363, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 				if templ_7745c5c3_Err != nil {
@@ -1287,7 +1284,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var49 templ.SafeURL
 				templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(server.ID, "tab=backups"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 371, Col: 70}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 368, Col: 70}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 				if templ_7745c5c3_Err != nil {
@@ -1324,7 +1321,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(next.Action))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 381, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 378, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -1351,7 +1348,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var51 templ.SafeURL
 			templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(server.ID, "tab=schedules"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 386, Col: 71}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 383, Col: 71}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 			if templ_7745c5c3_Err != nil {
@@ -1378,7 +1375,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 			var templ_7745c5c3_Var52 string
 			templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(server.Image)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 395, Col: 21}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 392, Col: 21}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 			if templ_7745c5c3_Err != nil {
@@ -1506,7 +1503,7 @@ func AvailabilityStatus(d ServerDetail) templ.Component {
 		var templ_7745c5c3_Var54 string
 		templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(described.Status)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 476, Col: 37}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 473, Col: 37}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 		if templ_7745c5c3_Err != nil {
@@ -1543,7 +1540,7 @@ func AvailabilityStatus(d ServerDetail) templ.Component {
 				var templ_7745c5c3_Var55 string
 				templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(a.State.LastState))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 486, Col: 37}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 483, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 				if templ_7745c5c3_Err != nil {
@@ -1641,7 +1638,7 @@ func AvailabilityForm(serverID string, policy monitor.Policy) templ.Component {
 		var templ_7745c5c3_Var57 string
 		templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + serverID + "/availability")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 514, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 511, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 		if templ_7745c5c3_Err != nil {
@@ -1674,7 +1671,7 @@ func AvailabilityForm(serverID string, policy monitor.Policy) templ.Component {
 		var templ_7745c5c3_Var58 string
 		templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.Itoa(policy.GraceSeconds))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 525, Col: 177}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 522, Col: 177}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var58)
 		if templ_7745c5c3_Err != nil {
@@ -1736,7 +1733,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var60 templ.SafeURL
 		templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/operations?serverId=" + a.ServerID))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 552, Col: 82}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 549, Col: 82}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 		if templ_7745c5c3_Err != nil {
@@ -1749,7 +1746,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var61 string
 		templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + a.ServerID + "/activity?" + activityQuery(a))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 553, Col: 124}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 550, Col: 124}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
 		if templ_7745c5c3_Err != nil {
@@ -1762,7 +1759,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var62 templ.SafeURL
 		templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/servers/" + a.ServerID))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 556, Col: 155}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 553, Col: 155}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 		if templ_7745c5c3_Err != nil {
@@ -1775,7 +1772,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var63 string
 		templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + a.ServerID + "/activity")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 556, Col: 215}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 553, Col: 215}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
 		if templ_7745c5c3_Err != nil {
@@ -1793,7 +1790,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var64 string
 			templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.ResolveAttributeValue(status)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 563, Col: 27}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 560, Col: 27}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var64)
 			if templ_7745c5c3_Err != nil {
@@ -1816,7 +1813,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var65 string
 			templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(OperationStatusLabels[status])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 563, Col: 94}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 560, Col: 94}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 			if templ_7745c5c3_Err != nil {
@@ -1839,7 +1836,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var66 string
 			templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue(kind)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 572, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 569, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var66)
 			if templ_7745c5c3_Err != nil {
@@ -1862,7 +1859,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var67 string
 			templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(kind))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 572, Col: 75}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 569, Col: 75}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 			if templ_7745c5c3_Err != nil {
@@ -1885,7 +1882,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var68 templ.SafeURL
 			templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(a.ServerID, "tab=activity"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 577, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 574, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 			if templ_7745c5c3_Err != nil {
@@ -1947,7 +1944,7 @@ func ActivityList(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var70 string
 		templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + a.ServerID + "/activity?" + activityQuery(a))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 588, Col: 102}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 585, Col: 102}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var70)
 		if templ_7745c5c3_Err != nil {
@@ -1960,7 +1957,7 @@ func ActivityList(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var71 string
 		templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.ResolveAttributeValue(liveTrigger(a.ServerID, a.Active))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 588, Col: 151}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 585, Col: 151}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var71)
 		if templ_7745c5c3_Err != nil {
@@ -1983,7 +1980,7 @@ func ActivityList(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var72 string
 		templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(len(a.Visible)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 592, Col: 105}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 589, Col: 105}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var72))
 		if templ_7745c5c3_Err != nil {
@@ -1996,7 +1993,7 @@ func ActivityList(a ActivityView) templ.Component {
 		var templ_7745c5c3_Var73 string
 		templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(a.Total))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 592, Col: 134}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 589, Col: 134}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var73))
 		if templ_7745c5c3_Err != nil {
@@ -2014,7 +2011,7 @@ func ActivityList(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var74 templ.SafeURL
 			templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(a.ServerID, "tab=activity"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 596, Col: 69}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 593, Col: 69}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var74))
 			if templ_7745c5c3_Err != nil {
@@ -2045,7 +2042,7 @@ func ActivityList(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var75 templ.SafeURL
 			templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(a.ServerID, "tab=update&recreate=1"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 603, Col: 78}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 600, Col: 78}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
 			if templ_7745c5c3_Err != nil {
@@ -2111,7 +2108,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var77 string
 			templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + a.ServerID + "/operations/" + a.SelectedID + "?tab=" + a.Tab)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 621, Col: 96}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 618, Col: 96}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var77)
 			if templ_7745c5c3_Err != nil {
@@ -2134,7 +2131,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var78 templ.SafeURL
 			templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(a.ServerID, "tab="+a.Tab))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 631, Col: 71}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 628, Col: 71}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var78))
 			if templ_7745c5c3_Err != nil {
@@ -2165,7 +2162,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var79 string
 			templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(a.SelectedError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 635, Col: 36}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 632, Col: 36}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 			if templ_7745c5c3_Err != nil {
@@ -2184,7 +2181,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var80 templ.SafeURL
 			templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/operations/" + operation.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 638, Col: 78}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 635, Col: 78}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 			if templ_7745c5c3_Err != nil {
@@ -2197,7 +2194,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var81 string
 			templ_7745c5c3_Var81, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(operation.Kind))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 641, Col: 36}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 638, Col: 36}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var81))
 			if templ_7745c5c3_Err != nil {
@@ -2218,7 +2215,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var82 string
 			templ_7745c5c3_Var82, templ_7745c5c3_Err = templ.JoinStringErrs(OperationStatusLabels[operation.Status])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 645, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 642, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var82))
 			if templ_7745c5c3_Err != nil {
@@ -2247,7 +2244,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 			var templ_7745c5c3_Var83 string
 			templ_7745c5c3_Var83, templ_7745c5c3_Err = templ.JoinStringErrs(OperationLabel(operation.Status, operation.Phase))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 652, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 649, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var83))
 			if templ_7745c5c3_Err != nil {
@@ -2265,7 +2262,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 				var templ_7745c5c3_Var84 string
 				templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.JoinStringErrs(operation.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 655, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 652, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var84))
 				if templ_7745c5c3_Err != nil {
@@ -2288,7 +2285,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 				var templ_7745c5c3_Var85 string
 				templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 658, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 655, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var85))
 				if templ_7745c5c3_Err != nil {
@@ -2311,7 +2308,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 				var templ_7745c5c3_Var86 string
 				templ_7745c5c3_Var86, templ_7745c5c3_Err = templ.JoinStringErrs(text)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 661, Col: 34}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 658, Col: 34}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var86))
 				if templ_7745c5c3_Err != nil {
@@ -2334,7 +2331,7 @@ func SelectedOperation(a ActivityView) templ.Component {
 				var templ_7745c5c3_Var87 templ.SafeURL
 				templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/servers/" + a.ServerID + "/backups/" + id + "/download"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 665, Col: 109}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 662, Col: 109}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var87))
 				if templ_7745c5c3_Err != nil {
@@ -2354,7 +2351,6 @@ func SelectedOperation(a ActivityView) templ.Component {
 	})
 }
 
-// ActiveStatus reports work that hasn't finished.
 func ActiveStatus(status string) bool { return status == "queued" || status == "running" }
 
 // newBackup is the backup a finished operation made, if any.
@@ -2396,7 +2392,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 		var templ_7745c5c3_Var89 string
 		templ_7745c5c3_Var89, templ_7745c5c3_Err = templ.ResolveAttributeValue(map[bool]string{true: "Operation history", false: "Recent operations"}[showContext])
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 688, Col: 124}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 684, Col: 124}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var89)
 		if templ_7745c5c3_Err != nil {
@@ -2424,7 +2420,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 			var templ_7745c5c3_Var90 string
 			templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.ResolveAttributeValue(map[bool]string{true: "4", false: "3"}[showContext])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 701, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 697, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var90)
 			if templ_7745c5c3_Err != nil {
@@ -2437,7 +2433,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 			var templ_7745c5c3_Var91 string
 			templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.JoinStringErrs(empty)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 701, Col: 98}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 697, Col: 98}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var91))
 			if templ_7745c5c3_Err != nil {
@@ -2456,7 +2452,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 			var templ_7745c5c3_Var92 templ.SafeURL
 			templ_7745c5c3_Var92, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/operations/" + operation.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 705, Col: 82}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 701, Col: 82}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var92))
 			if templ_7745c5c3_Err != nil {
@@ -2469,7 +2465,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 			var templ_7745c5c3_Var93 string
 			templ_7745c5c3_Var93, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(operation.Kind))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 705, Col: 113}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 701, Col: 113}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var93))
 			if templ_7745c5c3_Err != nil {
@@ -2487,7 +2483,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 				var templ_7745c5c3_Var94 templ.SafeURL
 				templ_7745c5c3_Var94, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/servers/" + operation.ServerID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 708, Col: 83}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 704, Col: 83}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var94))
 				if templ_7745c5c3_Err != nil {
@@ -2501,7 +2497,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 					var templ_7745c5c3_Var95 string
 					templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.JoinStringErrs(name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 710, Col: 16}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 706, Col: 16}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var95))
 					if templ_7745c5c3_Err != nil {
@@ -2511,7 +2507,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 					var templ_7745c5c3_Var96 string
 					templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.JoinStringErrs(operation.ServerID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 712, Col: 30}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 708, Col: 30}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var96))
 					if templ_7745c5c3_Err != nil {
@@ -2525,7 +2521,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 				var templ_7745c5c3_Var97 string
 				templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.JoinStringErrs(ActorLabel(operation.Actor))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 715, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 711, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var97))
 				if templ_7745c5c3_Err != nil {
@@ -2569,7 +2565,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 			var templ_7745c5c3_Var98 string
 			templ_7745c5c3_Var98, templ_7745c5c3_Err = templ.JoinStringErrs(OperationLabel(operation.Status, operation.Phase))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 726, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 722, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var98))
 			if templ_7745c5c3_Err != nil {
@@ -2587,7 +2583,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 				var templ_7745c5c3_Var99 string
 				templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.JoinStringErrs(operation.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 729, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 725, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var99))
 				if templ_7745c5c3_Err != nil {
@@ -2606,7 +2602,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 				var templ_7745c5c3_Var100 string
 				templ_7745c5c3_Var100, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 732, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 728, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var100))
 				if templ_7745c5c3_Err != nil {
@@ -2625,7 +2621,7 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 				var templ_7745c5c3_Var101 string
 				templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.JoinStringErrs(text)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 735, Col: 31}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 731, Col: 31}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var101))
 				if templ_7745c5c3_Err != nil {
@@ -2649,7 +2645,6 @@ func OperationList(operations []history.Operation, empty string, showContext boo
 	})
 }
 
-// ActorLabel names who started an operation.
 func ActorLabel(actor *history.Actor) string {
 	switch {
 	case actor == nil:

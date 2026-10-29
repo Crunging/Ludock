@@ -18,7 +18,6 @@ import (
 var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.ServerStart, "stop": authz.ServerStop,
 	"restart": authz.ServerRestart, "backup": authz.BackupsCreate}
 
-// scheduleActions are the actions the viewer may schedule.
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {

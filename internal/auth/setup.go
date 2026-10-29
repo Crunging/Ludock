@@ -20,7 +20,6 @@ const (
 	PasswordMax   = 128
 )
 
-// SetupState describes first-administrator setup.
 type SetupState struct {
 	Required    bool
 	Locked      bool

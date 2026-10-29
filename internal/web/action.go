@@ -30,7 +30,6 @@ func (a *serverAction) AssertObserved(observation identity.Observation) error {
 	return a.assert(&observation)
 }
 
-// Done releases the locks and stops revalidation.
 func (a *serverAction) Done() { a.done() }
 
 var errRequestClosed = apperr.New("REQUEST_CLOSED", 409, "Request closed")

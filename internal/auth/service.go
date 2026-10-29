@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	// SessionCookie names the session cookie.
 	SessionCookie = "ludock_session"
 	sessionTTLMs  = 7 * 24 * 60 * 60 * 1000
 
@@ -38,7 +37,6 @@ const (
 
 var log = logging.New("auth")
 
-// Client describes where a request came from.
 type Client struct {
 	IP        string
 	UserAgent string
@@ -51,14 +49,12 @@ func (c Client) source() string {
 	return c.IP
 }
 
-// Principal is an authenticated session.
 type Principal struct {
 	User      db.SessionUser
 	Token     string
 	TokenHash string
 }
 
-// Service implements accounts and sessions.
 type Service struct {
 	DB     *db.DB
 	Authz  *authz.Service
@@ -71,7 +67,6 @@ type Service struct {
 	setupScope string
 }
 
-// NewService wires a service with production defaults.
 func NewService(d *db.DB, authorization *authz.Service, setup *SetupWindow) *Service {
 	return &Service{DB: d, Authz: authorization, Setup: setup, Work: NewPasswordWork(), Hasher: Argon2{},
 		Now: func() int64 { return time.Now().UnixMilli() }, setupScope: identity.NewUUID()}
@@ -89,7 +84,6 @@ func passwordWorkSource(client Client) string {
 	return throttleKey("password-work-source", client.source())
 }
 
-// ErrBusy is the response to throttled or busy credential work.
 func busy(retryAfterMs int64) error {
 	return &apperr.Error{Code: "TOO_MANY_ATTEMPTS", Status: 429, Message: "Too many attempts. Try again later.", RetryAfterMs: retryAfterMs}
 }
@@ -125,13 +119,11 @@ func ValidPassword(password string) bool {
 	return length >= PasswordMin && length <= PasswordMax
 }
 
-// SetupRequired reports whether no account exists yet.
 func (s *Service) SetupRequired(ctx context.Context) (bool, error) {
 	count, err := s.DB.CountUsers(ctx)
 	return count == 0, err
 }
 
-// SetupState reports the setup window.
 func (s *Service) SetupState(ctx context.Context) (SetupState, error) {
 	required, err := s.SetupRequired(ctx)
 	if err != nil {
@@ -306,7 +298,6 @@ func truncateRunes(value string, limit int) string {
 	return string(runes)
 }
 
-// Login signs in and creates a session.
 func (s *Service) Login(ctx context.Context, username, password string, client Client) (*Principal, error) {
 	now := s.Now()
 	requested := truncateRunes(strings.ToLower(strings.TrimSpace(username)), 32)
@@ -362,9 +353,8 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 				return nil, err
 			}
 		}
-		// A rotating source cannot avoid this account-wide slowdown. Keep the
-		// cooldown short so an attacker cannot lock the owner out for long.
-		// Rejected retries do not extend it, and a successful login clears it.
+		// Keep the account-wide cooldown short so an attacker cannot lock the
+		// owner out for long. Rejected retries do not extend it.
 		current, err := s.DB.GetLoginThrottle(ctx, accountKey, failedAt, loginWindowMs)
 		if err != nil {
 			return nil, err
@@ -388,9 +378,8 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	if err := s.DB.ClearLoginThrottle(ctx, accountKey); err != nil {
 		return nil, err
 	}
-	// A reset or disable after verification revokes sessions; the insert
-	// checks the verified hash again so this login cannot outlive it. The
-	// audit entry commits with the session, so a failed login leaves none.
+	// The insert checks the verified hash again, so a reset or disable after
+	// verification wins. The audit entry commits with the session.
 	principal, err := s.createSession(ctx, *user, client, verifiedHash,
 		&db.AuditEntry{UserID: user.ID, Action: "auth.login", TargetType: "session", IPAddress: client.IP})
 	if errors.Is(err, db.ErrAccountChanged) {
@@ -486,9 +475,7 @@ func (s *Service) Logout(ctx context.Context, token string, client Client) error
 }
 
 // ChangePassword replaces the signed-in account's password and returns the
-// replacement session. Current-password guesses are throttled per source and
-// per credential, so a stolen session cannot be brute forced into a takeover
-// and one stolen session cannot lock every session out.
+// replacement session. Guesses are throttled per source and per credential.
 func (s *Service) ChangePassword(ctx context.Context, principal *Principal, currentPassword, newPassword string, client Client) (*Principal, error) {
 	if length := textutil.Length(currentPassword); length < 1 || length > PasswordMax || !ValidPassword(newPassword) {
 		return nil, apperr.Newf("INVALID_REQUEST", 400, "New password must be between %d and %d characters", PasswordMin, PasswordMax)
@@ -557,7 +544,6 @@ func (s *Service) ChangePassword(ctx context.Context, principal *Principal, curr
 	return &Principal{User: current.User, Token: token, TokenHash: session.TokenHash}, nil
 }
 
-// Sessions lists the account's sessions.
 func (s *Service) Sessions(ctx context.Context, principal *Principal) ([]db.Session, error) {
 	return s.DB.ListUserSessions(ctx, principal.User.ID, principal.TokenHash)
 }
@@ -620,7 +606,6 @@ func (s *Service) adminHash(principal *Principal, client Client, password string
 	return hash, err
 }
 
-// CreateUser adds an account.
 func (s *Service) CreateUser(ctx context.Context, principal *Principal, username, password string, role db.Role, client Client) (*db.User, error) {
 	if err := RequireAdmin(principal); err != nil {
 		return nil, err
@@ -660,7 +645,6 @@ func (s *Service) CreateUser(ctx context.Context, principal *Principal, username
 	return &record.User, nil
 }
 
-// UpdateAccess changes an account's role and disabled flag.
 func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id string, role db.Role, disabled bool, client Client) (*db.User, error) {
 	if err := RequireAdmin(principal); err != nil {
 		return nil, err
@@ -716,7 +700,6 @@ func boolInt(value bool) int {
 	return 0
 }
 
-// DeleteUser removes an account.
 func (s *Service) DeleteUser(ctx context.Context, principal *Principal, id string, client Client) error {
 	if err := RequireAdmin(principal); err != nil {
 		return err

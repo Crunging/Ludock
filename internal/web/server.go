@@ -19,12 +19,9 @@ import (
 
 var log = logging.New("http")
 
-// HealthCheck reports whether a dependency is usable.
 type HealthCheck func(ctx context.Context) error
 
-// Server holds the HTTP dependencies.
 type Server struct {
-	// App holds every service the pages use.
 	App      *app.App
 	DB       *db.DB
 	Auth     *auth.Service
@@ -69,7 +66,6 @@ func (s *Server) CloseStreams() {
 	}
 }
 
-// Handler builds the routed handler.
 func (s *Server) Handler() http.Handler {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("GET /api/v1/health", s.health)

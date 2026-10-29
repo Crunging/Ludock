@@ -16,7 +16,6 @@ import (
 	"github.com/Crunging/Ludock/internal/schedtime"
 )
 
-// Announcements are restart countdown warnings.
 type Announcements struct {
 	LeadMinutes []int `json:"leadMinutes"`
 }
@@ -44,7 +43,6 @@ var (
 	datePattern = regexp.MustCompile(`^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$`)
 )
 
-// Actions a schedule can run.
 var Actions = []string{"start", "stop", "restart", "backup"}
 
 // DefaultLeadMinutes are the countdown warnings offered by default.
@@ -52,7 +50,6 @@ var DefaultLeadMinutes = []int{10, 5, 1}
 
 func invalid(message string) error { return apperr.New("INVALID_REQUEST", 400, message) }
 
-// Validate checks settings.
 func (i *Input) Validate() error {
 	if !slices.Contains(Actions, i.Action) {
 		return invalid("Choose a schedule action")

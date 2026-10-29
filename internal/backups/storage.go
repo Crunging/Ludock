@@ -33,7 +33,6 @@ import (
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
-// Settings is the backup configuration.
 type Settings struct {
 	Destination    string `json:"destination"`
 	RetentionCount int    `json:"retentionCount"`
@@ -41,14 +40,12 @@ type Settings struct {
 	ReserveBytes   int64  `json:"reserveBytes"`
 }
 
-// Default limits for new settings.
 const (
 	DefaultRetention = 10
 	DefaultMaxBytes  = 100 << 30
 	DefaultReserve   = 5 << 30
 )
 
-// Root is a recorded data root.
 type Root struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
@@ -87,7 +84,6 @@ type Storage struct {
 	Roots, Self string
 }
 
-// NewStorage checks destinations against roots and the mounts of self.
 func NewStorage(client *docker.Client, roots []string, self string) *Storage {
 	return &Storage{Docker: client, Roots: strings.Join(roots, ":"), Self: self}
 }
@@ -285,7 +281,6 @@ func (s *Storage) RemovePartial(directory, id string) error {
 	return nil
 }
 
-// Open opens a published archive for reading.
 func (s *Storage) Open(directory, id string) (*os.File, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
@@ -561,14 +556,12 @@ func HelperRoot(context *servers.Context, root Root) (string, error) {
 	return "/mounts/" + root.ID + root.Path[len(mount.Destination):], nil
 }
 
-// DataHelper is a helper container with a server's data roots.
 type DataHelper struct {
 	Container string
 	Roots     []Root
 	Cleanup   func()
 }
 
-// Helpers creates and drives data helpers.
 type Helpers struct {
 	Docker  *docker.Client
 	Images  *launch.Images
@@ -990,7 +983,6 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 
 var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")
 
-// StageTarget is one root to stage and its path in the helper.
 type StageTarget struct {
 	Root Root
 	Path string

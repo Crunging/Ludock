@@ -21,7 +21,6 @@ const (
 	fileFlags      = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
 )
 
-// fd is a pinned descriptor.
 type fd int
 
 // tracker closes every descriptor still open when a helper exits.

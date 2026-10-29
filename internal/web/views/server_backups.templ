@@ -6,7 +6,6 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// BackupsView is the backups tab of a server.
 type BackupsView struct {
 	// Operation is a backup or restore the tab follows.
 	Operation            ActivityView
@@ -106,7 +105,6 @@ templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
 	>Create backup</button>
 }
 
-// ReadinessView is the result of a backup readiness check.
 type ReadinessView struct {
 	ServerID, ServerName string
 	Admin                bool
@@ -246,7 +244,6 @@ templ RestoreForm(b BackupsView) {
 	</form>
 }
 
-// UpdateView is the update tab of a server.
 type UpdateView struct {
 	ServerID, ServerName string
 	Admin, CanBackup     bool

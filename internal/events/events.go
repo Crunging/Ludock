@@ -307,7 +307,6 @@ func (h *Hub) Changed(ctx context.Context, serverID string) {
 	}
 }
 
-// byContainer indexes servers by their bound container.
 func byContainer(servers []identity.Server) map[string]*identity.Server {
 	result := make(map[string]*identity.Server, len(servers))
 	for index := range servers {

@@ -14,7 +14,6 @@ import (
 	"github.com/Crunging/Ludock/internal/update"
 )
 
-// BackupsView is the backups tab of a server.
 type BackupsView struct {
 	// Operation is a backup or restore the tab follows.
 	Operation            ActivityView
@@ -68,7 +67,7 @@ func BackupsTab(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(string(detailURL(b.ServerID, "tab=backups")))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 35, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 34, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 		if templ_7745c5c3_Err != nil {
@@ -133,7 +132,7 @@ func backupsTabBody(b BackupsView) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + b.ServerID + "/backups/preflight")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 49, Col: 165}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 48, Col: 165}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 			if templ_7745c5c3_Err != nil {
@@ -169,7 +168,7 @@ func backupsTabBody(b BackupsView) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(FormatBytes(b.LatestBackup.Size))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 64, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 63, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -269,7 +268,7 @@ func CreateBackupButton(serverID, serverName string, ready, oob bool) templ.Comp
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + serverID + "/backups")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 97, Col: 47}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 96, Col: 47}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 		if templ_7745c5c3_Err != nil {
@@ -282,7 +281,7 @@ func CreateBackupButton(serverID, serverName string, ready, oob bool) templ.Comp
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue("Back up " + serverName + "?")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 99, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 98, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -306,7 +305,6 @@ func CreateBackupButton(serverID, serverName string, ready, oob bool) templ.Comp
 	})
 }
 
-// ReadinessView is the result of a backup readiness check.
 type ReadinessView struct {
 	ServerID, ServerName string
 	Admin                bool
@@ -394,7 +392,7 @@ func BackupReadiness(r ReadinessView) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + r.ServerID + "/backups/preflight")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 137, Col: 109}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 135, Col: 109}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 		if templ_7745c5c3_Err != nil {
@@ -412,7 +410,7 @@ func BackupReadiness(r ReadinessView) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(r.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 140, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 138, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -436,7 +434,7 @@ func BackupReadiness(r ReadinessView) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(issue.Message)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 145, Col: 24}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 143, Col: 24}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -514,7 +512,7 @@ func BackupList(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + b.ServerID + "/backups")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 164, Col: 100}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 162, Col: 100}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 		if templ_7745c5c3_Err != nil {
@@ -569,7 +567,7 @@ func BackupList(b BackupsView) templ.Component {
 			var templ_7745c5c3_Var17 string
 			templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(FormatBytes(backup.Size))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 192, Col: 36}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 190, Col: 36}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 			if templ_7745c5c3_Err != nil {
@@ -590,7 +588,7 @@ func BackupList(b BackupsView) templ.Component {
 			var templ_7745c5c3_Var18 string
 			templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(backup.State)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 195, Col: 21}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 193, Col: 21}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 			if templ_7745c5c3_Err != nil {
@@ -608,7 +606,7 @@ func BackupList(b BackupsView) templ.Component {
 				var templ_7745c5c3_Var19 templ.SafeURL
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 200, Col: 120}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 198, Col: 120}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {
@@ -627,7 +625,7 @@ func BackupList(b BackupsView) templ.Component {
 				var templ_7745c5c3_Var20 templ.SafeURL
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(b.ServerID, "tab=backups&restore="+backup.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 203, Col: 118}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 201, Col: 118}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 				if templ_7745c5c3_Err != nil {
@@ -668,7 +666,7 @@ func BackupList(b BackupsView) templ.Component {
 			var templ_7745c5c3_Var21 string
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 211, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 209, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 			if templ_7745c5c3_Err != nil {
@@ -715,7 +713,7 @@ func RestoreForm(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + b.ServerID + "/restores")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 229, Col: 87}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 227, Col: 87}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {
@@ -736,7 +734,7 @@ func RestoreForm(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var24 string
 		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue(b.Restore.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 236, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 234, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 		if templ_7745c5c3_Err != nil {
@@ -749,7 +747,7 @@ func RestoreForm(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(b.ServerName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 238, Col: 36}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 236, Col: 36}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 		if templ_7745c5c3_Err != nil {
@@ -762,7 +760,7 @@ func RestoreForm(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var26 string
 		templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue(b.ServerName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 239, Col: 91}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 237, Col: 91}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 		if templ_7745c5c3_Err != nil {
@@ -775,7 +773,7 @@ func RestoreForm(b BackupsView) templ.Component {
 		var templ_7745c5c3_Var27 templ.SafeURL
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinURLErrs(detailURL(b.ServerID, "tab=backups"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 244, Col: 71}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 242, Col: 71}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 		if templ_7745c5c3_Err != nil {
@@ -797,7 +795,6 @@ func RestoreForm(b BackupsView) templ.Component {
 	})
 }
 
-// UpdateView is the update tab of a server.
 type UpdateView struct {
 	ServerID, ServerName string
 	Admin, CanBackup     bool
@@ -835,7 +832,7 @@ func UpdateTab(serverID string, recreate bool) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate])
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 260, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 257, Col: 126}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 		if templ_7745c5c3_Err != nil {
@@ -896,7 +893,7 @@ func UpdatePanel(u UpdateView) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(capability.ActionLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 274, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 271, Col: 31}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -951,7 +948,7 @@ func UpdatePanel(u UpdateView) templ.Component {
 					var templ_7745c5c3_Var32 string
 					templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(capability.UnavailableReason)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 296, Col: 59}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 293, Col: 59}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 					if templ_7745c5c3_Err != nil {
@@ -1013,7 +1010,7 @@ func reloadUpdate(serverID, label string) templ.Component {
 		var templ_7745c5c3_Var34 string
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/servers/" + serverID + "/update")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 309, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 306, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
 		if templ_7745c5c3_Err != nil {
@@ -1026,7 +1023,7 @@ func reloadUpdate(serverID, label string) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 309, Col: 184}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 306, Col: 184}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {
@@ -1069,7 +1066,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var37 string
 		templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue("/servers/" + u.ServerID + "/updates")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 314, Col: 73}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 311, Col: 73}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 		if templ_7745c5c3_Err != nil {
@@ -1082,7 +1079,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(capability.Image)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 320, Col: 25}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 317, Col: 25}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 		if templ_7745c5c3_Err != nil {
@@ -1141,7 +1138,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(u.ServerName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 338, Col: 36}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 335, Col: 36}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 		if templ_7745c5c3_Err != nil {
@@ -1164,7 +1161,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var40 string
 		templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(capability.ActionLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 346, Col: 133}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 343, Col: 133}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 		if templ_7745c5c3_Err != nil {

@@ -13,8 +13,8 @@ import (
 const maxStatements = 256
 
 // statementConnector opens SQLite connections that keep their parsed
-// statements. database/sql otherwise asks the driver to parse every query on
-// every call, which was most of the CPU spent on a server detail read.
+// statements; database/sql otherwise reparses every query on every call, which
+// was most of the CPU of a server detail read.
 type statementConnector struct {
 	driver *sqlite.Driver
 	dsn    string

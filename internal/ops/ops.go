@@ -22,7 +22,6 @@ import (
 
 var log = logging.New("operations")
 
-// Statuses.
 const (
 	Queued         = "queued"
 	Running        = "running"
@@ -32,7 +31,6 @@ const (
 	Interrupted    = "interrupted"
 )
 
-// Job is a persisted operation.
 type Job struct {
 	ID              string
 	ServerID        string
@@ -49,17 +47,14 @@ type Job struct {
 	BindingRevision int64
 }
 
-// Context is a running job.
 type Context struct {
 	Job    *Job
 	runner *Runner
 }
 
-// Progress persists the phase with merged recovery state and an optional
-// public result, atomically.
-//
-// The job in memory changes only once the write succeeds, so recovery
-// decisions made after a failed write match what a restart would see.
+// Progress atomically persists the phase with merged recovery state and an
+// optional public result. The in-memory job changes only once the write
+// succeeds, so it matches what a restart would see.
 func (c *Context) Progress(phase string, recovery, result map[string]any) error {
 	merged := make(map[string]any, len(c.Job.Recovery)+len(recovery))
 	for key, value := range c.Job.Recovery {
@@ -107,7 +102,6 @@ const (
 
 var laneCapacity = map[string]int{laneLifecycle: 4, laneData: 1}
 
-// Runner schedules operations.
 type Runner struct {
 	DB    *db.DB
 	Locks *locks.Table
@@ -135,7 +129,6 @@ type Runner struct {
 	loop     sync.WaitGroup
 }
 
-// Register adds a handler.
 func (r *Runner) Register(kind string, handler Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -198,7 +191,6 @@ func (r *Runner) row(ctx context.Context, id string) (*row, error) {
 	return result, err
 }
 
-// Get returns an operation, or nil.
 func (r *Runner) Get(ctx context.Context, id string) (*Job, error) {
 	result, err := r.row(ctx, id)
 	if err != nil || result == nil {
@@ -207,7 +199,6 @@ func (r *Runner) Get(ctx context.Context, id string) (*Job, error) {
 	return result.job()
 }
 
-// EnqueueOptions describes a new operation.
 type EnqueueOptions struct {
 	ServerID        string
 	ActorID         string
@@ -457,7 +448,6 @@ func laneFor(rw *row) string {
 	return laneData
 }
 
-// Wake asks the runner to look for queued work.
 func (r *Runner) Wake() {
 	r.mu.Lock()
 	wake := r.wake
@@ -589,9 +579,8 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			r.persist(ctx, "finish", func() error { return r.finish(ctx, job, status, result, "") })
 			return
 		}
-		// Nothing has changed yet. Keep the job queued, so a restart while it
-		// waits runs it normally instead of reconciling an interruption. Only
-		// a saved queued row is picked up again once the resource is free.
+		// Nothing has changed yet, so keep the job queued: a restart while it
+		// waits runs it normally instead of reconciling it.
 		if !r.persist(ctx, "requeue", func() error {
 			_, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=?", db.Now(), job.ID)
 			return err

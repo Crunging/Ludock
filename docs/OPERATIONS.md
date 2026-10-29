@@ -360,20 +360,21 @@ players can connect.
   alerts without stopping the server or its schedules.
 - **Docker outages** show availability as unknown.
 
-### Discord
+### Notifications
 
-In Discord, open **Server Settings → Integrations**, create a webhook for the
-alert channel, and copy its URL
+**Settings → Notifications** sends alerts to Discord, ntfy, Gotify, Telegram,
+email (SMTP), or a generic webhook. For each destination you use, fill in its
+card, turn it on, save, and choose **Send test notification**. Tokens, topics,
+passwords, and webhook URLs are never shown again; leave a saved field blank to
+keep it. For Discord, create a webhook for the alert channel under **Server
+Settings → Integrations**
 ([Discord's guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
-In Ludock, paste it in **Settings**, turn delivery on, save, and choose **Send
-test notification**. Ludock never shows the saved URL again; leaving the field
-blank keeps it.
 
 Alerts cover outages and recoveries, failed backups and schedules, and restore
-and update results. The queue checks every 15 seconds and survives restarts.
-Failed deliveries retry up to five times, and **Retry** allows five more.
-Turning delivery off pauses the queue. A restart right after a delivery can
-send a message twice.
+and update results. Each destination gets its own delivery. The queue checks
+every 15 seconds and survives restarts. A delivery gets up to five attempts,
+and **Retry** allows five more. Turning a destination off pauses its
+deliveries. A restart right after a delivery can send a message twice.
 
 ## Users and access
 

@@ -8,7 +8,6 @@ import (
 	"sync"
 )
 
-// Role is an account role.
 type Role string
 
 const (
@@ -17,7 +16,6 @@ const (
 	RoleViewer   Role = "viewer"
 )
 
-// ValidRole reports whether value names a role.
 func ValidRole(value string) bool {
 	switch Role(value) {
 	case RoleAdmin, RoleOperator, RoleViewer:
@@ -59,7 +57,6 @@ type Session struct {
 	Current    bool
 }
 
-// LoginThrottle is the state of one failure counter.
 type LoginThrottle struct {
 	Failures     int
 	BlockedUntil int64
@@ -79,14 +76,12 @@ func boolInt(value bool) int {
 	return 0
 }
 
-// CountUsers returns the number of accounts.
 func (d *DB) CountUsers(ctx context.Context) (int, error) {
 	var count int
 	err := d.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
 	return count, err
 }
 
-// CreateUser inserts an account.
 func (d *DB) CreateUser(ctx context.Context, user UserRecord) error {
 	_, err := d.ExecContext(ctx, `INSERT INTO users
     (id, username, password_hash, role, disabled, created_at, updated_at)
@@ -116,7 +111,6 @@ func (d *DB) FindUserByUsername(ctx context.Context, username string) (*UserReco
 	return d.findUser(ctx, "username", username)
 }
 
-// FindUserByID looks up an account.
 func (d *DB) FindUserByID(ctx context.Context, id string) (*UserRecord, error) {
 	return d.findUser(ctx, "id", id)
 }
@@ -199,7 +193,6 @@ func (d *DB) DeleteUserSessions(ctx context.Context, userID string) error {
 	return err
 }
 
-// SessionInput describes a new session.
 type SessionInput struct {
 	SessionID string
 	TokenHash string
@@ -230,7 +223,6 @@ func (d *DB) CreateSession(ctx context.Context, input SessionInput) error {
 	})
 }
 
-// insertSession stores a session in tx.
 func (d *DB) insertSession(ctx context.Context, tx *sql.Tx, input SessionInput) error {
 	values := []any{input.TokenHash, input.SessionID, input.UserID, input.CreatedAt, input.ExpiresAt, input.CreatedAt,
 		nullable(input.IPAddress), nullable(input.UserAgent)}
@@ -347,7 +339,6 @@ func (d *DB) Logout(ctx context.Context, tokenHash string, audit AuditEntry) err
 	})
 }
 
-// DeleteSession removes one session.
 func (d *DB) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash)
 	return err
@@ -373,10 +364,9 @@ func getThrottle(ctx context.Context, tx *sql.Tx, key string, now, windowMs int6
 	return LoginThrottle{Failures: failures, BlockedUntil: blocked}, started, true, nil
 }
 
-// GetLoginThrottle returns the active failure count and block for a key. An
-// expired window is cleared.
-// It reads without the write lock; only an expired row is deleted, and
-// only if it is still expired.
+// GetLoginThrottle returns the active failure count and block for a key. It
+// reads without the write lock and deletes an expired row only if it is still
+// expired.
 func (d *DB) GetLoginThrottle(ctx context.Context, key string, now, windowMs int64) (LoginThrottle, error) {
 	var failures int
 	var started, blocked int64
@@ -448,7 +438,6 @@ func (d *DB) RecordLoginFailure(ctx context.Context, key string, now, windowMs i
 	return result, err
 }
 
-// ClearLoginThrottle drops a failure counter.
 func (d *DB) ClearLoginThrottle(ctx context.Context, key string) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM login_attempts WHERE attempt_key = ?", key)
 	return err
@@ -462,7 +451,6 @@ func (d *DB) PruneLoginAttempts(ctx context.Context, now, windowMs int64) error 
 	return err
 }
 
-// AuditEntry is one audit record to write.
 type AuditEntry struct {
 	UserID     string
 	Action     string
@@ -553,7 +541,6 @@ func (d *DB) Setting(ctx context.Context, key string, target any) (bool, error) 
 	return true, json.Unmarshal([]byte(value), target)
 }
 
-// SetSetting stores a JSON setting.
 func (d *DB) SetSetting(ctx context.Context, q execer, key string, value any) error {
 	if q == nil {
 		q = d.DB
@@ -567,13 +554,11 @@ func (d *DB) SetSetting(ctx context.Context, q execer, key string, value any) er
 	return err
 }
 
-// DeleteSetting removes a setting.
 func (d *DB) DeleteSetting(ctx context.Context, key string) error {
 	_, err := d.ExecContext(ctx, "DELETE FROM settings WHERE key=?", key)
 	return err
 }
 
-// Errors for guarded account changes.
 var (
 	ErrSetupComplete   = errors.New("an account already exists")
 	ErrSessionGone     = errors.New("session revoked")

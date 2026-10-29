@@ -16,7 +16,6 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 )
 
-// Service combines Docker observation with logical servers and grants.
 type Service struct {
 	DB       *db.DB
 	Identity *identity.Store
@@ -148,8 +147,7 @@ func (s *Service) ConnectionHost(ctx context.Context) string {
 	return host
 }
 
-// SetConnectionHost stores or clears the public host.
-// An invalid host is rejected rather than stored.
+// SetConnectionHost stores or clears the public host, rejecting an invalid one.
 func (s *Service) SetConnectionHost(ctx context.Context, adminID, tokenHash, host string) error {
 	normalized := ""
 	if strings.TrimSpace(host) != "" {
@@ -182,7 +180,6 @@ type ActiveOperation struct {
 	ID, Kind, Status, Phase string
 }
 
-// BackupSummary is the newest complete backup.
 type BackupSummary struct {
 	CreatedAt int64
 	Size      int64
@@ -200,7 +197,6 @@ type View struct {
 	LatestBackup    *BackupSummary
 }
 
-// Can reports a capability in the view.
 func (v *View) Can(capability authz.Capability) bool {
 	return slices.Contains(v.Permissions, capability)
 }
@@ -338,7 +334,6 @@ func (s *Service) listViews(ctx context.Context, actor *db.SessionUser, current 
 	return views, nil
 }
 
-// Name is a visible server's ID and saved display name.
 type Name struct{ ID, DisplayName string }
 
 // Names lists the servers the actor may view from saved metadata, without

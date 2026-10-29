@@ -28,9 +28,8 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		LatestBackup: view.LatestBackup}
-	// A backup or restore started here shows its progress here, and so does
-	// any work still running: its panel reports when it ends, which brings
-	// back readiness and the controls the work paused.
+	// The tab follows any running work, so readiness and paused controls come
+	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
 		Archives: d.Admin && can(view, authz.BackupsRead)}
 	if b.Operation.SelectedID == "" && view.ActiveOperation != nil {

@@ -9,7 +9,6 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 )
 
-// UsersView is the users page.
 type UsersView struct {
 	Users     []db.User
 	CurrentID string
@@ -171,7 +170,6 @@ func accessValues(user db.User) string {
 	return `{"role":"` + string(user.Role) + `","disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
 }
 
-// GrantsView is one user's server access editor.
 type GrantsView struct {
 	UserID, Username string
 	Role             db.Role

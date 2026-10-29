@@ -17,7 +17,6 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// Service checks and plans image updates.
 type Service struct {
 	Docker *docker.Client
 	// DockerConfig is a Docker client config folder with registry
@@ -40,7 +39,6 @@ var (
 		"Docker no longer has the image this server's container was created from, so Ludock can't tell its settings from the image's defaults. Recreate it once through the tool that created it.")
 )
 
-// Plan is a container checked for replacement.
 type Plan struct {
 	Spec *docker.ContainerSpec
 	// Image is the configured image reference that is pulled.
@@ -139,10 +137,9 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 }
 
 // assertNoDependents refuses when another container joined one of this
-// container's namespaces: replacing it would cut that container off.
-// Ludock's own console helpers, such as a player reading's, are skipped:
-// each holds the server lock until it is removed, so none is left once the
-// update holds it, and one seen before then is gone within seconds.
+// container's namespaces, since replacing it would cut that container off.
+// Ludock's console helpers are skipped: each holds the server lock until it is
+// removed.
 func (s *Service) assertNoDependents(ctx context.Context, spec *docker.ContainerSpec) error {
 	containers, err := s.Docker.ListContainers(ctx, true, nil)
 	if err != nil {

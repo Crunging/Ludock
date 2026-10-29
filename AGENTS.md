@@ -32,6 +32,17 @@ between two steps). Name Go tests after the code and behavior in a few words,
 such as `TestRestoreSpacePerDisk`, and describe the scenario in a comment above
 the test.
 
+## Comments
+
+Agents write and read this code, and every comment costs context. Comment only
+what the code can't say: an invariant, a safety or ordering constraint, a
+non-obvious reason, or an outside fact such as a Docker quirk. Don't restate
+the code, walk through alternatives, or list what something doesn't do. Keep
+doc comments to a sentence or two, and skip them on names that explain
+themselves. Tests keep their scenario comment.
+
+## Commits
+
 Commit with Conventional Commits. Release Please owns versions,
 `CHANGELOG.md`, and `.release-please-manifest.json`; don't edit them or move
 published tags.

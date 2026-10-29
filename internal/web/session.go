@@ -26,14 +26,12 @@ import (
 // formLimit bounds form bodies; uploads stream separately.
 const formLimit = 64 * 1024
 
-// Request is the authenticated context of one request.
 type Request struct {
 	Principal *auth.Principal
 	Client    auth.Client
 	CSRF      string
 }
 
-// User is the session's principal.
 func (r *Request) User() *db.SessionUser { return &r.Principal.User }
 
 type contextKey struct{}
@@ -183,7 +181,6 @@ func (s *Server) admin(handler func(http.ResponseWriter, *http.Request, *Request
 	})
 }
 
-// page builds the shell description for a request.
 func (s *Server) page(r *http.Request, request *Request, title string) views.Page {
 	role := string(request.Principal.User.Role)
 	if role == "admin" {
@@ -221,7 +218,6 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 	views.ErrorPage(s.page(r, request, "Error"), "Something went wrong", public.Message).Render(r.Context(), w)
 }
 
-// render writes components as one HTML response.
 func render(w http.ResponseWriter, r *http.Request, status int, components ...templ.Component) {
 	html(w)
 	w.WriteHeader(status)

@@ -15,7 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// RestoreRequest is the restore helper protocol.
 type RestoreRequest struct {
 	Root      string `json:"root"`
 	Stage     string `json:"stage"`
@@ -315,7 +314,6 @@ func (h *restoreHelper) run() (any, error) {
 	return ok, syncAll(stage, root)
 }
 
-// RunRestore runs one restore step for a JSON request.
 func RunRestore(argument string, stdout, stderr io.Writer) int {
 	h := &restoreHelper{}
 	defer h.t.closeAll()
@@ -333,7 +331,6 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// RestoreRecord describes one extracted entry.
 type RestoreRecord struct {
 	Name  string   `json:"name"`
 	Type  string   `json:"type"`
@@ -414,7 +411,6 @@ func (x *extractor) parent(names []string) (fd, error) {
 	return current, nil
 }
 
-// changed marks a directory whose entries must be synced.
 func (x *extractor) changed(names []string) {
 	if x.dirty == nil {
 		x.dirty = map[string][]string{}

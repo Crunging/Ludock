@@ -7,13 +7,11 @@ import (
 	"github.com/Crunging/Ludock/internal/logging"
 )
 
-// LogEntry is one rendered application log line.
 type LogEntry struct {
 	logging.Entry
 	ContextJSON string
 }
 
-// LogsView is the Ludock logs page.
 type LogsView struct {
 	Entries          []LogEntry
 	Total            int

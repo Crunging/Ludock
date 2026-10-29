@@ -15,14 +15,12 @@ import (
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
-// Root is a browsable data directory.
 type Root struct {
 	ID   string
 	Name string
 	Path string
 }
 
-// Mount is a container mount as Docker reports it.
 type Mount struct {
 	Type        string
 	Source      string

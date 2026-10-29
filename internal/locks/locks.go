@@ -14,10 +14,8 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
-// ErrConflict reports a conflicting holder.
 var ErrConflict = apperr.New("OPERATION_CONFLICT", 409, "A conflicting operation is already running")
 
-// ErrRecovering reports that startup recovery has not finished.
 var ErrRecovering = apperr.New("RECOVERY_PENDING", 409, "Ludock is recovering interrupted operations. Try again shortly.")
 
 // BackgroundConflict reports a conflict only with background work, such as
@@ -32,7 +30,6 @@ func (e *BackgroundConflict) Error() string { return ErrConflict.Message }
 // Unwrap lets apperr.As see the public error.
 func (e *BackgroundConflict) Unwrap() error { return ErrConflict }
 
-// Cancel stops the background holders.
 func (e *BackgroundConflict) Cancel() {
 	for _, cancel := range e.cancels {
 		cancel()
@@ -43,7 +40,6 @@ type holder struct {
 	background func() // nil for foreground work
 }
 
-// Table holds keys.
 type Table struct {
 	mu       sync.Mutex
 	active   map[string]*holder
@@ -52,10 +48,8 @@ type Table struct {
 	fences   int
 }
 
-// Default is the process-wide lock table.
 var Default = New()
 
-// New returns an empty table.
 func New() *Table { return &Table{active: map[string]*holder{}} }
 
 func normalize(key string) string {
@@ -94,14 +88,11 @@ func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 	return t.acquire(keys, background, false)
 }
 
-// backgroundYield bounds how long foreground work waits for background
-// holders to finish their cleanup.
 const backgroundYield = 10 * time.Second
 
-// AcquirePreempting is Acquire for work that background work must not hold
-// up, such as a request someone is waiting on. Background holders, such as a
-// player reading, are cancelled and waited for; they hold their keys until
-// their cleanup finishes. It fails if they don't finish within 10 seconds.
+// AcquirePreempting is Acquire for work that background work must not hold up,
+// such as a request someone is waiting on. It cancels background holders and
+// waits up to backgroundYield for their cleanup to release the keys.
 // background, when set, marks this holder as background work too.
 func (t *Table) AcquirePreempting(ctx context.Context, keys []string, background func()) (func(), error) {
 	deadline := time.NewTimer(backgroundYield)
