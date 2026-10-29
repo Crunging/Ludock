@@ -699,9 +699,9 @@ const stopRecoveryMin = 5 * time.Minute
 // StopRecovery is persisted from the final inspection immediately before a
 // stop is dispatched.
 type StopRecovery struct {
-	StopStarted            bool   `json:"stopStarted"`
-	StopInitialStartedAt   *int64 `json:"stopInitialStartedAt"`
-	StopRecoveryDeadlineAt int64  `json:"stopRecoveryDeadlineAt"`
+	StopStarted            bool
+	StopInitialStartedAt   *int64
+	StopRecoveryDeadlineAt int64
 }
 
 // StopRecoveryState waits through the full grace period plus time to kill

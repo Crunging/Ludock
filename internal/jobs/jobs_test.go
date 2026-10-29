@@ -170,8 +170,8 @@ func TestRecoveryStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	f.jobs.Poll = time.Hour
-	stopping := &ops.Context{Job: &ops.Job{ID: "interrupted", Recovery: map[string]any{"stopStarted": true,
-		"stopRecoveryDeadlineAt": float64(time.Now().Add(time.Hour).UnixMilli())}}}
+	stopping := &ops.Context{Job: &ops.Job{ID: "interrupted", Recovery: ops.Recovery{StopStarted: true,
+		StopRecoveryDeadlineAt: time.Now().Add(time.Hour).UnixMilli()}}}
 	for name, wait := range map[string]func() error{
 		"helpers": func() error {
 			return f.jobs.removeOperationHelpers(ctx, &ops.Context{Job: &ops.Job{ID: "interrupted"}})
@@ -263,7 +263,7 @@ func TestRecoveryWithUnreadableRow(t *testing.T) {
 	if _, err := f.jobs.DB.Exec("ALTER TABLE backups RENAME TO backups_unreadable"); err != nil {
 		t.Fatal(err)
 	}
-	job := &ops.Context{Job: &ops.Job{ID: backup.ID, Recovery: map[string]any{"backupId": backup.Result["backupId"], "backupDestination": f.backupTo}}}
+	job := &ops.Context{Job: &ops.Job{ID: backup.ID, Recovery: ops.Recovery{BackupID: backup.Result["backupId"].(string), BackupDestination: f.backupTo}}}
 	if err := f.jobs.removeUnpublished(ctx, job); err == nil {
 		t.Fatal("treated an unreadable backup row as absent")
 	}
@@ -531,8 +531,8 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	// Recovery keeps the deadline in milliseconds, so the test does too.
 	deadline := time.UnixMilli(time.Now().Add(400 * time.Millisecond).UnixMilli())
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
-		BindingRevision: logical.BindingRevision, Recovery: map[string]any{"containerId": logical.ContainerID,
-			"stopStarted": true, "stopRecoveryDeadlineAt": float64(deadline.UnixMilli()), "lockKeys": []any{"server:" + f.serverID}}}}
+		BindingRevision: logical.BindingRevision, Recovery: ops.Recovery{ContainerID: logical.ContainerID,
+			StopStarted: true, StopRecoveryDeadlineAt: deadline.UnixMilli(), LockKeys: []string{"server:" + f.serverID}}}}
 	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}

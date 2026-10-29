@@ -120,26 +120,6 @@ func text(value any) (string, bool) {
 	return result, ok
 }
 
-func stringList(value any) ([]string, bool) {
-	switch typed := value.(type) {
-	case nil:
-		return nil, true
-	case []string:
-		return typed, true
-	case []any:
-		var result []string
-		for _, item := range typed {
-			entry, ok := item.(string)
-			if !ok || entry == "" {
-				return nil, false
-			}
-			result = append(result, entry)
-		}
-		return result, true
-	}
-	return nil, false
-}
-
 var (
 	errRevoked         = apperr.New("ACCESS_REVOKED", 403, "The operation owner no longer has access")
 	errScheduleRevoked = apperr.New("SCHEDULE_REVOKED", 403, "The schedule was deleted, disabled, or changed")
@@ -206,23 +186,16 @@ func (j *Jobs) assertCapability(ctx context.Context, job *ops.Context, capabilit
 
 const forceStopGuidance = "Force-stopped, recent progress may not have been saved."
 
-func lifecycleResult(job *ops.Context, updates map[string]any) map[string]any {
-	recovery := map[string]any{}
-	for key, value := range job.Job.Recovery {
-		recovery[key] = value
+func lifecycleResult(kind string, recovery ops.Recovery) map[string]any {
+	result := map[string]any{"action": kind}
+	if recovery.SaveStatus != "" {
+		result["saveStatus"], result["saveReason"] = recovery.SaveStatus, recovery.SaveReason
 	}
-	for key, value := range updates {
-		recovery[key] = value
-	}
-	result := map[string]any{"action": job.Job.Kind}
-	if status, ok := recovery["saveStatus"].(string); ok {
-		result["saveStatus"], result["saveReason"] = status, recovery["saveReason"]
-	}
-	if recovery["stopRecoveryTimedOut"] == true {
+	if recovery.StopRecoveryTimedOut {
 		result["stopRecoveryTimedOut"] = true
 		result["guidance"] = "Shutdown could not be confirmed before the recovery deadline. Review the server state before retrying."
 	}
-	if recovery["forceStopped"] == true {
+	if recovery.ForceStopped {
 		result["forceStopped"] = true
 		result["guidance"] = forceStopGuidance
 	}
@@ -239,8 +212,12 @@ func (j *Jobs) noteAvailability(err error) {
 
 // record keeps only fixed lifecycle summaries public; console output is
 // discarded.
-func record(job *ops.Context, phase string, recovery map[string]any) error {
-	return job.Progress(phase, recovery, lifecycleResult(job, recovery))
+func record(job *ops.Context, phase string, change func(*ops.Recovery)) error {
+	next := job.Job.Recovery
+	if change != nil {
+		change(&next)
+	}
+	return job.Progress(phase, func(r *ops.Recovery) { *r = next }, lifecycleResult(job.Job.Kind, next))
 }
 
 // saveWorld sends the game's save command, best effort. Revoked authority
@@ -261,10 +238,10 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 		if expected != nil && slices.ContainsFunc(expected.Commands, func(item games.QuickCommand) bool { return item.Label == "Save world" }) {
 			reason = "console_unavailable"
 		}
-		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
+		return record(job, "save_skipped", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "skipped", reason })
 	}
 	if server.Container.State != "running" {
-		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": "not_running"})
+		return record(job, "save_skipped", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "skipped", "not_running" })
 	}
 	if err := record(job, "saving_world", nil); err != nil {
 		return err
@@ -281,9 +258,9 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 		if console.IsTimeout(err) {
 			reason = "timed_out"
 		}
-		return record(job, "save_skipped", map[string]any{"saveStatus": "skipped", "saveReason": reason})
+		return record(job, "save_skipped", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "skipped", reason })
 	}
-	if err := record(job, "waiting_for_save", map[string]any{"saveStatus": "sent", "saveReason": nil}); err != nil {
+	if err := record(job, "waiting_for_save", func(r *ops.Recovery) { r.SaveStatus, r.SaveReason = "sent", "" }); err != nil {
 		return err
 	}
 	settle := j.SaveSettle
@@ -360,7 +337,7 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			}
 			// Persist before dispatch, so recovery recognizes a change that
 			// reached Docker.
-			if err := record(job, phase, map[string]any{"containerId": server.Container.ID}); err != nil {
+			if err := record(job, phase, func(r *ops.Recovery) { r.ContainerID = server.Container.ID }); err != nil {
 				return err
 			}
 			return j.Servers.Observer.ChangeState(ctx, server.Container.ID, mutation, func(observation identity.Observation, info *docker.ContainerInspect) error {
@@ -372,9 +349,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 				}
 				if mutation == servers.Stop {
 					// Recovery takes these locks before checking authority again.
-					recovery := stopRecovery(info)
-					recovery["lockKeys"] = server.LockKeys
-					return record(job, "stopping", recovery)
+					return record(job, "stopping", func(r *ops.Recovery) {
+						recordStop(r, info)
+						r.LockKeys = server.LockKeys
+					})
 				}
 				return nil
 			})
@@ -396,8 +374,10 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 			if server, err = j.resolve(ctx, job, permission, true); err != nil {
 				return nil, err
 			}
-			if err := record(job, "verifying_stop", map[string]any{"stopSettled": true,
-				"forceStopped": job.Job.Recovery["stopStarted"] == true && server.Container.Exit != nil && server.Container.Exit.Code == 137}); err != nil {
+			if err := record(job, "verifying_stop", func(r *ops.Recovery) {
+				r.StopSettled = true
+				r.ForceStopped = r.StopStarted && server.Container.Exit != nil && server.Container.Exit.Code == 137
+			}); err != nil {
 				return nil, err
 			}
 		}
@@ -410,18 +390,18 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 		if err := assertAccess(); err != nil {
 			return nil, err
 		}
-		return lifecycleResult(job, nil), nil
+		return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
 	})
 }
 
 // awaitStopDeadline holds the locks until a dispatched stop's saved deadline
 // has passed, even after authority or the binding changed, then returns err.
 func (j *Jobs) awaitStopDeadline(ctx context.Context, job *ops.Context, unsettled bool, err error) error {
-	deadline, ok := number(job.Job.Recovery["stopRecoveryDeadlineAt"])
-	if !unsettled || !ok {
+	deadline := job.Job.Recovery.StopRecoveryDeadlineAt
+	if !unsettled || deadline == 0 {
 		return err
 	}
-	if wait := time.Until(time.UnixMilli(int64(deadline))); wait > 0 {
+	if wait := time.Until(time.UnixMilli(deadline)); wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
@@ -433,14 +413,9 @@ func (j *Jobs) awaitStopDeadline(ctx context.Context, job *ops.Context, unsettle
 	return err
 }
 
-func stopRecovery(info *docker.ContainerInspect) map[string]any {
+func recordStop(r *ops.Recovery, info *docker.ContainerInspect) {
 	state := servers.StopRecoveryState(info, time.Now())
-	result := map[string]any{"stopStarted": state.StopStarted, "stopRecoveryDeadlineAt": state.StopRecoveryDeadlineAt,
-		"stopInitialStartedAt": nil}
-	if state.StopInitialStartedAt != nil {
-		result["stopInitialStartedAt"] = *state.StopInitialStartedAt
-	}
-	return result
+	r.StopStarted, r.StopRecoveryDeadlineAt, r.StopInitialStartedAt = state.StopStarted, state.StopRecoveryDeadlineAt, state.StopInitialStartedAt
 }
 
 // recoverLifecycle only observes: Docker may still be handling the
@@ -452,11 +427,11 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 		return nil, apperr.New("INVALID_OPERATION_STATE", 409, "Invalid lifecycle action")
 	}
 	recovery := job.Job.Recovery
-	unsettled := recovery["stopStarted"] == true && recovery["stopSettled"] != true
+	unsettled := recovery.StopStarted && !recovery.StopSettled
 	// A dispatched stop may still be running in Docker, whatever its owner's
 	// authority is now: its saved locks are taken first.
-	held, saved := stringList(recovery["lockKeys"])
-	if !unsettled || !saved {
+	held := recovery.LockKeys
+	if !unsettled {
 		initial, err := j.resolve(ctx, job, permission, true)
 		if err != nil {
 			return nil, err
@@ -473,26 +448,24 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 		return nil, j.awaitStopDeadline(ctx, job, unsettled, err)
 	}
 	defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
-	containerID, _ := text(recovery["containerId"])
-	if unsettled && containerID == server.Container.ID {
-		deadline, deadlineOK := number(recovery["stopRecoveryDeadlineAt"])
-		initialStarted, initialOK := number(recovery["stopInitialStartedAt"])
+	if unsettled && recovery.ContainerID == server.Container.ID {
+		deadline, initialStarted := recovery.StopRecoveryDeadlineAt, recovery.StopInitialStartedAt
 		if err := record(job, "reconciling_stop", nil); err != nil {
 			return nil, err
 		}
 		for server.Container.Exit == nil {
 			// A different running instance proves the old shutdown is over.
-			if server.Container.State == "running" && initialOK && server.Container.StateSince != 0 &&
-				float64(server.Container.StateSince) != initialStarted {
+			if server.Container.State == "running" && initialStarted != nil && server.Container.StateSince != 0 &&
+				server.Container.StateSince != *initialStarted {
 				j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 				break
 			}
-			if !deadlineOK {
+			if deadline == 0 {
 				return nil, apperr.New("INVALID_OPERATION_STATE", 409, "Saved stop recovery deadline is invalid")
 			}
-			remaining := time.Duration(deadline-float64(time.Now().UnixMilli())) * time.Millisecond
+			remaining := time.Until(time.UnixMilli(deadline))
 			if remaining <= 0 {
-				if err := record(job, "reconciliation_timed_out", map[string]any{"stopRecoveryTimedOut": true}); err != nil {
+				if err := record(job, "reconciliation_timed_out", func(r *ops.Recovery) { r.StopRecoveryTimedOut = true }); err != nil {
 					return nil, err
 				}
 				break
@@ -517,11 +490,13 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 		}
 		if server.Container.Exit != nil {
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, job.Job.Kind == "stop"))
-			if err := record(job, "reconciling", map[string]any{"stopSettled": true,
-				"forceStopped": recovery["forceStopped"] == true || server.Container.Exit.Code == 137}); err != nil {
+			if err := record(job, "reconciling", func(r *ops.Recovery) {
+				r.StopSettled = true
+				r.ForceStopped = r.ForceStopped || server.Container.Exit.Code == 137
+			}); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return lifecycleResult(job, nil), nil
+	return lifecycleResult(job.Job.Kind, job.Job.Recovery), nil
 }

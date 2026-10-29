@@ -70,9 +70,10 @@ func (f *fixture) interrupt(t *testing.T, prepare func(id string, swap *swapStat
 	swap := swapState{Stage: swapCreating, Name: "mc", Temporary: servers.ReplacementName("mc", id),
 		RestartPolicy: json.RawMessage(`{"Name":"unless-stopped"}`)}
 	prepare(id, &swap)
-	saved := map[string]any{"containerId": f.game, "fingerprint": logical.BindingFingerprint, "lockKeys": []string{"server:" + f.serverID},
-		"initialRunning": true, "stopStarted": true, "stopSettled": true, "dataSafe": true, "swap": swap}
-	encoded, _ := json.Marshal(saved)
+	running := true
+	swapJSON, _ := json.Marshal(swap)
+	encoded, _ := json.Marshal(ops.Recovery{ContainerID: f.game, Fingerprint: logical.BindingFingerprint,
+		LockKeys: []string{"server:" + f.serverID}, InitialRunning: &running, StopStarted: true, StopSettled: true, Swap: swapJSON})
 	input, _ := json.Marshal(skipBackup)
 	if _, err := f.jobs.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
 		VALUES (?,?,'admin','update','running','starting',?,?,?,?,?)`, id, f.serverID, string(input), string(encoded),
