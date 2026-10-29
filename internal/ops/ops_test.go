@@ -72,7 +72,7 @@ func TestEnqueueIdempotencyAndConflicts(t *testing.T) {
 func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	r, servers := setup(t, 3)
 	r.Register("start", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-		c.Progress("starting", map[string]any{"containerId": "x"}, nil)
+		c.Progress("starting", func(r *Recovery) { r.ContainerID = "x" }, nil)
 		return map[string]any{"action": "start"}, nil
 	}})
 	r.Register("update", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
@@ -86,7 +86,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	b, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[1], ActorID: "admin", Kind: "update"})
 	c, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[2], ActorID: "admin", Kind: "stop"})
 	job := waitStatus(t, r, a.ID, Succeeded)
-	if job.Recovery["containerId"] != "x" || job.Result["action"] != "start" {
+	if job.Recovery.ContainerID != "x" || job.Result["action"] != "start" {
 		t.Fatal(job)
 	}
 	waitStatus(t, r, b.ID, AlreadyCurrent)
@@ -160,13 +160,13 @@ func TestFailedCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	running := &Context{Job: job, runner: r}
-	if err := running.Progress("staging", map[string]any{"root": "staging"}, nil); err != nil {
+	if err := running.Progress("staging", func(r *Recovery) { r.DataHelperID = "staging" }, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := running.Progress("moving_old", map[string]any{"root": "moving_old"}, nil); err == nil {
+	if err := running.Progress("moving_old", func(r *Recovery) { r.DataHelperID = "moving_old" }, nil); err == nil {
 		t.Fatal("a failed checkpoint reported success")
 	}
-	if job.Phase != "staging" || job.Recovery["root"] != "staging" {
+	if job.Phase != "staging" || job.Recovery.DataHelperID != "staging" {
 		t.Fatal("memory ran ahead of the saved checkpoint:", job.Phase, job.Recovery)
 	}
 }
@@ -275,7 +275,7 @@ func TestInterruptedOperationsReconciled(t *testing.T) {
 	r.Register("stop", Handler{
 		Run: func(context.Context, *Context) (map[string]any, error) { ran = true; return nil, nil },
 		Recover: func(_ context.Context, c *Context) (map[string]any, error) {
-			return map[string]any{"reconciled": c.Job.Recovery["stopStarted"]}, nil
+			return map[string]any{"reconciled": c.Job.Recovery.StopStarted}, nil
 		},
 	})
 	r.DB.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -43,8 +44,50 @@ type Job struct {
 	Result          map[string]any
 	ActorID         string
 	Input           map[string]any
-	Recovery        map[string]any
+	Recovery        Recovery
 	BindingRevision int64
+}
+
+// Recovery is what an operation saves before each step that acts on Docker,
+// so a restart reconciles the step instead of repeating it.
+type Recovery struct {
+	// The container, binding, and locks a data operation acted on.
+	ContainerID string   `json:"containerId,omitempty"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	LockKeys    []string `json:"lockKeys,omitempty"`
+
+	// InitialRunning is saved once, before a data operation stops the server;
+	// nil means it never got that far.
+	InitialRunning *bool `json:"initialRunning,omitempty"`
+	// A dispatched stop may still be running in Docker until StopSettled or
+	// StopRecoveryDeadlineAt (Unix ms). A container whose start time differs
+	// from StopInitialStartedAt was started again by another manager.
+	StopStarted            bool   `json:"stopStarted,omitempty"`
+	StopSettled            bool   `json:"stopSettled,omitempty"`
+	StopRecoveryDeadlineAt int64  `json:"stopRecoveryDeadlineAt,omitempty"`
+	StopInitialStartedAt   *int64 `json:"stopInitialStartedAt,omitempty"`
+	StopRecoveryTimedOut   bool   `json:"stopRecoveryTimedOut,omitempty"`
+	ForceStopped           bool   `json:"forceStopped,omitempty"`
+	// StoppedStartedAt is the stopped container's StartedAt, which changes if
+	// anything starts it.
+	StoppedStartedAt string `json:"stoppedStartedAt,omitempty"`
+	StartRequested   bool   `json:"startRequested,omitempty"`
+	StateRestored    bool   `json:"stateRestored,omitempty"`
+
+	SaveStatus string `json:"saveStatus,omitempty"`
+	SaveReason string `json:"saveReason,omitempty"`
+
+	DataHelperID      string `json:"dataHelperId,omitempty"`
+	BackupID          string `json:"backupId,omitempty"`
+	BackupDestination string `json:"backupDestination,omitempty"`
+	BackupComplete    bool   `json:"backupComplete,omitempty"`
+
+	// DataUnsafe is set while a restore is replacing or rolling back data.
+	DataUnsafe bool `json:"dataUnsafe,omitempty"`
+	// Restore and Swap are the restore journal and update swap, which their
+	// handlers decode and validate.
+	Restore json.RawMessage `json:"restore,omitempty"`
+	Swap    json.RawMessage `json:"swap,omitempty"`
 }
 
 type Context struct {
@@ -52,16 +95,14 @@ type Context struct {
 	runner *Runner
 }
 
-// Progress atomically persists the phase with merged recovery state and an
-// optional public result. The in-memory job changes only once the write
-// succeeds, so it matches what a restart would see.
-func (c *Context) Progress(phase string, recovery, result map[string]any) error {
-	merged := make(map[string]any, len(c.Job.Recovery)+len(recovery))
-	for key, value := range c.Job.Recovery {
-		merged[key] = value
-	}
-	for key, value := range recovery {
-		merged[key] = value
+// Progress atomically persists the phase, the recovery state after change
+// (when not nil), and an optional public result. The in-memory job changes only
+// once the write succeeds, so it matches what a restart would see.
+func (c *Context) Progress(phase string, change func(*Recovery), result map[string]any) error {
+	merged := c.Job.Recovery
+	merged.LockKeys = slices.Clone(merged.LockKeys)
+	if change != nil {
+		change(&merged)
 	}
 	if result == nil {
 		result = c.Job.Result
@@ -177,8 +218,8 @@ func (r *row) job() (*Job, error) {
 	if job.Input, err = parseObject(r.input); err != nil {
 		return nil, err
 	}
-	if job.Recovery, err = parseObject(r.recovery); err != nil {
-		return nil, err
+	if json.Unmarshal([]byte(r.recovery), &job.Recovery) != nil {
+		return nil, errInvalidState
 	}
 	return job, nil
 }

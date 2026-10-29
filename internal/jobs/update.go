@@ -59,7 +59,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			background := context.WithoutCancel(ctx)
 			// Starting can update the game and change the world, so start only
 			// after a completed backup and once the data helper is removed.
-			if helper, _ := text(job.Job.Recovery["dataHelperId"]); j.backupCompleted(background, job) && helper == "" {
+			if j.backupCompleted(background, job) && job.Job.Recovery.DataHelperID == "" {
 				if restoreErr := j.restoreInitialState(background, current, job); restoreErr != nil && err == nil {
 					err = restoreErr
 				}
@@ -83,7 +83,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			if err != nil {
 				return nil, err
 			}
-			if err := job.Progress("backup_complete", map[string]any{"backupId": backup.ID}, nil); err != nil {
+			if err := job.Progress("backup_complete", func(r *ops.Recovery) { r.BackupID = backup.ID }, nil); err != nil {
 				return nil, err
 			}
 			selected, err := j.resolve(ctx, job, authz.ServerRestart, true)
@@ -95,7 +95,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}
 			// Persist before dispatch; recovery never repeats a start that
 			// reached Docker.
-			if err := job.Progress("starting", map[string]any{"startRequested": true}, nil); err != nil {
+			if err := job.Progress("starting", func(r *ops.Recovery) { r.StartRequested = true }, nil); err != nil {
 				return nil, err
 			}
 			if err := j.Servers.Observer.ChangeState(ctx, selected.Container.ID, servers.Start, func(observation identity.Observation, _ *docker.ContainerInspect) error {
@@ -107,18 +107,18 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 			}); err != nil {
 				return nil, err
 			}
-			if err := job.Progress("started", map[string]any{"stateRestored": true}, nil); err != nil {
+			if err := job.Progress("started", func(r *ops.Recovery) { r.StateRestored = true }, nil); err != nil {
 				return nil, err
 			}
 			j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, false))
 			recovery := job.Job.Recovery
-			return map[string]any{"action": "restart", "backupId": recovery["backupId"], "saveStatus": recovery["saveStatus"],
-				"saveReason": recovery["saveReason"]}, nil
+			return map[string]any{"action": "restart", "backupId": recovery.BackupID, "saveStatus": recovery.SaveStatus,
+				"saveReason": recovery.SaveReason}, nil
 		}()
 		if err != nil {
 			// A recorded stop may have reached Docker even if its result was
 			// lost; reconcile it before reporting the server left stopped.
-			if _, recorded := job.Job.Recovery["initialRunning"].(bool); recorded && !j.backupCompleted(ctx, job) {
+			if job.Job.Recovery.InitialRunning != nil && !j.backupCompleted(ctx, job) {
 				if keepErr := j.keepStoppedAfterFailedBackup(context.WithoutCancel(ctx), current, job); keepErr != nil {
 					log.Warn("Could not confirm the server stayed stopped after a failed backup; review its state")
 				}
@@ -130,7 +130,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 
 func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) error {
 	// Starting is safe to reconcile, but only once the backup completed.
-	if _, recorded := job.Job.Recovery["initialRunning"].(bool); recorded {
+	if job.Job.Recovery.InitialRunning != nil {
 		return j.recoverBackup(ctx, job, j.backupCompleted(ctx, job))
 	}
 	return nil
@@ -147,11 +147,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) error {
 		return err
 	}
 	if swap != nil {
-		held, err := recoveryLocks(job)
-		if err != nil {
-			return err
-		}
-		release, err := j.Locks.AcquireForRecovery(held)
+		release, err := j.Locks.AcquireForRecovery(recoveryLocks(job))
 		if err != nil {
 			return err
 		}
@@ -163,7 +159,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) error {
 	}
 	// Pulling changes no state. Backup recovery applies only after the
 	// initial state and binding were recorded before stopping.
-	if _, recorded := job.Job.Recovery["initialRunning"].(bool); !recorded {
+	if job.Job.Recovery.InitialRunning == nil {
 		return nil
 	}
 	if swap != nil && swap.reached(swapStarting) {
@@ -205,12 +201,10 @@ func (s *swapState) reached(stage string) bool {
 
 // savedSwap is the update's saved swap, or nil before it began.
 func savedSwap(job *ops.Context) (*swapState, error) {
-	value, present := job.Job.Recovery["swap"]
-	if !present {
+	if len(job.Job.Recovery.Swap) == 0 {
 		return nil, nil
 	}
-	encoded, _ := json.Marshal(value)
-	decoder := json.NewDecoder(bytesReader(encoded))
+	decoder := json.NewDecoder(bytesReader(job.Job.Recovery.Swap))
 	decoder.DisallowUnknownFields()
 	var swap swapState
 	if decoder.Decode(&swap) != nil || !slices.Contains(swapStages, swap.Stage) || swap.Name == "" || swap.Temporary == "" {
@@ -220,7 +214,11 @@ func savedSwap(job *ops.Context) (*swapState, error) {
 }
 
 func saveSwap(job *ops.Context, swap swapState) error {
-	return job.Progress(swap.Stage, map[string]any{"swap": swap}, nil)
+	encoded, err := json.Marshal(swap)
+	if err != nil {
+		return err
+	}
+	return job.Progress(swap.Stage, func(r *ops.Recovery) { r.Swap = encoded }, nil)
 }
 
 type UpdateRequest struct {
@@ -295,7 +293,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 		result, err = j.update(ctx, job, server, request, capability, plan)
 		if err != nil {
 			if undoErr := j.undoUpdate(context.WithoutCancel(ctx), server, job); undoErr != nil {
-				if err := job.Progress("recovery_required", map[string]any{"recoveryRequired": true}, nil); err != nil {
+				if err := job.Progress("recovery_required", nil, nil); err != nil {
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
 				}
 			}
@@ -333,8 +331,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
-	if err := job.Progress("pulling", map[string]any{"containerId": server.Container.ID, "initiallyRunning": initiallyRunning,
-		"previousImageId": plan.Spec.Image}, nil); err != nil {
+	if err := job.Progress("pulling", func(r *ops.Recovery) { r.ContainerID = server.Container.ID }, nil); err != nil {
 		return nil, err
 	}
 	auth, err := j.Updates.RegistryAuth(plan)
@@ -365,7 +362,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {
 		return nil, err
 	}
-	if err := job.Progress("validating", map[string]any{"selectedImageId": pulled}, nil); err != nil {
+	if err := job.Progress("validating", nil, nil); err != nil {
 		return nil, err
 	}
 	if !request.CreateBackup && request.SkipBackupConfirmation != server.Container.DisplayName {
@@ -374,7 +371,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
 		return nil, err
 	}
-	if err := job.Progress("stopping", map[string]any{"stopRequested": true}, nil); err != nil {
+	if err := job.Progress("stopping", nil, nil); err != nil {
 		return nil, err
 	}
 	// A forced stop only blocks a backup; replacing the container is what
@@ -392,7 +389,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		if err != nil {
 			return nil, err
 		}
-		if err := job.Progress("validating", map[string]any{"backupId": backup.ID}, nil); err != nil {
+		if err := job.Progress("validating", func(r *ops.Recovery) { r.BackupID = backup.ID }, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -576,7 +573,7 @@ func (j *Jobs) settleSwap(ctx context.Context, job *ops.Context) error {
 	if err != nil || swap == nil || swap.Stage == swapReplaced {
 		return err
 	}
-	original, _ := text(job.Job.Recovery["containerId"])
+	original := job.Job.Recovery.ContainerID
 	policy := swap.RestartPolicy
 	if len(policy) == 0 {
 		policy = noRestart
@@ -652,7 +649,7 @@ func (j *Jobs) ownedReplacement(ctx context.Context, job *ops.Context, swap *swa
 		}
 		id = spec.ID
 	}
-	if original, _ := text(job.Job.Recovery["containerId"]); id == original {
+	if id == job.Job.Recovery.ContainerID {
 		return "", errUpdateState
 	}
 	if _, err := j.Docker.Inspect(ctx, id); docker.IsNotFound(err) {
