@@ -87,12 +87,8 @@ func (s *Sessions) Authorize(ctx context.Context, channel Channel, validate func
 	}
 	watch, stop := context.WithCancel(ctx)
 	access.stop = stop
-	interval := s.IdleCheck
-	if interval == 0 {
-		interval = 2 * time.Second
-	}
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(s.idleCheck())
 		defer ticker.Stop()
 		for {
 			select {
@@ -106,6 +102,13 @@ func (s *Sessions) Authorize(ctx context.Context, channel Channel, validate func
 		}
 	}()
 	return access
+}
+
+func (s *Sessions) idleCheck() time.Duration {
+	if s.IdleCheck > 0 {
+		return s.IdleCheck
+	}
+	return 2 * time.Second
 }
 
 // Stop ends idle revalidation.
@@ -311,6 +314,23 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 			continue
 		}
 		run, cancel := context.WithTimeout(commandCtx, commandLimit)
+		// Leaving no longer ends a command, so its access is rechecked on its
+		// own: a silent shell command otherwise checks only as it prints.
+		go func() {
+			ticker := time.NewTicker(s.idleCheck())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-run.Done():
+					return
+				case <-ticker.C:
+					if !access.permitted(capability) {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
 		succeeded := s.execute(run, access, mode, raw, secrets, send, prefix, ip)
 		cancel()
 		// The command's lock is released by now, so a reading can take it.

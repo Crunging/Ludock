@@ -1,10 +1,12 @@
 package console
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,5 +220,55 @@ func TestCommandsFinishAfterTheBrowserLeaves(t *testing.T) {
 		if got := strings.Join(ran, ","); got != want {
 			t.Fatalf("revoked %v: ran %q, want %q", revoked, got, want)
 		}
+	}
+}
+
+// A command that outlives the browser still stops when its sender loses
+// access, even if it prints nothing, as when their session is revoked.
+func TestCommandStopsWhenAccessEndsAfterTheBrowserLeaves(t *testing.T) {
+	f := sessionSetup(t)
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	var start, cancel sync.Once
+	var finished atomic.Bool
+	f.engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, _, _ func([]byte)) int {
+		if len(cmd) > 3 && cmd[3] == "ludock-console-cancel" {
+			cancel.Do(func() { close(cancelled) })
+			return 0
+		}
+		start.Do(func() { close(started) })
+		select {
+		case <-cancelled:
+			return 125
+		case <-time.After(5 * time.Second):
+			finished.Store(true)
+			return 0
+		}
+	}
+	var revoked atomic.Bool
+	validate := func(context.Context) *db.SessionUser {
+		if revoked.Load() {
+			return nil
+		}
+		return f.admin
+	}
+	channel := &fakeChannel{}
+	session, leave := context.WithCancel(ctx)
+	input := make(chan string, 1)
+	input <- `{"type":"input","data":"sleep 20; touch /data/marker"}`
+	close(input)
+	go func() {
+		<-started
+		channel.Close(1001, "")
+		leave()
+		revoked.Store(true)
+	}()
+	f.sessions.Console(session, channel, validate, f.serverID, ShellMode, input, "")
+	if finished.Load() {
+		t.Fatal("the command ran to the end after its sender lost access")
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("the command was never cancelled")
 	}
 }
