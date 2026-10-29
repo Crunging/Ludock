@@ -92,7 +92,7 @@ func TestSourceRCON(t *testing.T) {
 		}
 		return nil
 	}})
-	if err == nil || err.Error() != "Console access changed" {
+	if !errors.Is(err, errAccessChanged) {
 		t.Fatal(err)
 	}
 	if _, _, err := DecodeRCON([]byte{1, 0, 0, 0}); err == nil {
@@ -128,7 +128,7 @@ func TestTelnet(t *testing.T) {
 func TestRustWebRCON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/web secret" {
-			http.Error(w, "nope", 401)
+			http.Error(w, "nope", http.StatusUnauthorized)
 			return
 		}
 		conn, err := websocket.Accept(w, r, nil)
@@ -180,7 +180,7 @@ func TestReaderStopsWithCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	results := reader(conn, 1<<30, "too large", done)
+	results := reader(conn, 1<<30, errors.New("too large"), done)
 	// The command reads one chunk and returns, as on a malformed first
 	// packet, while the endpoint keeps sending.
 	<-results

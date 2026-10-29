@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
@@ -361,9 +362,11 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		send("error", "Command exceeds the "+itoa(limit)+" character limit")
 		return false
 	}
-	failed := func() {
+	failed := func(err error) {
 		log.Warn("Console command could not complete", logging.F("serverId", access.ServerID), logging.F("mode", string(mode)))
-		if mode == GameMode {
+		if public, ok := apperr.As(err); ok {
+			send("error", public.Message)
+		} else if mode == GameMode {
 			send("error", "Game command failed or a conflicting operation is running")
 		} else {
 			send("error", "Shell command failed. Ensure timeout is installed; commands are limited to 60 seconds.")
@@ -371,13 +374,13 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	}
 	release, err := s.Locks.AcquirePreempting(ctx, access.Context.LockKeys, nil)
 	if err != nil {
-		failed()
+		failed(err)
 		return false
 	}
 	defer release()
 	current, err := access.Refresh(ctx)
 	if err != nil {
-		failed()
+		failed(err)
 		return false
 	}
 	capability := authz.ConsoleExecute
@@ -392,7 +395,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	}
 	adapter := games.ResolveAdapter(current.Container.GameType, current.Container.Labels)
 	if mode == GameMode && adapter == nil {
-		failed()
+		failed(nil)
 		return false
 	}
 	stdout := NewRedactor(secrets, func(value string) { send("stdout", value) })
@@ -418,7 +421,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 	}
 	if err != nil {
 		s.audit(user, prefix+".failed", access.ServerID, nil, "")
-		failed()
+		failed(err)
 		return false
 	}
 	s.audit(user, prefix+".succeeded", access.ServerID, nil, "")

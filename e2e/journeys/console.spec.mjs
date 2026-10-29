@@ -67,3 +67,23 @@ test("a command sent just before leaving the page still runs", async ({ page }) 
   await send("fake-leave Pat");
   await expect(page.locator(".xterm-rows")).toContainText("Pat left the game");
 });
+
+test("a command sent after the server stopped says why it can't run", async ({ page }) => {
+  await page.goto("/");
+  await serverRow(page, "Survival").getByRole("link", { name: "Console" }).click();
+  await expect(page.locator("[data-console-status]")).toHaveText("Connected");
+
+  const list = await page.context().newPage();
+  await list.goto("/");
+  const survival = serverRow(list, "Survival");
+  await survival.getByRole("button", { name: "Stop" }).click();
+  await list.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+  await expect(survival).toContainText("Stopped", { timeout: 30_000 });
+
+  await page.getByLabel("Game command").fill("list");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator(".xterm-rows")).toContainText("[error] The game server must be running to accept console commands");
+
+  await survival.getByRole("button", { name: "Start" }).click();
+  await expect(survival).toContainText("Running", { timeout: 30_000 });
+});

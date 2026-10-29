@@ -47,6 +47,7 @@ jobs:
         with:
           path: |
             ~/.cache/go-build
+            ~/.cache/staticcheck
             ~/go/pkg/mod
             /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
           key: go-test-${{ github.sha }}
@@ -62,6 +63,7 @@ jobs:
           go tool templ generate -path internal/web/views
           git diff --exit-code -- internal/web/views
       - run: go vet ./...
+      - run: go tool staticcheck ./...
       # -count=1 runs every test, never results cached for an unchanged package.
       - run: go test -race -count=1 ./...
       - name: Lint workflows
@@ -71,12 +73,13 @@ jobs:
       # Go marks the build results it uses, so dropping the rest keeps the
       # cache the size of one build instead of growing with every save.
       - if: github.event_name == 'push'
-        run: find ~/.cache/go-build -type f -mmin +90 -delete
+        run: find ~/.cache/go-build ~/.cache/staticcheck -type f -mmin +90 -delete
       - if: github.event_name == 'push'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
+            ~/.cache/staticcheck
             ~/go/pkg/mod
             /opt/hostedtoolcache/go/${{ steps.go.outputs.version }}
           key: go-test-${{ github.sha }}

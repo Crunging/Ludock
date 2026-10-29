@@ -7,17 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Crunging/Ludock/internal/launch"
 	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/launch"
 )
 
 var ctx = context.Background()
@@ -159,14 +160,16 @@ func TestNetworkTargetResolution(t *testing.T) {
 	}
 	for labels, want := range map[string]string{
 		`{"ludock.console.port":"0"}`:               "console port",
-		`{"ludock.console.password-env":"1BAD"}`:    "valid environment name",
-		`{"ludock.console.password-env":"MISSING"}`: "empty or unavailable",
+		`{"ludock.console.password-env":"1BAD"}`:    "valid environment variable name",
+		`{"ludock.console.password-env":"MISSING"}`: "empty or not set",
 		`{"ludock.console.host":"http://evil"}`:     "plain hostname",
 	} {
 		var parsed map[string]string
 		json.Unmarshal([]byte(labels), &parsed)
 		_, _, _, err := runtime.networkTarget(ctx, Target{ContainerID: id, Labels: parsed}, adapter)
-		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "secret") {
+		// The console shows these messages, so they are public and name no values.
+		if !apperr.Is(err, "CONSOLE_NOT_CONFIGURED") || !strings.Contains(err.Error(), want) ||
+			strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "MISSING") {
 			t.Errorf("%s: %v", labels, err)
 		}
 	}

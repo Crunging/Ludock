@@ -122,11 +122,14 @@ func (s *cachedStatement) Close() error {
 
 func (s *cachedStatement) NumInput() int { return s.stmt.NumInput() }
 
+// Exec and Query complete driver.Stmt; database/sql calls the Context forms.
 func (s *cachedStatement) Exec(args []driver.Value) (driver.Result, error) {
+	//lint:ignore SA1019 driver.Stmt requires Exec
 	return s.stmt.Exec(args)
 }
 
 func (s *cachedStatement) Query(args []driver.Value) (driver.Rows, error) {
+	//lint:ignore SA1019 driver.Stmt requires Query
 	return s.stmt.Query(args)
 }
 

@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -43,15 +42,22 @@ type Control struct {
 	AssertAccess func() error
 }
 
+var (
+	errAccessChanged  = errors.New("console access changed")
+	errCancelled      = errors.New("console command cancelled")
+	errRCONTooLarge   = errors.New("RCON response is too large")
+	errTelnetTooLarge = errors.New("Telnet console response is too large")
+)
+
 func (c Control) check() error {
 	if c.Authorize != nil {
 		if err := c.Authorize(); err != nil {
-			return errors.New("Console access changed")
+			return errAccessChanged
 		}
 	}
 	if c.AssertAccess != nil {
 		if err := c.AssertAccess(); err != nil {
-			return errors.New("Console access changed")
+			return errAccessChanged
 		}
 	}
 	return nil
@@ -66,7 +72,7 @@ func Execute(ctx context.Context, transport, host string, port int, password, co
 	case "telnet":
 		return Telnet(ctx, host, port, password, command, control)
 	}
-	return "", errors.New("Unsupported console transport")
+	return "", errors.New("unsupported console transport")
 }
 
 func requestID() int32 {
@@ -75,12 +81,9 @@ func requestID() int32 {
 }
 
 type session struct {
-	conn     net.Conn
-	control  Control
-	mu       sync.Mutex
-	received int
-	limitErr string
-	connErr  string
+	conn    net.Conn
+	control Control
+	connErr string
 }
 
 func dial(ctx context.Context, host string, port int, timeoutMessage, connectionMessage string) (net.Conn, error) {
@@ -88,7 +91,7 @@ func dial(ctx context.Context, host string, port int, timeoutMessage, connection
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, errors.New("Console command cancelled")
+			return nil, errCancelled
 		}
 		var timeout interface{ Timeout() bool }
 		if errors.As(err, &timeout) && timeout.Timeout() {
@@ -104,7 +107,7 @@ func dial(ctx context.Context, host string, port int, timeoutMessage, connection
 
 func (s *session) write(data []byte) error {
 	if len(data) > maxPacket+4 {
-		return errors.New("Console command or credential is too large")
+		return errors.New("console command or credential is too large")
 	}
 	if err := s.control.check(); err != nil {
 		return err
@@ -140,7 +143,7 @@ func DecodeRCON(buffer []byte) ([]RCONPacket, []byte, error) {
 	for len(buffer)-offset >= 4 {
 		size := int(int32(binary.LittleEndian.Uint32(buffer[offset:])))
 		if size < 10 || size > maxPacket {
-			return nil, nil, errors.New("The RCON server returned an invalid packet")
+			return nil, nil, errors.New("the RCON server returned an invalid packet")
 		}
 		if len(buffer)-offset < size+4 {
 			break
@@ -160,7 +163,7 @@ type readResult struct {
 
 // reader reads conn until it fails or done closes, so a reader with unread
 // results never blocks forever.
-func reader(conn net.Conn, limit int, limitMessage string, done <-chan struct{}) <-chan readResult {
+func reader(conn net.Conn, limit int, limitErr error, done <-chan struct{}) <-chan readResult {
 	results := make(chan readResult, 16)
 	go func() {
 		defer close(results)
@@ -179,7 +182,7 @@ func reader(conn net.Conn, limit int, limitMessage string, done <-chan struct{})
 			if n > 0 {
 				total += n
 				if total > limit {
-					send(readResult{err: errors.New(limitMessage)})
+					send(readResult{err: limitErr})
 					return
 				}
 				if !send(readResult{data: append([]byte(nil), buffer[:n]...)}) {
@@ -201,14 +204,14 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 	}
 	ctx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	conn, err := dial(ctx, host, port, "RCON connection timed out", "Could not connect to the server's RCON endpoint")
+	conn, err := dial(ctx, host, port, "RCON connection timed out", "could not connect to the server's RCON endpoint")
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	s := &session{conn: conn, control: control, connErr: "Could not connect to the server's RCON endpoint"}
+	s := &session{conn: conn, control: control, connErr: "could not connect to the server's RCON endpoint"}
 	authID, commandID := requestID(), requestID()
 	auth, err := EncodeRCON(authID, 3, password)
 	if err != nil {
@@ -217,7 +220,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 	if err := s.write(auth); err != nil {
 		return "", err
 	}
-	results := reader(conn, maxTCPReceived, "RCON response is too large", ctx.Done())
+	results := reader(conn, maxTCPReceived, errRCONTooLarge, ctx.Done())
 	var buffer []byte
 	authenticated, commandSent, received := false, false, false
 	var response bytes.Buffer
@@ -228,7 +231,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 			return errors.New("RCON connection timed out")
 		}
 		if ctx.Err() != nil {
-			return errors.New("Console command cancelled")
+			return errCancelled
 		}
 		return nil
 	}
@@ -243,7 +246,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 				if err := fail(); err != nil {
 					return "", err
 				}
-				if result.err != nil && result.err.Error() == "RCON response is too large" {
+				if errors.Is(result.err, errRCONTooLarge) {
 					return "", result.err
 				}
 				switch {
@@ -252,7 +255,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 				case !commandSent:
 					return "", errors.New("RCON connection closed before the command was sent")
 				case len(buffer) > 0:
-					return "", errors.New("The RCON server returned an incomplete packet")
+					return "", errors.New("the RCON server returned an incomplete packet")
 				}
 				return decodeText(response.Bytes()), nil
 			}
@@ -285,7 +288,7 @@ func SourceRCON(ctx context.Context, host string, port int, password, command st
 				}
 				received = true
 				if response.Len()+len(packet.Body) > maxPacket {
-					return "", errors.New("RCON response is too large")
+					return "", errRCONTooLarge
 				}
 				response.Write(packet.Body)
 			}
@@ -325,12 +328,12 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 	conn, _, err := websocket.Dial(handshake, address, nil)
 	if err != nil {
 		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
-			return "", errors.New("Console command cancelled")
+			return "", errCancelled
 		}
 		if handshake.Err() == context.DeadlineExceeded {
 			return "", errors.New("WebRCON connection timed out")
 		}
-		return "", errors.New("Could not connect or authenticate with Rust WebRCON")
+		return "", errors.New("could not connect or authenticate with Rust WebRCON")
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(maxPacket)
@@ -340,7 +343,7 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 	identifier := requestID()
 	message, _ := json.Marshal(map[string]any{"Identifier": identifier, "Message": command, "Name": "Ludock"})
 	if err := conn.Write(ctx, websocket.MessageText, message); err != nil {
-		return "", errors.New("Could not connect or authenticate with Rust WebRCON")
+		return "", errors.New("could not connect or authenticate with Rust WebRCON")
 	}
 	for {
 		_, data, err := conn.Read(ctx)
@@ -349,7 +352,7 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 				return "", errors.New("WebRCON command timed out")
 			}
 			if ctx.Err() != nil {
-				return "", errors.New("Console command cancelled")
+				return "", errCancelled
 			}
 			var closeErr websocket.CloseError
 			if errors.As(err, &closeErr) {
@@ -365,7 +368,7 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 			Message    json.RawMessage `json:"Message"`
 		}
 		if json.Unmarshal(data, &reply) != nil {
-			return "", errors.New("The WebRCON server returned an invalid response")
+			return "", errors.New("the WebRCON server returned an invalid response")
 		}
 		var id float64
 		if json.Unmarshal(reply.Identifier, &id) != nil || int32(id) != identifier || id != float64(identifier) {
@@ -452,15 +455,15 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	}
 	ctx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	conn, err := dial(ctx, host, port, "Telnet console connection timed out", "Could not connect to the server's Telnet console")
+	conn, err := dial(ctx, host, port, "Telnet console connection timed out", "could not connect to the server's Telnet console")
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	s := &session{conn: conn, control: control, connErr: "Could not connect to the server's Telnet console"}
-	results := reader(conn, maxTCPReceived, "Telnet console response is too large", ctx.Done())
+	s := &session{conn: conn, control: control, connErr: "could not connect to the server's Telnet console"}
+	results := reader(conn, maxTCPReceived, errTelnetTooLarge, ctx.Done())
 	var decoder telnetDecoder
 	var raw []byte
 	passwordSent, commandSent := false, false
@@ -483,13 +486,13 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 			if ctx.Err() == context.DeadlineExceeded {
 				return "", errors.New("Telnet console command timed out")
 			}
-			return "", errors.New("Console command cancelled")
+			return "", errCancelled
 		case result, ok := <-results:
 			if !ok || result.err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					return "", errors.New("Telnet console command timed out")
 				}
-				if result.err != nil && result.err.Error() == "Telnet console response is too large" {
+				if errors.Is(result.err, errTelnetTooLarge) {
 					return "", result.err
 				}
 				if commandSent {

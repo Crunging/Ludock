@@ -4,7 +4,6 @@ package launch
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -129,7 +128,7 @@ func pinned(image string) bool {
 }
 
 // ErrUnpinnedImage rejects a LUDOCK_HELPER_IMAGE without a digest.
-var ErrUnpinnedImage = errors.New("LUDOCK_HELPER_IMAGE must identify a trusted Ludock helper by its immutable sha256 digest.")
+var ErrUnpinnedImage = apperr.New("HELPER_IMAGE_UNPINNED", 503, "LUDOCK_HELPER_IMAGE must identify a trusted Ludock helper by its immutable sha256 digest.")
 
 func ValidateImage(image string) (string, error) {
 	if !pinned(image) {

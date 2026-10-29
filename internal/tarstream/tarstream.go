@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 )
 
-var ErrInvalid = errors.New("Invalid or truncated backup archive")
+var ErrInvalid = errors.New("invalid or truncated backup archive")
 
 const (
 	blockSize        = 512

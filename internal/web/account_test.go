@@ -4,18 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 )
-
-func (p *pages) postForm(target string, principal *auth.Principal, values url.Values) *http.Response {
-	values.Set("_csrf", CSRFToken(principal.Token))
-	return p.do("POST", target, principal, strings.NewReader(values.Encode()), nil).Result()
-}
 
 // Revoking a session from the account page is covered by the account journey.
 // This covers what it can't: revocation stays within the account and is audited.
