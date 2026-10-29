@@ -51,6 +51,11 @@ export default async function setup() {
   game:
     image: ${gameImage}
     command: ["sh", "-c", "trap 'exit 0' TERM; mkdir -p /data/world; while true; do echo tick $$(date +%s); sleep 2 & wait $$!; done"]
+    # Like most game images, it reports its health: Ludock shows it starting
+    # until it passes, and an update waits for the replacement to pass.
+    healthcheck:
+      test: ["CMD", "test", "-d", "/data/world"]
+      interval: 1s
     labels:
       ludock.enable: "true"
       ludock.name: Test Game

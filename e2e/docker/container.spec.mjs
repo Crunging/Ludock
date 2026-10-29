@@ -65,4 +65,9 @@ test("a backup restores the server's data and running state", async ({ page }) =
   await expectOperationSucceeded(page);
   expect(readFileSync(properties, "utf8")).toBe("motd=Hello from the container test\n");
   expect(docker("inspect", "--format", "{{.State.Running}}", gameContainer())).toBe("true");
+  // The restarted game passes its healthcheck again, and its page, which
+  // refreshes every 10 seconds, shows it running.
+  await expect.poll(() => docker("inspect", "--format", "{{.State.Health.Status}}", gameContainer()), { timeout: 30_000 }).toBe("healthy");
+  await openServer(page, "Test Game");
+  await expect(page.locator("#detail-live .server-state")).toContainText("Running", { timeout: 15_000 });
 });
