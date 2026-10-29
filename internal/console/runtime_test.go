@@ -7,18 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/launch"
 	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/launch"
 )
 
 var ctx = context.Background()
