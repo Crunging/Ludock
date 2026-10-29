@@ -45,3 +45,25 @@ test("a stopped server offers no command connection", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   await expect(page.locator("[data-console-status]")).toHaveText("Unavailable");
 });
+
+test("a command sent just before leaving the page still runs", async ({ page }) => {
+  const open = async () => {
+    await page.goto("/");
+    await serverRow(page, "Survival").getByRole("link", { name: "Console" }).click();
+    await expect(page.locator("[data-console-status]")).toHaveText("Connected");
+  };
+  const send = async (command) => {
+    await page.getByLabel("Game command").fill(command);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.locator("[data-console-feedback]")).toHaveText("Command sent. Check the output for its result.");
+  };
+  await open();
+  await send("fake-join Pat");
+  await page.goto("/");
+
+  await open();
+  await send("list");
+  await expect(page.locator(".xterm-rows")).toContainText("There are 1 of a max of 10 players online: Pat");
+  await send("fake-leave Pat");
+  await expect(page.locator(".xterm-rows")).toContainText("Pat left the game");
+});

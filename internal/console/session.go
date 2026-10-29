@@ -122,12 +122,15 @@ func (a *Access) User() *db.SessionUser {
 	return a.user
 }
 
-// Allowed rechecks the principal, both capabilities, and the binding. A
-// failure closes the channel.
+// Allowed rechecks the principal, both capabilities, and the binding, and
+// that the channel is still open. A failure closes the channel.
 func (a *Access) Allowed(required authz.Capability) bool {
-	if !a.channel.Open() {
-		return false
-	}
+	return a.channel.Open() && a.permitted(required)
+}
+
+// permitted is Allowed for a command the browser already sent, which runs
+// even if the browser has since left.
+func (a *Access) permitted(required authz.Capability) bool {
 	ctx := context.Background()
 	user := a.validate(ctx)
 	var capabilities []authz.Capability
@@ -148,7 +151,7 @@ func (a *Access) Allowed(required authz.Capability) bool {
 }
 
 func (a *Access) revalidate(ctx context.Context, discover bool) (*servers.Context, error) {
-	if !a.Allowed(a.capability) {
+	if !a.permitted(a.capability) {
 		return nil, errCancelled
 	}
 	resolve := a.sessions.Servers.VerifyAuthorized
@@ -156,7 +159,7 @@ func (a *Access) revalidate(ctx context.Context, discover bool) (*servers.Contex
 		resolve = a.sessions.Servers.ResolveAuthorized
 	}
 	refreshed, err := resolve(ctx, a.User(), a.ServerID, a.capability, a.revision)
-	if err != nil || !a.Allowed(a.capability) {
+	if err != nil || !a.permitted(a.capability) {
 		a.channel.Close(ClosePolicy, "Server access changed")
 		return nil, errCancelled
 	}
@@ -224,6 +227,10 @@ const (
 
 const maxPending = 10
 
+// commandLimit bounds one command, including a shell command's 60 seconds
+// and the wait for the server lock and a console helper.
+const commandLimit = 90 * time.Second
+
 // Console runs a game console or administrator shell. input carries raw
 // client messages, {"type":"input","data":"..."}; it closes with the
 // connection.
@@ -271,7 +278,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 	go func() {
 		defer close(commands)
 		for raw := range input {
-			if !access.Allowed(capability) {
+			if !access.permitted(capability) {
 				continue
 			}
 			select {
@@ -296,12 +303,18 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 				}
 			}, EndedMessage: "Log stream ended"})
 	}
+	// A command the browser sent runs to the end even if the browser leaves,
+	// as when someone sends one and opens another page.
+	commandCtx := context.WithoutCancel(ctx)
 	for raw := range commands {
-		if !access.Allowed(capability) {
+		if !access.permitted(capability) {
 			continue
 		}
+		run, cancel := context.WithTimeout(commandCtx, commandLimit)
+		succeeded := s.execute(run, access, mode, raw, secrets, send, prefix, ip)
+		cancel()
 		// The command's lock is released by now, so a reading can take it.
-		if s.execute(ctx, access, mode, raw, secrets, send, prefix, ip) && mode == GameMode && s.Commanded != nil {
+		if succeeded && mode == GameMode && s.Commanded != nil {
 			s.Commanded(serverID)
 		}
 	}
@@ -357,7 +370,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		capability = authz.ConsoleShell
 	}
 	assertAccess := func() error {
-		if !access.Allowed(capability) {
+		if !access.permitted(capability) {
 			return errCancelled
 		}
 		return nil

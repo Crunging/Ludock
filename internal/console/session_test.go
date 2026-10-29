@@ -180,3 +180,43 @@ func TestCommandsRunOnlyOnceAudited(t *testing.T) {
 		t.Fatal(closed.closed, closed.text())
 	}
 }
+
+// Commands the browser sent run even if it leaves while an earlier one is
+// still running, as when someone sends a command and opens another page.
+// They still need the sender's access when they run.
+func TestCommandsFinishAfterTheBrowserLeaves(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		f := sessionSetup(t)
+		channel := &fakeChannel{}
+		// Like the socket's, the session's context ends when the browser leaves.
+		session, leave := context.WithCancel(ctx)
+		var mu sync.Mutex
+		var ran []string
+		f.respond = func(command string) string {
+			mu.Lock()
+			ran = append(ran, command)
+			first := len(ran) == 1
+			mu.Unlock()
+			if first {
+				channel.Close(1001, "")
+				leave()
+				if revoked {
+					f.authz.SetUserGrants(ctx, f.friend.ID, nil, f.admin, f.adminSession)
+				}
+			}
+			return ""
+		}
+		input := make(chan string, 2)
+		input <- `{"type":"input","data":"save-all"}`
+		input <- `{"type":"input","data":"stop"}`
+		close(input)
+		f.sessions.Console(session, channel, f.validate(f.friend), f.serverID, GameMode, input, "")
+		want := "save-all,stop"
+		if revoked {
+			want = "save-all"
+		}
+		if got := strings.Join(ran, ","); got != want {
+			t.Fatalf("revoked %v: ran %q, want %q", revoked, got, want)
+		}
+	}
+}
