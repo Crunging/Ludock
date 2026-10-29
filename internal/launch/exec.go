@@ -12,7 +12,6 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 )
 
-// MaxOutput bounds buffered helper output.
 const MaxOutput = 4 * 1024 * 1024
 
 // Errors from helper commands. Messages are public.
@@ -24,7 +23,6 @@ var (
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
 )
 
-// ExecOptions configures one helper command.
 type ExecOptions struct {
 	Cmd []string
 	// Input is streamed to stdin; Trailer follows it only after the whole
@@ -48,10 +46,9 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 
-// Periodic limits check to one call a second, for transfers that would
-// otherwise check access on every chunk: a full check costs several
-// database reads. The first call always checks, and once check refuses,
-// every later call refuses. Commit points call check itself.
+// Periodic limits check to once a second, since a full check costs several
+// database reads. The first call always checks, and once check refuses, every
+// later call refuses.
 func Periodic(check func() error) func() error {
 	if check == nil {
 		return nil
@@ -96,9 +93,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	if options.Input != nil {
 		limit = 30 * time.Minute
 	}
-	// Docker can accept the connection and never answer it; the deadline and
-	// cancellation also end the opening so the caller can remove the helper
-	// and release its locks.
+	// Docker can accept the connection and never answer it.
 	deadline, cancelDeadline := context.WithTimeout(ctx, limit)
 	defer cancelDeadline()
 	conn, err := client.StartExec(deadline, execID)
@@ -196,9 +191,8 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	var stdout limitedBuffer
 	demuxErr := docker.Demux(conn, &stdout, nil)
-	// The helper only succeeds after the whole input and its trailer. An
-	// input still being read means it already failed; the caller's body
-	// unblocks once the request ends, so do not wait for it here.
+	// The helper only succeeds after the whole input and its trailer, so an
+	// input still being read has already failed; don't wait for it.
 	select {
 	case <-written:
 	default:

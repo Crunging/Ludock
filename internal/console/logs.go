@@ -25,7 +25,6 @@ type LogDecoder struct {
 	text      map[string]*utf8Stream
 }
 
-// NewLogDecoder emits decoded stdout and stderr text.
 func NewLogDecoder(output func(kind, data string)) *LogDecoder {
 	return &LogDecoder{output: output, channel: "stdout", text: map[string]*utf8Stream{"stdout": {}, "stderr": {}}}
 }
@@ -44,7 +43,6 @@ func (d *LogDecoder) raw() {
 	}
 }
 
-// Push decodes a chunk.
 func (d *LogDecoder) Push(chunk []byte) {
 	if len(chunk) == 0 {
 		return
@@ -112,7 +110,6 @@ func (d *LogDecoder) End() bool {
 	return true
 }
 
-// FollowOptions configures log following.
 type FollowOptions struct {
 	Tail       int
 	Timestamps bool

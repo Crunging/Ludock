@@ -124,9 +124,8 @@ func serve() int {
 	log.Info("Shutting down; signal again to exit without waiting for running operations")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	// End long-lived connections first: Shutdown waits for every handler,
-	// and event streams and console sockets otherwise stay open. Background
-	// work and held locks settle before the database closes.
+	// End long-lived connections first: Shutdown waits for every handler, and
+	// event streams and console sockets otherwise stay open.
 	server.CloseSockets()
 	server.CloseStreams()
 	failed := httpServer.Shutdown(shutdownCtx) != nil

@@ -23,7 +23,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Limits.
 const (
 	ConnectTimeout   = 5 * time.Second
 	CommandTimeout   = 10 * time.Second
@@ -58,7 +57,6 @@ func (c Control) check() error {
 	return nil
 }
 
-// Execute runs one command with the named transport.
 func Execute(ctx context.Context, transport, host string, port int, password, command string, control Control) (string, error) {
 	switch transport {
 	case "source-rcon":
@@ -130,7 +128,6 @@ func EncodeRCON(id, kind int32, body string) ([]byte, error) {
 	return packet, nil
 }
 
-// RCONPacket is one decoded packet.
 type RCONPacket struct {
 	ID, Type int32
 	Body     []byte
@@ -161,9 +158,8 @@ type readResult struct {
 	err  error
 }
 
-// reader reads conn until it fails or done closes. The command's context
-// closes done when it returns, so a reader with unread results never waits
-// on a send no one receives.
+// reader reads conn until it fails or done closes, so a reader with unread
+// results never blocks forever.
 func reader(conn net.Conn, limit int, limitMessage string, done <-chan struct{}) <-chan readResult {
 	results := make(chan readResult, 16)
 	go func() {
@@ -199,7 +195,6 @@ func reader(conn net.Conn, limit int, limitMessage string, done <-chan struct{})
 	return results
 }
 
-// SourceRCON runs a Source RCON command.
 func SourceRCON(ctx context.Context, host string, port int, password, command string, control Control) (string, error) {
 	if err := control.check(); err != nil {
 		return "", err

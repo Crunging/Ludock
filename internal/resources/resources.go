@@ -75,7 +75,6 @@ type History struct {
 	Memory, MemoryPeak int64
 }
 
-// Service records and reads resource history.
 type Service struct {
 	DB       *db.DB
 	Identity *identity.Store

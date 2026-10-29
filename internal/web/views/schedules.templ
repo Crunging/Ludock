@@ -10,7 +10,6 @@ import (
 	"github.com/Crunging/Ludock/internal/schedules"
 )
 
-// SchedulesView is the schedules tab of a server.
 type SchedulesView struct {
 	ServerID  string
 	Schedules []schedules.Schedule
@@ -72,7 +71,6 @@ func sameDays(a, b []int) bool {
 	return len(a) == len(b) && !slices.ContainsFunc(b, func(day int) bool { return !slices.Contains(a, day) })
 }
 
-// ScheduleWhen describes when a schedule runs.
 func ScheduleWhen(input schedules.Input) string {
 	if input.Kind == "once" {
 		return "Once, " + input.Date + " at " + input.Time
@@ -475,7 +473,6 @@ templ ScheduleEditor(f ScheduleForm) {
 	</form>
 }
 
-// SchedulePreview is the next run of a draft.
 templ SchedulePreview(enabled bool, text string) {
 	<strong>
 		if enabled {

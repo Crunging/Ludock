@@ -22,14 +22,12 @@ import (
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
-// ComposeIdentity is the Compose project, service, and replica number.
 type ComposeIdentity struct {
 	Project         string `json:"project"`
 	Service         string `json:"service"`
 	ContainerNumber string `json:"containerNumber"`
 }
 
-// Mount is one container mount as Docker reports it.
 type Mount struct {
 	Type        string `json:"type"`
 	Source      string `json:"source"`
@@ -54,7 +52,6 @@ type Observation struct {
 	Secrets []string `json:"-"`
 }
 
-// Status of a logical server's binding.
 type Status string
 
 const (
@@ -64,7 +61,6 @@ const (
 	StatusReviewRequired Status = "review_required"
 )
 
-// Server is a logical server.
 type Server struct {
 	ID                 string
 	HostID             string
@@ -82,7 +78,6 @@ type Server struct {
 	LastSeenAt         int64
 }
 
-// Store reads and reconciles logical servers.
 type Store struct{ DB *db.DB }
 
 // Matches session activity: coarse enough that polling causes no routine writes.
@@ -129,7 +124,6 @@ func isHex(char byte) bool {
 	return char >= '0' && char <= '9' || char >= 'a' && char <= 'f' || char >= 'A' && char <= 'F'
 }
 
-// NewUUID returns a random version 4 UUID.
 func NewUUID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

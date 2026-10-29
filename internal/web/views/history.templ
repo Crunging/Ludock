@@ -7,7 +7,6 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
-// HistoryServer is a server choice in history filters.
 type HistoryServer struct{ ID, Name string }
 
 // HistoryView is a page of operation history or the audit log.
@@ -235,7 +234,6 @@ templ AuditPage(page Page, h HistoryView) {
 	}
 }
 
-// OperationDetailView is one operation.
 type OperationDetailView struct {
 	Operation  *ops.Job
 	Actor      *history.Actor

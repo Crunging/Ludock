@@ -95,7 +95,6 @@ func RunMountIdentities(argument string) int {
 	return 0
 }
 
-// RunIdle keeps a helper container alive for its execs, then exits.
 func RunIdle(timeoutMs string) int {
 	ms, err := strconv.Atoi(timeoutMs)
 	if err != nil || ms <= 0 {

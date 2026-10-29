@@ -21,16 +21,14 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// Backup is a stored backup.
 type Backup struct {
-	ID        string
-	ServerID  string
-	Roots     []Root
-	Size      int64
-	Checksum  string
-	CreatedAt int64
-	State     string
-	// fingerprint and destination are internal.
+	ID          string
+	ServerID    string
+	Roots       []Root
+	Size        int64
+	Checksum    string
+	CreatedAt   int64
+	State       string
 	fingerprint string
 	destination string
 }
@@ -38,10 +36,8 @@ type Backup struct {
 // Fingerprint is the binding fingerprint the backup was made from.
 func (b *Backup) Fingerprint() string { return b.fingerprint }
 
-// Destination is where the archive is stored.
 func (b *Backup) Destination() string { return b.destination }
 
-// Service manages backup records and settings.
 type Service struct {
 	DB       *db.DB
 	Storage  *Storage
@@ -110,7 +106,6 @@ func (s *Service) Get(ctx context.Context, serverID, id string) (*Backup, error)
 	return backup, err
 }
 
-// Open opens a backup archive for download.
 func (s *Service) Open(ctx context.Context, serverID, id string) (io.ReadCloser, error) {
 	backup, err := s.Get(ctx, serverID, id)
 	if err != nil {
@@ -144,10 +139,9 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 }
 
 // remove marks a backup deleting before unlinking its archive, so an
-// interrupted removal leaves a row that is never offered for download or
-// restore and is retried by Delete or the next Prune, rather than a complete
-// row without its archive. assertAccess runs again right before the row is
-// marked; if it refuses, the backup is left as it was.
+// interrupted removal leaves a row that is never offered and is retried by
+// Delete or Prune. If assertAccess refuses right before marking, the backup is
+// left as it was.
 func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func() error) error {
 	marked := false
 	mark := func() error {
@@ -359,7 +353,6 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	return status, settings
 }
 
-// Status reports storage readiness.
 func (s *Service) Status(ctx context.Context) StorageStatus {
 	status, _ := s.inspect(ctx)
 	return status
@@ -373,7 +366,6 @@ type Preflight struct {
 	Issues    []Issue
 }
 
-// Preflight checks whether a backup could run now.
 func (s *Service) Preflight(ctx context.Context, server *servers.Context) Preflight {
 	status, settings := s.inspect(ctx)
 	issues := slices.Clone(status.Issues)
@@ -558,7 +550,6 @@ func AssertDataOperationState(state string) error {
 	return nil
 }
 
-// Record saves a complete backup.
 func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destination string) error {
 	roots, _ := json.Marshal(backup.Roots)
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
@@ -566,10 +557,8 @@ func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destin
 	return err
 }
 
-// FinishDeletions retries every interrupted or failed removal, each under
-// its server and storage locks; one that is busy waits for the next call.
-// It runs in the background, so an archive left behind is removed even when
-// it uses the space later backups need before they would prune.
+// FinishDeletions retries every interrupted or failed removal under its server
+// and storage locks; a busy one waits for the next call.
 func (s *Service) FinishDeletions(ctx context.Context) error {
 	s.deletionMu.Lock()
 	defer s.deletionMu.Unlock()
@@ -635,10 +624,9 @@ func (s *Service) finishDeletion(ctx context.Context, id string) error {
 // interleaving.
 var testHook func(point string)
 
-// RecordDeleting saves an unrecorded archive whose removal failed as a
-// deleting backup. It is never offered, and FinishDeletions, Prune, and
-// Delete retry removing it, so it cannot use storage unseen by retention and
-// capacity checks.
+// RecordDeleting records an archive whose removal failed as a deleting backup,
+// so FinishDeletions, Prune, and Delete retry it and it never uses storage
+// unseen.
 func (s *Service) RecordDeleting(ctx context.Context, id, serverID, fingerprint, destination string) error {
 	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
     VALUES(?,?,?,?,'[]',0,'',?,'deleting')`, id, serverID, fingerprint, destination, time.Now().UnixMilli())

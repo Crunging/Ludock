@@ -25,7 +25,6 @@ func NewRedactor(secrets []string, output func(string)) *Redactor {
 	return &Redactor{secrets: kept, output: output}
 }
 
-// Push adds output.
 func (r *Redactor) Push(value string) {
 	r.pending += value
 	r.emit(false)

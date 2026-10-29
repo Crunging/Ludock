@@ -38,17 +38,13 @@ cd e2e && npm ci && npx playwright test
 
 The Playwright journeys in `e2e/journeys` are the main suite. They build the
 real binary and `cmd/fakedocker`, start one of each on fresh temporary data for
-every worker, and use the product as people do: signing in, the dashboard, a
-server's page, backups and restores, schedules, consoles, files, sharing a
-server with an operator, account changes, and the administrator pages. Add or extend a journey for
-anything a user can reach in the browser. Go unit tests are for what a journey
-can't reach: logic with many edge cases, requests the UI never sends, and
-failures or races between two steps. Workers run whole files, so a file must
-pass on a fresh server without the files before it. A file whose journeys each
-pass on their own can set `test.describe.configure({ mode: "parallel" })` to
-spread them across workers. `--workers=1` runs every file on one server. CI
-retries a failed journey once to show whether it's flaky, but a flaky journey
-still fails the run.
+every worker, and use the product as people do. Add or extend a journey for
+anything a user can reach in the browser; Go unit tests are for what a journey
+can't reach. Workers run whole files, so a file must pass on a fresh server
+without the files before it, and a file whose journeys each pass on their own
+can set `test.describe.configure({ mode: "parallel" })`. `--workers=1` runs
+every file on one server. CI retries a failed journey once to show whether it's
+flaky, but a flaky journey still fails the run.
 
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`

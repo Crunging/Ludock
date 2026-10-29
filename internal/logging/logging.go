@@ -56,10 +56,8 @@ type Field struct {
 	Value any
 }
 
-// F builds a Field.
 func F(key string, value any) Field { return Field{key, value} }
 
-// Entry is one sanitized application log record.
 type Entry struct {
 	ID        int64   `json:"id"`
 	Timestamp int64   `json:"timestamp"`
@@ -92,14 +90,12 @@ func newSink() *sink {
 		stdout: os.Stdout, stderr: os.Stderr, now: time.Now}
 }
 
-// SetLevel changes the process-wide level.
 func SetLevel(level Level) {
 	std.mu.Lock()
 	std.level = level
 	std.mu.Unlock()
 }
 
-// CurrentLevel returns the process-wide level.
 func CurrentLevel() Level {
 	std.mu.Lock()
 	defer std.mu.Unlock()
@@ -113,10 +109,8 @@ func SetOutput(stdout, stderr io.Writer) {
 	std.mu.Unlock()
 }
 
-// Logger writes records for one component.
 type Logger struct{ component string }
 
-// New returns a component logger.
 func New(component string) *Logger { return &Logger{component} }
 
 func (l *Logger) Error(message string, fields ...Field) {
@@ -180,7 +174,6 @@ func (s *sink) write(level Level, component, message string, fields []Field) {
 	fmt.Fprintln(out, line)
 }
 
-// EncodeFields encodes ordered context as a JSON object.
 func EncodeFields(fields []Field) []byte {
 	var b strings.Builder
 	b.WriteByte('{')

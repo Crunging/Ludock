@@ -28,13 +28,11 @@ type ConsolePreset struct {
 	PasswordEnvCandidates []string
 }
 
-// Port is a container port and protocol.
 type Port struct {
 	Port     int
 	Protocol string
 }
 
-// Integration describes one supported game.
 type Integration struct {
 	GameType string
 	Name     string

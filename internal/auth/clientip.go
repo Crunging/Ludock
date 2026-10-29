@@ -125,7 +125,6 @@ func (c *ClientIP) Resolve(forwardedFor, peerAddress string) string {
 	return current.address
 }
 
-// Request resolves the client address of an HTTP request.
 func (c *ClientIP) Request(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

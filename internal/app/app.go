@@ -36,7 +36,6 @@ import (
 
 var log = logging.New("server")
 
-// App holds every service.
 type App struct {
 	Config    config.Config
 	DB        *db.DB
@@ -76,7 +75,6 @@ type App struct {
 	stop         chan struct{}
 }
 
-// New builds the services on an open database.
 func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, error) {
 	clientIP, err := auth.NewClientIP(cfg.TrustedProxies)
 	if err != nil {
@@ -263,9 +261,8 @@ func (a *App) record(ctx context.Context, current map[string]servers.Container, 
 	}()
 }
 
-// Stop ends background work. Console commands and streamed file requests
-// can outlive their connections; their locks and cleanup settle before the
-// database closes.
+// Stop ends background work. Locks and cleanup of console commands and file
+// streams settle before the database closes.
 func (a *App) Stop() {
 	close(a.stop)
 	a.Events.Stop()

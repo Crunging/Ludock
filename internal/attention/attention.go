@@ -17,7 +17,6 @@ import (
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
-// Item is one attention entry.
 type Item struct {
 	ID         string
 	Kind       string // binding, availability, schedule, operation
@@ -40,7 +39,6 @@ type Item struct {
 	ForceStopped  bool
 }
 
-// Result is the attention list.
 type Result struct {
 	Items []Item
 	// DiscoveryUnavailable: persisted issues are shown, but live discovery
@@ -48,7 +46,6 @@ type Result struct {
 	DiscoveryUnavailable bool
 }
 
-// Service builds attention lists.
 type Service struct {
 	DB        *db.DB
 	Authz     *authz.Service

@@ -20,12 +20,10 @@ var fragmentBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // after a restart every region refreshes in full once.
 var fragmentSeed = maphash.MakeSeed()
 
-// tagFragments lets live regions skip refreshes that changed nothing. An
-// htmx GET answered with HTML gets an ETag of its body and htmx headers. A
-// region sends the tag of the fragment it shows as If-None-Match, and an
-// unchanged fragment answers 304 without a body, so slow connections carry
-// only headers and the page keeps the region as it is. Responses are
-// no-store, so browsers never answer from a cache.
+// tagFragments lets live regions skip refreshes that changed nothing. An htmx
+// GET answered with HTML gets an ETag of its body and htmx headers; a region
+// sends the tag it shows as If-None-Match, and an unchanged fragment gets a
+// bodiless 304. Responses are no-store, so browsers never answer from a cache.
 func tagFragments(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.Header.Get("HX-Request") != "true" {

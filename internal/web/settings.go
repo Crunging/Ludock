@@ -199,7 +199,6 @@ func (s *Server) deliveries(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.Deliveries(s.deliveriesView(r)))
 }
 
-// testNotification queues a test to one destination.
 func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, request *Request) {
 	d, ok := s.destination(w, r, request)
 	if !ok {

@@ -10,7 +10,6 @@ import (
 // run this image, so the backend launches helpers with this path.
 const Binary = "/usr/local/bin/ludock"
 
-// Command builds the argument vector for a helper subcommand.
 func Command(name string, arguments ...any) []string {
 	command := []string{Binary, "helper", name}
 	for _, argument := range arguments {
@@ -28,7 +27,6 @@ func Command(name string, arguments ...any) []string {
 	return command
 }
 
-// Main runs `ludock helper <name> …` and returns the exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	argument := func(index int) string {
 		if index < len(args) {

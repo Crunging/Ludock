@@ -25,13 +25,11 @@ type Channel interface {
 	Open() bool
 }
 
-// Policy close codes.
 const (
 	ClosePolicy   = 1008
 	CloseInternal = 1011
 )
 
-// Sessions opens console and log streams.
 type Sessions struct {
 	DB       *db.DB
 	Authz    *authz.Service
@@ -111,7 +109,6 @@ func (s *Sessions) idleCheck() time.Duration {
 	return 2 * time.Second
 }
 
-// Stop ends idle revalidation.
 func (a *Access) Stop() {
 	if a.stop != nil {
 		a.stop()
@@ -220,7 +217,6 @@ func (s *Sessions) Logs(ctx context.Context, channel Channel, validate func(cont
 	}
 }
 
-// Mode is a console kind.
 type Mode string
 
 const (
@@ -340,7 +336,6 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 	}
 }
 
-// execute runs one command and reports whether it succeeded.
 func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw string, secrets []string, send func(string, string), prefix, ip string) bool {
 	var message struct {
 		Type string  `json:"type"`

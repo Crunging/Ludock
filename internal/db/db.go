@@ -19,7 +19,6 @@ var bg = context.Background()
 // Now returns the current Unix time in milliseconds. Tests may replace it.
 var Now = func() int64 { return time.Now().UnixMilli() }
 
-// DB is an open Ludock database.
 type DB struct {
 	*sql.DB
 	path string
@@ -150,7 +149,6 @@ func (d *DB) Close() error {
 	return err
 }
 
-// Check runs a trivial query for health checks.
 func (d *DB) Check(ctx context.Context) error {
 	var one int
 	return d.QueryRowContext(ctx, "SELECT 1").Scan(&one)
@@ -174,7 +172,6 @@ func (d *DB) Tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// IsUniqueViolation reports a UNIQUE constraint failure.
 func IsUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

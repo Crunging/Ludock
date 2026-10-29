@@ -10,7 +10,6 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
-// Status is a state label and its tone.
 type Status struct{ Label, Tone string }
 
 var cleanExits = map[int]bool{0: true, 130: true, 143: true}
@@ -134,11 +133,9 @@ func OperationPath(serverID, kind, operationID string) string {
 	return "/servers/" + serverID + "?tab=" + tab + "&operation=" + operationID
 }
 
-// OperationStatusLabels names operation outcomes.
 var OperationStatusLabels = map[string]string{"queued": "Queued", "running": "Running", "succeeded": "Succeeded",
 	"already_current": "Already current", "failed": "Failed", "interrupted": "Interrupted"}
 
-// OperationTones colors operation outcomes.
 var OperationTones = map[string]string{"queued": "active", "running": "active", "succeeded": "ok", "already_current": "ok",
 	"failed": "failed", "interrupted": "attention"}
 
@@ -204,5 +201,4 @@ func Since(state string, since int64) (string, bool) {
 	return "", true
 }
 
-// FormatBytes formats a size in binary units.
 func FormatBytes(bytes int64) string { return datasize.Format(bytes) }

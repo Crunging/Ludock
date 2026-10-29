@@ -2,7 +2,6 @@ package games
 
 import "strings"
 
-// Console labels.
 const (
 	LabelConsole            = "ludock.console"
 	LabelConsolePort        = "ludock.console.port"
@@ -13,7 +12,6 @@ const (
 	LabelSecretEnv = "ludock.secret-env"
 )
 
-// AdapterID names a console adapter.
 type AdapterID string
 
 const (
@@ -34,7 +32,6 @@ const (
 	TransportContainerStdin Transport = "container-stdin"
 )
 
-// Adapter is a resolved console adapter.
 type Adapter struct {
 	ID                    AdapterID
 	Name                  string

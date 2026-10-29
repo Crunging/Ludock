@@ -15,12 +15,10 @@ type ContainerSummary struct {
 	Created int64             `json:"Created"`
 }
 
-// HealthState is a container health result.
 type HealthState struct {
 	Status string `json:"Status"`
 }
 
-// ContainerState is the state section of an inspection.
 type ContainerState struct {
 	Status     string       `json:"Status"`
 	Running    bool         `json:"Running"`
@@ -33,7 +31,6 @@ type ContainerState struct {
 	Health     *HealthState `json:"Health,omitempty"`
 }
 
-// ContainerConfig is the config section of an inspection.
 type ContainerConfig struct {
 	Image       string            `json:"Image"`
 	Labels      map[string]string `json:"Labels"`
@@ -44,7 +41,6 @@ type ContainerConfig struct {
 	StopTimeout *int              `json:"StopTimeout,omitempty"`
 }
 
-// MountPoint is one mount of an inspected container.
 type MountPoint struct {
 	Type        string `json:"Type"`
 	Source      string `json:"Source"`
@@ -53,13 +49,11 @@ type MountPoint struct {
 	Name        string `json:"Name,omitempty"`
 }
 
-// PortBinding is a published port.
 type PortBinding struct {
 	HostIP   string `json:"HostIp"`
 	HostPort string `json:"HostPort"`
 }
 
-// NetworkSettings is the network section of an inspection.
 type NetworkSettings struct {
 	Ports    map[string][]PortBinding `json:"Ports"`
 	Networks map[string]struct {
@@ -99,7 +93,6 @@ type ContainerSpec struct {
 	ImageManifestDescriptor *ManifestDescriptor `json:"ImageManifestDescriptor,omitempty"`
 }
 
-// Platform is an image platform.
 type Platform struct {
 	OS           string `json:"os"`
 	Architecture string `json:"architecture"`
@@ -152,7 +145,6 @@ type ImageInspect struct {
 	Manifests    []ImageManifest            `json:"Manifests"`
 }
 
-// ContainerStats is a one-shot stats sample.
 type ContainerStats struct {
 	CPUStats struct {
 		CPUUsage struct {
@@ -173,14 +165,12 @@ type ContainerStats struct {
 	} `json:"memory_stats"`
 }
 
-// BindOptions configures a bind mount.
 type BindOptions struct {
 	Propagation            string `json:"Propagation,omitempty"`
 	NonRecursive           bool   `json:"NonRecursive,omitempty"`
 	ReadOnlyForceRecursive bool   `json:"ReadOnlyForceRecursive,omitempty"`
 }
 
-// MountSettings is a mount for a created container.
 type MountSettings struct {
 	Type        string       `json:"Type"`
 	Source      string       `json:"Source"`
@@ -189,7 +179,6 @@ type MountSettings struct {
 	BindOptions *BindOptions `json:"BindOptions,omitempty"`
 }
 
-// HostConfig is the host configuration of a created container.
 type HostConfig struct {
 	Mounts         []MountSettings `json:"Mounts,omitempty"`
 	Binds          []string        `json:"Binds,omitempty"`
@@ -205,7 +194,6 @@ type HostConfig struct {
 	Init           bool            `json:"Init,omitempty"`
 }
 
-// Healthcheck overrides an image healthcheck.
 type Healthcheck struct {
 	Test []string `json:"Test"`
 }
@@ -252,5 +240,4 @@ type VolumeInspect struct {
 	Mountpoint string            `json:"Mountpoint"`
 }
 
-// Filters is a Docker filter set.
 type Filters map[string][]string

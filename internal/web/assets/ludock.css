@@ -1,12 +1,8 @@
-/* Ludock: a panel for the game servers you already run.
-   Dark blue-gray surfaces, light ink, one orange accent taken from the
-   L-block mark, and block-shaped state markers that echo it. Yellow means
-   attention and nothing else. Archivo carries the
-   voice (wide and heavy for names, normal width for reading); Atkinson
-   Hyperlegible Mono is only for things that are literally code.
-   The Archivo files keep only the widths used here, 100% to 125%
-   (fonttools varLib.instancer wdth=100:125), which makes them a third
-   smaller. */
+/* Dark blue-gray surfaces, one orange accent from the L-block mark, and
+   block-shaped state markers. Yellow means attention and nothing else.
+   Archivo is the UI font; Atkinson Hyperlegible Mono is only for code. The
+   Archivo files keep only the widths used here
+   (fonttools varLib.instancer wdth=100:125). */
 
 @font-face {
   font-family: "Archivo";
@@ -626,9 +622,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .overview-facts dd > .overview-players__checked { flex-basis: 100%; font-size: 13px; }
 #overview-live > section { margin-top: 32px; }
 
-/* Resource history continues the manifest: one ruled panel, a cell per
-   measure. The line is the only colored ink; a crosshair reads out the same
-   minute in both cells. */
+/* Resource history: one ruled panel, a cell per measure. */
 .range-switch { display: flex; gap: 16px; }
 .range-switch a {
   display: inline-flex; align-items: center; min-height: 36px; white-space: nowrap;

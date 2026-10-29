@@ -26,37 +26,27 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 )
 
-// Container is a fake container.
 type Container struct {
 	docker.ContainerInspect
-	// Created is the create request of a container made through the API.
 	CreateRequest docker.ContainerCreate
 	// ExtraConfig holds configuration fields ContainerInspect doesn't model,
 	// such as Cmd and Volumes; inspection reports them inside Config.
-	ExtraConfig map[string]any
-	// HostConfig and Networks are reported on inspection.
-	HostConfig map[string]any
-	Networks   map[string]docker.EndpointSettings
-	// ImageManifestDescriptor is reported on inspection when set.
+	ExtraConfig             map[string]any
+	HostConfig              map[string]any
+	Networks                map[string]docker.EndpointSettings
 	ImageManifestDescriptor *docker.ManifestDescriptor
-	// Platform is the platform a create request selected.
-	Platform string
+	Platform                string
 	// Logs are emitted on /logs as stdout lines.
-	Logs []string
-	// Stats is returned by /stats.
+	Logs  []string
 	Stats docker.ContainerStats
-	// Stdin collects data written to attached stdin.
 	Stdin []byte
 	// Files are served by /archive: regular files by absolute path, and
 	// symbolic links whose value starts with "->", such as "-> /etc".
 	Files map[string]string
 }
 
-// ExecHandler runs a fake exec. It reads stdin and writes stdout/stderr and
-// returns the exit code.
 type ExecHandler func(container *Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int
 
-// Engine is the fake daemon state.
 type Engine struct {
 	mu         sync.Mutex
 	containers map[string]*Container
@@ -76,8 +66,7 @@ type Engine struct {
 	OnStart func(c *Container)
 	// Attach runs a container's process on an attached stream, under no
 	// lock; nil collects stdin in Container.Stdin.
-	Attach func(c *Container, stdin *bufio.Reader, stdout func([]byte))
-	// APIVersion is reported by /version.
+	Attach     func(c *Container, stdin *bufio.Reader, stdout func([]byte))
 	APIVersion string
 	// Fail makes every API request return this status when non-zero.
 	Fail int
@@ -105,7 +94,6 @@ type exec struct {
 	exitCode  *int
 }
 
-// Start serves a new engine on a socket in dir.
 func Start(dir string) (*Engine, error) {
 	socket := filepath.Join(dir, "docker.sock")
 	os.Remove(socket)
@@ -121,7 +109,6 @@ func Start(dir string) (*Engine, error) {
 	return engine, nil
 }
 
-// Close stops the engine.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	for _, events := range e.events {
@@ -138,7 +125,6 @@ func newID() string {
 	return fmt.Sprintf("%064x", time.Now().UnixNano()+idCounter.Add(1))
 }
 
-// GameOptions describes a fake game container.
 type GameOptions struct {
 	ID, Name, Image string
 	Labels          map[string]string
@@ -148,7 +134,6 @@ type GameOptions struct {
 	Ports           map[string][]docker.PortBinding
 }
 
-// AddContainer adds a container and returns its ID.
 func (e *Engine) AddContainer(options GameOptions) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -198,7 +183,6 @@ func (e *Engine) Container(id string) *docker.ContainerInspect {
 	return nil
 }
 
-// RemoveContainer deletes a container.
 func (e *Engine) RemoveContainer(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -347,7 +331,6 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// AddImage registers an image reference.
 func (e *Engine) AddImage(reference string) {
 	e.mu.Lock()
 	e.images[reference] = "sha256:" + strings.Repeat("2", 64)
@@ -510,7 +493,6 @@ func mergeDefaults(config, image map[string]any) map[string]any {
 	return result
 }
 
-// inspection is the container's /json body.
 func (c *Container) inspection() map[string]any {
 	var result map[string]any
 	remarshal(c.ContainerInspect, &result)
@@ -916,7 +898,6 @@ func Frame(channel byte, data []byte) []byte {
 	return frame
 }
 
-// SortedIDs lists container IDs in a stable order, for tests.
 func (e *Engine) SortedIDs() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()

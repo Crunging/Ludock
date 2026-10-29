@@ -188,7 +188,6 @@ const (
 
 var swapStages = []string{swapCreating, swapStarting, swapReplacing, swapReplaced}
 
-// swapState is the saved progress of replacing a server's container.
 type swapState struct {
 	Stage string `json:"stage"`
 	// Name is the original's name, which the replacement takes.
@@ -224,7 +223,6 @@ func saveSwap(job *ops.Context, swap swapState) error {
 	return job.Progress(swap.Stage, map[string]any{"swap": swap}, nil)
 }
 
-// UpdateRequest is a confirmed image update.
 type UpdateRequest struct {
 	CreateBackup           bool   `json:"createBackup"`
 	SkipBackupConfirmation string `json:"skipBackupConfirmation,omitempty"`
@@ -343,8 +341,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err != nil {
 		return nil, err
 	}
-	// Pulling stops as soon as the owner loses update authority, as
-	// lifecycle and data jobs do.
+	// Pulling stops as soon as the owner loses update authority.
 	if err := j.whileAuthorized(ctx, job, capability, func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
@@ -434,11 +431,8 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 		"running": initiallyRunning, "verification": verification}, nil
 }
 
-// swap replaces the stopped original with a container created from body,
-// which must run the pulled image. The replacement is created and checked
-// under a temporary name discovery ignores, so the original stays the
-// server until the replacement started cleanly. It returns how the
-// replacement was checked.
+// swap replaces the stopped original with a container created from body, which
+// must run the pulled image, and returns how the replacement was checked.
 func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Context, capability authz.Capability, stopped *update.Plan,
 	body map[string]any, pulled string, initiallyRunning bool) (string, error) {
 	// Until the swap completes, neither container may restart on its own: a
@@ -508,12 +502,11 @@ func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Conte
 	return verification, j.settle(ctx, job)
 }
 
-// awaitReplacement waits for a started replacement to prove itself: healthy
-// when it has a healthcheck, otherwise still running after the settle time.
-// It fails as soon as the replacement stops, restarts, or turns unhealthy,
-// while the original can still be restored. A healthcheck still starting
-// after three minutes is accepted: a game server can take longer than that
-// to download its files, and nothing has failed.
+// awaitReplacement waits until a started replacement is healthy or, without a
+// healthcheck, still running after the settle time. It fails as soon as the
+// replacement stops, restarts, or turns unhealthy. A healthcheck still starting
+// after three minutes is accepted, since a game server can take that long to
+// download its files.
 func (j *Jobs) awaitReplacement(ctx context.Context, job *ops.Context, capability authz.Capability, id string) (string, error) {
 	settle := j.ReplacementSettle
 	if settle == 0 {
@@ -639,11 +632,9 @@ func (j *Jobs) settleSwap(ctx context.Context, job *ops.Context) error {
 	return saveSwap(job, *swap)
 }
 
-// ownedReplacement is the ID of the swap's replacement, or "" if there is
-// none. A create whose response was lost left no saved ID; a container under
-// the temporary name is then this update's only if it carries this
-// operation's label, so a container someone else gave that name is never
-// removed or renamed.
+// ownedReplacement is the ID of the swap's replacement, or "". Without a saved
+// ID, a container under the temporary name counts only if it carries this
+// operation's label.
 func (j *Jobs) ownedReplacement(ctx context.Context, job *ops.Context, swap *swapState) (string, error) {
 	id := swap.Replacement
 	if id == "" {
@@ -672,9 +663,7 @@ func (j *Jobs) ownedReplacement(ctx context.Context, job *ops.Context, swap *swa
 	return id, nil
 }
 
-// removeUntilGone removes a container that may be running against the
-// server's data, or that Docker may be removing already. Like an operation
-// helper, it retries until Docker confirms the container is gone.
+// removeUntilGone retries until Docker confirms the container is gone.
 func (j *Jobs) removeUntilGone(ctx context.Context, id string) error {
 	for {
 		err := j.Docker.Remove(ctx, id, true, false)

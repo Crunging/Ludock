@@ -9,7 +9,6 @@ import (
 	"io"
 )
 
-// Frame errors.
 var (
 	ErrInvalidStream    = errors.New("Invalid Docker stream frame")
 	ErrIncompleteStream = errors.New("Incomplete Docker stream frame")
@@ -54,14 +53,12 @@ func Demux(source io.Reader, stdout, stderr io.Writer) error {
 	}
 }
 
-// Stdout returns a reader of a multiplexed stream's stdout channel.
 func Stdout(source io.Reader) io.ReadCloser {
 	reader, writer := io.Pipe()
 	go func() { writer.CloseWithError(Demux(source, writer, nil)) }()
 	return reader
 }
 
-// ErrJSONLineTooLong reports a record over the byte limit.
 var ErrJSONLineTooLong = errors.New("JSON line exceeded its limit")
 
 // DecodeJSONLines calls receive for each newline-delimited JSON value, with

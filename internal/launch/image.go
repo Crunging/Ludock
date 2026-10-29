@@ -42,7 +42,6 @@ func NewImages(client *docker.Client, configured, self string) *Images {
 	return &Images{Docker: client, Configured: configured, Self: self}
 }
 
-// Resolve returns the helper image reference.
 func (i *Images) Resolve(ctx context.Context) (string, error) {
 	if i.Configured != "" {
 		return ValidateImage(i.Configured)
@@ -132,7 +131,6 @@ func pinned(image string) bool {
 // ErrUnpinnedImage rejects a LUDOCK_HELPER_IMAGE without a digest.
 var ErrUnpinnedImage = errors.New("LUDOCK_HELPER_IMAGE must identify a trusted Ludock helper by its immutable sha256 digest.")
 
-// ValidateImage accepts only digest-pinned references.
 func ValidateImage(image string) (string, error) {
 	if !pinned(image) {
 		return "", ErrUnpinnedImage

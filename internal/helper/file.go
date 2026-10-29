@@ -22,7 +22,6 @@ import (
 	"github.com/Crunging/Ludock/internal/tarstream"
 )
 
-// FileRequest is the file helper protocol, shared with the backend.
 type FileRequest struct {
 	Operation   string   `json:"operation"`
 	Root        string   `json:"root"`
@@ -33,7 +32,6 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 }
 
-// FileEntry is one listed directory entry.
 type FileEntry struct {
 	Name       string  `json:"name"`
 	Type       string  `json:"type"`
@@ -51,8 +49,7 @@ type fileHelper struct {
 	out     *bufio.Writer
 	stdin   io.Reader
 	entries int
-	// buffer is reused for every file streamed.
-	buffer []byte
+	buffer  []byte
 
 	exit     func(int)
 	mu       sync.Mutex
@@ -623,7 +620,6 @@ func (h *fileHelper) run() error {
 	return errors.New("unknown file operation")
 }
 
-// RunFile runs the file helper for a JSON request.
 func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var request FileRequest
 	if err := json.Unmarshal([]byte(argument), &request); err != nil {

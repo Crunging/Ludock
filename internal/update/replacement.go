@@ -65,12 +65,10 @@ func encode(value any) json.RawMessage {
 	return encoded
 }
 
-// Replacement is the create request for a copy of the planned container
-// that runs image. Inspection merges the image's defaults into the
-// container's configuration; values still equal to the old image's defaults
-// are left out so the new image supplies its own, as Watchtower does.
-// Anonymous volumes are mounted by name, as Compose does, so the replacement
-// keeps their data instead of starting with empty ones.
+// Replacement is the create request for a copy of the planned container that
+// runs image. Values still equal to the old image's defaults are left out so
+// the new image supplies its own, and anonymous volumes are mounted by name so
+// their data carries over.
 func (p *Plan) Replacement(image *docker.ImageInspect, operationID string) (map[string]any, error) {
 	spec := p.Spec
 	config := maps.Clone(spec.Config)
@@ -213,14 +211,12 @@ func (p *Plan) Replacement(image *docker.ImageInspect, operationID string) (map[
 	return body, nil
 }
 
-// ownEnv recovers the environment a container was created with from the
-// one Docker reports. Docker lists the owner's variables first, then appends
-// the image's other variables in image order, so the shortest list that
-// merges into the reported one is the owner's: a variable the owner set to
-// the image's default value stays theirs if the new image changes the
-// default. The whole list always merges into itself, since every image
-// variable is in it, so the search stops short of it; an environment no
-// shorter list explains keeps every variable the owner changed.
+// ownEnv recovers the environment a container was created with from the one
+// Docker reports. Docker lists the owner's variables first, then the image's
+// others, so the shortest prefix that merges into the reported list is the
+// owner's. That keeps a variable the owner set to the old image's default even
+// if the new image changes the default. Failing that, every variable the owner
+// changed is kept.
 func ownEnv(env, image []string) []string {
 	for split := 0; split < len(env); split++ {
 		if slices.Equal(mergeEnv(env[:split], image), env) {
@@ -299,10 +295,8 @@ func (p *Plan) Platform() string {
 func (p *Plan) RestartPolicy() json.RawMessage { return p.Spec.HostConfig["RestartPolicy"] }
 
 // mounts returns HostConfig.Binds and Mounts with every anonymous volume
-// mounted by name at its destination, or nil for a list that doesn't change.
-// A volume is anonymous when no bind or mount names its source: one the
-// image declared, one from `docker run -v /path`, Compose's `- /path`, or an
-// API client's destination-only bind.
+// mounted by name at its destination, or nil if nothing changes. A volume is
+// anonymous when no bind or mount names its source.
 func (p *Plan) mounts() (binds []string, mounts []map[string]any, err error) {
 	json.Unmarshal(p.Spec.HostConfig["Binds"], &binds)
 	if raw := p.Spec.HostConfig["Mounts"]; len(raw) > 0 && json.Unmarshal(raw, &mounts) != nil {

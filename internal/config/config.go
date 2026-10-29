@@ -16,7 +16,6 @@ import (
 	"github.com/Crunging/Ludock/internal/datasize"
 )
 
-// Config is the process configuration.
 type Config struct {
 	// Listen is the HTTP address, host:port (LUDOCK_LISTEN, default ":3000").
 	Listen string
@@ -51,7 +50,6 @@ type Config struct {
 	MaxUploadBytes int64
 }
 
-// Defaults.
 const (
 	DefaultListen        = ":3000"
 	DefaultDockerSocket  = "/var/run/docker.sock"
@@ -59,7 +57,6 @@ const (
 	DefaultMaxUploadSize = 2 << 30
 )
 
-// DBPath is the database file inside the data directory.
 func (c Config) DBPath() string { return filepath.Join(c.DataDir, "ludock.db") }
 
 // HealthURL is the local health endpoint, for the image healthcheck.

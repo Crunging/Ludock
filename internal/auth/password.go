@@ -38,7 +38,6 @@ type Argon2 struct{}
 
 var b64 = base64.RawStdEncoding.Strict()
 
-// Hash returns an argon2id PHC string.
 func (Argon2) Hash(password string) (string, error) {
 	return hashWith(password, argonMemoryKiB, argonTime, argonThreads)
 }
@@ -115,10 +114,9 @@ const (
 	maxPasswordWorkPerSubject = 1
 )
 
-// PasswordWork bounds concurrent memory-hard KDF work. Requests are rejected
-// instead of queued so an attacker cannot build an unbounded backlog. Keys are
-// opaque, non-secret source and credential identifiers; the limits are
-// deliberately independent of persistent login throttles.
+// PasswordWork bounds concurrent memory-hard KDF work. It rejects instead of
+// queueing so an attacker cannot build a backlog. Its limits are deliberately
+// independent of the persistent login throttles.
 type PasswordWork struct {
 	mu        sync.Mutex
 	active    int
@@ -126,7 +124,6 @@ type PasswordWork struct {
 	bySubject map[string]int
 }
 
-// NewPasswordWork returns an empty limiter.
 func NewPasswordWork() *PasswordWork {
 	return &PasswordWork{bySource: map[string]int{}, bySubject: map[string]int{}}
 }

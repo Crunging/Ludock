@@ -37,11 +37,9 @@ var sleep = func(ctx context.Context, d time.Duration) {
 	}
 }
 
-// RemoveHelper removes a helper and any image-declared anonymous volumes.
-// AutoRemove can race this cleanup, and a conflict is not proof of removal:
-// callers keep their locks until Docker confirms the helper is gone. A failed
-// removal must not silently leave a writer running, so it stops the helper
-// before a final attempt.
+// RemoveHelper removes a helper and its anonymous volumes. A conflict is not
+// proof of removal, so callers keep their locks until Docker confirms it is
+// gone; a failed removal stops the helper before a final attempt.
 func (c *Client) RemoveHelper(ctx context.Context, id string) error {
 	remove := func() error {
 		for attempt := 0; ; attempt++ {

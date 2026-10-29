@@ -33,7 +33,6 @@ import (
 
 var log = logging.New("jobs")
 
-// Jobs holds the dependencies of every handler.
 type Jobs struct {
 	DB       *db.DB
 	Authz    *authz.Service
@@ -56,7 +55,6 @@ type Jobs struct {
 	Poll time.Duration
 }
 
-// Register adds every handler to the runner.
 func (j *Jobs) Register(runner *ops.Runner) {
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
@@ -231,9 +229,8 @@ func lifecycleResult(job *ops.Context, updates map[string]any) map[string]any {
 	return result
 }
 
-// noteAvailability logs a monitoring state that could not be saved after
-// Docker already changed. The change stands; at worst one outage alert is
-// sent for it.
+// noteAvailability logs a monitoring state that could not be saved after Docker
+// already changed.
 func (j *Jobs) noteAvailability(err error) {
 	if err != nil {
 		log.Warn("Could not save a server's monitoring state; an outage alert may follow")
@@ -417,10 +414,8 @@ func (j *Jobs) runLifecycle(ctx context.Context, job *ops.Context, action server
 	})
 }
 
-// awaitStopDeadline returns err once a dispatched stop's saved deadline has
-// passed, by which Docker has finished or killed the container. Recovery
-// stops acting when authority or the binding changes, but holds its locks
-// while the stop already sent may still be running.
+// awaitStopDeadline holds the locks until a dispatched stop's saved deadline
+// has passed, even after authority or the binding changed, then returns err.
 func (j *Jobs) awaitStopDeadline(ctx context.Context, job *ops.Context, unsettled bool, err error) error {
 	deadline, ok := number(job.Job.Recovery["stopRecoveryDeadlineAt"])
 	if !unsettled || !ok {

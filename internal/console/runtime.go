@@ -23,7 +23,6 @@ import (
 	"github.com/Crunging/Ludock/internal/netconsole"
 )
 
-// Limits.
 const (
 	MaxExecOutput      = 4 * 1024 * 1024
 	execKillGrace      = 3
@@ -33,11 +32,10 @@ const (
 	stdinTimeout       = 10 * time.Second
 )
 
-// boundedExecScript keeps the watchdog inside the container. Docker cannot
-// signal an exec and closing its stream does not stop it, so the command
-// really terminates even if Ludock disconnects. User input stays a
-// positional argument to "$@" and is never shell source. Without a
-// writable /tmp the command runs alone, bounded by its own timeout(1).
+// boundedExecScript keeps the watchdog inside the container, since Docker
+// cannot signal an exec and closing its stream does not stop it. User input
+// stays a positional argument to "$@", never shell source. Without a writable
+// /tmp the command runs alone, bounded by timeout(1).
 const boundedExecScript = `
 control="$1"; deadline="$2"; grace="$3"; shift 3
 ready="$control/ready"; cancel="$control/cancel"; reason="$control/reason"
@@ -106,17 +104,14 @@ func (o Output) complete() {
 	}
 }
 
-// Discard drops all output.
 var Discard = Output{}
 
-// Target is the container a command runs in.
 type Target struct {
 	ContainerID string
 	Labels      map[string]string // approved configuration labels
 	State       string
 }
 
-// Runtime runs commands.
 type Runtime struct {
 	Docker *docker.Client
 	Images *launch.Images
@@ -131,7 +126,6 @@ var (
 	errTimedOut  = errors.New("Game console command timed out")
 )
 
-// IsTimeout reports a console timeout.
 func IsTimeout(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "timed out")
 }
@@ -662,9 +656,8 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 	}
 	name := "ludock-console-" + identity.NewUUID()
 	// Never race create/start: wait for the outcome, then remove even a
-	// late-created helper. The wait is bounded on its own, since the server
-	// lock is held until then; a create that may pull the image gets time
-	// to.
+	// late-created helper. The wait has its own bound, since the server lock is
+	// held until then.
 	limit := 2 * time.Minute
 	if r.createLimit > 0 {
 		limit = r.createLimit

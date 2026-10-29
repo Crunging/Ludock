@@ -146,9 +146,8 @@ func Slot(input Input, now int64) string {
 	return clockSlot(input, localClock(location, now))
 }
 
-// dayOffsets samples the surrounding days to include offsets before and
-// after a clock change; exact wall times are resolved and verified by the
-// caller rather than scanning every minute.
+// dayOffsets samples the surrounding days for the offsets before and after a
+// clock change.
 func dayOffsets(location *time.Location, dateEpoch int64) []int64 {
 	var offsets []int64
 	for h := int64(-24); h <= 48; h += 12 {

@@ -12,10 +12,9 @@ var gzipWriters = sync.Pool{New: func() any {
 	return writer
 }}
 
-// compressPages gzips HTML for browsers that accept it. Server lists repeat
-// the same markup for every server, so they shrink about fifteenfold. Pages
-// mask their CSRF token per response (maskCSRF), and an unsafe request needs
-// that token, so compressed sizes can't reveal a secret to another site.
+// compressPages gzips HTML for browsers that accept it. Pages mask their CSRF
+// token per response (maskCSRF), so compressed sizes can't reveal it to another
+// site.
 func compressPages(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead || r.Header.Get("Upgrade") != "" || !acceptsGzip(r.Header.Get("Accept-Encoding")) {

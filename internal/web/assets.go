@@ -34,7 +34,6 @@ type asset struct {
 	gzip    func() []byte
 }
 
-// stylesheetURL matches a stylesheet's relative url() references.
 var stylesheetURL = regexp.MustCompile(`url\("([a-z0-9][a-z0-9/._-]*)"\)`)
 
 // load reads an asset once. A stylesheet names the files it uses with their

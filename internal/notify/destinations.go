@@ -15,7 +15,6 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
-// Destination is a service notifications are sent to.
 type Destination string
 
 const (
@@ -30,7 +29,6 @@ const (
 // Destinations lists every destination in display order.
 var Destinations = []Destination{Discord, Ntfy, Gotify, Telegram, Email, Webhook}
 
-// Parse returns the named destination.
 func Parse(name string) (Destination, bool) {
 	for _, d := range Destinations {
 		if string(d) == name {
@@ -40,7 +38,6 @@ func Parse(name string) (Destination, bool) {
 	return "", false
 }
 
-// Label is the destination's display name.
 func (d Destination) Label() string {
 	return map[Destination]string{Discord: "Discord", Ntfy: "ntfy", Gotify: "Gotify", Telegram: "Telegram",
 		Email: "Email", Webhook: "Webhook"}[d]
@@ -111,7 +108,6 @@ func (d Destination) configured(c Config) bool {
 
 func (d Destination) ready(c Config) bool { return c.Enabled && d.configured(c) }
 
-// DefaultNtfyServer is used when no ntfy server is entered.
 const DefaultNtfyServer = "https://ntfy.sh"
 
 var (
@@ -275,7 +271,6 @@ func normalizeEmail(c Config) (Config, error) {
 	return out, nil
 }
 
-// message is one notification ready to send.
 type message struct {
 	id, kind, text string
 	createdAt      int64
@@ -283,7 +278,6 @@ type message struct {
 
 const title = "Ludock"
 
-// request builds the HTTP request that delivers m to an HTTP destination.
 func (d Destination) request(ctx context.Context, c Config, m message) (*http.Request, error) {
 	var target string
 	var body any
@@ -324,5 +318,4 @@ func (d Destination) request(ctx context.Context, c Config, m message) (*http.Re
 	return request, nil
 }
 
-// telegramAPI is the Bot API origin.
 const telegramAPI = "https://api.telegram.org"
