@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 )
 
 var ctx = context.Background()
@@ -184,20 +185,20 @@ func TestMountProof(t *testing.T) {
 	}
 	engine.AddImage(pinnedImage)
 	images := &Images{Docker: client, Configured: pinnedImage}
-	proof, err := MountProof(ctx, client, images, []Mount{{Type: "bind", Source: "/srv/game/", Destination: "/data/"}}, "")
+	proof, err := MountProof(ctx, client, images, []identity.Mount{{Type: "bind", Source: "/srv/game/", Destination: "/data/"}}, "")
 	if err != nil || proof.Identities["/data"].Ino == "" {
 		t.Fatal(proof, err)
 	}
 	proof.Cleanup()
-	if _, err := MountProof(ctx, client, images, []Mount{{Type: "bind", Source: "/srv/missing", Destination: "/data"}}, ""); !errors.Is(err, ErrUnverifiedMount) {
+	if _, err := MountProof(ctx, client, images, []identity.Mount{{Type: "bind", Source: "/srv/missing", Destination: "/data"}}, ""); !errors.Is(err, ErrUnverifiedMount) {
 		t.Fatal(err)
 	}
 	// Remote or remapped volumes are refused.
-	if _, err := MountProof(ctx, client, images, []Mount{{Type: "volume", Name: "unknown", Destination: "/data"}}, ""); !errors.Is(err, ErrUnverifiedMount) {
+	if _, err := MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "unknown", Destination: "/data"}}, ""); !errors.Is(err, ErrUnverifiedMount) {
 		t.Fatal(err)
 	}
 	client.CreateVolume(ctx, "world")
-	if proof, err := MountProof(ctx, client, images, []Mount{{Type: "volume", Name: "world", Destination: "/data"}}, ""); err != nil || len(proof.Identities) != 0 {
+	if proof, err := MountProof(ctx, client, images, []identity.Mount{{Type: "volume", Name: "world", Destination: "/data"}}, ""); err != nil || len(proof.Identities) != 0 {
 		t.Fatal(err)
 	}
 	// The identity check inside a data helper walks the projected paths.
@@ -254,7 +255,7 @@ func TestStalledValidatorCreate(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := MountProof(ctx, client, &Images{Docker: client, Configured: pinnedImage},
-			[]Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}, "op-1")
+			[]identity.Mount{{Type: "bind", Source: "/srv/game", Destination: "/data"}}, "op-1")
 		done <- err
 	}()
 	select {

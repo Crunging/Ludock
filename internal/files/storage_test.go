@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
 )
 
@@ -70,7 +71,7 @@ func setup(t *testing.T) *fixture {
 		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: data, RW: true}}})
 	client := docker.New(engine.Socket)
 	service := &Service{Docker: client, Images: &launch.Images{Docker: client, Configured: image}}
-	roots := Roots("minecraft", nil, []Mount{{Type: "bind", Source: data, Destination: data, RW: true}})
+	roots := Roots("minecraft", nil, []identity.Mount{{Type: "bind", Source: data, Destination: data, Writable: true}})
 	if len(roots) != 1 {
 		t.Fatal(roots)
 	}

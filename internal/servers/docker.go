@@ -422,16 +422,8 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 			Commands: adapter.Commands, SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != "",
 			ListsPlayers: adapter.Players != nil}
 	}
-	container.FileRoots = files.Roots(gameType, container.Labels, fileMounts(info.Mounts))
+	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info.Mounts))
 	return container, nil
-}
-
-func fileMounts(mounts []docker.MountPoint) []files.Mount {
-	var result []files.Mount
-	for _, mount := range mounts {
-		result = append(result, files.Mount{Type: mount.Type, Source: mount.Source, Destination: mount.Destination, RW: mount.RW, Name: mount.Name})
-	}
-	return result
 }
 
 // toObservation is internal only: raw mounts and configuration are hashed by
@@ -474,10 +466,7 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 		observation.GameConfiguration["stdin:open"] = strconv.FormatBool(info.Config.OpenStdin)
 		observation.GameConfiguration["stdin:once"] = strconv.FormatBool(info.Config.StdinOnce)
 	}
-	for _, mount := range info.Mounts {
-		observation.Mounts = append(observation.Mounts, identity.Mount{Type: mount.Type, Source: mount.Source,
-			Destination: mount.Destination, Writable: mount.RW, Name: mount.Name})
-	}
+	observation.Mounts = identity.DockerMounts(info.Mounts)
 	return observation
 }
 
