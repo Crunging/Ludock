@@ -53,7 +53,7 @@ type StreamOpenError struct{ RequestStarted bool }
 
 func (e *StreamOpenError) Error() string { return "Docker stream connection failed" }
 
-var ErrReadTimeout = errors.New("Docker read timed out")
+var ErrReadTimeout = errors.New("docker read timed out")
 
 var resourcePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
@@ -102,7 +102,7 @@ func (c *Client) Writes() uint64 { return c.writes.Load() }
 
 func apiMinor(value string) (int, error) {
 	if !regexp.MustCompile(`^1\.\d+$`).MatchString(value) {
-		return 0, errors.New("Docker returned an invalid API version")
+		return 0, errors.New("docker returned an invalid API version")
 	}
 	return strconv.Atoi(value[2:])
 }
@@ -124,12 +124,12 @@ func (c *Client) negotiate(ctx context.Context) (string, error) {
 	}
 	minor = min(minor, maxAPIMinor)
 	if minor < minAPIMinor {
-		return "", errors.New("Docker Engine has no supported API version for this client")
+		return "", errors.New("docker Engine has no supported API version for this client")
 	}
 	if info.MinAPIVersion != "" {
 		least, err := apiMinor(info.MinAPIVersion)
 		if err != nil || minor < least {
-			return "", errors.New("Docker Engine has no supported API version for this client")
+			return "", errors.New("docker Engine has no supported API version for this client")
 		}
 	}
 	version = fmt.Sprintf("v1.%d", minor)
@@ -180,7 +180,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 		c.writes.Add(1)
 	}
 	if err != nil {
-		return nil, errors.New("Docker request failed")
+		return nil, errors.New("docker request failed")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
@@ -202,7 +202,7 @@ func (c *Client) read(ctx context.Context, path string, decode func(io.Reader) e
 		if err != nil && ctx.Err() == nil {
 			var api *APIError
 			if !errors.As(err, &api) {
-				err = errors.New("Docker returned invalid JSON")
+				err = errors.New("docker returned invalid JSON")
 			}
 		}
 	}
@@ -234,7 +234,7 @@ func (c *Client) postJSON(ctx context.Context, path string, query url.Values, bo
 		return nil
 	}
 	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
-		return errors.New("Docker returned invalid JSON")
+		return errors.New("docker returned invalid JSON")
 	}
 	return nil
 }
@@ -322,7 +322,7 @@ func (c *Client) Inspect(ctx context.Context, id string) (*ContainerInspect, err
 
 // ErrNotRegularFile reports a container path that is not a regular file, or
 // one larger than the caller allows.
-var ErrNotRegularFile = errors.New("Not a regular file of the expected size")
+var ErrNotRegularFile = errors.New("not a regular file of the expected size")
 
 // ReadFile reads a regular file inside a container through Docker's archive
 // API, without running anything in the container. Links are refused, not
@@ -349,14 +349,14 @@ func (c *Client) ReadFile(ctx context.Context, id, file string, limit int64) ([]
 	archive := tar.NewReader(response.Body)
 	header, err := archive.Next()
 	if err != nil {
-		return nil, errors.New("Docker returned an invalid archive")
+		return nil, errors.New("docker returned an invalid archive")
 	}
 	if header.Typeflag != tar.TypeReg || header.Size > limit {
 		return nil, ErrNotRegularFile
 	}
 	data := make([]byte, header.Size)
 	if _, err := io.ReadFull(archive, data); err != nil {
-		return nil, errors.New("Docker returned an invalid archive")
+		return nil, errors.New("docker returned an invalid archive")
 	}
 	return data, nil
 }
@@ -503,7 +503,7 @@ func (c *Client) Create(ctx context.Context, name, platform string, body any) (s
 		return "", err
 	}
 	if !ContainerIDPattern.MatchString(result.Id) {
-		return "", errors.New("Docker returned an invalid container identifier")
+		return "", errors.New("docker returned an invalid container identifier")
 	}
 	return result.Id, nil
 }
@@ -518,7 +518,7 @@ func (c *Client) CreateExec(ctx context.Context, id string, options ExecCreate) 
 		return "", err
 	}
 	if !resourcePattern.MatchString(result.Id) {
-		return "", errors.New("Docker returned an invalid exec identifier")
+		return "", errors.New("docker returned an invalid exec identifier")
 	}
 	return result.Id, nil
 }
@@ -662,7 +662,7 @@ func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string)
 	decodeErr := DecodeJSONLines(response.Body, 1<<20, false, func(raw json.RawMessage) error {
 		var record map[string]json.RawMessage
 		if json.Unmarshal(raw, &record) != nil || record == nil {
-			return errors.New("Docker returned invalid pull progress")
+			return errors.New("docker returned invalid pull progress")
 		}
 		_, hasError := record["error"]
 		_, hasDetail := record["errorDetail"]
@@ -677,7 +677,7 @@ func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string)
 		return failure
 	}
 	if decodeErr != nil || records == 0 {
-		return errors.New("Docker returned invalid or oversized pull progress")
+		return errors.New("docker returned invalid or oversized pull progress")
 	}
 	return nil
 }
@@ -790,7 +790,7 @@ type headerLimit struct {
 
 func (r *headerLimit) Read(p []byte) (int, error) {
 	if !r.done && r.read >= r.limit {
-		return 0, errors.New("Docker upgrade headers exceeded their limit")
+		return 0, errors.New("docker upgrade headers exceeded their limit")
 	}
 	n, err := r.conn.Read(p)
 	r.read += n

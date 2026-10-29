@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/Crunging/Ludock/internal/apperr"
 )
 
 // ApplicationID marks Ludock-owned SQLite files ("LDCK") independently of the
@@ -26,7 +28,7 @@ type Migration struct {
 }
 
 // ErrIncompatible reports a database that Ludock does not own or cannot upgrade.
-var ErrIncompatible = errors.New("This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DATA_DIR and complete first-administrator setup. The existing database and game data have not been changed.")
+var ErrIncompatible = apperr.New("DATABASE_INCOMPATIBLE", 500, "This database is incompatible with Ludock. Use a new application data volume or LUDOCK_DATA_DIR and complete first-administrator setup. The existing database and game data have not been changed.")
 
 // Migrations is the complete schema history.
 var Migrations = []Migration{

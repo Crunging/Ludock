@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	ErrInvalidStream    = errors.New("Invalid Docker stream frame")
-	ErrIncompleteStream = errors.New("Incomplete Docker stream frame")
+	ErrInvalidStream    = errors.New("invalid Docker stream frame")
+	ErrIncompleteStream = errors.New("incomplete Docker stream frame")
 )
 
 const maxFrame = 64 * 1024 * 1024
@@ -86,7 +86,7 @@ func DecodeJSONLines(source io.Reader, maxBytes int, skipInvalid bool, receive f
 		if len(bytes.TrimSpace(line)) > 0 {
 			if !json.Valid(line) {
 				if !skipInvalid {
-					return errors.New("Invalid JSON line")
+					return errors.New("invalid JSON line")
 				}
 			} else if receiveErr := receive(append(json.RawMessage(nil), line...)); receiveErr != nil {
 				return receiveErr

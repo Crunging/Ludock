@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
@@ -122,9 +123,16 @@ type Runtime struct {
 }
 
 var (
-	errCancelled = errors.New("Console command cancelled")
-	errTimedOut  = errors.New("Game console command timed out")
+	errCancelled  = errors.New("console command cancelled")
+	errTimedOut   = errors.New("game console command timed out")
+	errNotRunning = apperr.New("SERVER_NOT_RUNNING", 409, "The game server must be running to accept console commands")
 )
+
+// notConfigured explains a console setting the owner must fix. Its message
+// is shown in the console, so it never includes a label or environment value.
+func notConfigured(message string) error {
+	return apperr.New("CONSOLE_NOT_CONFIGURED", 409, message)
+}
 
 func IsTimeout(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "timed out")
@@ -144,7 +152,7 @@ func (r *Runtime) GameCommand(ctx context.Context, target Target, adapter *games
 		}
 	}
 	if target.State != "running" {
-		return errors.New("The game server must be running to accept console commands")
+		return errNotRunning
 	}
 	command = adapter.Command(command)
 	switch adapter.Transport {
@@ -176,10 +184,10 @@ func (r *Runtime) Query(ctx context.Context, target Target, adapter *games.Adapt
 		}
 	}
 	if target.State != "running" {
-		return "", errors.New("The game server must be running to accept console commands")
+		return "", errNotRunning
 	}
 	if adapter.Transport == games.TransportContainerStdin {
-		return "", errors.New("This game console does not return responses")
+		return "", errors.New("this game console does not return responses")
 	}
 	return r.query(ctx, target, adapter, adapter.Command(command), assertAccess)
 }
@@ -248,7 +256,7 @@ func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *gam
 		}
 	}
 	if port < 1 || port > 65535 {
-		return "", 0, "", errors.New("Set " + games.LabelConsolePort + " to the container's console port (1-65535)")
+		return "", 0, "", notConfigured("Set " + games.LabelConsolePort + " to the container's console port (1-65535)")
 	}
 	password, err := r.password(ctx, target, adapter, env)
 	if err != nil {
@@ -256,7 +264,7 @@ func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *gam
 	}
 	host := strings.TrimSpace(target.Labels[games.LabelConsoleHost])
 	if host != "" && (len(host) > 253 || strings.Contains(host, "://") || badHost.MatchString(host) || !hostChars.MatchString(host)) {
-		return "", 0, "", errors.New(games.LabelConsoleHost + " must be an IP address or plain hostname")
+		return "", 0, "", notConfigured(games.LabelConsoleHost + " must be an IP address or plain hostname")
 	}
 	return host, port, password, nil
 }
@@ -266,7 +274,7 @@ func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *gam
 func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Adapter, env map[string]string) (string, error) {
 	name := target.Labels[games.LabelConsolePasswordEnv]
 	if name != "" && !envName.MatchString(name) {
-		return "", errors.New(games.LabelConsolePasswordEnv + " is not a valid environment name")
+		return "", notConfigured(games.LabelConsolePasswordEnv + " is not a valid environment variable name")
 	}
 	for _, candidate := range adapter.PasswordEnvCandidates {
 		if name == "" && env[candidate] != "" {
@@ -277,10 +285,10 @@ func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Ad
 		return r.passwordFile(ctx, target.ContainerID, adapter.PasswordFile)
 	}
 	if name == "" {
-		return "", errors.New("Set " + games.LabelConsolePasswordEnv + " to the name of the container environment variable that holds its console password")
+		return "", notConfigured("Set " + games.LabelConsolePasswordEnv + " to the name of the container environment variable that holds its console password")
 	}
 	if env[name] == "" {
-		return "", errors.New("Console credential environment variable " + name + " is empty or unavailable")
+		return "", notConfigured("The console password variable is empty or not set in the container")
 	}
 	return env[name], nil
 }
@@ -365,12 +373,12 @@ func (f funcWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-var errLimited = errors.New("Game console output exceeded its limit")
+var errLimited = errors.New("game console output exceeded its limit")
 
 func (r *Runtime) exec(ctx context.Context, containerID string, options docker.ExecCreate, out Output, assertAccess func() error,
 	timeoutSeconds int) error {
 	if len(options.Cmd) == 0 {
-		return errors.New("The console adapter is missing its command configuration")
+		return errors.New("the console adapter is missing its command configuration")
 	}
 	if ctx.Err() != nil {
 		return errCancelled
@@ -387,7 +395,7 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 			return errCancelled
 		}
 		if createCtx.Err() != nil {
-			return errors.New("Game console preparation timed out")
+			return errors.New("game console preparation timed out")
 		}
 		return err
 	}
@@ -518,15 +526,15 @@ func (r *Runtime) exec(ctx context.Context, containerID string, options docker.E
 	case forced:
 		return errTimedOut
 	case streamErr != nil:
-		return errors.New("Game console stream failed")
+		return errors.New("game console stream failed")
 	case result == nil:
-		return errors.New("Game console process is no longer available")
+		return errors.New("game console process is no longer available")
 	case *result.ExitCode == 124:
 		return errTimedOut
 	case *result.ExitCode == 125:
 		return errCancelled
 	case result.Running || *result.ExitCode != 0:
-		return errors.New("Game console command failed")
+		return errors.New("game console command failed")
 	}
 	return nil
 }
@@ -572,10 +580,10 @@ func (r *Runtime) stdin(ctx context.Context, containerID, command string, out Ou
 		return err
 	}
 	if !info.Config.OpenStdin {
-		return errors.New("Container standard input is closed; recreate it with stdin_open: true")
+		return notConfigured("Container standard input is closed; recreate it with stdin_open: true")
 	}
 	if info.Config.StdinOnce {
-		return errors.New("Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled")
+		return notConfigured("Container standard input closes after an attached client disconnects; recreate it with StdinOnce disabled")
 	}
 	conn, err := r.Docker.Attach(ctx, containerID, docker.AttachOptions{Stream: true, Stdin: true})
 	if err != nil {
@@ -594,7 +602,7 @@ func (r *Runtime) stdin(ctx context.Context, containerID, command string, out Ou
 		if ctx.Err() == context.DeadlineExceeded {
 			return errTimedOut
 		}
-		return errors.New("Game console command failed")
+		return errors.New("game console command failed")
 	}
 	out.system("Command sent to the server process")
 	return nil
@@ -639,7 +647,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 			}
 		}
 	}()
-	preparation := time.AfterFunc(5*time.Second, func() { cancel(errors.New("Game console preparation timed out")) })
+	preparation := time.AfterFunc(5*time.Second, func() { cancel(errors.New("game console preparation timed out")) })
 	defer preparation.Stop()
 	failure := func(err error) error {
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
@@ -705,7 +713,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 	defer commandTimer.Stop()
 	encoded, _ := json.Marshal(request)
 	if _, err := conn.Write(append(encoded, '\n')); err != nil {
-		return "", failure(errors.New("Game console command failed"))
+		return "", failure(errors.New("game console command failed"))
 	}
 	stdout := docker.Stdout(conn)
 	reader := bufio.NewReaderSize(stdout, 64*1024)
@@ -723,7 +731,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 			continue
 		}
 		if err != nil {
-			return "", failure(errors.New("Game console helper ended without a response"))
+			return "", failure(errors.New("game console helper ended without a response"))
 		}
 		var record struct {
 			Type     string  `json:"type"`
@@ -732,7 +740,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		decodeErr := json.Unmarshal(line, &record)
 		line = nil
 		if decodeErr != nil {
-			return "", failure(errors.New("Invalid console helper response"))
+			return "", failure(errors.New("invalid console helper response"))
 		}
 		if err := check(); err != nil {
 			return "", failure(err)
@@ -740,7 +748,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		switch {
 		case record.Type == "authorize":
 			if _, err := conn.Write([]byte("{\"type\":\"authorized\"}\n")); err != nil {
-				return "", failure(errors.New("Game console command failed"))
+				return "", failure(errors.New("game console command failed"))
 			}
 		case record.Type == "result" && record.Response != nil:
 			if len(*record.Response) > netconsole.MaxBytes+65536 {
@@ -748,7 +756,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 			}
 			return *record.Response, nil
 		default:
-			return "", failure(errors.New("Game console command failed"))
+			return "", failure(errors.New("game console command failed"))
 		}
 	}
 }

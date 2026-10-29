@@ -18,9 +18,10 @@ commit the output.
 
 ## Checks and tests
 
-Before finishing, run `gofmt -l cmd internal`, `go vet ./...`, the Go tests for
-the packages you touched, and the journeys if you changed anything a user can
-see (`cd e2e && npx playwright test`).
+Before finishing, run `gofmt -l cmd internal`, `go vet ./...`,
+`go tool staticcheck ./...`, the Go tests for the packages you touched, and the
+journeys if you changed anything a user can see
+(`cd e2e && npx playwright test`).
 
 Prefer end-to-end tests. The Playwright journeys in `e2e/journeys` run the real
 binary against `cmd/fakedocker`; add or extend one for any behavior a user can
@@ -40,6 +41,12 @@ non-obvious reason, or an outside fact such as a Docker quirk. Don't restate
 the code, walk through alternatives, or list what something doesn't do. Keep
 doc comments to a sentence or two, and skip them on names that explain
 themselves. Tests keep their scenario comment.
+
+## Errors
+
+Error strings follow Go style: lowercase, without a trailing period. Text
+meant for people is an `apperr` error; pages, consoles, and startup logs show
+its message and replace any other error with a generic one.
 
 ## Commits
 

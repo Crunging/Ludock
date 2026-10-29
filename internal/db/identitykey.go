@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/logging"
 )
 
@@ -31,13 +32,11 @@ const (
 var keyLog = logging.New("identity-key")
 
 // ErrIdentityKey is the generic key failure. It never names host paths.
-var ErrIdentityKey = errors.New("Ludock's identity key is missing, unsafe, or does not match this database. Restore the matching .identity-key directory beside the database from your application-data backup; do not generate a replacement key.")
+var ErrIdentityKey = apperr.New("IDENTITY_KEY_INVALID", 500, "Ludock's identity key is missing, unsafe, or does not match this database. Restore the matching .identity-key directory beside the database from your application-data backup; do not generate a replacement key.")
 
-// KeyPermissionError says exactly what to fix, so it must not be replaced by
-// the generic error.
-type KeyPermissionError struct{ message string }
-
-func (e *KeyPermissionError) Error() string { return e.message }
+// keyPermissionCode marks an error that says exactly what to fix, so it must
+// not be replaced by the generic error.
+const keyPermissionCode = "IDENTITY_KEY_PERMISSIONS"
 
 // testing hooks for interrupted writes.
 var (
@@ -70,9 +69,9 @@ func checkKeyMode(target string, isDir bool, mode, expected uint32, warn bool) e
 	}
 	fix := fmt.Sprintf("in the database's directory, run setfacl -b %s && chmod %o %s", shellQuote(name), expected, shellQuote(name))
 	if mode&0o707 != expected {
-		return &KeyPermissionError{fmt.Sprintf(
+		return apperr.Newf(keyPermissionCode, 500,
 			"Ludock's identity key %s %s has unsafe permissions: expected %04o, found %04o. To fix it, %s",
-			kind, name, expected, mode, fix)}
+			kind, name, expected, mode, fix)
 	}
 	if warn {
 		keyLog.Warn(fmt.Sprintf(
@@ -127,8 +126,7 @@ func readPublishedKey(directory string) (key []byte, err error) {
 		if err != nil {
 			clear(key)
 			key = nil
-			var permission *KeyPermissionError
-			if !errors.As(err, &permission) {
+			if !apperr.Is(err, keyPermissionCode) {
 				err = ErrIdentityKey
 			}
 		}
@@ -268,8 +266,7 @@ func LoadKey(dbPath string, required bool) ([]byte, error) {
 		return nil, err
 	}
 	if err := publishKeyDirectory(keyDirectory, generated); err != nil {
-		var permission *KeyPermissionError
-		if errors.As(err, &permission) {
+		if apperr.Is(err, keyPermissionCode) {
 			return nil, err
 		}
 		return nil, ErrIdentityKey

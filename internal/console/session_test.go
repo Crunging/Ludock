@@ -60,7 +60,7 @@ type sessionFixture struct {
 	respond func(command string) string
 }
 
-func sessionSetup(t *testing.T) *sessionFixture {
+func sessionSetup(t *testing.T, configure ...func(*fakedocker.GameOptions)) *sessionFixture {
 	t.Helper()
 	engine, err := fakedocker.Start(t.TempDir())
 	if err != nil {
@@ -73,9 +73,13 @@ func sessionSetup(t *testing.T) *sessionFixture {
 		t.Fatal(err)
 	}
 	// The console connects directly, without a helper container.
-	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+	options := fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port)},
-		Env:    []string{"RCON_PASSWORD=hunter2-secret"}})
+		Env:    []string{"RCON_PASSWORD=hunter2-secret"}}
+	for _, change := range configure {
+		change(&options)
+	}
+	id := engine.AddContainer(options)
 	engine.Update(id, func(c *fakedocker.Container) { c.Logs = []string{"joined", "rcon password hunter2-secret ok"} })
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
@@ -270,5 +274,19 @@ func TestCommandStopsWhenAccessEndsAfterTheBrowserLeaves(t *testing.T) {
 	case <-cancelled:
 	default:
 		t.Fatal("the command was never cancelled")
+	}
+}
+
+// A console its owner set up wrong says what to fix, instead of the generic
+// failure.
+func TestConsoleShowsSetupGuidance(t *testing.T) {
+	f := sessionSetup(t, func(options *fakedocker.GameOptions) { options.Labels["ludock.console.port"] = "0" })
+	channel := &fakeChannel{}
+	input := make(chan string, 1)
+	input <- `{"type":"input","data":"list"}`
+	close(input)
+	f.sessions.Console(ctx, channel, f.validate(f.admin), f.serverID, GameMode, input, "")
+	if !strings.Contains(channel.text(), "error:Set ludock.console.port to the container's console port") {
+		t.Fatal(channel.text())
 	}
 }
