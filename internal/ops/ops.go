@@ -218,9 +218,11 @@ func (r *row) job() (*Job, error) {
 	if job.Input, err = parseObject(r.input); err != nil {
 		return nil, err
 	}
-	if json.Unmarshal([]byte(r.recovery), &job.Recovery) != nil {
+	var recovery *Recovery
+	if json.Unmarshal([]byte(r.recovery), &recovery) != nil || recovery == nil {
 		return nil, errInvalidState
 	}
+	job.Recovery = *recovery
 	return job, nil
 }
 
