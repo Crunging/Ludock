@@ -61,9 +61,12 @@ type Service struct {
 	mu       sync.Mutex
 	readings map[string]*Reading
 	reading  map[string]bool
-	slots    chan struct{}
-	work     sync.WaitGroup
-	stopped  bool
+	// again holds a Check that arrived during that server's reading, which
+	// may have started before the change; it runs once the reading ends.
+	again   map[string]identity.Server
+	slots   chan struct{}
+	work    sync.WaitGroup
+	stopped bool
 }
 
 // Get is the latest reading of a server's current container run, or nil.
@@ -137,12 +140,16 @@ func (s *Service) Stop() {
 
 func (s *Service) start(ctx context.Context, server identity.Server, wait *sync.WaitGroup) {
 	s.mu.Lock()
+	if s.reading == nil {
+		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]identity.Server{},
+			make(chan struct{}, parallel)
+	}
 	if s.stopped || s.reading[server.ID] {
+		if !s.stopped && wait == nil {
+			s.again[server.ID] = server
+		}
 		s.mu.Unlock()
 		return
-	}
-	if s.reading == nil {
-		s.reading, s.readings, s.slots = map[string]bool{}, map[string]*Reading{}, make(chan struct{}, parallel)
 	}
 	s.reading[server.ID] = true
 	s.work.Add(1)
@@ -154,7 +161,12 @@ func (s *Service) start(ctx context.Context, server identity.Server, wait *sync.
 		defer func() {
 			s.mu.Lock()
 			delete(s.reading, server.ID)
+			next, again := s.again[server.ID]
+			delete(s.again, server.ID)
 			s.mu.Unlock()
+			if again {
+				s.start(ctx, next, nil)
+			}
 			if wait != nil {
 				wait.Done()
 			}
