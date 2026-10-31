@@ -43,6 +43,9 @@ type FileEntry struct {
 // filesystem errors can contain private host information.
 const FileFailure = "The file operation failed: the path changed, is unsafe, or cannot be accessed."
 
+// FileNameTaken is the file helper's exit code when a new name is in use.
+const FileNameTaken = 3
+
 type fileHelper struct {
 	request FileRequest
 	t       tracker
@@ -520,7 +523,7 @@ func (h *fileHelper) run() error {
 			return err
 		}
 		if err := unix.Mkdirat(int(parent), name, 0o777); err != nil {
-			return err
+			return nameTaken(err)
 		}
 		directory, err := h.t.openAt(parent, name, directoryFlags, 0)
 		if err != nil {
@@ -556,12 +559,12 @@ func (h *fileHelper) run() error {
 			return errors.New("symbolic links cannot be renamed")
 		}
 		if _, err := lstatAt(targetParent, targetName); err == nil {
-			return errors.New("the destination already exists")
+			return errNameTaken
 		} else if !isNotExist(err) {
 			return err
 		}
 		if err := renameNoReplace(parent, name, targetParent, targetName, info); err != nil {
-			return err
+			return nameTaken(err)
 		}
 		return h.json(map[string]bool{"ok": true})
 	case "upload":
@@ -651,9 +654,21 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		io.WriteString(stderr, FileFailure)
+		if errors.Is(err, errNameTaken) {
+			return FileNameTaken
+		}
 		return 1
 	}
 	return 0
+}
+
+var errNameTaken = errors.New("the name is in use")
+
+func nameTaken(err error) error {
+	if errors.Is(err, unix.EEXIST) {
+		return errNameTaken
+	}
+	return err
 }
 
 // renameat2 is swapped in tests to act like a kernel without

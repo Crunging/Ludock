@@ -15,6 +15,7 @@ test("reviewing a server, setting up monitoring, and following a restart", async
   await page.getByLabel("Monitor this server").check();
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await expect(page.locator("#availability-title + p")).not.toHaveText("Monitoring disabled.");
+  await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
   await page.locator("#availability-result").evaluate((result) => result.replaceChildren());
   await page.getByLabel("Failure grace period (seconds)").fill("180");
   await page.getByLabel("Failure grace period (seconds)").press("Tab");

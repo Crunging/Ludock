@@ -370,3 +370,25 @@ func TestReplacementNameFitsAndIsHidden(t *testing.T) {
 		}
 	}
 }
+
+// Docker's usage counts file cache the kernel can reclaim; the figure shown
+// leaves it out as docker stats does, on either cgroup version.
+func TestMemoryInUseExcludesReclaimableCache(t *testing.T) {
+	const usage = 2000
+	for name, cache := range map[string]map[string]float64{
+		"cgroup v1":         {"total_inactive_file": 500, "inactive_file": 100},
+		"cgroup v2":         {"inactive_file": 500},
+		"cache over usage":  {"inactive_file": usage + 1},
+		"no cache reported": nil,
+	} {
+		var stats docker.ContainerStats
+		stats.MemoryStats.Usage, stats.MemoryStats.Stats = usage, cache
+		want := 1500.0
+		if name == "cache over usage" || name == "no cache reported" {
+			want = usage
+		}
+		if got := memoryInUse(&stats); got != want {
+			t.Errorf("%s: got %v, want %v", name, got, want)
+		}
+	}
+}

@@ -113,6 +113,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		_, err := serverService.RefreshNow(ctx)
 		return err
 	}}
+	monitoring.Changed = func(serverID string) { go a.Events.Changed(context.Background(), serverID) }
 	a.Players = &players.Service{Servers: serverService, Identity: store, Observer: observer, Runtime: runtime, Locks: table,
 		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) }}
 	a.Sessions.Commanded = func(serverID string) { a.Players.Check(context.Background(), serverID) }

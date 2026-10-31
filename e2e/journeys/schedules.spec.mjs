@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, createUser, openServer, signIn } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -78,4 +78,23 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await row.getByRole("button", { name: "Delete" }).click();
   await confirm.getByRole("button", { name: "Delete schedule" }).click();
   await expect(page.locator("#schedule-list")).toContainText("No schedules.");
+});
+
+test("a new schedule starts on an action its operator can use", async ({ page, session }) => {
+  await createUser(page, "scheduler", "scheduler password one", "operator");
+  const survival = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
+  await survival.getByLabel("Restart").check();
+  await survival.getByLabel("Manage own schedules").check();
+  await page.getByRole("button", { name: "Save server access" }).click();
+  await expect(page.locator("[data-grants] .alert--success")).toBeVisible();
+
+  const operator = await session({ storageState: { cookies: [], origins: [] } });
+  await signIn(operator, "scheduler", "scheduler password one");
+  await operator.getByRole("link", { name: "Survival", exact: true }).click();
+  await operator.getByRole("tab", { name: "Schedules" }).click();
+  const form = operator.locator("#schedule-form");
+  await expect(form.getByLabel("Action")).toHaveValue("restart");
+  await expect(form.getByText("Stops and starts the server at the selected time.")).toBeVisible();
+  await expect(form.getByText("Starts the server if it is stopped.")).toBeHidden();
+  await expect(operator.locator("#schedule-preview")).toContainText("08:00");
 });

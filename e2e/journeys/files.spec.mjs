@@ -50,13 +50,16 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   await page.getByRole("button", { name: "New folder" }).click();
   await dialog.getByLabel("Folder name").fill("world");
   await dialog.getByRole("button", { name: "Create folder" }).click();
-  await expect(dialog.locator(".alert--error")).toBeVisible();
+  await expect(dialog.locator(".alert--error")).toHaveText("A file or folder with that name already exists");
   await dialog.getByLabel("Folder name").fill("mods");
   await dialog.getByRole("button", { name: "Create folder" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Created “mods”.");
 
   await page.locator(".file-row", { hasText: "mods" }).getByRole("button", { name: "Actions for mods" }).click();
   await page.getByRole("button", { name: "Rename" }).click();
+  await dialog.getByLabel("New name").fill("world");
+  await dialog.getByRole("button", { name: "Rename" }).click();
+  await expect(dialog.locator(".alert--error")).toHaveText("A file or folder with that name already exists");
   await dialog.getByLabel("New name").fill("plugins");
   await dialog.getByRole("button", { name: "Rename" }).click();
   await expect(page.locator("#file-feedback")).toHaveText("Renamed “mods” to “plugins”.");
@@ -69,6 +72,14 @@ test("browsing, previewing, uploading, and changing server files", async ({ page
   }
   await page.getByLabel("Filter filenames").fill("server");
   await expect(names).toHaveText(["server.properties"]);
+
+  // Refreshing keeps the filter and order chosen since the page loaded.
+  await page.getByLabel("Sort by").selectOption("name-desc");
+  await expect(page).toHaveURL(/sort=name-desc/);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page).toHaveURL(/q=server/);
+  await expect(names).toHaveText(["server.properties"]);
+  await expect(page.locator(".file-filter-summary")).toContainText("Showing 1 of 2 entries");
 
   // The page names the server it belongs to and leads back to it.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Files");

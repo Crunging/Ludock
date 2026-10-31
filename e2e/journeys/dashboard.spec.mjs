@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, openServer, serverRow } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -204,4 +204,32 @@ test("filters changed while the list is loading all apply", async ({ page }) => 
   release();
   await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
   await expect(page).toHaveURL(/\/\?search=valh$/);
+});
+
+test("an outage reaches an open server list when its grace period ends, and clears", async ({ page }) => {
+  test.setTimeout(150_000);
+  await openServer(page, "valheim");
+  await page.getByLabel("Monitor this server").check();
+  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
+  await page.getByLabel("Failure grace period (seconds)").fill("10");
+  await page.getByLabel("Failure grace period (seconds)").press("Tab");
+  await expect(page.getByLabel("Failure grace period (seconds)")).toHaveValue("10");
+  // Starting through Ludock ends any earlier stop's quiet time.
+  await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+
+  await page.goto("/");
+  const attention = page.locator("#attention");
+  await expect(attention).not.toContainText("Server unavailable");
+  await dockerAction("valheim", "stop");
+  await expect(serverRow(page, "valheim")).toContainText("Stopped");
+  await expect(attention).toContainText("Server unavailable", { timeout: 60_000 });
+
+  await dockerAction("valheim", "start");
+  await expect(attention).not.toContainText("Server unavailable", { timeout: 30_000 });
+
+  await dockerAction("valheim", "stop");
+  await openServer(page, "valheim");
+  await page.getByLabel("Monitor this server").uncheck();
+  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
 });

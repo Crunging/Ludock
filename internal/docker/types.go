@@ -160,8 +160,9 @@ type ContainerStats struct {
 		SystemCPUUsage float64 `json:"system_cpu_usage"`
 	} `json:"precpu_stats"`
 	MemoryStats struct {
-		Usage float64 `json:"usage"`
-		Limit float64 `json:"limit"`
+		Usage float64            `json:"usage"`
+		Limit float64            `json:"limit"`
+		Stats map[string]float64 `json:"stats,omitempty"`
 	} `json:"memory_stats"`
 }
 
