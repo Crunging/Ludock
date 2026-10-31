@@ -43,7 +43,10 @@ type Service struct {
 	DB     *db.DB
 	Locks  *locks.Table
 	Notify func(key, message string)
-	Store  *identity.Store
+	// Changed is told when an alert is raised or cleared, which no Docker
+	// event announces to open pages. It must not block.
+	Changed func(serverID string)
+	Store   *identity.Store
 }
 
 // ParsePolicy validates a policy, applying defaults.
@@ -242,6 +245,12 @@ func (s *Service) notify(key, message string) {
 	}
 }
 
+func (s *Service) changed(serverID string) {
+	if s.Changed != nil {
+		s.Changed(serverID)
+	}
+}
+
 // Check runs one monitor tick. current is the discovery result of the same
 // tick, or nil when Docker is unreachable: an outage of the daemon is not
 // evidence that containers vanished, so bindings are kept but availability
@@ -309,6 +318,10 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			if changed && r.notified == 1 {
 				s.notify("recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
 			}
+			// Pages show an outage once its grace ends, even before its alert.
+			if changed && r.outage.Valid {
+				s.changed(server.ID)
+			}
 			continue
 		}
 		if r.intentional == 1 {
@@ -345,6 +358,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
 			}
 			s.notify("outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
+			s.changed(server.ID)
 		}
 	}
 	return nil

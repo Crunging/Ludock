@@ -620,8 +620,23 @@ func (o *Observer) readStats(ctx context.Context, id string) (*Stats, error) {
 	if systemDelta > 0 {
 		cpu = cpuDelta / systemDelta * cpus * 100
 	}
-	return &Stats{CPUPercent: round2(cpu), MemUsageMB: round2(stats.MemoryStats.Usage / (1024 * 1024)),
+	return &Stats{CPUPercent: round2(cpu), MemUsageMB: round2(memoryInUse(stats) / (1024 * 1024)),
 		MemLimitMB: round2(stats.MemoryStats.Limit / (1024 * 1024))}, nil
+}
+
+// memoryInUse matches docker stats: Docker's usage includes file cache the
+// kernel can reclaim, reported as total_inactive_file on cgroup v1 and
+// inactive_file on v2.
+func memoryInUse(stats *docker.ContainerStats) float64 {
+	memory := stats.MemoryStats
+	inactive, cgroupV1 := memory.Stats["total_inactive_file"]
+	if !cgroupV1 {
+		inactive = memory.Stats["inactive_file"]
+	}
+	if inactive < memory.Usage {
+		return memory.Usage - inactive
+	}
+	return memory.Usage
 }
 
 type Action string
