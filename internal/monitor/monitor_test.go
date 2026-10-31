@@ -37,6 +37,26 @@ func state(value, health string) map[string]servers.Container {
 	return map[string]servers.Container{"mc": {ID: "mc", State: value, Health: health}}
 }
 
+// An outage shows on pages once its grace ends, before the next tick alerts.
+// A server that recovers in between raises no alert, but pages still have to
+// hear that the outage is gone.
+func TestClearedOutageUpdatesPagesWithoutAnAlert(t *testing.T) {
+	s, events, server := setup(t)
+	var changes []string
+	s.Changed = func(serverID string) { changes = append(changes, serverID) }
+	s.Check(ctx, state("exited", ""), 1000)
+	if found, _ := problem(s, server.ID, 61_000); found == nil {
+		t.Fatal("no problem after grace")
+	}
+	s.Check(ctx, state("running", ""), 62_000)
+	if found, _ := problem(s, server.ID, 62_000); found != nil {
+		t.Fatal("problem after recovery")
+	}
+	if len(events.events) != 0 || len(changes) != 1 || changes[0] != server.ID {
+		t.Fatal(events.events, changes)
+	}
+}
+
 func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	s, events, server := setup(t)
 	s.Check(ctx, state("exited", ""), 1000)

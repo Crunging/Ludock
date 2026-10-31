@@ -1,5 +1,7 @@
 // Shared journey helpers. Every page fails its test on uncaught script
 // errors; failed requests the journey expects are checked explicitly.
+import { request } from "node:http";
+import { join } from "node:path";
 import { test as base, expect } from "@playwright/test";
 
 export { expect };
@@ -84,6 +86,19 @@ export async function openServer(page, name) {
 export async function expectOperationSucceeded(page) {
   await expect(page).toHaveURL(/[?&]operation=/);
   await expect(page.locator("#selected-operation")).toContainText("Succeeded", { timeout: 45_000 });
+}
+
+/** Changes a container behind Ludock's back, as another manager would. */
+export function dockerAction(container, action) {
+  return new Promise((resolve, reject) => {
+    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
+      path: `/v1.41/containers/${container}/${action}` }, (response) => {
+      response.resume();
+      response.on("end", resolve);
+    });
+    call.on("error", reject);
+    call.end();
+  });
 }
 
 /** Creates an account through the users page; returns nothing. */

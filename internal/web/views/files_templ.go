@@ -504,15 +504,15 @@ func FilesPage(page Page, f FilesView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var23 string
-				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/files/" + f.ServerID + "?" + f.listQuery())
+				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("/fragments/files/" + f.ServerID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `files.templ`, Line: 162, Col: 114}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `files.templ`, Line: 162, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "\" hx-target=\"#file-list\" hx-swap=\"outerHTML\" data-busy-label=\"Refreshing…\">Refresh</button> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "\" hx-include=\".file-filters\" hx-target=\"#file-list\" hx-swap=\"outerHTML\" data-busy-label=\"Refreshing…\">Refresh</button> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

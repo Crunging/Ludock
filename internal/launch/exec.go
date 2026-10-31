@@ -10,6 +10,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/helper"
 )
 
 const MaxOutput = 4 * 1024 * 1024
@@ -19,6 +20,7 @@ var (
 	ErrTimeout     = apperr.New("FILE_OPERATION_TIMEOUT", 409, "The file operation timed out. Refresh and try again.")
 	ErrFailed      = apperr.New("FILE_OPERATION_FAILED", 409, "File operation failed")
 	ErrUnsafe      = apperr.New("UNSAFE_OR_CHANGED_FILE_PATH", 409, "The path changed, is unsafe, or cannot be accessed")
+	ErrNameTaken   = apperr.New("FILE_NAME_TAKEN", 409, "A file or folder with that name already exists")
 	ErrOutputLimit = apperr.New("FILE_OUTPUT_LIMIT", 409, "File operation failed")
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
 )
@@ -210,6 +212,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	info, err := client.InspectExec(context.WithoutCancel(ctx), execID)
 	if err != nil {
 		return nil, err
+	}
+	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileNameTaken {
+		return nil, ErrNameTaken
 	}
 	if info.Running || info.ExitCode == nil || *info.ExitCode != 0 {
 		return nil, ErrUnsafe
