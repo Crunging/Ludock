@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.6.0](https://github.com/Crunging/Ludock/compare/v0.5.0...v0.6.0) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* Ludock no longer opens databases from 0.5 and earlier. Start with a new application data volume (or LUDOCK_DATA_DIR) and complete first-administrator setup again; the old database and game data are left unchanged. The JSON API and LUDOCK_API_TOKEN are removed (only /api/v1/health remains), as is AUDIT_LOG_MAX_ROWS. Renamed settings: MAX_UPLOAD_SIZE is LUDOCK_MAX_UPLOAD_SIZE, LOG_LEVEL is LUDOCK_LOG_LEVEL, DOCKER_SOCKET is LUDOCK_DOCKER_SOCKET, FILE_HELPER_IMAGE is LUDOCK_HELPER_IMAGE, and LUDOCK_DB_PATH is replaced by LUDOCK_DATA_DIR.
+
+### Features
+
+* record and graph each server's CPU and memory history ([#64](https://github.com/Crunging/Ludock/issues/64)) ([100bc10](https://github.com/Crunging/Ludock/commit/100bc10affaabb370669b5c1fc18efffb5078a20))
+* rewrite Ludock in Go ([#50](https://github.com/Crunging/Ludock/issues/50)) ([a600acd](https://github.com/Crunging/Ludock/commit/a600acd7a22fe6f84e6ef5648aa8bce9a4d80814))
+* send alerts to ntfy, Gotify, Telegram, email, or any webhook ([#66](https://github.com/Crunging/Ludock/issues/66)) ([da3a427](https://github.com/Crunging/Ludock/commit/da3a427aee7c6402323dfafe40447dc0ce7bf597))
+* show who's online on each Minecraft server ([#65](https://github.com/Crunging/Ludock/issues/65)) ([0bbc634](https://github.com/Crunging/Ludock/commit/0bbc634559eb6fbccb6318d7a1d3227711df0906))
+* smooth out the server list, server pages, and phone layout ([#58](https://github.com/Crunging/Ludock/issues/58)) ([f11169e](https://github.com/Crunging/Ludock/commit/f11169e070038d29230b07aafa17063b0d6a1c4f))
+* update servers through the Docker API without Compose mounts ([#57](https://github.com/Crunging/Ludock/issues/57)) ([1891590](https://github.com/Crunging/Ludock/commit/1891590104085b5c5f2e2c55382593b843c9aa1e))
+
+
+### Bug Fixes
+
+* **console:** finish commands sent before the browser leaves ([#71](https://github.com/Crunging/Ludock/issues/71)) ([6b7d788](https://github.com/Crunging/Ludock/commit/6b7d7888ffe5126c35e1391fe0f812a41528d74c))
+* correct six bugs found by testing the main flows ([#80](https://github.com/Crunging/Ludock/issues/80)) ([cc0c579](https://github.com/Crunging/Ludock/commit/cc0c579addbe7fcbc967a157a32278f35d7f6123))
+* hide more container credentials from logs and consoles ([#60](https://github.com/Crunging/Ludock/issues/60)) ([d937b25](https://github.com/Crunging/Ludock/commit/d937b25dab085f15aeb12611ce9f7b7856d8b75e))
+* keep sign-in redirects on site when next contains a tab ([#54](https://github.com/Crunging/Ludock/issues/54)) ([da72079](https://github.com/Crunging/Ludock/commit/da7207919ca83f5ad6837c722dd1b3458508505c))
+* **ops:** never run a job twice when it finishes while the queue is read ([#75](https://github.com/Crunging/Ludock/issues/75)) ([1f4e670](https://github.com/Crunging/Ludock/commit/1f4e67014653acfd68d0bf333bce33e2a972c37c))
+* **players:** read players again when a command lands during a reading ([#74](https://github.com/Crunging/Ludock/issues/74)) ([02b4ed0](https://github.com/Crunging/Ludock/commit/02b4ed099bdcef22fc67dd2a2f20dd2d24c407f7))
+* require Go 1.27.3 to patch HTTP/2 and certificate vulnerabilities ([#63](https://github.com/Crunging/Ludock/issues/63)) ([6ccdf22](https://github.com/Crunging/Ludock/commit/6ccdf22a8b0da4cfd8f7c3dc14d7ee0fee046cc3))
+* show the setup guidance Ludock already writes, and add staticcheck ([#73](https://github.com/Crunging/Ludock/issues/73)) ([e64bfda](https://github.com/Crunging/Ludock/commit/e64bfdae554c7b32a319073481ff53c197052f90))
+* show the whole More menu on the last server in the list ([#53](https://github.com/Crunging/Ludock/issues/53)) ([2f636d8](https://github.com/Crunging/Ludock/commit/2f636d80617d6055331faba2d54ee467e6cd114c))
+
+
+### Performance Improvements
+
+* cache SQLite statements and compress pages ([#59](https://github.com/Crunging/Ludock/issues/59)) ([08570f4](https://github.com/Crunging/Ludock/commit/08570f4cd848e778e16a477cc6b1a2cc8ac2ecdd))
+* reduce repeated Docker, database, and browser work ([#52](https://github.com/Crunging/Ludock/issues/52)) ([8f3d9ad](https://github.com/Crunging/Ludock/commit/8f3d9ad59e614a78c3deba0874b9dbc7904edb83))
+* send unchanged live refreshes as 304s, shrink fonts by a third, and say when Ludock can't be reached ([#68](https://github.com/Crunging/Ludock/issues/68)) ([950d0e4](https://github.com/Crunging/Ludock/commit/950d0e4ebad949e96d1dcaa31d990537f1eabe91))
+
+
+### Code Refactoring
+
+* check the second character of next explicitly in safeNext ([#55](https://github.com/Crunging/Ludock/issues/55)) ([cac3fed](https://github.com/Crunging/Ludock/commit/cac3fede3c4b3f0c0e05f76348e1205bd755933a))
+* **console:** send Minecraft commands over RCON from Ludock ([#62](https://github.com/Crunging/Ludock/issues/62)) ([817ef79](https://github.com/Crunging/Ludock/commit/817ef79ff69a7655ade1bb1fa10e5746f6dccd28))
+* cut comments that restate the code so agents read less noise ([#72](https://github.com/Crunging/Ludock/issues/72)) ([ecef458](https://github.com/Crunging/Ludock/commit/ecef458b43cea32e1f6a50d1f9a69b27896050f4))
+* drop the timing settings added for CI ([01a21f7](https://github.com/Crunging/Ludock/commit/01a21f783fe60c701b0b603a3db9edaad0a84a14))
+* **helper:** write archive headers with the shared tar encoder ([#61](https://github.com/Crunging/Ludock/issues/61)) ([9de64b6](https://github.com/Crunging/Ludock/commit/9de64b6ae5ad8f8e4ba99e62ef8e392fa566612a))
+* **jobs:** give operation recovery state a typed struct agents can navigate ([#76](https://github.com/Crunging/Ludock/issues/76)) ([a2cae12](https://github.com/Crunging/Ludock/commit/a2cae12318d7c255b15097ce6cfb84c6aa30e8cf))
+* split backup and restore code into their own files ([#77](https://github.com/Crunging/Ludock/issues/77)) ([c468e47](https://github.com/Crunging/Ludock/commit/c468e47abf941bfccf6662b414e7c4119aab9af6))
+* use one mount type for servers, files, and helpers ([#78](https://github.com/Crunging/Ludock/issues/78)) ([4a0e24b](https://github.com/Crunging/Ludock/commit/4a0e24b797e7ca7aa7e845723865f96cf63eb6a0))
+
 ## [0.5.0](https://github.com/Crunging/Ludock/compare/v0.4.0...v0.5.0) (2026-10-18)
 
 
