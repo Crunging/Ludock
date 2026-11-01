@@ -5,7 +5,7 @@
 # downloads the scanner and advisories, so CI can do that while it builds.
 set -euo pipefail
 image="${1:?usage: scripts/scan-image.sh IMAGE | --prepare}"
-trivy="aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+trivy="aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c"
 temp="${RUNNER_TEMP:?RUNNER_TEMP must be set}"
 cache="$temp/ludock-trivy-cache:/root/.cache/trivy"
 docker run --rm --volume "$cache" "$trivy" image --download-db-only --no-progress
