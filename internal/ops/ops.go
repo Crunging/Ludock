@@ -404,8 +404,9 @@ func (e *resourcesBusy) Error() string { return "Operation resources are busy" }
 // WithLocks acquires a job's resources before any effect. If another job
 // holds them, this job returns to the queue and runs again from the start
 // once they are released, as it would have after that job. A job cancels
-// background work holding its resources and waits for its cleanup without
-// holding back other jobs. Conflicts with requests outside the runner fail.
+// background work holding its resources and waits for its cleanup, and waits
+// for a request holding them, such as a download, without holding back other
+// jobs.
 func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)) (map[string]any, error) {
 	r := c.runner
 	id := c.Job.ID
@@ -454,6 +455,12 @@ func (c *Context) WithLocks(keys []string, action func() (map[string]any, error)
 				testHook("yield")
 			}
 			return nil, &resourcesBusy{released: released, settled: settled, holdsQueue: true}
+		}
+		if claimed && errors.Is(err, locks.ErrConflict) {
+			if wasYielded {
+				r.Wake()
+			}
+			return nil, &resourcesBusy{released: released}
 		}
 		if wasYielded {
 			r.Wake()
