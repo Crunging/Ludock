@@ -317,7 +317,7 @@ func userRow(u UsersView, user db.User) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var12 = []any{"settings-card user-row", templ.KV("user-row--two-factor", user.TwoFactor)}
+			var templ_7745c5c3_Var12 = []any{"settings-card user-row", templ.KV("user-row--two-factor", user.TwoFactor && user.ID != u.CurrentID)}
 			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_ElementWriter, templ_7745c5c3_Var12...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -624,7 +624,7 @@ func userRow(u UsersView, user db.User) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if user.TwoFactor {
+		if user.TwoFactor && user.ID != u.CurrentID {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<button class=\"secondary-btn\" type=\"button\" hx-post=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err

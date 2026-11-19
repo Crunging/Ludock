@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -226,13 +227,14 @@ func TestTwoFactorSecretStaysSealed(t *testing.T) {
 	}
 }
 
-// Only an administrator's session can reset another account's two-factor
+// Only another administrator's session can reset an account's two-factor
 // sign-in, and the reset signs that account out.
-func TestResetTwoFactorNeedsAdmin(t *testing.T) {
+func TestResetTwoFactorNeedsAnotherAdmin(t *testing.T) {
 	s, c, _ := newService(t, nil)
 	c.now = 1_700_000_000_000
 	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
 	addUser(t, s, "u-operator", "operator", db.RoleOperator, "operator long password")
+	addUser(t, s, "u-admin2", "admin2", db.RoleAdmin, "second admin password")
 	secret, _ := enrolled(t, s, c)
 	operator, err := s.Login(ctx, "operator", "operator long password", Client{})
 	if err != nil {
@@ -241,23 +243,122 @@ func TestResetTwoFactorNeedsAdmin(t *testing.T) {
 	if err := s.ResetTwoFactor(ctx, operator, adminID, Client{}); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
+	// A stale session role is checked again against the database.
+	operator.User.Role = db.RoleAdmin
+	if err := s.ResetTwoFactor(ctx, operator, adminID, Client{}); !apperr.Is(err, "FORBIDDEN") {
+		t.Fatal(err)
+	}
 	c.now += totpPeriodMs
 	admin, err := s.CompleteLogin(ctx, challengeFor(t, s, "192.0.2.5"), hotp(secret, totpStep(c.now)), Client{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The operator is promoted in the database only; its session role is stale.
-	operator.User.Role = db.RoleAdmin
-	if err := s.ResetTwoFactor(ctx, operator, adminID, Client{}); !apperr.Is(err, "FORBIDDEN") {
+	if err := s.ResetTwoFactor(ctx, admin, adminID, Client{}); !apperr.Is(err, "SELF_TWO_FACTOR_RESET") {
 		t.Fatal(err)
 	}
-	if err := s.ResetTwoFactor(ctx, admin, adminID, Client{}); err != nil {
+	other, err := s.Login(ctx, "admin2", "second admin password", Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetTwoFactor(ctx, other, adminID, Client{}); err != nil {
 		t.Fatal(err)
 	}
 	if current, _ := s.Session(ctx, admin.Token); current != nil {
 		t.Fatal("reset kept the account's sessions")
 	}
 	if _, err := s.Login(ctx, "admin", "correct horse battery staple", Client{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A password sign-in verified before two-factor sign-in turned on can't
+// create a session afterward.
+func TestPasswordSessionLosesToEnrollment(t *testing.T) {
+	s, c, _ := newService(t, nil)
+	c.now = 1_700_000_000_000
+	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
+	record, _ := s.DB.FindUserByID(ctx, adminID)
+	enrolled(t, s, c)
+	_, err := s.createSession(ctx, db.SessionUser{ID: adminID, Username: "admin", Role: db.RoleAdmin}, Client{}, record.PasswordHash, nil)
+	if !errors.Is(err, db.ErrAccountChanged) {
+		t.Fatal(err)
+	}
+}
+
+// Concurrent guesses on one challenge, each from a different source, still
+// get only the challenge's five attempts.
+func TestConcurrentCodesShareTheLimit(t *testing.T) {
+	s, c, _ := newService(t, nil)
+	c.now = 1_700_000_000_000
+	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
+	secret, _ := enrolled(t, s, c)
+	token := challengeFor(t, s, "192.0.2.2")
+	wrong := hotp(secret, totpStep(c.now)+5)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	checked := 0
+	for attempt := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.CompleteLogin(ctx, token, wrong, Client{IP: "198.51.100." + itoa(attempt+1)})
+			if apperr.Is(err, "INVALID_CODE") {
+				mu.Lock()
+				checked++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if checked != challengeAttempts {
+		t.Fatalf("%d codes checked", checked)
+	}
+}
+
+// Setting up two-factor sign-in belongs to the session that started it:
+// another session of the account can't see or confirm the secret.
+func TestPendingSecretStaysWithItsSession(t *testing.T) {
+	s, c, _ := newService(t, nil)
+	c.now = 1_700_000_000_000
+	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
+	laptop, _ := s.Login(ctx, "admin", "correct horse battery staple", Client{})
+	stolen, _ := s.Login(ctx, "admin", "correct horse battery staple", Client{})
+	enrollment, err := s.BeginTwoFactor(ctx, laptop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := secretEncoding.DecodeString(enrollment.Secret)
+	if pending, err := s.PendingTwoFactor(ctx, stolen); pending != nil || err != nil {
+		t.Fatal(pending, err)
+	}
+	if _, _, err := s.EnableTwoFactor(ctx, stolen, "correct horse battery staple", hotp(secret, totpStep(c.now)), Client{}); !apperr.Is(err, "TWO_FACTOR_CHANGED") {
+		t.Fatal(err)
+	}
+	if pending, err := s.PendingTwoFactor(ctx, laptop); pending == nil || pending.Secret != enrollment.Secret || err != nil {
+		t.Fatal(pending, err)
+	}
+}
+
+// Disabling an account ends its pending sign-ins, even if it is enabled
+// again before they expire.
+func TestDisablingEndsChallenges(t *testing.T) {
+	s, c, _ := newService(t, nil)
+	c.now = 1_700_000_000_000
+	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
+	addUser(t, s, "u-admin2", "admin2", db.RoleAdmin, "second admin password")
+	secret, _ := enrolled(t, s, c)
+	token := challengeFor(t, s, "192.0.2.2")
+	other, err := s.Login(ctx, "admin2", "second admin password", Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, disabled := range []bool{true, false} {
+		if _, err := s.UpdateAccess(ctx, other, adminID, db.RoleAdmin, disabled, Client{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.now += totpPeriodMs
+	if _, err := s.CompleteLogin(ctx, token, hotp(secret, totpStep(c.now)), Client{}); !apperr.Is(err, "SIGN_IN_EXPIRED") {
 		t.Fatal(err)
 	}
 }

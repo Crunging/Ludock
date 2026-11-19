@@ -105,7 +105,7 @@ func draftRole(u UsersView) db.Role {
 }
 
 templ userRow(u UsersView, user db.User) {
-	<section class={ "settings-card user-row", templ.KV("user-row--two-factor", user.TwoFactor) }>
+	<section class={ "settings-card user-row", templ.KV("user-row--two-factor", user.TwoFactor && user.ID != u.CurrentID) }>
 		<div class="user-row__identity">
 			<strong>{ user.Username }</strong>
 			<span>
@@ -145,7 +145,7 @@ templ userRow(u UsersView, user db.User) {
 			<input type="password" name="password" placeholder="New password" aria-label={ "New password for " + user.Username } autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
 			<button class="secondary-btn" type="submit" data-busy-label="Working…">Reset password</button>
 		</form>
-		if user.TwoFactor {
+		if user.TwoFactor && user.ID != u.CurrentID {
 			<button
 				class="secondary-btn"
 				type="button"

@@ -211,6 +211,9 @@ type SessionInput struct {
 	// The session is created only while the account still has it and is
 	// enabled, in the same statement, so a concurrent reset or disable wins.
 	PasswordHash string
+	// PasswordOnly also requires that the account has no two-factor sign-in,
+	// so enrollment racing a password sign-in wins.
+	PasswordOnly bool
 	// Audit, when set, commits with the session.
 	Audit *AuditEntry
 }
@@ -239,6 +242,9 @@ func (d *DB) insertSession(ctx context.Context, tx *sql.Tx, input SessionInput) 
 		insert = `INSERT INTO sessions
       (token_hash, session_id, user_id, created_at, expires_at, last_seen_at, ip_address, user_agent)
       SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND password_hash = ? AND disabled = 0`
+		if input.PasswordOnly {
+			insert += " AND totp_secret IS NULL"
+		}
 		values = append(values, input.UserID, input.PasswordHash)
 	}
 	result, err := tx.ExecContext(ctx, insert, values...)

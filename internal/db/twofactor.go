@@ -119,8 +119,9 @@ func (d *DB) SetPendingTwoFactor(ctx context.Context, userID, sealed string) err
 // account whose password was just verified.
 type TwoFactorChange struct {
 	UserID, TokenHash, PasswordHash string
-	// Pending is the sealed secret being confirmed; empty turns it off.
-	Pending string
+	// Pending is the stored pending secret being confirmed, and Secret the
+	// same secret sealed for sign-in; both empty turn it off.
+	Pending, Secret string
 	// Step is the time step of the confirming code, which can't sign in again.
 	Step           int64
 	RecoveryHashes []string
@@ -143,9 +144,9 @@ func (d *DB) ChangeTwoFactor(ctx context.Context, c TwoFactorChange) error {
 		}
 		var result sql.Result
 		if c.Pending != "" {
-			result, err = tx.ExecContext(ctx, `UPDATE users SET totp_secret = totp_pending, totp_pending = NULL, totp_step = ?,
+			result, err = tx.ExecContext(ctx, `UPDATE users SET totp_secret = ?, totp_pending = NULL, totp_step = ?,
         updated_at = ? WHERE id = ? AND password_hash = ? AND totp_pending = ? AND totp_secret IS NULL`,
-				c.Step, Now(), c.UserID, c.PasswordHash, c.Pending)
+				c.Secret, c.Step, Now(), c.UserID, c.PasswordHash, c.Pending)
 		} else {
 			result, err = tx.ExecContext(ctx, `UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_step = 0,
         updated_at = ? WHERE id = ? AND password_hash = ? AND totp_secret IS NOT NULL`, Now(), c.UserID, c.PasswordHash)
@@ -215,14 +216,23 @@ type SignInChallenge struct {
 	Step                      int64
 }
 
+// CreateSignInChallenge stores a challenge only while the account is
+// enabled, has two-factor sign-in, and still has the verified password.
 func (d *DB) CreateSignInChallenge(ctx context.Context, tokenHash, userID, passwordHash string, now, expiresAt int64) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sign_in_challenges WHERE expires_at <= ?", now); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO sign_in_challenges (token_hash, user_id, password_hash, expires_at)
-      VALUES (?, ?, ?, ?)`, tokenHash, userID, passwordHash, expiresAt)
-		return err
+		result, err := tx.ExecContext(ctx, `INSERT INTO sign_in_challenges (token_hash, user_id, password_hash, expires_at)
+      SELECT ?, id, password_hash, ? FROM users
+      WHERE id = ? AND password_hash = ? AND disabled = 0 AND totp_secret IS NOT NULL`, tokenHash, expiresAt, userID, passwordHash)
+		if err != nil {
+			return err
+		}
+		if created, _ := result.RowsAffected(); created != 1 {
+			return ErrAccountChanged
+		}
+		return nil
 	})
 }
 
@@ -247,16 +257,17 @@ func (d *DB) FindSignInChallenge(ctx context.Context, tokenHash string, now int6
 	return &c, nil
 }
 
-// FailSignInChallenge counts a wrong code and ends the challenge after
-// maxAttempts.
-func (d *DB) FailSignInChallenge(ctx context.Context, tokenHash string, maxAttempts int) error {
-	return d.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE sign_in_challenges SET attempts = attempts + 1 WHERE token_hash = ?", tokenHash); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, "DELETE FROM sign_in_challenges WHERE token_hash = ? AND attempts >= ?", tokenHash, maxAttempts)
-		return err
-	})
+// ReserveSignInAttempt counts a code attempt before it is checked, so
+// concurrent attempts can't exceed maxAttempts. It reports false when the
+// challenge is used up, expired, or gone.
+func (d *DB) ReserveSignInAttempt(ctx context.Context, tokenHash string, maxAttempts int, now int64) (bool, error) {
+	result, err := d.ExecContext(ctx, `UPDATE sign_in_challenges SET attempts = attempts + 1
+    WHERE token_hash = ? AND attempts < ? AND expires_at > ?`, tokenHash, maxAttempts, now)
+	if err != nil {
+		return false, err
+	}
+	reserved, err := result.RowsAffected()
+	return reserved == 1, err
 }
 
 func (d *DB) DeleteSignInChallenge(ctx context.Context, tokenHash string) error {

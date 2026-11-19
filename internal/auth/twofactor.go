@@ -47,7 +47,11 @@ func ChallengeToken(r *http.Request) string { return cookieValue(r, ChallengeCoo
 func (s *Service) challenge(ctx context.Context, user *verifiedUser) error {
 	token := s.newToken()
 	now := s.Now()
-	if err := s.DB.CreateSignInChallenge(ctx, HashToken(token), user.ID, user.PasswordHash, now, now+ChallengeTTLMs); err != nil {
+	err := s.DB.CreateSignInChallenge(ctx, HashToken(token), user.ID, user.PasswordHash, now, now+ChallengeTTLMs)
+	if errors.Is(err, db.ErrAccountChanged) {
+		return errInvalidCredentials
+	}
+	if err != nil {
 		return err
 	}
 	return &CodeRequired{Token: token}
@@ -55,6 +59,12 @@ func (s *Service) challenge(ctx context.Context, user *verifiedUser) error {
 
 func codeKey(username string) string {
 	return throttleKey("login-code-account", strings.ToLower(username))
+}
+
+// pendingBinding ties a secret being set up to the session that started it,
+// so the account's other sessions can't read or confirm it.
+func pendingBinding(principal *Principal) string {
+	return principal.User.ID + "\x00" + principal.TokenHash
 }
 
 // CompleteLogin finishes a two-factor sign-in with an authenticator code or
@@ -86,6 +96,21 @@ func (s *Service) CompleteLogin(ctx context.Context, token, code string, client 
 			return nil, err
 		}
 		return nil, errSignInExpired
+	}
+	// Attempts are counted before the code is checked, in transactions that
+	// serialize, so concurrent guesses can't exceed either limit.
+	if reserved, err := s.DB.ReserveSignInAttempt(ctx, tokenHash, challengeAttempts, now); err != nil || !reserved {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errSignInExpired
+	}
+	charged, err := s.DB.RecordLoginFailure(ctx, accountCodes, now, loginWindowMs, loginCodeAccountMax, 0)
+	if err != nil {
+		return nil, err
+	}
+	if charged.Failures > loginCodeAccountMax {
+		return nil, busy(0)
 	}
 	var step int64
 	recoveryHash := ""
@@ -122,14 +147,7 @@ func (s *Service) CompleteLogin(ctx context.Context, token, code string, client 
 			return nil, err
 		}
 	}
-	failedAt := s.Now()
-	if err := s.recordFailure(ctx, keys, failedAt); err != nil {
-		return nil, err
-	}
-	if _, err := s.DB.RecordLoginFailure(ctx, accountCodes, failedAt, loginWindowMs, loginCodeAccountMax, 0); err != nil {
-		return nil, err
-	}
-	if err := s.DB.FailSignInChallenge(ctx, tokenHash, challengeAttempts); err != nil {
+	if err := s.recordFailure(ctx, keys, s.Now()); err != nil {
 		return nil, err
 	}
 	if err := s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: challenge.UserID, Action: "auth.login.code-failed", TargetType: "user",
@@ -157,7 +175,7 @@ func (s *Service) BeginTwoFactor(ctx context.Context, principal *Principal) (*En
 		return nil, err
 	}
 	defer clear(secret)
-	sealed, err := s.DB.Seal(totpPurpose, principal.User.ID, secret)
+	sealed, err := s.DB.Seal(totpPurpose, pendingBinding(principal), secret)
 	if err != nil {
 		return nil, err
 	}
@@ -170,15 +188,16 @@ func (s *Service) BeginTwoFactor(ctx context.Context, principal *Principal) (*En
 	return &enrollment, nil
 }
 
-// PendingTwoFactor returns the unconfirmed secret again, or nil.
+// PendingTwoFactor returns the unconfirmed secret again to the session that
+// started setting it up, or nil.
 func (s *Service) PendingTwoFactor(ctx context.Context, principal *Principal) (*Enrollment, error) {
 	state, err := s.DB.TwoFactor(ctx, principal.User.ID)
 	if err != nil || state.Pending == "" || state.Secret != "" {
 		return nil, err
 	}
-	secret, err := s.DB.Unseal(totpPurpose, principal.User.ID, state.Pending)
+	secret, err := s.DB.Unseal(totpPurpose, pendingBinding(principal), state.Pending)
 	if err != nil {
-		return nil, err
+		return nil, nil
 	}
 	defer clear(secret)
 	enrollment := newEnrollment(secret, principal.User.Username)
@@ -198,8 +217,6 @@ func twoFactorChangeError(err error) error {
 		return errAuthRequired
 	case errors.Is(err, db.ErrTwoFactorChanged):
 		return errSetupChanged
-	case errors.Is(err, db.ErrAccountChanged):
-		return apperr.New("PASSWORD_CHANGED", 409, "Password changed; sign in again")
 	}
 	return err
 }
@@ -221,16 +238,20 @@ func (s *Service) EnableTwoFactor(ctx context.Context, principal *Principal, pas
 	if state.Pending == "" {
 		return nil, nil, errSetupChanged
 	}
+	secret, err := s.DB.Unseal(totpPurpose, pendingBinding(principal), state.Pending)
+	if err != nil {
+		return nil, nil, errSetupChanged
+	}
+	defer clear(secret)
 	record, credentialKey, err := s.confirmPassword(ctx, principal, password, client, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	secret, err := s.DB.Unseal(totpPurpose, principal.User.ID, state.Pending)
+	sealed, err := s.DB.Seal(totpPurpose, principal.User.ID, secret)
 	if err != nil {
 		return nil, nil, err
 	}
 	step := matchTOTP(secret, normalizeCode(code), s.Now(), 0)
-	clear(secret)
 	if step == 0 {
 		return nil, nil, apperr.New("INVALID_CODE", 400, "That code didn't work. Check the time on your phone and enter the newest code.")
 	}
@@ -241,7 +262,7 @@ func (s *Service) EnableTwoFactor(ctx context.Context, principal *Principal, pas
 	}
 	session, token := s.sessionInput(principal.User.ID, client)
 	err = s.DB.ChangeTwoFactor(ctx, db.TwoFactorChange{UserID: principal.User.ID, TokenHash: principal.TokenHash,
-		PasswordHash: record.PasswordHash, Pending: state.Pending, Step: step, RecoveryHashes: hashes, ThrottleKey: credentialKey,
+		PasswordHash: record.PasswordHash, Pending: state.Pending, Secret: sealed, Step: step, RecoveryHashes: hashes, ThrottleKey: credentialKey,
 		Session: session, Audit: db.AuditEntry{UserID: principal.User.ID, Action: "auth.two-factor.enabled", TargetType: "user",
 			TargetID: principal.User.ID, IPAddress: client.IP}})
 	if err != nil {
@@ -279,6 +300,9 @@ func (s *Service) DisableTwoFactor(ctx context.Context, principal *Principal, pa
 func (s *Service) ResetTwoFactor(ctx context.Context, principal *Principal, id string, client Client) error {
 	if err := RequireAdmin(principal); err != nil {
 		return err
+	}
+	if id == principal.User.ID {
+		return apperr.New("SELF_TWO_FACTOR_RESET", 409, "Turn off your own two-factor sign-in in Account")
 	}
 	err := s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
 		on, err := db.ClearTwoFactor(ctx, tx, id)

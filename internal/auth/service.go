@@ -161,11 +161,12 @@ func (s *Service) sessionInput(userID string, client Client) (db.SessionInput, s
 		CreatedAt: now, ExpiresAt: now + sessionTTLMs, IPAddress: client.IP, UserAgent: client.UserAgent}, token
 }
 
-// createSession signs user in. A non-empty verifiedHash is the password hash
-// the caller verified; the session is refused if the account changed since.
+// createSession signs user in with a password alone. verifiedHash is the
+// password hash the caller verified; the session is refused if the account
+// changed since or now has two-factor sign-in.
 func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client, verifiedHash string, audit *db.AuditEntry) (*Principal, error) {
 	input, token := s.sessionInput(user.ID, client)
-	input.PasswordHash, input.Audit = verifiedHash, audit
+	input.PasswordHash, input.PasswordOnly, input.Audit = verifiedHash, true, audit
 	if err := s.DB.CreateSession(ctx, input); err != nil {
 		return nil, err
 	}
@@ -736,8 +737,10 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 			return err
 		}
 		if disabled {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
-				return err
+			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?"} {
+				if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+					return err
+				}
 			}
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: principal.User.ID, Action: "user.access.updated", TargetType: "user",
