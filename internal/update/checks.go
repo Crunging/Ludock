@@ -571,9 +571,9 @@ func compareDigests(key string, repoDigests []string, remote string) string {
 
 // offers reports whether a tag's platforms include one Docker would pull
 // for platform: the same OS and architecture, and the same variant or, for
-// whole-number variants, an older one, such as arm/v6 for arm/v7. Other
-// variant fallbacks are left out rather than risk an update Docker can't
-// pull. An empty list or platform can't rule it out.
+// 32-bit ARM, an older one, such as arm/v6 for arm/v7. Other variant
+// fallbacks are left out rather than risk an update Docker can't pull. An
+// empty list or platform can't rule it out.
 func offers(platforms []docker.Platform, platform string) bool {
 	if len(platforms) == 0 || platform == "" {
 		return true
@@ -592,6 +592,9 @@ func offers(platforms []docker.Platform, platform string) bool {
 		}
 		if offered.Variant == "" || wanted == "" || offered.Variant == wanted {
 			return true
+		}
+		if offered.Architecture != "arm" {
+			return false
 		}
 		have, errHave := strconv.Atoi(strings.TrimPrefix(offered.Variant, "v"))
 		want, errWant := strconv.Atoi(strings.TrimPrefix(wanted, "v"))

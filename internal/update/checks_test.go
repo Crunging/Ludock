@@ -84,6 +84,9 @@ func TestOffersPlatform(t *testing.T) {
 	if !offers(arm64, "linux/arm64/v8.6") || offers(arm64, "linux/arm64/v9.0") || offers(arm64, "linux/arm64/v8") {
 		t.Error("arm64 variants matched loosely")
 	}
+	if offers([]docker.Platform{{OS: "linux", Architecture: "arm64", Variant: "v8"}}, "linux/arm64/v9") {
+		t.Error("an arm64/v9 server took an arm64/v8 image")
+	}
 	if !offers(nil, "linux/arm64") {
 		t.Error("an empty platform list ruled a platform out")
 	}
