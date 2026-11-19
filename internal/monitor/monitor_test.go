@@ -8,6 +8,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -15,7 +16,7 @@ var ctx = context.Background()
 
 type recorder struct{ events []string }
 
-func (r *recorder) notify(key, message string) { r.events = append(r.events, message) }
+func (r *recorder) notify(_ notify.Alert, key, message string) { r.events = append(r.events, message) }
 
 func setup(t *testing.T) (*Service, *recorder, identity.Server) {
 	t.Helper()

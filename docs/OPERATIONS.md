@@ -392,8 +392,9 @@ About every six hours, Ludock asks each image tag's registry, through Docker's
 Engine API, what the tag points to now, without pulling it. It asks once per
 tag however many servers use it, and spreads the tags out over time. When a
 server's container runs an older version, administrators see **Image update
-available** on the server list and a notice on its **Update** tab, and every
-notification destination is told once per server and version. Nothing updates
+available** on the server list and a notice on its **Update** tab, and each
+notification destination that chose **Newer images available** under **Alert
+types** is told once per server and version. Nothing updates
 until an administrator chooses **Update server**. **Check now** on the Update
 tab asks right away, at most once every 10 seconds.
 
@@ -532,9 +533,22 @@ keep it. For Discord, create a webhook for the alert channel under **Server
 Settings → Integrations**
 ([Discord's guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
 
-Alerts cover outages and recoveries, nearly full disks and memory near its
-limit and their recoveries, failed backups and schedules, restore and update
-results, and newer server images. Each disk or memory alert is sent once, and
+Each destination's **Alert types** choose what it gets:
+
+- **Server problems:** a server is unavailable, its game stops answering, or
+  Ludock can't reach Docker to check it; a nearly full disk or memory near its
+  limit; and each of their recoveries.
+- **Failed backups and schedules:** a backup fails, a scheduled action fails or
+  can't run, or a server is left stopped after its backup failed.
+- **Restores and updates:** a restore or update finishes, fails, or finds the
+  image already current.
+- **Newer images available:** a newer version of a server's image is
+  published.
+
+A destination gets every type except newer images until you choose otherwise,
+since popular images publish often and the server list and **Update** tab
+already show them. A type a destination doesn't get is never queued for it,
+and **Send test notification** works whatever is chosen. Each disk or memory alert is sent once, and
 names the server and, for a disk, the data folder's container path, never a
 host path. An image alert names the server, not its image, since an image
 reference can name a private registry. Each destination gets its own delivery. The queue checks

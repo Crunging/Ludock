@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -118,7 +119,7 @@ func newChecks(t *testing.T, config string) *checksFixture {
 // restart is a new Checks on the same database, as after Ludock restarts.
 func (f *checksFixture) restart(config string) *Checks {
 	f.checks = &Checks{Updates: &Service{Docker: f.servers.Observer.Docker, DockerConfig: config}, DB: f.servers.DB,
-		Identity: f.servers.Identity, Notify: func(key, message string) { f.sent = append(f.sent, key+" "+message) }}
+		Identity: f.servers.Identity, Notify: func(_ notify.Alert, key, message string) { f.sent = append(f.sent, key+" "+message) }}
 	return f.checks
 }
 

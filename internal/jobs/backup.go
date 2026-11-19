@@ -9,6 +9,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -178,7 +179,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 			return j.createStoppedBackup(ctx, server, job)
 		}()
 		if err != nil {
-			j.notify("backup-failed:"+job.Job.ID, "Backup failed for "+server.Container.DisplayName+". Review its operation details.")
+			j.notify(notify.FailedWork, "backup-failed:"+job.Job.ID, "Backup failed for "+server.Container.DisplayName+". Review its operation details.")
 			return nil, err
 		}
 		return map[string]any{"backupId": backup.ID, "size": backup.Size, "checksum": backup.Checksum}, nil

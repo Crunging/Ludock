@@ -134,7 +134,7 @@ func TestEmailDelivery(t *testing.T) {
 	if err := s.Configure(ctx, "admin", adminSession, Email, config, false); err != nil {
 		t.Fatal(err)
 	}
-	s.Notify("outage", "Survival is unavailable.")
+	s.Notify(ServerProblems, "outage", "Survival is unavailable.")
 	if err := s.Deliver(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -159,14 +159,14 @@ func TestEmailDelivery(t *testing.T) {
 	if err := s.Configure(ctx, "admin", adminSession, Email, config, false); err != nil {
 		t.Fatal(err)
 	}
-	s.Notify("refused", "Creative is unavailable.")
+	s.Notify(ServerProblems, "refused", "Creative is unavailable.")
 	s.Deliver(ctx)
 	<-server.finished
 	config.Password, config.To = "app-password", "a@example.com, nobody@example.com"
 	if err := s.Configure(ctx, "admin", adminSession, Email, config, false); err != nil {
 		t.Fatal(err)
 	}
-	s.Notify("recipient", "Lobby is unavailable.")
+	s.Notify(ServerProblems, "recipient", "Lobby is unavailable.")
 	s.Deliver(ctx)
 	<-server.finished
 	deliveries, _ = s.Deliveries(ctx)

@@ -58,6 +58,7 @@ func (d Destination) name() string {
 // fields; secret ones are write-only.
 type Config struct {
 	Enabled bool   `json:"enabled"`
+	Alerts  Alert  `json:"alerts,omitempty"`
 	URL     string `json:"url,omitempty"`
 	Token   string `json:"token,omitempty"`
 	Topic   string `json:"topic,omitempty"`
@@ -213,6 +214,11 @@ func (d Destination) normalize(c Config) (Config, error) {
 	}
 	if c.Enabled && !d.configured(out) {
 		return out, apperr.New("NOTIFICATION_SETTINGS_REQUIRED", 400, "Fill in the required "+d.Label()+" settings before turning it on")
+	}
+	// A choice equal to the default is saved as none, so it follows the
+	// default if that changes.
+	if out.Alerts = c.Alerts & allAlerts; out.Alerts == DefaultAlerts {
+		out.Alerts = 0
 	}
 	return out, nil
 }

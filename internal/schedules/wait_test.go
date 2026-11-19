@@ -8,6 +8,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -54,7 +55,7 @@ func (f *fixture) withPlayers(online int, known bool) *fakePlayers {
 func TestWaitForEmptyWindow(t *testing.T) {
 	f := setup(t)
 	var notified []string
-	f.s.Notify = func(key, message string) { notified = append(notified, key) }
+	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
 	players := f.withPlayers(2, true)
 	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ func TestWaitForEmptyEnds(t *testing.T) {
 	f.s.DB.Exec("DELETE FROM schedules")
 	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
 	var notified []string
-	f.s.Notify = func(key, message string) { notified = append(notified, key) }
+	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
 	f.withPlayers(0, false)
 	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
 		t.Fatal(err)

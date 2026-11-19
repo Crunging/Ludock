@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -446,7 +447,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
 				return nil, err
 			}
-			j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
+			j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
 			return restored, nil
 		}()
 		if err == nil {
@@ -457,10 +458,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 		// remains, which blocks every later backup until it is removed.
 		if restored != nil && state != nil && state.Status == "committed" {
 			if cleanErr := j.cleanupAfterFailure(context.WithoutCancel(ctx), server, job, &data); cleanErr == nil {
-				j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
+				j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
 				return restored, nil
 			}
-			j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+
+			j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+
 				", but its staging folder could not be removed. Review the operation before backing up.")
 			return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
 				" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
@@ -470,7 +471,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				err = errors.Join(err, rollbackErr)
 			}
 		}
-		j.notify("restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Review its recovery state.")
+		j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Review its recovery state.")
 		return nil, publicFirst(err)
 	})
 }

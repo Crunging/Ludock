@@ -173,8 +173,16 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 	input := notify.Config{Enabled: r.PostFormValue("enabled") == "true", URL: value("url"), Token: value("token"),
 		Topic: value("topic"), ChatID: value("chatId"), Host: value("host"), Security: value("security"),
 		Username: value("username"), Password: r.PostFormValue("password"), From: value("sender"), To: value("recipients")}
+	for _, name := range r.PostForm["alerts"] {
+		if alert, ok := notify.ParseAlert(name); ok {
+			input.Alerts |= alert
+		}
+	}
 	var err error
-	if port := value("port"); port != "" {
+	if input.Alerts == 0 {
+		err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Choose at least one alert type, or turn "+d.Label()+" off")
+	}
+	if port := value("port"); port != "" && err == nil {
 		if input.Port, err = strconv.Atoi(port); err != nil || input.Port < 1 {
 			err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Enter a mail server port from 1 to 65535")
 		}
@@ -192,7 +200,7 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 		// The visible fields keep what was entered; secrets are never echoed.
 		saved := n.Saved
 		n.Configuration = notify.Configuration{Destination: d, Enabled: input.Enabled, Configured: n.Configured, Saved: saved,
-			Config: notify.Config{Enabled: input.Enabled, URL: input.URL, ChatID: input.ChatID, Host: input.Host,
+			Config: notify.Config{Enabled: input.Enabled, Alerts: input.Alerts, URL: input.URL, ChatID: input.ChatID, Host: input.Host,
 				Port: input.Port, Security: input.Security, Username: input.Username, From: input.From, To: input.To}}
 		if d == notify.Discord || d == notify.Webhook {
 			n.Config.URL = ""

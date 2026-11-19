@@ -18,6 +18,7 @@ import (
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -57,7 +58,7 @@ type Checks struct {
 	Updates  *Service
 	DB       *db.DB
 	Identity *identity.Store
-	Notify   func(key, message string)
+	Notify   func(alert notify.Alert, key, message string)
 
 	// run serializes passes that reach Docker; mu guards state, which pages
 	// read without waiting for a registry.
@@ -457,14 +458,14 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool
 			entry.Status = CheckPlatform
 		}
 	}
-	notify := !quiet && entry.Status == CheckAvailable && entry.Notified != image.Digest
-	if notify {
+	announce := !quiet && entry.Status == CheckAvailable && entry.Notified != image.Digest
+	if announce {
 		entry.Notified = image.Digest
 	}
 	digest := image.Digest
 	c.mu.Unlock()
-	if notify && c.Notify != nil {
-		c.Notify("image-update:"+o.serverID+":"+digest, updateMessage(o.container))
+	if announce && c.Notify != nil {
+		c.Notify(notify.NewerImages, "image-update:"+o.serverID+":"+digest, updateMessage(o.container))
 	}
 }
 

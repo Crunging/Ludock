@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -544,7 +545,7 @@ func TestCommandSchedulesNeedConsoleAccess(t *testing.T) {
 func TestCommandSkippedWhileServerBusy(t *testing.T) {
 	f := setup(t)
 	var notified []string
-	f.s.Notify = func(key, message string) { notified = append(notified, key) }
+	f.s.Notify = func(_ notify.Alert, key, message string) { notified = append(notified, key) }
 	input := base
 	input.Action, input.Command = "command", "save-all"
 	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {

@@ -1,6 +1,7 @@
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { createServer as createTCPServer } from "node:net";
-import { test, expect, asAdmin } from "./fixtures.mjs";
+import { join } from "node:path";
+import { test, expect, asAdmin, dockerAction, openServer } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -61,7 +62,7 @@ async function mailServer() {
 
 async function openDestination(page, name) {
   const card = page.locator(`#notification-${name}-card`);
-  if (!(await card.evaluate((details) => details.open))) await card.locator("summary").click();
+  if (!(await card.evaluate((details) => details.open))) await card.locator(":scope > summary").click();
   return card;
 }
 
@@ -82,7 +83,7 @@ async function turnOff(page, name, label) {
   const card = await openDestination(page, name);
   await card.locator("input[name=enabled]").uncheck();
   await save(card, label);
-  await expect(card.locator("summary")).toContainText("Off");
+  await expect(card.locator(":scope > summary")).toContainText("Off");
 }
 
 test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page }) => {
@@ -99,7 +100,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await ntfy.getByLabel("Access token (optional)").fill("tk_e2esecret");
     await ntfy.getByLabel("Send alerts to ntfy").check();
     await save(ntfy, "ntfy");
-    await expect(ntfy.locator("summary")).toContainText("On");
+    await expect(ntfy.locator(":scope > summary")).toContainText("On");
     await expect(ntfy.getByLabel("Replace topic")).toHaveValue("");
     await sendTest(page, ntfy, "ntfy");
     const published = http.requests.find((request) => request.url === "/ntfy");
@@ -151,7 +152,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     for (const secret of ["e2e-secret-topic", "tk_e2esecret", "Ae2esecret", "e2e-secret-query", "e2e-secret-header"]) {
       expect(content).not.toContain(secret);
     }
-    await expect(page.locator("#notification-email-card summary")).toContainText("On");
+    await expect(page.locator("#notification-email-card > summary")).toContainText("On");
 
     // Turned off, so later journeys' alerts go nowhere.
     await turnOff(page, "ntfy", "ntfy");
@@ -204,7 +205,7 @@ test("saving Discord and Telegram settings without showing secrets again", async
   await discord.getByLabel("Webhook URL").fill(webhook);
   await save(discord, "Discord");
   await expect(discord.getByLabel("Replace webhook URL")).toHaveValue("");
-  await expect(discord.locator("summary")).toContainText("Off");
+  await expect(discord.locator(":scope > summary")).toContainText("Off");
   expect(await page.content()).not.toContain("e2e-secret-token");
 
   const telegram = await openDestination(page, "telegram");
@@ -226,4 +227,110 @@ test("saving Discord and Telegram settings without showing secrets again", async
   const content = await page.content();
   expect(content).not.toContain("e2e-secret-token");
   expect(content).not.toContain("e2e-secret-bot-token");
+});
+
+async function openAlertTypes(card) {
+  const types = card.locator(".notification-alerts");
+  if (!(await types.evaluate((details) => details.open))) await types.locator("summary").click();
+  return types;
+}
+
+/** Publishes a new version of Survival's image tag in the fake daemon's registry. */
+function publishSurvivalImage(digit) {
+  return new Promise((resolve, reject) => {
+    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
+      path: "/fake/registry?" + new URLSearchParams({ image: "itzg/minecraft-server:java21", id: "sha256:" + digit.repeat(64) }) }, (response) => {
+      response.resume();
+      response.on("end", resolve);
+    });
+    call.on("error", reject);
+    call.end();
+  });
+}
+
+/** Checks Survival's image until the Update tab finds the newer one; checks run at most every 10 seconds. */
+async function findNewerSurvivalImage(page) {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Update" }).click();
+  const check = page.locator("#image-check");
+  await expect(async () => {
+    await check.getByRole("button", { name: "Check now" }).click();
+    await expect(check).toContainText("A newer image is available.", { timeout: 2_000 });
+  }).toPass({ timeout: 30_000, intervals: [1_000, 3_000] });
+}
+
+// A destination gets server problems but not newer images until that type
+// is switched on; the panel shows newer images either way.
+test("choosing which types of alert reach a webhook", async ({ page }) => {
+  test.setTimeout(240_000);
+  const http = await receiver();
+  const messages = () => http.requests.filter((r) => r.url === "/alerts").map((r) => r.body.message);
+  const newerImage = /^Survival: a newer version of its container image is available/;
+  try {
+    await page.goto("/settings");
+    let webhook = await openDestination(page, "webhook");
+    await webhook.locator("input[name=url]").fill(http.url + "/alerts");
+    await webhook.getByLabel("Send alerts to the webhook").check();
+    const types = webhook.locator(".notification-alerts");
+    await expect(types.locator("summary")).toHaveText("Alert types Everything except newer images");
+    await expect(types.getByLabel("Server problems")).toBeHidden();
+    await save(webhook, "Webhook");
+
+    await publishSurvivalImage("5");
+    await findNewerSurvivalImage(page);
+
+    // Valheim goes down behind Ludock's back after a start through Ludock.
+    await openServer(page, "valheim");
+    await page.getByLabel("Monitor this server").check();
+    await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
+    await page.getByLabel("Failure grace period (seconds)").fill("11");
+    await page.getByLabel("Failure grace period (seconds)").press("Tab");
+    expect((await saved).ok()).toBe(true);
+    await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+    await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+    await dockerAction("valheim", "stop");
+    await expect.poll(messages, { timeout: 90_000 }).toContain("valheim is unavailable.");
+    // Alerts are delivered in the order they were queued, so a newer-image
+    // notice would have arrived first.
+    expect(messages().filter((m) => newerImage.test(m))).toEqual([]);
+
+    await page.goto("/settings");
+    webhook = await openDestination(page, "webhook");
+    await openAlertTypes(webhook);
+    await webhook.getByLabel("Newer images available").check();
+    await webhook.getByLabel("Server problems").uncheck();
+    await save(webhook, "Webhook");
+    await expect(webhook.locator(".notification-alerts summary")).toHaveText(
+      "Alert types Failed backups and schedules, Restores and updates, Newer images available");
+
+    await publishSurvivalImage("6");
+    await findNewerSurvivalImage(page);
+    await expect.poll(() => messages().filter((m) => newerImage.test(m)).length, { timeout: 30_000 }).toBe(1);
+    // A test still reaches it, whatever types are chosen.
+    await page.goto("/settings");
+    webhook = await openDestination(page, "webhook");
+    await sendTest(page, webhook, "Webhook");
+
+    // No type at all is the same as off, and says so.
+    await openAlertTypes(webhook);
+    for (const label of ["Failed backups and schedules", "Restores and updates", "Newer images available"]) {
+      await webhook.getByLabel(label).uncheck();
+    }
+    await webhook.getByRole("button", { name: "Save Webhook" }).click();
+    await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type, or turn Webhook off");
+  } finally {
+    await openServer(page, "valheim");
+    await page.getByLabel("Monitor this server").setChecked(false);
+    await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+    await dockerAction("valheim", "stop");
+    await page.goto("/settings");
+    const webhook = await openDestination(page, "webhook");
+    await openAlertTypes(webhook);
+    await webhook.getByLabel("Server problems").check();
+    await webhook.getByLabel("Newer images available").uncheck();
+    await webhook.locator("input[name=enabled]").uncheck();
+    await save(webhook, "Webhook");
+    http.close();
+  }
 });
