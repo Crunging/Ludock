@@ -186,14 +186,9 @@ func TestInspectionCacheAndEligibilityRecheck(t *testing.T) {
 	if count() != 3 {
 		t.Fatal("reuse window not enforced")
 	}
-	// The listing says eligible, but the fresh inspection opts out.
+	// A server that opts out is refused on inspection, not just left out of lists.
 	engine.Update(id, func(c *fakedocker.Container) { c.Config.Labels = map[string]string{"ludock.enable": "false"} })
 	now = now.Add(31 * time.Second)
-	observed, err := s.Observer.List(ctx)
-	if err != nil || len(observed) != 1 {
-		// Listing summaries include labels, so the list itself now excludes it.
-		t.Logf("observed %d", len(observed))
-	}
 	if _, _, err := s.Observer.Inspect(ctx, id); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
