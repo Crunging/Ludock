@@ -385,7 +385,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 }
 .danger-panel h3 { color: var(--halt-text); font-size: 17px; }
 .notice-panel {
-  margin-top: 24px; padding: 20px 22px; border-radius: var(--radius-lg);
+  margin: 24px 0; padding: 20px 22px; border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--caution) 16%, var(--block)); max-width: 760px;
 }
 .notice-panel h3 { font-size: 17px; }

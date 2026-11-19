@@ -911,7 +911,7 @@ func ConfirmChange(serverID string, revision int64) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "\" hx-target=\"#confirm-change-status\"><h3>This server changed in Docker</h3><p>Its game or data folders changed. People you shared it with can’t use it until you confirm it’s still the server you meant to share. Its schedules keep running, and you can keep using it as usual.</p><input type=\"hidden\" name=\"bindingRevision\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "\" hx-target=\"#confirm-change-status\"><h3>This server changed in Docker</h3><p>Its game or data folders changed. People you shared it with can’t use it, and their schedules wait, until you confirm it’s still the server you meant to share. You can keep using it as usual.</p><input type=\"hidden\" name=\"bindingRevision\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
