@@ -17,8 +17,13 @@ type fakePlayers struct {
 	checks int
 }
 
+// Online reports a reading taken during any wait unless the test dates it.
 func (p *fakePlayers) Online(context.Context, *db.SessionUser, string, authz.Capability, int64) (Occupancy, error) {
-	return p.now, nil
+	occupancy := p.now
+	if occupancy.Known && occupancy.ReadAt == 0 {
+		occupancy.ReadAt = 1 << 62
+	}
+	return occupancy, nil
 }
 
 func (p *fakePlayers) Lists(context.Context, *db.SessionUser, string) (bool, error) {
@@ -336,5 +341,29 @@ func TestWaitEdges(t *testing.T) {
 	f.s.Run(ctx, due+7*minute)
 	if f.operations(t) != 2 {
 		t.Fatal("did not run once the other work finished")
+	}
+}
+
+// The reading asked for when a wait begins never lands, so the last one,
+// an empty count from just before the scheduled time, is all Ludock has:
+// it doesn't count, since someone may have joined after it, and the wait
+// ends as unknown rather than restarting.
+func TestWaitIgnoresEarlierEmptyReading(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(0, true)
+	players.now.ReadAt = due - 20_000
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(1, WaitSkip)); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.Run(ctx, due+45_000)
+	if first := f.first(t, admin); f.operations(t) != 0 || first.LastResult != WaitingResult {
+		t.Fatal("acted on a reading from before the wait", first)
+	}
+	// A reading taken during the wait does count.
+	players.now.ReadAt = due + 50_000
+	f.s.Run(ctx, due+55_000)
+	if f.operations(t) != 1 {
+		t.Fatal("did not act on a reading from during the wait")
 	}
 }

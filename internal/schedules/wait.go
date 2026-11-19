@@ -87,10 +87,11 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	if err != nil {
 		return err
 	}
-	// An empty count counts only from a reading asked for during this wait
-	// that has had time to land, so it can't predate someone joining.
+	// An empty count counts only from a reading taken during this wait, once
+	// one asked for during it has had time to land, so it can't predate
+	// someone joining: a reading that fails leaves the earlier one in place.
 	settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
-	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled)
+	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled && occupancy.ReadAt >= r.lastRunAt.Int64)
 	// A run that skips acts only before the wait ends.
 	switch {
 	case now < ends && !empty:

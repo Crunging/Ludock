@@ -13,6 +13,8 @@ import (
 type Occupancy struct {
 	Online         int
 	Known, Stopped bool
+	// ReadAt is when a known count was read, in Unix milliseconds.
+	ReadAt int64
 }
 
 // Players is how runs that wait for an empty server read who is online.
@@ -45,8 +47,8 @@ func (p ServerPlayers) Online(ctx context.Context, user *db.SessionUser, serverI
 	if !p.Players.Source.Lists(server.Container) {
 		return Occupancy{}, nil
 	}
-	online, known := p.Players.Online(serverID, server.Container)
-	return Occupancy{Online: online, Known: known}, nil
+	online, readAt, known := p.Players.OnlineAt(serverID, server.Container)
+	return Occupancy{Online: online, Known: known, ReadAt: readAt}, nil
 }
 
 func (p ServerPlayers) Lists(ctx context.Context, user *db.SessionUser, serverID string) (bool, error) {
