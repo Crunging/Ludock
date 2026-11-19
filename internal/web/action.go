@@ -36,7 +36,14 @@ var errRequestClosed = apperr.New("REQUEST_CLOSED", 409, "Request closed")
 
 func (s *Server) startAction(r *http.Request, request *Request, serverID string, capability authz.Capability) (*serverAction, error) {
 	app := s.App
-	resolved, err := app.Servers.ResolveAuthorized(r.Context(), request.User(), serverID, capability, -1)
+	// Reading files confirms the one container it reads against its saved
+	// binding; the page already discovered the fleet a moment before, and a
+	// listing per keystroke of the filter should not discover it again.
+	resolve := app.Servers.ResolveAuthorized
+	if capability == authz.FilesRead {
+		resolve = app.Servers.VerifyAuthorized
+	}
+	resolved, err := resolve(r.Context(), request.User(), serverID, capability, -1)
 	if err != nil {
 		return nil, err
 	}

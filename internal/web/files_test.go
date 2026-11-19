@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/helper"
 )
 
@@ -86,6 +87,26 @@ func TestFileSort(t *testing.T) {
 		sortEntries(entries, order)
 		if names() != want {
 			t.Errorf("%s: %s", order, names())
+		}
+	}
+}
+
+// Reading files confirms its container directly instead of discovering the
+// whole fleet for every listing.
+func TestFileReadsSkipDiscovery(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.State.Running, c.State.Status = true, "running" })
+	before := len(p.engine.Requests)
+	request := httptest.NewRequest("GET", "/files/"+p.server, nil)
+	action, err := p.web.startAction(request, &Request{Principal: p.admin}, p.server, authz.FilesRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action.Done()
+	for _, call := range p.engine.Requests[before:] {
+		if strings.HasSuffix(call, "/containers/json") {
+			t.Fatal("discovered the fleet", call)
 		}
 	}
 }
