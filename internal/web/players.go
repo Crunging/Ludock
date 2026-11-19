@@ -91,6 +91,13 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	if err := s.App.DB.WriteAudit(act.Ctx, nil, entry); err != nil {
 		return "", apperr.New("AUDIT_UNAVAILABLE", 503, "Ludock could not record this action, so it was not sent. Try again.")
 	}
+	target := console.Target{ContainerID: act.Logical.ContainerID, Labels: act.Container.Labels, State: act.Container.State}
+	if accounts := adapter.Moderation.Accounts; accounts != nil && games.Online(action) {
+		if err := s.confirmAccount(act, target, adapter, accounts, command); err != nil {
+			s.audit(r, request, "server.player-action.failed", act.Logical.ID, map[string]any{"action": string(action), "player": name})
+			return "", err
+		}
+	}
 	var reply strings.Builder
 	secrets := act.Observation.Secrets
 	out := console.NewRedactor(secrets, func(value string) {
@@ -98,8 +105,7 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 			reply.WriteString(value)
 		}
 	})
-	err = s.App.Console.GameCommand(act.Ctx, console.Target{ContainerID: act.Logical.ContainerID, Labels: act.Container.Labels,
-		State: act.Container.State}, adapter, command, console.Output{Stdout: out.Push, Complete: out.End}, act.Assert)
+	err = s.App.Console.GameCommand(act.Ctx, target, adapter, command, console.Output{Stdout: out.Push, Complete: out.End}, act.Assert)
 	outcome := map[string]any{"action": string(action), "player": name}
 	if err != nil {
 		s.audit(r, request, "server.player-action.failed", act.Logical.ID, outcome)
@@ -115,6 +121,34 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 		s.audit(r, request, "server.player-action.succeeded", act.Logical.ID, outcome)
 	}
 	return reply.String(), nil
+}
+
+var errUnconfirmed = apperr.New("PLAYER_NOT_CONFIRMED", 409,
+	"The game didn’t confirm that player’s account is online, so nothing was sent. Use the console instead.")
+
+// confirmAccount asks the game, under the action's lock, whether command's
+// target is an online account name and not only a display name.
+func (s *Server) confirmAccount(act *serverAction, target console.Target, adapter *games.Adapter, accounts *games.PlayerQuery, command string) error {
+	var reply strings.Builder
+	err := s.App.Console.GameCommand(act.Ctx, target, adapter, accounts.Command, console.Output{Stdout: func(value string) {
+		if reply.Len() < 1<<20 {
+			reply.WriteString(value)
+		}
+	}}, act.Assert)
+	if err != nil {
+		return err
+	}
+	online, ok := accounts.Parse(reply.String())
+	if !ok {
+		return errUnconfirmed
+	}
+	// Minecraft's commands end with their target.
+	for _, id := range online.IDs {
+		if strings.HasSuffix(command, " "+id) {
+			return nil
+		}
+	}
+	return errUnconfirmed
 }
 
 // playerLists reads the server's lists for its panel, while act holds the

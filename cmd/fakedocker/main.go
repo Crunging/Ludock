@@ -137,6 +137,15 @@ func minecraftGame(password string, online ...string) (*fakeGame, string, string
 		return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
 	}, func(verb, name string) (string, bool) {
 		switch verb {
+		case "list":
+			if name != "uuids" || time.Now().Before(game.outageUntil) {
+				return "", false
+			}
+			var accounts []string
+			for _, player := range game.online {
+				accounts = append(accounts, fmt.Sprintf("%s (00000000-0000-4000-8000-%012x)", player, len(player)))
+			}
+			return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(accounts), strings.Join(accounts, ", ")), true
 		case "kick":
 			if !member(game.online, name) {
 				return "No player was found", true

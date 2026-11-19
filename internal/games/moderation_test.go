@@ -208,3 +208,25 @@ func TestPlayerIDs(t *testing.T) {
 		}
 	}
 }
+
+// Minecraft's "list uuids" names accounts; only its exact vanilla reply
+// confirms one.
+func TestParseMinecraftAccounts(t *testing.T) {
+	accounts := moderationOf(t, "minecraft").Accounts
+	got, ok := accounts.Parse("There are 2 of a max of 20 players online: Ada (069a79f4-44e9-4726-a5be-fca90e38aaf5), " +
+		"Zed_2 (00000000-0000-4000-8000-000000000002)\n")
+	if !ok || strings.Join(got.IDs, ",") != "Ada,Zed_2" {
+		t.Fatal(got, ok)
+	}
+	if got, ok := accounts.Parse("There are 0 of a max of 20 players online: "); !ok || len(got.IDs) != 0 {
+		t.Fatal(got, ok)
+	}
+	for _, reply := range []string{"", "There are 1 of a max of 20 players online: Ada",
+		"There are 2 of a max of 20 players online: Ada (069a79f4-44e9-4726-a5be-fca90e38aaf5)",
+		"There are 1 of a max of 20 players online: [VIP] Ada (069a79f4-44e9-4726-a5be-fca90e38aaf5)",
+		"There are 1 out of maximum 20 players online.\nAdmins: Ada", "Group uuids not found"} {
+		if got, ok := accounts.Parse(reply); ok {
+			t.Errorf("%q: %+v", reply, got)
+		}
+	}
+}

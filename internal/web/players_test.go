@@ -35,8 +35,13 @@ func newPlayerGame(t *testing.T) *playerGame {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.sent = append(g.sent, command)
-		if command == "list" {
-			return "There are 2 of a max of 10 players online: Ada, Ada_2"
+		switch command {
+		case "list":
+			return "There are 3 of a max of 10 players online: Ada, Ada_2, Eve"
+		case "list uuids":
+			// Eve is a display name, such as one a team prefix made.
+			return "There are 3 of a max of 10 players online: Ada (00000000-0000-4000-8000-000000000001), " +
+				"Ada_2 (00000000-0000-4000-8000-000000000002), Mallory (00000000-0000-4000-8000-000000000003)"
 		}
 		if strings.HasPrefix(command, "kick ") {
 			return "Kicked " + strings.TrimPrefix(command, "kick ") + ": Kicked by an operator"
@@ -125,9 +130,12 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 
 	operator := g.user("u-operator", "operator", db.RoleOperator)
 	g.grantOn(operator, authz.ServerView, authz.ConsoleExecute)
-	// Nobody else is online; a name kick takes must be in the list.
-	if response := g.act(operator, "kick", "Eve"); response.StatusCode != http.StatusConflict {
-		t.Error(response.StatusCode)
+	// A kick takes a name in the list, and on Minecraft one the game confirms
+	// is an account's, not only a display name.
+	for _, name := range []string{"Zed", "Eve"} {
+		if response := g.act(operator, "kick", name); response.StatusCode != http.StatusConflict {
+			t.Error(name, response.StatusCode)
+		}
 	}
 	for _, name := range []string{"", "Ada\nop Eve", "Ada\rop Eve", "Ada op", "@a", "@a[name=Ada]", `"Ada"`, "Ada;stop",
 		"Ada\x00", " Ada", "Ada ", "Ada\t", "Åda", "Ada op", "SeventeenLetters1", "Ada|op", "Ada&&stop", "Ada/op"} {
@@ -140,7 +148,7 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 			t.Errorf("%s: %d", action, response.StatusCode)
 		}
 	}
-	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return command == "list" }); len(sent) != 0 {
+	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
 		t.Fatal(sent)
 	}
 }
@@ -169,8 +177,8 @@ func TestPlayerActionSendsOneCommand(t *testing.T) {
 		!strings.Contains(page, "[redacted]") || strings.Contains(page, "rcon-secret") {
 		t.Fatal(response.StatusCode, page)
 	}
-	// Player readings, which follow each action, send "list".
-	sent := slices.DeleteFunc(g.commands(), func(command string) bool { return command == "list" })
+	// Readings, and the account check before a kick or ban, send "list".
+	sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") })
 	if strings.Join(sent, "|") != "kick Ada_2|ban Ada" {
 		t.Fatal(sent)
 	}
@@ -195,7 +203,7 @@ func TestPlayerActionNeedsItsAuditEntry(t *testing.T) {
 	if response := g.act(g.admin, "ban", "Ada"); response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatal(response.StatusCode)
 	}
-	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return command == "list" }); len(sent) != 0 {
+	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
 		t.Fatal(sent)
 	}
 }

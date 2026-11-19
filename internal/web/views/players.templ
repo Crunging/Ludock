@@ -134,7 +134,7 @@ templ PlayersFact(p PlayersView) {
 						<ul class="player-names" aria-label="Online players">
 							for _, name := range someNames(p.Reading, detailNames) {
 								if players.Actionable(p.Moderation, p.Reading, name) {
-									<li id={ playerID(name) }>
+									<li id={ playerID(name, players.OnlineKey(p.Reading, name)) }>
 										@playerMenu(p, name)
 									</li>
 								} else {
@@ -195,16 +195,17 @@ templ GameFact(g GameView) {
 	</div>
 }
 
-// playerID keys a player's chip by name, so a refresh that reorders the
-// list never leaves one player's open menu on another's chip.
-func playerID(name string) string {
-	return "player-" + hex.EncodeToString([]byte(name))
+// playerID keys a player's chip by name and account, so a refresh that
+// reorders the list, or gives the name to another account, never leaves an
+// open menu acting on someone else.
+func playerID(name, key string) string {
+	return "player-" + hex.EncodeToString([]byte(name)) + "-" + key
 }
 
 // playerMenu is an online player's name, which opens what can be done to
 // them. Results show in the page's status area, outside the live overview.
 templ playerMenu(p PlayersView, name string) {
-	{{ id := playerID(name) + "-actions" }}
+	{{ id := playerID(name, players.OnlineKey(p.Reading, name)) + "-actions" }}
 	<div class="action-menu player-menu" data-action-menu>
 		<button type="button" class="player-menu__trigger" aria-label={ name + ": actions" } aria-expanded="false" aria-controls={ id }>
 			<span class="player-name">{ name }</span>

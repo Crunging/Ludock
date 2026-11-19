@@ -3,6 +3,7 @@ package games
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,9 @@ type Moderation struct {
 	Lists *PlayerLists
 	// outcome reads a reply, or is nil when Ludock doesn't know the game's.
 	outcome func(action PlayerAction, reply string) Outcome
+	// Accounts, when set, lists online account names; a kick or ban is sent
+	// only after its reply confirms the target is one.
+	Accounts *PlayerQuery
 }
 
 // Online reports whether an action targets a player in the online list.
@@ -152,6 +156,35 @@ var minecraftModeration = &Moderation{
 	Lists: &PlayerLists{Allowed: "/data/whitelist.json", Banned: "/data/banned-players.json",
 		Properties: "/data/server.properties", AllowlistKey: "white-list"},
 	outcome: minecraftOutcome,
+	// Plain list shows display names, which team prefixes can change.
+	Accounts: &PlayerQuery{Command: "list uuids", Parse: parseMinecraftAccounts},
+}
+
+var (
+	minecraftAccounts = regexp.MustCompile(`^There are (\d+) of a max of \d+ players online: ?(.*)$`)
+	minecraftAccount  = regexp.MustCompile(`^([A-Za-z0-9_]{1,16}) \([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$`)
+)
+
+// parseMinecraftAccounts reads the vanilla reply to "list uuids", whose
+// entries are "Name (uuid)" with the account's own name. Any other reply,
+// such as a plugin's, is false.
+func parseMinecraftAccounts(response string) (Players, bool) {
+	match := minecraftAccounts.FindStringSubmatch(strings.TrimRight(response, "\x00\r\n "))
+	if match == nil {
+		return Players{}, false
+	}
+	var players Players
+	if match[2] != "" {
+		for _, entry := range strings.Split(match[2], ", ") {
+			account := minecraftAccount.FindStringSubmatch(entry)
+			if account == nil {
+				return Players{}, false
+			}
+			players.addWithID(account[1], account[1])
+			players.Online++
+		}
+	}
+	return players, strconv.Itoa(players.Online) == match[1]
 }
 
 // minecraftOutcome reads the vanilla server's English replies.
