@@ -33,14 +33,6 @@ func TestDiskAlertHysteresis(t *testing.T) {
 
 // A folder that can't be measured keeps its last figures and its alert,
 // and is marked unknown until a measurement succeeds.
-// A value exactly at the recovery line ends the alert, whatever floating
-// point makes of the ratio.
-func TestAlertEndsExactlyAtTheLine(t *testing.T) {
-	if over(true, float64(55)/100*100, 60) || over(true, float64(11)/20*100, 60) {
-		t.Fatal("55% kept a 60% alert")
-	}
-}
-
 func TestDiskUnknownMeasurementKeepsTheAlert(t *testing.T) {
 	state, _ := evaluateDisk(DiskState{}, space(95), 90, 1)
 	state, ended := evaluateDisk(state, []DiskSpace{{Path: "/data", Failed: true}}, 90, 2)
@@ -213,5 +205,14 @@ func TestPolicySavedDuringADiskMeasurement(t *testing.T) {
 	s.CheckDisk(ctx, state("running", ""), 1000)
 	if disk, _ := s.Disk(ctx, server.ID); len(events.events) != 0 || disk.CheckedAt != 0 {
 		t.Fatal(events.events, disk)
+	}
+}
+
+// A disk exactly at the recovery line ends the alert, though 55 of 100
+// computes as 55.00000000000001.
+func TestAlertEndsExactlyAtTheLine(t *testing.T) {
+	state, _ := evaluateDisk(DiskState{}, space(60), 60, 1)
+	if state, _ = evaluateDisk(state, space(55), 60, 2); state.alerting() {
+		t.Fatal("55% kept a 60% alert")
 	}
 }
