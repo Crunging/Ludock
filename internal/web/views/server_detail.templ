@@ -31,7 +31,9 @@ type ServerDetail struct {
 	ShowSchedule   bool
 	SchedulesReady bool
 	NextSchedule   *schedules.Schedule
-	Now            int64
+	// WaitingSchedule is a run waiting for players to leave.
+	WaitingSchedule *schedules.Schedule
+	Now             int64
 	Activity       ActivityView
 	Backups        BackupsView
 	Schedules      SchedulesView
@@ -58,6 +60,8 @@ type ActivityView struct {
 	AlreadyCurrent bool
 	// Tab is the tab showing the selected operation.
 	Tab string
+	// Waiting is a scheduled run waiting for players to leave.
+	Waiting *schedules.Schedule
 	// Archives offers the download of a backup the operation made.
 	Archives bool
 }
@@ -377,7 +381,10 @@ templ OverviewLive(d ServerDetail) {
 				<div>
 					<dt>Next scheduled</dt>
 					<dd>
-						if next := d.NextSchedule; next != nil {
+						if waiting := d.WaitingSchedule; waiting != nil {
+							<span class="schedule-waiting">{ ActionLabel(waiting.Action) } waiting for players to leave, until</span>
+							@Time(waiting.WaitingUntil, "plain", "")
+						} else if next := d.NextSchedule; next != nil {
 							<span>{ ActionLabel(next.Action) }</span>
 							@Time(next.NextRunAt, "plain", "")
 						} else {
@@ -545,6 +552,14 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 templ ActivityPanel(a ActivityView) {
 	if a.SelectedID != "" {
 		@SelectedOperation(a)
+	}
+	if waiting := a.Waiting; waiting != nil {
+		<p class="section-note activity-waiting" role="status">
+			A scheduled { waiting.Action } is waiting for players to leave, until
+			@Time(waiting.WaitingUntil, "plain", "")
+			.
+			<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
+		</p>
 	}
 	<div class="section-heading">
 		<h2 id="recent-operations-title" tabindex="-1">Recent operations</h2>

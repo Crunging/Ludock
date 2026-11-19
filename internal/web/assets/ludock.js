@@ -166,8 +166,8 @@
 
   // data-shown-by="checkbox-id" shows an element while the box is checked and
   // data-hidden-by hides it; data-shown-when="field=value" shows it while the
-  // form's field has that value. A radio's siblings change too, without their
-  // own events.
+  // form's field has that value, or one of "a|b". A radio's siblings change
+  // too, without their own events.
   function toggles(input) {
     var inputs = input.type === "radio" && input.form ? input.form.querySelectorAll('input[type=radio][name="' + input.name + '"]') : [input];
     inputs.forEach(function (box) {
@@ -180,7 +180,7 @@
       var rule = element.getAttribute("data-shown-when").split("=");
       if (rule[0] !== input.name) return;
       var field = input.form.elements[rule[0]];
-      element.hidden = !field || field.value !== rule[1];
+      element.hidden = !field || rule[1].split("|").indexOf(field.value) < 0;
     });
   }
   document.addEventListener("change", function (event) {

@@ -38,7 +38,9 @@ type ScheduleForm struct {
 	Actions         []string
 	CanCreateBackup bool
 	CanAnnounce     bool
-	Blocked         bool
+	// CanWait: Ludock can read who is online on the server.
+	CanWait bool
+	Blocked bool
 	Error           string
 	// Conflict is the latest saved schedule when it changed elsewhere.
 	Conflict *schedules.Schedule
@@ -130,6 +132,32 @@ func scheduleState(item schedules.Schedule) string {
 	return "Enabled"
 }
 
+// WaitText describes a schedule's wait for an empty server.
+func WaitText(wait *schedules.WaitForEmpty) string {
+	then := "skips"
+	if wait.Then == schedules.WaitRun {
+		then = "goes ahead"
+	}
+	return "Waits up to " + strconv.Itoa(wait.Minutes) + " min for an empty server, then " + then
+}
+
+func waitMinutes(input schedules.Input) string {
+	if input.WaitForEmpty == nil {
+		return strconv.Itoa(schedules.DefaultWaitMinutes)
+	}
+	if input.WaitForEmpty.Minutes == 0 {
+		return ""
+	}
+	return strconv.Itoa(input.WaitForEmpty.Minutes)
+}
+
+func waitThen(input schedules.Input) string {
+	if input.WaitForEmpty == nil || input.WaitForEmpty.Then == "" {
+		return schedules.WaitSkip
+	}
+	return input.WaitForEmpty.Then
+}
+
 // LeadText lists warning lead times for the form.
 func LeadText(minutes []int) string {
 	var parts []string
@@ -156,6 +184,7 @@ templ SchedulesTab(v SchedulesView) {
 		<summary>How schedules run</summary>
 		<p>Each schedule runs in its own time zone, and only while its owner still has access to the action. Missed times and daylight-saving gaps are skipped; a repeated hour runs once.</p>
 		<p>A one-time schedule runs once. If Ludock isn’t running at that time and misses it by more than five minutes, the run is recorded as missed and never runs late. Edit it to choose a new time.</p>
+		<p>A restart or stop can wait until nobody is online, up to a limit you choose, then skip the run or go ahead anyway. Pausing, editing, or deleting the schedule ends the wait.</p>
 		<p>Pausing stops future runs. It doesn’t undo work that already started.</p>
 	</details>
 	if v.Message != "" {
@@ -218,6 +247,9 @@ templ ScheduleList(v SchedulesView) {
 						<td>
 							{ ScheduleWhen(item.Input) }
 							<small class="table-detail">{ item.Timezone }</small>
+							if item.WaitForEmpty != nil {
+								<small class="table-detail">{ WaitText(item.WaitForEmpty) }</small>
+							}
 							if item.Announcements != nil {
 								<small class="table-detail">Warnings: { LeadText(item.Announcements.LeadMinutes) } min before</small>
 							}
@@ -225,6 +257,16 @@ templ ScheduleList(v SchedulesView) {
 						<td>{ scheduleState(item) }</td>
 						<td class="schedule-next-run">
 							switch {
+								case item.WaitingUntil != 0:
+									<span class="schedule-waiting">When the server is empty</span>
+									<small class="table-detail">
+										Waiting until { ScheduleDate(item.WaitingUntil, item.Timezone) }, then
+										if item.WaitForEmpty != nil && item.WaitForEmpty.Then == schedules.WaitRun {
+											going ahead anyway
+										} else {
+											skipping
+										}
+									</small>
 								case item.CompletedAt != 0:
 									None
 								case !item.Enabled:
@@ -236,7 +278,7 @@ templ ScheduleList(v SchedulesView) {
 							}
 							if item.NextRunUnavailableReason != "" {
 								<small class="table-detail">{ unavailableGuidance[item.NextRunUnavailableReason] }</small>
-							} else if item.Enabled && item.CompletedAt == 0 && item.NextRunAt == 0 {
+							} else if item.Enabled && item.CompletedAt == 0 && item.NextRunAt == 0 && item.WaitingUntil == 0 {
 								<small class="table-detail">{ unavailableGuidance["unavailable"] }</small>
 							}
 						</td>
@@ -331,6 +373,9 @@ func savedSummary(item *schedules.Schedule) string {
 		summary += " with backup before restart"
 	}
 	summary += ", " + ScheduleWhen(item.Input) + ", " + item.Timezone + ", " + strings.ToLower(scheduleState(*item))
+	if item.WaitForEmpty != nil {
+		summary += ", " + strings.ToLower(WaitText(item.WaitForEmpty))
+	}
 	if item.Announcements != nil {
 		return summary + ", warnings " + LeadText(item.Announcements.LeadMinutes) + " min before"
 	}
@@ -449,6 +494,39 @@ templ ScheduleEditor(f ScheduleForm) {
 				Create a backup before restarting
 			</label>
 		}
+		<div data-shown-when="action=restart|stop" hidden?={ input.Action != "restart" && input.Action != "stop" }>
+			if f.CanWait || input.WaitForEmpty != nil {
+				<fieldset>
+					<legend>Players online</legend>
+					<label class="check-label">
+						<input type="checkbox" name="waitForEmpty" value="true" id="schedule-wait" checked?={ input.WaitForEmpty != nil }/>
+						Wait until no one is online
+					</label>
+					<div class="stack-form" data-shown-by="schedule-wait" hidden?={ input.WaitForEmpty == nil }>
+						<label>
+							Wait up to (minutes)
+							<input type="number" name="waitMinutes" min="1" max={ strconv.Itoa(schedules.MaxWaitMinutes) } value={ waitMinutes(input) }/>
+							<small>From the scheduled time, 1–{ strconv.Itoa(schedules.MaxWaitMinutes) } minutes. Default: { strconv.Itoa(schedules.DefaultWaitMinutes) }.</small>
+						</label>
+						<fieldset class="weekday-input">
+							<legend>If players are still online then</legend>
+							<label class="check-label">
+								<input type="radio" name="waitThen" value="skip" checked?={ waitThen(input) == schedules.WaitSkip }/>Skip this run
+							</label>
+							<label class="check-label">
+								<input type="radio" name="waitThen" value="run" checked?={ waitThen(input) == schedules.WaitRun }/>Go ahead anyway
+							</label>
+						</fieldset>
+					</div>
+					<p class="section-note">The run goes ahead as soon as nobody is online; a stopped server counts as empty. When Ludock can’t tell who is online, for example while the console doesn’t answer, it keeps waiting and then skips or goes ahead as chosen. Countdown warnings need “Go ahead anyway” and count down to the end of the wait.</p>
+					if !f.CanWait {
+						<p class="section-note">Ludock can no longer read who is online on this server. Turn this off to save.</p>
+					}
+				</fieldset>
+			} else {
+				<p class="section-note">Waiting for an empty server needs a game whose console can list players.</p>
+			}
+		</div>
 		<div data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
 			if f.CanAnnounce {
 				<fieldset>

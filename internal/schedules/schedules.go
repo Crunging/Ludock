@@ -95,10 +95,13 @@ type Service struct {
 	Locks    *locks.Table
 	Notify   func(key, message string)
 	Console  Broadcaster
+	Players  Players
 
 	mu         sync.Mutex
 	announcing map[string]bool
-	warnings   sync.WaitGroup
+	// checked is when each waiting run last asked for a player reading.
+	checked  map[string]int64
+	warnings sync.WaitGroup
 }
 
 type row struct {
@@ -203,10 +206,26 @@ type Schedule struct {
 	NextRunAt                int64 // 0 when none
 	NextRunUnavailableReason string
 	CompletedAt              int64 // set once a one-time run was queued, skipped, or missed
+	// WaitingUntil is when a run waiting for players to leave stops waiting.
+	WaitingUntil int64
+}
+
+// WaitingResult marks a run waiting for an empty server. The run spent its
+// slot, with last_run_at its scheduled minute and no operation yet. Edits,
+// pauses, and the run's own end replace it in the same write.
+const WaitingResult = "Waiting for players to leave"
+
+func waiting(r *row) bool {
+	return r.lastResult.String == WaitingResult && r.lastRunAt.Valid && !r.lastOpID.Valid
+}
+
+// waitEnds is when a waiting run stops waiting.
+func waitEnds(r *row, data Input) int64 {
+	return r.lastRunAt.Int64 + int64(data.WaitForEmpty.Minutes)*60_000
 }
 
 func oneTimeCompleted(r *row, data Input) bool {
-	return data.Kind == "once" && r.lastSlot.String == schedtime.OneTimeSlot(data.Clock())
+	return data.Kind == "once" && r.lastSlot.String == schedtime.OneTimeSlot(data.Clock()) && !waiting(r)
 }
 
 // assertRunAhead requires one-time schedules to be saved or resumed with a
@@ -248,6 +267,9 @@ func (s *Service) public(ctx context.Context, r *row, now int64, check func(*row
 	if completed {
 		view.CompletedAt = r.lastRunAt.Int64
 	}
+	if waiting(r) && data.WaitForEmpty != nil {
+		view.WaitingUntil = waitEnds(r, data)
+	}
 	if data.Enabled && !completed {
 		if err := check(r, data); err != nil {
 			var reason *UnavailableError
@@ -256,6 +278,8 @@ func (s *Service) public(ctx context.Context, r *row, now int64, check func(*row
 			} else {
 				view.NextRunUnavailableReason = Unavailable
 			}
+		} else if view.WaitingUntil != 0 && data.Kind == "once" {
+			// The one run is under way.
 		} else if next, ok := schedtime.NextRun(data.Clock(), now, r.lastSlot.String); ok {
 			view.NextRunAt = next
 		} else {
@@ -441,6 +465,9 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 		bindingRevision: binding.BindingRevision}, data); err != nil {
 		return nil, err
 	}
+	if err := s.assertListsPlayers(ctx, actor, serverID, data); err != nil {
+		return nil, err
+	}
 	encoded, _ := json.Marshal(data)
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// Access revoked after the checks above plants nothing.
@@ -581,6 +608,11 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		if _, _, err := s.authority(ctx, s.DB, first, data); err != nil {
 			return nil, err
 		}
+		if update != nil {
+			if err := s.assertListsPlayers(ctx, actor, serverID, data); err != nil {
+				return nil, err
+			}
+		}
 	}
 	var result *row
 	changed := false
@@ -619,6 +651,17 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			return err
 		}
 		r.input, r.revision = string(encoded), r.revision+1
+		if waiting(r) {
+			ended := "Ended: the schedule was changed while it waited for players to leave"
+			if pausing {
+				ended = "Ended: the schedule was paused while it waited for players to leave"
+			}
+			now := db.Now()
+			if _, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=?", ended, now, id); err != nil {
+				return err
+			}
+			r.lastResult, r.lastRunAt = sql.NullString{String: ended, Valid: true}, sql.NullInt64{Int64: now, Valid: true}
+		}
 		action := "schedule.updated"
 		if update == nil {
 			action = "schedule.paused"
@@ -708,20 +751,23 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		if err != nil {
 			return err
 		}
+		if waiting(r) {
+			slot, configurationValid = r.lastSlot.String, true
+			return s.wait(ctx, r, data, now)
+		}
 		if !data.Enabled || oneTimeCompleted(r, data) {
 			return nil
 		}
 		// A run blocked by another operation is retried until its grace
 		// period ends, except on the last tick before then.
-		retryUntil := int64(0)
+		retryUntil, scheduledAt := int64(0), int64(0)
 		if data.Kind == "recurring" {
-			var start int64
-			slot, start = schedtime.DueSlot(data.Clock(), now, r.lastSlot.String, r.changedAt.Int64)
-			retryUntil = start + schedtime.RecurringGraceMs - lastChance
+			slot, scheduledAt = schedtime.DueSlot(data.Clock(), now, r.lastSlot.String, r.changedAt.Int64)
+			retryUntil = scheduledAt + schedtime.RecurringGraceMs - lastChance
 		} else {
 			slot = schedtime.Slot(data.Clock(), now)
-			runAt, _ := schedtime.OneTimeRun(data.Clock())
-			retryUntil = runAt + schedtime.OneTimeGraceMs - lastChance
+			scheduledAt, _ = schedtime.OneTimeRun(data.Clock())
+			retryUntil = scheduledAt + schedtime.OneTimeGraceMs - lastChance
 		}
 		configurationValid = true
 		if data.Kind == "once" && slot == "" {
@@ -750,38 +796,16 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 				return err
 			}
 		}
-		err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
-			// The owner's access is as checked above, read on this connection.
-			if err := assertUnchanged(ctx, tx, state, r.serverID, r.ownerID); err != nil {
-				return err
-			}
-			input := map[string]any{"scheduleId": r.id, "scheduleRevision": r.revision}
-			if data.CreateBackup {
-				input["createBackup"] = true
-			}
-			job, err := s.Runner.Enqueue(ctx, tx, ops.EnqueueOptions{ServerID: r.serverID, ActorID: user.ID, Kind: data.Action,
-				BindingRevision: binding.BindingRevision, Input: input, IdempotencyKey: "schedule:" + r.id + ":" + slot})
+		if data.WaitForEmpty != nil {
+			empty, _, err := s.empty(ctx, user, r.serverID, data, binding.BindingRevision)
 			if err != nil {
 				return err
 			}
-			// Queue and associate the same attempt atomically.
-			result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=? AND revision=?",
-				slot, now, job.ID, "Queued operation "+job.ID, r.id, r.revision)
-			if err != nil {
-				return err
-			}
-			changed, err := result.RowsAffected()
-			if err == nil && changed == 0 {
-				err = errScheduleChanged
-			}
-			return err
-		})
-		if err == nil {
-			s.Runner.Wake()
-			if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
-				log.Warn("Audit retention cleanup failed after scheduling; it will be retried")
+			if !empty {
+				return s.startWaiting(ctx, r, slot, scheduledAt, now)
 			}
 		}
+		err = s.queue(ctx, r, data, state, user, binding, slot, now)
 		// A command is sent now or not at all, never after other work.
 		if apperr.Is(err, "OPERATION_CONFLICT") && data.Action == "command" {
 			return SkipBusy
@@ -805,7 +829,7 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		reason = unavailableErr.Public.Message
 	} else if errors.As(err, &skip) {
 		reason = string(skip)
-	} else if apperr.Is(err, "SCHEDULE_MISSED") {
+	} else if apperr.Is(err, "SCHEDULE_MISSED") || apperr.Is(err, "SCHEDULE_PLAYERS_UNKNOWN") {
 		reason = err.Error()
 	} else if _, public := apperr.As(err); !public {
 		// An internal failure, such as a database error, is not a decision to
@@ -842,7 +866,46 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	s.notify("schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
 }
 
-// Skip ends a command run without sending it, spending its slot.
+// queue enqueues a run's operation and records it on the schedule in one
+// transaction, while the owner's access is still as read in state.
+func (s *Service) queue(ctx context.Context, r *row, data Input, state string, user *db.SessionUser, binding *identity.Server, slot string, now int64) error {
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// The owner's access is as checked above, read on this connection.
+		if err := assertUnchanged(ctx, tx, state, r.serverID, r.ownerID); err != nil {
+			return err
+		}
+		input := map[string]any{"scheduleId": r.id, "scheduleRevision": r.revision}
+		if data.CreateBackup {
+			input["createBackup"] = true
+		}
+		job, err := s.Runner.Enqueue(ctx, tx, ops.EnqueueOptions{ServerID: r.serverID, ActorID: user.ID, Kind: data.Action,
+			BindingRevision: binding.BindingRevision, Input: input, IdempotencyKey: "schedule:" + r.id + ":" + slot})
+		if err != nil {
+			return err
+		}
+		// Queue and associate the same attempt atomically.
+		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_slot=?,last_run_at=?,last_operation_id=?,last_result=? WHERE id=? AND revision=?",
+			slot, now, job.ID, "Queued operation "+job.ID, r.id, r.revision)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err == nil && changed == 0 {
+			err = errScheduleChanged
+		}
+		return err
+	})
+	if err == nil {
+		s.Runner.Wake()
+		if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
+			log.Warn("Audit retention cleanup failed after scheduling; it will be retried")
+		}
+	}
+	return err
+}
+
+// Skip ends a run without acting, spending its slot. Skips are expected, so
+// they notify nobody.
 type Skip string
 
 func (e Skip) Error() string { return string(e) }
@@ -931,9 +994,24 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 		if err != nil || !data.Enabled || data.Announcements == nil || oneTimeCompleted(r, data) {
 			continue
 		}
-		runAt, ok := schedtime.NextRun(data.Clock(), now, r.lastSlot.String)
-		if !ok {
-			continue
+		// A schedule that waits for an empty server warns only when it goes
+		// ahead anyway, so its warnings count down to the end of the wait.
+		var runAt int64
+		var slot string
+		if waiting(r) {
+			if data.WaitForEmpty == nil {
+				continue
+			}
+			runAt, slot = waitEnds(r, data), r.lastSlot.String
+		} else {
+			next, ok := schedtime.NextRun(data.Clock(), now, r.lastSlot.String)
+			if !ok {
+				continue
+			}
+			runAt, slot = next, schedtime.Slot(data.Clock(), next)
+			if data.WaitForEmpty != nil {
+				runAt += int64(data.WaitForEmpty.Minutes) * 60_000
+			}
 		}
 		lead := 0
 		for _, minutes := range data.Announcements.LeadMinutes {
@@ -942,7 +1020,6 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 				break
 			}
 		}
-		slot := schedtime.Slot(data.Clock(), runAt)
 		if lead == 0 || slot == "" || runAt-now < (announceCutoff+announceMinimum).Milliseconds() {
 			continue
 		}

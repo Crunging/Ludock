@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/resources"
+	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -71,6 +72,9 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 				item := &list[index]
 				if item.Enabled && item.NextRunAt != 0 && (d.NextSchedule == nil || item.NextRunAt < d.NextSchedule.NextRunAt) {
 					d.NextSchedule = item
+				}
+				if item.WaitingUntil != 0 && d.WaitingSchedule == nil {
+					d.WaitingSchedule = item
 				}
 			}
 		}
@@ -133,6 +137,12 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		case "activity":
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
 			d.Activity.Archives = d.Admin && can(&d.Row.Server, authz.BackupsRead)
+			if slices.ContainsFunc(d.Tabs, func(tab views.DetailTab) bool { return tab.ID == "schedules" }) {
+				list, _ := s.App.Schedules.List(r.Context(), request.User(), d.Row.Server.ID)
+				if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.WaitingUntil != 0 }); index >= 0 {
+					d.Activity.Waiting = &list[index]
+				}
+			}
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
 			d.Operation = d.Backups.Operation.SelectedID

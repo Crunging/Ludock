@@ -49,6 +49,7 @@ func (s *Server) scheduleForm(d *views.ServerDetail) views.ScheduleForm {
 	}
 	return views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: can(view, authz.BackupsCreate),
 		CanAnnounce: view.Console != nil && view.Console.SupportsBroadcast && can(view, authz.ConsoleExecute),
+		CanWait:     s.App.Players.Source.Lists(view.Container),
 		Blocked:     view.BindingStatus != "active" || d.DiscoveryUnavailable,
 		Input:       input, LeadText: "10, 5, 1"}
 }
@@ -131,6 +132,14 @@ func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 	slices.Sort(input.Days)
 	if input.Action == "command" {
 		input.Command = r.PostFormValue("command")
+	}
+	if (input.Action == "restart" || input.Action == "stop") && r.PostFormValue("waitForEmpty") == "true" {
+		minutes, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("waitMinutes")))
+		input.WaitForEmpty = &schedules.WaitForEmpty{Minutes: minutes, Then: r.PostFormValue("waitThen")}
+		if err != nil {
+			return input, r.PostFormValue("leadMinutes"), apperr.Newf("INVALID_REQUEST", 400,
+				"Wait between 1 and %d minutes for players to leave", schedules.MaxWaitMinutes)
+		}
 	}
 	leads := r.PostFormValue("leadMinutes")
 	if input.Action != "restart" {
@@ -290,6 +299,8 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 		if input.Action == "command" {
 			input.Command = "preview"
 		}
+		// Nor does waiting for an empty server, which starts at that time.
+		input.WaitForEmpty = nil
 		if input.Validate() == nil {
 			lastSlot := ""
 			if id := r.PostFormValue("scheduleId"); id != "" {
