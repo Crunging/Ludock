@@ -103,13 +103,15 @@ func Capitalize(value string) string {
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
 	"stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
-	"pulling": "Pulling image", "creating": "Creating updated container", "replacing": "Replacing previous container"}
+	"sending_command": "Sending command", "pulling": "Pulling image", "creating": "Creating updated container", "replacing": "Replacing previous container"}
 
 // OperationLabel describes an operation's progress.
 func OperationLabel(status, phase string) string {
 	switch status {
 	case "already_current":
 		return "Configured image is current"
+	case "skipped":
+		return "Skipped"
 	case "interrupted":
 		return "Interrupted — review required"
 	case "failed":
@@ -134,10 +136,17 @@ func OperationPath(serverID, kind, operationID string) string {
 }
 
 var OperationStatusLabels = map[string]string{"queued": "Queued", "running": "Running", "succeeded": "Succeeded",
-	"already_current": "Already current", "failed": "Failed", "interrupted": "Interrupted"}
+	"already_current": "Already current", "skipped": "Skipped", "failed": "Failed", "interrupted": "Interrupted"}
 
 var OperationTones = map[string]string{"queued": "active", "running": "active", "succeeded": "ok", "already_current": "ok",
-	"failed": "failed", "interrupted": "attention"}
+	"skipped": "idle", "failed": "failed", "interrupted": "attention"}
+
+// CommandReply is the redacted, bounded reply a scheduled command kept. It is
+// console output, for viewers with console access only.
+func CommandReply(result map[string]any) string {
+	text, _ := result["reply"].(string)
+	return text
+}
 
 // SaveDetail explains the save step of a stop or restart.
 func SaveDetail(result map[string]any) string {

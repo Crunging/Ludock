@@ -3,6 +3,7 @@ package schedules
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -461,5 +462,96 @@ func TestConcurrentScheduleWritesDoNotStall(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatal("concurrent writes stalled for", elapsed)
+	}
+}
+
+// A command schedule takes one trimmed line of at most MaxCommandLength
+// characters without control characters, and other actions take none.
+func TestCommandInputValidation(t *testing.T) {
+	command := func(text string) Input {
+		input := base
+		input.Action, input.Command = "command", text
+		return input
+	}
+	trimmed := command("  say hello  ")
+	if err := trimmed.Validate(); err != nil || trimmed.Command != "say hello" {
+		t.Fatal(err, trimmed.Command)
+	}
+	longest := command(strings.Repeat("é", MaxCommandLength))
+	if err := longest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"", "   ", strings.Repeat("a", MaxCommandLength+1), "save-all\nstop", "save-all\rstop",
+		"say\thi", "say \x00", "say \x7f", "say \u0085stop", "say  stop", "say  stop", "say \xff"} {
+		input := command(text)
+		if err := input.Validate(); !apperr.Is(err, "INVALID_REQUEST") {
+			t.Errorf("%q: %v", text, err)
+		}
+	}
+	start := base
+	start.Command = "save-all"
+	if err := start.Validate(); !apperr.Is(err, "INVALID_REQUEST") {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(longest)
+	if saved, err := ParseSaved(string(encoded)); err != nil || saved.Command != longest.Command || payloadSize(longest) != nil {
+		t.Fatal(err)
+	}
+}
+
+// Saving or resuming a command schedule needs console access, even in a
+// request the form would not send, and a run whose owner lost it is refused
+// without queueing anything.
+func TestCommandSchedulesNeedConsoleAccess(t *testing.T) {
+	f := setup(t)
+	input := base
+	input.Action, input.Command = "command", "save-all"
+	if _, err := f.s.Create(ctx, friend, f.serverID, input); !apperr.Is(err, "FORBIDDEN") {
+		t.Fatal(err)
+	}
+	f.grant(t, authz.ServerView, authz.ConsoleExecute, authz.SchedulesManage)
+	schedule, err := f.s.Create(ctx, friend, f.serverID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	f.grant(t, authz.ServerView, authz.SchedulesManage)
+	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 2, true); !apperr.Is(err, "FORBIDDEN") {
+		t.Fatal(err)
+	}
+	f.grant(t, authz.ServerView, authz.ConsoleExecute, authz.SchedulesManage)
+	if _, err := f.s.SetEnabled(ctx, friend, f.serverID, schedule.ID, 2, true); err != nil {
+		t.Fatal(err)
+	}
+	f.grant(t, authz.ServerView, authz.SchedulesManage)
+	f.s.Run(ctx, due)
+	if last := f.first(t, friend); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Suspended: required access for this scheduled action") {
+		t.Fatal(last.LastResult)
+	}
+}
+
+// A command due while the server is busy is skipped for that slot, without
+// waiting, retrying, or notifying.
+func TestCommandSkippedWhileServerBusy(t *testing.T) {
+	f := setup(t)
+	var notified []string
+	f.s.Notify = func(key, message string) { notified = append(notified, key) }
+	input := base
+	input.Action, input.Command = "command", "save-all"
+	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+		t.Fatal(err)
+	}
+	release, err := f.s.Locks.Acquire([]string{"server:" + f.serverID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	release()
+	f.s.Run(ctx, due+15_000)
+	last := f.first(t, admin)
+	if f.operations(t) != 0 || last.LastResult != string(SkipBusy) || last.LastRunAt != due || len(notified) != 0 {
+		t.Fatal(last, notified)
 	}
 }

@@ -52,3 +52,23 @@ func TestSchedulesFollowActionGrants(t *testing.T) {
 		t.Fatal("viewer sees the schedule form")
 	}
 }
+
+// A server without a game console offers no command schedules, and a forged
+// request for one saves nothing.
+func TestCommandSchedulesNeedAGameConsole(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	operator := p.user("u-operator", "operator", db.RoleOperator)
+	p.grant(operator, authz.ServerView, authz.SchedulesManage, authz.ConsoleExecute, authz.ServerStart)
+	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules", operator, nil, nil).Body.String(); strings.Contains(page, `<option value="command"`) {
+		t.Fatal("offered a command schedule without a game console")
+	}
+	response := p.action("/servers/"+p.server+"/schedules", operator,
+		scheduleForm(map[string][]string{"action": {"command"}, "command": {"save"}}))
+	if body := readBody(t, response); response.StatusCode != http.StatusBadRequest || !strings.Contains(body, "accept commands") {
+		t.Fatal(response.StatusCode, body)
+	}
+	if list, _ := p.app.Schedules.List(context.Background(), &operator.User, p.server); len(list) != 0 {
+		t.Fatal(list)
+	}
+}

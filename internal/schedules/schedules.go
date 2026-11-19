@@ -745,6 +745,11 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		if err != nil {
 			return err
 		}
+		if data.Action == "command" {
+			if err := s.commandReady(ctx, user, r.serverID, binding.BindingRevision); err != nil {
+				return err
+			}
+		}
 		err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 			// The owner's access is as checked above, read on this connection.
 			if err := assertUnchanged(ctx, tx, state, r.serverID, r.ownerID); err != nil {
@@ -777,6 +782,10 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 				log.Warn("Audit retention cleanup failed after scheduling; it will be retried")
 			}
 		}
+		// A command is sent now or not at all, never after other work.
+		if apperr.Is(err, "OPERATION_CONFLICT") && data.Action == "command" {
+			return SkipBusy
+		}
 		if apperr.Is(err, "OPERATION_CONFLICT") && now < retryUntil {
 			return errRetryLater
 		}
@@ -789,10 +798,13 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	}
 	reason := "Skipped: server state or a conflicting operation prevented this run"
 	var unavailableErr *UnavailableError
+	var skip Skip
 	if !configurationValid {
 		reason = "Suspended: saved schedule configuration is invalid; recreate this schedule"
 	} else if errors.As(err, &unavailableErr) {
 		reason = unavailableErr.Public.Message
+	} else if errors.As(err, &skip) {
+		reason = string(skip)
 	} else if apperr.Is(err, "SCHEDULE_MISSED") {
 		reason = err.Error()
 	} else if _, public := apperr.As(err); !public {
@@ -816,6 +828,10 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
 		return
 	}
+	// A command is expected to skip while its server is stopped or busy.
+	if skip != "" {
+		return
+	}
 	if !configurationValid && r.lastResult.String != reason {
 		log.Warn("Saved schedule configuration is invalid; recreate the schedule", logging.F("scheduleId", r.id))
 	}
@@ -824,6 +840,36 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		key = "invalid"
 	}
 	s.notify("schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
+}
+
+// Skip ends a command run without sending it, spending its slot.
+type Skip string
+
+func (e Skip) Error() string { return string(e) }
+
+const (
+	SkipBusy       Skip = "Skipped: the server was busy with other work"
+	SkipNotRunning Skip = "Skipped: the server wasn't running"
+	SkipNoConsole  Skip = "Skipped: the server's game console isn't available"
+)
+
+// commandReady skips a command run unless the server is running, idle, and
+// has a game console.
+func (s *Service) commandReady(ctx context.Context, user *db.SessionUser, serverID string, revision int64) error {
+	if s.Locks.ServerBusy(serverID) {
+		return SkipBusy
+	}
+	server, err := s.Servers.VerifyAuthorized(ctx, user, serverID, authz.ConsoleExecute, revision)
+	if err != nil {
+		return err
+	}
+	if server.Container.State != "running" {
+		return SkipNotRunning
+	}
+	if server.Container.Console == nil {
+		return SkipNoConsole
+	}
+	return nil
 }
 
 // claimAnnouncement records a warning before it is sent, so a restart

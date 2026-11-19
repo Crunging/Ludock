@@ -773,6 +773,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 
 .schedules-table td { font-size: 14.5px; }
 .schedules-table td:first-child:not([colspan]) { font-weight: 700; text-transform: capitalize; }
+.schedules-table .schedule-command { font-weight: 400; text-transform: none; overflow-wrap: anywhere; }
+.schedules-table .schedule-reply { overflow-wrap: anywhere; }
 .schedule-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .schedule-activity-link { display: inline-block; margin-top: 4px; font-size: 13px; }
 .schedule-form { margin-top: 32px; padding: 24px; max-width: 880px; border-radius: var(--radius-lg); background: var(--block); }

@@ -128,9 +128,10 @@ func palworldRCON(password string) string {
 }
 
 // gameRCON serves an RCON console that answers the game's list command with
-// format, and returns its port. Besides that command, it takes commands only
-// the fake has: "fake-join NAME" and "fake-leave NAME" change who is online,
-// and "fake-outage SECONDS" makes the list fail for that long.
+// format, and returns its port. "say MESSAGE" answers with the message as
+// players see it. Besides those, it takes commands only the fake has:
+// "fake-join NAME" and "fake-leave NAME" change who is online, and
+// "fake-outage SECONDS" makes the list fail for that long.
 func gameRCON(password, list string, format func(online []string) string, online ...string) string {
 	var mu sync.Mutex
 	var outageUntil time.Time
@@ -144,6 +145,8 @@ func gameRCON(password, list string, format func(online []string) string, online
 				return "An unexpected error occurred trying to execute that command"
 			}
 			return format(online)
+		case "say":
+			return "[Server] " + argument
 		case "fake-join":
 			if !slices.Contains(online, argument) {
 				online = append(online, argument)

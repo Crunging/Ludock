@@ -1,5 +1,6 @@
 // Package jobs implements the persisted server operations: start, stop,
-// restart (optionally with a backup), backup, restore, and image update.
+// restart (optionally with a backup), backup, restore, image update, and
+// scheduled console commands.
 // Each acts only after rechecking its owner's current access and the
 // server's binding, and records enough recovery state to reconcile an
 // interruption instead of replaying it.
@@ -80,6 +81,10 @@ func (j *Jobs) Register(runner *ops.Runner) {
 	})
 	runner.Register("backup", ops.Handler{Run: j.runBackup, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		return nil, j.recoverBackup(ctx, job, true)
+	}})
+	// An interrupted command is reported as interrupted and never sent again.
+	runner.Register("command", ops.Handler{Run: j.runCommand, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
+		return map[string]any{"action": "command"}, nil
 	}})
 	runner.Register("restore", ops.Handler{Run: j.runRestore, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		return nil, j.recoverRestore(ctx, job)
