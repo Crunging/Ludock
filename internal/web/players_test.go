@@ -110,8 +110,7 @@ func (g *playerGame) commands() []string {
 
 func (g *playerGame) grantOn(principal *auth.Principal, capabilities ...authz.Capability) {
 	g.t.Helper()
-	if _, err := g.app.Authz.SetUserGrants(context.Background(), principal.User.ID,
-		[]authz.GrantInput{{ServerID: g.server, Capabilities: capabilities}}, &g.admin.User, g.admin.TokenHash); err != nil {
+	if err := g.app.Authz.Share(context.Background(), &g.admin.User, g.admin.TokenHash, principal.User.ID, g.server, capabilities); err != nil {
 		g.t.Fatal(err)
 	}
 }
@@ -122,7 +121,7 @@ func (g *playerGame) grantOn(principal *auth.Principal, capabilities ...authz.Ca
 func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 	t.Parallel()
 	g := newPlayerGame(t)
-	viewer := g.user("u-viewer", "viewer", db.RoleOperator)
+	viewer := g.user("u-viewer", "viewer", db.RoleMember)
 	g.grantOn(viewer, authz.ServerView, authz.LogsRead)
 	if response := g.act(viewer, "kick", "Ada"); response.StatusCode < 400 {
 		t.Fatal(response.StatusCode)
@@ -132,7 +131,7 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 		t.Fatal(response.Code)
 	}
 
-	operator := g.user("u-operator", "operator", db.RoleOperator)
+	operator := g.user("u-operator", "operator", db.RoleMember)
 	g.grantOn(operator, authz.ServerView, authz.ConsoleExecute)
 	// A kick takes a name in the list.
 	if response := g.act(operator, "kick", "Zed"); response.StatusCode != http.StatusConflict {
@@ -159,7 +158,7 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 func TestPlayerActionSendsOneCommand(t *testing.T) {
 	t.Parallel()
 	g := newPlayerGame(t)
-	operator := g.user("u-operator", "operator", db.RoleOperator)
+	operator := g.user("u-operator", "operator", db.RoleMember)
 	g.grantOn(operator, authz.ServerView, authz.ConsoleExecute)
 	read := func(response *http.Response) string {
 		var page strings.Builder

@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, dockerAction, serverRow, openServer, createUser, signIn } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, serverRow, openServer, createUser, signIn, shareServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -93,11 +93,9 @@ test("adding a player to the allowlist, then removing them", async ({ page }) =>
 });
 
 test("someone without console access isn't offered player actions", async ({ page, session }) => {
-  await createUser(page, "watcher1", "watcher password one", "viewer");
-  const editor = page.locator("[data-grants]");
-  await editor.locator(".grants-server", { hasText: "Survival" }).getByRole("button", { name: "Status only" }).click();
-  await editor.getByRole("button", { name: "Save server access" }).click();
-  await expect(editor.locator(".alert--success")).toContainText("Server access saved for watcher1.");
+  await createUser(page, "watcher1", "watcher password one");
+  // Starting and stopping, and reading logs, without the console.
+  await shareServer(page, "Survival", "watcher1", ["See the server", "Start", "Stop", "Read logs"]);
   const console = await page.context().newPage();
   await command(console, "fake-join Mara");
 
