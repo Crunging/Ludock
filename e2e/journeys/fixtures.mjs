@@ -99,11 +99,12 @@ export function dockerAction(container, action) {
   });
 }
 
-/** Creates an account through the users page; returns nothing. */
+/** Creates an account with a password through the users page. */
 export async function createUser(page, username, password, role) {
   await page.goto("/users");
   const form = page.locator("#users form.settings-card");
   await form.getByLabel("Username").fill(username);
+  await form.getByLabel("Set a password now").check();
   await form.getByLabel("Initial password").fill(password);
   await form.getByLabel("Role").selectOption(role);
   await form.getByRole("button", { name: "Create user" }).click();

@@ -1,0 +1,81 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/Crunging/Ludock/internal/db"
+)
+
+// LinkForm is the page an invite or reset link opens.
+type LinkForm struct {
+	Username  string
+	Purpose   db.LinkPurpose
+	ExpiresAt int64
+	// TwoFactor means the account asks for a code after the new password.
+	TwoFactor         bool
+	Error             string
+	ConfirmationError bool
+}
+
+templ LinkPage(form LinkForm) {
+	@Document(map[bool]string{true: "Welcome · Ludock", false: "Choose a new password · Ludock"}[form.Purpose == db.LinkInvite], "", nil, nil) {
+		<main class="login-page">
+			@LudockMark("login-mark")
+			<form class="login-card" method="post" action="/link">
+				<h1 class="login-card__title">
+					if form.Purpose == db.LinkInvite {
+						Welcome to Ludock
+					} else {
+						Choose a new password
+					}
+				</h1>
+				<p class="login-card__description">
+					if form.Purpose == db.LinkInvite {
+						Choose a password for <strong>{ form.Username }</strong> to finish setting up your account.
+					} else {
+						Choose a new password for <strong>{ form.Username }</strong>. This signs the account out everywhere else.
+					}
+				</p>
+				<input type="text" name="username" value={ form.Username } autocomplete="username" hidden/>
+				<label class="login-card__label" for="password">New password</label>
+				<input id="password" name="password" class="login-card__input" type="password" data-password autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" aria-describedby="password-hint" required autofocus/>
+				<p class="login-card__hint" id="password-hint">Use at least { strconv.Itoa(passwordMin) } characters. A few words work well.</p>
+				<label class="login-card__label" for="confirm-password">Confirm password</label>
+				<input id="confirm-password" name="confirmation" class="login-card__input" type="password" data-password autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" aria-invalid={ map[bool]string{true: "true"}[form.ConfirmationError] } required/>
+				<label class="login-card__visibility">
+					<input type="checkbox" data-show-passwords/>
+					Show passwords
+				</label>
+				if form.Error != "" {
+					<div class="login-card__error" id="login-error" role="alert">{ form.Error }</div>
+				}
+				<button class="login-card__submit" type="submit" data-busy-label="Saving...">
+					if form.TwoFactor {
+						Save and continue
+					} else {
+						Save and sign in
+					}
+				</button>
+				<p class="login-card__account-help">
+					if form.TwoFactor {
+						Two-factor sign-in stays on: you'll enter a code from your authenticator app next.
+					}
+					This link works once and expires @Time(form.ExpiresAt, "", "")<span>.</span>
+				</p>
+			</form>
+		</main>
+	}
+}
+
+templ LinkUnavailable(message string) {
+	@Document("Link unavailable · Ludock", "", nil, nil) {
+		<main class="login-page">
+			@LudockMark("login-mark")
+			<section class="login-card" aria-labelledby="link-unavailable-title">
+				<h1 class="login-card__title" id="link-unavailable-title">This link doesn't work</h1>
+				<p class="login-card__description" role="alert">{ message }</p>
+				<a class="login-card__submit" href="/login">Go to sign in</a>
+			</section>
+		</main>
+	}
+}

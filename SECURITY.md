@@ -26,6 +26,8 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
   from.
 - Ask administrators to turn on two-factor sign-in in **Account**; an
   administrator account controls the Docker socket.
+- Send invite and password reset links privately: anyone who opens one before
+  the user does can set the password. They work once and expire after a day.
 - Administrators see every managed server. Other users see only the servers and
   actions shared with them.
 - Approve narrow backup folders, and keep registry and webhook credentials out

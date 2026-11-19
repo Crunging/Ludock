@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -50,11 +51,33 @@ func (s *Server) usersResult(w http.ResponseWriter, r *http.Request, request *Re
 	render(w, r, status, views.UsersContent(u))
 }
 
+// errNoOrigin refuses a link when the request doesn't say which address the
+// administrator is using; a link is never built from the Host header.
+var errNoOrigin = apperr.New("ORIGIN_REQUIRED", 400, "Ludock couldn't tell which address you're using. Reload the page and try again.")
+
+// linkView describes a link that was just made; it is shown only this once.
+func linkView(r *http.Request, username string, link *auth.Link) *views.LinkResult {
+	origin, _ := auth.RequestOrigin(r)
+	return &views.LinkResult{Username: username, URL: origin + "/link/" + link.Token, Purpose: link.Purpose, ExpiresAt: link.ExpiresAt}
+}
+
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request, request *Request) {
 	username, role := r.PostFormValue("username"), db.Role(r.PostFormValue("role"))
-	user, err := s.App.Auth.CreateUser(r.Context(), request.Principal, username, r.PostFormValue("password"), role, request.Client)
+	draft := func(u *views.UsersView) {
+		u.DraftName, u.DraftRole, u.DraftPassword = strings.TrimSpace(username), role, r.PostFormValue("access") == "password"
+	}
+	var user *db.User
+	var link *auth.Link
+	var err error
+	if r.PostFormValue("access") == "password" {
+		user, err = s.App.Auth.CreateUser(r.Context(), request.Principal, username, r.PostFormValue("password"), role, request.Client)
+	} else if _, ok := auth.RequestOrigin(r); !ok {
+		err = errNoOrigin
+	} else {
+		user, link, err = s.App.Auth.InviteUser(r.Context(), request.Principal, username, role, request.Client)
+	}
 	if err != nil {
-		s.usersResult(w, r, request, err, "", func(u *views.UsersView) { u.DraftName, u.DraftRole = strings.TrimSpace(username), role })
+		s.usersResult(w, r, request, err, "", draft)
 		return
 	}
 	notice := "Created " + user.Username + ". Share servers using their Server access controls below."
@@ -62,10 +85,44 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, request *Req
 		notice = "Created " + user.Username + ". Administrators can manage all servers and settings."
 	}
 	s.usersResult(w, r, request, nil, notice, func(u *views.UsersView) {
+		if link != nil {
+			u.Link = linkView(r, user.Username, link)
+		}
 		if user.Role != db.RoleAdmin {
 			u.OpenGrants = user.ID
 		}
 	})
+}
+
+func (s *Server) createUserLink(w http.ResponseWriter, r *http.Request, request *Request) {
+	id := r.PathValue("id")
+	if _, ok := auth.RequestOrigin(r); !ok {
+		s.usersResult(w, r, request, errNoOrigin, "", nil)
+		return
+	}
+	link, err := s.App.Auth.CreateLink(r.Context(), request.Principal, id, request.Client)
+	if err != nil {
+		s.usersResult(w, r, request, err, "", nil)
+		return
+	}
+	name := "the user"
+	if user, _ := s.App.DB.FindUserByID(r.Context(), id); user != nil {
+		name = user.Username
+	}
+	s.usersResult(w, r, request, nil, "", func(u *views.UsersView) { u.Link = linkView(r, name, link) })
+}
+
+func (s *Server) revokeUserLink(w http.ResponseWriter, r *http.Request, request *Request) {
+	id := r.PathValue("id")
+	err := s.App.Auth.RevokeLink(r.Context(), request.Principal, id, request.Client)
+	notice := ""
+	if err == nil {
+		notice = "Link revoked. It no longer works."
+		if user, _ := s.App.DB.FindUserByID(r.Context(), id); user != nil {
+			notice = "Revoked the link for " + user.Username + ". It no longer works."
+		}
+	}
+	s.usersResult(w, r, request, err, notice, nil)
 }
 
 func (s *Server) updateUserAccess(w http.ResponseWriter, r *http.Request, request *Request) {

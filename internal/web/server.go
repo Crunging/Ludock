@@ -75,6 +75,9 @@ func (s *Server) Handler() http.Handler {
 	s.mux.HandleFunc("POST /login", s.login)
 	s.mux.HandleFunc("POST /login/code", s.loginCode)
 	s.mux.HandleFunc("POST /setup", s.setup)
+	s.mux.HandleFunc("GET /link/{token}", s.openLink)
+	s.mux.HandleFunc("GET /link", s.linkPage)
+	s.mux.HandleFunc("POST /link", s.useLink)
 	s.mux.HandleFunc("POST /logout", s.authed(s.logout))
 	if s.App != nil {
 		s.routes()
@@ -122,6 +125,14 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+// loggedPath is the request path for logs, with a link's token left out.
+func loggedPath(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/link/") {
+		return "/link/{token}"
+	}
+	return r.URL.Path
+}
+
 func safeMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
 }
@@ -157,13 +168,13 @@ func (s *Server) policy(next http.Handler) http.Handler {
 					panic(recovered)
 				}
 				log.Error("Unhandled request error", logging.F("requestId", id), logging.F("method", r.Method),
-					logging.F("path", r.URL.Path), logging.F("panicType", fmt.Sprintf("%T", recovered)))
+					logging.F("path", loggedPath(r)), logging.F("panicType", fmt.Sprintf("%T", recovered)))
 				if recorder.status == 0 {
 					http.Error(recorder, "Internal server error", http.StatusInternalServerError)
 				}
 			}
 			log.Debug("HTTP request completed", logging.F("requestId", id), logging.F("method", r.Method),
-				logging.F("path", r.URL.Path), logging.F("status", recorder.status),
+				logging.F("path", loggedPath(r)), logging.F("status", recorder.status),
 				logging.F("durationMs", time.Since(started).Milliseconds()), logging.F("remoteAddress", s.ClientIP.Request(r)))
 		}()
 		if !safeMethod(r.Method) && (r.Header.Get("Sec-Fetch-Site") == "cross-site" ||

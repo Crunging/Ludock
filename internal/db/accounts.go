@@ -32,6 +32,10 @@ type User struct {
 	Disabled  bool
 	CreatedAt int64
 	TwoFactor bool
+	// PasswordSet is false for an invited account that hasn't chosen one.
+	PasswordSet bool
+	// Link is the account's working invite or reset link, if any.
+	Link *AccountLink
 }
 
 // UserRecord includes the password verifier.
@@ -104,7 +108,7 @@ func (d *DB) findUser(ctx context.Context, column, value string) (*UserRecord, e
 	if err != nil {
 		return nil, err
 	}
-	user.Role, user.Disabled = Role(role), disabled == 1
+	user.Role, user.Disabled, user.PasswordSet = Role(role), disabled == 1, user.PasswordHash != ""
 	return &user, nil
 }
 
@@ -119,8 +123,11 @@ func (d *DB) FindUserByID(ctx context.Context, id string) (*UserRecord, error) {
 
 // ListUsers lists accounts by username.
 func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id, username, role, disabled, created_at, totp_secret IS NOT NULL
-    FROM users ORDER BY username COLLATE NOCASE`)
+	rows, err := d.QueryContext(ctx, `SELECT users.id, users.username, users.role, users.disabled, users.created_at,
+    users.totp_secret IS NOT NULL, users.password_hash != '', links.purpose, links.expires_at
+    FROM users LEFT JOIN account_links AS links ON links.user_id = users.id AND links.expires_at > ?
+      AND links.password_hash = users.password_hash AND users.disabled = 0
+    ORDER BY users.username COLLATE NOCASE`, Now())
 	if err != nil {
 		return nil, err
 	}
@@ -130,10 +137,16 @@ func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
 		var user User
 		var role string
 		var disabled int
-		if err := rows.Scan(&user.ID, &user.Username, &role, &disabled, &user.CreatedAt, &user.TwoFactor); err != nil {
+		var purpose sql.NullString
+		var expiresAt sql.NullInt64
+		if err := rows.Scan(&user.ID, &user.Username, &role, &disabled, &user.CreatedAt, &user.TwoFactor, &user.PasswordSet,
+			&purpose, &expiresAt); err != nil {
 			return nil, err
 		}
 		user.Role, user.Disabled = Role(role), disabled == 1
+		if purpose.Valid {
+			user.Link = &AccountLink{Purpose: LinkPurpose(purpose.String), ExpiresAt: expiresAt.Int64}
+		}
 		users = append(users, user)
 	}
 	return users, rows.Err()
