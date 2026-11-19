@@ -730,6 +730,13 @@ func (s *Service) createUser(ctx context.Context, principal *Principal, username
 }
 
 func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id string, role db.Role, disabled bool, client Client) (*db.User, error) {
+	return s.ChangeAccess(ctx, principal, id, role, &disabled, client)
+}
+
+// ChangeAccess changes an account's role, its disabled flag, or both; an
+// empty role or nil disabled keeps the current value, read in the same
+// transaction, so a stale page changes only what it names.
+func (s *Service) ChangeAccess(ctx context.Context, principal *Principal, id string, role db.Role, change *bool, client Client) (*db.User, error) {
 	if err := RequireAdmin(principal); err != nil {
 		return nil, err
 	}
@@ -740,10 +747,24 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 	if target == nil {
 		return nil, errUserNotFound
 	}
-	if !db.ValidRole(string(role)) {
+	if (role != "" && !db.ValidRole(string(role))) || (role == "" && change == nil) {
 		return nil, apperr.New("INVALID_REQUEST", 400, "Invalid access settings")
 	}
+	var disabled bool
 	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT role, disabled FROM users WHERE id = ?", id).Scan(&current, &disabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return db.ErrUserNotFound
+			}
+			return err
+		}
+		if role == "" {
+			role = db.Role(current)
+		}
+		if change != nil {
+			disabled = *change
+		}
 		last, err := db.RemovesLastAdmin(ctx, tx, id, role, disabled)
 		if err != nil {
 			return err

@@ -495,6 +495,27 @@ func TestAdministratorAndBackStartsWithNothingShared(t *testing.T) {
 	}
 }
 
+// A role change from a page opened before the account was disabled leaves
+// it disabled, and enabling it from a page opened before a role change keeps
+// the new role.
+func TestAccessChangesOnlyWhatTheyName(t *testing.T) {
+	s, _, principal := racingService(t)
+	disable, enable := true, false
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, &disable, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	user, err := s.ChangeAccess(ctx, principal, targetID, db.RoleAdmin, nil, Client{})
+	if err != nil || user.Role != db.RoleAdmin || !user.Disabled {
+		t.Fatal(user, err)
+	}
+	if user, err = s.ChangeAccess(ctx, principal, targetID, "", &enable, Client{}); err != nil || user.Role != db.RoleAdmin || user.Disabled {
+		t.Fatal(user, err)
+	}
+	if _, err := s.ChangeAccess(ctx, principal, targetID, "", nil, Client{}); !apperr.Is(err, "INVALID_REQUEST") {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionCookieParsing(t *testing.T) {
 	r := httptestRequestWithCookie("other=1; ludock_session=first; ludock_session=se%63ond; bad%ZZ=x")
 	if got := SessionToken(r); got != "second" {

@@ -188,7 +188,7 @@ templ userRow(u UsersView, user db.User) {
 					class="secondary-btn"
 					type="button"
 					hx-post={ "/users/" + user.ID + "/access" }
-					hx-vals={ roleValues(user, db.RoleMember) }
+					hx-vals={ roleValues(db.RoleMember) }
 					hx-target="#users"
 					hx-swap="outerHTML"
 					hx-confirm={ "Make " + user.Username + " a member?" }
@@ -200,7 +200,7 @@ templ userRow(u UsersView, user db.User) {
 					class="secondary-btn"
 					type="button"
 					hx-post={ "/users/" + user.ID + "/access" }
-					hx-vals={ roleValues(user, db.RoleAdmin) }
+					hx-vals={ roleValues(db.RoleAdmin) }
 					hx-target="#users"
 					hx-swap="outerHTML"
 					hx-confirm={ "Make " + user.Username + " an administrator?" }
@@ -290,9 +290,9 @@ templ linkResult(link LinkResult) {
 }
 
 func accessValues(user db.User) string {
-	return `{"role":"` + string(user.Role) + `","disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
+	return `{"disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
 }
 
-func roleValues(user db.User, role db.Role) string {
-	return `{"role":"` + string(role) + `","disabled":"` + strconv.FormatBool(user.Disabled) + `"}`
+func roleValues(role db.Role) string {
+	return `{"role":"` + string(role) + `"}`
 }

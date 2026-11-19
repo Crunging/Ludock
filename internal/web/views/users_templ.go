@@ -585,9 +585,9 @@ func userRow(u UsersView, user db.User) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var21 string
-				templ_7745c5c3_Var21, templ_7745c5c3_Err = templruntime.NewAttributeExpression(roleValues(user, db.RoleMember)).Resolve(ctx)
+				templ_7745c5c3_Var21, templ_7745c5c3_Err = templruntime.NewAttributeExpression(roleValues(db.RoleMember)).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `users.templ`, Line: 191, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `users.templ`, Line: 191, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 				if templ_7745c5c3_Err != nil {
@@ -629,9 +629,9 @@ func userRow(u UsersView, user db.User) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var24 string
-				templ_7745c5c3_Var24, templ_7745c5c3_Err = templruntime.NewAttributeExpression(roleValues(user, db.RoleAdmin)).Resolve(ctx)
+				templ_7745c5c3_Var24, templ_7745c5c3_Err = templruntime.NewAttributeExpression(roleValues(db.RoleAdmin)).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `users.templ`, Line: 203, Col: 45}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `users.templ`, Line: 203, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 				if templ_7745c5c3_Err != nil {
@@ -971,11 +971,11 @@ func linkResult(link LinkResult) templ.Component {
 }
 
 func accessValues(user db.User) string {
-	return `{"role":"` + string(user.Role) + `","disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
+	return `{"disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
 }
 
-func roleValues(user db.User, role db.Role) string {
-	return `{"role":"` + string(role) + `","disabled":"` + strconv.FormatBool(user.Disabled) + `"}`
+func roleValues(role db.Role) string {
+	return `{"role":"` + string(role) + `"}`
 }
 
 var _ = templruntime.GeneratedTemplate
