@@ -316,10 +316,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			}
 			var staged map[string]int64
 			if item == "" {
-				staged, err = j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum)
+				staged, err = j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, row.Size, row.Checksum)
 			} else {
 				var bytes int64
-				bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum, roots[0].ID, item)
+				bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, row.Size, row.Checksum, roots[0].ID, item)
 				staged = map[string]int64{roots[0].ID: bytes}
 			}
 			if err != nil {
@@ -388,7 +388,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			if err := j.Backups.Helpers.ExtractToStage(ctx, row.Destination(), row.ID, data.Container, targets, stageName(job),
-				row.Roots, settings.MaxBytes, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
+				row.Roots, row.Size, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
 				return nil, err
 			}
 			if err := assertAccess(); err != nil {

@@ -57,8 +57,9 @@ platforms.
 
 Ludock keeps its own data and your backups in separate volumes; your game
 containers and their data stay where they are. Backup storage in the example's
-`backups` volume turns on automatically, with limits in **Settings → Backup
-storage**. Backups stop the server while they copy.
+`backups` volume turns on automatically, and each server keeps a spread of
+recent and older backups without any setup. Backups stop the server while
+they copy.
 
 Most settings live in the browser. For deployment options, copy
 [`.env.example`](./.env.example) to `.env`, uncomment what you need, and run

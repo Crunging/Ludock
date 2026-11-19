@@ -98,7 +98,8 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 // Tests lower it.
 var maxEntries = 100000
 
-var errCapacity = fail("BACKUP_CAPACITY", "The archive exceeds the configured size limit.")
+// errGrown is an archive larger than its recorded size.
+var errGrown = fail("INVALID_BACKUP", "The backup archive is larger than when it was made.")
 
 // ValidateStream checks a whole archive and every recorded root.
 func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte)) (map[string]int64, error) {
@@ -128,7 +129,7 @@ func validateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 		}
 		total += header.Size
 		if total > maxBytes {
-			return errCapacity
+			return errGrown
 		}
 		parts := strings.Split(name, "/")
 		if len(parts) == 2 {
@@ -141,7 +142,7 @@ func validateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 	}, func(chunk []byte) error {
 		read += int64(len(chunk))
 		if read > maxBytes {
-			return errCapacity
+			return errGrown
 		}
 		if onChunk != nil {
 			onChunk(chunk)

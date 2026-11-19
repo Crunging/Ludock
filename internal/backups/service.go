@@ -1,6 +1,7 @@
 package backups
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,21 +15,30 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 type Backup struct {
-	ID          string
-	ServerID    string
-	Roots       []Root
-	Size        int64
-	Checksum    string
-	CreatedAt   int64
-	State       string
+	ID        string
+	ServerID  string
+	Roots     []Root
+	Size      int64
+	Checksum  string
+	CreatedAt int64
+	State     string
+	// KeptAt is when an administrator kept the backup, 0 if not kept;
+	// retention never removes a kept backup.
+	KeptAt int64
+	Note   string
+	// Reason is the work that took the backup for its own protection:
+	// "restore" or "update", or empty.
+	Reason      string
 	fingerprint string
 	destination string
 }
@@ -64,15 +74,18 @@ var deletionBatch = 100
 
 const settingsKey = "backups"
 
-var errNotFound = fail("BACKUP_NOT_FOUND", "Backup not found.")
+var (
+	errNotFound = fail("BACKUP_NOT_FOUND", "Backup not found.")
+	errKept     = fail("BACKUP_KEPT", "This backup is kept. Release it before deleting it.")
+)
 
-const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state"
+const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,COALESCE(kept_at,0),note,reason"
 
 func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
 	var backup Backup
 	var roots string
 	if err := s.Scan(&backup.ID, &backup.ServerID, &backup.fingerprint, &backup.destination, &roots, &backup.Size,
-		&backup.Checksum, &backup.CreatedAt, &backup.State); err != nil {
+		&backup.Checksum, &backup.CreatedAt, &backup.State, &backup.KeptAt, &backup.Note, &backup.Reason); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(roots), &backup.Roots)
@@ -130,6 +143,10 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 		return err
 	}
 	defer release()
+	// Retention may have removed it while this waited for the locks.
+	if exists, err := s.Exists(ctx, id, false); err != nil || !exists {
+		return cmp.Or(err, error(errNotFound))
+	}
 	if assertAccess != nil {
 		if err := assertAccess(); err != nil {
 			return err
@@ -150,8 +167,13 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 				return err
 			}
 		}
-		if _, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=?", backup.ID); err != nil {
+		// Kept between listing and marking, the backup stays.
+		result, err := s.DB.ExecContext(ctx, "UPDATE backups SET state='deleting' WHERE id=? AND (state='deleting' OR kept_at IS NULL)", backup.ID)
+		if err != nil {
 			return err
+		}
+		if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+			return errKept
 		}
 		marked = true
 		return nil
@@ -191,8 +213,7 @@ func (s *Service) SavedSettings(ctx context.Context) (*Settings, bool, error) {
 	var settings Settings
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
-	if string(raw) == "null" || decoder.Decode(&settings) != nil || settings.Destination == "" || settings.RetentionCount < 1 ||
-		settings.RetentionCount > 1000 || settings.MaxBytes <= 0 || settings.ReserveBytes < 0 {
+	if string(raw) == "null" || decoder.Decode(&settings) != nil || !settings.valid() {
 		return nil, true, nil
 	}
 	return &settings, true, nil
@@ -213,7 +234,7 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 	return settings, authz.AdminMutationError(err)
 }
 
-// Initialize enables the single approved root with default limits, unless
+// Initialize enables the single approved root with the default reserve, unless
 // an administrator has ever saved backup settings.
 func (s *Service) Initialize(ctx context.Context) error {
 	s.initMu.Lock()
@@ -229,7 +250,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if len(roots) != 1 {
 		return nil
 	}
-	settings := Settings{Destination: roots[0], RetentionCount: DefaultRetention, MaxBytes: DefaultMaxBytes, ReserveBytes: DefaultReserve}
+	settings := Settings{Destination: roots[0], ReserveBytes: DefaultReserve}
 	if _, err := s.Storage.ValidateSettings(ctx, settings); err != nil {
 		return nil
 	}
@@ -272,25 +293,65 @@ func (s *Service) ForBackup(ctx context.Context) (Settings, error) {
 		}
 	}
 	if settings == nil {
-		return Settings{}, fail("BACKUPS_NOT_CONFIGURED", "An administrator must configure a backup destination, retention, and capacity before creating backups.")
+		return Settings{}, fail("BACKUPS_NOT_CONFIGURED", "An administrator must choose a backup folder in Settings before creating backups.")
 	}
 	return s.Storage.ValidateSettings(ctx, *settings)
 }
 
-// ArchiveBytes is the size of complete backups. An unreadable total is an
-// error, never zero: zero would let backups grow past the global limit.
-func (s *Service) ArchiveBytes(ctx context.Context) (int64, error) {
-	var size int64
-	err := s.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM backups WHERE state='complete'").Scan(&size)
-	return size, err
+// ArchiveBytes is the size of complete backups, and of the kept ones among
+// them. An unreadable total is an error, never zero: zero would let backups
+// grow past the total limit.
+func (s *Service) ArchiveBytes(ctx context.Context) (total, kept int64, err error) {
+	err = s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(size),0), COALESCE(SUM(CASE WHEN kept_at IS NULL THEN 0 ELSE size END),0)
+    FROM backups WHERE state='complete'`).Scan(&total, &kept)
+	return total, kept, err
 }
 
-// Remaining is the archive budget left under the global limit.
-func Remaining(settings Settings, used int64) (int64, error) {
+// unlimited stands in for "no total limit"; it fits JSON's exact integers.
+const unlimited = maxSetting
+
+// Remaining is the archive budget left under the total limit, if one is set.
+func Remaining(settings Settings, used, kept int64) (int64, error) {
+	if settings.MaxBytes == 0 {
+		return unlimited, nil
+	}
 	if available := settings.MaxBytes - used; available > 0 {
 		return available, nil
 	}
-	return 0, fail("BACKUP_CAPACITY", "The global backup byte limit is reached. Remove backups or increase the limit.")
+	return 0, CapacityError(codeLimit, kept)
+}
+
+// The problems behind a backup that can't fit, as error codes.
+const (
+	codeDisk  = "BACKUP_CAPACITY"
+	codeLimit = "BACKUP_LIMIT"
+)
+
+// CapacityError reports a backup that can't fit, saying how much kept
+// backups hold when they are part of the reason.
+func CapacityError(code string, kept int64) error {
+	problem := "The backup disk is down to its free-space reserve."
+	if code == codeLimit {
+		problem = "Backups have reached their total size limit."
+	}
+	advice := " Delete backups you no longer need, or free space on the backup disk."
+	if code == codeLimit {
+		advice = " Delete backups you no longer need, or raise the limit in Settings."
+	}
+	if kept > 0 {
+		advice += " Kept backups use " + datasize.Format(kept) + "; release ones you no longer need so they can be deleted."
+	}
+	return fail(code, problem+advice)
+}
+
+// ExplainCapacity rewords a lack of room to say how much kept backups hold.
+func ExplainCapacity(err error, kept int64) error {
+	for _, code := range []string{codeDisk, codeLimit} {
+		if apperr.Is(err, code) {
+			return CapacityError(code, kept)
+		}
+	}
+	return err
 }
 
 // Issue is a public readiness problem.
@@ -308,8 +369,10 @@ func readinessIssue(err error, fallback Issue) Issue {
 // StorageStatus is the storage readiness shown to administrators.
 type StorageStatus struct {
 	Configured     bool
+	Destination    string
 	ArchiveBytes   int64
-	MaxBytes       int64
+	KeptBytes      int64
+	MaxBytes       int64 // 0 when there is no total limit
 	ReserveBytes   int64
 	AvailableBytes int64 // -1 when unknown
 	Issues         []Issue
@@ -317,8 +380,8 @@ type StorageStatus struct {
 
 func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	settings, found, _ := s.SavedSettings(ctx)
-	used, err := s.ArchiveBytes(ctx)
-	status := StorageStatus{Configured: found, ArchiveBytes: used, AvailableBytes: -1}
+	used, kept, err := s.ArchiveBytes(ctx)
+	status := StorageStatus{Configured: found, ArchiveBytes: used, KeptBytes: kept, AvailableBytes: -1}
 	if err != nil {
 		status.Issues = append(status.Issues, Issue{"BACKUP_RECORDS_UNAVAILABLE", "Ludock could not read its backup records. Try again."})
 		return status, nil
@@ -328,12 +391,12 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 		if !found {
 			code = "BACKUPS_NOT_CONFIGURED"
 		}
-		status.Issues = append(status.Issues, Issue{code, "An administrator must configure a valid backup destination, retention, and capacity before creating backups."})
+		status.Issues = append(status.Issues, Issue{code, "An administrator must choose a valid backup folder in Settings before creating backups."})
 		return status, nil
 	}
-	status.MaxBytes, status.ReserveBytes = settings.MaxBytes, settings.ReserveBytes
-	if _, err := Remaining(*settings, status.ArchiveBytes); err != nil {
-		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup archive limit could not be checked."}))
+	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
+	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {
+		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup size limit could not be checked."}))
 	}
 	if _, err := s.Storage.ValidateSettings(ctx, *settings); err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DESTINATION",
@@ -347,7 +410,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	} else {
 		status.AvailableBytes = available
 		if available <= settings.ReserveBytes {
-			status.Issues = append(status.Issues, Issue{"BACKUP_CAPACITY", "The backup destination does not have free space above its configured reserve."})
+			status.Issues = append(status.Issues, readinessIssue(CapacityError(codeDisk, kept), Issue{}))
 		}
 	}
 	return status, settings
@@ -506,8 +569,9 @@ func AssertDataOperationState(state string) error {
 
 func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destination string) error {
 	roots, _ := json.Marshal(backup.Roots)
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
-    VALUES(?,?,?,?,?,?,?,?,'complete')`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum, backup.CreatedAt)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,reason)
+    VALUES(?,?,?,?,?,?,?,?,'complete',?)`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum,
+		backup.CreatedAt, backup.Reason)
 	return err
 }
 
@@ -602,33 +666,110 @@ func (s *Service) Exists(ctx context.Context, id string, complete bool) (bool, e
 	return err == nil, err
 }
 
-// Prune removes complete backups beyond the retention count, keeping keep,
-// and finishes interrupted deletions.
-func (s *Service) Prune(ctx context.Context, serverID string, retention int, keep string) error {
+// Prune applies the retention rule to a server's backups and finishes its
+// interrupted deletions. protected backups (the one just taken, a restore's
+// source) stay, and so does any archive open for reading. The caller holds
+// the server and storage locks.
+func (s *Service) Prune(ctx context.Context, serverID string, settings Settings, protected ...string) error {
 	list, err := s.List(ctx, serverID)
 	if err != nil {
 		return err
 	}
-	var complete, removed []Backup
 	for _, backup := range list {
-		switch backup.State {
-		case "complete":
-			complete = append(complete, backup)
-		case "deleting":
-			removed = append(removed, backup)
-		}
-	}
-	if len(complete) > retention {
-		for _, old := range complete[retention:] {
-			if old.ID != keep {
-				removed = append(removed, old)
+		if backup.State == "deleting" {
+			if err := s.remove(ctx, &backup, nil); err != nil {
+				return err
 			}
 		}
 	}
-	for _, old := range removed {
-		if err := s.remove(ctx, &old, nil); err != nil {
+	expired, spare := planRetention(list, time.Local, func(id string) bool {
+		return slices.Contains(protected, id) || s.Storage.Reading(id)
+	})
+	for _, backup := range expired {
+		if err := s.removeIdle(ctx, backup); err != nil {
+			return err
+		}
+	}
+	// Space is measured again after each removal, and only archives in the
+	// current folder free room on its disk.
+	for _, backup := range spare {
+		if room, need := s.room(ctx, list, settings); room >= need {
+			break
+		}
+		if backup.destination != settings.Destination {
+			continue
+		}
+		if err := s.removeIdle(ctx, backup); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// removeIdle removes a backup for retention unless it is being read or was
+// kept since it was listed.
+func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
+	release, idle := s.Storage.claimIdle(backup.ID)
+	if !idle {
+		return nil
+	}
+	defer release()
+	if err := s.remove(ctx, &backup, nil); !errors.Is(err, errKept) {
+		return err
+	}
+	return nil
+}
+
+// room is the space left for the server's next backup and the space it
+// should need: its newest backup's size plus a margin. When either is
+// unknown, need is zero, so space alone removes nothing.
+func (s *Service) room(ctx context.Context, list []Backup, settings Settings) (room, need int64) {
+	index := slices.IndexFunc(list, func(backup Backup) bool { return backup.State == "complete" })
+	if index < 0 {
+		return 0, 0
+	}
+	available, err := s.Storage.AvailableBytes(settings.Destination)
+	if err != nil {
+		return 0, 0
+	}
+	room = available - settings.ReserveBytes
+	if settings.MaxBytes > 0 {
+		used, _, err := s.ArchiveBytes(ctx)
+		if err != nil {
+			return 0, 0
+		}
+		room = min(room, settings.MaxBytes-used)
+	}
+	size := list[index].Size
+	return room, size + size*spaceMargin/100
+}
+
+// Keep marks a complete backup kept, with an optional note, while admin is
+// still an administrator signed in with tokenHash.
+func (s *Service) Keep(ctx context.Context, serverID, id, note string, admin *db.SessionUser, tokenHash string) error {
+	note = strings.Join(strings.Fields(note), " ")
+	if textutil.Length(note) > noteLimit {
+		return apperr.New("INVALID_REQUEST", 400, "Keep the note to 100 characters or fewer.")
+	}
+	return s.setKept(ctx, serverID, id, admin, tokenHash, "kept_at=?, note=?", db.Now(), note)
+}
+
+// Release lets retention remove a kept backup again.
+func (s *Service) Release(ctx context.Context, serverID, id string, admin *db.SessionUser, tokenHash string) error {
+	return s.setKept(ctx, serverID, id, admin, tokenHash, "kept_at=NULL, note=''")
+}
+
+func (s *Service) setKept(ctx context.Context, serverID, id string, admin *db.SessionUser, tokenHash, assignments string, values ...any) error {
+	err := s.DB.AdminMutation(ctx, admin.ID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE backups SET "+assignments+" WHERE server_id=? AND id=? AND state='complete'",
+			append(values, serverID, id)...)
+		if err != nil {
+			return err
+		}
+		if changed, err := result.RowsAffected(); err != nil || changed == 0 {
+			return errNotFound
+		}
+		return nil
+	})
+	return authz.AdminMutationError(err)
 }

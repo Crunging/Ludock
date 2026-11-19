@@ -290,15 +290,42 @@ options that remap the host path.
 
 ## Backups
 
+### What Ludock keeps
+
+After each new backup, Ludock removes the server's backups it no longer
+needs. It keeps:
+
+- the 3 newest backups;
+- the last backup of each of the 7 most recent days with a backup;
+- the last of each of the 4 most recent weeks with one;
+- the last of each of the 6 most recent months with one;
+- every backup an administrator keeps.
+
+A nightly schedule leaves about 14 backups reaching back five months. Only
+days, weeks, and months that have backups count, so backups taken rarely or
+only by hand are never removed for being old. Days follow Ludock's time zone
+(`TZ`). Safety backups taken before a restore or an update follow the same
+rule and are labeled in the list.
+
+To keep a backup for good, such as one before a big update, choose
+**Keep…** on it in **Backups** and add a note if you like. Retention never
+removes a kept backup and it can't be deleted until **Release** is chosen;
+kept backups still use disk space, and the list and **Settings** show how
+much. Retention never touches a backup being written, restored from,
+browsed, or downloaded.
+
 ### Storage
 
 With the example deployment, Ludock turns on backup storage by itself when
 `/backups` is the only approved root, passes the same checks as a manual save,
-and doesn't overlap game data. The defaults are 10 backups per server, a 100 GiB
-total limit, and 5 GiB of free disk space kept in reserve; change them in
-**Settings → Backup storage**. Once settings are saved, including turning
-storage off, Ludock never sets them up again. Turning on storage doesn't create
-backups or schedules.
+and doesn't overlap game data. **Settings → Backup storage** shows where
+backups go, how much space they and kept backups use, and the free space left.
+Once settings are saved, including turning storage off, Ludock never sets them
+up again. Turning on storage doesn't create backups or schedules.
+
+Under **Advanced** are the backup folder, a minimum of free space to leave on
+the backup disk and on game-data disks during restores (5 GiB by default),
+and an optional total limit for all backups, which is off by default.
 
 To keep backups on another disk, replace the `/backups` volume with a host
 folder that is writable and separate from game data:
@@ -322,6 +349,9 @@ If a custom container host name stops Ludock from verifying the mount, set
   before it runs.
 - **Space:** a new archive needs room before old ones are removed. The reserve
   applies while copying and while staging a restore on the game data's disk.
+  If the next backup might not fit, Ludock removes the server's oldest
+  backups first, never its 3 newest or kept ones; if there still isn't room,
+  the backup fails, saying how much kept backups use.
 - **Cancelled copies:** a forced stop (exit 137 or out of memory), a start from
   another tool, a replaced container, or another running container writing the
   same data cancels the copy.

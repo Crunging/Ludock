@@ -130,7 +130,7 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if logging := engine.HelperLogging(); logging["backup-helper"] != "none" {
 		t.Fatal(logging)
 	}
-	settings := Settings{Destination: destination, RetentionCount: 3, MaxBytes: 1 << 30, ReserveBytes: 0}
+	settings := Settings{Destination: destination, MaxBytes: 1 << 30, ReserveBytes: 0}
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
 	stoppedChecks := 0
 	size, checksum, err := helpers.WriteSnapshot(ctx, context, dataHelper, settings, id, 1<<30,
@@ -155,7 +155,8 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	if _, err := storage.Validate(destination, id, []Root{{ID: "root-0"}, {ID: "root-1"}}, 1<<30, checksum); !apperr.Is(err, "INVALID_BACKUP") {
 		t.Fatal(err)
 	}
-	if _, err := storage.Validate(destination, id, roots, 100, checksum); !apperr.Is(err, "BACKUP_CAPACITY") {
+	// An archive larger than its recorded size was changed.
+	if _, err := storage.Validate(destination, id, roots, 100, checksum); !apperr.Is(err, "INVALID_BACKUP") {
 		t.Fatal(err)
 	}
 	// Stage the archive into a restore stage of a writable helper.

@@ -144,7 +144,7 @@ func setup(t *testing.T) *fixture {
 			f.serverID = view.ID
 		}
 	}
-	if _, err := backupService.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 5, MaxBytes: 1 << 30},
+	if _, err := backupService.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: 1 << 30},
 		f.admin, f.adminSession); err != nil {
 		t.Fatal(err)
 	}
@@ -209,12 +209,12 @@ func TestBackupSettingsNeedAdminSession(t *testing.T) {
 	if err := f.jobs.DB.DeleteUserSessions(ctx, f.admin.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 1, MaxBytes: 1 << 30},
+	_, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, MaxBytes: 1 << 20},
 		f.admin, f.adminSession)
 	if !apperr.Is(err, "AUTHENTICATION_REQUIRED") {
 		t.Fatal(err)
 	}
-	if saved, _, _ := f.jobs.Backups.SavedSettings(ctx); saved == nil || saved.RetentionCount != 5 {
+	if saved, _, _ := f.jobs.Backups.SavedSettings(ctx); saved == nil || saved.MaxBytes != 1<<30 {
 		t.Fatal(saved)
 	}
 }
@@ -323,11 +323,10 @@ func TestRecoveryWithUnreadableRow(t *testing.T) {
 // Interrupted pruning is never offered and is retried.
 func TestInterruptedPruning(t *testing.T) {
 	f := setup(t)
-	if _, err := f.jobs.Backups.SaveSettings(ctx, backups.Settings{Destination: f.backupTo, RetentionCount: 1, MaxBytes: 1 << 30},
-		f.admin, f.adminSession); err != nil {
-		t.Fatal(err)
-	}
+	// The fourth backup of a day is the first retention removes.
 	old := f.run(t, "backup", nil).Result["backupId"].(string)
+	f.run(t, "backup", nil)
+	f.run(t, "backup", nil)
 	if _, err := f.jobs.DB.Exec(`CREATE TRIGGER no_prune BEFORE DELETE ON backups
 		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
 		t.Fatal(err)

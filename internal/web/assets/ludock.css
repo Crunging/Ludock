@@ -1074,6 +1074,13 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .backup-storage__values dd { font-family: var(--display); font-size: 21px; font-weight: 600; }
 .backup-storage__issues { color: var(--halt-text); font-size: 14px; }
 .admin-root-options { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.backup-storage__folder { grid-column: 1 / -1; }
+.backup-storage__folder dd { font-family: var(--font); font-size: 15px; }
+.backup-storage code, .admin-root-options code, .admin-setup-help code { overflow-wrap: anywhere; }
+.backup-usage { margin-bottom: 8px; color: var(--ink-2); font-size: 15px; }
+.backup-note { color: var(--ink-2); font-style: italic; }
+.keep-panel { margin: 0 0 20px; padding: 20px 22px; border-radius: var(--radius-lg); background: var(--block); max-width: 760px; }
+.keep-panel h3 { font-size: 17px; }
 .admin-settings-feedback { display: flex; }
 .admin-settings-feedback > a { flex: 0 1 auto; }
 .notification-destinations { display: grid; gap: var(--gap); }

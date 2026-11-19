@@ -282,6 +282,16 @@ var Migrations = []Migration{
       ) STRICT;
     `,
 	},
+	{
+		// Retention never removes a kept backup (kept_at set). reason names
+		// the work that took a backup for its own protection.
+		Version: 8,
+		SQL: `
+      ALTER TABLE backups ADD COLUMN kept_at INTEGER CHECK (kept_at >= 0);
+      ALTER TABLE backups ADD COLUMN note TEXT NOT NULL DEFAULT '';
+      ALTER TABLE backups ADD COLUMN reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update'));
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
