@@ -26,14 +26,14 @@ type ConnectionSettings struct {
 }
 
 // BackupSettingsView is the backup storage form. Sizes are GiB text so an
-// untouched value saves the exact byte count.
+// untouched value saves the exact byte count; an empty MaxGiB is no limit.
 type BackupSettingsView struct {
-	Configured                    bool
-	Destination                   string
-	Retention, MaxGiB, ReserveGiB string
-	Roots                         []string
-	Error                         string
-	Saved                         bool
+	Configured         bool
+	Destination        string
+	MaxGiB, ReserveGiB string
+	Roots              []string
+	Error              string
+	Saved              bool
 }
 
 // NotificationDestinationView is one destination's card.
@@ -127,68 +127,59 @@ templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 
 templ BackupSettingsForm(b BackupSettingsView) {
 	<form class="stack-form" id="backup-settings-form" hx-post="/settings/backups" hx-target="this" hx-swap="outerHTML">
-		<p>
-			if b.Configured {
-				Backups are on. You can change the destination and limits below.
-			} else {
-				Review the destination and limits, then save to enable backups.
-			}
-			Backups run only when started manually or by a schedule. Every backup stops its server for the entire copy.
-		</p>
 		if b.Configured {
 			<section class="backup-storage" aria-labelledby="backup-storage-summary-title" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="load" hx-swap="outerHTML">
-				<div class="backup-storage__header">
-					<h3 id="backup-storage-summary-title">Current storage</h3>
-				</div>
 				<p class="muted" role="status">Checking backup storage…</p>
 			</section>
-		}
-		<div class="admin-setup-help">
-			if len(b.Roots) > 0 {
-				<p>Configured backup folders (checked when you save):</p>
-				<div class="admin-root-options">
-					for _, root := range b.Roots {
-						<button type="button" class="secondary-btn" data-fill="backup-destination" data-fill-value={ root }>Use <code>{ root }</code></button>
-					}
-				</div>
-			} else {
+		} else if len(b.Roots) == 0 {
+			<div class="admin-setup-help">
 				<h3>Mount a backup folder first</h3>
 				<ol>
 					<li>Create a separate backup folder on the Docker host and mount it writable into Ludock, for example <code>/srv/ludock-backups:/backups</code>.</li>
 					<li>Set <code>LUDOCK_BACKUP_ROOTS=/backups</code> in Ludock’s <code>.env</code>, then run <code>docker compose up -d --force-recreate ludock</code> from its Compose folder to apply the mount and setting.</li>
-					<li>Enter that mounted path below, choose the limits, and save. You can then create a backup from a server’s Backups tab.</li>
+					<li>Enter that mounted path below and save. You can then create a backup from a server’s Backups tab.</li>
 				</ol>
-			}
-		</div>
-		<label>
-			Mounted destination path
-			<input id="backup-destination" name="destination" value={ b.Destination } placeholder="/backups" autocapitalize="none" spellcheck="false" aria-describedby="backup-destination-help" required/>
-		</label>
-		<p class="muted" id="backup-destination-help">An existing folder inside Ludock, separate from game data.</p>
-		<div class="form-columns">
-			<div>
-				<label>
-					Backups per server
-					<input type="number" name="retentionCount" min="1" max="1000" inputmode="numeric" value={ b.Retention } aria-describedby="backup-retention-help" required/>
-				</label>
-				<p class="muted" id="backup-retention-help">Older backups are removed after a new backup succeeds.</p>
 			</div>
-			<div>
-				<label>
-					Total backup limit (GiB)
-					<input type="number" name="maxGiB" min="0.000000001" step="any" inputmode="decimal" value={ b.MaxGiB } aria-describedby="backup-limit-help" required/>
-				</label>
-				<p class="muted" id="backup-limit-help">Combined size of backups across all servers. Leave room for the next backup before older backups are removed.</p>
+		} else {
+			<p>Backups are off. Choose a backup folder below and save to turn them on.</p>
+		}
+		<p class="muted">Backups run when you start one or a schedule does, and each one stops its server while it copies. Ludock keeps a spread of recent and older backups for each server and removes the rest; each server’s Backups tab says which.</p>
+		<details class="disclosure" id="backup-advanced" open?={ !b.Configured || b.Error != "" }>
+			<summary>Advanced</summary>
+			<div class="stack-form">
+				if len(b.Roots) > 1 {
+					<div class="admin-root-options">
+						for _, root := range b.Roots {
+							<button type="button" class="secondary-btn" data-fill="backup-destination" data-fill-value={ root }>Use <code>{ root }</code></button>
+						}
+					</div>
+				}
+				<div>
+					<label>
+						Backup folder
+						<input id="backup-destination" name="destination" value={ b.Destination } placeholder="/backups" autocapitalize="none" spellcheck="false" aria-describedby="backup-destination-help" required/>
+					</label>
+					<p class="muted" id="backup-destination-help">A folder mounted into Ludock and listed in <code>LUDOCK_BACKUP_ROOTS</code>, separate from game data.</p>
+				</div>
+				<div class="form-columns">
+					<div>
+						<label>
+							Minimum free space (GiB)
+							<input type="number" name="reserveGiB" min="0" step="any" inputmode="decimal" value={ b.ReserveGiB } aria-describedby="backup-reserve-help" required/>
+						</label>
+						<p class="muted" id="backup-reserve-help">Backups and restores never fill the backup disk or a game-data disk past this, leaving room for temporary files. Use 0 for none.</p>
+					</div>
+					<div>
+						<label>
+							Total limit for all backups (GiB)
+							<input type="number" name="maxGiB" min="0.000000001" step="any" inputmode="decimal" value={ b.MaxGiB } placeholder="No limit" aria-describedby="backup-limit-help"/>
+						</label>
+						<p class="muted" id="backup-limit-help">Optional. Leave empty to let backups use the disk down to the free-space minimum.</p>
+					</div>
+				</div>
+				<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
 			</div>
-			<div>
-				<label>
-					Minimum free space (GiB)
-					<input type="number" name="reserveGiB" min="0" step="any" inputmode="decimal" value={ b.ReserveGiB } aria-describedby="backup-reserve-help" required/>
-				</label>
-				<p class="muted" id="backup-reserve-help">Space to leave free on the backup disk and on game-data disks during restores. Use 0 for no reserve.</p>
-			</div>
-		</div>
-		<p class="muted">Allow extra disk space for temporary files during backups and restores.</p>
+		</details>
 		if b.Error != "" {
 			@Alert("error", b.Error)
 		}
@@ -198,7 +189,6 @@ templ BackupSettingsForm(b BackupSettingsView) {
 				<a href="/">Choose a server and open Backups to create a backup.</a>
 			</div>
 		}
-		<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
 	</form>
 }
 
@@ -206,23 +196,14 @@ templ BackupStorage(status backups.StorageStatus) {
 	<section class="backup-storage" aria-labelledby="backup-storage-summary-title" id="backup-storage">
 		<div class="backup-storage__header">
 			<h3 id="backup-storage-summary-title">Current storage</h3>
-			<button type="button" class="secondary-btn" hx-get="/fragments/settings/backup-storage" hx-target="#backup-storage" hx-swap="outerHTML" data-busy-label="Checking…">Refresh storage</button>
+			<button type="button" class="secondary-btn" hx-get="/fragments/settings/backup-storage" hx-target="#backup-storage" hx-swap="outerHTML" data-busy-label="Checking…">Refresh</button>
 		</div>
-		<p class="muted">Uses saved settings. Unsaved changes below do not affect these values.</p>
 		<dl class="backup-storage__values">
-			<div><dt>Archive usage</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
+			<div class="backup-storage__folder"><dt>Saved in</dt><dd><code>{ status.Destination }</code></dd></div>
+			<div><dt>Backups use</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
+			<div><dt>Kept backups</dt><dd>{ FormatBytes(status.KeptBytes) }</dd></div>
 			<div>
-				<dt>Configured limit</dt>
-				<dd>
-					if status.Configured {
-						{ FormatBytes(status.MaxBytes) }
-					} else {
-						Not configured
-					}
-				</dd>
-			</div>
-			<div>
-				<dt>Available disk space</dt>
+				<dt>Free on disk</dt>
 				<dd>
 					if status.AvailableBytes >= 0 {
 						{ FormatBytes(status.AvailableBytes) }
@@ -231,16 +212,9 @@ templ BackupStorage(status backups.StorageStatus) {
 					}
 				</dd>
 			</div>
-			<div>
-				<dt>Free-space reserve</dt>
-				<dd>
-					if status.Configured {
-						{ FormatBytes(status.ReserveBytes) }
-					} else {
-						Not configured
-					}
-				</dd>
-			</div>
+			if status.MaxBytes > 0 {
+				<div><dt>Total limit</dt><dd>{ FormatBytes(status.MaxBytes) }</dd></div>
+			}
 		</dl>
 		if len(status.Issues) > 0 {
 			<ul class="backup-storage__issues">
@@ -249,7 +223,6 @@ templ BackupStorage(status backups.StorageStatus) {
 				}
 			</ul>
 		}
-		<p class="muted">Available disk space is measured before the reserve. Storage and server data roots are checked again when a backup runs.</p>
 	</section>
 }
 

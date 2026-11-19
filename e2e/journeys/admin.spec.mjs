@@ -103,14 +103,34 @@ test("changing the public address and backup limits", async ({ page }) => {
   await page.goto("/");
   await expect(serverRow(page, "Survival")).toContainText("play.example.com:25565");
 
+  // Backup storage set itself up: the page says where backups go and what
+  // they use, and keeps the folder and limits under Advanced.
   await page.goto("/settings");
   const backups = page.locator("#backup-settings-form");
-  await expect(backups.locator("#backup-storage")).toContainText("Archive usage");
-  await backups.getByLabel("Backups per server").fill("3");
-  await backups.getByLabel("Total backup limit (GiB)").fill("2.5");
+  const storage = backups.locator("#backup-storage");
+  await expect(storage).toContainText("Saved in");
+  await expect(storage).toContainText("Backups use");
+  await expect(storage).toContainText("Free on disk");
+  await expect(storage).not.toContainText("Total limit");
+  await expect(backups.getByLabel("Backup folder")).toBeHidden();
+  await backups.getByText("Advanced").click();
+  await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("");
+  await backups.getByLabel("Total limit for all backups (GiB)").fill("2.5");
   await backups.getByRole("button", { name: "Save backup settings" }).click();
   await expect(backups.locator(".alert--success")).toContainText("Backup settings saved.");
-  await expect(backups.getByLabel("Total backup limit (GiB)")).toHaveValue("2.5");
+  await expect(storage).toContainText("Total limit2.5 GiB");
+  await backups.getByText("Advanced").click();
+  await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("2.5");
+  await backups.getByLabel("Total limit for all backups (GiB)").fill("");
+  await backups.getByRole("button", { name: "Save backup settings" }).click();
+  await expect(storage).not.toContainText("Total limit");
+
+  // The long backup folder path wraps instead of widening a phone screen.
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.reload();
+  await expect(storage).toContainText("Saved in");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await page.setViewportSize({ width: 1280, height: 800 });
 
   // Restore the default address so other journeys see the page's own host.
   await page.locator("#connection-form").getByLabel("Public address").fill("");

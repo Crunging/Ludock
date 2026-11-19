@@ -401,10 +401,10 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		}
 		size += int64(len(chunk))
 		if size > availableBytes {
-			return fail("BACKUP_CAPACITY", "The backup exceeds the global byte limit. Remove older backups or increase the limit.")
+			return CapacityError(codeLimit, 0)
 		}
 		if size > diskBudget {
-			return fail("BACKUP_CAPACITY", "The backup destination does not have enough free space above its configured reserve.")
+			return CapacityError(codeDisk, 0)
 		}
 		if size-checked > 16*1024*1024 {
 			checked = size
@@ -698,7 +698,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	}, func(chunk []byte) error {
 		total += int64(len(chunk))
 		if total > maxBytes {
-			return fail("BACKUP_CAPACITY", "The archive exceeds its configured size limit.")
+			return errGrown
 		}
 		hash.Write(chunk)
 		return nil

@@ -44,11 +44,17 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 			return b
 		}
 		s.readBackups(r, &b)
-		if id := r.URL.Query().Get("restore"); id != "" {
-			for index := range b.Backups {
-				if b.Backups[index].ID == id && b.Backups[index].State == "complete" {
-					b.Restore = &b.Backups[index]
-				}
+		restore, keep := r.URL.Query().Get("restore"), r.URL.Query().Get("keep")
+		for index := range b.Backups {
+			backup := &b.Backups[index]
+			if backup.State != "complete" {
+				continue
+			}
+			if backup.ID == restore {
+				b.Restore = backup
+			}
+			if backup.ID == keep && backup.KeptAt == 0 {
+				b.Keep = backup
 			}
 		}
 	}
@@ -149,14 +155,18 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, request *Reques
 	changed(w)
 }
 
-// followOperation shows queued work on the server's page, swapping the page
-// body in place like its tabs do.
+// followOperation shows queued work on the server's page.
 func followOperation(w http.ResponseWriter, serverID string, job *ops.Job) {
+	showInPage(w, views.OperationPath(serverID, job.Kind, job.ID))
+}
+
+// showInPage moves to another view of a server, swapping the page body in
+// place like its tabs do.
+func showInPage(w http.ResponseWriter, path string) {
 	var location strings.Builder
 	encoder := json.NewEncoder(&location)
 	encoder.SetEscapeHTML(false)
-	encoder.Encode(map[string]string{"path": views.OperationPath(serverID, job.Kind, job.ID),
-		"target": "#detail-body", "select": "#detail-body", "swap": "outerHTML"})
+	encoder.Encode(map[string]string{"path": path, "target": "#detail-body", "select": "#detail-body", "swap": "outerHTML"})
 	w.Header().Set("HX-Location", strings.TrimSpace(location.String()))
 }
 
@@ -218,6 +228,41 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 	s.audit(r, request, "backup.deleted", id, map[string]any{"backupId": backupID})
 	w.Header().Set("HX-Trigger", "backups-changed, servers-changed")
 	render(w, r, http.StatusOK, views.Alert("success", "Backup deleted."))
+}
+
+// keepBackup and releaseBackup let an administrator who can read a server's
+// archives exempt one from retention, or end that.
+func (s *Server) keepBackup(w http.ResponseWriter, r *http.Request, request *Request) {
+	id, backupID := r.PathValue("id"), r.PathValue("backup")
+	err := s.assertArchives(r, request, id)
+	if err == nil {
+		err = s.App.Backups.Keep(r.Context(), id, backupID, r.PostFormValue("note"), request.User(), request.Principal.TokenHash)
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	s.audit(r, request, "backup.kept", id, map[string]any{"backupId": backupID})
+	showInPage(w, "/servers/"+id+"?tab=backups")
+}
+
+func (s *Server) releaseBackup(w http.ResponseWriter, r *http.Request, request *Request) {
+	id, backupID := r.PathValue("id"), r.PathValue("backup")
+	err := s.assertArchives(r, request, id)
+	if err == nil {
+		err = s.App.Backups.Release(r.Context(), id, backupID, request.User(), request.Principal.TokenHash)
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	s.audit(r, request, "backup.released", id, map[string]any{"backupId": backupID})
+	w.Header().Set("HX-Trigger", "backups-changed")
+	render(w, r, http.StatusOK, views.Alert("success", "Backup released. Retention can remove it like any other."))
+}
+
+func (s *Server) assertArchives(r *http.Request, request *Request, id string) error {
+	return s.archiveAccess(r.Context(), request, id)()
 }
 
 // downloadBackup streams an archive, checking access again every second;

@@ -179,3 +179,49 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   }
   expect(backupCount).toBeGreaterThan(0);
 });
+
+test("keeping a backup with a note, seeing it outlast retention, and releasing it", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  const retention = page.locator("#backup-retention");
+  await expect(retention).toContainText("Ludock keeps the 3 newest backups, plus the last one of each of the 7 most recent days");
+  await expect(retention).toContainText("Backups you keep are never removed.");
+  const rows = page.locator("#backup-list tbody tr");
+  const backUp = async () => {
+    // Work an earlier journey started on Survival may still be finishing.
+    await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+    await page.getByRole("button", { name: "Create backup" }).click();
+    await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+    await expectOperationSucceeded(page);
+    await page.getByRole("link", { name: "Dismiss" }).click();
+  };
+  await backUp();
+
+  await rows.first().getByRole("link", { name: "Keep…" }).click();
+  const keep = page.locator("#keep-backup");
+  await expect(keep).toContainText("Ludock never removes a kept backup");
+  await keep.getByLabel(/Note/).fill("before 1.21 update");
+  await keep.getByRole("button", { name: "Keep backup" }).click();
+  await expect(keep).toHaveCount(0);
+  const kept = rows.filter({ hasText: "before 1.21 update" });
+  await expect(kept).toContainText("kept");
+  await expect(kept.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(page.locator("#backup-usage")).toContainText("of it in kept backups");
+  const browse = await kept.getByRole("link", { name: "Browse" }).getAttribute("href");
+
+  // Four newer backups leave the three newest and the kept one.
+  for (let count = 0; count < 4; count++) await backUp();
+  await expect(rows).toHaveCount(4);
+  await expect(kept).toHaveCount(1);
+  await expect(rows.first()).not.toContainText("before 1.21 update");
+
+  // Released, it is the oldest, so the next backup removes it.
+  await kept.getByRole("button", { name: "Release" }).click();
+  await expect(page.locator("#detail-status")).toContainText("Backup released.");
+  await expect(kept).toHaveCount(0);
+  await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(1);
+  await expect(page.locator("#backup-usage")).not.toContainText("kept");
+  await backUp();
+  await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(0);
+  await expect(rows).toHaveCount(3);
+});

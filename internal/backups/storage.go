@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 
@@ -21,17 +22,23 @@ import (
 )
 
 type Settings struct {
-	Destination    string `json:"destination"`
-	RetentionCount int    `json:"retentionCount"`
-	MaxBytes       int64  `json:"maxBytes"`
-	ReserveBytes   int64  `json:"reserveBytes"`
+	Destination string `json:"destination"`
+	// MaxBytes caps all servers' archives together; 0 means no cap, so only
+	// the free-space reserve limits them.
+	MaxBytes     int64 `json:"maxBytes"`
+	ReserveBytes int64 `json:"reserveBytes"`
 }
 
 const (
-	DefaultRetention = 10
-	DefaultMaxBytes  = 100 << 30
-	DefaultReserve   = 5 << 30
+	DefaultReserve = 5 << 30
+	maxSetting     = 1<<53 - 1
 )
+
+// valid checks the limits; Storage.ValidateSettings also checks the folder.
+func (s Settings) valid() bool {
+	return s.Destination != "" && textutil.Length(s.Destination) <= 1024 && s.MaxBytes >= 0 && s.MaxBytes <= maxSetting &&
+		s.ReserveBytes >= 0 && s.ReserveBytes <= maxSetting
+}
 
 type Root struct {
 	ID   string `json:"id"`
@@ -69,6 +76,72 @@ type Storage struct {
 	// Roots are approved destinations, ':'-separated; Self names Ludock's
 	// own container.
 	Roots, Self string
+
+	// readers counts open archives by backup ID, and claimed holds archives
+	// retention is removing, so it never removes one being read.
+	usageMu sync.Mutex
+	readers map[string]int
+	claimed map[string]bool
+}
+
+// claimIdle reserves an archive no one is reading for removal; release
+// ends the claim.
+func (s *Storage) claimIdle(id string) (release func(), ok bool) {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	if s.readers[id] > 0 || s.claimed[id] {
+		return nil, false
+	}
+	if s.claimed == nil {
+		s.claimed = map[string]bool{}
+	}
+	s.claimed[id] = true
+	return func() {
+		s.usageMu.Lock()
+		delete(s.claimed, id)
+		s.usageMu.Unlock()
+	}, true
+}
+
+// Reading reports whether an archive is open for reading.
+func (s *Storage) Reading(id string) bool {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	return s.readers[id] > 0
+}
+
+func (s *Storage) startRead(id string) bool {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	if s.claimed[id] {
+		return false
+	}
+	if s.readers == nil {
+		s.readers = map[string]int{}
+	}
+	s.readers[id]++
+	return true
+}
+
+func (s *Storage) endRead(id string) {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	if s.readers[id]--; s.readers[id] <= 0 {
+		delete(s.readers, id)
+	}
+}
+
+// Archive is an open backup archive; retention leaves it alone until it
+// is closed.
+type Archive struct {
+	*os.File
+	once sync.Once
+	done func()
+}
+
+func (a *Archive) Close() error {
+	a.once.Do(a.done)
+	return a.File.Close()
 }
 
 func NewStorage(client *docker.Client, roots []string, self string) *Storage {
@@ -78,9 +151,7 @@ func NewStorage(client *docker.Client, roots []string, self string) *Storage {
 // ValidateSettings checks limits, the destination, and that it is a
 // writable mount of Ludock's own container.
 func (s *Storage) ValidateSettings(ctx context.Context, settings Settings) (Settings, error) {
-	if settings.Destination == "" || textutil.Length(settings.Destination) > 1024 || settings.RetentionCount < 1 ||
-		settings.RetentionCount > 1000 || settings.MaxBytes <= 0 || settings.MaxBytes > 1<<53-1 ||
-		settings.ReserveBytes < 0 || settings.ReserveBytes > 1<<53-1 {
+	if !settings.valid() {
 		return settings, apperr.New("INVALID_REQUEST", 400, "Invalid request")
 	}
 	directory, err := s.ApprovedDirectory(settings.Destination)
@@ -217,7 +288,7 @@ func budget(directory pinned, reserve, additional int64) (int64, error) {
 	}
 	available := helper.FreeBytes(&stat) - reserve
 	if available < additional {
-		return 0, fail("BACKUP_CAPACITY", "The backup destination does not have enough free space above its configured reserve.")
+		return 0, CapacityError(codeDisk, 0)
 	}
 	return available, nil
 }
@@ -268,10 +339,26 @@ func (s *Storage) RemovePartial(directory, id string) error {
 	return nil
 }
 
-func (s *Storage) Open(directory, id string) (*os.File, error) {
+func (s *Storage) Open(directory, id string) (*Archive, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
+	missing := fail("INVALID_BACKUP", "The backup archive is missing or unreadable.")
+	if !s.startRead(id) {
+		return nil, missing
+	}
+	file, err := s.openFile(directory, id)
+	if err != nil {
+		s.endRead(id)
+		if _, ok := apperr.As(err); !ok {
+			err = missing
+		}
+		return nil, err
+	}
+	return &Archive{File: file, done: func() { s.endRead(id) }}, nil
+}
+
+func (s *Storage) openFile(directory, id string) (*os.File, error) {
 	dir, err := s.pin(directory)
 	if err != nil {
 		return nil, err

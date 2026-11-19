@@ -28,16 +28,17 @@ func pageHost(r *http.Request) string {
 // backupSettingsView shows the saved settings, or defaults with the single
 // approved root, as new settings.
 func (s *Server) backupSettingsView(r *http.Request) views.BackupSettingsView {
-	b := views.BackupSettingsView{Roots: s.App.Config.BackupRoots, Retention: strconv.Itoa(backups.DefaultRetention),
-		MaxGiB: gibText(backups.DefaultMaxBytes), ReserveGiB: gibText(backups.DefaultReserve)}
+	b := views.BackupSettingsView{Roots: s.App.Config.BackupRoots, ReserveGiB: gibText(backups.DefaultReserve)}
 	saved, _, err := s.App.Backups.SavedSettings(r.Context())
 	if err != nil {
 		b.Error = publicMessage(err)
 	}
 	if saved != nil {
 		b.Configured = true
-		b.Destination, b.Retention = saved.Destination, strconv.Itoa(saved.RetentionCount)
-		b.MaxGiB, b.ReserveGiB = gibText(saved.MaxBytes), gibText(saved.ReserveBytes)
+		b.Destination, b.ReserveGiB = saved.Destination, gibText(saved.ReserveBytes)
+		if saved.MaxBytes > 0 {
+			b.MaxGiB = gibText(saved.MaxBytes)
+		}
 	} else if len(b.Roots) == 1 {
 		b.Destination = b.Roots[0]
 	}
@@ -117,17 +118,18 @@ func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request,
 func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, request *Request) {
 	b := s.backupSettingsView(r)
 	b.Destination = strings.TrimSpace(r.PostFormValue("destination"))
-	b.Retention, b.MaxGiB, b.ReserveGiB = r.PostFormValue("retentionCount"), r.PostFormValue("maxGiB"), r.PostFormValue("reserveGiB")
+	b.MaxGiB, b.ReserveGiB = strings.TrimSpace(r.PostFormValue("maxGiB")), strings.TrimSpace(r.PostFormValue("reserveGiB"))
 	invalid := apperr.New("INVALID_REQUEST", 400,
-		"Check the backup settings: enter a destination, 1–1,000 backups per server, a positive total limit, and a free-space reserve of zero or more.")
-	retention, retentionErr := strconv.Atoi(strings.TrimSpace(b.Retention))
-	maxGiB, maxErr := strconv.ParseFloat(strings.TrimSpace(b.MaxGiB), 64)
-	reserveGiB, reserveErr := strconv.ParseFloat(strings.TrimSpace(b.ReserveGiB), 64)
+		"Check the backup settings: choose a folder, a free-space reserve of zero or more, and a total limit above zero or none.")
+	maxGiB, maxErr := 0.0, error(nil)
+	if b.MaxGiB != "" {
+		maxGiB, maxErr = strconv.ParseFloat(b.MaxGiB, 64)
+	}
+	reserveGiB, reserveErr := strconv.ParseFloat(b.ReserveGiB, 64)
 	var err error
-	settings := backups.Settings{Destination: b.Destination, RetentionCount: retention,
-		MaxBytes: int64(math.Round(maxGiB * gib)), ReserveBytes: int64(math.Round(reserveGiB * gib))}
-	if b.Destination == "" || retentionErr != nil || maxErr != nil || reserveErr != nil || retention < 1 || retention > 1000 ||
-		settings.MaxBytes <= 0 || settings.ReserveBytes < 0 || math.IsInf(maxGiB, 0) || math.IsInf(reserveGiB, 0) {
+	settings := backups.Settings{Destination: b.Destination, MaxBytes: int64(math.Round(maxGiB * gib)), ReserveBytes: int64(math.Round(reserveGiB * gib))}
+	if b.Destination == "" || maxErr != nil || reserveErr != nil || (b.MaxGiB != "" && settings.MaxBytes <= 0) ||
+		settings.MaxBytes < 0 || settings.ReserveBytes < 0 || math.IsInf(maxGiB, 0) || math.IsInf(reserveGiB, 0) {
 		err = invalid
 	} else if err = s.recheckAdmin(r.Context(), request); err == nil {
 		settings, err = s.App.Backups.SaveSettings(r.Context(), settings, request.User(), request.Principal.TokenHash)

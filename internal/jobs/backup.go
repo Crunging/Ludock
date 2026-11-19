@@ -27,14 +27,14 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 	if err := j.assertStopped(ctx, server, job); err != nil {
 		return nil, err
 	}
-	if err := j.Backups.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
-		return nil, err
-	}
-	used, err := j.Backups.ArchiveBytes(ctx)
+	used, kept, err := j.Backups.ArchiveBytes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	available, err := backups.Remaining(settings, used)
+	if err := j.Backups.Storage.AssertSpace(settings.Destination, settings.ReserveBytes, 0); err != nil {
+		return nil, backups.ExplainCapacity(err, kept)
+	}
+	available, err := backups.Remaining(settings, used, kept)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +105,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		}()
 		size, checksum, err := j.Backups.Helpers.WriteSnapshot(ctx, server, data, settings, id, available, assertCopy,
 			func() error { return j.dataAuthority(ctx, server, job) })
+		err = backups.ExplainCapacity(err, kept)
 		stop()
 		<-watched
 		mu.Lock()
@@ -124,6 +125,9 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		}
 		backup := &backups.Backup{ID: id, ServerID: server.Logical.ID, Roots: data.Roots, Size: size, Checksum: checksum,
 			CreatedAt: time.Now().UnixMilli(), State: "complete"}
+		if kind := job.Job.Kind; kind == "restore" || kind == "update" {
+			backup.Reason = kind
+		}
 		if err := j.Backups.Record(ctx, *backup, server.Logical.BindingFingerprint, settings.Destination); err != nil {
 			return nil, err
 		}
@@ -132,8 +136,8 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err := job.Progress("backup_complete", func(r *ops.Recovery) { r.BackupComplete = true }, nil); err != nil {
 			log.Warn("Could not save a backup's completion marker; its record is already saved")
 		}
-		keep, _ := text(job.Job.Input["backupId"])
-		if err := j.Backups.Prune(ctx, server.Logical.ID, settings.RetentionCount, keep); err != nil {
+		source, _ := text(job.Job.Input["backupId"])
+		if err := j.Backups.Prune(ctx, server.Logical.ID, settings, id, source); err != nil {
 			return nil, err
 		}
 		return backup, nil

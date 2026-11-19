@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,7 +123,7 @@ func TestABackupWaitsForStorageSetupUnderWay(t *testing.T) {
 		close(entered)
 		time.Sleep(100 * time.Millisecond)
 		if _, err := d.Exec(`INSERT INTO settings(key,value_json) VALUES('backups',?)`,
-			`{"destination":"`+s.Storage.Roots+`","retentionCount":3,"maxBytes":1073741824,"reserveBytes":0}`); err != nil {
+			`{"destination":"`+s.Storage.Roots+`","maxBytes":0,"reserveBytes":0}`); err != nil {
 			t.Error(err)
 		}
 		close(saved)
@@ -197,5 +198,71 @@ func TestAssertNoOtherWriters(t *testing.T) {
 		Mounts: []docker.MountPoint{{Type: "bind", Source: filepath.Join(data, "world"), Destination: "/world", RW: true}}})
 	if err := s.AssertNoOtherWriters(ctx, server, ""); !apperr.Is(err, "SHARED_DATA_WRITER") {
 		t.Fatal(err)
+	}
+}
+
+// Retention leaves alone a backup an administrator keeps, even one kept
+// after Prune listed it, and an archive open for a download or browse until
+// it is closed. Deleting a kept backup is refused.
+func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
+	s, first, _ := recorded(t)
+	destination := s.Storage.Roots
+	var fingerprint string
+	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
+	ids := []string{first.ID}
+	for index := 1; index < 7; index++ {
+		backup := Backup{ID: identity.NewUUID(), ServerID: first.ServerID, CreatedAt: int64(index) * 60_000, State: "complete"}
+		if err := os.WriteFile(filepath.Join(destination, backup.ID+".tar"), []byte("archive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Record(ctx, backup, fingerprint, destination); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, backup.ID)
+	}
+	// ids is oldest first: keep the oldest, read the second.
+	s.DB.Exec("UPDATE backups SET kept_at=1, note='before 1.21' WHERE id=?", ids[0])
+	if err := s.Delete(ctx, first.ServerID, ids[0], nil); !apperr.Is(err, "BACKUP_KEPT") {
+		t.Fatal("deleted a kept backup", err)
+	}
+	archive, err := s.Storage.Open(destination, ids[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{Destination: destination}
+	if err := s.Prune(ctx, first.ServerID, settings, ids[6]); err != nil {
+		t.Fatal(err)
+	}
+	present := func() []string {
+		var left []string
+		for _, id := range ids {
+			_, statErr := os.Stat(filepath.Join(destination, id+".tar"))
+			if exists, _ := s.Exists(ctx, id, true); exists != (statErr == nil) {
+				t.Fatal("record and archive disagree for", id)
+			} else if exists {
+				left = append(left, id)
+			}
+		}
+		return left
+	}
+	if left := present(); !slices.Equal(left, []string{ids[0], ids[1], ids[4], ids[5], ids[6]}) {
+		t.Fatal(left)
+	}
+	archive.Close()
+	if err := s.Prune(ctx, first.ServerID, settings, ids[6]); err != nil {
+		t.Fatal(err)
+	}
+	if left := present(); !slices.Equal(left, []string{ids[0], ids[4], ids[5], ids[6]}) {
+		t.Fatal(left)
+	}
+	// A backup kept after retention chose it is not marked for deletion.
+	s.DB.Exec("UPDATE backups SET kept_at=1 WHERE id=?", ids[4])
+	backup, _ := s.Get(ctx, first.ServerID, ids[4])
+	backup.KeptAt = 0
+	if err := s.remove(ctx, backup, nil); !errors.Is(err, errKept) {
+		t.Fatal(err)
+	}
+	if left := present(); !slices.Equal(left, []string{ids[0], ids[4], ids[5], ids[6]}) {
+		t.Fatal(left)
 	}
 }
