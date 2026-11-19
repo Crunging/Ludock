@@ -615,6 +615,25 @@ type helperReply struct {
 	Status   *helper.StatusResult
 }
 
+// RemoveLeftovers removes console helpers left by an earlier process: one
+// may still be sending a command, and none holds its server's lock. One
+// Ludock runs per Docker host, so at startup every one is left over.
+func (r *Runtime) RemoveLeftovers(ctx context.Context) error {
+	helpers, err := r.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=console-helper"}})
+	if err != nil {
+		return err
+	}
+	for _, candidate := range helpers {
+		if candidate.Labels["ludock.internal"] != "console-helper" {
+			continue
+		}
+		if err := r.Docker.RemoveHelper(ctx, candidate.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) networkHelper(ctx context.Context, containerID string, request helper.NetworkConsoleRequest, assertAccess func() error) (helperReply, error) {
 	check := func() error {
 		if ctx.Err() != nil {
@@ -681,7 +700,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"},
 		HostConfig: &docker.HostConfig{NetworkMode: "container:" + containerID, ReadonlyRootfs: true, AutoRemove: true,
 			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"}, PidsLimit: 64, Memory: 256 * 1024 * 1024,
-			NanoCpus: 1_000_000_000}})
+			NanoCpus: 1_000_000_000, LogConfig: launch.NoLogs}})
 	helperRef := created
 	if helperRef == "" {
 		// A lost create response may still have created the named helper.

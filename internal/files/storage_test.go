@@ -284,6 +284,18 @@ func TestIdleListingHelperIsRemoved(t *testing.T) {
 	}
 }
 
+// File helpers keep no Docker logs; the mount validator is read through
+// its logs.
+func TestHelpersKeepNoLogs(t *testing.T) {
+	f := setup(t)
+	if err := f.service.Mkdir(ctx, f.target, "root-0", "", "logs", nil); err != nil {
+		t.Fatal(err)
+	}
+	if logging := f.engine.HelperLogging(); logging["file-helper"] != "none" || logging["mount-validator"] != "" {
+		t.Fatal(logging)
+	}
+}
+
 // Failed changes remove their helper before returning.
 func TestFailedChangeRemovesHelper(t *testing.T) {
 	f := setup(t)

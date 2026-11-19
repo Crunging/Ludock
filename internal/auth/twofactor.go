@@ -137,8 +137,10 @@ func (s *Service) CompleteLogin(ctx context.Context, token, code string, client 
 		err = s.DB.CompleteSignInChallenge(ctx, tokenHash, step, recoveryHash, session)
 		switch {
 		case err == nil:
+			// The session is saved and its challenge spent, so the sign-in
+			// stands; failure counts left behind expire with their window.
 			if err := s.clearLoginKeys(ctx, keys.accountSource, keys.account, accountCodes); err != nil {
-				return nil, err
+				log.Warn("Could not clear sign-in failure counts after a sign-in")
 			}
 			return &Principal{User: user, Token: sessionToken, TokenHash: session.TokenHash}, nil
 		case errors.Is(err, db.ErrChallengeGone), errors.Is(err, db.ErrAccountChanged):

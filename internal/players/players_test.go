@@ -3,6 +3,7 @@ package players
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,32 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
 		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port), "ludock.query": "disabled"},
 		Env:    []string{"RCON_PASSWORD=secret"}})
+	players, server := gameService(t, engine)
+	players.Check(ctx, server)
+	<-answered
+	online = "Theo"
+	players.Check(ctx, server)
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		players.mu.Lock()
+		reading := players.readings[server]
+		players.mu.Unlock()
+		if reading != nil && len(reading.Names) == 1 && reading.Names[0] == "Theo" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second check was dropped:", reading)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// gameService reads players from the games on engine, which has one server,
+// and returns that server's ID.
+func gameService(t *testing.T, engine *fakedocker.Engine) (*Service, string) {
+	t.Helper()
+	ctx := context.Background()
 	d := dbtest.Open(t)
 	client := docker.New(engine.Socket)
 	store := &identity.Store{DB: d}
@@ -58,24 +85,40 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 	players := &Service{Servers: service, Identity: store,
 		Source: &GameSource{Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
 	t.Cleanup(players.Stop)
+	return players, views[0].ID
+}
 
-	players.Check(ctx, views[0].ID)
-	<-answered
-	online = "Theo"
-	players.Check(ctx, views[0].ID)
-	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		players.mu.Lock()
-		reading := players.readings[views[0].ID]
-		players.mu.Unlock()
-		if reading != nil && len(reading.Names) == 1 && reading.Names[0] == "Theo" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the second check was dropped:", reading)
-		}
-		time.Sleep(10 * time.Millisecond)
+// A Palworld console password of a few digits occurs inside an online
+// player's Steam ID. The list still reads, a name holding the password shows
+// it redacted, and a name cut to the length limit partway into the password
+// shows none of it.
+func TestSecretInsidePlayerID(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	port, err := fakedocker.ServeRCON("4242", func(string) string {
+		return "name,playeruid,steamid\nAda,1234567890,76561198042420001\nx4242y,1234567891,76561198000000002\n" +
+			strings.Repeat("a", 63) + "4242,1234567892,76561198000000003\n"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: true,
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.query": "disabled"},
+		Env:    []string{"RCON_ENABLED=true", "RCON_PORT=" + fmt.Sprint(port), "ADMIN_PASSWORD=4242"}})
+	players, server := gameService(t, engine)
+	identified, err := players.Identity.Get(context.Background(), server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reading, err := players.Source.Read(context.Background(), *identified)
+	if err != nil || reading == nil || reading.Failed {
+		t.Fatal(reading, err)
+	}
+	if reading.Online != 3 || strings.Join(reading.Names, ",") != "Ada,x[redacted]y,"+strings.Repeat("a", 63) {
+		t.Fatal(reading.Players)
 	}
 }
 

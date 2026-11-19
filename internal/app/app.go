@@ -150,8 +150,8 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	return a, nil
 }
 
-// Start removes leftover file helpers and reconciles interrupted operations,
-// then runs the tick every 15 s. Recovery is retried with backoff until it
+// Start removes leftover file and console helpers and reconciles interrupted
+// operations, then runs the tick every 15 s. Recovery is retried with backoff until it
 // succeeds, since no work may take locks while an earlier writer remains.
 func (a *App) Start(ctx context.Context) {
 	// A page opened between ticks shows players without waiting for the next.
@@ -166,8 +166,12 @@ func (a *App) Start(ctx context.Context) {
 	// before the server listens, so none can take them first.
 	lift := a.Locks.Fence()
 	recoverStartup := func() error {
-		// A file command interrupted by the restart may still be writing.
+		// A file command interrupted by the restart may still be writing,
+		// and a console helper may still be sending a command.
 		if err := a.Files.RemoveLeftovers(ctx); err != nil {
+			return err
+		}
+		if err := a.Console.RemoveLeftovers(ctx); err != nil {
 			return err
 		}
 		return a.Runner.Start(ctx, lift)

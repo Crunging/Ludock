@@ -257,6 +257,31 @@ func TestSilentGameOutage(t *testing.T) {
 	}
 }
 
+// A game stops answering, then Docker becomes unreachable for a while. When
+// Docker returns and no recent query says whether the game answers, the
+// outage stays; only an answer recovers it.
+func TestSilentOutageSurvivesDockerOutage(t *testing.T) {
+	s, events, server := setup(t)
+	game := GameAnswering
+	s.Game = func(string, servers.Container) GameAnswer { return game }
+	s.Check(ctx, state("running", "healthy"), 1000)
+	game = GameNotAnswering
+	s.Check(ctx, state("running", "healthy"), 2000)
+	s.Check(ctx, state("running", "healthy"), 62_000)
+	s.Check(ctx, nil, 70_000)
+	game = GameUnknown
+	s.Check(ctx, state("running", "healthy"), 80_000)
+	if found, _ := problem(s, server.ID, 80_000); found == nil || found.State != NotAnswering || found.OutageStartedAt != 2000 {
+		t.Fatal("an unknown game recovered", found)
+	}
+	game = GameAnswering
+	s.Check(ctx, state("running", "healthy"), 90_000)
+	if len(events.events) != 2 || events.events[0] != "Minecraft is running, but the game stopped answering." ||
+		events.events[1] != "Minecraft recovered." {
+		t.Fatal(events.events)
+	}
+}
+
 // An outage already shown on pages that turns out to be a silent game tells
 // open pages its new reason, though no new alert goes out.
 func TestOutageReasonChangeUpdatesPages(t *testing.T) {

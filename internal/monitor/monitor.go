@@ -430,9 +430,11 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			notified = 1
 		}
 		lastState := string(server.Status)
-		if unavailable {
+		// A silent game keeps its state while Docker is unreachable, since
+		// only the game answering ends that outage.
+		if unavailable && r.lastState.String != NotAnswering {
 			lastState = "docker_unavailable"
-		} else if silent {
+		} else if unavailable || silent {
 			lastState = NotAnswering
 		} else if found && server.ContainerID != "" {
 			lastState = container.State

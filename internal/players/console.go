@@ -3,8 +3,10 @@ package players
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/games"
@@ -73,12 +75,22 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading
 		return reading, nil
 	}
 	if probe.Adapter != nil && result.ResponseErr == nil {
-		// Redacted before parsing, so no name carries a secret.
-		var redacted strings.Builder
-		redactor := console.NewRedactor(observed.Observation.Secrets, func(value string) { redacted.WriteString(value) })
-		redactor.Push(result.Response)
-		redactor.End()
-		if players, ok := probe.Adapter.Players.Parse(redacted.String()); ok {
+		// Parsed raw, since a short secret can occur inside a player ID that
+		// the strict parsers check; the names are what is kept, so they are
+		// redacted instead.
+		if players, ok := probe.Adapter.Players.Parse(result.Response); ok {
+			secrets := append(slices.Clone(observed.Observation.Secrets), result.Secrets...)
+			for index, name := range players.Names {
+				var safe strings.Builder
+				redactor := console.NewRedactor(secrets, func(part string) { safe.WriteString(part) })
+				redactor.Push(name)
+				// A name cut to the limit may end partway into a secret, so
+				// that tail stays withheld.
+				if utf8.RuneCountInString(name) < games.MaxNameRunes {
+					redactor.End()
+				}
+				players.Names[index] = safe.String()
+			}
 			reading.Players, reading.Failed, reading.Via = players, false, ViaConsole
 		}
 	}

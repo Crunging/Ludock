@@ -99,6 +99,19 @@ export function dockerAction(container, action) {
   });
 }
 
+/** Calls one of the fake daemon's journey controls, such as /fake/disk. */
+export function fake(path, query = {}) {
+  return new Promise((resolve, reject) => {
+    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
+      path: path + "?" + new URLSearchParams(query) }, (response) => {
+      response.resume();
+      response.on("end", resolve);
+    });
+    call.on("error", reject);
+    call.end();
+  });
+}
+
 /** Creates an account with a password through the users page. */
 export async function createUser(page, username, password, role) {
   await page.goto("/users");

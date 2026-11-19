@@ -138,6 +138,12 @@
           window.location.assign("/login");
           return;
         }
+        if (response.status === 202) {
+          // The server could not tell whether the file was written.
+          var unknown = new Error(errorText(response, await response.text()));
+          unknown.unconfirmed = true;
+          throw unknown;
+        }
         if (!response.ok) throw new Error(errorText(response, await response.text()));
         completed += 1;
       }
@@ -146,6 +152,8 @@
       if (controller.signal.aborted) {
         show("success", "Upload canceled. " + completed + " of " + files.length + " files confirmed complete. Check “" + current +
           "” before retrying; canceling does not undo data already written.");
+      } else if (error && error.unconfirmed) {
+        show("error", "Uploaded " + completed + " of " + files.length + " files. " + error.message);
       } else {
         show("error", "Uploaded " + completed + " of " + files.length + " files. Could not upload “" + current + "”: " +
           (error && error.message ? error.message : "Upload failed."));

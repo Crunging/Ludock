@@ -80,6 +80,10 @@ func (d DiskState) alerting() bool {
 type MemoryState struct {
 	AlertSince int64 `json:"alertSince,omitempty"`
 	Notified   bool  `json:"notified,omitempty"`
+	// Revision is the binding judged; only samples from its first checked
+	// minute, From, count.
+	Revision int64 `json:"revision,omitempty"`
+	From     int64 `json:"from,omitempty"`
 }
 
 // over decides an alert from a percentage: it starts at threshold and, once
@@ -218,8 +222,17 @@ func resetAlerts(ctx context.Context, tx *sql.Tx, serverID string, previous, pol
 	}
 	if !policy.Enabled || previous.MemoryAlert != policy.MemoryAlert || previous.MemoryPercent != policy.MemoryPercent ||
 		previous.MemoryMinutes != policy.MemoryMinutes {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key=?", memoryKey(serverID)); err != nil {
+		// The binding and its first judged minute outlast the alert.
+		var memory MemoryState
+		raw, err := loadState(ctx, tx, memoryKey(serverID), &memory)
+		if err != nil {
 			return err
+		}
+		if raw != "" {
+			encoded, _ := json.Marshal(MemoryState{Revision: memory.Revision, From: memory.From})
+			if _, err := tx.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=?", string(encoded), memoryKey(serverID)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -384,22 +397,32 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		if err != nil {
 			return err
 		}
+		// An accepted replacement starts without the old binding's alert,
+		// and the old container's samples don't count against its limit.
+		judged := MemoryState{Revision: server.BindingRevision, From: previous.From}
+		if raw != "" && previous.Revision != server.BindingRevision {
+			judged.From = minute
+		}
 		next := previous
+		if previous.Revision != server.BindingRevision {
+			next = judged
+		}
 		limit, sampled := limits[server.ID]
 		switch {
 		case !bound(server, current) || current[server.ContainerID].State != "running":
 			// A stopped game uses no memory.
-			next = MemoryState{}
+			next = judged
 		case !sampled:
 			// Unknown this minute.
 		case limit <= 0:
-			next = MemoryState{}
+			next = judged
 		default:
-			samples, err := s.memorySamples(ctx, server.ID, minute, policy.MemoryMinutes)
+			samples, err := s.memorySamples(ctx, server.ID, max(minute-int64(policy.MemoryMinutes)*resources.Interval, judged.From-1), minute)
 			if err != nil {
 				return err
 			}
-			next = evaluateMemory(previous, samples, minute, limit, policy.MemoryPercent, policy.MemoryMinutes)
+			next = evaluateMemory(next, samples, minute, limit, policy.MemoryPercent, policy.MemoryMinutes)
+			next.Revision, next.From = judged.Revision, judged.From
 		}
 		if next == previous && (next.AlertSince == 0 || next.Notified) {
 			continue
@@ -410,7 +433,8 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 			continue
 		}
 		if previous.AlertSince != 0 && next.AlertSince == 0 {
-			if previous.Notified {
+			// Like a disk alert, one that ends with its binding sends no recovery.
+			if previous.Notified && previous.Revision == next.Revision {
 				s.notify("memory-recovery:"+server.ID+":"+strconv.FormatInt(previous.AlertSince, 10),
 					server.DisplayName+"’s memory use is no longer near its limit.")
 			}
@@ -429,9 +453,10 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 	return nil
 }
 
-func (s *Service) memorySamples(ctx context.Context, serverID string, minute int64, minutes int) ([]memorySample, error) {
+// memorySamples reads the samples after a and up to b, oldest first.
+func (s *Service) memorySamples(ctx context.Context, serverID string, after, minute int64) ([]memorySample, error) {
 	rows, err := s.DB.QueryContext(ctx, "SELECT at,memory FROM resource_samples WHERE server_id=? AND at>? AND at<=? ORDER BY at",
-		serverID, minute-int64(minutes)*resources.Interval, minute)
+		serverID, after, minute)
 	if err != nil {
 		return nil, err
 	}

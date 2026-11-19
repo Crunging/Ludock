@@ -134,6 +134,27 @@ func TestCompleteLoginSpendsCodesOnce(t *testing.T) {
 	}
 }
 
+// Clearing the failure counts fails after a correct code. The session is
+// already saved and the challenge spent, so the sign-in still succeeds.
+func TestCompleteLoginSurvivesClearFailure(t *testing.T) {
+	s, c, _ := newService(t, nil)
+	c.now = 1_700_000_000_000
+	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
+	secret, _ := enrolled(t, s, c)
+	c.now += totpPeriodMs
+	token := challengeFor(t, s, "192.0.2.2")
+	if _, err := s.DB.Exec("CREATE TRIGGER keep_attempts BEFORE DELETE ON login_attempts BEGIN SELECT RAISE(ABORT, 'refused'); END"); err != nil {
+		t.Fatal(err)
+	}
+	principal, err := s.CompleteLogin(ctx, token, hotp(secret, totpStep(c.now)), Client{})
+	if err != nil || principal == nil || principal.User.ID != adminID {
+		t.Fatal(principal, err)
+	}
+	if session, err := s.Session(ctx, principal.Token); err != nil || session == nil {
+		t.Fatal("the session the sign-in returned does not work", err)
+	}
+}
+
 // A challenge is not a session, and it ends when the password changes, the
 // account is disabled, or two-factor sign-in is reset between the steps.
 func TestChallengeEndsWithAccountChanges(t *testing.T) {

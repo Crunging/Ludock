@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, serverRow, signIn, createUser } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, signIn, createUser, fake } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -230,6 +230,48 @@ test("a save is refused when the file changed after the editor opened", async ({
     await expect(dialog.locator("pre")).toContainText("motd=Written by the game");
   } finally {
     writeFileSync(properties, original);
+  }
+});
+
+test("a save or upload whose result is lost is reported as unconfirmed, not failed", async ({ page }) => {
+  const properties = join(survivalData(), "server.properties");
+  const original = readFileSync(properties);
+  try {
+    await openFiles(page);
+    await page.getByRole("button", { name: "server.properties", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Edit" }).click();
+    const editor = dialog.getByRole("textbox", { name: "Edit server.properties" });
+    await editor.fill("motd=Maybe saved\n");
+    // The daemon loses the result after the helper wrote the file.
+    await fake("/fake/lose-upload");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--error")).toHaveText(
+      "The save of “server.properties” could not be confirmed. It may have completed. Copy your text, then reopen the file to check it before saving again.");
+    await expect(editor).toHaveValue("motd=Maybe saved\n");
+    expect(readFileSync(properties, "utf8")).toBe("motd=Maybe saved\n");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.locator("pre")).toContainText("motd=Maybe saved");
+    await dialog.getByRole("button", { name: "Close" }).click();
+
+    await fake("/fake/lose-upload");
+    await page.locator("[data-upload-input]").setInputFiles([
+      { name: "lost.txt", mimeType: "text/plain", buffer: Buffer.from("lost result\n") },
+      { name: "never.txt", mimeType: "text/plain", buffer: Buffer.from("not sent\n") },
+    ]);
+    await expect(page.locator("#file-feedback")).toHaveText(
+      "Uploaded 0 of 2 files. The result for “lost.txt” could not be confirmed. The upload may have completed. Review the folder before uploading again.");
+    await expect(page.locator(".file-row__name")).toContainText(["lost.txt"]);
+    await expect(page.locator(".file-row__name", { hasText: "never.txt" })).toHaveCount(0);
+
+    // Both are in the audit log, since either may have happened.
+    for (const action of ["server.file.edited", "server.file.uploaded"]) {
+      await page.goto("/audit?action=" + action);
+      await expect(page.locator(".audit-entry").first()).toContainText(action);
+    }
+  } finally {
+    writeFileSync(properties, original);
+    rmSync(join(survivalData(), "lost.txt"), { force: true });
   }
 });
 

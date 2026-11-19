@@ -1,24 +1,10 @@
-import { request } from "node:http";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, fake, openServer } from "./fixtures.mjs";
 
 asAdmin();
 
 const GiB = 1024 ** 3;
 const valheimData = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "valheim");
-
-/** Calls one of the fake daemon's journey controls, such as /fake/disk. */
-function fake(path, query) {
-  return new Promise((resolve, reject) => {
-    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
-      path: path + "?" + new URLSearchParams(query) }, (response) => {
-      response.resume();
-      response.on("end", resolve);
-    });
-    call.on("error", reject);
-    call.end();
-  });
-}
 
 /** Makes measuring Valheim's data folder report a disk this full, or fail. */
 const disk = (percent) => fake("/fake/disk", percent === "fail" ? { path: valheimData(), fail: "1" }
