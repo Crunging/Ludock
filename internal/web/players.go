@@ -129,8 +129,9 @@ var errUnconfirmed = apperr.New("PLAYER_NOT_CONFIRMED", 409,
 
 // confirmAccount asks the game, under the action's lock, for the online
 // account names, and goes ahead only when they are exactly the names the
-// reading listed. A display name a team prefix or suffix changed, even into
-// another player's name, then stops every kick and ban.
+// reading listed, row by row. A display name a team prefix, suffix, or
+// plugin changed, even into another player's name, then stops every kick
+// and ban.
 func (s *Server) confirmAccount(act *serverAction, target console.Target, adapter *games.Adapter, accounts *games.PlayerQuery,
 	command string, reading *players.Reading) error {
 	var reply strings.Builder
@@ -143,15 +144,14 @@ func (s *Server) confirmAccount(act *serverAction, target console.Target, adapte
 		return err
 	}
 	online, ok := accounts.Parse(reply.String())
-	if !ok || reading == nil || len(reading.IDs) != reading.Online {
-		return errUnconfirmed
-	}
-	listed, confirmed := slices.Sorted(slices.Values(reading.IDs)), slices.Sorted(slices.Values(online.IDs))
-	if !slices.Equal(listed, confirmed) {
+	// Both replies list the server's players in the same order, so each row
+	// must be the same account, not only the same names.
+	if !ok || reading == nil || online.Online != reading.Online || len(online.IDs) != online.Online ||
+		!slices.Equal(reading.IDs, online.IDs) {
 		return errUnconfirmed
 	}
 	// Minecraft's commands end with their target.
-	for _, id := range confirmed {
+	for _, id := range online.IDs {
 		if strings.HasSuffix(command, " "+id) {
 			return nil
 		}

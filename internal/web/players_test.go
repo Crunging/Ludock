@@ -215,13 +215,19 @@ func TestPlayerActionNeedsItsAuditEntry(t *testing.T) {
 func TestPlayerActionNeedsMatchingAccounts(t *testing.T) {
 	t.Parallel()
 	g := newPlayerGame(t)
-	g.mu.Lock()
-	g.accounts = "There are 2 of a max of 10 players online: Ada (00000000-0000-4000-8000-000000000001), " +
-		"Bo (00000000-0000-4000-8000-000000000002)"
-	g.mu.Unlock()
-	for _, name := range []string{"Ada", "Ada_2"} {
-		if response := g.act(g.admin, "ban", name); response.StatusCode != http.StatusConflict {
-			t.Error(name, response.StatusCode)
+	// One display name isn't an account; two players' display names are each
+	// other's account names; more players are online than the list counted.
+	for _, accounts := range []string{"Ada (00000000-0000-4000-8000-000000000001), Bo (00000000-0000-4000-8000-000000000002)",
+		"Ada_2 (00000000-0000-4000-8000-000000000002), Ada (00000000-0000-4000-8000-000000000001)",
+		"Ada (00000000-0000-4000-8000-000000000001), Ada_2 (00000000-0000-4000-8000-000000000002), " +
+			"Eve (00000000-0000-4000-8000-000000000003)"} {
+		g.mu.Lock()
+		g.accounts = fmt.Sprintf("There are %d of a max of 10 players online: %s", strings.Count(accounts, "("), accounts)
+		g.mu.Unlock()
+		for _, name := range []string{"Ada", "Ada_2"} {
+			if response := g.act(g.admin, "ban", name); response.StatusCode != http.StatusConflict {
+				t.Error(accounts, name, response.StatusCode)
+			}
 		}
 	}
 	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
