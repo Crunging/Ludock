@@ -272,3 +272,23 @@ func TestStalledValidatorCreate(t *testing.T) {
 		}
 	}
 }
+
+// A helper that refuses a complete upload exits as soon as it reads the end
+// of the input, which can be before the sender has returned from closing it;
+// the refusal must still be reported, not an unfinished upload.
+func TestExecRefusalAfterCompleteInput(t *testing.T) {
+	_, client, id := setup(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "world.dat"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uploadID := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
+	upload := fileCommand(root, "upload", "world.dat", map[string]any{"size": 5, "uploadId": uploadID,
+		"expected": map[string]any{"size": 5, "sha256": strings.Repeat("0", 64)}})
+	for range 200 {
+		_, err := Exec(ctx, client, id, ExecOptions{Cmd: upload, Input: strings.NewReader("hello"), Trailer: []byte(uploadID)})
+		if !errors.Is(err, ErrFileChanged) {
+			t.Fatal(err)
+		}
+	}
+}

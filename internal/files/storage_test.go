@@ -99,12 +99,78 @@ func TestPreviewCapAndBinaryDetection(t *testing.T) {
 		}
 	}
 	// A file that grew past the limit after listing is still cut off.
-	kind, _, _ := ReadPreview(io.LimitReader(zeroFree{}, PreviewLimit+10))
-	if kind != PreviewLarge {
-		t.Fatal(kind)
+	preview, _ := ReadPreview(io.LimitReader(zeroFree{}, PreviewLimit+10))
+	if preview.Kind != PreviewLarge {
+		t.Fatal(preview.Kind)
 	}
-	if kind, _, _ := ReadPreview(strings.NewReader("\xff\xfe")); kind != PreviewBinary {
+	if preview, _ := ReadPreview(strings.NewReader("\xff\xfe")); preview.Kind != PreviewBinary {
 		t.Fatal("invalid UTF-8 shown as text")
+	}
+	f.helpersLeft(t)
+}
+
+// Editor text arrives with LF or CRLF breaks and no BOM; a save writes the
+// file's own breaks and BOM back, and files whose breaks a browser can't
+// keep are not editable.
+func TestEditedContentKeepsLineEndings(t *testing.T) {
+	for _, test := range []struct {
+		file, typed, want string
+		editable          bool
+	}{
+		{"a\nb", "a\r\nb\r\nc", "a\nb\nc", true},
+		{"a\r\nb\r\n", "a\nb\nc", "a\r\nb\r\nc", true},
+		{"a\r\nb\r\n", "a\r\nb\r\nc\r\n", "a\r\nb\r\nc\r\n", true},
+		{"\ufeffkey=1\r\n", "key=2\n", "\ufeffkey=2\r\n", true},
+		{"\ufeff\ufeffx", "\ufeffy", "\ufeff\ufeffy", true},
+		{"", "new", "new", true},
+		{"a\r\nb\n", "", "", false},
+		{"a\rb", "", "", false},
+	} {
+		preview, err := ReadPreview(strings.NewReader(test.file))
+		if err != nil || preview.Kind != PreviewText || preview.Editable != test.editable {
+			t.Fatalf("%q: %+v %v", test.file, preview, err)
+		}
+		if !test.editable {
+			continue
+		}
+		if got := string(EditedContent(test.typed, preview.CRLF, preview.BOM)); got != test.want {
+			t.Fatalf("%q typed %q: got %q", test.file, test.typed, got)
+		}
+	}
+}
+
+// A save checks the content it replaces: a change made elsewhere after the
+// preview, even one keeping the size, refuses the save and keeps that
+// change; a current save keeps the file's mode.
+func TestSaveRefusesChangedFile(t *testing.T) {
+	f := setup(t)
+	name := filepath.Join(f.data, "server.properties")
+	os.Chmod(name, 0o640)
+	preview, err := f.service.Preview(ctx, f.target, "root-0", "server.properties", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(name, []byte("motd=other\n"), 0o640)
+	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("motd=mine\n"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(name); string(data) != "motd=other\n" {
+		t.Fatal(string(data))
+	}
+	preview, _ = f.service.Preview(ctx, f.target, "root-0", "server.properties", nil)
+	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("motd=mine\n"), preview.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(name)
+	if data, _ := os.ReadFile(name); string(data) != "motd=mine\n" || info.Mode().Perm() != 0o640 {
+		t.Fatal(string(data), info.Mode())
+	}
+	os.Remove(name)
+	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("x"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
+		t.Fatal("recreated a deleted file", err)
+	}
+	if _, err := os.Stat(name); !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 	f.helpersLeft(t)
 }

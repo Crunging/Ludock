@@ -44,6 +44,21 @@ func TestFilesFollowGrants(t *testing.T) {
 	}
 }
 
+// A user who may read files but not write them forges a save, which the
+// preview never offers them.
+func TestFileSaveNeedsWriteGrant(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	operator := p.user("u-operator", "operator", db.RoleOperator)
+	p.grant(operator, authz.ServerView, authz.FilesRead)
+	version := "3-" + strings.Repeat("0", 64)
+	response := p.do("PUT", "/files/"+p.server+"/save?root=0&path=a.txt&version="+version, operator, strings.NewReader("hi\n"),
+		map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": CSRFToken(operator.Token), "HX-Request": "true"})
+	if response.Code != http.StatusForbidden {
+		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
 func TestUploadChecks(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)

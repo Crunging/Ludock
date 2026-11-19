@@ -2,13 +2,17 @@ package files
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +40,7 @@ var messages = map[string]string{
 	"FILE_TARGET_CHANGED":         "The server changed while preparing file access. Refresh and try again.",
 	"FILE_ROOT_CHANGED":           "The file root changed. Refresh and try again.",
 	"FILE_OPERATION_TIMEOUT":      "The file operation timed out. Refresh and try again.",
+	"INVALID_FILE_VERSION":        "Reopen the file before saving it",
 }
 
 // Error builds a file error with its public message.
@@ -508,13 +513,35 @@ func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, nam
 	if err != nil {
 		return err
 	}
+	return s.write(ctx, target, root, normalized, size, body, nil, assertAccess)
+}
+
+// Save replaces an existing file's content only while it still matches
+// version, the Version its preview reported.
+func (s *Service) Save(ctx context.Context, target Target, rootID, relative string, content []byte, version string, assertAccess func() error) error {
+	expected, ok := parseVersion(version)
+	if !ok {
+		return Error("INVALID_FILE_VERSION", 400)
+	}
+	root, normalized, err := resolve(target, rootID, relative)
+	if err != nil {
+		return err
+	}
+	if normalized == "" {
+		return Error("ROOT_MUTATION", 400)
+	}
+	return s.write(ctx, target, root, normalized, int64(len(content)), bytes.NewReader(content), &expected, assertAccess)
+}
+
+func (s *Service) write(ctx context.Context, target Target, root Root, normalized string, size int64, body io.Reader,
+	expected *helper.FileVersion, assertAccess func() error) error {
 	access, err := s.Acquire(ctx, target, root, false, assertAccess)
 	if err != nil {
 		return err
 	}
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
-		UploadID: uploadID}, io.LimitReader(body, size+1), []byte(uploadID))
+		UploadID: uploadID, Expected: expected}, io.LimitReader(body, size+1), []byte(uploadID))
 	// A helper that finished removed its own staging file; one cut off may not
 	// have, so only a failed upload sends the cleanup request.
 	if err != nil {
@@ -675,23 +702,58 @@ type Preview struct {
 	Text string
 	Name string
 	Size int64
+	// Version identifies the previewed bytes for Save.
+	Version string
+	// BOM and CRLF record what the text drops or a browser rewrites, so a
+	// save writes them back. Editable is false when the line endings are
+	// mixed or include lone carriage returns, which a browser can't keep.
+	BOM, CRLF, Editable bool
+}
+
+func parseVersion(value string) (helper.FileVersion, bool) {
+	size, sum, ok := strings.Cut(value, "-")
+	parsed, err := strconv.ParseInt(size, 10, 64)
+	if !ok || err != nil || parsed < 0 || parsed > PreviewLimit || len(sum) != 64 || strings.Trim(sum, "0123456789abcdef") != "" {
+		return helper.FileVersion{}, false
+	}
+	return helper.FileVersion{Size: parsed, SHA256: sum}, true
 }
 
 // ReadPreview reads at most PreviewLimit bytes. A file over the limit (even
 // one that grew after listing) is "large"; NUL bytes or invalid UTF-8 make it
 // "binary".
-func ReadPreview(source io.Reader) (PreviewKind, string, error) {
+func ReadPreview(source io.Reader) (Preview, error) {
 	data, err := io.ReadAll(io.LimitReader(source, PreviewLimit+1))
 	if err != nil {
-		return "", "", err
+		return Preview{}, err
 	}
 	if len(data) > PreviewLimit {
-		return PreviewLarge, "", nil
+		return Preview{Kind: PreviewLarge}, nil
 	}
 	if slices.Contains(data, 0) || !utf8.Valid(data) {
-		return PreviewBinary, "", nil
+		return Preview{Kind: PreviewBinary}, nil
 	}
-	return PreviewText, strings.TrimPrefix(string(data), "\ufeff"), nil
+	text := string(data)
+	crlf := strings.Count(text, "\r\n")
+	preview := Preview{Kind: PreviewText, Version: fmt.Sprintf("%d-%x", len(data), sha256.Sum256(data)),
+		BOM: strings.HasPrefix(text, "\ufeff"), CRLF: crlf > 0,
+		Editable: strings.Count(text, "\r") == crlf && (crlf == 0 || strings.Count(text, "\n") == crlf)}
+	preview.Text = strings.TrimPrefix(text, "\ufeff")
+	return preview, nil
+}
+
+// EditedContent turns text submitted from the editor back into the file's
+// bytes: browsers submit every line break as CRLF, so breaks are rewritten
+// in the file's own style and a leading BOM is restored.
+func EditedContent(text string, crlf, bom bool) []byte {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	if crlf {
+		text = strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	if bom {
+		text = "\ufeff" + text
+	}
+	return []byte(text)
 }
 
 // Preview opens a file for inline display without reading past the limit.
@@ -701,14 +763,15 @@ func (s *Service) Preview(ctx context.Context, target Target, rootID, relative s
 		return nil, err
 	}
 	defer download.Close()
-	preview := &Preview{Name: download.Name, Size: download.Size}
 	if download.Type != "file" {
 		return nil, Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
 	}
-	if download.Size > PreviewLimit {
-		preview.Kind = PreviewLarge
-		return preview, nil
+	preview := Preview{Kind: PreviewLarge}
+	if download.Size <= PreviewLimit {
+		if preview, err = ReadPreview(download); err != nil {
+			return nil, err
+		}
 	}
-	preview.Kind, preview.Text, err = ReadPreview(download)
-	return preview, err
+	preview.Name, preview.Size = download.Name, download.Size
+	return &preview, nil
 }

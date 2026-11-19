@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, signIn, createUser } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -137,4 +137,121 @@ test("the last sort chosen while a filter is loading applies", async ({ page }) 
   await expect(page).toHaveURL(/q=o&root=[^&]+&sort=size-desc$/);
   await expect(page.getByLabel("Sort by")).toHaveValue("size-desc");
   await page.unroute("**/fragments/files/**");
+});
+
+// The journeys' fake daemon keeps Survival's data under the e2e directory.
+const survivalData = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft");
+
+async function openFiles(page) {
+  await page.goto("/");
+  await serverRow(page, "Survival").getByRole("button", { name: /More actions/ }).click();
+  await serverRow(page, "Survival").getByRole("link", { name: "Files" }).click();
+  await expect(page.locator(".file-row__name").first()).toBeVisible();
+}
+
+test("editing a text file in the browser and saving it", async ({ page }) => {
+  const properties = join(survivalData(), "server.properties");
+  const original = readFileSync(properties);
+  const crlf = join(survivalData(), "ops.cfg");
+  writeFileSync(crlf, "﻿op=alex\r\nlevel=4\r\n");
+  chmodSync(crlf, 0o640);
+  try {
+    await openFiles(page);
+    await page.getByRole("button", { name: "server.properties", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Edit" }).click();
+    await expect(dialog).toContainText("A running game may overwrite this file, or ignore the change until it restarts.");
+    const editor = dialog.getByRole("textbox", { name: "Edit server.properties" });
+    await expect(editor).toHaveValue(original.toString("utf8"));
+    // Text over the limit is refused and stays in the editor to shorten.
+    const long = "x".repeat(520 * 1024);
+    await editor.fill(long);
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--error")).toHaveText("The file would be over 512 KiB, so it can’t be saved here.");
+    expect(await editor.inputValue()).toBe(long);
+    expect(readFileSync(properties)).toEqual(original);
+    // Exactly what is typed is saved, including no final newline.
+    await editor.fill("\nmotd=Edited in the browser\nmax-players=5");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--success")).toHaveText("Saved “server.properties”.");
+    await expect(dialog.locator("pre")).toContainText("motd=Edited in the browser");
+    expect(readFileSync(properties, "utf8")).toBe("\nmotd=Edited in the browser\nmax-players=5");
+    await dialog.getByRole("button", { name: "Close" }).click();
+
+    // A file with CRLF line endings and a byte order mark keeps both, and its mode.
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await page.getByRole("button", { name: "ops.cfg", exact: true }).click();
+    await dialog.getByRole("button", { name: "Edit" }).click();
+    await expect(dialog.getByRole("textbox")).toHaveValue("op=alex\nlevel=4\n");
+    await dialog.getByRole("textbox").fill("op=alex\nlevel=2\n");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--success")).toBeVisible();
+    expect(readFileSync(crlf, "utf8")).toBe("﻿op=alex\r\nlevel=2\r\n");
+    expect(statSync(crlf).mode & 0o777).toBe(0o640);
+
+    // Cancel leaves the file as it was, and Save waits while it loads.
+    await dialog.getByRole("button", { name: "Edit" }).click();
+    await dialog.getByRole("textbox").fill("discarded");
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/fragments/files/**/preview?*", async (route) => { await held; await route.continue(); });
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    release();
+    await expect(dialog.locator("pre")).toContainText("level=2");
+    await page.unroute("**/fragments/files/**/preview?*");
+    expect(readFileSync(crlf, "utf8")).toBe("﻿op=alex\r\nlevel=2\r\n");
+  } finally {
+    writeFileSync(properties, original);
+    rmSync(crlf, { force: true });
+  }
+});
+
+test("a save is refused when the file changed after the editor opened", async ({ page }) => {
+  const properties = join(survivalData(), "server.properties");
+  const original = readFileSync(properties);
+  try {
+    await openFiles(page);
+    await page.getByRole("button", { name: "server.properties", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Edit" }).click();
+    const editor = dialog.getByRole("textbox", { name: "Edit server.properties" });
+    await editor.fill("motd=Mine\n");
+    // The game rewrites the file meanwhile.
+    writeFileSync(properties, "motd=Written by the game\n");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--error")).toContainText("The file changed since you opened it, so your edit was not saved.");
+    await expect(editor).toHaveValue("motd=Mine\n");
+    expect(readFileSync(properties, "utf8")).toBe("motd=Written by the game\n");
+    // Escape doesn't throw the unsaved text away.
+    await editor.press("Escape");
+    await expect(editor).toHaveValue("motd=Mine\n");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.locator("pre")).toContainText("motd=Written by the game");
+  } finally {
+    writeFileSync(properties, original);
+  }
+});
+
+test("a viewer who can read files is not offered editing", async ({ page, session }) => {
+  await createUser(page, "fileviewer", "file viewer password", "viewer");
+  const survival = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
+  await survival.getByRole("button", { name: "Status only" }).click();
+  await survival.getByLabel("Read and download files").check();
+  await page.locator("[data-grants]").getByRole("button", { name: "Save server access" }).click();
+  await expect(page.locator("[data-grants] .alert--success")).toContainText("Server access saved for fileviewer.");
+
+  const viewer = await session({ storageState: { cookies: [], origins: [] } });
+  await signIn(viewer, "fileviewer", "file viewer password");
+  await openFiles(viewer);
+  await viewer.getByRole("button", { name: "server.properties", exact: true }).click();
+  const dialog = viewer.getByRole("dialog");
+  await expect(dialog.locator("pre")).toContainText("motd=");
+  await expect(dialog.getByRole("link", { name: "Download" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  // Asking for the editor directly still shows only the preview.
+  const fragment = await viewer.request.get(`${new URL(viewer.url()).pathname.replace("/files/", "/fragments/files/")}/preview?root=root-0&path=server.properties&edit=1`);
+  const body = await fragment.text();
+  expect(body).toContain("Contents of server.properties");
+  expect(body).not.toContain("data-file-editor");
 });

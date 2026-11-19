@@ -195,10 +195,16 @@ Stop a game before replacing a world or configuration it has open. Uploads are
 written to a temporary file and replace the destination only once complete, so
 allow space for both.
 
+Users who can change files can also edit a previewed text file and save it.
+A save is written like an upload and keeps the file's permissions, owner, line
+endings, and byte order mark. If the file changed after the editor opened, the
+save is refused and the text stays in the editor. Files that mix line endings
+are download-only, since a browser can't keep them.
+
 | Limit | Value |
 | --- | --- |
 | Upload size | 2 GiB; set `LUDOCK_MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
-| Text preview | 512 KiB; larger or binary files are downloaded instead |
+| Text preview and editing | 512 KiB; larger or binary files are downloaded instead |
 | Folder listing | 10,000 entries |
 | Upload or download | 30 minutes; uploads also stop after 60 seconds without data |
 | Other file actions | 55 seconds |

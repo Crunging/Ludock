@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -21,6 +22,7 @@ var (
 	ErrFailed      = apperr.New("FILE_OPERATION_FAILED", 409, "File operation failed")
 	ErrUnsafe      = apperr.New("UNSAFE_OR_CHANGED_FILE_PATH", 409, "The path changed, is unsafe, or cannot be accessed")
 	ErrNameTaken   = apperr.New("FILE_NAME_TAKEN", 409, "A file or folder with that name already exists")
+	ErrFileChanged = apperr.New("FILE_CHANGED", 409, "The file changed since you opened it, so your edit was not saved. Copy your text, then reopen the file to see the new version.")
 	ErrOutputLimit = apperr.New("FILE_OUTPUT_LIMIT", 409, "File operation failed")
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
 )
@@ -145,12 +147,14 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	})
 	defer stop()
 
-	written := make(chan struct{})
+	// Set once the whole input and its trailer are written, before the write
+	// side closes: the helper can read that close and exit before the sender
+	// returns from it.
+	var sent atomic.Bool
 	if options.Input == nil {
-		close(written)
+		sent.Store(true)
 	} else {
 		go func() {
-			defer close(written)
 			buffer := make([]byte, 64*1024)
 			periodic := Periodic(check)
 			for {
@@ -178,6 +182,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 							fail(ErrUpload)
 						}
 					}
+					sent.Store(true)
 					break
 				}
 				if readErr != nil {
@@ -195,9 +200,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	demuxErr := docker.Demux(conn, &stdout, nil)
 	// The helper only succeeds after the whole input and its trailer, so an
 	// input still being read has already failed; don't wait for it.
-	select {
-	case <-written:
-	default:
+	if !sent.Load() {
 		fail(ErrUpload)
 	}
 	if err := current(); err != nil {
@@ -215,6 +218,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileNameTaken {
 		return nil, ErrNameTaken
+	}
+	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileChanged {
+		return nil, ErrFileChanged
 	}
 	if info.Running || info.ExitCode == nil || *info.ExitCode != 0 {
 		return nil, ErrUnsafe

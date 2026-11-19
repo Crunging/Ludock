@@ -25,7 +25,7 @@ type FilesView struct {
 	// Matched counts the entries the filter keeps; Entries holds the first
 	// Limit of them.
 	Matched, Limit int
-	ListError    string
+	ListError      string
 	// Error replaces the browser when the server or access is unavailable.
 	Error        string
 	CanManage    bool
@@ -397,7 +397,10 @@ templ FileActionDialog(d FileDialog) {
 }
 
 type FilePreview struct {
-	ServerID   string
+	ServerID string
+	Root     string
+	// File is the path within Root.
+	File       string
 	Name       string
 	Path       string
 	Size       int64
@@ -407,21 +410,75 @@ type FilePreview struct {
 	Error      string
 	Download   string
 	Limit      string
+	// CanEdit offers editing to users with file write access.
+	CanEdit  bool
+	Editable bool
+	Editing  bool
+	Version  string
+	CRLF     bool
+	BOM      bool
+	// Unsaved marks editor text the file doesn't hold, such as a refused save.
+	Unsaved bool
+	Notice  string
+}
+
+func (p FilePreview) previewURL(edit bool) string {
+	values := url.Values{"root": {p.Root}, "path": {p.File}}
+	if edit {
+		values.Set("edit", "1")
+	}
+	return "/fragments/files/" + p.ServerID + "/preview?" + values.Encode()
+}
+
+func (p FilePreview) saveURL() string {
+	values := url.Values{"root": {p.Root}, "path": {p.File}, "version": {p.Version}}
+	if p.CRLF {
+		values.Set("crlf", "1")
+	}
+	if p.BOM {
+		values.Set("bom", "1")
+	}
+	return "/files/" + p.ServerID + "/save?" + values.Encode()
 }
 
 templ FilePreviewDialog(p FilePreview) {
 	<dialog class="file-action-dialog file-preview" id="file-action" aria-labelledby="file-preview-title" aria-describedby="file-preview-description" data-open-on-load>
-		<div class="file-preview__header">
-			<div>
-				<h2 id="file-preview-title">{ p.Name }</h2>
-				<p id="file-preview-description" class="file-preview__meta">
-					<code>{ p.Path }</code>
-					<span>{ FormatBytes(p.Size) }</span>
-				</p>
-			</div>
+		@FilePreviewContent(p)
+	</dialog>
+}
+
+// FilePreviewContent is the preview dialog's content, swapped in place when
+// editing starts, ends, or saves.
+templ FilePreviewContent(p FilePreview) {
+	<div class="file-preview__header">
+		<div>
+			<h2 id="file-preview-title">{ p.Name }</h2>
+			<p id="file-preview-description" class="file-preview__meta">
+				<code>{ p.Path }</code>
+				<span>{ FormatBytes(p.Size) }</span>
+			</p>
 		</div>
+	</div>
+	if p.Editing {
+		<form class="file-editor" data-file-editor={ p.saveURL() }>
+			<p class="file-editor__note">A running game may overwrite this file, or ignore the change until it restarts.</p>
+			<textarea class="file-editor__text" name="content" aria-label={ "Edit " + p.Name } spellcheck="false" autocomplete="off" autocapitalize="off" data-unsaved?={ p.Unsaved } autofocus>{ "\n" + p.Text }</textarea>
+			<div data-file-editor-error>
+				if p.Error != "" {
+					@Alert("error", p.Error)
+				}
+			</div>
+			<div class="file-action-dialog__actions">
+				<button type="button" class="secondary-btn" hx-get={ p.previewURL(false) } hx-target="#file-action" hx-swap="innerHTML">Cancel</button>
+				<button type="submit" class="primary-btn">Save</button>
+			</div>
+		</form>
+	} else {
 		<div class="file-preview__body">
-			switch {
+			if p.Notice != "" {
+				@Alert("success", p.Notice)
+			}
+			switch  {
 				case p.Error != "":
 					<div class="alert alert--error" role="alert">{ p.Error }</div>
 				case p.Kind == files.PreviewLarge:
@@ -433,10 +490,16 @@ templ FilePreviewDialog(p FilePreview) {
 				default:
 					<pre tabindex="0" aria-label={ "Contents of " + p.Name }>{ p.Text }</pre>
 			}
+			if p.CanEdit && p.Error == "" && p.Kind == files.PreviewText && !p.Editable {
+				<p class="muted">This file mixes line endings, so it can’t be edited here.</p>
+			}
 		</div>
 		<div class="file-action-dialog__actions">
 			<a class="secondary-btn" href={ templ.SafeURL(p.Download) } download>Download</a>
+			if p.CanEdit && p.Error == "" && p.Kind == files.PreviewText && p.Editable {
+				<button type="button" class="secondary-btn" hx-get={ p.previewURL(true) } hx-target="#file-action" hx-swap="innerHTML">Edit</button>
+			}
 			<button type="button" class="primary-btn" data-dialog-close autofocus>Close</button>
 		</div>
-	</dialog>
+	}
 }

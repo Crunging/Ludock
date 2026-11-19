@@ -44,6 +44,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /fragments/files/{id}/preview", s.authed(s.filePreview))
 	m.HandleFunc("GET /files/{id}/download", s.authed(s.fileDownload))
 	m.HandleFunc("PUT /files/{id}/upload", s.authed(s.fileUpload))
+	m.HandleFunc("PUT /files/{id}/save", s.authed(s.fileSave))
 	m.HandleFunc("POST /files/{id}/create", s.authed(s.fileChange("create")))
 	m.HandleFunc("POST /files/{id}/rename", s.authed(s.fileChange("rename")))
 	m.HandleFunc("POST /files/{id}/delete", s.authed(s.fileChange("delete")))

@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,14 @@ type FileRequest struct {
 	Destination string   `json:"destination,omitempty"`
 	Size        *int64   `json:"size,omitempty"`
 	UploadID    string   `json:"uploadId,omitempty"`
+	// Expected makes an upload replace only this exact existing file.
+	Expected *FileVersion `json:"expected,omitempty"`
+}
+
+// FileVersion identifies a file's content by size and SHA-256.
+type FileVersion struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type FileEntry struct {
@@ -49,6 +58,10 @@ const BackupLimit = 4 * time.Hour
 
 // FileNameTaken is the file helper's exit code when a new name is in use.
 const FileNameTaken = 3
+
+// FileChanged is the file helper's exit code when an upload's expected
+// version is no longer the file's content.
+const FileChanged = 4
 
 type fileHelper struct {
 	request FileRequest
@@ -389,6 +402,13 @@ func (h *fileHelper) upload(parent fd, name string) error {
 	if h.uploadAborted() || received != size || committed != int64(len(trailer)) {
 		return errors.New("upload did not match its declared size or was interrupted")
 	}
+	// Checked once the input is complete, so the backend reads the helper's
+	// exit code instead of an unfinished upload.
+	if h.request.Expected != nil {
+		if err := h.expectVersion(parent, name, original, *h.request.Expected); err != nil {
+			return err
+		}
+	}
 	// Set permissions while the helper still owns the new inode; CHOWN is
 	// enough to restore game ownership without granting FOWNER.
 	mode := uint32(0o666 &^ currentUmask())
@@ -433,6 +453,44 @@ func (h *fileHelper) upload(parent fd, name string) error {
 		return err
 	}
 	return h.json(map[string]bool{"ok": true})
+}
+
+// expectVersion confirms the target still holds the expected content. The
+// stat taken before hashing is the one the commit compares against, so a
+// write after the hash is caught there.
+func (h *fileHelper) expectVersion(parent fd, name string, original *unix.Stat_t, expected FileVersion) error {
+	if original == nil || original.Size != expected.Size {
+		return errFileChanged
+	}
+	file, err := h.t.openAt(parent, name, fileFlags, 0)
+	if err != nil {
+		return err
+	}
+	defer h.t.close(file)
+	opened, err := fstat(file)
+	if err != nil {
+		return err
+	}
+	if opened.Dev != original.Dev || opened.Ino != original.Ino {
+		return errFileChanged
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 64*1024)
+	for position := int64(0); position < expected.Size; {
+		n, err := unix.Pread(int(file), buffer[:min(int64(len(buffer)), expected.Size-position)], position)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errFileChanged
+		}
+		hash.Write(buffer[:n])
+		position += int64(n)
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != strings.ToLower(expected.SHA256) {
+		return errFileChanged
+	}
+	return nil
 }
 
 func currentUmask() int {
@@ -666,12 +724,18 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if errors.Is(err, errNameTaken) {
 			return FileNameTaken
 		}
+		if errors.Is(err, errFileChanged) {
+			return FileChanged
+		}
 		return 1
 	}
 	return 0
 }
 
-var errNameTaken = errors.New("the name is in use")
+var (
+	errNameTaken   = errors.New("the name is in use")
+	errFileChanged = errors.New("the file changed")
+)
 
 func nameTaken(err error) error {
 	if errors.Is(err, unix.EEXIST) {
