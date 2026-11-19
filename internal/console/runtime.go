@@ -615,6 +615,25 @@ type helperReply struct {
 	Status   *helper.StatusResult
 }
 
+// RemoveLeftovers removes console helpers left by an earlier process: one
+// may still be sending a command, and none holds its server's lock. One
+// Ludock runs per Docker host, so at startup every one is left over.
+func (r *Runtime) RemoveLeftovers(ctx context.Context) error {
+	helpers, err := r.Docker.ListContainers(ctx, true, docker.Filters{"label": {"ludock.internal=console-helper"}})
+	if err != nil {
+		return err
+	}
+	for _, candidate := range helpers {
+		if candidate.Labels["ludock.internal"] != "console-helper" {
+			continue
+		}
+		if err := r.Docker.RemoveHelper(ctx, candidate.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) networkHelper(ctx context.Context, containerID string, request helper.NetworkConsoleRequest, assertAccess func() error) (helperReply, error) {
 	check := func() error {
 		if ctx.Err() != nil {

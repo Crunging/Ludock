@@ -137,3 +137,42 @@ func TestFirstViewerReadsPlayers(t *testing.T) {
 		t.Fatal("waited for the next tick to read players")
 	}
 }
+
+// A console helper left by an interrupted run may still be sending a
+// command. Docker refuses to remove it at first, and no work takes a server
+// until it is gone.
+func TestStartRemovesLeftoverConsoleHelpers(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	leftover := engine.AddContainer(fakedocker.GameOptions{Name: "ludock-console-1", Image: "ludock", Running: true,
+		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"}})
+	engine.FailRemoves = 2
+	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.Start(ctx)
+	defer a.Stop()
+	if release, err := a.Locks.Acquire([]string{"server:x"}, nil); err == nil {
+		release()
+		t.Fatal("work took a server before the leftover helper was removed")
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		release, err := a.Locks.Acquire([]string{"server:x"}, nil)
+		if err == nil {
+			release()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("startup recovery never finished", err)
+		}
+	}
+	if engine.Container(leftover) != nil {
+		t.Fatal("left the console helper")
+	}
+}
