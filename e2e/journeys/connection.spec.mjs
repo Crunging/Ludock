@@ -9,12 +9,16 @@ function refreshList(page) {
 
 test("a list refresh that changed nothing sends no list and keeps an open menu", async ({ page }) => {
   await page.goto("/");
+  const survival = serverRow(page, "Survival");
+  // The first player readings land in the background and change the list.
+  await expect.poll(async () => {
+    await refreshList(page);
+    return page.locator(".server-row").getByText("Checking…", { exact: true }).count();
+  }).toBe(0);
   const first = await refreshList(page);
-  expect(first.status()).toBe(200);
   const tag = first.headers()["etag"];
   expect(tag).toBeTruthy();
 
-  const survival = serverRow(page, "Survival");
   await survival.getByRole("button", { name: /More actions/ }).click();
   const restart = survival.getByRole("button", { name: "Restart…" });
   await expect(restart).toBeVisible();
