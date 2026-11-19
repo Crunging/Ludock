@@ -36,6 +36,7 @@ func TestChoicePrecedence(t *testing.T) {
 		{"docker socket", candidate{image: "portainer/portainer-ce", mounts: socket}, &add, false, "host", false},
 		{"host run folder", candidate{image: "ich777/steamcmd:valheim", mounts: run}, &add, false, "host", false},
 		{"parent of Docker's data", candidate{image: "ich777/steamcmd:valheim", mounts: []docker.MountPoint{{Type: "bind", Source: "/var/lib", Destination: "/host"}}}, &add, false, "host", false},
+		{"containerd sockets", candidate{image: "ich777/steamcmd:valheim", mounts: []docker.MountPoint{{Type: "bind", Source: "/run/containerd", Destination: "/c"}}}, &add, false, "host", false},
 		{"ordinary data folder", candidate{image: "ich777/steamcmd:valheim", mounts: data}, &add, true, "", true},
 		{"privileged", candidate{image: "ich777/steamcmd:valheim", privileged: true}, &add, false, "host", false},
 		{"Ludock itself", candidate{image: "ghcr.io/crunging/ludock:0.7.0"}, &add, false, "ludock", false},

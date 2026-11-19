@@ -15,7 +15,7 @@ func (s *Server) addServersView(r *http.Request, request *Request) (views.AddSer
 	var v views.AddServersView
 	containers, err := s.App.Observer.Unmanaged(r.Context())
 	// Listing reads Docker; the account may have changed meanwhile.
-	if _, err := s.App.Authz.AssertAdministrator(r.Context(), request.User()); err != nil {
+	if err := s.recheckAdmin(r.Context(), request); err != nil {
 		return v, err
 	}
 	if err != nil {

@@ -72,7 +72,8 @@ func (c candidate) external() string {
 var engineSockets = []string{"docker.sock", "podman.sock", "containerd.sock", "crio.sock"}
 
 // hostFolders can't be bound, nor can any folder that holds one.
-var hostFolders = []string{"/run", "/var/run", "/var/lib/docker", "/var/lib/containerd", "/var/lib/containers"}
+var hostFolders = []string{"/run", "/var/run", "/run/containerd", "/run/podman", "/var/lib/docker", "/var/lib/containerd",
+	"/var/lib/containers"}
 
 // controlsHost reports a container that can take over its host: privileged,
 // or given an engine socket, the host's root, or the folders holding them.
