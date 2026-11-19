@@ -49,6 +49,14 @@ func TestModerationCommands(t *testing.T) {
 	if adapter := ResolveAdapter("factorio", map[string]string{LabelConsole: "telnet-console"}); adapter.Moderation != nil {
 		t.Error("factorio over telnet has moderation")
 	}
+	// Minecraft's commands and list files belong to the Minecraft image, not
+	// to every console a label sets to Minecraft RCON.
+	if adapter := ResolveAdapter("unknown", map[string]string{LabelConsole: "minecraft-rcon"}); adapter.Moderation != nil {
+		t.Error("a labeled console has Minecraft moderation")
+	}
+	if adapter := ResolveAdapter("minecraft", map[string]string{LabelConsole: "minecraft-rcon"}); adapter.Moderation == nil {
+		t.Error("Minecraft lost moderation to its own label")
+	}
 }
 
 // A name or ID is accepted only in the game's whole form, so nothing in it
@@ -154,7 +162,9 @@ func TestParseMinecraftPlayerList(t *testing.T) {
 		"white-list = false\r\n":            {false, true},
 		"#white-list=true\nwhite-list=TRUE": {true, true},
 		"motd=Hi\n":                         {false, false},
-		"white-list=maybe\n":                {false, false},
+		"white-list=maybe\n":                {false, true},
+		"white-list: true\n":                {true, true},
+		"white-list=true \n":                {false, true},
 		"enforce-white-list=true\n":         {false, false},
 	} {
 		if on, set := ParseProperty([]byte(text), "white-list"); on != want[0] || set != want[1] {
@@ -163,8 +173,8 @@ func TestParseMinecraftPlayerList(t *testing.T) {
 	}
 }
 
-// Games whose commands take IDs keep each listed player's ID beside the
-// name; a name listed twice has no single ID.
+// Each listed player keeps the ID the game's commands take beside the name;
+// a name listed twice has no single ID.
 func TestPlayerIDs(t *testing.T) {
 	ark, _ := ParseARKPlayers("0. Ada, 76561198000000000\n1. Zed, 0002a1b2c3d4e5f60718293a4b5c6d7e\n2. Ada, 76561198000000001\n")
 	palworld, _ := ParsePalworldPlayers("name,playeruid,steamid\n,000,00000000000000000\nAda,1,steam_76561198000000000\n")
@@ -182,8 +192,19 @@ func TestPlayerIDs(t *testing.T) {
 			t.Errorf("%+v %s: %q %v", c.players, c.name, id, ok)
 		}
 	}
-	minecraft, _ := ParseMinecraftList("There are 1 of a max of 5 players online: Ada")
-	if _, ok := minecraft.ID("Ada"); ok {
-		t.Error("Minecraft names have IDs")
+	// Vanilla Minecraft and Factorio list account names; a plugin's list
+	// shows nicknames and gives none.
+	minecraft, _ := ParseMinecraftList("There are 2 of a max of 5 players online: Ada, Zed")
+	factorio, _ := ParseFactorioPlayers("Online players (1):\n  Ada (online)\n")
+	for _, players := range []Players{minecraft, factorio} {
+		if id, ok := players.ID("Ada"); id != "Ada" || !ok {
+			t.Errorf("%+v: %q %v", players, id, ok)
+		}
+	}
+	for _, list := range []string{"There are 1/5 players online:Ada", "There are 1 of a max of 5 players online: §eAda",
+		"There are 1 out of maximum 5 players online.\nAdmins: Ada", "There are 1 of a max of 5 players online:\nAdmins: Ada"} {
+		if players, _ := ParseMinecraftList(list); len(players.Names) != 1 || players.IDs[0] != "" {
+			t.Errorf("%q: %+v", list, players)
+		}
 	}
 }

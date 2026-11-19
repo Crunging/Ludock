@@ -105,12 +105,20 @@ func ParseMinecraftList(response string) (Players, bool) {
 	if online == 0 {
 		return players, true
 	}
+	// Only the vanilla reply, unformatted on one line, lists account names;
+	// plugins' lists show nicknames and prefixes, so they give no IDs.
+	vanilla := strings.HasPrefix(response, "There are ") && strings.Contains(response, " of a max of ") &&
+		!strings.Contains(response, "§") && !strings.ContainsAny(strings.TrimRight(match[3], " \r\n"), "\n:")
 	for _, line := range strings.Split(match[3], "\n") {
 		if group := strings.LastIndex(line, ": "); group >= 0 {
 			line = line[group+2:]
 		}
 		for _, name := range strings.Split(line, ",") {
-			players.add(name)
+			if vanilla {
+				players.addWithID(name, strings.TrimSpace(name))
+			} else {
+				players.add(name)
+			}
 		}
 	}
 	return players, true
@@ -153,7 +161,8 @@ func ParseFactorioPlayers(response string) (Players, bool) {
 			}
 			seen[name] = true
 			players.Online++
-			players.add(name)
+			// Factorio lists account names, which its commands take.
+			players.addWithID(name, name)
 		case factorioLog.MatchString(line):
 		default:
 			return Players{}, false

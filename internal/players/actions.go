@@ -3,6 +3,7 @@ package players
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/console"
@@ -17,19 +18,16 @@ var (
 	errListsUnread = apperr.New("PLAYER_LISTS_UNREADABLE", 409, "Ludock couldn’t read the server’s player lists")
 )
 
-// Command is the console command for action on the player named name. A
-// game that takes IDs gets the ID of the one player with that name in the
-// latest reading, which is never shown.
+// Command is the console command for action on the player named name. Kick
+// and ban target the one player listed as name in a fresh reading, by the ID
+// that reading gave, which is never shown.
 func Command(moderation *games.Moderation, reading *Reading, action games.PlayerAction, name string) (string, error) {
 	if !moderation.Offers(action) {
 		return "", errNotTaken
 	}
 	target := name
-	if moderation.ByID {
-		id, ok := "", false
-		if reading != nil && !reading.Failed {
-			id, ok = reading.ID(name)
-		}
+	if games.Online(action) {
+		id, ok := onlineID(reading, name)
 		if !ok {
 			return "", errNotOnline
 		}
@@ -42,16 +40,17 @@ func Command(moderation *games.Moderation, reading *Reading, action games.Player
 	return command, nil
 }
 
-// Actionable reports whether a listed player can be acted on.
+func onlineID(reading *Reading, name string) (string, bool) {
+	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
+		return "", false
+	}
+	return reading.ID(name)
+}
+
+// Actionable reports whether an online player can be kicked or banned.
 func Actionable(moderation *games.Moderation, reading *Reading, name string) bool {
-	if moderation == nil || reading == nil {
-		return false
-	}
-	if moderation.ByID {
-		id, ok := reading.ID(name)
-		return ok && moderation.Valid(id)
-	}
-	return moderation.Valid(name)
+	id, ok := onlineID(reading, name)
+	return ok && moderation.Valid(id)
 }
 
 // Lists are who may join a server, as its game keeps them.
@@ -85,7 +84,7 @@ func ReadLists(ctx context.Context, client *docker.Client, containerID string, m
 		}
 		shown := list.Names[:0]
 		for _, name := range list.Names {
-			if redacted(name, secrets) {
+			if Redacted(name, secrets) {
 				list.Others++
 			} else {
 				shown = append(shown, name)
@@ -108,7 +107,8 @@ func ReadLists(ctx context.Context, client *docker.Client, containerID string, m
 	return &lists, nil
 }
 
-func redacted(text string, secrets []string) bool {
+// Redacted reports whether text holds one of secrets.
+func Redacted(text string, secrets []string) bool {
 	var safe strings.Builder
 	redactor := console.NewRedactor(secrets, func(part string) { safe.WriteString(part) })
 	redactor.Push(text)

@@ -15,7 +15,10 @@ import (
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
-var errNoModeration = apperr.New("PLAYER_ACTION_UNSUPPORTED", 409, "Ludock can’t act on players on this game")
+var (
+	errNoModeration = apperr.New("PLAYER_ACTION_UNSUPPORTED", 409, "Ludock can’t act on players on this game")
+	errSecretName   = apperr.New("PLAYER_NAME_INVALID", 400, "That isn’t a player name Ludock can send. Use the console.")
+)
 
 // moderation is the server's console moderation, or nil.
 func moderation(container servers.Container) *games.Moderation {
@@ -68,6 +71,10 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	if adapter == nil || adapter.Moderation == nil {
 		return "", errNoModeration
 	}
+	// A typed name that holds a secret never reaches the audit log or page.
+	if !games.Online(action) && players.Redacted(name, act.Observation.Secrets) {
+		return "", errSecretName
+	}
 	command, err := players.Command(adapter.Moderation, s.App.Players.Get(act.Logical.ID, act.Container), action, name)
 	if err != nil {
 		return "", err
@@ -100,7 +107,12 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 		}
 		return "", apperr.New("GAME_COMMAND_FAILED", 502, "The game didn’t take the command, or a conflicting operation is running")
 	}
-	s.audit(r, request, "server.player-action.succeeded", act.Logical.ID, outcome)
+	// The game saying no such player is a failed action, not a sent one.
+	if adapter.Moderation.Outcome(action, reply.String()) == games.NoPlayer {
+		s.audit(r, request, "server.player-action.failed", act.Logical.ID, outcome)
+	} else {
+		s.audit(r, request, "server.player-action.succeeded", act.Logical.ID, outcome)
+	}
 	return reply.String(), nil
 }
 

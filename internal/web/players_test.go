@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -33,6 +34,9 @@ func newPlayerGame(t *testing.T) *playerGame {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.sent = append(g.sent, command)
+		if command == "list" {
+			return "There are 2 of a max of 10 players online: Ada, Ada_2"
+		}
 		if strings.HasPrefix(command, "kick ") {
 			return "Kicked " + strings.TrimPrefix(command, "kick ") + ": Kicked by an operator"
 		}
@@ -58,6 +62,17 @@ func newPlayerGame(t *testing.T) *playerGame {
 	}
 	if g.server == "" {
 		t.Fatal("no Minecraft server", views)
+	}
+	// Kick and ban act on players in a reading.
+	g.app.Players.Check(context.Background(), g.server)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		server, _ := g.app.Servers.Summary(context.Background(), &g.admin.User, g.server)
+		if server != nil && g.app.Players.Get(g.server, server.Server.Container) != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no player reading")
+		}
 	}
 	return g
 }
@@ -100,9 +115,13 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 
 	operator := g.user("u-operator", "operator", db.RoleOperator)
 	g.grantOn(operator, authz.ServerView, authz.ConsoleExecute)
+	// Nobody else is online; a name kick takes must be in the list.
+	if response := g.act(operator, "kick", "Eve"); response.StatusCode != http.StatusConflict {
+		t.Error(response.StatusCode)
+	}
 	for _, name := range []string{"", "Ada\nop Eve", "Ada\rop Eve", "Ada op", "@a", "@a[name=Ada]", `"Ada"`, "Ada;stop",
 		"Ada\x00", " Ada", "Ada ", "Ada\t", "Åda", "Ada op", "SeventeenLetters1", "Ada|op", "Ada&&stop", "Ada/op"} {
-		if response := g.act(operator, "kick", name); response.StatusCode != http.StatusBadRequest {
+		if response := g.act(operator, "allow", name); response.StatusCode != http.StatusBadRequest {
 			t.Errorf("%q: %d", name, response.StatusCode)
 		}
 	}
@@ -111,7 +130,7 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 			t.Errorf("%s: %d", action, response.StatusCode)
 		}
 	}
-	if sent := g.commands(); len(sent) != 0 {
+	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return command == "list" }); len(sent) != 0 {
 		t.Fatal(sent)
 	}
 }
@@ -164,7 +183,7 @@ func TestPlayerActionNeedsItsAuditEntry(t *testing.T) {
 	if response := g.act(g.admin, "ban", "Ada"); response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatal(response.StatusCode)
 	}
-	if sent := g.commands(); len(sent) != 0 {
+	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return command == "list" }); len(sent) != 0 {
 		t.Fatal(sent)
 	}
 }

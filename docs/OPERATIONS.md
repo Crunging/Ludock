@@ -271,10 +271,12 @@ name, and lifts bans. Whether the allowlist is on is the server's own
 | 7 Days to Die | `kick` | | | The entity ID `listplayers` lists |
 
 Each action is one console command with the same access, checks, and audit as
-a typed one; the audit log records who did what to which player. Ludock sends a
-name or ID only when it is wholly in the game's own form, so it can't carry
-spaces, quotes, line breaks, or a selector such as `@a`, and refuses anything
-else. Project Zomboid and Conan Exiles get no actions: Zomboid's names can hold
+a typed one; the audit log records who did what to which player. A kick or ban
+goes to a player in the latest list of who's online, by the name or ID that list
+gave. Ludock sends a name or ID only when it is wholly in the game's own form,
+so it can't carry spaces, quotes, line breaks, or a selector such as `@a`, and
+refuses anything else. A Minecraft server whose plugins change the `list`
+reply, which then shows nicknames, offers no kick or ban. Project Zomboid and Conan Exiles get no actions: Zomboid's names can hold
 spaces its commands need quoted, and Conan's kick takes a row number that can
 change between readings. 7 Days to Die bans need a length, so they stay in the
 console. Ludock reads Minecraft's lists from `whitelist.json`,

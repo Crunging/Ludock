@@ -20,10 +20,10 @@ const (
 // Moderation is how a game's console acts on players. A player's name or ID
 // is hostile text from the game or a form: a command is built only from a
 // target that matches the whole of the game's own form, which never allows
-// whitespace, quotes, separators, or selectors.
+// whitespace, quotes, separators, or selectors. Kick and ban take the ID
+// the player list gives for an online player (Players.IDs); the list
+// actions take a name.
 type Moderation struct {
-	// ByID: commands take the ID the player list gives, not the name.
-	ByID bool
 	// target is the form of a name or ID the game takes. Every form stays
 	// shorter than MaxNameRunes, so a name the list cut short never matches.
 	target *regexp.Regexp
@@ -34,6 +34,9 @@ type Moderation struct {
 	// outcome reads a reply, or is nil when Ludock doesn't know the game's.
 	outcome func(action PlayerAction, reply string) Outcome
 }
+
+// Online reports whether an action targets a player in the online list.
+func Online(action PlayerAction) bool { return action == Kick || action == Ban }
 
 // Offers reports whether the game takes the action.
 func (m *Moderation) Offers(action PlayerAction) bool {
@@ -123,22 +126,17 @@ func (m *Moderation) ParseMinecraftPlayerList(data []byte) (ListedPlayers, bool)
 	return list, true
 }
 
-// ParseProperty reads a true or false key from a Java properties file, or
-// reports false when the file doesn't set it.
+// ParseProperty reads a boolean from a Java properties file as Java does:
+// the last line setting key wins, and only "true" in any case is true. It
+// reports false when no line sets the key.
 func ParseProperty(data []byte, key string) (on, set bool) {
 	for _, line := range strings.Split(string(data), "\n") {
-		name, value, found := strings.Cut(strings.TrimSpace(line), "=")
-		if !found || strings.TrimSpace(name) != key {
+		line = strings.TrimLeft(strings.TrimSuffix(line, "\r"), " \t\f")
+		separator := strings.IndexAny(line, "=:")
+		if line == "" || line[0] == '#' || line[0] == '!' || separator < 0 || strings.TrimRight(line[:separator], " \t\f") != key {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "true":
-			on, set = true, true
-		case "false":
-			on, set = false, true
-		default:
-			return false, false
-		}
+		on, set = strings.EqualFold(strings.TrimLeft(line[separator+1:], " \t\f"), "true"), true
 	}
 	return on, set
 }
@@ -184,19 +182,19 @@ var factorioModeration = &Moderation{
 }
 
 // Palworld takes the Steam ID its ShowPlayers gives.
-var palworldModeration = &Moderation{ByID: true,
+var palworldModeration = &Moderation{
 	target:   regexp.MustCompile(`^(?:steam_)?[0-9]{17}$`),
 	commands: map[PlayerAction][2]string{Kick: {"KickPlayer ", ""}, Ban: {"BanPlayer ", ""}},
 }
 
 // ARK takes a Survival Evolved Steam ID or a Survival Ascended EOS ID.
-var arkModeration = &Moderation{ByID: true,
+var arkModeration = &Moderation{
 	target:   regexp.MustCompile(`^(?:[0-9]{17}|[0-9A-Fa-f]{32})$`),
 	commands: map[PlayerAction][2]string{Kick: {"KickPlayer ", ""}, Ban: {"BanPlayer ", ""}},
 }
 
 // 7 Days to Die kicks by the entity ID listplayers gives.
-var sevenDaysModeration = &Moderation{ByID: true,
+var sevenDaysModeration = &Moderation{
 	target:   regexp.MustCompile(`^[0-9]{1,10}$`),
 	commands: map[PlayerAction][2]string{Kick: {"kick ", ""}},
 }

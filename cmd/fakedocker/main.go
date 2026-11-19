@@ -225,6 +225,9 @@ func palworldRCON(password string) string {
 		for _, name := range game.online {
 			if steamID(name) == id {
 				game.online = slices.DeleteFunc(game.online, func(listed string) bool { return listed == name })
+				if verb == "BanPlayer" {
+					game.banned = append(game.banned, name)
+				}
 				return map[string]string{"KickPlayer": "Kicked: ", "BanPlayer": "Banned: "}[verb] + name, true
 			}
 		}
