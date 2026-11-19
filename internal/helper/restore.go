@@ -357,10 +357,10 @@ func sameMount(left, right fd) (bool, error) {
 // mountOf is mountID; tests replace it, since they can't mount.
 var mountOf = mountID
 
-// oneMount refuses a folder with another mount anywhere inside it: moving
-// the folder would carry that mount into the restore folder, and cleanup
-// never empties one.
-func (h *restoreHelper) oneMount(parent fd, name string, depth int) error {
+// removable refuses a folder that cleanup could not empty after it moved
+// into the restore folder: one with another mount or a special file anywhere
+// inside it.
+func (h *restoreHelper) removable(parent fd, name string, depth int) error {
 	h.removed++
 	if depth > 64 || h.removed > 1000000 {
 		return errUnsafe
@@ -383,9 +383,11 @@ func (h *restoreHelper) oneMount(parent fd, name string, depth int) error {
 			return err
 		}
 		if isDir(info) {
-			if err := h.oneMount(directory, child, depth+1); err != nil {
+			if err := h.removable(directory, child, depth+1); err != nil {
 				return err
 			}
+		} else if !isRegular(info) && !isSymlink(info) {
+			return errUnsafe
 		}
 	}
 	return nil
@@ -496,7 +498,7 @@ func (h *restoreHelper) checkItem(root fd, parts []string) (any, error) {
 		return nil, err
 	}
 	if info != nil && isDir(info) {
-		if err := h.oneMount(parent, parts[len(parts)-1], 0); err != nil {
+		if err := h.removable(parent, parts[len(parts)-1], 0); err != nil {
 			return nil, err
 		}
 	}
@@ -524,7 +526,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		if info != nil && isDir(info) {
-			if err := h.oneMount(parent, name, 0); err != nil {
+			if err := h.removable(parent, name, 0); err != nil {
 				return err
 			}
 		}

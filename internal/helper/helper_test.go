@@ -494,11 +494,11 @@ func TestRestoreItemRollbackOwnership(t *testing.T) {
 	}
 }
 
-// The folder picked for a one-item restore has another filesystem mounted
-// somewhere inside it, such as a disk the host mounted under the data: the
-// restore is refused before the server stops and never moves the folder,
-// which would carry that mount into the restore folder.
-func TestRestoreItemRefusesNestedMount(t *testing.T) {
+// The folder picked for a one-item restore holds something cleanup could
+// never remove, first a named pipe and then another filesystem mounted
+// inside it, such as a disk the host mounted under the data: the restore is
+// refused before the server stops and never moves the folder aside.
+func TestRestoreItemRefusesUnremovableFolder(t *testing.T) {
 	root := t.TempDir()
 	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
 	for _, dir := range []string{"world/region", "world/mods/cache", stage + "/old"} {
@@ -511,6 +511,14 @@ func TestRestoreItemRefusesNestedMount(t *testing.T) {
 	if step("check") != 0 {
 		t.Fatal("refused a folder on one mount")
 	}
+	pipe := filepath.Join(root, "world/region/console.pipe")
+	if err := unix.Mkfifo(pipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if step("check") == 0 || step("moveOld") == 0 {
+		t.Fatal("accepted a folder with a named pipe inside it")
+	}
+	os.Remove(pipe)
 	var mounted unix.Stat_t
 	if err := unix.Stat(filepath.Join(root, "world/mods/cache"), &mounted); err != nil {
 		t.Fatal(err)
