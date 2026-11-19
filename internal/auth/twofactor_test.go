@@ -179,8 +179,9 @@ func TestWrongCodesAreThrottled(t *testing.T) {
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
 	}
-	if _, err := s.CompleteLogin(ctx, token, hotp(secret, totpStep(c.now)+1), Client{IP: "192.0.2.2"}); err == nil {
-		t.Fatal("exhausted challenge signed in")
+	// A used-up challenge starts over even while its source is blocked.
+	if _, err := s.CompleteLogin(ctx, token, hotp(secret, totpStep(c.now)+1), Client{IP: "192.0.2.2"}); !apperr.Is(err, "SIGN_IN_EXPIRED") {
+		t.Fatalf("exhausted challenge: %v", err)
 	}
 	if _, err := s.Login(ctx, "admin", "correct horse battery staple", Client{IP: "192.0.2.2"}); !apperr.Is(err, "TOO_MANY_ATTEMPTS") {
 		t.Fatalf("source not blocked: %v", err)

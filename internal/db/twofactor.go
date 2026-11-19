@@ -236,8 +236,9 @@ func (d *DB) CreateSignInChallenge(ctx context.Context, tokenHash, userID, passw
 	})
 }
 
-// FindSignInChallenge returns an unexpired challenge, or nil.
-func (d *DB) FindSignInChallenge(ctx context.Context, tokenHash string, now int64) (*SignInChallenge, error) {
+// FindSignInChallenge returns an unexpired challenge with attempts left, or
+// nil.
+func (d *DB) FindSignInChallenge(ctx context.Context, tokenHash string, maxAttempts int, now int64) (*SignInChallenge, error) {
 	var c SignInChallenge
 	var role string
 	var disabled int
@@ -245,7 +246,8 @@ func (d *DB) FindSignInChallenge(ctx context.Context, tokenHash string, now int6
 	err := d.QueryRowContext(ctx, `SELECT users.id, users.username, users.role, sign_in_challenges.password_hash,
     users.password_hash, users.disabled, users.totp_secret, users.totp_step
     FROM sign_in_challenges JOIN users ON users.id = sign_in_challenges.user_id
-    WHERE sign_in_challenges.token_hash = ? AND sign_in_challenges.expires_at > ?`, tokenHash, now).
+    WHERE sign_in_challenges.token_hash = ? AND sign_in_challenges.attempts < ? AND sign_in_challenges.expires_at > ?`,
+		tokenHash, maxAttempts, now).
 		Scan(&c.UserID, &c.Username, &role, &c.PasswordHash, &c.CurrentHash, &disabled, &secret, &c.Step)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

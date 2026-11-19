@@ -76,7 +76,7 @@ func (s *Service) CompleteLogin(ctx context.Context, token, code string, client 
 		return nil, errSignInExpired
 	}
 	tokenHash := HashToken(token)
-	challenge, err := s.DB.FindSignInChallenge(ctx, tokenHash, now)
+	challenge, err := s.DB.FindSignInChallenge(ctx, tokenHash, challengeAttempts, now)
 	if err != nil {
 		return nil, err
 	}
