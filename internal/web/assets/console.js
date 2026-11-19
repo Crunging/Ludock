@@ -24,15 +24,15 @@
 
   var colors = getComputedStyle(document.documentElement);
   var css = function (name, fallback) { return colors.getPropertyValue(name).trim() || fallback; };
-  var background = css("--terminal", "#0b1017");
+  var background = css("--terminal", "#061417");
   var fontFamily = css("--mono", "monospace");
   var terminal = new window.Terminal({
     theme: {
-      background: background, foreground: css("--terminal-fg", "#dbe4e8"), cursor: css("--accent", "#f08a24"),
-      cursorAccent: background, selectionBackground: "rgba(240, 138, 36, 0.3)",
-      black: background, red: "#f39b92", green: "#92dba0", yellow: "#e8c46b", blue: "#38bdf8", magenta: "#c084fc",
-      cyan: "#7cc8e0", white: "#d6d6d6", brightBlack: "#767676", brightRed: "#fca5a5", brightGreen: "#6ee7b7",
-      brightYellow: "#fde68a", brightBlue: "#7dd3fc", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ededed",
+      background: background, foreground: css("--terminal-fg", "#dce8e6"), cursor: css("--accent", "#ff8b2b"),
+      cursorAccent: background, selectionBackground: "rgba(255, 139, 43, 0.3)",
+      black: background, red: "#ff8a7f", green: "#7fe08a", yellow: "#f5c83a", blue: "#8ca6ff", magenta: "#d0a2ff",
+      cyan: "#7fd8e0", white: "#d3dedc", brightBlack: "#6f8a8a", brightRed: "#ffb0a8", brightGreen: "#a4ecac",
+      brightYellow: "#fbe08a", brightBlue: "#b3c3ff", brightMagenta: "#e2c4ff", brightCyan: "#a8e8ee", brightWhite: "#f2f7f6",
     },
     // xterm measures glyph width once, so start on a font that is already present.
     fontFamily: "ui-monospace, monospace",

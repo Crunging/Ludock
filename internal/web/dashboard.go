@@ -48,6 +48,8 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 	states := map[string]bool{}
 	for index := range all {
 		view := &all[index]
+		status := views.ServerStatus(view.State, view.Health, view.Exit)
+		list.Fleet = append(list.Fleet, views.FleetBlock{Name: view.DisplayName, Label: status.Label, Tone: status.Tone})
 		states[view.State] = true
 		if backupSummary(request.User(), view) {
 			list.ShowBackup = true
@@ -112,7 +114,7 @@ func (s *Server) serversFragment(w http.ResponseWriter, r *http.Request, request
 	list := s.serverList(r, request)
 	// Every list request carries the filters as they are, so each keeps the
 	// address bar in step; going back to the list or reloading it keeps them.
-	if r.Header.Get("HX-Target") == "servers" {
+	if htmxTarget(r) == "servers" {
 		page := url.Values{}
 		if list.Search != "" {
 			page.Set("search", list.Search)
@@ -191,7 +193,7 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, request *Re
 	changed(w)
 }
 
-func fromDetail(r *http.Request) bool { return r.Header.Get("HX-Target") == "detail-status" }
+func fromDetail(r *http.Request) bool { return htmxTarget(r) == "detail-status" }
 
 func (s *Server) audit(r *http.Request, request *Request, action, serverID string, details map[string]any) {
 	entry := db.AuditEntry{UserID: request.User().ID, Action: action, TargetType: "settings", Details: details, IPAddress: request.Client.IP}

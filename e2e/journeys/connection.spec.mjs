@@ -81,3 +81,28 @@ test("a change that fails after a refresh replaced its button still says so", as
   fail();
   await expect(page.locator("[data-connection-notice]")).toContainText("your change may not have been made");
 });
+
+test("a refresh queued behind another is checked against what that one showed", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect.poll(async () => (await refreshList(page)).status()).toBe(304);
+  // The next refresh shows other content; one more queues behind it while it loads.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let requests = 0, queuedTag;
+  await page.route(/\/fragments\/servers(\?|$)/, async (route) => {
+    if (++requests > 1) {
+      queuedTag ??= route.request().headers()["if-none-match"];
+      return route.continue();
+    }
+    await held;
+    await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { ETag: '"other"' }, body: "<p>Other content</p>" });
+  });
+  await page.evaluate(() => window.htmx.trigger(document.body, "servers-changed"));
+  await expect.poll(() => requests).toBe(1);
+  await page.evaluate(() => window.htmx.trigger(document.body, "servers-changed"));
+  release();
+  await expect.poll(() => queuedTag).toBe('"other"');
+  await expect(page.locator(".server-row")).toHaveCount(2);
+  await page.unroute(/\/fragments\/servers(\?|$)/);
+});

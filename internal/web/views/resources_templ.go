@@ -202,7 +202,7 @@ func ResourceHistory(h resources.History) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\" hx-trigger=\"every 60s\" hx-swap=\"outerHTML\" hx-disinherit=\"*\"><div class=\"section-heading\"><h2 id=\"resource-history-title\">Resource history</h2><nav class=\"range-switch\" aria-label=\"History range\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\" hx-trigger=\"every 60s\" hx-swap=\"outerHTML\"><div class=\"section-heading\"><h2 id=\"resource-history-title\">Resource history</h2><nav class=\"range-switch\" aria-label=\"History range\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

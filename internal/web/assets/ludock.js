@@ -42,16 +42,33 @@
     }
   });
 
-  // hx-confirm asks in the page's own dialog instead of the browser's.
+  // Morphing a live region keeps what only the page knows: a server's open
+  // menu, and times already written in local form.
+  if (window.htmx) {
+    htmx.registerExtension("ludock", {
+      htmx_before_morph_attr: function (elt, detail) {
+        if (detail.attrName === "hidden" && elt.matches(".server-row .action-menu__content")) return false;
+        if (detail.attrName === "aria-expanded" && elt.matches(".server-row [data-action-menu] > button")) return false;
+      },
+      htmx_before_morph_node: function (elt, detail) {
+        var incoming = detail.newNode;
+        if (elt.tagName === "TIME" && elt.getAttribute("datetime") === incoming.getAttribute("datetime") &&
+          elt.getAttribute("data-relative") === incoming.getAttribute("data-relative")) return false;
+      },
+    });
+  }
+
+  // hx-confirm asks in the page's own dialog instead of the browser's. htmx
+  // has built the request by then, so a ticked option joins its body.
   var confirming = null;
   document.addEventListener("htmx:confirm", function (event) {
     var dialog = document.getElementById("confirm-dialog");
-    var elt = event.detail.elt;
-    if (!event.detail.question || !dialog || !dialog.showModal) return;
+    var ctx = event.detail.ctx, elt = ctx.sourceElement;
+    if (!dialog || !dialog.showModal) return;
     event.preventDefault();
     var detail = elt.getAttribute("data-confirm-detail") || "";
     var button = dialog.querySelector("[data-confirm-button]");
-    dialog.querySelector("h2").textContent = event.detail.question;
+    dialog.querySelector("h2").textContent = ctx.confirm;
     dialog.querySelector("#confirm-dialog-detail").textContent = detail;
     dialog.querySelector("#confirm-dialog-detail").hidden = !detail;
     var optionName = elt.getAttribute("data-confirm-option");
@@ -70,16 +87,13 @@
       // An action in a menu closed the menu; focus returns to its button.
       var menu = elt.closest("[data-action-menu]");
       if (menu && elt.closest("[hidden]")) menu.querySelector(":scope > button").focus();
-      if (dialog.returnValue !== "confirm") return;
-      // htmx reads hx-vals as it builds the request.
-      if (optionName) {
-        var values = {};
-        if (checkbox.checked) values[optionName] = "true";
-        elt.setAttribute("hx-vals", JSON.stringify(values));
+      // htmx holds the element's request queue until it hears either answer.
+      if (dialog.returnValue !== "confirm") {
+        event.detail.dropRequest();
+        return;
       }
-      elt.setAttribute("data-confirmed-sending", "");
-      elt.addEventListener("htmx:afterRequest", function () { elt.removeAttribute("data-confirmed-sending"); }, { once: true });
-      event.detail.issueRequest(true);
+      if (optionName && checkbox.checked) ctx.request.body.set(optionName, "true");
+      event.detail.issueRequest();
     }, { once: true });
     dialog.showModal();
   });
@@ -97,46 +111,43 @@
   });
 
   // htmx buttons (or a form's submit button) show their busy label and stay
-  // disabled while the request runs.
+  // disabled while the request runs. The request remembers its button, which
+  // a refresh may replace meanwhile.
   function busyButton(elt) {
     if (!elt || !elt.matches) return null;
     if (elt.matches("button[data-busy-label]")) return elt;
     return elt.matches("form") ? elt.querySelector("button[type=submit][data-busy-label]") : null;
   }
-  document.addEventListener("htmx:beforeRequest", function (event) {
-    var button = busyButton(event.detail.elt);
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx, button = busyButton(ctx.sourceElement);
     if (!button || button.hasAttribute("data-idle-label")) return;
     button.setAttribute("data-idle-label", button.textContent);
     button.textContent = button.getAttribute("data-busy-label");
     button.disabled = true;
+    ctx.busyButton = button;
   });
   // Restore busy buttons, and close a dialog after its htmx form succeeds.
-  document.addEventListener("htmx:afterRequest", function (event) {
-    var button = busyButton(event.detail.elt);
+  document.addEventListener("htmx:finally:request", function (event) {
+    var ctx = event.detail.ctx, button = ctx.busyButton;
     if (button && button.hasAttribute("data-idle-label")) {
       button.textContent = button.getAttribute("data-idle-label");
       button.removeAttribute("data-idle-label");
       button.disabled = false;
     }
-    var form = event.detail.elt;
-    // htmx leaves "successful" unset when the response moves the page with
-    // HX-Location, which follows queued work.
-    var moved = event.detail.xhr && event.detail.xhr.status < 400 && event.detail.xhr.getResponseHeader("HX-Location");
-    if ((event.detail.successful || moved) && form && form.matches && form.matches("dialog form[data-close-on-success]")) {
+    var form = ctx.request.form;
+    if (ctx.response && ctx.response.status < 400 && form && form.matches("dialog form[data-close-on-success]")) {
       form.closest("dialog").close();
     }
   });
 
-  // Timed polls wait while the tab is hidden; events still refresh. Showing
-  // the tab again refreshes the live server views that missed a poll.
-  function polls(elt) {
-    var parts = (elt.getAttribute && elt.getAttribute("hx-trigger") || "").split(",").map(function (part) { return part.trim(); });
-    return parts.some(function (part) { return part.indexOf("every ") === 0; }) &&
-      !parts.some(function (part) { return part === "load" || part.indexOf("load ") === 0; });
+  // Timed polls wait while the tab is hidden, as the event stream does.
+  // Showing the tab again refreshes the live server views that missed a poll.
+  function timed(ctx) {
+    return !!ctx.sourceEvent && ctx.sourceEvent.type === "every";
   }
   var missedPoll = false;
-  document.addEventListener("htmx:beforeRequest", function (event) {
-    if (document.hidden && !event.detail.requestConfig.triggeringEvent && polls(event.detail.elt)) {
+  document.addEventListener("htmx:config:request", function (event) {
+    if (document.hidden && timed(event.detail.ctx)) {
       missedPoll = true;
       event.preventDefault();
     }
@@ -149,8 +160,8 @@
   });
 
   // Session expiry or revocation sends the browser to sign in again.
-  document.addEventListener("htmx:responseError", function (event) {
-    if (event.detail.xhr && event.detail.xhr.status === 401) window.location.assign("/login");
+  document.addEventListener("htmx:response:error", function (event) {
+    if (event.detail.ctx.response.status === 401) window.location.assign("/login");
   });
 
   // data-shown-by="checkbox-id" shows an element while the box is checked and
@@ -282,9 +293,15 @@
   // Ludock logs: follow the newest entry, or keep the entry being read in
   // place while the buffer refreshes.
   var logAnchor = null;
-  document.addEventListener("htmx:beforeSwap", function (event) {
+  // The elements a swap is about to change. A 304 changes none.
+  function swapTargets(detail) {
+    return detail.tasks.filter(function (task) {
+      return task.target && task.target.nodeType === 1 && task.swapSpec.style !== "none";
+    }).map(function (task) { return task.target; });
+  }
+  document.addEventListener("htmx:before:swap", function (event) {
     var output = document.querySelector("[data-log-output]");
-    if (!output || !event.detail.target || event.detail.target.id !== "application-logs") return;
+    if (!output || !swapTargets(event.detail).some(function (target) { return target.id === "application-logs"; })) return;
     logAnchor = null;
     var view = output.getBoundingClientRect();
     var rows = output.querySelectorAll("[data-log-id]");
@@ -372,149 +389,116 @@
     }
   });
 
-  // A live refresh never replaces an open dialog (such as a stop
-  // confirmation in the server list), or the element a confirmation will
-  // send; it refreshes once the dialog closes.
-  document.addEventListener("htmx:beforeSwap", function (event) {
-    var target = event.detail.target;
-    var open = target && target.querySelector && target.querySelector("dialog[open]");
-    if (!open && confirming && target && target.contains && target.contains(confirming)) open = document.getElementById("confirm-dialog");
-    if (!open || event.detail.requestConfig.elt.closest("dialog") === open) return;
-    event.detail.shouldSwap = false;
-    if (open.hasAttribute("data-refresh-pending")) return;
-    open.setAttribute("data-refresh-pending", "");
-    open.addEventListener("close", function () {
-      open.removeAttribute("data-refresh-pending");
-      if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
-    }, { once: true });
+  // A live refresh never replaces an open dialog, or the element whose
+  // confirmation is open (such as a stop in the server list); it refreshes
+  // once the dialog closes. A response's other partials leave them alone.
+  document.addEventListener("htmx:before:swap", function (event) {
+    var detail = event.detail, source = detail.ctx.sourceElement;
+    for (var index = detail.tasks.length - 1; index >= 0; index--) {
+      var task = detail.tasks[index], target = task.target;
+      if (!target || target.nodeType !== 1 || task.swapSpec.style === "none") continue;
+      var open = target.querySelector("dialog[open]");
+      if (!open && confirming && target.contains(confirming)) open = document.getElementById("confirm-dialog");
+      if (!open || (source.closest && source.closest("dialog") === open)) continue;
+      if (task.type !== "main") {
+        detail.tasks.splice(index, 1);
+        continue;
+      }
+      event.preventDefault();
+      if (open.hasAttribute("data-refresh-pending")) return;
+      open.setAttribute("data-refresh-pending", "");
+      open.addEventListener("close", function () {
+        open.removeAttribute("data-refresh-pending");
+        if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
+      }, { once: true });
+      return;
+    }
   });
 
-  // A live server view's refresh waits while a confirmed request from inside it
-  // is on its way, since that response's events only reach the page while the
-  // sending element is there. The view reloads once it answers.
-  document.addEventListener("htmx:beforeSwap", function (event) {
-    var target = event.detail.target;
-    if (!target || !target.querySelector || event.detail.requestConfig.verb !== "get" ||
-      (target.getAttribute("hx-trigger") || "").indexOf("servers-changed") === -1) return;
-    var sending = target.querySelector("[data-confirmed-sending]");
-    if (!sending || sending === event.detail.requestConfig.elt) return;
-    event.detail.shouldSwap = false;
-    if (sending.hasAttribute("data-refresh-pending")) return;
-    sending.setAttribute("data-refresh-pending", "");
-    sending.addEventListener("htmx:afterRequest", function () {
-      sending.removeAttribute("data-refresh-pending");
-      if (window.htmx) window.htmx.trigger(document.body, "servers-changed");
-    }, { once: true });
+  // A refresh never replaces a select whose choice it didn't see, such as a
+  // filter changed while the list was loading.
+  document.addEventListener("htmx:before:swap", function (event) {
+    var tasks = event.detail.tasks;
+    for (var index = tasks.length - 1; index >= 0; index--) {
+      var live = tasks[index].target, incoming = tasks[index].fragment.querySelector("select");
+      if (tasks[index].type === "main" || !live || live.tagName !== "SELECT" || !incoming || incoming.id !== live.id) continue;
+      var chosen = incoming.querySelector("option[selected]") || incoming.querySelector("option");
+      if (chosen && chosen.value !== live.value) tasks.splice(index, 1);
+    }
   });
 
   // In-page navigation on a server's page (tabs and links that swap
   // #detail-body): only the newest navigation swaps, so a slow earlier response
   // can't replace a later click, and a failed one loads the address as a full
-  // page so its error shows. Each request guards its own target, since a newer
-  // response may already have replaced it. An action follows its work with
-  // HX-Location only if nothing navigated since it was sent; the check listens
-  // on the action's button, which a navigation may have replaced.
-  var navigation = 0, followStale = false;
-  document.addEventListener("htmx:beforeRequest", function (event) {
-    var xhr = event.detail.xhr, config = event.detail.requestConfig, elt = event.target, sent = navigation;
-    if (!xhr || !config || config.verb === "get") return;
-    elt.addEventListener("htmx:beforeOnLoad", function check(load) {
-      if (load.detail.xhr !== xhr) return;
-      elt.removeEventListener("htmx:beforeOnLoad", check);
-      followStale = sent !== navigation && !!xhr.getResponseHeader("HX-Location");
-    });
-  });
-  document.addEventListener("htmx:beforeRequest", function (event) {
-    var target = event.detail.target, xhr = event.detail.xhr;
-    if (!target || !xhr || !target.closest || !target.closest("#detail-body")) return;
+  // page so its error shows. An action follows its work with HX-Location only
+  // if nothing navigated since it was sent.
+  var navigation = 0;
+  function navigates(ctx) {
+    return !!ctx.target && ctx.target.id === "detail-body";
+  }
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx;
     // A request queued for a view that is gone has nothing left to update.
-    if (!target.isConnected) {
+    if (ctx.target && ctx.target.isConnected === false) {
       event.preventDefault();
       return;
     }
-    var navigates = target.id === "detail-body";
-    if (navigates && followStale && event.target === document.body) {
-      followStale = false;
-      event.preventDefault();
-      return;
-    }
-    var view = navigates ? ++navigation : navigation;
-    target.addEventListener("htmx:beforeSwap", function guard(swap) {
-      if (swap.detail.xhr !== xhr) return;
-      target.removeEventListener("htmx:beforeSwap", guard);
-      if (view !== navigation) {
-        swap.detail.shouldSwap = false;
-      } else if (navigates && xhr.status >= 400) {
-        swap.detail.shouldSwap = false;
-        window.location.assign(swap.detail.pathInfo.finalRequestPath || swap.detail.pathInfo.requestPath);
-      }
-    });
+    ctx.navigation = navigates(ctx) ? ++navigation : navigation;
   });
-  // A second click on a link whose request is still pending starts its own
-  // request, since htmx drops a queued one once a newer view replaces the link.
+  document.addEventListener("htmx:after:request", function (event) {
+    var ctx = event.detail.ctx;
+    if (ctx.request.method !== "GET" && ctx.hx.location && ctx.navigation !== navigation) delete ctx.hx.location;
+  });
+  document.addEventListener("htmx:before:swap", function (event) {
+    var ctx = event.detail.ctx;
+    if (!navigates(ctx)) return;
+    if (ctx.navigation !== navigation) {
+      event.preventDefault();
+    } else if (ctx.response.status >= 400) {
+      event.preventDefault();
+      window.location.assign(ctx.request.action);
+    }
+  });
+
+  // A modified click opens a link's own address in a new tab or window; htmx
+  // 4.0.2 cancels it on links it handles, so the click never reaches htmx.
   document.addEventListener("click", function (event) {
-    var link = event.target.closest && event.target.closest("#detail-body a[hx-boost]");
-    if (!link || !link.classList.contains("htmx-request") || !window.htmx) return;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    var source = document.createElement("span");
-    source.hidden = true;
-    document.body.appendChild(source);
-    window.htmx.ajax("GET", link.getAttribute("href"), { source: source, target: "#detail-body", select: "#detail-body", swap: "outerHTML show:none", push: "true" })
-      .finally(function () { source.remove(); });
+    if (!(event.ctrlKey || event.metaKey || event.shiftKey) || !event.target.closest) return;
+    if (event.target.closest("a[href][data-htmx-powered]")) event.stopPropagation();
   }, true);
-
-  // An out-of-band swap never replaces the element a confirmation will send.
-  document.addEventListener("htmx:oobBeforeSwap", function (event) {
-    var target = event.detail.target;
-    if (confirming && target && (target === confirming || target.contains(confirming))) event.detail.shouldSwap = false;
-  });
-
-  // A refresh never replaces a select whose choice it didn't see, such as a
-  // filter changed while the list was loading: the form's queued request
-  // reads the select when it runs, so the choice must still be there.
-  document.addEventListener("htmx:oobBeforeSwap", function (event) {
-    var live = event.detail.target;
-    var incoming = event.detail.fragment && event.detail.fragment.querySelector && event.detail.fragment.querySelector("select");
-    if (!live || live.tagName !== "SELECT" || !incoming || incoming.id !== live.id) return;
-    var chosen = incoming.querySelector("option[selected]") || incoming.querySelector("option");
-    if (chosen && chosen.value !== live.value) event.detail.shouldSwap = false;
-  });
 
   // Live regions send the ETag of the fragment they show, and the server
   // answers an unchanged fragment with a bodiless 304. Any other swap into or
-  // over a region forgets its tag. These handlers come after the others so they
-  // see swaps the others cancelled. A hung timed refresh gives up after 30
+  // over a region forgets its tag; that handler comes after the others, so it
+  // skips swaps they cancelled. A hung timed refresh gives up after 30
   // seconds.
   var shown = {};
-  function refreshesItself(config) {
-    return config && config.verb === "get" && config.elt === config.target && !config.boosted && !!config.elt.id;
-  }
   function forget(target) {
-    if (!target) return;
     Object.keys(shown).forEach(function (id) {
       var node = shown[id].node;
-      if (!node.isConnected || node === target || node.contains(target) || (target.contains && target.contains(node))) delete shown[id];
+      if (!node.isConnected || node === target || node.contains(target) || target.contains(node)) delete shown[id];
     });
   }
-  function timed(elt) {
-    return !!elt && !!elt.getAttribute && (elt.getAttribute("hx-trigger") || "").indexOf("every ") !== -1;
-  }
-  document.addEventListener("htmx:configRequest", function (event) {
-    var config = event.detail;
-    if (timed(config.elt)) config.timeout = 30000;
-    if (!refreshesItself(config)) return;
-    var last = shown[config.elt.id];
-    if (last && last.node === config.elt) config.headers["If-None-Match"] = last.tag;
+  document.addEventListener("htmx:config:request", function (event) {
+    var ctx = event.detail.ctx;
+    if (timed(ctx)) ctx.request.timeout = 30000;
+    if (ctx.request.method !== "GET" || ctx.sourceElement !== ctx.target || !ctx.target.id) return;
+    // The swap may replace the element, so the request keeps the region's id.
+    ctx.region = ctx.target.id;
   });
-  document.addEventListener("htmx:beforeSwap", function (event) { if (event.detail.shouldSwap) forget(event.detail.target); });
-  document.addEventListener("htmx:oobBeforeSwap", function (event) { if (event.detail.shouldSwap) forget(event.detail.target); });
-  document.addEventListener("htmx:afterSwap", function (event) {
-    var detail = event.detail, xhr = detail.xhr, config = detail.requestConfig;
-    if (!xhr || xhr.status !== 200 || !refreshesItself(config)) return;
-    var tag = xhr.getResponseHeader("ETag"), node = document.getElementById(config.elt.id);
-    if (tag && node) shown[node.id] = { node: node, tag: tag };
+  // A request may wait in a queue behind one that changes the region, so it
+  // names the tag shown when it is sent.
+  document.addEventListener("htmx:before:request", function (event) {
+    var ctx = event.detail.ctx, last = ctx.region && shown[ctx.region];
+    if (last && last.node === ctx.target) ctx.request.headers["If-None-Match"] = last.tag;
+  });
+  document.addEventListener("htmx:before:swap", function (event) {
+    if (!event.defaultPrevented) swapTargets(event.detail).forEach(forget);
+  });
+  document.addEventListener("htmx:after:swap", function (event) {
+    var ctx = event.detail.ctx, node = ctx.region && document.getElementById(ctx.region);
+    var tag = ctx.response && ctx.response.status === 200 && ctx.response.headers.get("ETag");
+    if (tag && node) shown[ctx.region] = { node: node, tag: tag };
   });
 
   // A request that can't reach Ludock shows a notice at the bottom of the page.
@@ -546,9 +530,12 @@
   function catchUp() {
     if (window.htmx) htmx.trigger(document.body, "servers-changed");
   }
-  function failed(config) {
-    var refresh = refreshesItself(config) || timed(config.elt);
-    if (config.verb !== "get" && !refresh) {
+  function stream(elt) {
+    return !!elt && !!elt.hasAttribute && elt.hasAttribute("hx-sse:connect");
+  }
+  function failed(ctx) {
+    var refresh = !!ctx.region || timed(ctx);
+    if (ctx.request.method !== "GET" && !refresh) {
       notice("change", "Ludock didn’t answer, so your change may not have been made. Check your connection, then check the result before trying again.");
     } else if (!refresh) {
       if (unreachable !== "change") notice("refresh", "Can’t reach Ludock. Check your connection and try again.");
@@ -557,20 +544,19 @@
       notice("refresh", "Can’t reach Ludock. Showing the last known state until the connection is back.");
     }
   }
-  function answered(config) {
-    if (!unreachable || (unreachable === "change" && (config.verb === "get" || timed(config.elt)))) return;
+  function answered(ctx) {
+    if (!unreachable || (unreachable === "change" && (ctx.request.method === "GET" || timed(ctx)))) return;
     var missed = unreachable === "refresh";
     notice(null);
     if (missed) catchUp();
   }
-  // htmx reports a request's end on the element that sent it, which a
-  // refresh may have replaced by then, so these listen on the request.
-  document.addEventListener("htmx:beforeRequest", function (event) {
-    var xhr = event.detail.xhr, config = event.detail.requestConfig;
-    if (!xhr || !config) return;
-    xhr.addEventListener("load", function () { answered(config); });
-    xhr.addEventListener("error", function () { failed(config); });
-    xhr.addEventListener("timeout", function () { failed(config); });
+  // htmx reports these on the document when a refresh has replaced the
+  // element that sent the request. An error with no response never arrived;
+  // the event stream reports its own state.
+  document.addEventListener("htmx:after:request", function (event) { answered(event.detail.ctx); });
+  document.addEventListener("htmx:error", function (event) {
+    var ctx = event.detail.ctx;
+    if (ctx && !ctx.response && !stream(ctx.sourceElement)) failed(ctx);
   });
   window.addEventListener("online", catchUp);
 
@@ -644,8 +630,8 @@
   }
   setInterval(function () { formatTimes(); }, 30000);
   // Swapped content is formatted in the same task that inserts it, before
-  // the browser paints; htmx:load comes only after settling, a frame later.
-  document.addEventListener("htmx:afterSwap", function () { formatTimes(); });
+  // the browser paints or an observer sees it.
+  document.addEventListener("htmx:before:settle", function () { formatTimes(); });
 
   // Resource charts: a crosshair follows the pointer, or the arrow keys on a
   // focused chart, and reads out the nearest sample in every chart of the
@@ -782,23 +768,32 @@
     button.focus();
   });
 
-  // Live update connection status and session expiry over SSE.
+  // Live updates arrive over an event stream, which htmx closes while the tab
+  // is hidden and reopens when it shows. A stream that reconnects may have
+  // missed events, so live views refresh. htmx retries a stream that drops,
+  // but not one that never opened.
   function liveStatus(connected) {
     document.querySelectorAll("[data-live-status]").forEach(function (element) { element.hidden = connected; });
   }
-  // A stream that reconnects may have missed events, so live views refresh.
-  var streamLost = false;
-  document.addEventListener("htmx:sseOpen", function () {
+  var streamed = false;
+  document.addEventListener("htmx:sse:after:connection", function () {
     liveStatus(true);
-    if (streamLost) catchUp();
-    streamLost = false;
+    if (streamed) catchUp();
+    streamed = true;
   });
-  document.addEventListener("htmx:sseError", function () {
+  document.addEventListener("htmx:sse:error", function (event) {
+    if (event.detail.status === 401) window.location.assign("/login");
+    else liveStatus(false);
+  });
+  document.addEventListener("htmx:sse:before:message", function (event) {
+    if (event.detail.message.event === "expired") window.location.assign("/login");
+  });
+  document.addEventListener("htmx:finally:request", function (event) {
+    var elt = event.detail.ctx.sourceElement;
+    if (!stream(elt) || (elt._htmx && elt._htmx.sse)) return;
     liveStatus(false);
-    streamLost = true;
-  });
-  document.addEventListener("htmx:sseMessage", function (event) {
-    if (event.detail && event.detail.type === "expired") window.location.assign("/login");
+    streamed = true;
+    setTimeout(function () { htmx.trigger(elt, "live-retry"); }, 5000);
   });
 
   // Long lists show their first items until expanded.
@@ -825,14 +820,14 @@
     });
   }
 
-  // htmx:load fires for each element htmx adds, including outerHTML swaps.
-  document.addEventListener("htmx:load", function (event) {
-    formatTimes(event.detail.elt);
-    collapseLists(event.detail.elt);
-    confirmations(event.detail.elt);
-    timezones(event.detail.elt);
-    openDialogs(event.detail.elt);
-    if (event.detail.elt.id === "application-logs") followLogs();
+  // htmx processes each element it adds or morphs.
+  document.addEventListener("htmx:after:process", function (event) {
+    var root = event.target;
+    collapseLists(root);
+    confirmations(root);
+    timezones(root);
+    openDialogs(root);
+    if (root.id === "application-logs") followLogs();
   });
 
   onReady(function () {
@@ -842,16 +837,5 @@
     timezones();
     msFields();
     followLogs();
-    // Error and success responses both render into their targets; a 304
-    // keeps the region a refresh found unchanged.
-    if (window.htmx) {
-      htmx.config.responseHandling = [
-        { code: "204", swap: false },
-        { code: "304", swap: false },
-        { code: "[23]..", swap: true },
-        { code: "401", swap: false, error: true },
-        { code: "[45]..", swap: true, error: false },
-      ];
-    }
   });
 })();

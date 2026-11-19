@@ -24,12 +24,12 @@ templ Document(title, csrf string, scripts, styles []string) {
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-			<meta name="theme-color" content="#0b1017"/>
-			<meta name="color-scheme" content="dark"/>
+			<meta name="theme-color" content="#081a1e"/>
+			<meta name="color-scheme" content="light dark"/>
 			<meta name="description" content="Manage your existing Docker game servers with Ludock."/>
-			// Eval stays off: the CSP allows no inline or string-evaluated script.
-			// Back and forward reload pages, since htmx keeps no snapshots.
-			<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"selfRequestsOnly":true}'/>
+			// Back and forward reload the page rather than restoring it in place.
+			// The CSP allows no evaluated script, so no attribute uses js: or hx-on.
+			<meta name="htmx-config" content='{"history":"reload","includeIndicatorCSS":false,"extensions":"sse,preload,ludock","defaultTimeout":120000}'/>
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 			}
@@ -41,21 +41,27 @@ templ Document(title, csrf string, scripts, styles []string) {
 				<link rel="stylesheet" href={ Asset(style) }/>
 			}
 			<title>{ title }</title>
-			<script src={ Asset("vendor/htmx.min.js") } defer></script>
-			<script src={ Asset("vendor/htmx-sse.min.js") } defer></script>
-			<script src={ Asset("ludock.js") } defer></script>
-			for _, script := range scripts {
-				<script src={ Asset(script) } defer></script>
-			}
 		</head>
-		<body hx-ext="sse">
+		<body>
 			{ children... }
+			// Scripts run here in order, while the document is still loading, so
+			// htmx starts at DOMContentLoaded with its extensions registered. A
+			// deferred htmx starts on a timer, which can fire before an extension
+			// has loaded and leave the event stream unconnected.
+			<script src={ Asset("vendor/htmx.min.js") }></script>
+			<script src={ Asset("vendor/htmx-sse.min.js") }></script>
+			// Starts loading a server's tabs when the pointer goes down on them.
+			<script src={ Asset("vendor/htmx-preload.min.js") }></script>
+			<script src={ Asset("ludock.js") }></script>
+			for _, script := range scripts {
+				<script src={ Asset(script) }></script>
+			}
 		</body>
 	</html>
 }
 
-// LudockMark is the L block from Tetris: four blocks, drawn like the state
-// markers. It takes the current color (the orange accent).
+// LudockMark is an L of four stacked blocks, drawn like the state markers.
+// It takes the current color (the brand orange).
 templ LudockMark(class string) {
 	<svg class={ class } viewBox="0 0 64 64" fill="currentColor" aria-hidden="true" focusable="false">
 		<rect x="17" y="9" width="14" height="14" rx="2.5"></rect>
@@ -91,7 +97,7 @@ templ navLink(page Page, to, label string) {
 // Shell is the signed-in layout: a harbor bar across the top, then the page.
 templ Shell(page Page) {
 	@Document(page.Title+" · Ludock", page.CSRF, page.Scripts, page.Styles) {
-		<div class={ "app", templ.KV("app--console", page.Console) } hx-headers={ csrfHeaders(page.CSRF) }>
+		<div class={ "app", templ.KV("app--console", page.Console) } hx-headers:inherited={ csrfHeaders(page.CSRF) }>
 			<a class="skip-link" href="#main-content">Skip to content</a>
 			if !page.Console {
 				<header class="harbor" data-harbor>

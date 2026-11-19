@@ -58,6 +58,33 @@ test("reading Ludock's logs and diagnostics", async ({ page }) => {
   await setHidden(false);
   await expect.poll(() => polls, { timeout: 5000 }).toBeGreaterThan(0);
 
+  // A poll that answers late, for the filter before it, leaves a newer filter in place.
+  await page.getByLabel("Search logs").fill("");
+  await expect(page.locator(".application-log").nth(1)).toBeVisible();
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let holding = false;
+  await page.route(/\/fragments\/logs\?.*since=/, async (route) => {
+    if (holding) return route.continue();
+    holding = true;
+    await held;
+    // Without the buffer state it names, the poll is answered in full.
+    const address = new URL(route.request().url());
+    address.searchParams.delete("since");
+    await route.continue({ url: address.toString() });
+  });
+  await expect.poll(() => holding).toBe(true);
+  const late = page.waitForResponse((response) => /\/fragments\/logs\?/.test(response.url()) && !response.url().includes("since=") &&
+    response.request().headers()["hx-source"] === "div#application-logs");
+  await page.getByLabel("Search logs").fill("Ludock listening");
+  await page.waitForTimeout(600);
+  release();
+  await late;
+  await expect(page.locator(".application-log")).toHaveCount(1);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".application-log")).toHaveCount(1);
+  await page.unroute(/\/fragments\/logs\?.*since=/);
+
   await page.goto("/diagnostics");
   await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
   await expect(page.getByRole("cell", { name: "Minecraft", exact: true })).toBeVisible();

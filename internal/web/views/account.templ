@@ -21,7 +21,7 @@ templ AccountPage(page Page, view AccountView) {
 				<h1 class="page__title">Account</h1>
 				<p class="page__subtitle">Change your password and review signed-in devices.</p>
 			</div>
-			@AccountStatus(view, false)
+			@AccountStatus(view)
 			<form class="settings-card" method="post" action="/account/password">
 				<input type="hidden" name="_csrf" value={ page.CSRF }/>
 				<h2>Change password</h2>
@@ -48,15 +48,9 @@ templ AccountPage(page Page, view AccountView) {
 	}
 }
 
-// AccountStatus shows the page's result; oob replaces it from a fragment.
-templ AccountStatus(view AccountView, oob bool) {
-	<div
-		id="account-status"
-		aria-live="polite"
-		if oob {
-			hx-swap-oob="true"
-		}
-	>
+// AccountStatus shows the page's result.
+templ AccountStatus(view AccountView) {
+	<div id="account-status" aria-live="polite">
 		if view.Error != "" {
 			@Alert("error", view.Error)
 		}
@@ -64,6 +58,13 @@ templ AccountStatus(view AccountView, oob bool) {
 			@Alert("success", view.Message)
 		}
 	</div>
+}
+
+// AccountStatusUpdate replaces the page's result from a fragment.
+templ AccountStatusUpdate(view AccountView) {
+	@Partial("#account-status", "outerHTML") {
+		@AccountStatus(view)
+	}
 }
 
 templ AccountSessions(view AccountView) {

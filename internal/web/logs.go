@@ -53,7 +53,7 @@ func (s *Server) logsPage(w http.ResponseWriter, r *http.Request, request *Reque
 
 func (s *Server) logsFragment(w http.ResponseWriter, r *http.Request, request *Request) {
 	// A poll of an unchanged buffer keeps what the page shows.
-	if r.Header.Get("HX-Trigger") == "application-logs" {
+	if htmxSource(r) == "application-logs" {
 		generation, newest := logging.Latest()
 		if query := r.URL.Query(); query.Get("generation") == generation && query.Get("since") == strconv.FormatInt(newest, 10) {
 			w.WriteHeader(http.StatusNoContent)
@@ -61,7 +61,7 @@ func (s *Server) logsFragment(w http.ResponseWriter, r *http.Request, request *R
 		}
 	}
 	l := logsView(r)
-	if r.Header.Get("HX-Trigger") != "application-logs" {
+	if htmxSource(r) != "application-logs" {
 		w.Header().Set("HX-Replace-Url", strings.TrimSuffix("/logs?"+l.Query(), "?"))
 	}
 	render(w, r, http.StatusOK, views.LogEntries(l))

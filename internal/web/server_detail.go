@@ -248,7 +248,7 @@ func (s *Server) detailActivity(w http.ResponseWriter, r *http.Request, request 
 	if a.Kind != "" {
 		page.Set("kind", a.Kind)
 	}
-	if r.Header.Get("HX-Trigger") != "activity-list" {
+	if htmxSource(r) != "activity-list" {
 		w.Header().Set("HX-Replace-Url", "/servers/"+id+"?"+page.Encode())
 	}
 	render(w, r, http.StatusOK, views.ActivityList(a))

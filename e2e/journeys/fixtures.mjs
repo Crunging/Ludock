@@ -15,7 +15,7 @@ export const admin = { username: "admin", password: "correct horse battery stapl
 
 const offline = new WeakSet();
 
-/** Lets a journey take a page offline; htmx logs the requests that fail. */
+/** Lets a journey take a page offline; htmx logs the requests and event streams that fail. */
 export function expectOffline(page) {
   offline.add(page);
 }
@@ -23,11 +23,9 @@ export function expectOffline(page) {
 function watch(page, problems) {
   page.on("pageerror", (error) => problems.push(String(error)));
   page.on("console", (message) => {
-    // Browsers log failed responses and closed event streams, and htmx logs
-    // the 401 that sends the page to sign in; journeys assert on the page
-    // instead.
-    if (message.type() !== "error" || /Failed to load resource|\[object Event\]|^Response Status Error Code 401 /.test(message.text())) return;
-    if (offline.has(page) && /^htmx:(sendError|afterRequest), /.test(message.text())) return;
+    // Browsers log failed responses; journeys assert on the page instead.
+    if (message.type() !== "error" || /Failed to load resource/.test(message.text())) return;
+    if (offline.has(page) && /^htmx: htmx:(sse:)?error: /.test(message.text())) return;
     problems.push(message.text());
   });
   // Ludock asks in its own dialogs; a browser dialog is a regression.

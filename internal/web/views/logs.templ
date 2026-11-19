@@ -25,9 +25,9 @@ type LogsView struct {
 	Newest     int64
 }
 
+// pollURL names the buffer state shown; the poll adds the filters from the form.
 func (l LogsView) pollURL() string {
-	return "/fragments/logs?" + l.Query() + map[bool]string{true: "&", false: ""}[l.Query() != ""] +
-		url.Values{"generation": {l.Generation}, "since": {strconv.FormatInt(l.Newest, 10)}}.Encode()
+	return "/fragments/logs?" + url.Values{"generation": {l.Generation}, "since": {strconv.FormatInt(l.Newest, 10)}}.Encode()
 }
 
 // Query is the page URL query for these filters.
@@ -70,10 +70,10 @@ templ LogsPage(page Page, l LogsView) {
 							Pause
 						}
 					</a>
-					<button class="secondary-btn" type="button" hx-get={ "/fragments/logs?" + l.Query() } hx-target="#application-logs" hx-swap="outerHTML" data-busy-label="Refreshing…">Refresh</button>
+					<button class="secondary-btn" type="button" hx-get="/fragments/logs" hx-include=".application-logs-filters" hx-target="#application-logs" hx-swap="outerMorph" hx-sync="#application-logs:queue last" data-busy-label="Refreshing…">Refresh</button>
 				</div>
 			</div>
-			<form class="application-logs-filters" role="group" aria-label="Log filters" method="get" action="/logs" hx-get="/fragments/logs" hx-target="#application-logs" hx-swap="outerHTML" hx-trigger="input changed delay:250ms from:find input, change from:find select" hx-disinherit="*">
+			<form class="application-logs-filters" role="group" aria-label="Log filters" method="get" action="/logs" hx-get="/fragments/logs" hx-target="#application-logs" hx-swap="outerMorph" hx-sync="#application-logs:queue last" hx-trigger="input changed delay:250ms target:input, change target:select">
 				if l.Paused {
 					<input type="hidden" name="paused" value="1"/>
 				}
@@ -111,16 +111,19 @@ templ LogsPage(page Page, l LogsView) {
 	}
 }
 
-// LogEntries is the filtered buffer; it reloads every 2 s unless paused.
+// LogEntries is the filtered buffer; it reloads every 2 s unless paused. Like
+// the server list, its polls read the filters from the form and share its
+// queue with filter requests, so the newest filters win; every swap into it
+// morphs, since a queued request keeps the element it targets.
 templ LogEntries(l LogsView) {
 	<div
 		id="application-logs"
 		if !l.Paused {
 			hx-get={ l.pollURL() }
+			hx-include=".application-logs-filters"
 			hx-trigger="every 2s"
-			hx-swap="outerHTML"
+			hx-swap="outerMorph"
 		}
-		hx-disinherit="*"
 	>
 		<div class="application-logs-summary">
 			<span class="application-logs-count">{ intText(len(l.Entries)) } of { intText(l.Total) } recent entries</span>

@@ -4,6 +4,14 @@ templ Alert(kind, message string) {
 	<div class={ "alert", "alert--" + kind } role={ map[bool]string{true: "alert", false: "status"}[kind == "error"] }>{ message }</div>
 }
 
+// Partial sends its children to another part of the page along with a
+// response: target is a selector and swap an hx-swap value.
+templ Partial(target, swap string) {
+	<hx-partial hx-target={ target } hx-swap={ swap }>
+		{ children... }
+	</hx-partial>
+}
+
 templ ErrorPage(page Page, title, message string) {
 	@Shell(page) {
 		<div class="page">

@@ -28,7 +28,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await expect(output).not.toContainText("dev-db-secret");
   await expect(output).not.toContainText("dev-url-secret");
   await page.getByRole("button", { name: "Pause" }).click();
-  await expect(page.getByText("· live display paused")).toBeVisible();
+  await expect(page.getByText("Live display is paused.")).toBeVisible();
 
   await page.getByRole("link", { name: "Container Shell" }).click();
   await expect(output).toContainText("Administrator shell.");

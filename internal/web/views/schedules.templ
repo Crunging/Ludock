@@ -102,9 +102,9 @@ func ScheduleRun(ms int64, timezone string, now int64) string {
 	minute := now / 60_000 * 60_000
 	prefix := ""
 	if ms == minute {
-		prefix = "Due now · "
+		prefix = "Due now, "
 	} else if ms < minute {
-		prefix = "Awaiting scheduler · "
+		prefix = "Awaiting scheduler, "
 	}
 	return prefix + ScheduleDate(ms, timezone)
 }
@@ -163,7 +163,7 @@ templ SchedulesTab(v SchedulesView) {
 
 // ScheduleList reloads after a pause, resume, or deletion.
 templ ScheduleList(v SchedulesView) {
-	<div class="table-scroll schedules-table-scroll" id="schedule-list" tabindex="0" role="region" aria-label="Schedule list" hx-get={ "/fragments/servers/" + v.ServerID + "/schedules?" + scheduleListQuery(v) } hx-trigger="schedules-changed from:body" hx-swap="outerHTML" hx-disinherit="*">
+	<div class="table-scroll schedules-table-scroll" id="schedule-list" tabindex="0" role="region" aria-label="Schedule list" hx-get={ "/fragments/servers/" + v.ServerID + "/schedules?" + scheduleListQuery(v) } hx-trigger="schedules-changed from:document" hx-swap="outerHTML">
 		<table class="data-table schedules-table" aria-label="Schedules">
 			<thead>
 				<tr>
@@ -305,11 +305,11 @@ func savedSummary(item *schedules.Schedule) string {
 	if item.CreateBackup {
 		summary += " with backup before restart"
 	}
-	summary += " · " + ScheduleWhen(item.Input) + " · " + item.Timezone + " · " + scheduleState(*item)
+	summary += ", " + ScheduleWhen(item.Input) + ", " + item.Timezone + ", " + strings.ToLower(scheduleState(*item))
 	if item.Announcements != nil {
-		return summary + " · Warnings: " + LeadText(item.Announcements.LeadMinutes) + " min before"
+		return summary + ", warnings " + LeadText(item.Announcements.LeadMinutes) + " min before"
 	}
-	return summary + " · Warnings off"
+	return summary + ", warnings off"
 }
 
 func scheduleTarget(f ScheduleForm) string {
@@ -323,7 +323,7 @@ func scheduleTarget(f ScheduleForm) string {
 // and conflicts keep the draft.
 templ ScheduleEditor(f ScheduleForm) {
 	{{ input := f.Input }}
-	<form class="stack-form settings-section schedule-form" id="schedule-form" hx-post={ scheduleTarget(f) } hx-target="this" hx-swap="outerHTML" hx-disinherit="*">
+	<form class="stack-form settings-section schedule-form" id="schedule-form" hx-post={ scheduleTarget(f) } hx-target="this" hx-swap="outerHTML">
 		<h3 tabindex="-1">
 			if f.EditID != "" {
 				Edit schedule
@@ -447,7 +447,7 @@ templ ScheduleEditor(f ScheduleForm) {
 				Create paused
 			</label>
 		}
-		<p class="schedule-preview" id="schedule-preview" hx-post={ "/fragments/servers/" + f.ServerID + "/schedules/preview" } hx-include="#schedule-form" hx-trigger="load, change from:#schedule-form, input from:#schedule-form delay:400ms, every 30s" hx-swap="innerHTML">
+		<p class="schedule-preview" id="schedule-preview" hx-post={ "/fragments/servers/" + f.ServerID + "/schedules/preview" } hx-include="#schedule-form" hx-sync="this:queue last" hx-trigger="load, change from:#schedule-form, input from:#schedule-form delay:400ms, every 30s" hx-swap="innerHTML">
 			<strong>Next run:</strong>
 		</p>
 		<p class="schedule-form-note">

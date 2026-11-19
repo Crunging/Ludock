@@ -22,7 +22,7 @@ func TestAssetsRevalidateAndCompressText(t *testing.T) {
 	}
 	// The stylesheet names its fonts with their versions, so they are cached
 	// like it; an unversioned request revalidates instead.
-	font := "fonts/archivo-latin-wdth-normal.woff2"
+	font := "fonts/tektur-latin-wdth-normal.woff2"
 	stylesheet, _ := load("ludock.css")
 	if !strings.Contains(string(stylesheet.data), `url("`+font+"?v="+versionOf(font)+`")`) {
 		t.Fatal("stylesheet names an unversioned font")

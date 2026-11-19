@@ -164,7 +164,7 @@ func resourcesURL(serverID, key string) string {
 // ResourceHistory is the CPU and memory history of a server; it reloads
 // itself each minute, as samples arrive.
 templ ResourceHistory(h resources.History) {
-	<section id="resource-history" class="resource-history" aria-labelledby="resource-history-title" hx-get={ resourcesURL(h.ServerID, h.Range.Key) } hx-trigger="every 60s" hx-swap="outerHTML" hx-disinherit="*">
+	<section id="resource-history" class="resource-history" aria-labelledby="resource-history-title" hx-get={ resourcesURL(h.ServerID, h.Range.Key) } hx-trigger="every 60s" hx-swap="outerHTML">
 		<div class="section-heading">
 			<h2 id="resource-history-title">Resource history</h2>
 			<nav class="range-switch" aria-label="History range">

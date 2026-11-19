@@ -18,7 +18,7 @@ func (p *pages) action(target string, principal *auth.Principal, values url.Valu
 	}
 	values.Set("_csrf", CSRFToken(principal.Token))
 	return p.do("POST", target, principal, strings.NewReader(values.Encode()),
-		map[string]string{"HX-Request": "true", "HX-Target": "detail-status"}).Result()
+		map[string]string{"HX-Request": "true", "HX-Target": "div#detail-status"}).Result()
 }
 
 func (p *pages) queued(t *testing.T) (kind string, input string) {

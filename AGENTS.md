@@ -16,6 +16,19 @@ version 1; add changes as new consecutive entries in
 `.templ` files, run `go tool templ generate -path internal/web/views` and
 commit the output.
 
+## Frontend
+
+The browser runs htmx 4, not 2, vendored with its SSE and preload extensions.
+Attributes inherit only with `:inherited`, events are named like
+`htmx:after:swap`, and a response updates other regions with `<hx-partial>`
+(`views.Partial`). Scripts load in order at the end of `<body>`, never with
+`defer`: a deferred htmx can start before its extensions register, which
+leaves live updates unconnected. The Content Security Policy allows no inline
+or evaluated script, which rules out `js:` values, `hx-trigger` filters,
+`hx-on`, and `hx-live`; behaviors are `data-*` attributes handled in
+`ludock.js`. After changing `internal/web/assets/vendor`, run
+`scripts/check-vendor.sh`.
+
 ## Checks and tests
 
 Before finishing, run `gofmt -l cmd internal`, `go vet ./...`,
@@ -86,5 +99,5 @@ published tags.
   start cleanly before the original is removed; until then the original stays
   the server and a failure restores it.
 - **Forms are same-origin.** Every unsafe request carries the session's CSRF
-  token and is re-authenticated after its body is read; pages never run inline
-  scripts.
+  token and is re-authenticated after its body is read; pages never run inline or
+  string-evaluated scripts.
