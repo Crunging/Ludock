@@ -248,14 +248,20 @@ function publishSurvivalImage(digit) {
   });
 }
 
-/** Checks Survival's image until the Update tab finds the newer one; checks run at most every 10 seconds. */
+/**
+ * Checks Survival's image until a check newer than the last one finds a newer
+ * image; checks run at most every 10 seconds.
+ */
 async function findNewerSurvivalImage(page) {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Update" }).click();
   const check = page.locator("#image-check");
+  const checked = check.locator(".image-check__checked time");
+  const before = await checked.count() ? await checked.getAttribute("datetime") : null;
   await expect(async () => {
     await check.getByRole("button", { name: "Check now" }).click();
     await expect(check).toContainText("A newer image is available.", { timeout: 2_000 });
+    expect(await checked.getAttribute("datetime", { timeout: 2_000 })).not.toBe(before);
   }).toPass({ timeout: 30_000, intervals: [1_000, 3_000] });
 }
 
@@ -279,8 +285,8 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     await publishSurvivalImage("5");
     await findNewerSurvivalImage(page);
 
-    // Valheim goes down behind Ludock's back after a start through Ludock.
-    await openServer(page, "valheim");
+    // Enshrouded goes down behind Ludock's back after a start through Ludock.
+    await openServer(page, "enshrouded");
     await page.getByLabel("Monitor this server").check();
     await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
@@ -289,8 +295,8 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     expect((await saved).ok()).toBe(true);
     await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
     await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
-    await dockerAction("valheim", "stop");
-    await expect.poll(messages, { timeout: 90_000 }).toContain("valheim is unavailable.");
+    await dockerAction("enshrouded", "stop");
+    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded is unavailable.");
     // Alerts are delivered in the order they were queued, so a newer-image
     // notice would have arrived first.
     expect(messages().filter((m) => newerImage.test(m))).toEqual([]);
@@ -318,12 +324,13 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
       await webhook.getByLabel(label).uncheck();
     }
     await webhook.getByRole("button", { name: "Save Webhook" }).click();
-    await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type, or turn Webhook off");
+    await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type");
+    await expect(webhook.getByLabel("Server problems")).not.toBeChecked();
   } finally {
-    await openServer(page, "valheim");
+    await openServer(page, "enshrouded");
     await page.getByLabel("Monitor this server").setChecked(false);
     await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
-    await dockerAction("valheim", "stop");
+    await dockerAction("enshrouded", "stop");
     await page.goto("/settings");
     const webhook = await openDestination(page, "webhook");
     await openAlertTypes(webhook);

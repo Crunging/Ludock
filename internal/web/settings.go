@@ -179,13 +179,13 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 		}
 	}
 	var err error
-	if input.Alerts == 0 {
-		err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Choose at least one alert type, or turn "+d.Label()+" off")
-	}
-	if port := value("port"); port != "" && err == nil {
+	if port := value("port"); port != "" {
 		if input.Port, err = strconv.Atoi(port); err != nil || input.Port < 1 {
 			err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Enter a mail server port from 1 to 65535")
 		}
+	}
+	if input.Alerts == 0 && err == nil {
+		err = apperr.New("INVALID_NOTIFICATION_SETTINGS", 400, "Choose at least one alert type")
 	}
 	if err == nil {
 		err = authz.AdminMutationError(s.App.Notify.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, d,
@@ -206,6 +206,7 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 			n.Config.URL = ""
 		}
 		n.Error = publicMessage(err)
+		n.NoAlerts = input.Alerts == 0
 	} else {
 		s.audit(r, request, "notifications.configured", "", map[string]any{"destination": string(d)})
 		n.Notice = d.Label() + " settings saved."

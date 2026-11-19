@@ -40,6 +40,8 @@ type BackupSettingsView struct {
 type NotificationDestinationView struct {
 	notify.Configuration
 	Open bool
+	// NoAlerts shows a save rejected for choosing no alert type as it was sent.
+	NoAlerts bool
 	// Error and Notice report a save; the Test ones report a test send.
 	Error, Notice         string
 	TestError, TestNotice string
@@ -354,13 +356,18 @@ func alertChoice(chosen notify.Alert) string {
 }
 
 templ alertTypes(n NotificationDestinationView) {
-	<details class="disclosure notification-alerts">
-		<summary>Alert types <span class="notification-alerts__choice">{ alertChoice(n.Config.Alerts) }</span></summary>
+	<details class="disclosure notification-alerts" open?={ n.NoAlerts }>
+		<summary>
+			Alert types
+			if !n.NoAlerts {
+				<span class="notification-alerts__choice">{ alertChoice(n.Config.Alerts) }</span>
+			}
+		</summary>
 		<fieldset class="notification-alerts__options">
 			<legend class="sr-only">{ "Alert types to send to " + n.Destination.Label() }</legend>
 			for _, alert := range notify.AlertTypes {
 				<label class="check-label notification-alerts__option">
-					<input type="checkbox" name="alerts" value={ alert.Name() } checked?={ n.Config.Alerts.Includes(alert) }/>
+					<input type="checkbox" name="alerts" value={ alert.Name() } checked?={ !n.NoAlerts && n.Config.Alerts.Includes(alert) }/>
 					<span>
 						{ alert.Label() }
 						<span class="muted">{ alertDescription(alert) }</span>
