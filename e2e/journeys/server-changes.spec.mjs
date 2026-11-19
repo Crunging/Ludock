@@ -45,17 +45,18 @@ test("changing a password or label in Docker leaves a server as it was in Ludock
     await recreate("minecraft", { env: ["DB_PASS=rotated-db-secret", "RCON_PASSWORD=dev-rcon-secret"],
       label: ["ludock.console.password-env=RCON_PASSWORD"] });
 
-    await openServer(adminPage, "Survival");
-    await expect(adminPage.getByRole("heading", { name: "This server changed in Docker" })).toHaveCount(0);
-    await adminPage.goto("/");
-    await expect(adminPage.locator(".needs-attention")).not.toContainText("Server changed");
-
+    // The console reaches the new container, so Ludock has seen it.
     await operator.goto("/");
     await serverRow(operator, "Survival").getByRole("link", { name: "Console" }).click();
     await expect(operator.locator("[data-console-status]")).toHaveText("Connected");
     await operator.getByLabel("Game command").fill("list");
     await operator.getByRole("button", { name: "Send" }).click();
     await expect(operator.locator(".xterm-rows")).toContainText("There are 0 of a max of 10 players online:");
+
+    await openServer(adminPage, "Survival");
+    await expect(adminPage.getByRole("heading", { name: "This server changed in Docker" })).toHaveCount(0);
+    await adminPage.goto("/");
+    await expect(adminPage.locator(".needs-attention")).not.toContainText("Server changed");
   } finally {
     await recreate("minecraft", { env: ["DB_PASS=dev-db-secret", "RCON_PASSWORD"], label: ["ludock.console.password-env"] });
     await deleteUser(adminPage, "steady");
@@ -78,8 +79,11 @@ test("a new game pauses shared access until an administrator confirms it", async
 
     // The administrator keeps full use of the server and sees why sharing
     // is paused.
-    await adminPage.goto("/");
-    await expect(serverRow(adminPage, "enshrouded")).toContainText("Changed in Docker. Shared access is paused until you confirm.");
+    // Pages reuse discovery for two seconds; Docker's events refresh it.
+    await expect(async () => {
+      await adminPage.goto("/");
+      await expect(serverRow(adminPage, "enshrouded")).toContainText("Changed in Docker. Shared access is paused until you confirm.", { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(adminPage.locator(".needs-attention")).toContainText("Server changed");
     await openServer(adminPage, "enshrouded");
     const notice = adminPage.locator(".notice-panel");
