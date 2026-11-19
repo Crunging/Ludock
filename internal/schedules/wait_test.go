@@ -309,7 +309,9 @@ func TestWaitEdges(t *testing.T) {
 		t.Fatal(last)
 	}
 	// Nor on a zero that settles after the end.
-	f.s.DB.Exec("UPDATE schedules SET last_result=?,last_run_at=?", WaitingResult, due)
+	if _, err := f.s.DB.Exec("UPDATE schedules SET last_result=?,last_run_at=?", WaitingResult, due); err != nil {
+		t.Fatal(err)
+	}
 	f.s.Run(ctx, due+10*minute-20_000)
 	f.s.Run(ctx, due+10*minute+10_000)
 	if last := f.first(t, admin); f.operations(t) != 0 || last.WaitingUntil != 0 {
