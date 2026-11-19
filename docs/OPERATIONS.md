@@ -306,6 +306,11 @@ If a custom container host name stops Ludock from verifying the mount, set
 - **Records:** each archive's record lives in Ludock's database, so back up
   archives and the database together. Importing other archives isn't
   supported.
+- **Browsing:** administrators choose **Browse** on a backup to look through
+  it folder by folder, with sizes and modification times, and download single
+  files from it. Browsing reads the archive and changes nothing. Archives can
+  hold configuration secrets, so browsing and downloads are for administrators
+  only, like downloading a whole archive.
 
 ### Restore
 
@@ -316,6 +321,17 @@ nothing is replaced. Each folder is staged and swapped in with a journal, so an
 interrupted restore is finished or rolled back when Ludock starts again.
 Replacing several folders is **not atomic**. The server returns to its previous
 state only once its data is known to be safe.
+
+To get back one file or folder instead, browse the backup, choose
+**Restore…** on that item, and type the server's name. Ludock checks the whole
+archive and that the item's folder still exists and can be reached without
+links or other disks, then stops the server, moves the current copy aside,
+puts the backup's copy in its place, and returns the server to its previous
+state. Everything else is left as it is. If the swap fails or Ludock restarts
+midway, the current copy is put back. No safety backup is taken, and once the
+restore succeeds the replaced copy is deleted, so back up first if you might
+want it again. A backup made under a different server configuration can be
+browsed but not restored.
 
 If recovery fails, leave the server stopped and check **Activity**, the
 container in Docker, and its owning manager's logs.

@@ -17,8 +17,10 @@ import (
 )
 
 type journal struct {
-	Root  backups.Root `json:"root"`
-	Phase string       `json:"phase"`
+	Root backups.Root `json:"root"`
+	// Item is the one path below Root that a selective restore replaces.
+	Item  string `json:"item,omitempty"`
+	Phase string `json:"phase"`
 }
 
 type restoreRecovery struct {
@@ -50,6 +52,11 @@ func restoreState(job *ops.Context) (*restoreRecovery, error) {
 				return nil, errJournal
 			}
 			seen[entry.Root.ID] = true
+			if entry.Item != "" {
+				if clean, err := backups.CleanPath(entry.Item); err != nil || clean == "" || len(state.Roots) != 1 {
+					return nil, errJournal
+				}
+			}
 		}
 	case "cleaned", "rolled_back":
 		if len(state.Roots) > 0 {
@@ -99,13 +106,13 @@ func stageName(job *ops.Context) string { return ".ludock-restore-" + job.Job.ID
 // failed copy.
 const removalLimit = 30 * time.Minute
 
-func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
+func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root, item string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
 	limit := 2 * time.Minute
 	if operation == "cleanup" || operation == "rollbackClean" {
 		limit = removalLimit
 	}
 	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", helper.RestoreRequest{Root: root, Stage: stageName(job),
-		Operation: operation}), assertAccess, limit)
+		Operation: operation, Item: item}), assertAccess, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -119,14 +126,31 @@ var errRestoreCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for r
 // assertStagingRoom refuses, before the server stops, a restore that cannot
 // fit: roots on one filesystem must fit together above the reserve. Staging
 // checks again as it runs.
-func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, job *ops.Context, roots []backups.Root,
+func (j *Jobs) assertStagingRoom(ctx context.Context, server *servers.Context, job *ops.Context, roots []backups.Root, item string,
 	staged map[string]int64, reserve int64, assertAccess func() error) error {
 	data, err := j.Backups.Helpers.NewDataHelper(ctx, server, true, job.Job.ID)
 	if err != nil {
 		return err
 	}
 	defer data.Cleanup()
-	return j.stagingRoom(ctx, data, server, job, roots, staged, reserve, assertAccess)
+	if err := j.stagingRoom(ctx, data, server, job, roots, staged, reserve, assertAccess); err != nil {
+		return err
+	}
+	if item == "" {
+		return nil
+	}
+	destination, err := backups.HelperRoot(server, roots[0])
+	if err != nil {
+		return err
+	}
+	checked, err := j.restoreStep(ctx, data, destination, item, job, "check", assertAccess)
+	if err != nil {
+		return fail("RESTORE_ITEM_UNSAFE", "The current copy can’t be replaced safely: something on its path is a link, a special file, or another disk.")
+	}
+	if checked["parent"] != true {
+		return fail("RESTORE_PARENT_MISSING", "The folder that held this item no longer exists. Restore the folder that contains it instead.")
+	}
+	return nil
 }
 
 // stagingRoom requires every filesystem to hold its roots' staged bytes
@@ -139,7 +163,7 @@ func (j *Jobs) stagingRoom(ctx context.Context, data *backups.DataHelper, server
 		if err != nil {
 			return err
 		}
-		space, err := j.restoreStep(ctx, data, destination, job, "space", assertAccess)
+		space, err := j.restoreStep(ctx, data, destination, "", job, "space", assertAccess)
 		if err != nil {
 			return err
 		}
@@ -184,7 +208,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			return err
 		}
 		if entry.Phase == "old_moved" || entry.Phase == "replaced" {
-			if _, err := j.restoreStep(ctx, data, rootPath, job, "rollbackClean", nil); err != nil {
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackClean", nil); err != nil {
 				return err
 			}
 		}
@@ -195,7 +219,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 			if err := persistJournal(job, indexOf(current, entry.Root.ID), "rolling_back"); err != nil {
 				return err
 			}
-			if _, err := j.restoreStep(ctx, data, rootPath, job, "rollbackOld", nil); err != nil {
+			if _, err := j.restoreStep(ctx, data, rootPath, entry.Item, job, "rollbackOld", nil); err != nil {
 				return err
 			}
 			current, _ = journals(job)
@@ -203,7 +227,7 @@ func (j *Jobs) rollbackRestore(ctx context.Context, server *servers.Context, job
 				return err
 			}
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, job, "cleanup", nil); err != nil {
+		if _, err := j.restoreStep(ctx, data, rootPath, "", job, "cleanup", nil); err != nil {
 			return err
 		}
 	}
@@ -220,7 +244,7 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 		if err != nil {
 			return err
 		}
-		if _, err := j.restoreStep(ctx, data, rootPath, job, "cleanup", nil); err != nil {
+		if _, err := j.restoreStep(ctx, data, rootPath, "", job, "cleanup", nil); err != nil {
 			return err
 		}
 	}
@@ -254,6 +278,20 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if !rootsEqual(row.Roots, current) {
 		return nil, fail("BACKUP_ROOT_CHANGED", "The current data roots do not match this backup.")
 	}
+	// A selective restore replaces one item of one root; a full one, every root.
+	roots := row.Roots
+	item, _ := text(job.Job.Input["item"])
+	if rootID, _ := text(job.Job.Input["root"]); rootID != "" || item != "" {
+		index := slices.IndexFunc(row.Roots, func(root backups.Root) bool { return root.ID == rootID })
+		if clean, err := backups.CleanPath(item); err != nil || clean == "" || index < 0 {
+			return nil, fail("UNSAFE_PATH", "That path isn’t allowed.")
+		}
+		roots = row.Roots[index : index+1]
+	}
+	what := "Restore"
+	if item != "" {
+		what = "Restore of one item"
+	}
 	settings, err := j.Backups.ForBackup(ctx)
 	if err != nil {
 		return nil, err
@@ -275,26 +313,37 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
 				return nil, err
 			}
-			staged, err := j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum)
+			var staged map[string]int64
+			if item == "" {
+				staged, err = j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum)
+			} else {
+				var bytes int64
+				_, bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum, roots[0].ID, item)
+				staged = map[string]int64{roots[0].ID: bytes}
+			}
 			if err != nil {
 				return nil, err
 			}
-			if err := j.assertStagingRoom(ctx, server, job, row.Roots, staged, settings.ReserveBytes, assertAccess); err != nil {
+			if err := j.assertStagingRoom(ctx, server, job, roots, item, staged, settings.ReserveBytes, assertAccess); err != nil {
 				return nil, err
 			}
 			if err := j.stopForData(ctx, server, job); err != nil {
 				return nil, err
 			}
-			safety, err := j.createStoppedBackup(ctx, server, job)
-			if err != nil {
-				return nil, err
+			// One item's replaced copy is kept in the stage until the swap
+			// commits; a whole restore also keeps a safety backup.
+			var safety *backups.Backup
+			if item == "" {
+				if safety, err = j.createStoppedBackup(ctx, server, job); err != nil {
+					return nil, err
+				}
 			}
 			if err := job.Progress("restore_staging", nil, nil); err != nil {
 				return nil, err
 			}
 			var entries []journal
-			for _, root := range row.Roots {
-				entries = append(entries, journal{Root: root, Phase: "staging"})
+			for _, root := range roots {
+				entries = append(entries, journal{Root: root, Item: item, Phase: "staging"})
 			}
 			if err := saveRestore(job, restoreRecovery{Status: "staging", Roots: entries}, ""); err != nil {
 				return nil, err
@@ -312,22 +361,22 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			// Extraction also stops at the reserve as it writes.
-			if err := j.stagingRoom(ctx, data, server, job, row.Roots, staged, settings.ReserveBytes, assertAccess); err != nil {
+			if err := j.stagingRoom(ctx, data, server, job, roots, staged, settings.ReserveBytes, assertAccess); err != nil {
 				return nil, err
 			}
 			var targets []backups.StageTarget
-			for _, root := range row.Roots {
+			for _, root := range roots {
 				destination, err := backups.HelperRoot(server, root)
 				if err != nil {
 					return nil, err
 				}
-				targets = append(targets, backups.StageTarget{Root: root, Path: destination})
+				targets = append(targets, backups.StageTarget{Root: root, Path: destination, Item: item})
 			}
 			for _, target := range targets {
 				if err := assertAccess(); err != nil {
 					return nil, err
 				}
-				if _, err := j.restoreStep(ctx, data, target.Path, job, "stage", assertAccess); err != nil {
+				if _, err := j.restoreStep(ctx, data, target.Path, "", job, "stage", assertAccess); err != nil {
 					return nil, err
 				}
 			}
@@ -348,7 +397,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := saveRestore(job, restoreRecovery{Status: "replacing", Roots: current}, ""); err != nil {
 				return nil, err
 			}
-			for index, root := range row.Roots {
+			for index, root := range roots {
 				if err := j.assertStopped(ctx, server, job); err != nil {
 					return nil, err
 				}
@@ -362,7 +411,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				if err := persistJournal(job, index, "moving_old"); err != nil {
 					return nil, err
 				}
-				if _, err := j.restoreStep(ctx, data, destination, job, "moveOld", assertAccess); err != nil {
+				if _, err := j.restoreStep(ctx, data, destination, item, job, "moveOld", assertAccess); err != nil {
 					return nil, err
 				}
 				if err := persistJournal(job, index, "old_moved"); err != nil {
@@ -371,7 +420,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				if err := assertAccess(); err != nil {
 					return nil, err
 				}
-				if _, err := j.restoreStep(ctx, data, destination, job, "moveNew", assertAccess); err != nil {
+				if _, err := j.restoreStep(ctx, data, destination, item, job, "moveNew", assertAccess); err != nil {
 					return nil, err
 				}
 				if err := persistJournal(job, index, "replaced"); err != nil {
@@ -388,11 +437,16 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, ""); err != nil {
 				return nil, err
 			}
-			restored = map[string]any{"restoredBackupId": row.ID, "safetyBackupId": safety.ID}
+			restored = map[string]any{"restoredBackupId": row.ID}
+			if safety != nil {
+				restored["safetyBackupId"] = safety.ID
+			} else {
+				restored["restoredRoot"], restored["restoredItem"] = roots[0].ID, item
+			}
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
 				return nil, err
 			}
-			j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+".")
+			j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
 			return restored, nil
 		}()
 		if err == nil {
@@ -403,10 +457,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 		// remains, which blocks every later backup until it is removed.
 		if restored != nil && state != nil && state.Status == "committed" {
 			if cleanErr := j.cleanupAfterFailure(context.WithoutCancel(ctx), server, job, &data); cleanErr == nil {
-				j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+".")
+				j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
 				return restored, nil
 			}
-			j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+
+			j.notify("restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+
 				", but its staging folder could not be removed. Review the operation before backing up.")
 			return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
 				" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
@@ -416,7 +470,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				err = errors.Join(err, rollbackErr)
 			}
 		}
-		j.notify("restore-result:"+job.Job.ID, "Restore failed for "+server.Container.DisplayName+". Review its recovery state.")
+		j.notify("restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Review its recovery state.")
 		return nil, publicFirst(err)
 	})
 }
@@ -484,7 +538,7 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
 		}
 		// Recovery uses exactly the roots of the revalidated binding.
 		if len(entries) > 0 {
-			if len(entries) != len(server.Container.FileRoots) {
+			if len(entries) != len(server.Container.FileRoots) && entries[0].Item == "" {
 				return fail("INVALID_RESTORE_JOURNAL", "Restore recovery roots do not match this server. Keep it stopped and review its recovery state.")
 			}
 			for _, entry := range entries {

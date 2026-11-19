@@ -26,6 +26,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /fragments/servers/{id}/backups/preflight", s.authed(s.backupPreflight))
 	m.HandleFunc("POST /servers/{id}/backups", s.authed(s.createBackup))
 	m.HandleFunc("GET /servers/{id}/backups/{backup}/download", s.admin(s.downloadBackup))
+	m.HandleFunc("GET /servers/{id}/backups/{backup}/file", s.admin(s.downloadBackupFile))
+	m.HandleFunc("GET /fragments/servers/{id}/backups/{backup}/folder", s.admin(s.backupFolder))
 	m.HandleFunc("POST /servers/{id}/backups/{backup}/delete", s.admin(s.deleteBackup))
 	m.HandleFunc("POST /servers/{id}/restores", s.admin(s.restoreBackup))
 	m.HandleFunc("GET /fragments/servers/{id}/update", s.authed(s.updatePanel))

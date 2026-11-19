@@ -289,6 +289,30 @@ func (s *source) exact(size int64) ([]byte, error) {
 	return result, nil
 }
 
+// skip discards size bytes. An unhashed seekable input seeks past them, so
+// listing an archive reads its headers, not its file bodies; a seek past
+// the end shows up as truncation at the next read.
+func (s *source) skip(size int64) error {
+	buffered := min(size, int64(len(s.pending)))
+	s.pending = s.pending[buffered:]
+	size -= buffered
+	if seeker, ok := s.reader.(io.Seeker); ok && s.onChunk == nil && size > 0 && !s.eof {
+		_, err := seeker.Seek(size, io.SeekCurrent)
+		return err
+	}
+	for size > 0 {
+		part, err := s.take(int(min(size, 65536)))
+		if err != nil {
+			return err
+		}
+		if len(part) == 0 {
+			return ErrInvalid
+		}
+		size -= int64(len(part))
+	}
+	return nil
+}
+
 func allZero(data []byte) bool {
 	for _, b := range data {
 		if b != 0 {
@@ -419,7 +443,7 @@ func Walk(input io.Reader, visit func(*Header, io.Reader) error, onChunk func([]
 		if err := visit(header, entry); err != nil {
 			return err
 		}
-		if _, err := io.Copy(io.Discard, entry); err != nil {
+		if err := s.skip(entry.remaining); err != nil {
 			return err
 		}
 		padding, err := s.exact(int64(len(Padding(header.Size))))

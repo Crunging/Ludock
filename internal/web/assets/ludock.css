@@ -893,6 +893,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .file-breadcrumbs a { color: var(--link); text-decoration: none; padding: 3px 6px; border-radius: 4px; }
 .file-breadcrumbs a:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
 .file-breadcrumbs a[aria-current=page] { color: var(--ink); }
+.backup-browser { grid-template-columns: minmax(0, 1fr); }
+.backup-browser .file-breadcrumbs a, .backup-browser code { overflow-wrap: anywhere; }
 .file-toolbar__actions { display: flex; gap: 6px; }
 .file-dropzone {
   display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;

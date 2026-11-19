@@ -19,6 +19,10 @@ type RestoreRequest struct {
 	Root      string `json:"root"`
 	Stage     string `json:"stage"`
 	Operation string `json:"operation"`
+	// Item, when set, limits the operation to that path below Root. The
+	// replaced copy waits in the stage as old/item, a rolled-back one as
+	// returned.
+	Item string `json:"item,omitempty"`
 }
 
 // RestoreFailure is the only error text the restore helper prints.
@@ -196,6 +200,15 @@ func (h *restoreHelper) run() (any, error) {
 		return nil, err
 	}
 	ok := map[string]bool{"ok": true}
+	var item []string
+	if h.request.Item != "" {
+		if item, err = itemParts(h.request.Item); err != nil {
+			return nil, err
+		}
+		if h.request.Operation == "check" {
+			return h.checkItem(root, item)
+		}
+	}
 	switch h.request.Operation {
 	case "space":
 		var stat unix.Statfs_t
@@ -242,6 +255,9 @@ func (h *restoreHelper) run() (any, error) {
 	if stage < 0 {
 		// An earlier cleanup may have removed the stage and failed to sync.
 		return ok, syncAll(root)
+	}
+	if item != nil && h.request.Operation != "cleanup" {
+		return ok, h.runItem(root, stage, item)
 	}
 	switch h.request.Operation {
 	case "cleanup":
@@ -316,6 +332,177 @@ func (h *restoreHelper) run() (any, error) {
 		return nil, errUnsafe
 	}
 	return ok, syncAll(stage, root)
+}
+
+func itemParts(item string) ([]string, error) {
+	parts, err := recordParts(item)
+	if err != nil || len(parts) > 62 {
+		return nil, errUnsafe
+	}
+	for _, part := range parts {
+		if strings.HasPrefix(part, ".ludock-restore-") {
+			return nil, errUnsafe
+		}
+	}
+	return parts, nil
+}
+
+// itemParent pins the folder holding an item below base. Every folder on
+// the way is a real directory on base's filesystem, so neither a link nor a
+// nested mount can redirect the item.
+func (h *restoreHelper) itemParent(base fd, parts []string) (fd, error) {
+	info, err := fstat(base)
+	if err != nil {
+		return -1, err
+	}
+	current := base
+	for _, name := range parts[:len(parts)-1] {
+		next, err := h.t.openAt(current, name, directoryFlags, 0)
+		if err != nil {
+			return -1, err
+		}
+		pinned, err := fstat(next)
+		if err != nil {
+			return -1, err
+		}
+		if pinned.Dev != info.Dev {
+			return -1, errUnsafe
+		}
+		current = next
+	}
+	return current, nil
+}
+
+// movable returns an item's metadata, or nil when it is absent. Only folders
+// and singly linked regular files on the root's filesystem move.
+func movable(parent fd, name string, device uint64) (*unix.Stat_t, error) {
+	info, err := lstatAt(parent, name)
+	if isNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if info.Dev != device || (!isDir(info) && (!isRegular(info) || info.Nlink != 1)) {
+		return nil, errUnsafe
+	}
+	return info, nil
+}
+
+// move renames an item to an absent destination and proves the same inode
+// arrived.
+func move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
+	if _, err := lstatAt(to, target); err == nil {
+		return errUnsafe
+	} else if !isNotExist(err) {
+		return err
+	}
+	if err := unix.Renameat(int(from), name, int(to), target); err != nil {
+		return err
+	}
+	moved, err := lstatAt(to, target)
+	if err != nil {
+		return err
+	}
+	if !sameInode(info, moved) {
+		return errUnsafe
+	}
+	return syncAll(from, to)
+}
+
+// checkItem reports, before the server stops, whether the item's folder
+// exists, and refuses an item that cannot be replaced.
+func (h *restoreHelper) checkItem(root fd, parts []string) (any, error) {
+	parent, err := h.itemParent(root, parts)
+	if isNotExist(err) {
+		return map[string]bool{"parent": false}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rootInfo, err := fstat(root)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := movable(parent, parts[len(parts)-1], rootInfo.Dev); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"parent": true}, nil
+}
+
+func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
+	rootInfo, err := fstat(root)
+	if err != nil {
+		return err
+	}
+	name := parts[len(parts)-1]
+	switch h.request.Operation {
+	case "moveOld":
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		info, err := movable(parent, name, rootInfo.Dev)
+		if err != nil || info == nil {
+			return err
+		}
+		return move(parent, name, old, "item", info)
+	case "moveNew":
+		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		staged, err := h.itemParent(next, parts)
+		if err != nil {
+			return err
+		}
+		info, err := movable(staged, name, rootInfo.Dev)
+		if err != nil {
+			return err
+		}
+		if info == nil {
+			return errUnsafe
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		return move(staged, name, parent, name, info)
+	case "rollbackClean":
+		// The replacement goes back into the stage rather than being deleted,
+		// so nothing outside the stage is ever removed.
+		if _, err := h.t.openAt(stage, "old", directoryFlags, 0); err != nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		info, err := movable(parent, name, rootInfo.Dev)
+		if err != nil || info == nil {
+			return err
+		}
+		return move(parent, name, stage, "returned", info)
+	case "rollbackOld":
+		old, err := h.t.openAt(stage, "old", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		info, err := movable(old, "item", rootInfo.Dev)
+		if err != nil || info == nil {
+			return err
+		}
+		parent, err := h.itemParent(root, parts)
+		if err != nil {
+			return err
+		}
+		return move(old, "item", parent, name, info)
+	}
+	return errUnsafe
 }
 
 func RunRestore(argument string, stdout, stderr io.Writer) int {
