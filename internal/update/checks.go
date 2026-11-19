@@ -93,8 +93,9 @@ type serverCheck struct {
 	ContainerID string `json:"containerId"`
 	// Image is the normalized reference, or "" when Update server doesn't
 	// support the container.
-	Image  string `json:"image,omitempty"`
-	Status string `json:"status,omitempty"`
+	Image      string `json:"image,omitempty"`
+	Status     string `json:"status,omitempty"`
+	ObservedAt int64  `json:"observedAt,omitempty"`
 	// Notified is the newest registry digest already announced.
 	Notified string `json:"notified,omitempty"`
 }
@@ -186,8 +187,9 @@ func (c *Checks) Status(ctx context.Context, serverID, containerID string) *Chec
 	return status
 }
 
-// Forget marks a server's result stale, as after an update, so the next
-// pass compares its image again.
+// Forget marks a server's result stale after its image was pulled, and
+// makes its tag due: the pull may have found a newer version than the one
+// last seen.
 func (c *Checks) Forget(serverID string) {
 	c.init()
 	c.mu.Lock()
@@ -196,6 +198,9 @@ func (c *Checks) Forget(serverID string) {
 	if c.state != nil {
 		if entry := c.state.Servers[serverID]; entry != nil {
 			entry.ContainerID = ""
+			if image := c.state.Images[entry.Image]; image != nil {
+				image.NextAt = 0
+			}
 		}
 	}
 }
@@ -222,10 +227,13 @@ func (c *Checks) release() { <-c.run }
 // what its registry last said, then asks the registry about at most one due
 // image reference.
 func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, now int64) {
-	if current == nil || !c.Enabled(ctx) || !c.acquire(ctx) {
+	if current == nil || !c.acquire(ctx) {
 		return
 	}
 	defer c.release()
+	if !c.Enabled(ctx) {
+		return
+	}
 	active, err := c.active(ctx, current)
 	if err != nil {
 		return
@@ -245,7 +253,10 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	}
 	var stale []string
 	for id, container := range active {
-		if entry := state.Servers[id]; entry == nil || entry.ContainerID != container.ID {
+		// Refusals are looked at again in time: another container sharing a
+		// namespace can go away without this one being recreated.
+		if entry := state.Servers[id]; entry == nil || entry.ContainerID != container.ID ||
+			(entry.Image == "" && now-entry.ObservedAt >= checkInterval.Milliseconds()) {
 			stale = append(stale, id)
 		}
 	}
@@ -253,7 +264,7 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	c.mu.Unlock()
 
 	for _, id := range stale {
-		c.apply(ctx, c.observe(ctx, id, active[id]), now)
+		c.apply(ctx, c.observe(ctx, id, active[id]), now, false)
 		changed = true
 	}
 
@@ -287,7 +298,7 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 		// The containers are inspected again: whether Update server supports
 		// one can change without it being recreated.
 		for _, id := range checked {
-			c.apply(ctx, c.observe(ctx, id, active[id]), now)
+			c.apply(ctx, c.observe(ctx, id, active[id]), now, false)
 		}
 		changed = true
 	}
@@ -320,23 +331,33 @@ func (c *Checks) CheckNow(ctx context.Context, serverID string, container server
 		return nil
 	}
 	defer c.release()
-	now := db.Now()
-	c.apply(ctx, c.observe(ctx, serverID, container), now)
-	c.mu.Lock()
-	key, ask := "", false
-	if c.state == nil {
-		c.mu.Unlock()
+	if !c.Enabled(ctx) {
 		return nil
 	}
-	if entry := c.state.Servers[serverID]; entry != nil && entry.Image != "" {
-		key = entry.Image
-		image := c.state.Images[key]
-		ask = now-image.TriedAt >= checkNowSpacing.Milliseconds()
+	now := db.Now()
+	o := c.observe(ctx, serverID, container)
+	c.mu.Lock()
+	ask := false
+	if state, err := c.loadLocked(ctx); err != nil {
+		c.mu.Unlock()
+		return nil
+	} else if image := state.Images[o.key]; o.supported {
+		ask = image == nil || now-image.TriedAt >= checkNowSpacing.Milliseconds()
 	}
 	c.mu.Unlock()
+	// A registry answer about to be replaced is not announced.
+	c.apply(ctx, o, now, ask)
 	if ask {
-		c.ask(ctx, key, now)
-		c.apply(ctx, c.observe(ctx, serverID, container), now)
+		c.ask(ctx, o.key, now)
+		c.apply(ctx, c.observe(ctx, serverID, container), now, false)
+		// Other servers on the tag are compared with the new answer next pass.
+		c.mu.Lock()
+		for id, entry := range c.state.Servers {
+			if id != serverID && entry.Image == o.key {
+				entry.ContainerID = ""
+			}
+		}
+		c.mu.Unlock()
 	}
 	c.mu.Lock()
 	c.saveLocked(ctx)
@@ -379,9 +400,11 @@ func (c *Checks) observe(ctx context.Context, serverID string, container servers
 	return o
 }
 
-// apply records an observation against the registry's last answer and
-// notifies when it finds a version not announced before.
-func (c *Checks) apply(ctx context.Context, o observation, now int64) {
+// apply records an observation against the registry's last answer and,
+// unless quiet, notifies when it finds a version not announced before.
+func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool) {
+	// Checks turned off while a lookup ran announce nothing.
+	quiet = quiet || !c.Enabled(ctx)
 	c.mu.Lock()
 	state, err := c.loadLocked(ctx)
 	if err != nil || c.generation[o.serverID] != o.generation {
@@ -397,7 +420,7 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64) {
 		c.mu.Unlock()
 		return
 	}
-	entry := &serverCheck{ContainerID: o.container.ID}
+	entry := &serverCheck{ContainerID: o.container.ID, ObservedAt: now}
 	if previous != nil {
 		entry.Notified = previous.Notified
 	}
@@ -419,7 +442,7 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64) {
 			entry.Status = CheckPlatform
 		}
 	}
-	notify := entry.Status == CheckAvailable && entry.Notified != image.Digest
+	notify := !quiet && entry.Status == CheckAvailable && entry.Notified != image.Digest
 	if notify {
 		entry.Notified = image.Digest
 	}
@@ -502,7 +525,7 @@ func splitTag(reference string) (repository, tag string) {
 // Docker Hub's official images under library/.
 func normalizeRepository(repository string) string {
 	host, path := "docker.io", repository
-	if first, rest, found := strings.Cut(repository, "/"); found && (strings.ContainsAny(first, ".:") || first == "localhost") {
+	if first, rest, found := strings.Cut(repository, "/"); found && isRegistry(first) {
 		host, path = normalizeRegistry(first), rest
 	}
 	if host == "docker.io" && !strings.Contains(path, "/") {
@@ -534,8 +557,9 @@ func compareDigests(key string, repoDigests []string, remote string) string {
 	return CheckAvailable
 }
 
-// offers reports whether a tag's platforms include platform ("os/arch" or
-// "os/arch/variant"). An empty list or platform can't rule it out.
+// offers reports whether a tag's platforms include platform's OS and
+// architecture. Variants are left out: Docker can pull a compatible one.
+// An empty list or platform can't rule it out.
 func offers(platforms []docker.Platform, platform string) bool {
 	if len(platforms) == 0 || platform == "" {
 		return true
@@ -544,13 +568,7 @@ func offers(platforms []docker.Platform, platform string) bool {
 	if len(parts) < 2 {
 		return true
 	}
-	for _, offered := range platforms {
-		if offered.OS != parts[0] || offered.Architecture != parts[1] {
-			continue
-		}
-		if len(parts) < 3 || offered.Variant == "" || offered.Variant == parts[2] {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(platforms, func(offered docker.Platform) bool {
+		return offered.OS == parts[0] && offered.Architecture == parts[1]
+	})
 }

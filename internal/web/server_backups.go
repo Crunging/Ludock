@@ -332,6 +332,12 @@ func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Req
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		u.Check = s.App.Checks.CheckNow(ctx, id, resolved.Container)
 		cancel()
+		// The check can wait behind another; the session may have lost the
+		// administrator role meanwhile.
+		if err := s.recheckAdmin(r.Context(), request); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
 	}
 	render(w, r, http.StatusOK, views.ImageCheck(u))
 }

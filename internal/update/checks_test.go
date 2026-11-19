@@ -58,6 +58,7 @@ func TestImageKeySpellings(t *testing.T) {
 		"ghcr.io/owner/game":                    "ghcr.io/owner/game:latest",
 		"localhost:5000/game":                   "localhost:5000/game:latest",
 		"localhost/game:1":                      "localhost/game:1",
+		"REGISTRY/team/game":                    "registry/team/game:latest",
 		"registry.example:5000/team/game:2.0.1": "registry.example:5000/team/game:2.0.1",
 	} {
 		if got := imageKey(reference); got != want {
@@ -67,11 +68,11 @@ func TestImageKeySpellings(t *testing.T) {
 }
 
 // A tag that dropped the server's platform has nothing pulling could give it;
-// a variant is compared only when both sides name one.
+// variants are left to Docker, which can pull a compatible one.
 func TestOffersPlatform(t *testing.T) {
 	both := []docker.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm", Variant: "v7"}}
 	for platform, want := range map[string]bool{
-		"linux/amd64": true, "linux/arm/v7": true, "linux/arm": true, "linux/arm/v6": false, "linux/arm64": false,
+		"linux/amd64": true, "linux/arm/v7": true, "linux/arm": true, "linux/arm/v6": true, "linux/arm64": false,
 		"windows/amd64": false, "": true,
 	} {
 		if got := offers(both, platform); got != want {
@@ -195,5 +196,30 @@ func TestChecksSkipPinnedImages(t *testing.T) {
 	f.run(t, (time.Hour).Milliseconds())
 	if status := f.status(t, id); status != nil || len(f.engine.RegistryAuth) != 0 {
 		t.Fatalf("a pinned image was checked: %+v %v", status, f.engine.RegistryAuth)
+	}
+}
+
+// After Update server pulls a version newer than the one last seen, the
+// server isn't reported out of date against the stale answer: the tag is
+// asked about again on the next pass.
+func TestChecksForgetAsksAgain(t *testing.T) {
+	f := newChecks(t, "")
+	const reference = "itzg/minecraft-server:java21"
+	id := f.engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: reference, Running: true})
+	f.engine.PublishImage(reference, "sha256:"+strings.Repeat("3", 64))
+	f.run(t, 0)
+	f.run(t, (16 * time.Minute).Milliseconds())
+	if status := f.status(t, id); status == nil || status.State != CheckAvailable || len(f.sent) != 1 {
+		t.Fatalf("%+v %v", status, f.sent)
+	}
+	// The tag moves on, and the server is updated to the newest version.
+	newest := "sha256:" + strings.Repeat("4", 64)
+	f.engine.PublishImage(reference, newest)
+	f.engine.Update(id, func(c *fakedocker.Container) { c.Image = newest })
+	logical, _ := f.servers.Identity.List(context.Background(), "")
+	f.checks.Forget(logical[0].ID)
+	f.run(t, (20 * time.Minute).Milliseconds())
+	if status := f.status(t, id); status == nil || status.State != CheckCurrent || len(f.sent) != 1 {
+		t.Fatalf("compared with the stale answer: %+v %v", status, f.sent)
 	}
 }
