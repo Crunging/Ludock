@@ -427,4 +427,19 @@ func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
 	if err := check(); err == nil || !strings.Contains(err.Error(), "shares this server's network") {
 		t.Fatal(err)
 	}
+	// The update panel renders without inspecting every container; the
+	// update itself still refuses.
+	server, err := f.jobs.Servers.ResolveAuthorized(ctx, f.admin, f.serverID, authz.ServerUpdate, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.engine.Requests)
+	if capability := f.jobs.Updates.Capability(ctx, server, true, func() bool { return false }); !capability.Available {
+		t.Fatal(capability.UnavailableReason)
+	}
+	for _, request := range f.engine.Requests[before:] {
+		if strings.Contains(request, "/containers/") && !strings.Contains(request, f.game) {
+			t.Fatal("inspected another container", request)
+		}
+	}
 }

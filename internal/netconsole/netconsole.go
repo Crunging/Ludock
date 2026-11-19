@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -74,6 +75,11 @@ func Execute(ctx context.Context, transport, host string, port int, password, co
 	}
 	return "", errors.New("unsupported console transport")
 }
+
+// directClient never uses ambient proxy settings: the WebRCON password is in
+// the URL path.
+var directClient = &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: ConnectTimeout}).DialContext},
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 func requestID() int32 {
 	n, _ := rand.Int(rand.Reader, big.NewInt(2_000_000_000))
@@ -325,7 +331,7 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 	handshake, cancelHandshake := context.WithTimeout(ctx, ConnectTimeout)
 	defer cancelHandshake()
 	address := "ws://" + formatHost(host) + ":" + strconv.Itoa(port) + "/" + url.PathEscape(password)
-	conn, _, err := websocket.Dial(handshake, address, nil)
+	conn, _, err := websocket.Dial(handshake, address, &websocket.DialOptions{HTTPClient: directClient})
 	if err != nil {
 		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
 			return "", errCancelled
@@ -387,8 +393,9 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
-	authFailed     = regexp.MustCompile(`(?i)incorrect|invalid password|authentication failed`)
-	beforePassword = regexp.MustCompile(`(?is).*password\s*[:>]?\s*`)
+	// authFailed is a console's own rejection reply, which starts its line;
+	// streamed chat or log lines that mention one do not.
+	authFailed = regexp.MustCompile(`(?im)^\s*(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
 )
 
 type telnetDecoder struct {
@@ -441,9 +448,8 @@ func (d *telnetDecoder) decode(chunk []byte) ([]byte, []byte) {
 	return output, replies
 }
 
-// CleanTelnet removes the prompt and the echoed command.
+// CleanTelnet removes the echoed command from the output that followed it.
 func CleanTelnet(output, command string) string {
-	output = beforePassword.ReplaceAllString(output, "")
 	echo := regexp.MustCompile(`(?i)^\s*` + regexp.QuoteMeta(command) + `\s*`)
 	return strings.TrimSpace(echo.ReplaceAllString(output, ""))
 }
@@ -471,12 +477,36 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	quiet.Stop()
 	commandTimer := time.NewTimer(time.Hour)
 	commandTimer.Stop()
-	finish := func() string { return CleanTelnet(decodeText(raw), command) }
+	// Only text after the command is its response, and only the reply to the
+	// password can report a failed sign-in: game servers such as 7 Days to
+	// Die stream their log, including player chat, to every Telnet client.
+	passwordAt, commandAt := 0, 0
+	errSignIn := errors.New("Telnet console authentication failed")
+	// The reply to the password can follow streamed log lines, or arrive
+	// after the command was sent, ahead of its echo or response. Later lines
+	// are the command's own output, which may start like a rejection.
+	rejected := func() bool {
+		if !commandSent {
+			return authFailed.MatchString(decodeText(raw[passwordAt:]))
+		}
+		if authFailed.MatchString(decodeText(raw[passwordAt:commandAt])) {
+			return true
+		}
+		first, _, _ := strings.Cut(strings.TrimLeft(decodeText(raw[commandAt:]), " \t\r\n"), "\n")
+		return authFailed.MatchString(first)
+	}
+	finish := func() (string, error) {
+		if rejected() {
+			return "", errSignIn
+		}
+		return CleanTelnet(decodeText(raw[commandAt:]), command), nil
+	}
 	for {
 		select {
 		case <-quiet.C:
-			return finish(), nil
+			return finish()
 		case <-commandTimer.C:
+			commandAt = len(raw)
 			if err := s.write([]byte(command + "\n")); err != nil {
 				return "", err
 			}
@@ -496,7 +526,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 					return "", result.err
 				}
 				if commandSent {
-					return finish(), nil
+					return finish()
 				}
 				return "", errors.New("Telnet console closed before the command was sent")
 			}
@@ -509,20 +539,18 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 			raw = append(raw, text...)
 			output := decodeText(raw)
 			if !passwordSent && passwordPrompt.MatchString(output) {
-				passwordSent = true
+				passwordSent, passwordAt = true, len(raw)
 				if err := s.write([]byte(password + "\n")); err != nil {
 					return "", err
 				}
 				commandTimer.Reset(telnetCommandGap)
 				continue
 			}
-			if passwordSent {
-				if authFailed.MatchString(output) {
-					return "", errors.New("Telnet console authentication failed")
-				}
-				if commandSent {
-					quiet.Reset(telnetQuiet)
-				}
+			if passwordSent && !commandSent && rejected() {
+				return "", errSignIn
+			}
+			if commandSent {
+				quiet.Reset(telnetQuiet)
 			}
 		}
 	}

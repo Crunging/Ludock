@@ -105,16 +105,16 @@ type row struct {
 	id, serverID, ownerID, input   string
 	bindingRevision, revision      int64
 	lastSlot, lastResult, lastOpID sql.NullString
-	lastRunAt                      sql.NullInt64
+	lastRunAt, changedAt           sql.NullInt64
 	createdAt                      int64
 }
 
-const columns = "id,server_id,owner_id,input_json,binding_revision,revision,last_slot,last_result,last_operation_id,last_run_at,created_at"
+const columns = "id,server_id,owner_id,input_json,binding_revision,revision,last_slot,last_result,last_operation_id,last_run_at,created_at,changed_at"
 
 func scan(s interface{ Scan(...any) error }) (*row, error) {
 	var r row
 	return &r, s.Scan(&r.id, &r.serverID, &r.ownerID, &r.input, &r.bindingRevision, &r.revision, &r.lastSlot,
-		&r.lastResult, &r.lastOpID, &r.lastRunAt, &r.createdAt)
+		&r.lastResult, &r.lastOpID, &r.lastRunAt, &r.createdAt, &r.changedAt)
 }
 
 type queryer interface {
@@ -464,8 +464,8 @@ func (s *Service) Create(ctx context.Context, actor *db.SessionUser, serverID st
 		if count >= MaxPerServer {
 			return apperr.Newf("SCHEDULE_LIMIT_REACHED", 409, "A server can have up to %d schedules", MaxPerServer)
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES(?,?,?,?,?,?)",
-			id, serverID, actor.ID, string(encoded), binding.BindingRevision, db.Now()); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at,changed_at) VALUES(?,?,?,?,?,?,?)",
+			id, serverID, actor.ID, string(encoded), binding.BindingRevision, db.Now(), db.Now()); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.created", TargetType: "server",
@@ -615,7 +615,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		encoded, _ := json.Marshal(data)
 		// Keep the binding baseline, consumed slot, and history. Every change
 		// invalidates work queued from an earlier configuration.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1 WHERE id=?", string(encoded), id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), db.Now(), id); err != nil {
 			return err
 		}
 		r.input, r.revision = string(encoded), r.revision+1
@@ -666,6 +666,12 @@ func (s *Service) notify(key, message string) {
 // read; the next run evaluates the current revision.
 var errScheduleChanged = errors.New("schedule changed")
 
+var errRetryLater = errors.New("schedule run retried later")
+
+// lastChance is two scheduler ticks: a run still blocked this close to the
+// end of its grace period is recorded as skipped instead of retried.
+const lastChance = 30_000
+
 // Run queues every due schedule once per slot. Missed one-time runs are
 // recorded, never replayed.
 func (s *Service) Run(ctx context.Context, now int64) {
@@ -705,7 +711,18 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 		if !data.Enabled || oneTimeCompleted(r, data) {
 			return nil
 		}
-		slot = schedtime.Slot(data.Clock(), now)
+		// A run blocked by another operation is retried until its grace
+		// period ends, except on the last tick before then.
+		retryUntil := int64(0)
+		if data.Kind == "recurring" {
+			var start int64
+			slot, start = schedtime.DueSlot(data.Clock(), now, r.lastSlot.String, r.changedAt.Int64)
+			retryUntil = start + schedtime.RecurringGraceMs - lastChance
+		} else {
+			slot = schedtime.Slot(data.Clock(), now)
+			runAt, _ := schedtime.OneTimeRun(data.Clock())
+			retryUntil = runAt + schedtime.OneTimeGraceMs - lastChance
+		}
 		configurationValid = true
 		if data.Kind == "once" && slot == "" {
 			runAt, ok := schedtime.OneTimeRun(data.Clock())
@@ -760,11 +777,14 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 				log.Warn("Audit retention cleanup failed after scheduling; it will be retried")
 			}
 		}
+		if apperr.Is(err, "OPERATION_CONFLICT") && now < retryUntil {
+			return errRetryLater
+		}
 		return err
 	}()
-	// A schedule or access changed since it was read: the next run
-	// evaluates the current state.
-	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) {
+	// A schedule or access changed since it was read, or another operation
+	// holds the server: the next check evaluates the current state.
+	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) || errors.Is(err, errRetryLater) {
 		return
 	}
 	reason := "Skipped: server state or a conflicting operation prevented this run"
@@ -935,10 +955,11 @@ func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64,
 	if err != nil {
 		return err
 	}
-	// A job that needs the server cancels the warning, and the warning cancels
-	// a player reading, since it has one chance to go out. The locks are held
-	// only until the console command's cleanup finishes.
-	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, cancel)
+	// A warning has one chance to go out, so it cancels a player reading and
+	// is not cancelled by requests or jobs, which wait for it. The locks are
+	// held only until the console command's cleanup finishes, before the
+	// announcement cutoff.
+	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, nil)
 	if err != nil {
 		return err
 	}

@@ -62,7 +62,7 @@ func TestBackgroundHoldersCanBeCancelled(t *testing.T) {
 }
 
 // Preempting work cancels a background holder and takes the keys once its
-// cleanup releases them; a foreground holder still conflicts at once.
+// cleanup releases them; a foreground holder is waited for briefly.
 func TestAcquirePreemptingWaitsForBackground(t *testing.T) {
 	table := New()
 	var release func()
@@ -76,10 +76,22 @@ func TestAcquirePreemptingWaitsForBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		foreground()
+	}()
+	second, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := time.Now()
 	if _, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, nil); err != ErrConflict {
 		t.Fatal(err)
 	}
-	foreground()
+	if waited := time.Since(held); waited < foregroundWait {
+		t.Fatal(waited)
+	}
+	second()
 	// Background work can preempt other background work and stay cancellable.
 	release, _ = table.Acquire([]string{"server:a"}, func() { go release() })
 	warning, err := table.AcquirePreempting(context.Background(), []string{"server:a"}, func() {})

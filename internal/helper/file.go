@@ -43,6 +43,10 @@ type FileEntry struct {
 // filesystem errors can contain private host information.
 const FileFailure = "The file operation failed: the path changed, is unsafe, or cannot be accessed."
 
+// BackupLimit bounds reading one data root for a backup, while the server is
+// stopped.
+const BackupLimit = 4 * time.Hour
+
 // FileNameTaken is the file helper's exit code when a new name is in use.
 const FileNameTaken = 3
 
@@ -636,8 +640,13 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// The deadline belongs to the command as well as its Docker connection:
 	// losing the connection must not leave a writer running.
 	limit := 55 * time.Second
-	if slices.Contains([]string{"backup", "download", "upload"}, request.Operation) {
+	switch request.Operation {
+	case "download", "upload":
 		limit = 30 * time.Minute
+	case "backup":
+		// The backend's deadline, started just after this one, ends the read
+		// and reports the timeout; this one only stops a helper it lost.
+		limit = BackupLimit + time.Minute
 	}
 	deadline := time.AfterFunc(limit, func() {
 		if request.Operation == "upload" {

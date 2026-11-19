@@ -54,14 +54,14 @@ var imageID = regexp.MustCompile(`^(sha256:)?[0-9a-f]{12,64}$`)
 // Check reads the server's container from Docker and confirms that Ludock
 // can replace it.
 func (s *Service) Check(ctx context.Context, server *servers.Context) (*Plan, error) {
-	return s.check(ctx, server, nil)
+	return s.check(ctx, server, nil, true)
 }
 
 // Recheck checks the server again, as Check does, keeping what earlier read
 // that Docker may since have dropped: the old image's defaults, which a pull
 // can remove, and each network's MAC and address, which a stop clears.
 func (s *Service) Recheck(ctx context.Context, server *servers.Context, earlier *Plan) (*Plan, error) {
-	plan, err := s.check(ctx, server, earlier)
+	plan, err := s.check(ctx, server, earlier, true)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,9 @@ func (s *Service) Recheck(ctx context.Context, server *servers.Context, earlier 
 	return plan, nil
 }
 
-func (s *Service) check(ctx context.Context, server *servers.Context, earlier *Plan) (*Plan, error) {
+// check confirms the update can run. dependents also inspects every other
+// container on the host for one sharing this one's namespaces.
+func (s *Service) check(ctx context.Context, server *servers.Context, earlier *Plan, dependents bool) (*Plan, error) {
 	spec, err := s.Docker.InspectSpec(ctx, server.Container.ID)
 	if err != nil {
 		return nil, err
@@ -101,8 +103,10 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 	if _, swarm := config.Labels["com.docker.swarm.service.id"]; swarm {
 		return nil, errSwarm
 	}
-	if err := s.assertNoDependents(ctx, spec); err != nil {
-		return nil, err
+	if dependents {
+		if err := s.assertNoDependents(ctx, spec); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.nameVolumes(ctx, spec); err != nil {
 		return nil, err
@@ -236,7 +240,10 @@ func (s *Service) Capability(ctx context.Context, server *servers.Context, admin
 	if busy() {
 		return fail(apperr.New("OPERATION_CONFLICT", 409, "Wait for the active operation to finish before updating"))
 	}
-	if _, err := s.Check(ctx, server); err != nil {
+	// The panel skips the dependents scan, which inspects every container on
+	// the host each time it renders; queueing and running the update check
+	// it, and refuse there.
+	if _, err := s.check(ctx, server, nil, false); err != nil {
 		return fail(err)
 	}
 	capability.Available = true

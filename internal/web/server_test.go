@@ -3,8 +3,12 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/logging"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/auth"
@@ -55,5 +59,15 @@ func TestPolicyHeadersAndCrossOriginRejection(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "http://panel.example/api/v1/health", nil))
 	if response.Code != http.StatusServiceUnavailable || response.Body.String() != "{\"status\":\"degraded\"}\n" {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+// An unexpected error is logged by its types and Docker status, never its
+// message, which can name a host path.
+func TestCauseFieldsOmitMessages(t *testing.T) {
+	err := fmt.Errorf("open /srv/secret/world: %w", &docker.APIError{Status: 500})
+	encoded := string(logging.EncodeFields(causeFields(err)))
+	if strings.Contains(encoded, "/srv/secret") || !strings.Contains(encoded, "*docker.APIError") || !strings.Contains(encoded, `"dockerStatus":500`) {
+		t.Fatal(encoded)
 	}
 }

@@ -60,7 +60,15 @@ type Access struct {
 	mu         sync.Mutex
 	user       *db.SessionUser
 	stop       context.CancelFunc
+	// allowedAt is when Allowed last confirmed each capability.
+	allowedAt map[authz.Capability]time.Time
 }
+
+// allowedReuse is how long Allowed trusts its last confirmation of log
+// reading. Log output checks it per line, and a check is several database
+// reads; the idle watcher revalidates on its own, uncached. Command output is
+// always checked afresh.
+const allowedReuse = time.Second
 
 // Authorize resolves the server for capability, or reports why not and
 // closes the channel. validate returns the current principal.
@@ -126,7 +134,28 @@ func (a *Access) User() *db.SessionUser {
 // Allowed rechecks the principal, both capabilities, and the binding, and
 // that the channel is still open. A failure closes the channel.
 func (a *Access) Allowed(required authz.Capability) bool {
-	return a.channel.Open() && a.permitted(required)
+	if !a.channel.Open() {
+		return false
+	}
+	if required != authz.LogsRead {
+		return a.permitted(required)
+	}
+	a.mu.Lock()
+	fresh := time.Since(a.allowedAt[required]) < allowedReuse
+	a.mu.Unlock()
+	if fresh {
+		return true
+	}
+	if !a.permitted(required) {
+		return false
+	}
+	a.mu.Lock()
+	if a.allowedAt == nil {
+		a.allowedAt = map[authz.Capability]time.Time{}
+	}
+	a.allowedAt[required] = time.Now()
+	a.mu.Unlock()
+	return true
 }
 
 // permitted is Allowed for a command the browser already sent, which runs

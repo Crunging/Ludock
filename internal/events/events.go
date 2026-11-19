@@ -51,6 +51,9 @@ type Hub struct {
 	Authz    *authz.Service
 	// Refresh reconciles the fleet (servers.Service.Refresh).
 	Refresh func(ctx context.Context) error
+	// Watching, when set, is told when the first viewer subscribes. It must
+	// not block.
+	Watching func()
 
 	mu          sync.Mutex
 	subscribers map[*Subscriber]bool
@@ -66,6 +69,8 @@ type dockerEvent struct {
 	Action string `json:"Action"`
 	Actor  struct {
 		ID string `json:"ID"`
+		// Attributes include the container's labels.
+		Attributes map[string]string `json:"Attributes"`
 	} `json:"Actor"`
 	ID   string   `json:"id"`
 	Time *float64 `json:"time"`
@@ -77,7 +82,9 @@ type change struct {
 }
 
 func stateChange(event dockerEvent) (change, bool) {
-	if !StateActions[event.Action] {
+	// Ludock's own helpers come and go with every file listing and console
+	// query; none of them is a server.
+	if !StateActions[event.Action] || event.Actor.Attributes["ludock.internal"] != "" {
 		return change{}, false
 	}
 	id := event.Actor.ID
@@ -106,6 +113,13 @@ func Decode(source io.Reader, deliver func(dockerEvent)) error {
 	})
 }
 
+// Watched reports whether anyone has a page open that follows server changes.
+func (h *Hub) Watched() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subscribers) > 0
+}
+
 // Subscribe adds a viewer and starts the Docker stream if needed. The
 // returned function removes it.
 func (h *Hub) Subscribe(subscriber *Subscriber) func() {
@@ -115,6 +129,9 @@ func (h *Hub) Subscribe(subscriber *Subscriber) func() {
 		h.subscribers = map[*Subscriber]bool{}
 	}
 	h.subscribers[subscriber] = true
+	if len(h.subscribers) == 1 && h.Watching != nil && !h.stopped {
+		h.Watching()
+	}
 	if h.cancel == nil && !h.stopped {
 		h.startLocked()
 	}

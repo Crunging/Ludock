@@ -129,6 +129,14 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 // then runs the tick every 15 s. Recovery is retried with backoff until it
 // succeeds, since no work may take locks while an earlier writer remains.
 func (a *App) Start(ctx context.Context) {
+	// A page opened between ticks shows players without waiting for the next.
+	a.Events.Watching = func() {
+		select {
+		case <-a.stop:
+		default:
+			a.pollPlayers(ctx)
+		}
+	}
 	// Requests wait for recovery to take its operations' locks; Start runs
 	// before the server listens, so none can take them first.
 	lift := a.Locks.Fence()
@@ -210,15 +218,25 @@ func (a *App) Tick(ctx context.Context) {
 			}
 		}()
 	}
-	if a.polling.TryLock() {
-		a.background.Add(1)
-		go func() {
-			defer a.background.Done()
-			defer a.polling.Unlock()
-			a.Players.Poll(ctx)
-		}()
+	// Player counts are shown only on pages that follow server changes, and a
+	// reading can start a console helper, so nobody watching means no reading.
+	if a.Events.Watched() {
+		a.pollPlayers(ctx)
 	}
 	a.deliver(ctx)
+}
+
+// pollPlayers reads players beside other work, once at a time.
+func (a *App) pollPlayers(ctx context.Context) {
+	if !a.polling.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		defer a.polling.Unlock()
+		a.Players.Poll(ctx)
+	}()
 }
 
 // deliver sends due notifications beside other work. A call while a pass

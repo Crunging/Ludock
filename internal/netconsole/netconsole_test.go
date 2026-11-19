@@ -125,6 +125,30 @@ func TestTelnet(t *testing.T) {
 	}
 }
 
+// WebRCON never goes through a configured proxy, which would see the
+// password in its URL.
+func TestRustWebRCONIgnoresProxy(t *testing.T) {
+	proxied := make(chan struct{}, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied <- struct{}{}
+		http.Error(w, "proxy", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("http_proxy", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	// A host the proxy would be used for; the dial fails without reaching it.
+	short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	RustWebRCON(short, "192.0.2.1", 28016, "secret", "status", Control{})
+	select {
+	case <-proxied:
+		t.Fatal("WebRCON request went through the proxy")
+	default:
+	}
+}
+
 func TestRustWebRCON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/web secret" {
@@ -160,8 +184,102 @@ func TestRustWebRCON(t *testing.T) {
 }
 
 func TestCleanTelnet(t *testing.T) {
-	if got := CleanTelnet("Welcome\nPassword: \r\nsay hi\nok", "say hi"); got != "ok" {
+	if got := CleanTelnet("say hi\nok", "say hi"); got != "ok" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// Log lines streamed to the console, such as player chat, neither end the
+// sign-in nor replace the command's response.
+func TestTelnetIgnoresStreamedLog(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "Chat 'Bob': my password is incorrect\r\nTotal of 2 in the game\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	response, err := Telnet(ctx, host, port, "telnet-secret", "listplayers", Control{})
+	if err != nil || response != "Chat 'Bob': my password is incorrect\r\nTotal of 2 in the game" {
+		t.Fatalf("%q %v", response, err)
+	}
+	// Chat right after sign-in, before the command, is not a rejection, and
+	// neither is a command that says the word.
+	chatty, chattyPort := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\nChat 'Bob': password is incorrect\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "done\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if response, err := Telnet(ctx, chatty, chattyPort, "telnet-secret", "say password is incorrect", Control{}); err != nil || response != "done" {
+		t.Fatalf("%q %v", response, err)
+	}
+	// Without a banner, the first line can be chat or the command's echo.
+	quiet, quietPort := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("2026-11-19 INF Chat 'Bob': password is incorrect\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "done\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if response, err := Telnet(ctx, quiet, quietPort, "telnet-secret", "say password is incorrect", Control{}); err != nil || response != "done" {
+		t.Fatalf("%q %v", response, err)
+	}
+}
+
+// A rejection that arrives after the command was sent still fails the
+// sign-in instead of becoming the command's output.
+func TestTelnetDelayedRejection(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		time.Sleep(4 * telnetCommandGap)
+		conn.Write([]byte("Password incorrect, please enter password:\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if _, err := Telnet(ctx, host, port, "bad", "listplayers", Control{}); err == nil || err.Error() != "Telnet console authentication failed" {
+		t.Fatal(err)
+	}
+}
+
+// A rejection after a streamed log line still fails the sign-in, even when
+// the server prompts again instead of hanging up.
+func TestTelnetRejectionAfterLog(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("2026-11-19 INF Chat 'Bob': hi\r\nPassword incorrect, please enter password:\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if _, err := Telnet(ctx, host, port, "bad", "listplayers", Control{}); err == nil || err.Error() != "Telnet console authentication failed" {
+		t.Fatal(err)
+	}
+}
+
+// A command's own output that starts like a rejection is its response, not
+// a failed sign-in.
+func TestTelnetOutputLikeRejection(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "Invalid password for user Bob\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	response, err := Telnet(ctx, host, port, "telnet-secret", "setpassword Bob x", Control{})
+	if err != nil || response != "Invalid password for user Bob" {
+		t.Fatalf("%q %v", response, err)
 	}
 }
 

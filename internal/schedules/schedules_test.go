@@ -119,16 +119,77 @@ func TestRunsOncePerSlotWithoutCatchingUp(t *testing.T) {
 		t.Fatal(f.operations(t))
 	}
 	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
-	f.s.Run(ctx, due+86400_000+60_000)
+	f.s.Run(ctx, due+86400_000+16*60_000)
 	if f.operations(t) != 1 {
-		t.Fatal("caught up a missed slot")
+		t.Fatal("caught up a slot past its grace period")
+	}
+	// A tick held up by a slow daemon still runs the slot, once.
+	f.s.Run(ctx, due+2*86400_000+3*60_000)
+	f.s.Run(ctx, due+2*86400_000+4*60_000)
+	if f.operations(t) != 2 {
+		t.Fatal("did not run a slot within its grace period", f.operations(t))
 	}
 	var input string
-	f.s.DB.QueryRow("SELECT input_json FROM operations").Scan(&input)
+	f.s.DB.QueryRow("SELECT input_json FROM operations ORDER BY created_at LIMIT 1").Scan(&input)
 	if !strings.Contains(input, `"scheduleId"`) || strings.Contains(input, "createBackup") {
 		t.Fatal(input)
 	}
 }
+
+// A schedule saved just after its minute does not run for that minute, and a
+// run blocked by another operation on the server is retried instead of
+// skipped while its grace period lasts.
+func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
+	f := setup(t)
+	db.Now = func() int64 { return due + 60_000 }
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due+2*60_000)
+	if f.operations(t) != 0 {
+		t.Fatal("ran a minute that passed before the schedule was saved")
+	}
+	// Saved during its own minute, it still runs for that minute.
+	f.s.DB.Exec("DELETE FROM schedules")
+	db.Now = func() int64 { return due + 30_000 }
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due+45_000)
+	if f.operations(t) != 1 {
+		t.Fatal("skipped the minute the schedule was saved in")
+	}
+	f.s.DB.Exec("DELETE FROM operations")
+	db.Now = func() int64 { return due - 3600_000 }
+	f.s.DB.Exec("DELETE FROM schedules")
+	schedule, err := f.s.Create(ctx, friend, f.serverID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	if saved := f.first(t, friend); saved.LastSlot != "" || saved.LastResult != "" {
+		t.Fatal("consumed a slot blocked by another operation", saved.LastResult)
+	}
+	f.s.DB.Exec("UPDATE operations SET status='succeeded' WHERE id=?", busy.ID)
+	f.s.Run(ctx, due+5*60_000)
+	if f.operations(t) != 2 || f.first(t, friend).LastSlot == "" {
+		t.Fatal("did not run the slot once the operation finished", schedule.ID)
+	}
+	// Blocked on the last check of its grace period, a run is skipped.
+	f.s.DB.Exec("DELETE FROM operations WHERE id<>?", busy.ID)
+	f.s.DB.Exec("UPDATE operations SET status='running'")
+	f.s.DB.Exec("UPDATE schedules SET last_slot=NULL,last_result=NULL")
+	f.s.Run(ctx, due+schedtimeRecurringGrace()-10_000)
+	if result := f.first(t, friend).LastResult; !strings.HasPrefix(result, "Skipped") {
+		t.Fatal(result)
+	}
+}
+
+func schedtimeRecurringGrace() int64 { return 15 * 60_000 }
 
 // Revoked actions disabled owners and binding changes.
 func TestScheduleAuthorityChanges(t *testing.T) {

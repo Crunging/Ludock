@@ -515,10 +515,14 @@ func (s *Service) Upload(ctx context.Context, target Target, rootID, parent, nam
 	uploadID := identity.NewUUID()
 	_, err = access.request(ctx, helper.FileRequest{Operation: "upload", Root: root.Path, Path: normalized, Size: &size,
 		UploadID: uploadID}, io.LimitReader(body, size+1), []byte(uploadID))
-	cleanupAccess := &Access{service: s, container: access.container, blocked: access.blocked}
-	if _, cleanupErr := cleanupAccess.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-cleanup",
-		Root: root.Path, Path: normalized, UploadID: uploadID}, nil, nil); cleanupErr != nil {
-		log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
+	// A helper that finished removed its own staging file; one cut off may not
+	// have, so only a failed upload sends the cleanup request.
+	if err != nil {
+		cleanupAccess := &Access{service: s, container: access.container, blocked: access.blocked}
+		if _, cleanupErr := cleanupAccess.request(context.WithoutCancel(ctx), helper.FileRequest{Operation: "upload-cleanup",
+			Root: root.Path, Path: normalized, UploadID: uploadID}, nil, nil); cleanupErr != nil {
+			log.Warn("Failed to clean up an upload temporary file", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
+		}
 	}
 	// A failed upload may still be writing, so its helper is removed before
 	// the locks are released, as for Delete.

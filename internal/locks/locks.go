@@ -88,29 +88,53 @@ func (t *Table) Acquire(keys []string, background func()) (func(), error) {
 	return t.acquire(keys, background, false)
 }
 
-const backgroundYield = 10 * time.Second
+const (
+	backgroundYield = 10 * time.Second
+	// foregroundWait is how long a request waits for another request or job
+	// holding its keys, such as a second tab listing the same files.
+	foregroundWait = 3 * time.Second
+)
 
 // AcquirePreempting is Acquire for work that background work must not hold up,
 // such as a request someone is waiting on. It cancels background holders and
-// waits up to backgroundYield for their cleanup to release the keys.
-// background, when set, marks this holder as background work too.
+// waits up to backgroundYield for their cleanup to release the keys, and up to
+// foregroundWait for foreground holders. background, when set, marks this
+// holder as background work too.
 func (t *Table) AcquirePreempting(ctx context.Context, keys []string, background func()) (func(), error) {
 	deadline := time.NewTimer(backgroundYield)
 	defer deadline.Stop()
+	foreground := time.Now().Add(foregroundWait)
 	for {
 		released := t.NextRelease()
 		release, err := t.Acquire(keys, background)
-		var holders *BackgroundConflict
-		if !errors.As(err, &holders) {
-			return release, err
+		if err == nil {
+			return release, nil
 		}
-		holders.Cancel()
+		var holders *BackgroundConflict
+		if errors.As(err, &holders) {
+			holders.Cancel()
+		} else if !errors.Is(err, ErrConflict) {
+			return nil, err
+		}
+		wait := deadline.C
+		var timer *time.Timer
+		if holders == nil {
+			remaining := time.Until(foreground)
+			if remaining <= 0 {
+				return nil, ErrConflict
+			}
+			timer = time.NewTimer(remaining)
+			wait = timer.C
+		}
 		select {
 		case <-released:
-		case <-deadline.C:
+		case <-wait:
 			return nil, ErrConflict
 		case <-ctx.Done():
 			return nil, ErrConflict
+		}
+		if timer != nil {
+			timer.Stop()
 		}
 	}
 }

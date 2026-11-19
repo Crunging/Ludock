@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -94,9 +95,17 @@ func persistJournal(job *ops.Context, index int, phase string) error {
 
 func stageName(job *ops.Context) string { return ".ludock-restore-" + job.Job.ID }
 
+// removalLimit bounds a restore step that deletes a whole data root's old or
+// failed copy.
+const removalLimit = 30 * time.Minute
+
 func (j *Jobs) restoreStep(ctx context.Context, data *backups.DataHelper, root string, job *ops.Context, operation string, assertAccess func() error) (map[string]any, error) {
-	out, err := j.Backups.Helpers.Exec(ctx, data.Container, helper.Command("restore", helper.RestoreRequest{Root: root, Stage: stageName(job),
-		Operation: operation}), assertAccess)
+	limit := 2 * time.Minute
+	if operation == "cleanup" || operation == "rollbackClean" {
+		limit = removalLimit
+	}
+	out, err := j.Backups.Helpers.ExecWithin(ctx, data.Container, helper.Command("restore", helper.RestoreRequest{Root: root, Stage: stageName(job),
+		Operation: operation}), assertAccess, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +261,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	// The archive is validated once its locks are held.
 	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
 		var data *backups.DataHelper
+		var restored map[string]any
 		assertAccess := func() error { return j.dataAuthority(ctx, server, job) }
 		defer func() {
 			if data != nil {
@@ -378,16 +388,29 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := saveRestore(job, restoreRecovery{Status: "committed", Roots: current}, ""); err != nil {
 				return nil, err
 			}
+			restored = map[string]any{"restoredBackupId": row.ID, "safetyBackupId": safety.ID}
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
 				return nil, err
 			}
 			j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+".")
-			return map[string]any{"restoredBackupId": row.ID, "safetyBackupId": safety.ID}, nil
+			return restored, nil
 		}()
 		if err == nil {
 			return result, nil
 		}
 		state, _ := restoreState(job)
+		// The restored data is in place; only its staging copy of the old data
+		// remains, which blocks every later backup until it is removed.
+		if restored != nil && state != nil && state.Status == "committed" {
+			if cleanErr := j.cleanupAfterFailure(context.WithoutCancel(ctx), server, job, &data); cleanErr == nil {
+				j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+".")
+				return restored, nil
+			}
+			j.notify("restore-result:"+job.Job.ID, "Restore completed for "+server.Container.DisplayName+
+				", but its staging folder could not be removed. Review the operation before backing up.")
+			return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
+				" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
+		}
 		if data != nil && (state == nil || (state.Status != "committed" && state.Status != "cleaned")) {
 			if rollbackErr := j.rollbackAfterFailure(context.WithoutCancel(ctx), server, job, &data); rollbackErr != nil {
 				err = errors.Join(err, rollbackErr)
@@ -417,6 +440,27 @@ func (j *Jobs) rollbackAfterFailure(ctx context.Context, server *servers.Context
 		}
 	}
 	return j.rollbackRestore(ctx, server, job, *data)
+}
+
+// cleanupAfterFailure removes a committed restore's staging folders through
+// a fresh helper, as rollbackAfterFailure does.
+func (j *Jobs) cleanupAfterFailure(ctx context.Context, server *servers.Context, job *ops.Context, data **backups.DataHelper) error {
+	if *data != nil {
+		(*data).Cleanup()
+		*data = nil
+	}
+	if err := j.assertStopped(ctx, server, job); err != nil {
+		return err
+	}
+	fresh, err := j.Backups.Helpers.NewDataHelper(ctx, server, false, job.Job.ID)
+	if err != nil {
+		return err
+	}
+	*data = fresh
+	if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.DataHelperID = fresh.Container }, nil); err != nil {
+		return err
+	}
+	return j.cleanupRestore(ctx, server, job, fresh)
 }
 
 // publicFirst keeps the first public error of a joined error.

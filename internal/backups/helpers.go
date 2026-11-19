@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -103,9 +104,17 @@ type Helpers struct {
 	Docker  *docker.Client
 	Images  *launch.Images
 	Storage *Storage
-	// pollInterval and openLimit are shortened in tests.
+	// pollInterval, openLimit, and readLimit are shortened in tests.
 	pollInterval time.Duration
 	openLimit    time.Duration
+	readLimit    time.Duration
+}
+
+func (h *Helpers) backupLimit() time.Duration {
+	if h.readLimit > 0 {
+		return h.readLimit
+	}
+	return helper.BackupLimit
 }
 
 // NewDataHelper starts a helper labelled with the operation, so recovery can
@@ -223,12 +232,19 @@ func (h *Helpers) start(ctx context.Context, id, execID string) (*docker.Conn, e
 }
 
 var (
-	errTimeout = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
-	errFailed  = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
+	errTimeout       = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
+	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data root for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
+	errFailed        = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
 )
 
 // Exec runs a short helper command (two-minute limit) and returns stdout.
 func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertAccess func() error) ([]byte, error) {
+	return h.ExecWithin(ctx, id, command, assertAccess, 2*time.Minute)
+}
+
+// ExecWithin is Exec with its own time limit, for commands that walk a whole
+// data root.
+func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
 	execID, err := h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: command, AttachStdout: true, AttachStderr: true})
 	if err != nil {
 		return nil, err
@@ -238,7 +254,7 @@ func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertA
 			return nil, err
 		}
 	}
-	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 2*time.Minute, errTimeout)
+	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), limit, errTimeout)
 	defer cancel()
 	conn, err := h.start(deadline, id, execID)
 	if err != nil {
@@ -310,10 +326,14 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 	if err != nil {
 		return nil, nil, err
 	}
-	timer := time.AfterFunc(30*time.Minute, func() { conn.Close() })
+	var expired atomic.Bool
+	timer := time.AfterFunc(h.backupLimit(), func() { expired.Store(true); conn.Close() })
 	reader := docker.Stdout(conn)
 	closer := &closeFunc{Reader: reader, close: func() error { timer.Stop(); conn.Close(); return reader.Close() }}
 	complete := func() error {
+		if expired.Load() {
+			return errBackupTimeout
+		}
 		result, err := h.Docker.InspectExec(context.WithoutCancel(ctx), execID)
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 			return fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
@@ -407,6 +427,9 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	if err := write(header); err != nil {
 		return 0, "", err
 	}
+	// Restore refuses an archive of more than maxEntries entries, counting
+	// this header, so a backup it would refuse is refused while written.
+	entries := 1
 	for _, root := range data.Roots {
 		if err := assertStopped(); err != nil {
 			return 0, "", err
@@ -443,10 +466,11 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			if err := ValidateEntry(mapped, data.Roots); err != nil {
 				return err
 			}
-			if names[name] || len(names) >= 100000 {
-				return fail("UNSAFE_ARCHIVE", "The selected root has duplicate paths or too many entries.")
+			if names[name] || entries >= maxEntries {
+				return fail("UNSAFE_ARCHIVE", "The selected roots have duplicate paths or too many entries.")
 			}
 			names[name] = true
+			entries++
 			encoded, err := tarstream.EncodeHeader(*mapped)
 			if err != nil {
 				return err
@@ -473,8 +497,10 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			}
 			return nil
 		}, nil)
-		if err == nil {
-			err = complete()
+		// A stream cut off at the time limit fails as a broken archive; the
+		// limit is the reason.
+		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) {
+			err = completeErr
 		}
 		input.Close()
 		if err != nil {
@@ -630,7 +656,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			return err
 		}
 		name := strings.TrimSuffix(header.Name, "/")
-		if names[name] || len(names) >= 100000 {
+		if names[name] || len(names) >= maxEntries {
 			return fail("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.")
 		}
 		names[name] = true

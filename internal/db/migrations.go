@@ -230,6 +230,17 @@ var Migrations = []Migration{
         WHERE key = 'notifications';
     `,
 	},
+	{
+		// A recurring run may start late, but never for a minute before its
+		// schedule was last saved.
+		Version: 5,
+		SQL: `
+      ALTER TABLE schedules ADD COLUMN changed_at INTEGER CHECK (changed_at >= 0);
+      -- Earlier saves weren't recorded, so existing schedules run nothing late
+      -- from before this upgrade.
+      UPDATE schedules SET changed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER);
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }

@@ -23,6 +23,10 @@ const (
 	// start, covering a delayed tick or brief restart. Later runs are
 	// recorded as missed and never replayed.
 	OneTimeGraceMs = 5 * minute
+	// RecurringGraceMs is how long after its minute a recurring run may still
+	// start, covering a tick held up by a slow Docker daemon or a run waiting
+	// for another operation on the server.
+	RecurringGraceMs = 15 * minute
 )
 
 var (
@@ -144,6 +148,31 @@ func Slot(input Input, now int64) string {
 		return ""
 	}
 	return clockSlot(input, localClock(location, now))
+}
+
+// DueSlot is the slot a recurring schedule should run now and its start: the
+// latest matching minute within RecurringGraceMs that is not lastSlot and is
+// not before the minute of notBefore, when the schedule was saved. "" means
+// none.
+func DueSlot(input Input, now int64, lastSlot string, notBefore int64) (string, int64) {
+	location, ok := validClock(input, now)
+	if !ok || input.Kind != "recurring" {
+		return "", 0
+	}
+	notBefore = floorDiv(notBefore, minute) * minute
+	for at := now; at > now-RecurringGraceMs; at -= minute {
+		c := localClock(location, at)
+		if c.minuteStart < notBefore {
+			break
+		}
+		if slot := clockSlot(input, c); slot != "" {
+			if slot == lastSlot {
+				return "", 0
+			}
+			return slot, c.minuteStart
+		}
+	}
+	return "", 0
 }
 
 // dayOffsets samples the surrounding days for the offsets before and after a

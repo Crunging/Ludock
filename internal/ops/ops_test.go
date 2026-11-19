@@ -245,13 +245,24 @@ func TestJobsYieldHeldResourcesAndRetry(t *testing.T) {
 	close(gate)
 	waitStatus(t, r, first.ID, Succeeded)
 	waitStatus(t, r, second.ID, Succeeded)
-	// A conflict with a request outside the runner fails instead of waiting.
-	release, _ := r.Locks.Acquire([]string{"path:/srv/shared"}, nil)
-	defer release()
-	third, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
-	if job := waitStatus(t, r, third.ID, Failed); job.Error != "A conflicting operation is already running" {
-		t.Fatal(job.Error)
+	if got := <-order; got != servers[1] {
+		t.Fatal(got)
 	}
+	// A request outside the runner holding the resources, such as a
+	// download, is waited for: the job stays queued and runs once it ends.
+	release, _ := r.Locks.Acquire([]string{"path:/srv/shared"}, nil)
+	third, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+	select {
+	case got := <-order:
+		t.Fatal("ran while the request held its resources", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	waitStatus(t, r, third.ID, Queued)
+	release()
+	if got := <-order; got != servers[0] {
+		t.Fatal(got)
+	}
+	waitStatus(t, r, third.ID, Succeeded)
 }
 
 func TestBackgroundHoldersAreCancelled(t *testing.T) {
