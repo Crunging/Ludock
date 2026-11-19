@@ -482,9 +482,19 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// Die stream their log, including player chat, to every Telnet client.
 	passwordAt, commandAt := 0, 0
 	errSignIn := errors.New("Telnet console authentication failed")
-	// A rejection can follow streamed log lines, or arrive after the command
-	// was sent; it is the only line that starts with one.
-	rejected := func() bool { return authFailed.MatchString(decodeText(raw[passwordAt:])) }
+	// The reply to the password can follow streamed log lines, or arrive
+	// after the command was sent, ahead of its echo or response. Later lines
+	// are the command's own output, which may start like a rejection.
+	rejected := func() bool {
+		if !commandSent {
+			return authFailed.MatchString(decodeText(raw[passwordAt:]))
+		}
+		if authFailed.MatchString(decodeText(raw[passwordAt:commandAt])) {
+			return true
+		}
+		first, _, _ := strings.Cut(strings.TrimLeft(decodeText(raw[commandAt:]), " \t\r\n"), "\n")
+		return authFailed.MatchString(first)
+	}
 	finish := func() (string, error) {
 		if rejected() {
 			return "", errSignIn

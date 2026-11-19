@@ -265,6 +265,24 @@ func TestTelnetRejectionAfterLog(t *testing.T) {
 	}
 }
 
+// A command's own output that starts like a rejection is its response, not
+// a failed sign-in.
+func TestTelnetOutputLikeRejection(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "Invalid password for user Bob\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	response, err := Telnet(ctx, host, port, "telnet-secret", "setpassword Bob x", Control{})
+	if err != nil || response != "Invalid password for user Bob" {
+		t.Fatalf("%q %v", response, err)
+	}
+}
+
 // A reader stops when its command ends with results unread.
 func TestReaderStopsWithCommand(t *testing.T) {
 	host, port := listen(t, func(conn net.Conn) {
