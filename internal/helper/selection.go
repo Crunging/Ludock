@@ -14,31 +14,29 @@ type selected struct {
 	info           *unix.Stat_t
 }
 
-// selection deletes, moves, or archives Paths, entries of one folder. Every
-// entry is checked before any is changed.
+// selection deletes, moves, or archives Paths, names of entries in the
+// folder Path. Every entry is checked before any is changed.
 func (h *fileHelper) selection(root fd, operation string) error {
 	if len(h.request.Paths) == 0 || len(h.request.Paths) > 1000 {
 		return errUnsafe
 	}
-	var folder []string
+	folder, err := components(h.request.Path)
+	if err != nil {
+		return err
+	}
 	var items []selected
-	for index, value := range h.request.Paths {
-		parts, err := components(value)
-		if err != nil {
-			return err
-		}
-		if len(parts) == 0 || (index > 0 && !slices.Equal(parts[:len(parts)-1], folder)) {
+	for _, name := range h.request.Paths {
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
 			return errUnsafe
 		}
-		folder = parts[:len(parts)-1]
-		relative := strings.Join(parts, "/")
-		if slices.ContainsFunc(items, func(item selected) bool { return item.relative == relative }) {
+		relative := strings.Join(append(slices.Clone(folder), name), "/")
+		if slices.ContainsFunc(items, func(item selected) bool { return item.name == name }) {
 			return errUnsafe
 		}
 		if err := h.check(relative, true); err != nil {
 			return err
 		}
-		items = append(items, selected{name: parts[len(parts)-1], relative: relative})
+		items = append(items, selected{name: name, relative: relative})
 	}
 	parent, err := h.pinDirectory(root, strings.Join(folder, "/"))
 	if err != nil {

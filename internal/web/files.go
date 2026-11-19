@@ -127,6 +127,10 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	f.Root = f.Roots[0]
 	if index := slices.IndexFunc(f.Roots, func(root files.Root) bool { return root.ID == query.Get("root") }); index >= 0 {
 		f.Root = f.Roots[index]
+	} else if query.Get("root") != "" && r.Header.Get("HX-Request") != "" {
+		// A stale page's refresh keeps showing only the folder it showed.
+		f.ListError = "This storage location is no longer available. Reload the page."
+		return f
 	}
 	action, err := s.startAction(r, request, f.ServerID, authz.FilesRead)
 	if err != nil {
@@ -269,10 +273,16 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 			err = s.App.Files.DeleteSelection(action.Ctx, target, root, path, d.Names, action.Assert)
 			message, details["names"] = "Deleted "+views.ItemCount(len(d.Names))+".", d.Names
 		case "unpack":
-			var settings backups.Settings
-			if settings, err = s.App.Backups.ForBackup(action.Ctx); err == nil {
+			// The reserve is the backup setting restores keep on game disks; it
+			// applies whether or not backups are set up.
+			reserve := int64(backups.DefaultReserve)
+			var settings *backups.Settings
+			if settings, _, err = s.App.Backups.SavedSettings(action.Ctx); err == nil {
+				if settings != nil {
+					reserve = settings.ReserveBytes
+				}
 				var result *helper.UnpackResult
-				if result, err = s.App.Files.Unpack(action.Ctx, target, root, path, settings.ReserveBytes, action.Assert); err == nil {
+				if result, err = s.App.Files.Unpack(action.Ctx, target, root, path, reserve, action.Assert); err == nil {
 					message = "Unpacked “" + d.Name + "” into “" + result.Name + "”."
 					if result.Skipped > 0 {
 						message += " Left out links and special files: " + views.ItemCount(result.Skipped) + "."

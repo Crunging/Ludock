@@ -17,7 +17,12 @@ import (
 // MaxSelection is how many entries one selection can act on.
 const MaxSelection = 500
 
-// selection resolves names in one folder of a root to their paths.
+// selectionBytes bounds a selection's names, which reach the helper as one
+// command argument.
+const selectionBytes = 48 << 10
+
+// selection checks the names of entries in one folder of a root and returns
+// their paths.
 func selection(target Target, rootID, folder string, names []string) (Root, string, []string, error) {
 	root, normalized, err := resolve(target, rootID, folder)
 	if err != nil {
@@ -26,12 +31,13 @@ func selection(target Target, rootID, folder string, names []string) (Root, stri
 	if len(names) == 0 || len(names) > MaxSelection {
 		return Root{}, "", nil, Error("INVALID_SELECTION", 400)
 	}
+	size := 0
 	paths := make([]string, 0, len(names))
 	for index, name := range names {
 		if err := ValidateName(name); err != nil {
 			return Root{}, "", nil, err
 		}
-		if slices.Contains(names[:index], name) {
+		if size += len(name); size > selectionBytes || slices.Contains(names[:index], name) {
 			return Root{}, "", nil, Error("INVALID_SELECTION", 400)
 		}
 		paths = append(paths, joinRelative(normalized, name))
@@ -41,7 +47,7 @@ func selection(target Target, rootID, folder string, names []string) (Root, stri
 
 // DeleteSelection removes entries of one folder, after checking them all.
 func (s *Service) DeleteSelection(ctx context.Context, target Target, rootID, folder string, names []string, assertAccess func() error) error {
-	root, normalized, paths, err := selection(target, rootID, folder, names)
+	root, normalized, _, err := selection(target, rootID, folder, names)
 	if err != nil {
 		return err
 	}
@@ -49,7 +55,7 @@ func (s *Service) DeleteSelection(ctx context.Context, target Target, rootID, fo
 	if err != nil {
 		return err
 	}
-	_, err = access.request(ctx, helper.FileRequest{Operation: "delete-paths", Root: root.Path, Path: normalized, Paths: paths}, nil, nil)
+	_, err = access.request(ctx, helper.FileRequest{Operation: "delete-paths", Root: root.Path, Path: normalized, Paths: names}, nil, nil)
 	access.Cleanup(err != nil)
 	return err
 }
@@ -77,7 +83,7 @@ func (s *Service) Move(ctx context.Context, target Target, rootID, folder string
 	if err != nil {
 		return err
 	}
-	_, err = access.request(ctx, helper.FileRequest{Operation: "move", Root: root.Path, Path: normalized, Paths: paths,
+	_, err = access.request(ctx, helper.FileRequest{Operation: "move", Root: root.Path, Path: normalized, Paths: names,
 		Destination: destination}, nil, nil)
 	access.Cleanup(err != nil)
 	return err
@@ -85,7 +91,7 @@ func (s *Service) Move(ctx context.Context, target Target, rootID, folder string
 
 // OpenSelectionDownload streams entries of one folder as one tar archive.
 func (s *Service) OpenSelectionDownload(ctx context.Context, target Target, rootID, folder string, names []string, assertAccess func() error) (*Download, error) {
-	root, normalized, paths, err := selection(target, rootID, folder, names)
+	root, normalized, _, err := selection(target, rootID, folder, names)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +104,7 @@ func (s *Service) OpenSelectionDownload(ctx context.Context, target Target, root
 		name = path.Base(normalized)
 	}
 	download, err := s.openDownload(ctx, access, helper.FileRequest{Operation: "download-paths", Root: root.Path, Path: normalized,
-		Paths: paths}, name+" selection", assertAccess, target)
+		Paths: names}, name+" selection", assertAccess, target)
 	if err != nil {
 		access.Cleanup(false)
 		return nil, err

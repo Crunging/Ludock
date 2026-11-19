@@ -41,7 +41,7 @@ var messages = map[string]string{
 	"FILE_ROOT_CHANGED":           "The file root changed. Refresh and try again.",
 	"FILE_OPERATION_TIMEOUT":      "The file operation timed out. Refresh and try again.",
 	"INVALID_FILE_VERSION":        "Reopen the file before saving it",
-	"INVALID_SELECTION":           "Choose up to 500 items in one folder",
+	"INVALID_SELECTION":           "Choose fewer items, up to 500 in one folder",
 	"MOVE_INTO_ITSELF":            "A folder can’t be moved into itself",
 	"MOVE_SAME_FOLDER":            "Choose a different folder to move to",
 }

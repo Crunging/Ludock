@@ -184,6 +184,11 @@ func TestUnpackRefusesHostileArchives(t *testing.T) {
 		"file-dir.tar":  {tarArchive(t, []archived{{name: "a", body: "1"}, {name: "a/b", body: "2"}}), FileArchiveUnsafe},
 		"text.zip":      {[]byte("not an archive"), FileNotArchive},
 		"truncated.tgz": {gzipped(tarArchive(t, []archived{{name: "a", body: strings.Repeat("x", 4096)}}))[:60], FileNotArchive},
+		// The tar ends before the gzip trailer, which is cut off.
+		"trailer.tgz": {func() []byte {
+			data := gzipped(tarArchive(t, []archived{{name: "a", body: "x"}}))
+			return data[:len(data)-4]
+		}(), FileNotArchive},
 	}
 	for name, test := range cases {
 		if _, code := unpackFile(t, root, name, test.data); code != test.code {
@@ -223,6 +228,7 @@ func TestUnpackLimits(t *testing.T) {
 		"entries.zip":  zipArchive(t, []archived{{name: "1"}, {name: "2"}, {name: "3"}, {name: "4"}, {name: "5"}, {name: "6"}}),
 		"entries.tar":  tarArchive(t, []archived{{name: "1"}, {name: "2"}, {name: "3"}, {name: "4"}, {name: "5"}, {name: "6"}}),
 		"depth.tar":    tarArchive(t, []archived{{name: "a/b/c/d", body: "x"}}),
+		"implied.tar":  tarArchive(t, []archived{{name: "a/b/x", body: "x"}, {name: "c/d/y", body: "y"}}),
 	}
 	before := listTree(t, root)
 	for name, data := range cases {
@@ -281,40 +287,41 @@ func TestSelectionDeleteAndMove(t *testing.T) {
 	for _, name := range []string{"a.log", "b.log", "c.log"} {
 		os.WriteFile(filepath.Join(root, "logs", name), []byte(name), 0o644)
 	}
-	move := func(paths []string, destination string, mounts ...string) int {
-		_, code := runFile(t, FileRequest{Operation: "move", Root: root, Path: "logs", Paths: paths, Destination: destination, Mounts: mounts}, nil)
+	move := func(folder string, names []string, destination string, mounts ...string) int {
+		_, code := runFile(t, FileRequest{Operation: "move", Root: root, Path: folder, Paths: names, Destination: destination, Mounts: mounts}, nil)
 		return code
 	}
 	for name, code := range map[string]int{
-		"mixed folders": move([]string{"logs/a.log", "server.properties"}, "world"),
-		"into itself":   move([]string{"logs/old"}, "logs/old"),
-		"a link":        move([]string{"escape"}, "world"),
-		"a mount":       move([]string{"mounted"}, "world", root+"/mounted"),
-		"into a mount":  move([]string{"logs/a.log"}, "mounted", root+"/mounted"),
-		"climbing":      move([]string{"logs/../server.properties"}, "world"),
+		"another folder": move("logs", []string{"a.log", "../server.properties"}, "world"),
+		"a path":         move("", []string{"logs/a.log"}, "world"),
+		"into itself":    move("logs", []string{"old"}, "logs/old"),
+		"a link":         move("", []string{"escape"}, "world"),
+		"a mount":        move("", []string{"mounted"}, "world", root+"/mounted"),
+		"into a mount":   move("logs", []string{"a.log"}, "mounted", root+"/mounted"),
+		"twice":          move("logs", []string{"a.log", "a.log"}, "world"),
 	} {
 		if code == 0 {
 			t.Errorf("%s moved", name)
 		}
 	}
 	os.WriteFile(filepath.Join(root, "logs", "old", "b.log"), nil, 0o644)
-	if code := move([]string{"logs/a.log", "logs/b.log"}, "logs/old"); code != FileNameTaken {
+	if code := move("logs", []string{"a.log", "b.log"}, "logs/old"); code != FileNameTaken {
 		t.Fatal(code)
 	}
 	if _, err := os.Stat(filepath.Join(root, "logs", "a.log")); err != nil {
 		t.Fatal("a refused move changed something")
 	}
 	os.Remove(filepath.Join(root, "logs", "old", "b.log"))
-	if code := move([]string{"logs/a.log", "logs/b.log"}, "logs/old"); code != 0 {
+	if code := move("logs", []string{"a.log", "b.log"}, "logs/old"); code != 0 {
 		t.Fatal(code)
 	}
 	if got := listTree(t, filepath.Join(root, "logs")); !reflect.DeepEqual(got, []string{"c.log", "old", "old/a.log", "old/b.log"}) {
 		t.Fatal(got)
 	}
-	if _, code := runFile(t, FileRequest{Operation: "delete-paths", Root: root, Path: "logs", Paths: []string{"logs/c.log", "logs/missing"}}, nil); code == 0 {
+	if _, code := runFile(t, FileRequest{Operation: "delete-paths", Root: root, Path: "logs", Paths: []string{"c.log", "missing"}}, nil); code == 0 {
 		t.Fatal("deleted with a missing entry")
 	}
-	if _, code := runFile(t, FileRequest{Operation: "delete-paths", Root: root, Path: "logs", Paths: []string{"logs/c.log", "logs/old"}}, nil); code != 0 {
+	if _, code := runFile(t, FileRequest{Operation: "delete-paths", Root: root, Path: "logs", Paths: []string{"c.log", "old"}}, nil); code != 0 {
 		t.Fatal(code)
 	}
 	if got := listTree(t, filepath.Join(root, "logs")); len(got) != 0 {

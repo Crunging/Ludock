@@ -140,7 +140,10 @@ func (u *unpacker) directory(parts []string) (fd, error) {
 	for _, part := range parts {
 		next, err := u.h.t.openAt(current, part, directoryFlags, 0)
 		if isNotExist(err) {
-			if err = unix.Mkdirat(int(current), part, 0o777); err == nil {
+			if err = u.count(); err == nil {
+				err = unix.Mkdirat(int(current), part, 0o777)
+			}
+			if err == nil {
 				if next, err = u.h.t.openAt(current, part, directoryFlags, 0); err == nil {
 					err = unix.Fchown(int(next), int(u.owner.Uid), int(u.owner.Gid))
 				}
@@ -157,10 +160,22 @@ func (u *unpacker) directory(parts []string) (fd, error) {
 	return current, nil
 }
 
-func (u *unpacker) entry(name string) ([]string, error) {
+// count adds an entry or a folder it implies. Every few entries the reserve
+// is checked too, since empty files and folders take space as well.
+func (u *unpacker) count() error {
 	u.entries++
 	if u.entries > u.limits.Entries {
-		return nil, errArchiveLimit
+		return errArchiveLimit
+	}
+	if u.entries%256 == 0 {
+		return u.room(0)
+	}
+	return nil
+}
+
+func (u *unpacker) entry(name string) ([]string, error) {
+	if err := u.count(); err != nil {
+		return nil, err
 	}
 	if err := u.stopped(); err != nil {
 		return nil, err
@@ -388,14 +403,20 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	if err := unix.Mkdirat(int(parent), stageName, 0o700); err != nil {
 		return err
 	}
+	// The parent is the game's to change, so the staging name is checked to
+	// still be this helper's folder before it is removed or published.
 	done := false
+	var stageInfo *unix.Stat_t
 	defer func() {
-		if !done {
+		if !done && stageInfo != nil && h.isStage(parent, stageName, stageInfo) {
 			h.removeEntry(parent, stageName, 0)
 		}
 	}()
 	stage, err := h.t.openAt(parent, stageName, directoryFlags, 0)
 	if err != nil {
+		return err
+	}
+	if stageInfo, err = fstat(stage); err != nil {
 		return err
 	}
 	limits := Unpack
@@ -416,7 +437,13 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 		if decompressed, err = gzip.NewReader(bufio.NewReaderSize(io.NewSectionReader(archive, 0, info.Size), 64*1024)); err != nil {
 			return errNotArchive
 		}
-		err = u.tar(&budget{reader: decompressed, allowed: allowed})
+		stream := &budget{reader: decompressed, allowed: allowed}
+		if err = u.tar(stream); err == nil {
+			// Reading on to the end checks gzip's trailer and checksum.
+			if _, err = io.Copy(io.Discard, stream); err != nil && !errors.Is(err, errArchiveLimit) {
+				err = errNotArchive
+			}
+		}
 	case n == 512 && bytes.HasPrefix(magic[257:], []byte("ustar")):
 		err = u.tar(io.NewSectionReader(archive, 0, info.Size))
 	default:
@@ -432,7 +459,7 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	if err := unix.Syncfs(int(stage)); err != nil {
 		return err
 	}
-	result, err := h.finishUnpack(parent, name, stageName, stage, owner, u.umask, u.result)
+	result, err := h.finishUnpack(parent, name, stageName, stage, stageInfo, owner, u.umask, u.result)
 	if err != nil {
 		return err
 	}
@@ -440,7 +467,14 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	return h.json(result)
 }
 
-func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd, owner *unix.Stat_t, umask int, result UnpackResult) (UnpackResult, error) {
+func (h *fileHelper) isStage(parent fd, name string, stage *unix.Stat_t) bool {
+	info, err := lstatAt(parent, name)
+	return err == nil && isDir(info) && sameInode(info, stage)
+}
+
+// finishUnpack publishes the result. Once it has a name the unpack has
+// happened, so later steps are best effort.
+func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd, stageInfo, owner *unix.Stat_t, umask int, result UnpackResult) (UnpackResult, error) {
 	children, err := names(stage)
 	if err != nil {
 		return result, err
@@ -463,6 +497,9 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 	if err != nil {
 		return result, err
 	}
+	if !h.isStage(parent, stageName, stageInfo) || h.stop.Load() {
+		return result, errStopped
+	}
 	for attempt := 1; ; attempt++ {
 		candidate := base
 		if attempt > 1 {
@@ -484,10 +521,9 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 		result.Name = candidate
 		break
 	}
-	if source == stage {
-		if err := unix.Unlinkat(int(parent), stageName, unix.AT_REMOVEDIR); err != nil {
-			return result, err
-		}
+	if source == stage && h.isStage(parent, stageName, stageInfo) {
+		unix.Unlinkat(int(parent), stageName, unix.AT_REMOVEDIR)
 	}
-	return result, unix.Fsync(int(parent))
+	unix.Fsync(int(parent))
+	return result, nil
 }
