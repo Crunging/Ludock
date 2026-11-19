@@ -121,8 +121,8 @@ var Integrations = []Integration{
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Terraria console", BroadcastTemplate: "say {message}",
 			Placeholder: "playing, save, say Hello",
 			Commands:    []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}}}},
-	// Bedrock 1.26.50 and later clients connect over TCP first, then play on
-	// UDP ports the image leaves unset.
+	// From Bedrock 1.26.50 the default NetherNet transport connects over TCP
+	// first, then plays on UDP ports the image leaves unset.
 	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},
 		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, Aliases: []string{"bedrock"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Bedrock console", BroadcastTemplate: "say {message}",
