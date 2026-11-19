@@ -96,9 +96,10 @@ func ParseMinecraftList(response string) (Players, bool) {
 
 var (
 	factorioHeader = regexp.MustCompile(`^Online players \((\d+)\):$`)
-	// Player lines are indented; unindented "[JOIN]" or "[CHAT]" log lines
-	// can arrive in the same reply.
 	factorioPlayer = regexp.MustCompile(`^[ \t]+(\S.*?)[ \t]+\(online\)[ \t\r]*$`)
+	// Player lines are indented; log lines such as "[JOIN] Ada joined the
+	// game" can arrive unindented in the same reply.
+	factorioLog = regexp.MustCompile(`^\[(?:JOIN|LEAVE|CHAT|SHOUT|WHISPER|COMMAND|KICK|BAN|UNBANNED|PROMOTE|DEMOTE)\] `)
 )
 
 // ParseFactorioPlayers reads Factorio's "/players online":
@@ -124,14 +125,14 @@ func ParseFactorioPlayers(response string) (Players, bool) {
 			}
 			header, _ = strconv.Atoi(factorioHeader.FindStringSubmatch(trimmed)[1])
 		case factorioPlayer.MatchString(line) && header >= 0:
-			name := factorioPlayer.FindStringSubmatch(line)[1]
-			if seen[name] {
+			name := strings.TrimSpace(factorioPlayer.FindStringSubmatch(line)[1])
+			if name == "" || seen[name] {
 				return Players{}, false
 			}
 			seen[name] = true
 			players.Online++
 			players.add(name)
-		case strings.HasPrefix(line, "["):
+		case factorioLog.MatchString(line):
 		default:
 			return Players{}, false
 		}
@@ -169,9 +170,9 @@ func ParsePalworldPlayers(response string) (Players, bool) {
 	return players, true
 }
 
-// arkPlayer ends with a 17-digit Steam ID or a 32-digit hexadecimal Epic or
-// EOS ID.
-var arkPlayer = regexp.MustCompile(`^(\d+)\. (.*), (\d{17}|[0-9A-Fa-f]{32})$`)
+// arkPlayer ends with a 17-digit Steam ID, a 19-digit Survival Evolved Epic
+// ID, or a 32-digit hexadecimal EOS ID.
+var arkPlayer = regexp.MustCompile(`^(\d+)\. (.*), (\d{17}|\d{19}|[0-9A-Fa-f]{32})$`)
 
 // ParseARKPlayers reads ListPlayers from ARK, one numbered row per player
 // such as "0. Ada, 76561198000000000", with Steam IDs on Survival Evolved and
@@ -253,7 +254,8 @@ func ParseConanPlayers(response string) (Players, bool) {
 			return Players{}, false
 		}
 		index, err := strconv.Atoi(strings.TrimSpace(row[0]))
-		if err != nil || index < 0 || seen[index] {
+		// Every player has a Funcom user ID and a platform ID.
+		if err != nil || index < 0 || seen[index] || strings.TrimSpace(row[3]) == "" || strings.TrimSpace(row[4]) == "" {
 			return Players{}, false
 		}
 		seen[index] = true
@@ -267,9 +269,12 @@ func ParseConanPlayers(response string) (Players, bool) {
 	return players, true
 }
 
+const sevenDaysVector = `-?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?`
+
 var (
-	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(.*, ping=\d+$`)
-	sevenDaysTotal  = regexp.MustCompile(`^Total of (\d+) in the game$`)
+	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(` + sevenDaysVector + `\), rot=\(` + sevenDaysVector +
+		`\), remote=(?:True|False), .*, ping=\d+$`)
+	sevenDaysTotal = regexp.MustCompile(`^Total of (\d+) in the game$`)
 	// Log lines the Telnet console streams, such as
 	// "2026-11-19T10:00:00 512.345 INF Player connected".
 	sevenDaysLog = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d \d+\.\d+ [A-Z]{3} `)

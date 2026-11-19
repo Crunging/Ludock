@@ -151,7 +151,8 @@ func TestParseFactorioPlayers(t *testing.T) {
 		"Online players (1):\nAda (online)\n", "Online players (1):\n  Ada (offline)\n",
 		"Players (1):\n  Ada (online)\n", "Online players (1):\n  Ada (online)\nOnline players (1):\n  Ada (online)\n",
 		"  Ada (online)\nOnline players (1):\n", "Online players (2):\n  Ada (online)\n  Ada (online)\n",
-		"Online players (1):\n  Ada\x00 (online)\n",
+		"Online players (1):\n  Ada\x00 (online)\n", "Online players (0):\n[garbled]\n",
+		"Online players (2):\n  Ada (online)\n  \u00a0Ada (online)\n",
 	})
 }
 
@@ -177,6 +178,8 @@ func TestParseARKPlayers(t *testing.T) {
 		{"No Players Connected\n \n", 0, nil},
 		{"\n0. Ada, 76561198000000000\n1. Zed Smith, 76561198000000001\n \n", 2, []string{"Ada", "Zed Smith"}},
 		{"0. Ada, Lovelace, 0002a1b2c3d4e5f60718293a4b5c6d7e\n", 1, []string{"Ada, Lovelace"}},
+		// Survival Evolved gives Epic Games Store players 19-digit IDs.
+		{"0. Ada, 76561198000000000\n1. Zed, 2535412345678901234\n", 2, []string{"Ada", "Zed"}},
 	}, []string{
 		"", " \n", "Server received, But no response!! \n", "1. Ada, 76561198000000000\n",
 		"0. Ada, 76561198000000000\n0. Zed, 76561198000000001\n", "0. Ada 76561198000000000\n",
@@ -210,7 +213,7 @@ func TestParseConanPlayers(t *testing.T) {
 		// A header cut short could be any table.
 		"Idx | Char name | Player name\n",
 		header + "  0 | Ada | ada_1 | 1A | 7656 | Steam\n  0 | Zed | zed_2 | 2B | 7657 | Steam\n",
-		header + " -1 | Ada | ada_1 | 1A | 7656 | Steam\n",
+		header + " -1 | Ada | ada_1 | 1A | 7656 | Steam\n", header + "  0 |  |  |  |  |\n",
 	})
 }
 
@@ -228,7 +231,7 @@ func TestParse7DaysPlayers(t *testing.T) {
 	}, []string{"", log, row, row + "\nTotal of 2 in the game", "Total of 0 in the game\nTotal of 0 in the game",
 		// A row cut short, or text that isn't a row or the server log.
 		"0. id=171, Ada, pos=(\nTotal of 1 in the game", "0. id=171, Ada, p\x00os=(\nTotal of 0 in the game",
-		"garbled\nTotal of 0 in the game", "Total of 1 in the game\n" + row})
+		"garbled\nTotal of 0 in the game", "0. id=171, Ada, pos=(garbage, ping=0\nTotal of 1 in the game", "Total of 1 in the game\n" + row})
 }
 
 // Each game with a player list gets it from its preset, also when a label
