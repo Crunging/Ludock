@@ -493,3 +493,43 @@ func TestRestoreItemRollbackOwnership(t *testing.T) {
 		t.Fatal(string(data))
 	}
 }
+
+// The folder picked for a one-item restore has another filesystem mounted
+// somewhere inside it, such as a disk the host mounted under the data: the
+// restore is refused before the server stops and never moves the folder,
+// which would carry that mount into the restore folder.
+func TestRestoreItemRefusesNestedMount(t *testing.T) {
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	for _, dir := range []string{"world/region", "world/mods/cache", stage + "/old"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+	}
+	step := func(operation string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world"})
+		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	if step("check") != 0 {
+		t.Fatal("refused a folder on one mount")
+	}
+	var mounted unix.Stat_t
+	if err := unix.Stat(filepath.Join(root, "world/mods/cache"), &mounted); err != nil {
+		t.Fatal(err)
+	}
+	mountOf = func(descriptor fd) (uint64, error) {
+		var info unix.Stat_t
+		if err := unix.Fstat(int(descriptor), &info); err != nil {
+			return 0, err
+		}
+		if info.Ino == mounted.Ino {
+			return 2, nil
+		}
+		return 1, nil
+	}
+	t.Cleanup(func() { mountOf = mountID })
+	if step("check") == 0 || step("moveOld") == 0 {
+		t.Fatal("accepted a folder with a mount inside it")
+	}
+	if _, err := os.Stat(filepath.Join(root, "world/mods/cache")); err != nil {
+		t.Fatal("the folder was moved", err)
+	}
+}

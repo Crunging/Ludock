@@ -346,12 +346,49 @@ func (h *restoreHelper) run() (any, error) {
 // sameMount reports whether two open directories are on one mount, which
 // also tells apart bind mounts of one filesystem.
 func sameMount(left, right fd) (bool, error) {
-	a, err := mountID(left)
+	a, err := mountOf(left)
 	if err != nil {
 		return false, err
 	}
-	b, err := mountID(right)
+	b, err := mountOf(right)
 	return err == nil && a == b, err
+}
+
+// mountOf is mountID; tests replace it, since they can't mount.
+var mountOf = mountID
+
+// oneMount refuses a folder with another mount anywhere inside it: moving
+// the folder would carry that mount into the restore folder, and cleanup
+// never empties one.
+func (h *restoreHelper) oneMount(parent fd, name string, depth int) error {
+	h.removed++
+	if depth > 64 || h.removed > 1000000 {
+		return errUnsafe
+	}
+	directory, err := h.t.openAt(parent, name, directoryFlags, 0)
+	if err != nil {
+		return err
+	}
+	defer h.t.close(directory)
+	if same, err := sameMount(parent, directory); err != nil || !same {
+		return errUnsafe
+	}
+	children, err := names(directory)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		info, err := lstatAt(directory, child)
+		if err != nil {
+			return err
+		}
+		if isDir(info) {
+			if err := h.oneMount(directory, child, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // mountID reads a descriptor's mount ID from statx, or from fdinfo on
@@ -454,8 +491,14 @@ func (h *restoreHelper) checkItem(root fd, parts []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := movable(parent, parts[len(parts)-1], rootInfo.Dev); err != nil {
+	info, err := movable(parent, parts[len(parts)-1], rootInfo.Dev)
+	if err != nil {
 		return nil, err
+	}
+	if info != nil && isDir(info) {
+		if err := h.oneMount(parent, parts[len(parts)-1], 0); err != nil {
+			return nil, err
+		}
 	}
 	return map[string]bool{"parent": true}, nil
 }
@@ -479,6 +522,11 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		info, err := movable(parent, name, rootInfo.Dev)
 		if err != nil {
 			return err
+		}
+		if info != nil && isDir(info) {
+			if err := h.oneMount(parent, name, 0); err != nil {
+				return err
+			}
 		}
 		return move(parent, name, old, "item", info)
 	case "moveNew":
