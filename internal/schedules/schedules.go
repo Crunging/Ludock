@@ -935,10 +935,11 @@ func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64,
 	if err != nil {
 		return err
 	}
-	// A job that needs the server cancels the warning, and the warning cancels
-	// a player reading, since it has one chance to go out. The locks are held
-	// only until the console command's cleanup finishes.
-	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, cancel)
+	// A warning has one chance to go out, so it cancels a player reading and
+	// is not cancelled by requests or jobs, which wait for it. The locks are
+	// held only until the console command's cleanup finishes, before the
+	// announcement cutoff.
+	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, nil)
 	if err != nil {
 		return err
 	}
