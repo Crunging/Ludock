@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +68,9 @@ type Checks struct {
 	// generation counts Forget calls per server, so an observation made
 	// before one is not applied after it.
 	generation map[string]int
+	// forgotten counts Forget calls per image key, so a registry answer
+	// asked for before one is not kept after it.
+	forgotten map[string]int
 }
 
 type checkState struct {
@@ -119,6 +123,7 @@ func (c *Checks) init() {
 	c.once.Do(func() {
 		c.run = make(chan struct{}, 1)
 		c.generation = map[string]int{}
+		c.forgotten = map[string]int{}
 	})
 }
 
@@ -200,6 +205,12 @@ func (c *Checks) Forget(serverID string) {
 			entry.ContainerID = ""
 			if image := c.state.Images[entry.Image]; image != nil {
 				image.Digest, image.NextAt = "", 0
+				c.forgotten[entry.Image]++
+				for _, other := range c.state.Servers {
+					if other.Image == entry.Image {
+						other.Status = CheckPending
+					}
+				}
 			}
 		}
 	}
@@ -466,7 +477,7 @@ func updateMessage(container servers.Container) string {
 // ask records what the registry says key's tag points to now.
 func (c *Checks) ask(ctx context.Context, key string, now int64) {
 	c.mu.Lock()
-	reference := key
+	reference, forgotten := key, c.forgotten[key]
 	if image := c.state.Images[key]; image != nil && image.Reference != "" {
 		reference = image.Reference
 	}
@@ -482,7 +493,7 @@ func (c *Checks) ask(ctx context.Context, key string, now int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	image := c.state.Images[key]
-	if image == nil {
+	if image == nil || c.forgotten[key] != forgotten {
 		return
 	}
 	image.TriedAt = now
@@ -580,8 +591,8 @@ func offers(platforms []docker.Platform, platform string) bool {
 		if offered.Variant == "" || wanted == "" || offered.Variant == wanted {
 			return true
 		}
-		have, okHave := strings.CutPrefix(offered.Variant, "v")
-		want, okWant := strings.CutPrefix(wanted, "v")
-		return okHave && okWant && len(have) == 1 && len(want) == 1 && have <= want
+		have, errHave := strconv.ParseFloat(strings.TrimPrefix(offered.Variant, "v"), 64)
+		want, errWant := strconv.ParseFloat(strings.TrimPrefix(wanted, "v"), 64)
+		return errHave == nil && errWant == nil && have <= want
 	})
 }
