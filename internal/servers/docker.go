@@ -74,6 +74,9 @@ type Container struct {
 	Created   int64
 	// Labels holds approved configuration labels only.
 	Labels map[string]string
+	// Source is why Ludock manages it: SourceImage, SourceLabel, or
+	// SourcePanel.
+	Source string
 }
 
 type Observed struct {
@@ -107,6 +110,9 @@ func assertEligible(info *docker.ContainerInspect) error {
 
 type Observer struct {
 	Docker *docker.Client
+	// Choices are administrators' choices to add or remove servers; nil
+	// means none.
+	Choices *identity.Store
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
 
@@ -164,9 +170,14 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 	if err != nil {
 		return nil, err
 	}
+	choices, err := o.choices(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var eligible []docker.ContainerSummary
 	for _, container := range containers {
-		if games.Evaluate(container.Image, container.Labels).Eligible && !isReplacement(container.Names) {
+		labels, _ := summaryCandidate(container).withChoice(choices)
+		if games.Evaluate(container.Image, labels).Eligible && !isReplacement(container.Names) {
 			eligible = append(eligible, container)
 		}
 	}
@@ -195,7 +206,7 @@ func (o *Observer) List(ctx context.Context) ([]Observed, error) {
 				if stop {
 					return
 				}
-				observed, cached, err := o.observeSummary(ctx, eligible[index], previous)
+				observed, cached, err := o.observeSummary(ctx, eligible[index], previous, choices)
 				if err != nil {
 					status := docker.StatusCode(err)
 					if status == http.StatusNotFound || status == http.StatusForbidden || apperr.Is(err, "INVALID_COMPOSE_IDENTITY") ||
@@ -260,7 +271,8 @@ func isReplacement(names []string) bool {
 	return false
 }
 
-func (o *Observer) observeSummary(ctx context.Context, container docker.ContainerSummary, previous map[string]inspection) (*Observed, *inspection, error) {
+func (o *Observer) observeSummary(ctx context.Context, container docker.ContainerSummary, previous map[string]inspection,
+	choices map[string]identity.Choice) (*Observed, *inspection, error) {
 	id, err := validContainerID(container.ID)
 	if err != nil {
 		return nil, nil, err
@@ -275,7 +287,7 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 		}
 		cached = inspection{summary: summary, inspectedAt: now, info: info}
 	}
-	observed, err := observe(cached.info)
+	observed, _, err := observe(cached.info, choices)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -286,7 +298,8 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 }
 
 // Inspect observes one container directly. Mutations and their binding
-// checks always use this, never the cache.
+// checks always use this, never the cache. The inspection it returns has an
+// administrator's choice applied to its labels, and is never sent to Docker.
 func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.ContainerInspect, error) {
 	if _, err := validContainerID(id); err != nil {
 		return nil, nil, err
@@ -295,19 +308,24 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if err != nil {
 		return nil, nil, err
 	}
-	observed, err := observe(info)
-	return observed, info, err
+	choices, err := o.choices(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return observe(info, choices)
 }
 
-func observe(info *docker.ContainerInspect) (*Observed, error) {
+func observe(info *docker.ContainerInspect, choices map[string]identity.Choice) (*Observed, *docker.ContainerInspect, error) {
+	info, source := applyChoice(info, choices)
 	if err := assertEligible(info); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	container, err := toContainer(info)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &Observed{Container: *container, Observation: toObservation(info, container)}, nil
+	container.Source = source
+	return &Observed{Container: *container, Observation: toObservation(info, container)}, info, nil
 }
 
 // Docker keeps the last check result after a container stops; only a

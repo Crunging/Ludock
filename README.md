@@ -52,8 +52,8 @@ platforms.
    ```
 
 3. Servers using [supported game images](./docs/OPERATIONS.md#supported-games)
-   appear automatically. For any other image, add the label
-   `ludock.enable: "true"` to its container.
+   appear automatically. For any other container, open **Missing a server?**
+   under the server list and choose **Add**.
 
 Ludock keeps its own data and your backups in separate volumes; your game
 containers and their data stay where they are. Backup storage in the example's

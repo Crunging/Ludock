@@ -193,3 +193,46 @@ func InvalidComposeIdentity(labels map[string]string) bool {
 	}
 	return !replica.MatchString(number)
 }
+
+// Suggest guesses the game of a container Ludock doesn't recognize, for an
+// administrator adding it: from its image, then a game named in its image or
+// container name, such as ich777/steamcmd:valheim, then a published port
+// only one game uses. It returns "unknown" when nothing fits.
+func Suggest(image, name string, ports []Port) string {
+	if game := InferGameType(image); game != "unknown" {
+		return game
+	}
+	// The repository and tag without a registry or digest, then the name.
+	reference, _, _ := strings.Cut(image, "@")
+	if slash := strings.Index(reference, "/"); slash >= 0 && strings.ContainsAny(reference[:slash], ".:") {
+		reference = reference[slash+1:]
+	}
+	text := "-" + nonSlug.ReplaceAllString(strings.ToLower(reference+" "+name), "-") + "-"
+	best, length := "", 0
+	for _, game := range Integrations {
+		keys := append([]string{game.GameType, nonSlug.ReplaceAllString(strings.ToLower(game.Name), "-")}, game.Aliases...)
+		for _, key := range keys {
+			key = strings.Trim(key, "-")
+			for _, form := range []string{key, strings.ReplaceAll(key, "-", "")} {
+				if len(form) > length && strings.Contains(text, "-"+form+"-") {
+					best, length = game.GameType, len(form)
+				}
+			}
+		}
+	}
+	if best != "" {
+		return best
+	}
+	for _, port := range ports {
+		var match []string
+		for _, game := range Integrations {
+			if game.GamePort != nil && *game.GamePort == port {
+				match = append(match, game.GameType)
+			}
+		}
+		if len(match) == 1 {
+			return match[0]
+		}
+	}
+	return "unknown"
+}

@@ -395,7 +395,9 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 			}
 			grants = append(grants, validated{input.ServerID, capabilities})
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ?", userID); err != nil {
+		// The editor doesn't show removed servers; their grants wait for them.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM server_grants WHERE user_id = ? AND server_id NOT IN
+      (SELECT id FROM logical_servers WHERE `+identity.RemovedServer+`)`, userID); err != nil {
 			return err
 		}
 		now := db.Now()
@@ -403,8 +405,10 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 			if len(grant.Capabilities) == 0 {
 				continue
 			}
+			// A removed server's kept grant is replaced by a form opened before it was removed.
 			if _, err := tx.ExecContext(ctx, `INSERT INTO server_grants (user_id, server_id, capabilities_json, updated_at)
-        VALUES (?, ?, ?, ?)`, userID, grant.ServerID, encodeCapabilities(grant.Capabilities), now); err != nil {
+        VALUES (?, ?, ?, ?) ON CONFLICT (user_id, server_id) DO UPDATE SET capabilities_json = excluded.capabilities_json,
+        updated_at = excluded.updated_at`, userID, grant.ServerID, encodeCapabilities(grant.Capabilities), now); err != nil {
 				return err
 			}
 		}

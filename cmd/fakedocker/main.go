@@ -267,6 +267,15 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "enshrouded", Image: "sknnr/enshrouded-dedicated-server:latest",
 		Ports: map[string][]docker.PortBinding{"15636/udp": {{HostIP: "0.0.0.0", HostPort: "15636"}},
 			"15637/udp": {{HostIP: "0.0.0.0", HostPort: "15637"}}}})
+	// Containers Ludock doesn't manage by itself: a game on an image it
+	// doesn't recognize, one its owner opted out, and a tool that controls
+	// Docker.
+	engine.AddContainer(fakedocker.GameOptions{Name: "satisfactory", Image: "ich777/steamcmd:satisfactory",
+		Ports: map[string][]docker.PortBinding{"7777/udp": {{HostIP: "0.0.0.0", HostPort: "7777"}}}})
+	engine.AddContainer(fakedocker.GameOptions{Name: "valheim-old", Image: "ich777/steamcmd:valheim",
+		Labels: map[string]string{"ludock.enable": "false"}})
+	engine.AddContainer(fakedocker.GameOptions{Name: "portainer", Image: "portainer/portainer-ce:2.21.4", Running: true,
+		Mounts: []docker.MountPoint{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock", RW: true}}})
 }
 
 // seedDemo adds the servers shown in the README screenshots, with files and

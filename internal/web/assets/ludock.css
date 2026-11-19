@@ -585,7 +585,19 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .dashboard-help { margin-top: 18px; }
 .dashboard-help summary { list-style: none; cursor: pointer; display: inline-block; }
 .dashboard-help summary::-webkit-details-marker { display: none; }
-.dashboard-help .help-panel { margin-top: 12px; max-width: 760px; }
+.dashboard-help .help-panel, .dashboard-help #add-servers { margin-top: 12px; max-width: 760px; }
+.add-servers__list { display: grid; gap: var(--gap); margin-top: 12px; padding: 0; list-style: none; }
+.add-servers__item {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 10px 12px; border-radius: var(--radius); background: var(--block);
+}
+.add-servers__identity { display: grid; gap: 2px; min-width: 0; }
+.add-servers__name { color: var(--ink); overflow-wrap: anywhere; }
+.add-servers__image { font-size: 13.5px; overflow-wrap: anywhere; }
+.add-servers__form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.add-servers__form select { max-width: 100%; }
+.help-panel .add-servers__note, .help-panel .alert { margin-top: 12px; }
+.remove-server { margin-top: 24px; max-width: var(--measure); }
 
 /* ---------- Copy address, menus, dialogs ---------- */
 

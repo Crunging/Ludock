@@ -67,6 +67,9 @@ type Target struct {
 type Service struct {
 	Docker *docker.Client
 	Images *launch.Images
+	// Managed reports whether Ludock manages a container, including an
+	// administrator's choice; nil reads its labels and image alone.
+	Managed func(ctx context.Context, info *docker.ContainerInspect) bool
 	// ListerIdle is how long a listing helper is kept after its last use; zero
 	// means 30 seconds.
 	ListerIdle time.Duration
@@ -187,6 +190,13 @@ func OwnerMount(rootPath string, mounts []identity.Mount) *identity.Mount {
 	return owner
 }
 
+func (s *Service) managed(ctx context.Context, info *docker.ContainerInspect) bool {
+	if s.Managed != nil {
+		return s.Managed(ctx, info)
+	}
+	return games.Evaluate(info.Config.Image, info.Config.Labels).Eligible
+}
+
 // Acquire starts a helper with only the root's own mount and its safe
 // nested mounts, read-only when readOnly. Unsafe nested mounts are blocked.
 // After the helper's mounts are pinned it proves the game still owns the
@@ -198,7 +208,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		return nil, err
 	}
 	if inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		!games.Evaluate(inspection.Config.Image, inspection.Config.Labels).Eligible {
+		!s.managed(ctx, inspection) {
 		return nil, Error("FILE_TARGET_CHANGED", 409)
 	}
 	mounts := identity.DockerMounts(inspection.Mounts)
@@ -307,7 +317,7 @@ func (s *Service) acquireLister(ctx context.Context, target Target, root Root, a
 func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		!games.Evaluate(inspection.Config.Image, inspection.Config.Labels).Eligible || signature(inspection) != access.signature {
+		!s.managed(ctx, inspection) || signature(inspection) != access.signature {
 		return false
 	}
 	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection.Mounts))

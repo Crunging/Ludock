@@ -39,18 +39,48 @@ invalid value prevents startup.
 
 ## Adding servers
 
-Ludock decides which containers to manage in this order:
+Servers on [supported game images](#supported-games) appear by themselves. For
+any other container, such as an ich777, LinuxGSM, or custom image, open
+**Missing a server?** under the server list. It lists the containers Ludock can
+see but doesn't manage, with their image and published ports; pick the game if
+Ludock didn't guess it, and choose **Add**. Nothing changes in Docker or the
+container's Compose file. Like every new server, it's visible only to
+administrators until you share it.
 
-1. **`ludock.enable`:** `"true"` adds the container and `"false"` leaves it out.
-   Any other value leaves it out and is reported in **Diagnostics**.
+To take a server out, open it and choose **Remove from Ludock**, whether it was
+added by hand or found by itself. The container keeps running as it was. Its
+sharing, schedules, monitoring settings, and backups are kept, and come back if
+you add it again. Until then it leaves the server list, and its scheduled runs
+don't happen.
+
+Ludock remembers these choices in its own database, by Compose project, service,
+and replica, or by container name for a standalone container, so they survive
+the container being recreated. It decides which containers to manage in this
+order:
+
+1. **`ludock.enable` label:** `"true"` adds the container and `"false"` leaves
+   it out, whatever the panel says. Any other value leaves it out and is
+   reported in **Diagnostics**.
 2. **Compose one-off containers** are left out unless labeled.
-3. **Supported game images** are added; other images are left out. A
+3. **The panel:** a container added there is managed, and one removed there is
+   left out.
+4. **Supported game images** are added; other images are left out. A
    `ludock.game` label alone doesn't add an unsupported image.
+
+The panel never offers Ludock itself, its helper containers, update
+replacements, or containers that can control the host: privileged containers
+and ones given a Docker, Podman, or containerd socket, the host's root, or
+`/run`. Their console and files would hand over the whole host, so add one only
+with a label, deliberately.
 
 Images are recognized by the end of the repository name, ignoring registry,
 tag, and digest, so private mirrors work. Recognition picks the console
-integration; it doesn't verify the image. To add another image, label it in the
-Compose service that owns it:
+integration; it doesn't verify the image.
+
+### Labels
+
+Labels are the advanced way to add or adjust a server, in the Compose service
+that owns it:
 
 ```yaml
 stdin_open: true
@@ -59,8 +89,6 @@ labels:
   ludock.game: "terraria"
   ludock.name: "Terraria with friends"
 ```
-
-### Labels
 
 | Label | Purpose |
 | --- | --- |
