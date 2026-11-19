@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/a-h/templ v0.3.1118
+	github.com/boombuler/barcode v1.1.0
 	github.com/coder/websocket v1.8.15
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0

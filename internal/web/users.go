@@ -92,6 +92,20 @@ func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request, reque
 	s.usersResult(w, r, request, err, notice, nil)
 }
 
+func (s *Server) resetUserTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {
+	id := r.PathValue("id")
+	err := s.App.Auth.ResetTwoFactor(r.Context(), request.Principal, id, request.Client)
+	notice := ""
+	if err == nil {
+		name := "the user"
+		if user, _ := s.App.DB.FindUserByID(r.Context(), id); user != nil {
+			name = user.Username
+		}
+		notice = "Two-factor sign-in turned off for " + name + ". They were signed out and can set it up again in Account."
+	}
+	s.usersResult(w, r, request, err, notice, nil)
+}
+
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, request *Request) {
 	id := r.PathValue("id")
 	name := ""

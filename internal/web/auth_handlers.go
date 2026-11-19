@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"unicode"
@@ -14,6 +15,16 @@ const sessionMaxAge = 7 * 24 * 60 * 60
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{Name: auth.SessionCookie, Value: token, Path: "/", MaxAge: sessionMaxAge, HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: auth.IsExternalHTTPS(r)})
+}
+
+func setChallengeCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{Name: auth.ChallengeCookie, Value: token, Path: "/login", MaxAge: auth.ChallengeTTLMs / 1000,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: auth.IsExternalHTTPS(r)})
+}
+
+func clearChallengeCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: auth.ChallengeCookie, Value: "", Path: "/login", MaxAge: -1, HttpOnly: true,
 		SameSite: http.SameSiteStrictMode, Secure: auth.IsExternalHTTPS(r)})
 }
 
@@ -92,10 +103,39 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	username := r.PostFormValue("username")
 	form := views.LoginForm{Username: strings.TrimSpace(username), Next: safeNext(r.PostFormValue("next"))}
 	principal, err := s.Auth.Login(r.Context(), username, r.PostFormValue("password"), s.client(r))
+	var required *auth.CodeRequired
+	if errors.As(err, &required) {
+		setChallengeCookie(w, r, required.Token)
+		html(w)
+		views.LoginPage(views.LoginForm{Code: true, Next: form.Next}).Render(r.Context(), w)
+		return
+	}
 	if err != nil {
 		s.renderLogin(w, r, form, err)
 		return
 	}
+	setSessionCookie(w, r, principal.Token)
+	http.Redirect(w, r, form.Next, http.StatusSeeOther)
+}
+
+// loginCode is the second step of a two-factor sign-in.
+func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
+	form := views.LoginForm{Code: true}
+	if err := readForm(w, r); err != nil {
+		s.renderLogin(w, r, form, err)
+		return
+	}
+	form.Next = safeNext(r.PostFormValue("next"))
+	principal, err := s.Auth.CompleteLogin(r.Context(), auth.ChallengeToken(r), r.PostFormValue("code"), s.client(r))
+	if apperr.Is(err, "SIGN_IN_EXPIRED") {
+		clearChallengeCookie(w, r)
+		form.Code = false
+	}
+	if err != nil {
+		s.renderLogin(w, r, form, err)
+		return
+	}
+	clearChallengeCookie(w, r)
 	setSessionCookie(w, r, principal.Token)
 	http.Redirect(w, r, form.Next, http.StatusSeeOther)
 }

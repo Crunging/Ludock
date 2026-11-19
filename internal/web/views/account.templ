@@ -2,12 +2,15 @@ package views
 
 import (
 	"strconv"
+	"strings"
 
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 )
 
 type AccountView struct {
-	Sessions []db.Session
+	TwoFactor TwoFactorView
+	Sessions  []db.Session
 	// SessionsError replaces the list when it could not load.
 	SessionsError string
 	Error         string
@@ -19,7 +22,7 @@ templ AccountPage(page Page, view AccountView) {
 		<div class="page">
 			<div class="page__header">
 				<h1 class="page__title">Account</h1>
-				<p class="page__subtitle">Change your password and review signed-in devices.</p>
+				<p class="page__subtitle">Change your password, protect sign-in with an authenticator app, and review signed-in devices.</p>
 			</div>
 			@AccountStatus(view)
 			<form class="settings-card" method="post" action="/account/password">
@@ -41,6 +44,7 @@ templ AccountPage(page Page, view AccountView) {
 					<button class="primary-btn" type="submit" data-busy-label="Working…">Change password</button>
 				</div>
 			</form>
+			@twoFactorSection(page, view.TwoFactor)
 			<section class="settings-section" id="sessions">
 				@AccountSessions(view)
 			</section>
@@ -109,4 +113,95 @@ templ AccountSessions(view AccountView) {
 			</article>
 		}
 	</div>
+}
+
+type TwoFactorView struct {
+	On           bool
+	RecoveryLeft int
+	// Enrollment is a secret being set up; it is shown only until confirmed.
+	Enrollment *auth.Enrollment
+	// RecoveryCodes are shown once, right after two-factor sign-in turns on.
+	RecoveryCodes []string
+}
+
+// groupSecret splits a base32 secret into groups of four for typing.
+func groupSecret(secret string) string {
+	var groups []string
+	for len(secret) > 4 {
+		groups = append(groups, secret[:4])
+		secret = secret[4:]
+	}
+	return strings.Join(append(groups, secret), " ")
+}
+
+templ twoFactorSection(page Page, view TwoFactorView) {
+	<section class="settings-card two-factor" id="two-factor" aria-labelledby="two-factor-title">
+		<h2 id="two-factor-title">Two-factor sign-in</h2>
+		if len(view.RecoveryCodes) > 0 {
+			<p>Save these recovery codes somewhere safe, such as a password manager. Each one works once in place of a code if you lose your phone. They won’t be shown again.</p>
+			<ul class="recovery-codes" aria-label="Recovery codes">
+				for _, code := range view.RecoveryCodes {
+					<li><code>{ code }</code></li>
+				}
+			</ul>
+		} else if view.Enrollment != nil {
+			<p>Scan this QR code with an authenticator app, or enter the setup key by hand. Then enter the 6-digit code the app shows.</p>
+			<div class="two-factor__setup">
+				@qrCode(view.Enrollment.URI)
+				<div>
+					<p class="two-factor__key-label">Setup key</p>
+					<code class="two-factor__key">{ groupSecret(view.Enrollment.Secret) }</code>
+				</div>
+			</div>
+			<form method="post" action="/account/two-factor/enable">
+				<input type="hidden" name="_csrf" value={ page.CSRF }/>
+				<div class="form-grid">
+					<label>
+						<span>Current password</span>
+						<input type="password" name="currentPassword" autocomplete="current-password" maxlength="128" required/>
+					</label>
+					<label>
+						<span>Code from the app</span>
+						<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8" required/>
+					</label>
+					<button class="primary-btn" type="submit" data-busy-label="Working…">Turn on two-factor sign-in</button>
+				</div>
+			</form>
+		} else if view.On {
+			<p>
+				On. Signing in asks for a code from your authenticator app.
+				if view.RecoveryLeft == 1 {
+					1 recovery code left.
+				} else {
+					{ strconv.Itoa(view.RecoveryLeft) } recovery codes left.
+				}
+			</p>
+			<form method="post" action="/account/two-factor/disable">
+				<input type="hidden" name="_csrf" value={ page.CSRF }/>
+				<div class="form-grid">
+					<label>
+						<span>Current password</span>
+						<input type="password" name="currentPassword" autocomplete="current-password" maxlength="128" required/>
+					</label>
+					<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Turn off two-factor sign-in</button>
+				</div>
+			</form>
+		} else {
+			<p>Off. Ask for a code from an authenticator app, such as a password manager or phone app, after your password.</p>
+			<form method="post" action="/account/two-factor/setup">
+				<input type="hidden" name="_csrf" value={ page.CSRF }/>
+				<button class="secondary-btn" type="submit" data-busy-label="Working…">Set up two-factor sign-in</button>
+			</form>
+		}
+	</section>
+}
+
+templ qrCode(content string) {
+	{{ path, size, err := qrPath(content) }}
+	if err == nil {
+		<svg class="two-factor__qr" viewBox={ "0 0 " + strconv.Itoa(size) + " " + strconv.Itoa(size) } role="img" aria-label="QR code for your authenticator app" shape-rendering="crispEdges">
+			<rect width="100%" height="100%" fill="#fff"></rect>
+			<path d={ path } fill="#000"></path>
+		</svg>
+	}
 }

@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	s.mux.HandleFunc("GET /assets/", serveAsset)
 	s.mux.HandleFunc("GET /login", s.loginPage)
 	s.mux.HandleFunc("POST /login", s.login)
+	s.mux.HandleFunc("POST /login/code", s.loginCode)
 	s.mux.HandleFunc("POST /setup", s.setup)
 	s.mux.HandleFunc("POST /logout", s.authed(s.logout))
 	if s.App != nil {

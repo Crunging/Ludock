@@ -138,7 +138,8 @@ func serve() int {
 	return 0
 }
 
-// recoverAccount resets a password from the console. The new password comes
+// recoverAccount resets a password and turns off two-factor sign-in from the
+// console. The new password comes
 // from LUDOCK_RECOVERY_PASSWORD so it stays out of the process list.
 func recoverAccount(args []string) int {
 	username := ""
@@ -172,6 +173,10 @@ func recoverAccount(args []string) int {
 	if user == nil {
 		fmt.Fprintf(os.Stderr, "Account %q was not found.\n", username)
 		return 1
+	}
+	if user.TwoFactor {
+		fmt.Printf("Password reset and two-factor sign-in turned off for %q. All existing sessions were revoked.\n", user.Username)
+		return 0
 	}
 	fmt.Printf("Password reset for %q. All existing sessions were revoked.\n", user.Username)
 	return 0

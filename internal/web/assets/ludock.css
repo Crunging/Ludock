@@ -971,6 +971,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .user-row__identity { display: grid; gap: 2px; min-width: 0; }
 .user-row__identity strong { font-family: var(--display); font-size: 19px; font-weight: 600; font-stretch: 90%; overflow-wrap: anywhere; }
 .user-row__identity span { color: var(--ink-3); font-size: 13px; }
+.user-row--two-factor { grid-template-columns: minmax(150px, 1fr) 140px auto auto minmax(220px, 1.2fr) auto auto; }
+.user-row__identity .user-row__two-factor { margin-left: 6px; white-space: nowrap; }
 .user-row__identity .user-row__disabled { margin-left: 6px; font-family: var(--font); font-size: 13px; font-weight: 700; color: var(--caution-text); }
 .user-row label > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 .user-access-summary { font-size: 14px; }
@@ -994,6 +996,14 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .session-row strong { font-weight: 700; }
 .session-row span { color: var(--ink-3); font-size: 14px; overflow-wrap: anywhere; }
 #account-status:not(:empty) { margin-bottom: 8px; }
+.two-factor { display: grid; gap: 14px; max-width: 980px; margin-top: 20px; }
+.two-factor > h2 { margin-bottom: 0; }
+.two-factor__setup { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; }
+.two-factor__qr { width: 200px; height: 200px; border-radius: var(--radius); }
+.two-factor__key-label { margin-bottom: 4px; color: var(--ink-3); font-size: 14px; }
+.two-factor__key { font-size: 16px; overflow-wrap: anywhere; user-select: all; }
+.recovery-codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 0; list-style: none; }
+.recovery-codes code { font-size: 16px; }
 .page > form.settings-card { max-width: 980px; }
 
 .settings-jump-links { display: flex; gap: var(--gap); flex-wrap: wrap; margin: -6px 0 8px; font-size: 15px; }

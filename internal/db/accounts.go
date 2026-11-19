@@ -31,6 +31,7 @@ type User struct {
 	Role      Role
 	Disabled  bool
 	CreatedAt int64
+	TwoFactor bool
 }
 
 // UserRecord includes the password verifier.
@@ -94,8 +95,9 @@ func (d *DB) findUser(ctx context.Context, column, value string) (*UserRecord, e
 	var user UserRecord
 	var disabled int
 	var role string
-	err := d.QueryRowContext(ctx, `SELECT id, username, password_hash, role, disabled, created_at
-    FROM users WHERE `+column+` = ?`, value).Scan(&user.ID, &user.Username, &user.PasswordHash, &role, &disabled, &user.CreatedAt)
+	err := d.QueryRowContext(ctx, `SELECT id, username, password_hash, role, disabled, created_at, totp_secret IS NOT NULL
+    FROM users WHERE `+column+` = ?`, value).Scan(&user.ID, &user.Username, &user.PasswordHash, &role, &disabled, &user.CreatedAt,
+		&user.TwoFactor)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -117,7 +119,7 @@ func (d *DB) FindUserByID(ctx context.Context, id string) (*UserRecord, error) {
 
 // ListUsers lists accounts by username.
 func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id, username, role, disabled, created_at
+	rows, err := d.QueryContext(ctx, `SELECT id, username, role, disabled, created_at, totp_secret IS NOT NULL
     FROM users ORDER BY username COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -128,7 +130,7 @@ func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
 		var user User
 		var role string
 		var disabled int
-		if err := rows.Scan(&user.ID, &user.Username, &role, &disabled, &user.CreatedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Username, &role, &disabled, &user.CreatedAt, &user.TwoFactor); err != nil {
 			return nil, err
 		}
 		user.Role, user.Disabled = Role(role), disabled == 1
@@ -160,11 +162,15 @@ func (d *DB) UpdateUserAccess(ctx context.Context, id string, role Role, disable
 	})
 }
 
-// UpdateUserPassword replaces a password and revokes every session.
+// UpdateUserPassword replaces a password, turns off two-factor sign-in,
+// and revokes every session.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, passwordHash string, audit AuditEntry) error {
 	return d.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
 			passwordHash, Now(), id); err != nil {
+			return err
+		}
+		if _, err := ClearTwoFactor(ctx, tx, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {

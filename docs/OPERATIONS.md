@@ -391,6 +391,22 @@ deleting archives, updating, the container shell, and settings are for
 administrators. Removing access also blocks the user's queued work and closes
 their open consoles and log streams.
 
+### Two-factor sign-in
+
+Anyone can turn on two-factor sign-in in **Account**: scan the QR code with an
+authenticator app (or type the setup key), then enter the current password
+and a code from the app. Signing in then asks for a 6-digit code after the
+password; codes from the previous or next 30 seconds are accepted, and each
+works once. Ludock shows ten recovery codes once when two-factor sign-in turns
+on; each works once in place of a code. Wrong codes count toward the same
+sign-in limits as wrong passwords, and an account is locked out of the code
+step for 15 minutes after 10 wrong codes.
+
+Turning two-factor sign-in on or off asks for the current password and signs
+out the account's other sessions, like a password change. For a lost phone,
+an administrator can choose **Turn off two-factor** on **Users**, which signs
+that user out everywhere, or use `ludock recover` (below).
+
 ### Server identity
 
 A Compose server is identified by its project, service, and replica, and a
@@ -441,8 +457,8 @@ unset LUDOCK_RECOVERY_PASSWORD
 docker compose start ludock
 ```
 
-Replace `admin` with the existing username. This signs the account out
-everywhere; it doesn't create accounts.
+Replace `admin` with the existing username. This also turns off the account's
+two-factor sign-in and signs it out everywhere; it doesn't create accounts.
 
 ## Health check
 

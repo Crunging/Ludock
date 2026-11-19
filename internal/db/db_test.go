@@ -314,7 +314,7 @@ func TestFutureMigrationKeepsRecords(t *testing.T) {
 	if err := ApplyMigrations(bg, conn, Migrations, testKey); err != nil {
 		t.Fatal(err)
 	}
-	conn.ExecContext(bg, "INSERT INTO users VALUES ('u','player','hash','viewer',0,1,1)")
+	conn.ExecContext(bg, "INSERT INTO users (id, username, password_hash, role, disabled, created_at, updated_at) VALUES ('u','player','hash','viewer',0,1,1)")
 	next := append(append([]Migration(nil), Migrations...), Migration{Version: LatestVersion() + 1,
 		SQL: "CREATE TABLE test_preferences (user_id TEXT PRIMARY KEY REFERENCES users(id), note TEXT NOT NULL) STRICT;"})
 	if err := ApplyMigrations(bg, conn, next, testKey); err != nil {
