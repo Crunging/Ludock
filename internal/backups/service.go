@@ -1,6 +1,7 @@
 package backups
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -142,6 +143,10 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 		return err
 	}
 	defer release()
+	// Retention may have removed it while this waited for the locks.
+	if exists, err := s.Exists(ctx, id, false); err != nil || !exists {
+		return cmp.Or(err, error(errNotFound))
+	}
 	if assertAccess != nil {
 		if err := assertAccess(); err != nil {
 			return err
@@ -330,8 +335,11 @@ func CapacityError(code string, kept int64) error {
 		problem = "Backups have reached their total size limit."
 	}
 	advice := " Delete backups you no longer need, or free space on the backup disk."
+	if code == codeLimit {
+		advice = " Delete backups you no longer need, or raise the limit in Settings."
+	}
 	if kept > 0 {
-		advice = " Kept backups use " + datasize.Format(kept) + "; release or delete ones you no longer need, or free space on the backup disk."
+		advice += " Kept backups use " + datasize.Format(kept) + "; release ones you no longer need so they can be deleted."
 	}
 	return fail(code, problem+advice)
 }
@@ -674,20 +682,40 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 			}
 		}
 	}
-	room, need := s.room(ctx, list, settings)
-	removals := planRemovals(list, time.Local, func(id string) bool {
+	expired, spare := planRetention(list, time.Local, func(id string) bool {
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
-	}, room, need)
-	for _, backup := range removals {
-		release, idle := s.Storage.claimIdle(backup.ID)
-		if !idle {
-			continue
-		}
-		err := s.remove(ctx, &backup, nil)
-		release()
-		if err != nil && !errors.Is(err, errKept) {
+	})
+	for _, backup := range expired {
+		if err := s.removeIdle(ctx, backup); err != nil {
 			return err
 		}
+	}
+	// Space is measured again after each removal, and only archives in the
+	// current folder free room on its disk.
+	for _, backup := range spare {
+		if room, need := s.room(ctx, list, settings); room >= need {
+			break
+		}
+		if backup.destination != settings.Destination {
+			continue
+		}
+		if err := s.removeIdle(ctx, backup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeIdle removes a backup for retention unless it is being read or was
+// kept since it was listed.
+func (s *Service) removeIdle(ctx context.Context, backup Backup) error {
+	release, idle := s.Storage.claimIdle(backup.ID)
+	if !idle {
+		return nil
+	}
+	defer release()
+	if err := s.remove(ctx, &backup, nil); !errors.Is(err, errKept) {
+		return err
 	}
 	return nil
 }

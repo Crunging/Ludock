@@ -28,6 +28,23 @@ func series(times ...time.Time) []Backup {
 
 func nothingProtected(string) bool { return false }
 
+// planRemovals is what Prune removes when each removal frees its size of
+// room: everything expired, then spare backups while room is short of need.
+func planRemovals(list []Backup, zone *time.Location, protected func(string) bool, room, need int64) []Backup {
+	expired, spare := planRetention(list, zone, protected)
+	for _, backup := range expired {
+		room += backup.Size
+	}
+	for _, backup := range spare {
+		if room >= need {
+			break
+		}
+		expired = append(expired, backup)
+		room += backup.Size
+	}
+	return expired
+}
+
 func remaining(list, removed []Backup) []Backup {
 	return slices.DeleteFunc(slices.Clone(list), func(backup Backup) bool {
 		return slices.ContainsFunc(removed, func(r Backup) bool { return r.ID == backup.ID })

@@ -53,11 +53,12 @@ func ruleKeeps(list []Backup, zone *time.Location) map[string]bool {
 	return keep
 }
 
-// planRemovals chooses which of one server's backups (newest first) to
-// remove: those the rule doesn't keep, then, while room is short of need,
-// the oldest the rule keeps beyond the newest keepNewest. Kept backups, ones
-// still being deleted, and protected ones are never chosen.
-func planRemovals(list []Backup, zone *time.Location, protected func(id string) bool, room, need int64) []Backup {
+// planRetention sorts one server's backups (newest first) for removal:
+// expired are those the rule doesn't keep, and spare, oldest first, are the
+// ones it keeps beyond the newest keepNewest, which go only while the next
+// backup wouldn't fit. Kept backups, ones still being deleted, and protected
+// ones are in neither.
+func planRetention(list []Backup, zone *time.Location, protected func(id string) bool) (expired, spare []Backup) {
 	var candidates []Backup
 	for _, backup := range list {
 		if backup.State == "complete" && backup.KeptAt == 0 {
@@ -65,18 +66,15 @@ func planRemovals(list []Backup, zone *time.Location, protected func(id string) 
 		}
 	}
 	keep := ruleKeeps(candidates, zone)
-	var removed []Backup
 	for _, backup := range candidates {
 		if !keep[backup.ID] && !protected(backup.ID) {
-			removed = append(removed, backup)
-			room += backup.Size
+			expired = append(expired, backup)
 		}
 	}
-	for index := len(candidates) - 1; index >= keepNewest && room < need; index-- {
+	for index := len(candidates) - 1; index >= keepNewest; index-- {
 		if backup := candidates[index]; keep[backup.ID] && !protected(backup.ID) {
-			removed = append(removed, backup)
-			room += backup.Size
+			spare = append(spare, backup)
 		}
 	}
-	return removed
+	return expired, spare
 }

@@ -266,3 +266,39 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 		t.Fatal(left)
 	}
 }
+
+// Space pressure removes the oldest backups only until the next one fits,
+// measuring again after each removal, and skips archives left in an earlier
+// backup folder, which free nothing there.
+func TestPruneMakesRoomForTheNextBackup(t *testing.T) {
+	s, first, _ := recorded(t)
+	destination := s.Storage.Roots
+	var fingerprint string
+	s.DB.QueryRow("SELECT binding_fingerprint FROM backups WHERE id=?", first.ID).Scan(&fingerprint)
+	s.DB.Exec("UPDATE backups SET size=100, destination='/earlier' WHERE id=?", first.ID)
+	ids := []string{first.ID}
+	for day := 1; day < 6; day++ {
+		backup := Backup{ID: identity.NewUUID(), ServerID: first.ServerID, Size: 100, CreatedAt: int64(day) * 86_400_000, State: "complete"}
+		if err := os.WriteFile(filepath.Join(destination, backup.ID+".tar"), []byte("archive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Record(ctx, backup, fingerprint, destination); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, backup.ID)
+	}
+	// Six daily backups of 100 bytes leave 50 under the limit; the next
+	// needs 110.
+	if err := s.Prune(ctx, first.ServerID, Settings{Destination: destination, MaxBytes: 650}, ids[5]); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, id := range ids {
+		if exists, _ := s.Exists(ctx, id, true); exists {
+			left = append(left, id)
+		}
+	}
+	if !slices.Equal(left, []string{ids[0], ids[2], ids[3], ids[4], ids[5]}) {
+		t.Fatal(left)
+	}
+}
