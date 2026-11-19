@@ -212,6 +212,9 @@ func (c *Checks) Forget(serverID string) {
 					}
 				}
 			}
+			// Saved now, so a restart before the next pass can't bring the
+			// answer from before the pull back.
+			c.saveLocked(context.Background())
 		}
 	}
 }
