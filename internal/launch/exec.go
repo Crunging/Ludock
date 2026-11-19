@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -146,12 +147,14 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	})
 	defer stop()
 
-	written := make(chan struct{})
+	// Set once the whole input and its trailer are written, before the write
+	// side closes: the helper can read that close and exit before the sender
+	// returns from it.
+	var sent atomic.Bool
 	if options.Input == nil {
-		close(written)
+		sent.Store(true)
 	} else {
 		go func() {
-			defer close(written)
 			buffer := make([]byte, 64*1024)
 			periodic := Periodic(check)
 			for {
@@ -179,6 +182,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 							fail(ErrUpload)
 						}
 					}
+					sent.Store(true)
 					break
 				}
 				if readErr != nil {
@@ -196,9 +200,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	demuxErr := docker.Demux(conn, &stdout, nil)
 	// The helper only succeeds after the whole input and its trailer, so an
 	// input still being read has already failed; don't wait for it.
-	select {
-	case <-written:
-	default:
+	if !sent.Load() {
 		fail(ErrUpload)
 	}
 	if err := current(); err != nil {
