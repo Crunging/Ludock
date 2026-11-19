@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -123,27 +124,111 @@ func (w writer) Write(data []byte) (int, error) {
 }
 
 // minecraftGame serves a Minecraft RCON console and Server List Ping, and
-// returns their ports.
-func minecraftGame(password string, online ...string) (string, string) {
+// returns the game and their ports. Its console kicks, bans, and keeps an
+// allowlist with the vanilla server's replies, and writes both lists where
+// the itzg image keeps them once the game's publish is set.
+func minecraftGame(password string, online ...string) (*fakeGame, string, string) {
 	game := &fakeGame{online: online}
+	member := func(list []string, name string) bool { return slices.Contains(list, name) }
+	remove := func(list []string, name string) []string {
+		return slices.DeleteFunc(list, func(listed string) bool { return listed == name })
+	}
 	rcon := game.rcon(password, "list", func(online []string) string {
 		return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
+	}, func(verb, name string) (string, bool) {
+		switch verb {
+		case "kick":
+			if !member(game.online, name) {
+				return "No player was found", true
+			}
+			game.online = remove(game.online, name)
+			return "Kicked " + name + ": Kicked by an operator", true
+		case "ban":
+			if member(game.banned, name) {
+				return "Nothing changed. The player is already banned", true
+			}
+			game.banned, game.online = append(game.banned, name), remove(game.online, name)
+		case "pardon":
+			if !member(game.banned, name) {
+				return "Nothing changed. The player isn't banned", true
+			}
+			game.banned = remove(game.banned, name)
+		case "whitelist":
+			change, name, _ := strings.Cut(name, " ")
+			switch {
+			case change == "add" && member(game.allowed, name):
+				return "Player is already whitelisted", true
+			case change == "add":
+				game.allowed = append(game.allowed, name)
+			case change == "remove" && !member(game.allowed, name):
+				return "Player is not whitelisted", true
+			case change == "remove":
+				game.allowed = remove(game.allowed, name)
+			default:
+				return "Unknown or incomplete command, see below for error", true
+			}
+			game.publishLists()
+			return map[string]string{"add": "Added ", "remove": "Removed "}[change] + name +
+				map[string]string{"add": " to the whitelist", "remove": " from the whitelist"}[change], true
+		default:
+			return "", false
+		}
+		game.publishLists()
+		return map[string]string{"ban": "Banned " + name + ": Banned by an operator", "pardon": "Unbanned " + name}[verb], true
 	})
 	query, err := fakedocker.ServeMinecraftStatus(game.status)
 	if err != nil {
 		panic(err)
 	}
-	return rcon, fmt.Sprint(query)
+	return game, rcon, fmt.Sprint(query)
 }
 
-// palworldRCON serves a Palworld RCON console and returns its port.
+// publishLists writes the game's allowlist and ban list as the server's
+// whitelist.json and banned-players.json. The caller holds g.mu.
+func (g *fakeGame) publishLists() {
+	if g.publish == nil {
+		return
+	}
+	entries := func(names []string) string {
+		list := []map[string]string{}
+		for _, name := range names {
+			list = append(list, map[string]string{"uuid": "00000000-0000-0000-0000-000000000000", "name": name})
+		}
+		encoded, _ := json.Marshal(list)
+		return string(encoded)
+	}
+	g.publish(map[string]string{"/data/whitelist.json": entries(g.allowed), "/data/banned-players.json": entries(g.banned),
+		"/data/server.properties": "motd=A Minecraft Server\nwhite-list=" + strconv.FormatBool(g.allowlistOn) + "\n"})
+}
+
+// palworldRCON serves a Palworld RCON console and returns its port. Each
+// player keeps the Steam ID they first joined with.
 func palworldRCON(password string) string {
-	return (&fakeGame{}).rcon(password, "ShowPlayers", func(online []string) string {
+	game := &fakeGame{}
+	steamID := func(name string) string {
+		index := slices.Index(game.seen, name)
+		if index < 0 {
+			game.seen, index = append(game.seen, name), len(game.seen)
+		}
+		return fmt.Sprintf("7656119800000%04d", index)
+	}
+	return game.rcon(password, "ShowPlayers", func(online []string) string {
 		list := "name,playeruid,steamid\n"
 		for index, name := range online {
-			list += fmt.Sprintf("%s,%d,7656119800000%04d\n", name, 1000000+index, index)
+			list += fmt.Sprintf("%s,%d,%s\n", name, 1000000+index, steamID(name))
 		}
 		return list
+	}, func(verb, id string) (string, bool) {
+		if verb != "KickPlayer" && verb != "BanPlayer" {
+			return "", false
+		}
+		for _, name := range game.online {
+			if steamID(name) == id {
+				game.online = slices.DeleteFunc(game.online, func(listed string) bool { return listed == name })
+				return map[string]string{"KickPlayer": "Kicked: ", "BanPlayer": "Banned: "}[verb] + name, true
+			}
+		}
+		return "Failed: no player with that ID", true
 	})
 }
 
@@ -153,6 +238,11 @@ type fakeGame struct {
 	mu                     sync.Mutex
 	online                 []string
 	outageUntil, hungUntil time.Time
+	// allowed and banned are the game's lists, and seen everyone who joined.
+	allowed, banned, seen []string
+	allowlistOn           bool
+	// publish writes files into the game's container.
+	publish func(files map[string]string)
 }
 
 func (g *fakeGame) status() (int, int, bool) {
@@ -162,16 +252,23 @@ func (g *fakeGame) status() (int, int, bool) {
 }
 
 // rcon serves an RCON console that answers the game's list command with
-// format, and returns its port. "say MESSAGE" answers with the message as
-// players see it. Besides those, it takes commands only the fake has: "fake-join NAME" and "fake-leave NAME" change who is online,
-// "fake-outage SECONDS" makes the list fail for that long, and "fake-hang
-// SECONDS" also silences the status query, as a game that hangs while its
-// container runs.
-func (g *fakeGame) rcon(password, list string, format func(online []string) string) string {
+// format, and the game's own commands with commands, and returns its port.
+// "say MESSAGE" answers with the message as players see it. Besides those,
+// it takes commands only the fake has: "fake-join NAME" and "fake-leave
+// NAME" change who is online, "fake-outage SECONDS" makes the list fail for
+// that long, and "fake-hang SECONDS" also silences the status query, as a
+// game that hangs while its container runs.
+func (g *fakeGame) rcon(password, list string, format func(online []string) string,
+	commands func(verb, argument string) (string, bool)) string {
 	port, err := fakedocker.ServeRCON(password, func(command string) string {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		verb, argument, _ := strings.Cut(command, " ")
+		if commands != nil {
+			if reply, ok := commands(verb, argument); ok {
+				return reply
+			}
+		}
 		switch verb {
 		case list:
 			if time.Now().Before(g.outageUntil) {
@@ -181,6 +278,9 @@ func (g *fakeGame) rcon(password, list string, format func(online []string) stri
 		case "say":
 			return "[Server] " + argument
 		case "fake-join":
+			if slices.Contains(g.banned, argument) {
+				return argument + " is banned"
+			}
 			if !slices.Contains(g.online, argument) {
 				g.online = append(g.online, argument)
 			}
@@ -215,7 +315,7 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		return path
 	}
 	mc := data("minecraft")
-	rcon, query := minecraftGame("dev-rcon-secret")
+	game, rcon, query := minecraftGame("dev-rcon-secret")
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server:java21", Running: true,
 		Labels: map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games", "com.docker.compose.service": "minecraft",
 			"com.docker.compose.container-number": "1", "ludock.query.port": query},
@@ -238,7 +338,11 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 2*(1<<30), 4*(1<<30), 4*(1<<30)
 		c.Stats.MemoryStats.Stats = map[string]float64{"inactive_file": 0.5 * (1 << 30)}
 		// Like the real image, which generates a password when given none.
-		c.Files = map[string]string{"/data/.rcon-cli.env": "password=dev-rcon-secret\n"}
+		c.Files = map[string]string{"/data/.rcon-cli.env": "password=dev-rcon-secret\n",
+			"/data/server.properties": "motd=A Minecraft Server\nwhite-list=false\n"}
+		game.publish = func(files map[string]string) {
+			engine.Update(id, func(c *fakedocker.Container) { maps.Copy(c.Files, files) })
+		}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21",
 			"[Server thread/INFO]: Stats plugin using dev-db-secret for postgres://stats:dev-url-secret@db/stats",
 			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
@@ -317,7 +421,16 @@ func seedDemo(engine *fakedocker.Engine, dir string) {
 
 	id, minecraft := server("minecraft", "Friends\u2019 survival world", "itzg/minecraft-server:java21", "25565/tcp", true, 3*time.Hour)
 	engine.Update(id, func(c *fakedocker.Container) {
-		rcon, query := minecraftGame("demo-rcon-secret", "Mara", "Theo")
+		game, rcon, query := minecraftGame("demo-rcon-secret", "Mara", "Theo")
+		game.allowed, game.allowlistOn, c.Files = []string{"Mara", "Theo", "Juno", "Rafi"}, true, map[string]string{}
+		game.publish = func(files map[string]string) {
+			engine.Update(id, func(c *fakedocker.Container) { maps.Copy(c.Files, files) })
+		}
+		go func() {
+			game.mu.Lock()
+			defer game.mu.Unlock()
+			game.publishLists()
+		}()
 		c.Config.Labels["ludock.query.port"] = query
 		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + rcon}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21.4",

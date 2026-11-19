@@ -46,6 +46,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}", s.authed(s.saveSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/toggle", s.authed(s.toggleSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/delete", s.authed(s.deleteSchedule))
+	m.HandleFunc("POST /servers/{id}/players/{action}", s.authed(s.playerAction))
+	m.HandleFunc("GET /fragments/servers/{id}/player-lists", s.authed(s.playerListsFragment))
 	m.HandleFunc("GET /console/{id}", s.authed(s.consolePage))
 	m.HandleFunc("GET /ws/console/{id}", s.authed(s.consoleSocket))
 	m.HandleFunc("GET /files/{id}", s.authed(s.filesPage))

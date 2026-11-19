@@ -37,6 +37,9 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	d := &views.ServerDetail{Row: s.serverRow(r, request, *view, false, snapshot.DiscoveryUnavailable), Stats: snapshot.Stats,
 		DiscoveryUnavailable: snapshot.DiscoveryUnavailable, Admin: admin, Now: db.Now()}
 	d.Row.ShowPlayers = true
+	if can(view, authz.ConsoleExecute) && d.Row.Players.Running {
+		d.Row.Players.ServerID, d.Row.Players.Moderation = view.ID, moderation(view.Container)
+	}
 	manageSchedules := can(view, authz.SchedulesManage) || (admin && view.Can(authz.ServerView))
 	d.Tabs = []views.DetailTab{{ID: "overview", Label: "Overview"}, {ID: "activity", Label: "Activity"}}
 	if admin || can(view, authz.BackupsCreate) {

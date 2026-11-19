@@ -48,6 +48,8 @@ type Adapter struct {
 	TrimSlash bool
 	// Players lists who is online, or is nil when Ludock can't.
 	Players *PlayerQuery
+	// Moderation acts on players in that list, or is nil.
+	Moderation *Moderation
 }
 
 var adapters = map[AdapterID]Adapter{
@@ -57,7 +59,7 @@ var adapters = map[AdapterID]Adapter{
 		CommandPlaceholder:    "difficulty hard, whitelist add PlayerName, say Hello",
 		Commands:              []QuickCommand{{"List players", "list"}, {"Save world", "save-all"}, {"Message players", "say "}},
 		PasswordEnvCandidates: []string{"RCON_PASSWORD"}, PasswordFile: "/data/.rcon-cli.env", TrimSlash: true,
-		Players: &PlayerQuery{Command: "list", Parse: ParseMinecraftList}},
+		Players: &PlayerQuery{Command: "list", Parse: ParseMinecraftList}, Moderation: minecraftModeration},
 	SourceRCON: {ID: SourceRCON, Name: "RCON", Transport: TransportSourceRCON, CommandPlaceholder: "status, save, broadcast Hello",
 		Commands:              []QuickCommand{},
 		PasswordEnvCandidates: []string{"RCON_PASSWORD", "ADMIN_PASSWORD", "SERVER_ADMIN_PASSWORD", "ARK_ADMIN_PASSWORD", "SRCDS_RCONPW"}},
@@ -91,7 +93,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 		// A label naming the game's own adapter keeps its player list.
 		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID &&
 			integration.Console.Players != nil {
-			adapter.Players = integration.Console.Players
+			adapter.Players, adapter.Moderation = integration.Console.Players, integration.Console.Moderation
 		}
 		return &adapter
 	}
@@ -101,7 +103,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 	preset := integration.Console
 	adapter := adapters[preset.Adapter]
 	if preset.Players != nil {
-		adapter.Players = preset.Players
+		adapter.Players, adapter.Moderation = preset.Players, preset.Moderation
 	}
 	if preset.Name != "" {
 		adapter.Name = preset.Name

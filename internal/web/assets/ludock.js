@@ -47,8 +47,8 @@
   if (window.htmx) {
     htmx.registerExtension("ludock", {
       htmx_before_morph_attr: function (elt, detail) {
-        if (detail.attrName === "hidden" && elt.matches(".server-row .action-menu__content")) return false;
-        if (detail.attrName === "aria-expanded" && elt.matches(".server-row [data-action-menu] > button")) return false;
+        if (detail.attrName === "hidden" && elt.matches(".server-row .action-menu__content, .player-menu .action-menu__content")) return false;
+        if (detail.attrName === "aria-expanded" && elt.matches(".server-row [data-action-menu] > button, .player-menu > button")) return false;
       },
       htmx_before_morph_node: function (elt, detail) {
         var incoming = detail.newNode;

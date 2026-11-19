@@ -155,6 +155,9 @@ templ detailBody(d ServerDetail) {
 				@SharingTab(d.Sharing)
 			default:
 				@OverviewLive(d)
+				if moderation := d.Row.Players.Moderation; moderation != nil && moderation.Lists != nil {
+					@PlayerListsDisclosure(server.ID)
+				}
 				if d.Admin && d.Availability != nil {
 					@AvailabilityForm(server.ID, d.Availability.Policy)
 				}

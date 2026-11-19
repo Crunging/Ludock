@@ -253,6 +253,34 @@ still show how many are online. A query gives counts only, never names: the
 names Minecraft sends are a sample that plugins often change, and Ludock
 doesn't send Valve's separate player query. The Steam count leaves out bots.
 
+#### Kicking, banning, and the allowlist
+
+Someone who can send console commands can click an online player's name on the
+server's overview to kick or ban them; a ban asks first. On Minecraft,
+**Allowlist and bans** below the overview lists who is allowed in (the game
+calls it the whitelist) and who is banned, adds and removes allowed players by
+name, and lifts bans. Whether the allowlist is on is the server's own
+`white-list` setting, which Ludock shows but never changes.
+
+| Game | Kick | Ban | Allowlist and ban list | Player is named by |
+| --- | --- | --- | --- | --- |
+| Minecraft | `kick` | `ban` | `whitelist add`, `whitelist remove`, `pardon` | Name: letters, digits, `_`, up to 16 |
+| Factorio | `/kick` | `/ban` | | Name: letters, digits, `.`, `_`, `-`, up to 60 |
+| Palworld | `KickPlayer` | `BanPlayer` | | The Steam ID `ShowPlayers` lists |
+| ARK: Survival Evolved and Survival Ascended | `KickPlayer` | `BanPlayer` | | The Steam or EOS ID `ListPlayers` lists |
+| 7 Days to Die | `kick` | | | The entity ID `listplayers` lists |
+
+Each action is one console command with the same access, checks, and audit as
+a typed one; the audit log records who did what to which player. Ludock sends a
+name or ID only when it is wholly in the game's own form, so it can't carry
+spaces, quotes, line breaks, or a selector such as `@a`, and refuses anything
+else. Project Zomboid and Conan Exiles get no actions: Zomboid's names can hold
+spaces its commands need quoted, and Conan's kick takes a row number that can
+change between readings. 7 Days to Die bans need a length, so they stay in the
+console. Ludock reads Minecraft's lists from `whitelist.json`,
+`banned-players.json`, and `server.properties` in `/data`, where the itzg image
+keeps them.
+
 ## Files
 
 Writable bind mounts and local named volumes that are safe to expose become file
