@@ -8,6 +8,8 @@ import (
 
 // LinkForm is the page an invite or reset link opens.
 type LinkForm struct {
+	// Key ties the form to the link it was opened from.
+	Key       string
 	Username  string
 	Purpose   db.LinkPurpose
 	ExpiresAt int64
@@ -36,6 +38,7 @@ templ LinkPage(form LinkForm) {
 						Choose a new password for <strong>{ form.Username }</strong>. This signs the account out everywhere else.
 					}
 				</p>
+				<input type="hidden" name="link" value={ form.Key }/>
 				<input type="text" name="username" value={ form.Username } autocomplete="username" hidden/>
 				<label class="login-card__label" for="password">New password</label>
 				<input id="password" name="password" class="login-card__input" type="password" data-password autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" aria-describedby="password-hint" required autofocus/>

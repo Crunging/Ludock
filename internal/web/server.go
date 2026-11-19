@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -127,7 +128,7 @@ func (r *statusRecorder) Flush() {
 
 // loggedPath is the request path for logs, with a link's token left out.
 func loggedPath(r *http.Request) string {
-	if strings.HasPrefix(r.URL.Path, "/link/") {
+	if strings.HasPrefix(path.Clean(r.URL.Path), "/link/") {
 		return "/link/{token}"
 	}
 	return r.URL.Path

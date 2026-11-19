@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
 
@@ -33,14 +34,19 @@ func (s *Server) openLink(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/link", http.StatusSeeOther)
 }
 
+// linkFormKey ties a link's form to the link it was opened from. The cookie
+// holds only the latest link a browser opened, so a form left open in
+// another tab must not set the password of a different account.
+func linkFormKey(token string) string { return auth.HashToken("ludock:link-form:v1:" + token) }
+
 func (s *Server) linkPage(w http.ResponseWriter, r *http.Request) {
 	link, err := s.Auth.OpenLink(r.Context(), auth.LinkToken(r), s.client(r))
 	if err != nil {
 		s.renderLink(w, r, views.LinkForm{}, err)
 		return
 	}
-	render(w, r, http.StatusOK, views.LinkPage(views.LinkForm{Username: link.Username, Purpose: link.Purpose,
-		ExpiresAt: link.ExpiresAt, TwoFactor: link.TwoFactor}))
+	render(w, r, http.StatusOK, views.LinkPage(views.LinkForm{Key: linkFormKey(auth.LinkToken(r)), Username: link.Username,
+		Purpose: link.Purpose, ExpiresAt: link.ExpiresAt, TwoFactor: link.TwoFactor}))
 }
 
 // renderLink shows the form again with err, or the one neutral answer for
@@ -69,12 +75,16 @@ func (s *Server) useLink(w http.ResponseWriter, r *http.Request) {
 		s.renderLink(w, r, views.LinkForm{}, err)
 		return
 	}
+	if token != "" && subtle.ConstantTimeCompare([]byte(r.PostFormValue("link")), []byte(linkFormKey(token))) != 1 {
+		s.renderLink(w, r, views.LinkForm{}, apperr.New("LINK_CHANGED", 409, "You opened another link in this browser. Open the link you want to use again."))
+		return
+	}
 	link, err := s.Auth.OpenLink(r.Context(), token, s.client(r))
 	if err != nil {
 		s.renderLink(w, r, views.LinkForm{}, err)
 		return
 	}
-	form := views.LinkForm{Username: link.Username, Purpose: link.Purpose, ExpiresAt: link.ExpiresAt, TwoFactor: link.TwoFactor}
+	form := views.LinkForm{Key: linkFormKey(token), Username: link.Username, Purpose: link.Purpose, ExpiresAt: link.ExpiresAt, TwoFactor: link.TwoFactor}
 	password := r.PostFormValue("password")
 	if password != r.PostFormValue("confirmation") {
 		form.ConfirmationError = true

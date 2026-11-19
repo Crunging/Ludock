@@ -235,3 +235,15 @@ func TestUseAccountLinkCommitsOnce(t *testing.T) {
 		t.Fatal("commits:", committed)
 	}
 }
+
+// An invited administrator who hasn't chosen a password doesn't count as
+// another administrator, so the only one who can sign in can't step down.
+func TestInvitedAdminIsNotAnotherAdmin(t *testing.T) {
+	s, _, admin := linkService(t)
+	if _, _, err := s.InviteUser(ctx, admin, "next-admin", db.RoleAdmin, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAccess(ctx, admin, adminID, db.RoleViewer, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+		t.Fatal(err)
+	}
+}

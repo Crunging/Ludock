@@ -675,7 +675,7 @@ func (s *Service) adminHash(principal *Principal, client Client, password string
 // CreateUser creates an account with a password the administrator chose.
 func (s *Service) CreateUser(ctx context.Context, principal *Principal, username, password string, role db.Role, client Client) (*db.User, error) {
 	if !ValidPassword(password) {
-		return nil, apperr.New("INVALID_REQUEST", 400, "Invalid user details")
+		return nil, apperr.Newf("INVALID_REQUEST", 400, "Password must be at least %d characters", PasswordMin)
 	}
 	return s.createUser(ctx, principal, username, password, role, client, nil)
 }

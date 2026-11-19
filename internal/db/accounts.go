@@ -697,20 +697,23 @@ func (d *DB) AdminMutation(ctx context.Context, adminID, tokenHash string, now i
 var ErrNotAdmin = errors.New("administrator permission required")
 
 // RemovesLastAdmin reports whether changing target would leave no enabled
-// administrator.
+// administrator who can sign in. Invited administrators without a password
+// don't count: their link may never be used.
 func RemovesLastAdmin(ctx context.Context, tx *sql.Tx, targetID string, role Role, disabled bool) (bool, error) {
 	var currentRole string
 	var currentDisabled int
-	if err := tx.QueryRowContext(ctx, "SELECT role, disabled FROM users WHERE id = ?", targetID).Scan(&currentRole, &currentDisabled); err != nil {
+	var hasPassword bool
+	if err := tx.QueryRowContext(ctx, "SELECT role, disabled, password_hash != '' FROM users WHERE id = ?", targetID).
+		Scan(&currentRole, &currentDisabled, &hasPassword); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, ErrUserNotFound
 		}
 		return false, err
 	}
-	if Role(currentRole) != RoleAdmin || currentDisabled == 1 || (role == RoleAdmin && !disabled) {
+	if Role(currentRole) != RoleAdmin || currentDisabled == 1 || !hasPassword || (role == RoleAdmin && !disabled) {
 		return false, nil
 	}
 	var count int
-	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0").Scan(&count)
+	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND password_hash != ''").Scan(&count)
 	return count <= 1, err
 }

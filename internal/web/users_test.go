@@ -129,3 +129,32 @@ func TestOpeningALinkHidesItsToken(t *testing.T) {
 		t.Fatal(unknown.Code, unknown.Body.String())
 	}
 }
+
+// A link form left open in one tab can't set a password once the browser
+// opened another link, which replaced the cookie.
+func TestLinkFormBelongsToItsLink(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	first := p.user("u-first", "first", db.RoleViewer)
+	second := p.user("u-second", "second", db.RoleViewer)
+	firstLink, _ := p.app.Auth.CreateLink(context.Background(), p.admin, first.User.ID, auth.Client{})
+	secondLink, _ := p.app.Auth.CreateLink(context.Background(), p.admin, second.User.ID, auth.Client{})
+	submit := func(key string) *httptest.ResponseRecorder {
+		form := url.Values{"link": {key}, "password": {"a new long password"}, "confirmation": {"a new long password"}}
+		request := httptest.NewRequest("POST", "http://panel.example/link", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(&http.Cookie{Name: auth.LinkCookie, Value: secondLink.Token})
+		response := httptest.NewRecorder()
+		p.handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := submit(linkFormKey(firstLink.Token)); response.Code != http.StatusConflict {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if response := submit(linkFormKey(secondLink.Token)); response.Code != http.StatusSeeOther {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if _, err := p.app.Auth.Login(context.Background(), "first", "a new long password", auth.Client{}); err == nil {
+		t.Fatal("first account's password changed")
+	}
+}

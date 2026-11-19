@@ -91,7 +91,9 @@ templ UsersContent(u UsersView) {
 				</label>
 				<label data-shown-when="access=password" hidden?={ !u.DraftPassword }>
 					<span>Initial password</span>
-					<input type="password" name="password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" autocomplete="new-password" aria-describedby="create-user-access-help"/>
+					// No minlength: the field stays in the form while hidden, and a
+					// partial password would block an invite.
+					<input type="password" name="password" maxlength="128" autocomplete="new-password" aria-describedby="create-user-access-help"/>
 				</label>
 				<button class="primary-btn" type="submit" data-busy-label="Creating…">Create user</button>
 			</div>
