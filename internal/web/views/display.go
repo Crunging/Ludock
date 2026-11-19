@@ -2,11 +2,13 @@ package views
 
 import (
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/datasize"
+	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -211,3 +213,24 @@ func Since(state string, since int64) (string, bool) {
 }
 
 func FormatBytes(bytes int64) string { return datasize.Format(bytes) }
+
+// GameChoices are the games an administrator can pick for a server, by
+// name, then "Other game".
+func GameChoices() []GameChoice {
+	choices := make([]GameChoice, 0, len(games.Integrations)+1)
+	for _, game := range games.Integrations {
+		choices = append(choices, GameChoice{game.GameType, game.Name})
+	}
+	slices.SortFunc(choices, func(a, b GameChoice) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	return append(choices, GameChoice{"unknown", games.DisplayName("unknown")})
+}
+
+// portList is the published ports players would use, such as
+// "2456/udp, 2457/udp".
+func portList(ports []servers.Port) string {
+	parts := make([]string, len(ports))
+	for index, port := range ports {
+		parts[index] = strconv.Itoa(port.Public) + "/" + port.Type
+	}
+	return strings.Join(parts, ", ")
+}

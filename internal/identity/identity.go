@@ -263,14 +263,27 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func listServers(ctx context.Context, q queryer, hostID string) ([]Server, error) {
-	query := "SELECT " + serverColumns + " FROM logical_servers ORDER BY display_name COLLATE NOCASE, id"
+// removedServer matches a server an administrator removed in the panel whose
+// container has since left discovery.
+const removedServer = `status = 'missing' AND EXISTS (SELECT 1 FROM settings
+  WHERE key = '` + choicePrefix + `' || external_identity AND json_extract(value_json, '$.managed') = 0)`
+
+// listServers lists a host's servers, or every host's when hostID is "".
+// Servers removed in the panel are left out unless withRemoved.
+func listServers(ctx context.Context, q queryer, hostID string, withRemoved bool) ([]Server, error) {
+	var conditions []string
 	var args []any
 	if hostID != "" {
-		query = "SELECT " + serverColumns + " FROM logical_servers WHERE host_id = ? ORDER BY display_name COLLATE NOCASE, id"
-		args = append(args, hostID)
+		conditions, args = append(conditions, "host_id = ?"), append(args, hostID)
 	}
-	rows, err := q.QueryContext(ctx, query, args...)
+	if !withRemoved {
+		conditions = append(conditions, "NOT ("+removedServer+")")
+	}
+	query := "SELECT " + serverColumns + " FROM logical_servers"
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	rows, err := q.QueryContext(ctx, query+" ORDER BY display_name COLLATE NOCASE, id", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -286,9 +299,10 @@ func listServers(ctx context.Context, q queryer, hostID string) ([]Server, error
 	return servers, rows.Err()
 }
 
-// List lists logical servers, optionally for one host.
+// List lists logical servers, optionally for one host. Servers an
+// administrator removed are left out; Get still finds them.
 func (s *Store) List(ctx context.Context, hostID string) ([]Server, error) {
-	return listServers(ctx, s.DB, hostID)
+	return listServers(ctx, s.DB, hostID, false)
 }
 
 // Get returns a logical server or nil.
@@ -403,7 +417,7 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 		}
 	}
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		existing, err := listServers(ctx, tx, hostID)
+		existing, err := listServers(ctx, tx, hostID, true)
 		if err != nil {
 			return err
 		}

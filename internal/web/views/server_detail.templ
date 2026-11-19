@@ -157,6 +157,9 @@ templ detailBody(d ServerDetail) {
 				} else if d.Availability != nil {
 					<p class="muted">Ask an administrator to investigate availability problems or change monitoring settings.</p>
 				}
+				if d.Admin {
+					@RemoveServer(server)
+				}
 		}
 	</section>
 }
@@ -872,4 +875,29 @@ func ActorLabel(actor *history.Actor) string {
 		return "User " + actor.ID + " (name unavailable)"
 	}
 	return "Not recorded"
+}
+
+// RemoveServer takes a server out of Ludock (administrators only).
+templ RemoveServer(server servers.View) {
+	<section class="stack-form remove-server" aria-labelledby="remove-server-title">
+		<h2 id="remove-server-title">Remove from Ludock</h2>
+		if server.Source == servers.SourceLabel {
+			<p class="muted">Its <code>ludock.enable: "true"</code> label keeps this server in Ludock. Remove the label where the container is defined to take it out.</p>
+		} else {
+			<p class="muted">Ludock stops managing this server. Nothing changes in Docker, and its sharing, schedules, and backups come back if you add it again from the server list.</p>
+			<div>
+				<button
+					type="button"
+					class="secondary-btn secondary-btn--danger"
+					hx-post={ "/servers/" + server.ID + "/remove" }
+					hx-target="#remove-server-result"
+					hx-confirm={ "Remove " + server.DisplayName + " from Ludock?" }
+					data-confirm-detail="The container keeps running as it is. You can add it again from the server list."
+					data-confirm-action="Remove server"
+					data-busy-label="Removing…"
+				>Remove from Ludock</button>
+			</div>
+		}
+		<div id="remove-server-result" aria-live="polite"></div>
+	</section>
 }
