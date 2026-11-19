@@ -730,6 +730,13 @@ func (s *Service) createUser(ctx context.Context, principal *Principal, username
 }
 
 func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id string, role db.Role, disabled bool, client Client) (*db.User, error) {
+	return s.ChangeAccess(ctx, principal, id, role, &disabled, client)
+}
+
+// ChangeAccess changes an account's role, its disabled flag, or both; an
+// empty role or nil disabled keeps the current value, read in the same
+// transaction, so a stale page changes only what it names.
+func (s *Service) ChangeAccess(ctx context.Context, principal *Principal, id string, role db.Role, change *bool, client Client) (*db.User, error) {
 	if err := RequireAdmin(principal); err != nil {
 		return nil, err
 	}
@@ -740,10 +747,24 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 	if target == nil {
 		return nil, errUserNotFound
 	}
-	if !db.ValidRole(string(role)) {
+	if (role != "" && !db.ValidRole(string(role))) || (role == "" && change == nil) {
 		return nil, apperr.New("INVALID_REQUEST", 400, "Invalid access settings")
 	}
+	var disabled bool
 	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT role, disabled FROM users WHERE id = ?", id).Scan(&current, &disabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return db.ErrUserNotFound
+			}
+			return err
+		}
+		if role == "" {
+			role = db.Role(current)
+		}
+		if change != nil {
+			disabled = *change
+		}
 		last, err := db.RemovesLastAdmin(ctx, tx, id, role, disabled)
 		if err != nil {
 			return err
@@ -754,6 +775,13 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 		if _, err := tx.ExecContext(ctx, "UPDATE users SET role = ?, disabled = ?, updated_at = ? WHERE id = ?",
 			string(role), boolInt(disabled), s.Now(), id); err != nil {
 			return err
+		}
+		// Administrators use every server, so their shares are dropped: one
+		// made a member again starts with nothing shared.
+		if role == db.RoleAdmin {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ?", id); err != nil {
+				return err
+			}
 		}
 		if disabled {
 			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?",
@@ -802,7 +830,7 @@ func (s *Service) DeleteUser(ctx context.Context, principal *Principal, id strin
 		return apperr.New("SELF_DELETE", 409, "You cannot delete your own account")
 	}
 	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
-		last, err := db.RemovesLastAdmin(ctx, tx, id, db.RoleViewer, true)
+		last, err := db.RemovesLastAdmin(ctx, tx, id, db.RoleMember, true)
 		if err != nil {
 			return err
 		}

@@ -16,7 +16,7 @@ import (
 func TestRevokeSessions(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	phone, _ := p.app.Auth.Login(context.Background(), "operator", "password-u-operator", auth.Client{IP: "192.0.2.7", UserAgent: "Phone"})
 	sessions, _ := p.app.Auth.Sessions(context.Background(), phone)
 	var phoneID string

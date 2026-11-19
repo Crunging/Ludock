@@ -48,6 +48,9 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	if admin || can(view, authz.ServerRestart) {
 		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"})
 	}
+	if admin {
+		d.Tabs = append(d.Tabs, views.DetailTab{ID: "sharing", Label: "Sharing"})
+	}
 	d.Tab = "overview"
 	if slices.ContainsFunc(d.Tabs, func(item views.DetailTab) bool { return item.ID == tab }) {
 		d.Tab = tab
@@ -134,7 +137,7 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 	return a
 }
 
-var detailTabs = []string{"activity", "backups", "schedules", "update"}
+var detailTabs = []string{"activity", "backups", "schedules", "update", "sharing"}
 
 func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *Request) {
 	tab := r.URL.Query().Get("tab")
@@ -160,6 +163,8 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 			d.Schedules = s.schedulesView(r, request, d)
 		case "update":
 			d.Recreate = r.URL.Query().Get("recreate") == "1"
+		case "sharing":
+			d.Sharing, err = s.sharingView(r, request, d.Row.Server.ID)
 		case "overview":
 			if err = s.overview(r, request, d); err == nil {
 				d.Resources, err = s.App.Resources.History(r.Context(), request.User(), d.Row.Server.ID,

@@ -1,0 +1,205 @@
+package views
+
+import (
+	"slices"
+
+	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/db"
+)
+
+// SharingView is a server's Sharing tab: who may use it, and the form to
+// share it with someone else.
+type SharingView struct {
+	ServerID, ServerName string
+	Paused               bool
+	Shares               []authz.Share
+	// People are enabled members it isn't shared with yet.
+	People        []db.User
+	Error, Notice string
+	// Link is a new person's invite link, shown this once.
+	Link *LinkResult
+	// Draft keeps the share form's choices after an error.
+	DraftPerson, DraftName string
+	DraftLevel             authz.Level
+	DraftCustom            []authz.Capability
+}
+
+var levelNames = map[authz.Level]string{authz.LevelSee: "Can see it", authz.LevelRun: "Can run it",
+	authz.LevelFull: "Full access", authz.LevelCustom: "Custom"}
+
+var levelHelp = map[authz.Level]string{
+	authz.LevelSee:    "Whether it’s running, who is online, and the address to join.",
+	authz.LevelRun:    "Also start, stop, and restart it, use its game console, and read its logs.",
+	authz.LevelFull:   "Also change its files, make backups, and set up their own schedules.",
+	authz.LevelCustom: "Choose exactly what they can do.",
+}
+
+// LevelName is a level as people read it.
+func LevelName(level authz.Level) string { return levelNames[level] }
+
+var capabilityLabels = []struct {
+	Value authz.Capability
+	Label string
+}{{authz.ServerView, "See the server"}, {authz.ServerStart, "Start"}, {authz.ServerStop, "Stop"}, {authz.ServerRestart, "Restart"},
+	{authz.LogsRead, "Read logs"}, {authz.ConsoleExecute, "Send console commands"}, {authz.FilesRead, "Read and download files"},
+	{authz.FilesWrite, "Change files"}, {authz.BackupsCreate, "Create backups"}, {authz.SchedulesManage, "Set up their own schedules"}}
+
+// ShareCapabilities reads a submitted level, or a custom choice of
+// capabilities. Seeing the server comes with any of them, and changing files
+// with reading them. ok is false for a level the form doesn't offer.
+func ShareCapabilities(level authz.Level, custom []string) (capabilities []authz.Capability, ok bool) {
+	if level != authz.LevelCustom {
+		return level.Capabilities(), slices.Contains(authz.Levels, level)
+	}
+	selected := map[authz.Capability]bool{}
+	for _, value := range custom {
+		selected[authz.Capability(value)] = true
+	}
+	if len(selected) > 0 {
+		selected[authz.ServerView] = true
+	}
+	if selected[authz.FilesWrite] {
+		selected[authz.FilesRead] = true
+	}
+	for _, capability := range authz.All {
+		if selected[capability] {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	// Anything else is refused when saved.
+	for value := range selected {
+		if !slices.Contains(capabilities, value) {
+			capabilities = append(capabilities, value)
+		}
+	}
+	return capabilities, len(capabilities) > 0
+}
+
+func (v SharingView) draftLevel() authz.Level {
+	if v.DraftLevel == "" {
+		return authz.LevelRun
+	}
+	return v.DraftLevel
+}
+
+templ SharingTab(v SharingView) {
+	<h2>Sharing</h2>
+	<p class="section-lede">Choose who else can use this server. Administrators can always use every server; nobody else sees it until you share it.</p>
+	@SharingContent(v)
+}
+
+// SharingContent is replaced after every change.
+templ SharingContent(v SharingView) {
+	<div id="sharing" class="sharing">
+		if v.Error != "" {
+			@Alert("error", v.Error)
+		}
+		if v.Notice != "" {
+			@Alert("success", v.Notice)
+		}
+		if v.Link != nil {
+			@linkResult(*v.Link)
+		}
+		if v.Paused && len(v.Shares) > 0 {
+			<p class="section-note">Shared access is paused until you confirm the change in Docker above.</p>
+		}
+		if len(v.Shares) == 0 {
+			<p class="section-note">Not shared with anyone yet.</p>
+		} else {
+			<ul class="share-list" aria-label={ "People " + v.ServerName + " is shared with" }>
+				for _, share := range v.Shares {
+					@shareRow(v, share)
+				}
+			</ul>
+		}
+		@shareForm(v)
+	</div>
+}
+
+templ shareRow(v SharingView, share authz.Share) {
+	<li class="share-row">
+		<div class="share-row__who">
+			<strong>{ share.Username }</strong>
+			if share.Disabled {
+				<span class="user-row__disabled">Disabled</span>
+			}
+		</div>
+		<form class="share-row__form" hx-post={ "/servers/" + v.ServerID + "/sharing/" + share.UserID } hx-target="#sharing" hx-swap="outerHTML">
+			@levelChoice("share-"+share.UserID, "Access for "+share.Username, share.Level, share.Capabilities, false)
+			<div class="inline-actions">
+				<button class="secondary-btn" type="submit" data-busy-label="Saving…">Save</button>
+				<button
+					class="secondary-btn secondary-btn--danger"
+					type="button"
+					hx-post={ "/servers/" + v.ServerID + "/sharing/" + share.UserID }
+					hx-vals={ `{"level":"none"}` }
+					hx-target="#sharing"
+					hx-swap="outerHTML"
+					hx-confirm={ "Stop sharing " + v.ServerName + " with " + share.Username + "?" }
+					data-confirm-detail="They lose access right away, including any console or log they have open, and their schedules for it stop."
+					data-confirm-action="Stop sharing"
+					data-confirm-danger
+				>Stop sharing</button>
+			</div>
+		</form>
+	</li>
+}
+
+templ shareForm(v SharingView) {
+	<form class="settings-card share-form" hx-post={ "/servers/" + v.ServerID + "/sharing" } hx-target="#sharing" hx-swap="outerHTML">
+		<h3>Share with someone</h3>
+		<div class="form-grid">
+			if len(v.People) > 0 {
+				<label>
+					<span>Person</span>
+					<select name="person">
+						for _, person := range v.People {
+							<option value={ person.ID } selected?={ v.DraftPerson == person.ID }>{ person.Username }</option>
+						}
+						<option value="new" selected?={ v.DraftPerson == "new" }>Someone new…</option>
+					</select>
+				</label>
+			} else {
+				<input type="hidden" name="person" value="new"/>
+			}
+			<label data-shown-when="person=new" hidden?={ len(v.People) > 0 && v.DraftPerson != "new" }>
+				<span>Their username</span>
+				<input name="username" value={ v.DraftName } minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="share-username-help"/>
+			</label>
+		</div>
+		@levelChoice("share-new", "Access", v.draftLevel(), v.DraftCustom, true)
+		<p id="share-username-help" class="muted" data-shown-when="person=new" hidden?={ len(v.People) > 0 && v.DraftPerson != "new" }>
+			Ludock makes their account and a one-time link for you to send them. They choose their own password with it.
+		</p>
+		<div>
+			<button class="primary-btn" type="submit" data-busy-label="Sharing…">Share</button>
+		</div>
+	</form>
+}
+
+// levelChoice picks a level, with each capability under Custom.
+templ levelChoice(id, label string, level authz.Level, capabilities []authz.Capability, help bool) {
+	<label class="share-level">
+		<span>{ label }</span>
+		<select name="level" aria-describedby={ id + "-help" }>
+			for _, option := range append(slices.Clone(authz.Levels), authz.LevelCustom) {
+				<option value={ string(option) } selected?={ option == level }>{ levelNames[option] }</option>
+			}
+		</select>
+	</label>
+	<p id={ id + "-help" } class={ "muted share-level__help", templ.KV("sr-only", !help) }>
+		for _, option := range append(slices.Clone(authz.Levels), authz.LevelCustom) {
+			<span data-shown-when={ "level=" + string(option) } hidden?={ option != level }>{ levelHelp[option] }</span>
+		}
+	</p>
+	<fieldset class="share-custom" data-custom-access data-shown-when="level=custom" hidden?={ level != authz.LevelCustom }>
+		<legend class="sr-only">{ label }: custom</legend>
+		for _, capability := range capabilityLabels {
+			<label>
+				<input type="checkbox" name="capability" value={ string(capability.Value) } checked?={ slices.Contains(capabilities, capability.Value) }/>
+				{ capability.Label }
+			</label>
+		}
+		<p class="muted share-custom__note">Creating backups stops a running server for the copy. Restoring, downloading, and deleting backups, updating, and the container shell stay with administrators.</p>
+	</fieldset>
+}

@@ -255,7 +255,7 @@ func TestResetTwoFactorNeedsAnotherAdmin(t *testing.T) {
 	s, c, _ := newService(t, nil)
 	c.now = 1_700_000_000_000
 	addUser(t, s, adminID, "admin", db.RoleAdmin, "correct horse battery staple")
-	addUser(t, s, "u-operator", "operator", db.RoleOperator, "operator long password")
+	addUser(t, s, "u-operator", "operator", db.RoleMember, "operator long password")
 	addUser(t, s, "u-admin2", "admin2", db.RoleAdmin, "second admin password")
 	secret, _ := enrolled(t, s, c)
 	operator, err := s.Login(ctx, "operator", "operator long password", Client{})

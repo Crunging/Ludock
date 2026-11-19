@@ -365,8 +365,8 @@ func TestHashUpgradeDoesNotOverwriteReset(t *testing.T) {
 
 func TestLoginReturnsCurrentRole(t *testing.T) {
 	s, h, _ := racingService(t)
-	h.beforeVerify = func() { s.DB.UpdateUserAccess(ctx, adminID, db.RoleViewer, false) }
-	if user, _ := s.Authenticate(ctx, "admin", original); user == nil || user.Role != db.RoleViewer {
+	h.beforeVerify = func() { s.DB.UpdateUserAccess(ctx, adminID, db.RoleMember, false) }
+	if user, _ := s.Authenticate(ctx, "admin", original); user == nil || user.Role != db.RoleMember {
 		t.Fatal(user)
 	}
 }
@@ -380,7 +380,7 @@ func TestAdminChangesAfterDemotion(t *testing.T) {
 		s, h, principal := racingService(t)
 		h.beforeHash = func() {
 			if c.change == "demote" {
-				s.DB.UpdateUserAccess(ctx, adminID, db.RoleViewer, false)
+				s.DB.UpdateUserAccess(ctx, adminID, db.RoleMember, false)
 			} else {
 				s.DB.DeleteUserSessions(ctx, adminID)
 			}
@@ -449,7 +449,7 @@ func TestLastAdminIsProtected(t *testing.T) {
 	if err := s.DeleteUser(ctx, principal, adminID, Client{}); !apperr.Is(err, "SELF_DELETE") {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleViewer, false, Client{}); err != nil {
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.UpdateAccess(ctx, principal, adminID, db.RoleAdmin, true, Client{}); !apperr.Is(err, "LAST_ADMIN") {
@@ -458,7 +458,60 @@ func TestLastAdminIsProtected(t *testing.T) {
 	if err := s.DeleteUser(ctx, principal, targetID, Client{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateUser(ctx, principal, "Admin", "new-password-123", db.RoleViewer, Client{}); !apperr.Is(err, "USERNAME_TAKEN") {
+	if _, err := s.CreateUser(ctx, principal, "Admin", "new-password-123", db.RoleMember, Client{}); !apperr.Is(err, "USERNAME_TAKEN") {
+		t.Fatal(err)
+	}
+}
+
+// A member made an administrator and back starts with nothing shared, so a
+// share from before can't come back unnoticed.
+func TestAdministratorAndBackStartsWithNothingShared(t *testing.T) {
+	s, _, principal := racingService(t)
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
+		`INSERT INTO server_grants VALUES('` + targetID + `','s','["server.view","server.start"]',1)`} {
+		if _, err := s.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleAdmin, false, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	if grants, err := s.Authz.UserGrants(ctx, targetID); err != nil || len(grants) != 0 {
+		t.Fatal(grants, err)
+	}
+	if _, err := s.UpdateAccess(ctx, principal, adminID, db.RoleMember, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAccess(ctx, principal, targetID, "operator", false, Client{}); !apperr.Is(err, "INVALID_REQUEST") {
+		t.Fatal(err)
+	}
+}
+
+// A role change from a page opened before the account was disabled leaves
+// it disabled, and enabling it from a page opened before a role change keeps
+// the new role.
+func TestAccessChangesOnlyWhatTheyName(t *testing.T) {
+	s, _, principal := racingService(t)
+	disable, enable := true, false
+	if _, err := s.ChangeAccess(ctx, principal, targetID, db.RoleMember, &disable, Client{}); err != nil {
+		t.Fatal(err)
+	}
+	user, err := s.ChangeAccess(ctx, principal, targetID, db.RoleAdmin, nil, Client{})
+	if err != nil || user.Role != db.RoleAdmin || !user.Disabled {
+		t.Fatal(user, err)
+	}
+	if user, err = s.ChangeAccess(ctx, principal, targetID, "", &enable, Client{}); err != nil || user.Role != db.RoleAdmin || user.Disabled {
+		t.Fatal(user, err)
+	}
+	if _, err := s.ChangeAccess(ctx, principal, targetID, "", nil, Client{}); !apperr.Is(err, "INVALID_REQUEST") {
 		t.Fatal(err)
 	}
 }
@@ -533,10 +586,10 @@ func TestUserDeletedAfterChange(t *testing.T) {
 		}
 	}
 	client := Client{IP: "127.0.0.1"}
-	if _, err := s.CreateUser(ctx, principal, "newcomer", "a long enough password", db.RoleViewer, client); !apperr.Is(err, "USER_NOT_FOUND") {
+	if _, err := s.CreateUser(ctx, principal, "newcomer", "a long enough password", db.RoleMember, client); !apperr.Is(err, "USER_NOT_FOUND") {
 		t.Fatal("create", err)
 	}
-	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleViewer, false, client); !apperr.Is(err, "USER_NOT_FOUND") {
+	if _, err := s.UpdateAccess(ctx, principal, targetID, db.RoleMember, false, client); !apperr.Is(err, "USER_NOT_FOUND") {
 		t.Fatal("update", err)
 	}
 }

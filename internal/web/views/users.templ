@@ -1,9 +1,7 @@
 package views
 
 import (
-	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
@@ -19,10 +17,16 @@ type UsersView struct {
 	DraftRole db.Role
 	// DraftPassword keeps "Set a password now" chosen after an error.
 	DraftPassword bool
-	// OpenGrants opens a user's server access after creation.
-	OpenGrants string
+	// Reach lists the servers shared with each member.
+	Reach map[string][]Reach
 	// Link is a link just made, shown this once.
 	Link *LinkResult
+}
+
+// Reach is one server shared with a member.
+type Reach struct {
+	ServerID, Name string
+	Level          authz.Level
 }
 
 // LinkResult is a new invite or reset link for the administrator to send.
@@ -40,22 +44,21 @@ func (l LinkResult) noun() string {
 }
 
 var roleHelp = map[db.Role]string{
-	db.RoleAdmin:    "Administrators can manage all servers, users, and settings.",
-	db.RoleOperator: "Operators can use only the servers and actions you share with them.",
-	db.RoleViewer:   "Viewers can check status and read the logs or files you share with them.",
+	db.RoleAdmin:  "Administrators can use every server and change users and settings.",
+	db.RoleMember: "Members use only the servers you share with them, from each server’s Sharing tab.",
 }
 
 var roles = []struct {
 	Value db.Role
 	Label string
-}{{db.RoleAdmin, "Admin"}, {db.RoleOperator, "Operator"}, {db.RoleViewer, "Viewer"}}
+}{{db.RoleMember, "Member"}, {db.RoleAdmin, "Administrator"}}
 
 templ UsersPage(page Page, u UsersView) {
 	@Shell(page) {
 		<div class="page users-page">
 			<div class="page__header">
 				<h1 class="page__title">Users</h1>
-				<p class="page__subtitle">Create accounts, then share specific servers and actions. New operators and viewers have no server access.</p>
+				<p class="page__subtitle">Everyone who can sign in, and what each can use. To share a server, open it and choose Sharing.</p>
 			</div>
 			@UsersContent(u)
 		</div>
@@ -75,14 +78,14 @@ templ UsersContent(u UsersView) {
 			@linkResult(*u.Link)
 		}
 		<form class="settings-card create-user" hx-post="/users" hx-target="#users" hx-swap="outerHTML">
-			<h2>Create user</h2>
+			<h2>Add a person</h2>
 			<div class="form-grid">
 				<label>
 					<span>Username</span>
 					<input name="username" value={ u.DraftName } minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="create-user-username-help" required/>
 				</label>
 				<label>
-					<span>Role</span>
+					<span>Account</span>
 					<select name="role" aria-describedby="create-user-role-help" id="create-user-role">
 						for _, role := range roles {
 							<option value={ string(role.Value) } selected?={ draftRole(u) == role.Value }>{ role.Label }</option>
@@ -114,9 +117,6 @@ templ UsersContent(u UsersView) {
 					for _, role := range roles {
 						<span data-shown-when={ "role=" + string(role.Value) } hidden?={ draftRole(u) != role.Value }>
 							{ roleHelp[role.Value] }
-							if role.Value != db.RoleAdmin {
-								Choose their server access after creating the account.
-							}
 						</span>
 					}
 				</p>
@@ -140,7 +140,7 @@ templ UsersContent(u UsersView) {
 
 func draftRole(u UsersView) db.Role {
 	if u.DraftRole == "" {
-		return db.RoleOperator
+		return db.RoleMember
 	}
 	return u.DraftRole
 }
@@ -162,17 +162,19 @@ templ userRow(u UsersView, user db.User) {
 				}
 			</span>
 		</div>
-		<form hx-post={ "/users/" + user.ID + "/access" } hx-target="#users" hx-swap="outerHTML" hx-trigger="change">
-			<input type="hidden" name="disabled" value={ strconv.FormatBool(user.Disabled) }/>
-			<label>
-				<span>Role</span>
-				<select name="role" aria-label={ "Role for " + user.Username } disabled?={ user.Disabled }>
-					for _, role := range roles {
-						<option value={ string(role.Value) } selected?={ user.Role == role.Value }>{ role.Label }</option>
+		<div class="user-row__reach">
+			if user.Role == db.RoleAdmin {
+				<span>Administrator · every server and setting</span>
+			} else if len(u.Reach[user.ID]) == 0 {
+				<span class="muted">Nothing shared yet</span>
+			} else {
+				<ul aria-label={ "Servers shared with " + user.Username }>
+					for _, reach := range u.Reach[user.ID] {
+						<li><a href={ "/servers/" + reach.ServerID + "?tab=sharing" }>{ reach.Name }</a> <span class="muted">{ LevelName(reach.Level) }</span></li>
 					}
-				</select>
-			</label>
-		</form>
+				</ul>
+			}
+		</div>
 		<button class="secondary-btn" type="button" hx-post={ "/users/" + user.ID + "/access" } hx-vals={ accessValues(user) } hx-target="#users" hx-swap="outerHTML" data-busy-label="Working…">
 			if user.Disabled {
 				Enable
@@ -180,10 +182,32 @@ templ userRow(u UsersView, user db.User) {
 				Disable
 			}
 		</button>
-		if user.Role != db.RoleAdmin {
-			<button id={ "server-access-" + user.ID } class="secondary-btn" type="button" hx-get={ "/fragments/users/" + user.ID + "/grants" } hx-target={ "#server-grants-" + user.ID } aria-controls={ "server-grants-" + user.ID } data-busy-label="Loading…">Server access</button>
-		} else {
-			<span class="muted user-access-summary">All servers</span>
+		if !user.Disabled {
+			if user.Role == db.RoleAdmin {
+				<button
+					class="secondary-btn"
+					type="button"
+					hx-post={ "/users/" + user.ID + "/access" }
+					hx-vals={ roleValues(db.RoleMember) }
+					hx-target="#users"
+					hx-swap="outerHTML"
+					hx-confirm={ "Make " + user.Username + " a member?" }
+					data-confirm-detail="They keep their account but no longer manage users or settings, and start with no servers shared. Share servers with them from each server’s Sharing tab."
+					data-confirm-action="Make member"
+				>Make member</button>
+			} else {
+				<button
+					class="secondary-btn"
+					type="button"
+					hx-post={ "/users/" + user.ID + "/access" }
+					hx-vals={ roleValues(db.RoleAdmin) }
+					hx-target="#users"
+					hx-swap="outerHTML"
+					hx-confirm={ "Make " + user.Username + " an administrator?" }
+					data-confirm-detail="They can use every server, change its containers, and manage users and settings, including yours."
+					data-confirm-action="Make administrator"
+				>Make administrator</button>
+			}
 		}
 		<div class="password-reset">
 			if user.ID != u.CurrentID && !user.Disabled {
@@ -248,14 +272,6 @@ templ userRow(u UsersView, user db.User) {
 				>Revoke link</button>
 			</div>
 		}
-		<div
-			id={ "server-grants-" + user.ID }
-			class="grants-region"
-			if u.OpenGrants == user.ID {
-				hx-get={ "/fragments/users/" + user.ID + "/grants" }
-				hx-trigger="load"
-			}
-		></div>
 	</section>
 }
 
@@ -274,131 +290,9 @@ templ linkResult(link LinkResult) {
 }
 
 func accessValues(user db.User) string {
-	return `{"role":"` + string(user.Role) + `","disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
+	return `{"disabled":"` + strconv.FormatBool(!user.Disabled) + `"}`
 }
 
-type GrantsView struct {
-	UserID, Username string
-	Role             db.Role
-	Servers          []HistoryServer
-	Selected         map[string][]authz.Capability
-	Error, Notice    string
-	Loaded           bool
-}
-
-var capabilityLabels = []struct {
-	Value authz.Capability
-	Label string
-}{{authz.ServerView, "View server"}, {authz.ServerStart, "Start"}, {authz.ServerStop, "Stop"}, {authz.ServerRestart, "Restart"},
-	{authz.LogsRead, "Read logs"}, {authz.ConsoleExecute, "Send console commands"}, {authz.FilesRead, "Read and download files"},
-	{authz.FilesWrite, "Change files"}, {authz.BackupsCreate, "Create backups"}, {authz.SchedulesManage, "Manage own schedules"}}
-
-func (g GrantsView) grantable(capability authz.Capability) bool {
-	return slices.Contains(authz.RoleCeiling(g.Role), capability)
-}
-
-func (g GrantsView) selectedCount() int {
-	count := 0
-	for _, capabilities := range g.Selected {
-		if slices.Contains(capabilities, authz.ServerView) {
-			count++
-		}
-	}
-	return count
-}
-
-templ GrantsEditor(g GrantsView) {
-	<form class="grants-editor" id={ "grants-" + g.UserID } hx-post={ "/users/" + g.UserID + "/grants" } hx-target="this" hx-swap="outerHTML" data-grants>
-		<h3 tabindex="-1" autofocus>Server access for { g.Username }</h3>
-		<p class="muted">Choose a preset for each server, then adjust its permissions. New servers are not shared automatically.</p>
-		if g.Error != "" {
-			@Alert("error", g.Error)
-		}
-		if g.Notice != "" {
-			@Alert("success", g.Notice)
-		}
-		if !g.Loaded {
-			<div class="inline-actions">
-				<button class="secondary-btn" type="button" hx-get={ "/fragments/users/" + g.UserID + "/grants" } hx-target={ "#server-grants-" + g.UserID }>Try again</button>
-				<button class="secondary-btn" type="button" data-clear={ "server-grants-" + g.UserID }>Close</button>
-			</div>
-		} else {
-			if len(g.Servers) == 0 {
-				<div class="admin-setup-help">
-					<p>No eligible servers are available to assign.</p>
-					<p><a href="/diagnostics">Check server discovery</a> to connect Docker or find out why a container is missing. Then return here to share it.</p>
-				</div>
-			}
-			for _, server := range g.Servers {
-				{{ selected := g.Selected[server.ID] }}
-				<fieldset class="grants-server" data-grant-server>
-					<legend>{ server.Name }</legend>
-					<div class="grants-presets">
-						<button type="button" class="text-link" data-grant-preset="server.view">Status only</button>
-						if g.Role != db.RoleViewer {
-							<button type="button" class="text-link" data-grant-preset="server.view,server.start,server.stop">Start and stop</button>
-						}
-						<button type="button" class="text-link" data-grant-preset="">Remove access</button>
-					</div>
-					<div class="grants-capabilities">
-						for _, capability := range capabilityLabels {
-							if g.grantable(capability.Value) {
-								<label>
-									<input type="checkbox" name={ "grant:" + server.ID } value={ string(capability.Value) } checked?={ slices.Contains(selected, capability.Value) }/>
-									{ capability.Label }
-								</label>
-							}
-						}
-					</div>
-					<p class="muted" data-grant-note="backups.create" hidden?={ !slices.Contains(selected, authz.BackupsCreate) }>
-						Creating a backup stops a running server for the copy, then starts it again. Archive downloads and restores remain administrator-only.
-					</p>
-				</fieldset>
-			}
-			<div class="inline-actions">
-				<p class="grants-selection-summary" aria-live="polite" data-grant-summary>
-					if g.selectedCount() == 0 {
-						No servers selected. This user will not see any servers.
-					} else if g.selectedCount() == 1 {
-						1 server selected.
-					} else {
-						{ strconv.Itoa(g.selectedCount()) } servers selected.
-					}
-				</p>
-				<button type="submit" class="primary-btn" data-busy-label="Saving…">Save server access</button>
-				<button type="button" class="secondary-btn" data-clear={ "server-grants-" + g.UserID }>Done</button>
-			</div>
-		}
-	</form>
-}
-
-// GrantInputs reads a submitted grants form: server.view is required for
-// any access, and changing files includes reading them.
-func GrantInputs(form map[string][]string) []authz.GrantInput {
-	var grants []authz.GrantInput
-	for key, values := range form {
-		serverID, ok := strings.CutPrefix(key, "grant:")
-		if !ok {
-			continue
-		}
-		selected := map[authz.Capability]bool{}
-		for _, value := range values {
-			selected[authz.Capability(value)] = true
-		}
-		if !selected[authz.ServerView] {
-			continue
-		}
-		if selected[authz.FilesWrite] {
-			selected[authz.FilesRead] = true
-		}
-		var capabilities []authz.Capability
-		for _, capability := range capabilityLabels {
-			if selected[capability.Value] {
-				capabilities = append(capabilities, capability.Value)
-			}
-		}
-		grants = append(grants, authz.GrantInput{ServerID: serverID, Capabilities: capabilities})
-	}
-	slices.SortFunc(grants, func(a, b authz.GrantInput) int { return strings.Compare(a.ServerID, b.ServerID) })
-	return grants
+func roleValues(role db.Role) string {
+	return `{"role":"` + string(role) + `"}`
 }

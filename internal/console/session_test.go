@@ -84,7 +84,7 @@ func sessionSetup(t *testing.T, configure ...func(*fakedocker.GameOptions)) *ses
 	engine.Update(id, func(c *fakedocker.Container) { c.Logs = []string{"joined", "rcon password hunter2-secret ok"} })
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
-	friend := &db.SessionUser{ID: "friend", Username: "friend", Role: db.RoleOperator}
+	friend := &db.SessionUser{ID: "friend", Username: "friend", Role: db.RoleMember}
 	for _, user := range []*db.SessionUser{admin, friend} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
@@ -97,8 +97,7 @@ func sessionSetup(t *testing.T, configure ...func(*fakedocker.GameOptions)) *ses
 	if err != nil || len(views) != 1 {
 		t.Fatal(views, err)
 	}
-	authorization.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: views[0].ID,
-		Capabilities: []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute}}}, admin, adminSession)
+	authorization.Share(ctx, admin, adminSession, friend.ID, views[0].ID, []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute})
 	f.containerID = id
 	f.engine, f.serverID, f.friend, f.admin, f.adminSession, f.authz = engine, views[0].ID, friend, admin, adminSession, authorization
 	f.sessions = &Sessions{DB: d, Authz: authorization, Identity: store, Servers: service, Locks: locks.New(),
@@ -124,7 +123,7 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 	if !strings.Contains(text, "joined") || strings.Contains(text, "hunter2-secret") || !strings.Contains(text, "[redacted]") {
 		t.Fatal(text)
 	}
-	f.authz.SetUserGrants(ctx, f.friend.ID, nil, f.admin, f.adminSession)
+	f.authz.Share(ctx, f.admin, f.adminSession, f.friend.ID, f.serverID, nil)
 	time.Sleep(100 * time.Millisecond)
 	if channel.Open() {
 		t.Fatal("stream stayed open after revocation")
@@ -234,7 +233,7 @@ func TestCommandsFinishAfterTheBrowserLeaves(t *testing.T) {
 				channel.Close(1001, "")
 				leave()
 				if revoked {
-					f.authz.SetUserGrants(ctx, f.friend.ID, nil, f.admin, f.adminSession)
+					f.authz.Share(ctx, f.admin, f.adminSession, f.friend.ID, f.serverID, nil)
 				}
 			}
 			return ""

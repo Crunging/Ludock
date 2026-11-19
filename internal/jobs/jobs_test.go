@@ -409,7 +409,7 @@ func TestUpdateStopsOnLostAuthority(t *testing.T) {
 	}()
 	<-started
 	// The owner is demoted while Compose is running.
-	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false); err != nil {
+	if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -475,7 +475,7 @@ func TestAuthorityLostAsCommandEnds(t *testing.T) {
 	job := &ops.Context{Job: &ops.Job{ID: "update", ServerID: f.serverID, ActorID: "admin", Kind: "update"}}
 	// The command finishes as the watcher sees the owner demoted.
 	err := f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(ctx context.Context) error {
-		if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false); err != nil {
+		if err := f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false); err != nil {
 			t.Fatal(err)
 		}
 		<-ctx.Done()
@@ -487,7 +487,7 @@ func TestAuthorityLostAsCommandEnds(t *testing.T) {
 	// Or the owner is demoted after the last poll.
 	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, false)
 	err = f.jobs.whileAuthorized(ctx, job, authz.ServerUpdate, func(context.Context) error {
-		return f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleOperator, false)
+		return f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleMember, false)
 	})
 	if _, public := apperr.As(err); !public {
 		t.Fatal("reported", err, "after a loss since the last poll")

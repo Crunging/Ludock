@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, createUser, dockerAction, openServer, serverRow, signIn } from "./fixtures.mjs";
+import { test, expect, asAdmin, createUser, dockerAction, openServer, serverRow, signIn, shareServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -161,13 +161,9 @@ test("a new schedule opens on a daily restart that backs up first", async ({ pag
   await expect(row).toHaveCount(0);
 });
 
-test("a new schedule starts on an action its operator can use", async ({ page, session }) => {
-  await createUser(page, "scheduler", "scheduler password one", "operator");
-  const survival = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
-  await survival.getByLabel("Restart").check();
-  await survival.getByLabel("Manage own schedules").check();
-  await page.getByRole("button", { name: "Save server access" }).click();
-  await expect(page.locator("[data-grants] .alert--success")).toBeVisible();
+test("a new schedule starts on an action its owner can use", async ({ page, session }) => {
+  await createUser(page, "scheduler", "scheduler password one");
+  await shareServer(page, "Survival", "scheduler", ["Restart", "Set up their own schedules"]);
 
   const operator = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(operator, "scheduler", "scheduler password one");
@@ -183,9 +179,7 @@ test("a new schedule starts on an action its operator can use", async ({ page, s
   // Sending commands needs console access too.
   await expect(form.getByLabel("Action").locator("option", { hasText: "Send command" })).toHaveCount(0);
 
-  await survival.getByLabel("Send console commands").check();
-  await page.getByRole("button", { name: "Save server access" }).click();
-  await expect(page.locator("[data-grants] .alert--success")).toBeVisible();
+  await shareServer(page, "Survival", "scheduler", ["Restart", "Set up their own schedules", "Send console commands"]);
   await operator.reload();
   await operator.locator("#schedule-form").getByLabel("Action").selectOption("command");
   await expect(operator.locator("#schedule-form").getByLabel("Console command")).toBeVisible();

@@ -115,10 +115,9 @@ func TestScheduledCommandSkipsStoppedServer(t *testing.T) {
 func TestScheduledCommandRefusedWithoutConsoleAccess(t *testing.T) {
 	f := setup(t)
 	serverID, _, received := f.commandServer(t, "")
-	operator := db.User{ID: "operator", Username: "operator", Role: db.RoleOperator, CreatedAt: 1}
+	operator := db.User{ID: "operator", Username: "operator", Role: db.RoleMember, CreatedAt: 1}
 	f.jobs.DB.CreateUser(ctx, db.UserRecord{User: operator, PasswordHash: "x"})
-	if _, err := f.jobs.Authz.SetUserGrants(ctx, operator.ID, []authz.GrantInput{{ServerID: serverID,
-		Capabilities: []authz.Capability{authz.ServerView, authz.SchedulesManage}}}, f.admin, f.adminSession); err != nil {
+	if err := f.jobs.Authz.Share(ctx, f.admin, f.adminSession, operator.ID, serverID, []authz.Capability{authz.ServerView, authz.SchedulesManage}); err != nil {
 		t.Fatal(err)
 	}
 	job := f.scheduleCommand(t, serverID, operator.ID, "say hello")

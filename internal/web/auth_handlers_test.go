@@ -81,7 +81,7 @@ func totp(t *testing.T, secret string) string {
 func TestSignInChallengeIsNotASession(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	enrollment, err := p.app.Auth.BeginTwoFactor(context.Background(), operator)
 	if err != nil {
 		t.Fatal(err)

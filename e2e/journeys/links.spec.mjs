@@ -22,7 +22,7 @@ test("inviting a user who chooses their own password, once", async ({ page, sess
   await expect(form.getByLabel("Make an invite link")).toBeChecked();
   await expect(form.getByLabel("Initial password")).toBeHidden();
   await form.getByLabel("Username").fill("dana");
-  await form.getByLabel("Role").selectOption("viewer");
+  await form.getByLabel("Account").selectOption("member");
   await form.getByRole("button", { name: "Create user" }).click();
   const link = await shownLink(admin, "Invite link for dana");
   expect(link).toMatch(new RegExp(`^${new URL(admin.url()).origin}/link/[\\w-]{43}$`));
@@ -48,7 +48,7 @@ test("inviting a user who chooses their own password, once", async ({ page, sess
 
 test("resetting a password by link, after revoking an earlier one", async ({ session }) => {
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(admin, "erin", "erin first long password", "viewer");
+  await createUser(admin, "erin", "erin first long password");
   const laptop = await session();
   await signIn(laptop, "erin", "erin first long password");
   await expect(laptop.getByText("No servers shared")).toBeVisible();

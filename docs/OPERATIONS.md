@@ -555,8 +555,8 @@ warnings are under **More options**. To keep a new schedule from running,
   and, to people with console access, the start of the game's reply, with
   secrets redacted. Anyone who can see the schedule can read its command, so
   leave passwords out.
-- **Who:** operators manage their own schedules and administrators manage all
-  of them. A schedule runs with its owner's current access. Editing or resuming
+- **Who:** members with **Full access** to a server manage their own
+  schedules and administrators manage all of them. A schedule runs with its owner's current access. Editing or resuming
   needs schedule access and access to the action; pausing doesn't.
 - **Timing:** missed times and skipped daylight-saving hours don't run, a
   repeated hour runs once, and resuming doesn't replay missed runs. Editing or
@@ -661,24 +661,50 @@ deliveries. A restart right after a delivery can send a message twice.
 
 ## Users and access
 
-| Role | Access |
-| --- | --- |
-| Administrator | Every server and setting |
-| Operator | Shared servers, with any of: logs, file downloads, start, stop, restart, console, changing files, creating backups, and managing their own schedules |
-| Viewer | Shared servers, with logs and file downloads if shared |
+There are two kinds of account. **Administrators** use every server and manage
+users and settings. **Members** see only the servers shared with them, and
+what they can do is chosen per server. A new server is shared with nobody.
 
-Operators and viewers see a server only once it's shared with them. Changing
-files also needs file downloads, and a backup permission includes the temporary
-stop it needs but not general start and stop. Restoring, downloading or
-deleting archives, updating, the container shell, and settings are for
-administrators. Removing access also blocks the user's queued work and closes
-their open consoles and log streams.
+### Share a server with a friend
+
+Open the server and choose **Sharing**. Pick someone who already has an
+account, or **Someone new…** and type a username, choose their access, and
+choose **Share**. For someone new, Ludock makes the account and shows a
+one-time invite link to copy and send; they open it, choose a password, and
+land on the servers shared with them. The same tab lists everyone the server
+is shared with: change their access and choose **Save**, or **Stop sharing**.
+Changes take effect right away, including for pages, consoles, and log
+streams they have open, and work they queued.
+
+| Access | What they can do |
+| --- | --- |
+| Can see it | See whether it's running, who is online, and the address to join |
+| Can run it | Also start, stop, and restart it, use the game console, and read its logs |
+| Full access | Also read and change its files, create backups, and set up their own schedules |
+
+Creating a backup stops a running server for the copy and starts it again.
+Restoring, downloading, or deleting backups, updates, the container shell,
+monitoring, settings, and adding or removing servers stay with
+administrators.
+
+**Custom** sets exactly which of those actions someone has, for communities
+that need something in between. The server's Sharing tab shows such access as
+Custom. Changing files always includes reading them.
+
+**Users** lists everyone with what each can use, and is where you add an
+account without sharing a server yet, make someone an administrator or a
+member, disable or delete an account, make a reset link, or turn off
+two-factor sign-in. Making someone an administrator drops their per-server
+sharing, so making them a member again starts with nothing shared; their
+schedules stay paused until they have access again. Ludock always keeps at
+least one administrator who can sign in.
 
 ### Invite and reset links
 
-On **Users**, a new account gets an invite link by default: Ludock shows a
-one-time link to copy and send, and whoever opens it chooses the password and
-is signed in. The account can't sign in until then. For a forgotten password,
+Sharing a server with someone new always makes an invite link, and on
+**Users** a new account gets one by default too: Ludock shows a one-time link
+to copy and send, and whoever opens it chooses the password and is signed in.
+The account can't sign in until then. For a forgotten password,
 **Reset link** makes a link that sets a new one and signs the user out
 everywhere else. To type a password instead, choose **Set a password now**
 when creating the user, or **Set password** on their row.

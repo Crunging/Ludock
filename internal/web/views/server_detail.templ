@@ -44,6 +44,7 @@ type ServerDetail struct {
 	Schedules      SchedulesView
 	// Recreate opens the update tab with "Update even if the image is already current" ticked.
 	Recreate bool
+	Sharing  SharingView
 	// Operation is the operation the page shows, if any.
 	Operation string
 }
@@ -150,6 +151,8 @@ templ detailBody(d ServerDetail) {
 				@SchedulesTab(d.Schedules)
 			case "update":
 				@UpdateTab(server.ID, d.Recreate)
+			case "sharing":
+				@SharingTab(d.Sharing)
 			default:
 				@OverviewLive(d)
 				if d.Admin && d.Availability != nil {

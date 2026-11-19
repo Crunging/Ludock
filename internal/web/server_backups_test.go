@@ -30,7 +30,7 @@ func (p *pages) queued(t *testing.T) (kind string, input string) {
 func TestCreateBackupNeedsTheGrant(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView)
 	if response := p.action("/servers/"+p.server+"/backups", operator, nil); response.StatusCode != http.StatusForbidden {
 		t.Fatal(response.StatusCode)
@@ -55,7 +55,7 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 	p := newPages(t)
 	p.app.DB.Exec(`INSERT INTO backups (id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state)
     VALUES ('11111111-1111-4111-8111-111111111111',?,'f','/backups','[]',10,'c',1,'complete')`, p.server)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
 	restore := func(principal *auth.Principal, backup, confirmation string) *http.Response {
 		return p.action("/servers/"+p.server+"/restores", principal, url.Values{"backupId": {backup}, "confirmation": {confirmation}})
@@ -84,7 +84,7 @@ func TestRestoreChecksConfirmationAndBackup(t *testing.T) {
 func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.BackupsCreate)
 	backup := "/servers/" + p.server + "/backups/11111111-1111-4111-8111-111111111111"
 	if response := p.do("GET", backup+"/download", operator, nil, nil); response.Code == http.StatusOK {
@@ -107,7 +107,7 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.ServerRestart)
 	values := url.Values{"createBackup": {"true"}}
 	if response := p.action("/servers/"+p.server+"/updates", operator, values); response.StatusCode != http.StatusForbidden {

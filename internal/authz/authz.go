@@ -44,40 +44,72 @@ var All = []Capability{ServerView, ServerStart, ServerStop, ServerRestart, LogsR
 	FilesWrite, BackupsCreate, SchedulesManage, ServerUpdate, ServerRecreate, BackupsRestore, BackupsRead,
 	BackupsDelete, ConsoleShell}
 
+// readCapabilities are not audited when denied.
 var readCapabilities = []Capability{ServerView, LogsRead, FilesRead}
 
-var operatorCapabilities = append(append([]Capability(nil), readCapabilities...),
-	ServerStart, ServerStop, ServerRestart, ConsoleExecute, FilesWrite, BackupsCreate, SchedulesManage)
+// memberCapabilities are those a member may be given; the rest are for
+// administrators.
+var memberCapabilities = []Capability{ServerView, ServerStart, ServerStop, ServerRestart, LogsRead, ConsoleExecute,
+	FilesRead, FilesWrite, BackupsCreate, SchedulesManage}
 
 // RoleCeiling lists the capabilities a role may be granted.
 func RoleCeiling(role db.Role) []Capability {
-	var allowed []Capability
 	switch role {
 	case db.RoleAdmin:
 		return slices.Clone(All)
-	case db.RoleOperator:
-		allowed = operatorCapabilities
-	default:
-		allowed = readCapabilities
+	case db.RoleMember:
+		return slices.Clone(memberCapabilities)
 	}
-	var result []Capability
+	return nil
+}
+
+// Level names a member's access to a server. It is derived from the stored
+// capabilities, which stay the only record of access.
+type Level string
+
+const (
+	LevelNone   Level = ""
+	LevelSee    Level = "see"
+	LevelRun    Level = "run"
+	LevelFull   Level = "full"
+	LevelCustom Level = "custom"
+)
+
+// Levels lists the named levels, each including the one before.
+var Levels = []Level{LevelSee, LevelRun, LevelFull}
+
+var levelCapabilities = map[Level][]Capability{
+	LevelSee:  {ServerView},
+	LevelRun:  {ServerView, ServerStart, ServerStop, ServerRestart, LogsRead, ConsoleExecute},
+	LevelFull: memberCapabilities,
+}
+
+// Capabilities lists what a named level allows; other levels allow nothing.
+func (l Level) Capabilities() []Capability { return slices.Clone(levelCapabilities[l]) }
+
+// LevelOf names a set of capabilities, or LevelCustom when no level matches.
+func LevelOf(capabilities []Capability) Level {
+	if !slices.Contains(capabilities, ServerView) {
+		return LevelNone
+	}
+	var sorted []Capability
 	for _, capability := range All {
-		if slices.Contains(allowed, capability) {
-			result = append(result, capability)
+		if slices.Contains(capabilities, capability) {
+			sorted = append(sorted, capability)
 		}
 	}
-	return result
+	for _, level := range Levels {
+		if slices.Equal(sorted, levelCapabilities[level]) {
+			return level
+		}
+	}
+	return LevelCustom
 }
 
 type Grant struct {
 	ServerID     string
 	Capabilities []Capability
 	UpdatedAt    int64
-}
-
-type GrantInput struct {
-	ServerID     string
-	Capabilities []Capability
 }
 
 type Service struct {
@@ -321,111 +353,114 @@ func (s *Service) auditDenial(ctx context.Context, actor *db.SessionUser, server
 
 func invalidGrant(message string) error { return apperr.New("INVALID_GRANT", 400, message) }
 
-func (s *Service) validateGrant(ctx context.Context, q interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, role db.Role, input GrantInput) ([]Capability, error) {
-	var exists int
-	if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM logical_servers WHERE id = ?", input.ServerID).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if exists == 0 {
-		return nil, ErrServerNotFound
-	}
-	ceiling := RoleCeiling(role)
-	for _, capability := range input.Capabilities {
-		if !slices.Contains(ceiling, capability) {
-			return nil, invalidGrant("A capability exceeds this user's role")
+// validCapabilities checks capabilities for a member, in display order.
+func validCapabilities(input []Capability) ([]Capability, error) {
+	for _, capability := range input {
+		if !slices.Contains(memberCapabilities, capability) {
+			return nil, invalidGrant("Only administrators can do that")
 		}
 	}
 	var capabilities []Capability
 	for _, capability := range All {
-		if slices.Contains(input.Capabilities, capability) {
+		if slices.Contains(input, capability) {
 			capabilities = append(capabilities, capability)
 		}
 	}
 	if len(capabilities) > 0 && !slices.Contains(capabilities, ServerView) {
-		return nil, invalidGrant("Server access is required for every server capability")
+		return nil, invalidGrant("Every kind of access includes seeing the server")
 	}
 	if slices.Contains(capabilities, FilesWrite) && !slices.Contains(capabilities, FilesRead) {
-		return nil, invalidGrant("File writing also requires file reading")
+		return nil, invalidGrant("Changing files also needs reading them")
 	}
 	return capabilities, nil
 }
 
-// SetUserGrants atomically replaces a user's assignments; empty grants revoke
-// access. The actor's session and admin role are rechecked inside the
-// transaction.
-func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []GrantInput, actor *db.SessionUser, tokenHash string) ([]Grant, error) {
-	administrator, err := s.AssertAdministrator(ctx, actor)
+// Share is one member's access to a server.
+type Share struct {
+	UserID, Username string
+	Disabled         bool
+	Capabilities     []Capability
+	Level            Level
+}
+
+// Sharing lists the members a server is shared with, by name.
+func (s *Service) Sharing(ctx context.Context, serverID string) ([]Share, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT u.id, u.username, u.disabled, g.capabilities_json FROM server_grants g
+    JOIN users u ON u.id = g.user_id WHERE g.server_id = ? AND u.role = ? ORDER BY u.username`, serverID, string(db.RoleMember))
 	if err != nil {
 		return nil, err
 	}
-	if len(inputs) > 1000 {
-		return nil, invalidGrant("Too many server assignments")
-	}
-	seen := map[string]bool{}
-	for _, input := range inputs {
-		if seen[input.ServerID] {
-			return nil, invalidGrant("Duplicate server assignment")
+	defer rows.Close()
+	var shares []Share
+	for rows.Next() {
+		var share Share
+		var capabilities string
+		if err := rows.Scan(&share.UserID, &share.Username, &share.Disabled, &capabilities); err != nil {
+			return nil, err
 		}
-		seen[input.ServerID] = true
+		share.Capabilities = parseCapabilities(capabilities)
+		share.Level = LevelOf(share.Capabilities)
+		if share.Level != LevelNone {
+			shares = append(shares, share)
+		}
+	}
+	return shares, rows.Err()
+}
+
+// Share sets a member's access to a server; no capabilities removes it. The
+// actor's session and administrator role are rechecked inside the
+// transaction.
+func (s *Service) Share(ctx context.Context, actor *db.SessionUser, tokenHash, userID, serverID string, capabilities []Capability) error {
+	administrator, err := s.AssertAdministrator(ctx, actor)
+	if err != nil {
+		return err
 	}
 	err = s.DB.AdminMutation(ctx, administrator.ID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		var role string
-		var disabled int
-		err := tx.QueryRowContext(ctx, "SELECT role, disabled FROM users WHERE id = ?", userID).Scan(&role, &disabled)
-		if errors.Is(err, sql.ErrNoRows) {
-			return apperr.New("USER_NOT_FOUND", 404, "User not found")
-		}
-		if err != nil {
-			return err
-		}
-		if db.Role(role) == db.RoleAdmin {
-			return invalidGrant("Administrators already have access to all eligible servers")
-		}
-		type validated struct {
-			ServerID     string       `json:"serverId"`
-			Capabilities []Capability `json:"capabilities"`
-		}
-		var grants []validated
-		for _, input := range inputs {
-			capabilities, err := s.validateGrant(ctx, tx, db.Role(role), input)
-			if err != nil {
-				return err
-			}
-			grants = append(grants, validated{input.ServerID, capabilities})
-		}
-		// The editor doesn't show removed servers; their grants wait for them.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM server_grants WHERE user_id = ? AND server_id NOT IN
-      (SELECT id FROM logical_servers WHERE `+identity.RemovedServer+`)`, userID); err != nil {
-			return err
-		}
-		now := db.Now()
-		for _, grant := range grants {
-			if len(grant.Capabilities) == 0 {
-				continue
-			}
-			// A removed server's kept grant is replaced by a form opened before it was removed.
-			if _, err := tx.ExecContext(ctx, `INSERT INTO server_grants (user_id, server_id, capabilities_json, updated_at)
-        VALUES (?, ?, ?, ?) ON CONFLICT (user_id, server_id) DO UPDATE SET capabilities_json = excluded.capabilities_json,
-        updated_at = excluded.updated_at`, userID, grant.ServerID, encodeCapabilities(grant.Capabilities), now); err != nil {
-				return err
-			}
-		}
-		if grants == nil {
-			grants = []validated{}
-		}
-		for index := range grants {
-			if grants[index].Capabilities == nil {
-				grants[index].Capabilities = []Capability{}
-			}
-		}
-		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: administrator.ID, Action: "users.server_grants.updated",
-			TargetType: "user", TargetID: userID, Details: map[string]any{"grants": grants}})
+		return s.ShareIn(ctx, tx, administrator.ID, userID, serverID, capabilities)
 	})
 	if err != nil {
-		return nil, AdminMutationError(err)
+		return AdminMutationError(err)
 	}
 	s.DB.PruneAuditIfNeeded(ctx)
-	return s.UserGrants(ctx, userID)
+	return nil
+}
+
+// ShareIn is Share inside a db.AdminMutation, such as one creating the member.
+func (s *Service) ShareIn(ctx context.Context, tx *sql.Tx, adminID, userID, serverID string, input []Capability) error {
+	capabilities, err := validCapabilities(input)
+	if err != nil {
+		return err
+	}
+	var role string
+	err = tx.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", userID).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return apperr.New("USER_NOT_FOUND", 404, "User not found")
+	}
+	if err != nil {
+		return err
+	}
+	if db.Role(role) != db.RoleMember {
+		return invalidGrant("Administrators can already use every server")
+	}
+	var exists int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM logical_servers WHERE id = ? AND NOT ("+identity.RemovedServer+")",
+		serverID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return ErrServerNotFound
+	}
+	if len(capabilities) == 0 {
+		_, err = tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ? AND server_id = ?", userID, serverID)
+		capabilities = []Capability{}
+	} else {
+		_, err = tx.ExecContext(ctx, `INSERT INTO server_grants (user_id, server_id, capabilities_json, updated_at)
+      VALUES (?, ?, ?, ?) ON CONFLICT (user_id, server_id) DO UPDATE SET capabilities_json = excluded.capabilities_json,
+      updated_at = excluded.updated_at`, userID, serverID, encodeCapabilities(capabilities), db.Now())
+	}
+	if err != nil {
+		return err
+	}
+	return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: adminID, Action: "server.sharing.updated", TargetType: "server",
+		TargetID: serverID, Details: map[string]any{"userId": userID, "capabilities": capabilities}})
 }

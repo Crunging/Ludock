@@ -17,7 +17,7 @@ var ctx = context.Background()
 func TestAServerRevokedWhileListingIsLeftOut(t *testing.T) {
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
-	friend := &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleOperator}
+	friend := &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleMember}
 	for _, user := range []*db.SessionUser{admin, friend} {
 		if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1},
 			PasswordHash: "x"}); err != nil {
@@ -32,8 +32,7 @@ func TestAServerRevokedWhileListingIsLeftOut(t *testing.T) {
 	}
 	serverID := list[0].ID
 	authorization := &authz.Service{DB: d, Servers: store}
-	if _, err := authorization.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: serverID,
-		Capabilities: []authz.Capability{authz.ServerView, authz.SchedulesManage}}}, admin, session); err != nil {
+	if err := authorization.Share(ctx, admin, session, friend.ID, serverID, []authz.Capability{authz.ServerView, authz.SchedulesManage}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,binding_revision,created_at,updated_at)
@@ -44,7 +43,7 @@ func TestAServerRevokedWhileListingIsLeftOut(t *testing.T) {
 		Schedules: &schedules.Service{DB: d, Authz: authorization, Identity: store}}
 	// The friend loses the server after the list checked it.
 	testHook = func(string) {
-		if _, err := authorization.SetUserGrants(ctx, friend.ID, nil, admin, session); err != nil {
+		if err := authorization.Share(ctx, admin, session, friend.ID, serverID, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -340,7 +340,7 @@ func TestUpdateRecoveryEndsWhenPolicyCannotBeRestored(t *testing.T) {
 // confirms the change.
 func TestUpdateNewImageVolumePausesSharing(t *testing.T) {
 	f := setup(t)
-	if _, err := f.jobs.DB.Exec(`INSERT INTO users(id, username, role, password_hash, created_at, updated_at) VALUES ('friend', 'friend', 'viewer', 'x', 1, 1);
+	if _, err := f.jobs.DB.Exec(`INSERT INTO users(id, username, role, password_hash, created_at, updated_at) VALUES ('friend', 'friend', 'member', 'x', 1, 1);
     INSERT INTO server_grants(user_id, server_id, capabilities_json, updated_at) VALUES ('friend', ?, '["server.view"]', 1)`, f.serverID); err != nil {
 		t.Fatal(err)
 	}

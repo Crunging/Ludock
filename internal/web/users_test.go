@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ type postResult struct {
 func TestUsersPageNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	if response := p.do("GET", "/users", operator, nil, nil); response.Code != http.StatusSeeOther {
 		t.Fatal(response.Code)
 	}
@@ -38,15 +39,44 @@ func TestUsersPageNeedsAnAdministrator(t *testing.T) {
 	}
 }
 
-func TestGrantsStayWithinRoleCeiling(t *testing.T) {
+// Requests the Sharing tab never sends: a member, even one with full
+// access, can't share or change access, and an administrator can't give a
+// member what only administrators do.
+func TestSharingRefusesForgedRequests(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
-	tooMuch := p.adminPost("/users/"+viewer.User.ID+"/grants", url.Values{"grant:" + p.server: {"server.view", "server.start"}})
-	if !strings.Contains(tooMuch.Body, "alert--error") {
-		t.Fatal(tooMuch.Body)
+	ctx := context.Background()
+	member := p.user("u-member", "member", db.RoleMember)
+	other := p.user("u-other", "other", db.RoleMember)
+	p.grant(member, authz.LevelFull.Capabilities()...)
+	for _, target := range []string{"/servers/" + p.server + "/sharing", "/servers/" + p.server + "/sharing/" + other.User.ID} {
+		form := url.Values{"_csrf": {CSRFToken(member.Token)}, "person": {other.User.ID}, "level": {"full"}}
+		if response := p.do("POST", target, member, strings.NewReader(form.Encode()), map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
+			t.Fatal(target, response.Code)
+		}
 	}
-	if grants, _ := p.app.Authz.UserGrants(context.Background(), viewer.User.ID); len(grants) != 0 {
+	if page := p.do("GET", "/servers/"+p.server+"?tab=sharing", member, nil, nil); strings.Contains(page.Body.String(), "Share with someone") {
+		t.Fatal("member offered sharing")
+	}
+	for _, form := range []url.Values{
+		{"person": {other.User.ID}, "level": {"custom"}, "capability": {"server.view", "console.shell"}},
+		{"person": {other.User.ID}, "level": {"custom"}, "capability": {"backups.restore"}},
+		{"person": {other.User.ID}, "level": {"admin"}},
+		{"person": {other.User.ID}, "level": {"custom"}},
+		{"person": {p.admin.User.ID}, "level": {"full"}},
+	} {
+		if result := p.adminPost("/servers/"+p.server+"/sharing", form); result.Code < 400 || !strings.Contains(result.Body, "alert--error") {
+			t.Fatal(form, result.Code)
+		}
+	}
+	if result := p.adminPost("/servers/"+p.server+"/sharing/"+member.User.ID, url.Values{"level": {"custom"},
+		"capability": {"server.view", "server.update"}}); result.Code < 400 {
+		t.Fatal(result.Code)
+	}
+	if grants, _ := p.app.Authz.UserGrants(ctx, other.User.ID); len(grants) != 0 {
+		t.Fatal(grants)
+	}
+	if grants, _ := p.app.Authz.UserGrants(ctx, member.User.ID); len(grants) != 1 || authz.LevelOf(grants[0].Capabilities) != authz.LevelFull {
 		t.Fatal(grants)
 	}
 	if self := p.adminPost("/users/"+p.admin.User.ID+"/delete", url.Values{}); self.Code < 400 {
@@ -54,17 +84,56 @@ func TestGrantsStayWithinRoleCeiling(t *testing.T) {
 	}
 }
 
-func TestGrantInputsNormalize(t *testing.T) {
+// Inviting someone new makes their account and access together: a refused
+// access leaves no account behind.
+func TestInviteAndShareIsAtomic(t *testing.T) {
 	t.Parallel()
-	inputs := views.GrantInputs(map[string][]string{
-		"grant:a": {"files.write"},                // no view: no access
-		"grant:b": {"server.view", "files.write"}, // writing implies reading
-		"grant:c": {"server.view", "console.shell"},
-		"other":   {"server.view"},
-	})
-	if len(inputs) != 2 || inputs[0].ServerID != "b" || len(inputs[0].Capabilities) != 3 || inputs[1].ServerID != "c" ||
-		len(inputs[1].Capabilities) != 1 || inputs[0].Capabilities[2] != authz.FilesWrite {
-		t.Fatalf("%+v", inputs)
+	p := newPages(t)
+	send := func(form url.Values) *httptest.ResponseRecorder {
+		form.Set("_csrf", CSRFToken(p.admin.Token))
+		form.Set("person", "new")
+		return p.do("POST", "/servers/"+p.server+"/sharing", p.admin, strings.NewReader(form.Encode()),
+			map[string]string{"HX-Request": "true", "Origin": "https://ludock.example", "Sec-Fetch-Site": "same-origin"})
+	}
+	refused := send(url.Values{"username": {"newbie"}, "level": {"custom"}, "capability": {"server.view", "console.shell"}})
+	if refused.Code != http.StatusBadRequest {
+		t.Fatal(refused.Code, refused.Body.String())
+	}
+	if user, _ := p.app.DB.FindUserByUsername(context.Background(), "newbie"); user != nil {
+		t.Fatal("account made without its access")
+	}
+	shared := send(url.Values{"username": {"newbie"}, "level": {"see"}})
+	user, _ := p.app.DB.FindUserByUsername(context.Background(), "newbie")
+	if shared.Code != http.StatusOK || user == nil || user.Role != db.RoleMember || !strings.Contains(shared.Body.String(), `value="https://ludock.example/link/`) {
+		t.Fatal(shared.Code, user, shared.Body.String())
+	}
+	if grants, _ := p.app.Authz.UserGrants(context.Background(), user.ID); len(grants) != 1 || authz.LevelOf(grants[0].Capabilities) != authz.LevelSee {
+		t.Fatal(grants)
+	}
+}
+
+// A custom choice includes seeing the server and reading files it changes;
+// values the form never offers pass through, to be refused when saved.
+func TestShareCapabilitiesNormalize(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		level  authz.Level
+		custom []string
+		want   []authz.Capability
+		ok     bool
+	}{
+		{authz.LevelSee, []string{"console.shell"}, []authz.Capability{authz.ServerView}, true},
+		{authz.LevelCustom, []string{"files.write"}, []authz.Capability{authz.ServerView, authz.FilesRead, authz.FilesWrite}, true},
+		{authz.LevelCustom, []string{"console.shell"}, []authz.Capability{authz.ServerView, authz.ConsoleShell}, true},
+		{authz.LevelCustom, []string{"bogus"}, []authz.Capability{authz.ServerView, "bogus"}, true},
+		{authz.LevelCustom, nil, nil, false},
+		{"admin", nil, nil, false},
+		{authz.LevelNone, nil, nil, false},
+	} {
+		got, ok := views.ShareCapabilities(c.level, c.custom)
+		if ok != c.ok || !slices.Equal(got, c.want) {
+			t.Fatal(c.level, c.custom, got, ok)
+		}
 	}
 }
 
@@ -73,7 +142,7 @@ func TestGrantInputsNormalize(t *testing.T) {
 func TestLinkUsesTheBrowserOrigin(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	target := p.user("u-target", "target", db.RoleViewer)
+	target := p.user("u-target", "target", db.RoleMember)
 	form := url.Values{"_csrf": {CSRFToken(p.admin.Token)}}.Encode()
 	send := func(headers map[string]string) string {
 		request := httptest.NewRequest("POST", "http://panel.example/users/"+target.User.ID+"/link", strings.NewReader(form))
@@ -102,7 +171,7 @@ func TestLinkUsesTheBrowserOrigin(t *testing.T) {
 func TestOpeningALinkHidesItsToken(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	target := p.user("u-target", "target", db.RoleViewer)
+	target := p.user("u-target", "target", db.RoleMember)
 	link, err := p.app.Auth.CreateLink(context.Background(), p.admin, target.User.ID, auth.Client{})
 	if err != nil {
 		t.Fatal(err)
@@ -140,8 +209,8 @@ func TestOpeningALinkHidesItsToken(t *testing.T) {
 func TestLinkFormBelongsToItsLink(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	first := p.user("u-first", "first", db.RoleViewer)
-	second := p.user("u-second", "second", db.RoleViewer)
+	first := p.user("u-first", "first", db.RoleMember)
+	second := p.user("u-second", "second", db.RoleMember)
 	firstLink, _ := p.app.Auth.CreateLink(context.Background(), p.admin, first.User.ID, auth.Client{})
 	secondLink, _ := p.app.Auth.CreateLink(context.Background(), p.admin, second.User.ID, auth.Client{})
 	submit := func(key string) *httptest.ResponseRecorder {

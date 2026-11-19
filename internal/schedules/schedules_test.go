@@ -23,7 +23,7 @@ var ctx = context.Background()
 
 var (
 	admin  = &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
-	friend = &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleOperator}
+	friend = &db.SessionUser{ID: "22222222-2222-4222-8222-222222222222", Username: "friend", Role: db.RoleMember}
 	// adminSession is the admin's token hash in the current setup.
 	adminSession string
 )
@@ -65,7 +65,7 @@ func setup(t *testing.T) *fixture {
 
 func (f *fixture) grant(t *testing.T, capabilities ...authz.Capability) {
 	t.Helper()
-	if _, err := f.s.Authz.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: f.serverID, Capabilities: capabilities}}, admin, adminSession); err != nil {
+	if err := f.s.Authz.Share(ctx, admin, adminSession, friend.ID, f.serverID, capabilities); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -208,12 +208,12 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 		t.Fatal(schedule)
 	}
 	f.grant(t, authz.ServerView, authz.ServerStart, authz.SchedulesManage)
-	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleOperator, true)
+	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleMember, true)
 	f.s.Run(ctx, due+86400_000)
 	if f.operations(t) != 0 || f.first(t, admin).NextRunUnavailableReason != OwnerDisabled {
 		t.Fatal(f.first(t, admin))
 	}
-	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleOperator, false)
+	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleMember, false)
 	// A material change pauses the friend's schedule until an administrator
 	// confirms it, and the same schedule then runs again.
 	changed := f.obs

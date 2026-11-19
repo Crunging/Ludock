@@ -144,7 +144,7 @@ func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) 
 		if err != nil {
 			return nil, nil, err
 		}
-		if user.Role != db.RoleOperator || grant == nil || !slices.Contains(grant.Capabilities, authz.ServerView) ||
+		if user.Role != db.RoleMember || grant == nil || !slices.Contains(grant.Capabilities, authz.ServerView) ||
 			!slices.Contains(grant.Capabilities, authz.SchedulesManage) {
 			return nil, nil, unavailable(OwnerAccessRemoved)
 		}

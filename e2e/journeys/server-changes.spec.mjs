@@ -1,6 +1,6 @@
 import { request } from "node:http";
 import { join } from "node:path";
-import { test, expect, signIn, createUser, serverRow, openServer } from "./fixtures.mjs";
+import { test, expect, signIn, createUser, serverRow, openServer, shareServer } from "./fixtures.mjs";
 
 /** Recreates a container with changed environment variables and labels, as Portainer or Compose would; a bare KEY removes it. */
 function recreate(container, { env = [], label = [] }) {
@@ -18,14 +18,6 @@ function recreate(container, { env = [], label = [] }) {
   });
 }
 
-async function share(adminPage, server, ...capabilities) {
-  const editor = adminPage.locator("[data-grants]");
-  const row = editor.locator(".grants-server", { hasText: server });
-  for (const capability of capabilities) await row.getByLabel(capability, { exact: true }).check();
-  await editor.getByRole("button", { name: "Save server access" }).click();
-  await expect(editor.locator(".alert--success")).toBeVisible();
-}
-
 async function deleteUser(adminPage, username) {
   await adminPage.goto("/users");
   await adminPage.locator(".user-row", { hasText: username }).getByRole("button", { name: "Delete" }).click();
@@ -35,8 +27,8 @@ async function deleteUser(adminPage, username) {
 
 test("changing a password or label in Docker leaves a server as it was in Ludock", async ({ session }) => {
   const adminPage = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(adminPage, "steady", "steady password one", "operator");
-  await share(adminPage, "Survival", "Send console commands");
+  await createUser(adminPage, "steady", "steady password one");
+  await shareServer(adminPage, "Survival", "steady", ["Send console commands"]);
   const operator = await session();
   await signIn(operator, "steady", "steady password one");
   try {
@@ -65,8 +57,8 @@ test("changing a password or label in Docker leaves a server as it was in Ludock
 
 test("a new game pauses shared access until an administrator confirms it", async ({ session }) => {
   const adminPage = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(adminPage, "friend", "friend password one", "operator");
-  await share(adminPage, "enshrouded", "Restart", "Manage own schedules");
+  await createUser(adminPage, "friend", "friend password one");
+  await shareServer(adminPage, "enshrouded", "friend", ["Restart", "Set up their own schedules"]);
   const friend = await session();
   await signIn(friend, "friend", "friend password one");
   await friend.getByRole("link", { name: "enshrouded", exact: true }).click();

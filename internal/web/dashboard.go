@@ -160,9 +160,6 @@ func (s *Server) attentionFragment(w http.ResponseWriter, r *http.Request, reque
 			if item.Kind == "binding" && request.User().Role != db.RoleAdmin {
 				continue
 			}
-			if item.Kind == "schedule" && request.User().Role == db.RoleViewer {
-				continue
-			}
 			view.Items = append(view.Items, item)
 		}
 	}

@@ -17,7 +17,7 @@ import (
 func TestFilesFollowGrants(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); strings.Contains(page, "valheim") {
 		t.Fatal("hidden server named")
 	}
@@ -25,7 +25,7 @@ func TestFilesFollowGrants(t *testing.T) {
 	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); !strings.Contains(page, "You do not have file access to this server.") {
 		t.Fatal(page)
 	}
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.FilesRead)
 	page := p.do("GET", "/files/"+p.server, operator, nil, nil).Body.String()
 	if !strings.Contains(page, "File access is not configured") || strings.Contains(page, "data-dropzone") {
@@ -54,7 +54,7 @@ func TestFilesFollowGrants(t *testing.T) {
 func TestFileSaveNeedsWriteGrant(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.FilesRead)
 	version := "3-" + strings.Repeat("0", 64)
 	response := p.do("PUT", "/files/"+p.server+"/save?root=0&path=a.txt&version="+version, operator, strings.NewReader("hi\n"),

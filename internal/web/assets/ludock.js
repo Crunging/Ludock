@@ -322,27 +322,12 @@
     if (event.target.matches && event.target.matches("[data-log-follow]")) followLogs();
   });
 
-  // Server access editor: any action needs "View server", changing files
-  // needs reading them, and removing view removes everything. The server
-  // applies the same rules when saving.
-  function grantSummary(form) {
-    var count = 0;
-    form.querySelectorAll("[data-grant-server]").forEach(function (fieldset) {
-      var view = fieldset.querySelector('input[value="server.view"]');
-      if (view && view.checked) count++;
-      var backup = fieldset.querySelector('input[value="backups.create"]');
-      var note = fieldset.querySelector('[data-grant-note="backups.create"]');
-      if (note) note.hidden = !(backup && backup.checked);
-    });
-    var summary = form.querySelector("[data-grant-summary]");
-    if (summary) {
-      summary.textContent = (count === 0 ? "No servers selected. This user will not see any servers."
-        : count + (count === 1 ? " server" : " servers") + " selected.") + " Unsaved changes.";
-    }
-  }
+  // Custom access: any choice includes seeing the server, changing files
+  // includes reading them, and unticking seeing the server clears the rest.
+  // The server applies the same rules when saving.
   document.addEventListener("change", function (event) {
     var box = event.target;
-    var fieldset = box.closest && box.closest("[data-grants] [data-grant-server]");
+    var fieldset = box.closest && box.closest("[data-custom-access]");
     if (!fieldset || box.type !== "checkbox") return;
     var find = function (value) { return fieldset.querySelector('input[value="' + value + '"]'); };
     if (box.checked) {
@@ -353,18 +338,8 @@
     } else if (box.value === "files.read" && find("files.write")) {
       find("files.write").checked = false;
     }
-    grantSummary(box.closest("[data-grants]"));
   });
   document.addEventListener("click", function (event) {
-    var preset = event.target.closest && event.target.closest("[data-grant-preset]");
-    if (preset) {
-      var chosen = preset.getAttribute("data-grant-preset").split(",");
-      preset.closest("[data-grant-server]").querySelectorAll("input[type=checkbox]").forEach(function (box) {
-        box.checked = chosen.indexOf(box.value) >= 0;
-      });
-      grantSummary(preset.closest("[data-grants]"));
-      return;
-    }
     // data-fill="input-id" with data-fill-value sets that field and focuses it.
     var fill = event.target.closest && event.target.closest("[data-fill]");
     if (fill) {
@@ -373,13 +348,6 @@
         field.value = fill.getAttribute("data-fill-value");
         field.focus();
       }
-      return;
-    }
-    // data-clear="id" empties a region, such as a closed editor.
-    var clear = event.target.closest && event.target.closest("[data-clear]");
-    if (clear) {
-      var region = document.getElementById(clear.getAttribute("data-clear"));
-      if (region) region.replaceChildren();
     }
   });
 

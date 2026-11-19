@@ -17,7 +17,7 @@ var ctx = context.Background()
 
 var (
 	admin  = &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
-	viewer = &db.SessionUser{ID: "viewer", Username: "viewer", Role: db.RoleViewer}
+	viewer = &db.SessionUser{ID: "viewer", Username: "viewer", Role: db.RoleMember}
 )
 
 const day = 24 * 3_600_000

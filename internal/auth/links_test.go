@@ -34,7 +34,7 @@ func wantLinkInvalid(t *testing.T, err error) {
 // in password work are turned away as busy.
 func TestInviteLinkWorksOnceUnderConcurrentUse(t *testing.T) {
 	s, _, admin := linkService(t)
-	user, link, err := s.InviteUser(ctx, admin, "invitee", db.RoleViewer, Client{})
+	user, link, err := s.InviteUser(ctx, admin, "invitee", db.RoleMember, Client{}, nil)
 	if err != nil || link.Purpose != db.LinkInvite {
 		t.Fatal(link, err)
 	}
@@ -77,7 +77,7 @@ func TestInviteLinkWorksOnceUnderConcurrentUse(t *testing.T) {
 // when the password changes some other way.
 func TestResetLinkEndsWithExpiryOrChange(t *testing.T) {
 	s, c, admin := linkService(t)
-	addUser(t, s, targetID, "target", db.RoleOperator, original)
+	addUser(t, s, targetID, "target", db.RoleMember, original)
 	expired, err := s.CreateLink(ctx, admin, targetID, Client{})
 	if err != nil || expired.Purpose != db.LinkReset {
 		t.Fatal(expired, err)
@@ -106,10 +106,10 @@ func TestResetLinkEndsWithExpiryOrChange(t *testing.T) {
 // or is disabled while the new password is being hashed.
 func TestLinkEndsWhenAccountIsDisabled(t *testing.T) {
 	s, _, admin := linkService(t)
-	addUser(t, s, targetID, "target", db.RoleOperator, original)
+	addUser(t, s, targetID, "target", db.RoleMember, original)
 	link, _ := s.CreateLink(ctx, admin, targetID, Client{})
 	for _, disabled := range []bool{true, false} {
-		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleOperator, disabled, Client{}); err != nil {
+		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleMember, disabled, Client{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -119,7 +119,7 @@ func TestLinkEndsWhenAccountIsDisabled(t *testing.T) {
 	link, _ = s.CreateLink(ctx, admin, targetID, Client{})
 	s.Hasher.(*fastHasher).beforeHash = func() {
 		s.Hasher.(*fastHasher).beforeHash = nil
-		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleOperator, true, Client{}); err != nil {
+		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleMember, true, Client{}); err != nil {
 			t.Error(err)
 		}
 	}
@@ -168,7 +168,7 @@ func TestResetLinkStillAsksForTheCode(t *testing.T) {
 // blocked source can't use even a working link.
 func TestLinkAttemptsAreThrottled(t *testing.T) {
 	s, _, admin := linkService(t)
-	addUser(t, s, targetID, "target", db.RoleOperator, original)
+	addUser(t, s, targetID, "target", db.RoleMember, original)
 	link, _ := s.CreateLink(ctx, admin, targetID, Client{})
 	attacker := Client{IP: "203.0.113.9"}
 	for range loginSourceMax {
@@ -186,7 +186,7 @@ func TestLinkAttemptsAreThrottled(t *testing.T) {
 // valid, and an administrator can't make one for their own account.
 func TestLinkChangesRecheckTheAdmin(t *testing.T) {
 	s, _, admin := linkService(t)
-	addUser(t, s, targetID, "target", db.RoleOperator, original)
+	addUser(t, s, targetID, "target", db.RoleMember, original)
 	if _, err := s.CreateLink(ctx, admin, adminID, Client{}); !apperr.Is(err, "SELF_LINK") {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestLinkChangesRecheckTheAdmin(t *testing.T) {
 // Concurrent transactions spending the same link: exactly one commits.
 func TestUseAccountLinkCommitsOnce(t *testing.T) {
 	s, _, admin := linkService(t)
-	addUser(t, s, targetID, "target", db.RoleOperator, original)
+	addUser(t, s, targetID, "target", db.RoleMember, original)
 	link, _ := s.CreateLink(ctx, admin, targetID, Client{})
 	hash, _ := Argon2{}.Hash(linkPassword)
 	var wg sync.WaitGroup
@@ -240,10 +240,10 @@ func TestUseAccountLinkCommitsOnce(t *testing.T) {
 // another administrator, so the only one who can sign in can't step down.
 func TestInvitedAdminIsNotAnotherAdmin(t *testing.T) {
 	s, _, admin := linkService(t)
-	if _, _, err := s.InviteUser(ctx, admin, "next-admin", db.RoleAdmin, Client{}); err != nil {
+	if _, _, err := s.InviteUser(ctx, admin, "next-admin", db.RoleAdmin, Client{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, admin, adminID, db.RoleViewer, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+	if _, err := s.UpdateAccess(ctx, admin, adminID, db.RoleMember, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
 		t.Fatal(err)
 	}
 }

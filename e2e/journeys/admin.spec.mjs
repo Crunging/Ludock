@@ -138,9 +138,9 @@ test("changing the public address and backup limits", async ({ page }) => {
   await expect(page.locator("#connection-form .alert--success")).toHaveText("Server address cleared.");
 });
 
-test("a role changed while a deletion is answering stays changed", async ({ page }) => {
-  await createUser(page, "alice", "alice-password-123", "viewer");
-  await createUser(page, "bob", "bob-password-1234", "viewer");
+test("someone made an administrator while a deletion is answering stays one", async ({ page }) => {
+  await createUser(page, "alice", "alice-password-123");
+  await createUser(page, "bob", "bob-password-1234");
   // Alice's deletion is done on the server, but its answer arrives last.
   let release;
   const held = new Promise((resolve) => { release = resolve; });
@@ -152,11 +152,14 @@ test("a role changed while a deletion is answering stays changed", async ({ page
   const alice = page.locator(".user-row", { hasText: "alice" });
   await alice.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog", { name: "Delete alice?" }).getByRole("button", { name: "Delete user" }).click();
+  const bob = page.locator(".user-row", { hasText: "bob" });
   const promoted = page.waitForResponse(/\/users\/[^/]+\/access$/);
-  await page.getByLabel("Role for bob").selectOption("operator");
+  await bob.getByRole("button", { name: "Make administrator" }).click();
+  await page.getByRole("dialog", { name: "Make bob an administrator?" }).getByRole("button", { name: "Make administrator" }).click();
   await promoted;
   const deleted = page.waitForResponse(/\/users\/[^/]+\/delete$/);
   release();
   await deleted;
-  await expect(page.getByLabel("Role for bob")).toHaveValue("operator");
+  await expect(bob.getByRole("button", { name: "Make member" })).toBeVisible();
+  await expect(bob).toContainText("Administrator · every server and setting");
 });

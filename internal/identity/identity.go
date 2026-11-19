@@ -514,8 +514,6 @@ func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision in
 
 func sharedWithOthers(ctx context.Context, tx *sql.Tx, serverID string) (bool, error) {
 	var shared bool
-	// An administrator's grant counts too: it applies again if the account
-	// becomes an operator.
 	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM server_grants WHERE server_id = ?)", serverID).Scan(&shared)
 	return shared, err
 }

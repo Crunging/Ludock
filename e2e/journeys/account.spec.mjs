@@ -1,7 +1,7 @@
 import { test, expect, signIn, createUser } from "./fixtures.mjs";
 
 test("changing a password signs out the account's other devices", async ({ session }) => {
-  await createUser(await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE }), "player1", "first long password", "viewer");
+  await createUser(await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE }), "player1", "first long password");
 
   const laptop = await session();
   const phone = await session();

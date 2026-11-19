@@ -112,14 +112,45 @@ export function fake(path, query = {}) {
   });
 }
 
-/** Creates an account with a password through the users page. */
-export async function createUser(page, username, password, role) {
+/**
+ * Creates an account with a password through the users page. role is
+ * "member" or "admin"; the former "operator" and "viewer" make a member.
+ */
+export async function createUser(page, username, password, role = "member") {
   await page.goto("/users");
   const form = page.locator("#users form.settings-card");
   await form.getByLabel("Username").fill(username);
   await form.getByLabel("Set a password now").check();
   await form.getByLabel("Initial password").fill(password);
-  await form.getByLabel("Role").selectOption(role);
+  await form.getByLabel("Account").selectOption(role === "admin" ? "admin" : "member");
   await form.getByRole("button", { name: "Create user" }).click();
   await expect(page.locator("#users .alert--success")).toContainText(`Created ${username}.`);
+}
+
+/**
+ * Shares a server with an existing member from the server's Sharing tab, as
+ * an administrator. access is "Can see it", "Can run it", "Full access", or a
+ * list of the Custom choices' labels, such as ["Start", "Read logs"].
+ */
+export async function shareServer(page, server, username, access) {
+  await page.goto("/");
+  await page.getByRole("link", { name: server, exact: true }).click();
+  await page.getByRole("tab", { name: "Sharing" }).click();
+  const sharing = page.locator("#sharing");
+  await expect(sharing).toBeVisible();
+  const existing = sharing.locator(".share-row", { has: page.getByText(username, { exact: true }) });
+  const form = (await existing.count()) ? existing.locator("form") : sharing.locator("form.share-form");
+  if (!(await existing.count())) await form.getByLabel("Person").selectOption({ label: username });
+  await chooseAccess(form, access);
+  await form.getByRole("button", { name: (await existing.count()) ? "Save" : "Share", exact: true }).click();
+  await expect(sharing.locator(".alert--success")).toBeVisible();
+}
+
+/** Chooses a level, or Custom with exactly the given choices, in a sharing form. */
+export async function chooseAccess(form, access) {
+  const level = form.locator('select[name="level"]');
+  if (typeof access === "string") return level.selectOption({ label: access });
+  await level.selectOption({ label: "Custom" });
+  for (const box of await form.locator('input[name="capability"]').all()) await box.uncheck();
+  for (const label of access) await form.getByLabel(label, { exact: true }).check();
 }

@@ -236,7 +236,7 @@ func TestMaterialChangePausesSharing(t *testing.T) {
 // before the change: nobody confirmed either version since.
 func TestPauseSurvivesDisappearance(t *testing.T) {
 	s := &Store{DB: dbtest.Open(t)}
-	addUser(t, s, "friend", db.RoleViewer)
+	addUser(t, s, "friend", db.RoleMember)
 	original := reconcile(t, s, 0, observation(nil))[0]
 	share(t, s, "friend", original.ID)
 	reconcile(t, s, 0, observation(func(o *Observation) { o.GameType = "factorio" }))
