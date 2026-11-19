@@ -49,9 +49,10 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	}
 	switch operation {
 	case "delete-paths":
-		for index, item := range items {
+		// Removing a folder can fail after removing some of it.
+		for _, item := range items {
 			if err := h.removeEntry(parent, item.name, 0); err != nil {
-				return partial(index, err)
+				return errPartial
 			}
 		}
 		return h.json(map[string]bool{"ok": true})

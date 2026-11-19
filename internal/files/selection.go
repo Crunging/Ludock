@@ -14,6 +14,10 @@ import (
 	"github.com/Crunging/Ludock/internal/logging"
 )
 
+// errUnconfirmed has a 5xx status, which pages report as an unconfirmed
+// result.
+var errUnconfirmed = apperr.New("FILE_UNCONFIRMED", 500, "The unpack was interrupted")
+
 // MaxSelection is how many entries one selection can act on.
 const MaxSelection = 500
 
@@ -136,22 +140,22 @@ func (s *Service) Unpack(ctx context.Context, target Target, rootID, relative st
 		access.Cleanup(true)
 		// A helper that refused the archive removed its staging folder; one cut
 		// off may not have, so once it is gone a new helper removes it.
-		if slices.ContainsFunc([]string{"ARCHIVE_UNSAFE", "ARCHIVE_TOO_LARGE", "ARCHIVE_NO_SPACE", "NOT_AN_ARCHIVE", "FILE_NAME_TAKEN",
-			"UNSAFE_OR_CHANGED_FILE_PATH"}, func(code string) bool { return apperr.Is(err, code) }) {
+		if slices.ContainsFunc([]string{"ARCHIVE_UNSAFE", "ARCHIVE_TOO_LARGE", "ARCHIVE_NO_SPACE", "NOT_AN_ARCHIVE", "FILE_NAME_TAKEN"},
+			func(code string) bool { return apperr.Is(err, code) }) {
 			return nil, err
 		}
 		s.removeStage(context.WithoutCancel(ctx), target, root, normalized, stage)
-		// A helper cut off by a timeout or revoked access may have published
-		// its result before Docker removed it.
+		// A helper cut off by a timeout or revoked access, or one whose exit
+		// is unknown, may have published its result.
 		if public, ok := apperr.As(err); ok && public.Status == 401 {
 			return nil, err
 		}
-		return nil, apperr.New("FILE_UNCONFIRMED", 500, "The unpack was interrupted")
+		return nil, errUnconfirmed
 	}
 	access.Cleanup(false)
 	var result helper.UnpackResult
 	if err := json.Unmarshal(out, &result); err != nil || result.Name == "" {
-		return nil, Error("FILE_OPERATION_FAILED", 409)
+		return nil, errUnconfirmed
 	}
 	return &result, nil
 }
