@@ -74,6 +74,7 @@ func TestBindingDigestScope(t *testing.T) {
 		func(o *Observation) { o.DataFolders[0].Path = "/data/world" },
 		func(o *Observation) { o.DataFolders[0].Destination = "/" },
 		func(o *Observation) { o.DataFolders[0].Type = "volume" },
+		func(o *Observation) { o.DataFolders[0].ReadOnly = true },
 		func(o *Observation) { o.DataFolders = append(o.DataFolders, b) },
 		func(o *Observation) { o.DataFolders = nil },
 	}
@@ -188,16 +189,15 @@ func share(t *testing.T, s *Store, userID, serverID string) {
 }
 
 // A new game or other data folders take effect at once. They pause sharing
-// only when someone other than an administrator has access, and an
-// administrator confirms the server as it is now to resume it.
+// only when the server has grants, including an administrator's, which
+// applies again if the account becomes an operator. An administrator
+// confirms the server as it is now to resume it.
 func TestMaterialChangePausesSharing(t *testing.T) {
 	s := &Store{DB: dbtest.Open(t)}
 	addUser(t, s, "admin", db.RoleAdmin)
 	addUser(t, s, "other-admin", db.RoleAdmin)
-	addUser(t, s, "friend", db.RoleOperator)
 	session := dbtest.Session(t, s.DB, "admin")
 	original := reconcile(t, s, 0, observation(nil))[0]
-	share(t, s, "other-admin", original.ID)
 	moved := func(o *Observation) {
 		o.DataFolders = []DataFolder{{Path: "/data", Type: "bind", Source: "/srv/unrelated-world", Destination: "/data"}}
 	}
@@ -206,7 +206,7 @@ func TestMaterialChangePausesSharing(t *testing.T) {
 	if unshared.SharingPaused || unshared.BindingFingerprint != want || unshared.BindingRevision != original.BindingRevision+1 {
 		t.Fatalf("%+v", unshared)
 	}
-	share(t, s, "friend", original.ID)
+	share(t, s, "other-admin", original.ID)
 	paused := reconcile(t, s, 0, observation(func(o *Observation) { moved(o); o.GameType = "factorio" }))[0]
 	if !paused.SharingPaused || paused.Status != StatusActive || paused.GameType != "factorio" || paused.BindingRevision != unshared.BindingRevision+1 {
 		t.Fatalf("%+v", paused)

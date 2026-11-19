@@ -68,6 +68,7 @@ type DataFolder struct {
 	Type        string `json:"type"`
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
+	ReadOnly    bool   `json:"readOnly"`
 }
 
 type Status string
@@ -203,11 +204,12 @@ func ExternalIdentity(o Observation) (string, error) {
 func BindingDigest(o Observation) string {
 	folders := []DataFolder{}
 	for _, folder := range o.DataFolders {
-		folders = append(folders, DataFolder{path.Clean(folder.Path), folder.Type, path.Clean(folder.Source), path.Clean(folder.Destination)})
+		folders = append(folders, DataFolder{path.Clean(folder.Path), folder.Type, path.Clean(folder.Source), path.Clean(folder.Destination),
+			folder.ReadOnly})
 	}
 	slices.SortFunc(folders, func(a, b DataFolder) int {
-		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Type, b.Type), cmp.Compare(a.Source, b.Source),
-			cmp.Compare(a.Destination, b.Destination))
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Destination, b.Destination), cmp.Compare(a.Type, b.Type),
+			cmp.Compare(a.Source, b.Source))
 	})
 	encoded, _ := json.Marshal(struct {
 		GameType    string       `json:"gameType"`
@@ -498,8 +500,9 @@ func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision in
 
 func sharedWithOthers(ctx context.Context, tx *sql.Tx, serverID string) (bool, error) {
 	var shared bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_grants JOIN users ON users.id = server_grants.user_id
-    WHERE server_grants.server_id = ? AND users.role != 'admin')`, serverID).Scan(&shared)
+	// An administrator's grant counts too: it applies again if the account
+	// becomes an operator.
+	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM server_grants WHERE server_id = ?)", serverID).Scan(&shared)
 	return shared, err
 }
 

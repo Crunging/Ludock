@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -438,14 +439,20 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 	if project, service, number, ok := games.ComposeLabels(labels); ok {
 		observation.Compose = &identity.ComposeIdentity{Project: project, Service: service, ContainerNumber: number}
 	}
+	// Each root is its own mount and every mount nested inside it, which
+	// Files shows as part of the root.
 	for _, root := range container.FileRoots {
-		if mount, ok := files.RootMount(root.Path, observation.Mounts); ok {
+		owner, _ := files.RootMount(root.Path, observation.Mounts)
+		for _, mount := range observation.Mounts {
+			if mount != owner && !files.Within(path.Clean(mount.Destination), root.Path) {
+				continue
+			}
 			source := mount.Source
 			if mount.Type == "volume" && mount.Name != "" {
 				source = mount.Name
 			}
-			observation.DataFolders = append(observation.DataFolders,
-				identity.DataFolder{Path: root.Path, Type: mount.Type, Source: source, Destination: mount.Destination})
+			observation.DataFolders = append(observation.DataFolders, identity.DataFolder{Path: root.Path, Type: mount.Type,
+				Source: source, Destination: mount.Destination, ReadOnly: !mount.Writable})
 		}
 	}
 	credentials := map[string]bool{}
