@@ -64,8 +64,8 @@ func TestPublicMetadataExcludesSecrets(t *testing.T) {
 			t.Errorf("container exposes %s", secret)
 		}
 	}
-	if observed.Observation.GameConfiguration["env:RCON_PASSWORD"] != "private-password" || observed.Observation.Compose == nil {
-		t.Fatal("observation lost identity inputs")
+	if len(observed.Observation.DataFolders) != 1 || observed.Observation.DataFolders[0].Source != "rust" || observed.Observation.Compose == nil {
+		t.Fatalf("observation lost identity inputs: %+v", observed.Observation)
 	}
 	if secrets := observed.Observation.Secrets; len(secrets) != 1 || secrets[0] != "private-password" {
 		t.Fatal(secrets)

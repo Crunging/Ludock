@@ -297,7 +297,7 @@ func (j *Jobs) recoveryContext(ctx context.Context, job *ops.Context) (*servers.
 	}
 	if logical == nil || logical.Status != identity.StatusActive || logical.ContainerID == "" || logical.ContainerID != containerID ||
 		logical.BindingFingerprint != job.Job.Recovery.Fingerprint {
-		return nil, fail("RECOVERY_BINDING_CHANGED", "Recovery requires review because the server binding changed.")
+		return nil, fail("RECOVERY_BINDING_CHANGED", "The server changed in Docker while this was interrupted, so Ludock left it as it is. Check the server before trying again.")
 	}
 	observed, err := j.observeDuringStop(ctx, job, logical.ContainerID, logical)
 	if err != nil {

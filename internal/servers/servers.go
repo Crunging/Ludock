@@ -192,6 +192,8 @@ type View struct {
 	Connection      *Connection
 	BindingStatus   identity.Status
 	BindingRevision int64
+	// SharingPaused is set only on administrators' views.
+	SharingPaused   bool
 	Permissions     []authz.Capability
 	ActiveOperation *ActiveOperation
 	LatestBackup    *BackupSummary
@@ -261,7 +263,8 @@ func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, server
 }
 
 func (s *Service) view(ctx context.Context, d *details, logical identity.Server, permissions []authz.Capability, container *Container) *View {
-	view := &View{ID: logical.ID, BindingStatus: logical.Status, BindingRevision: logical.BindingRevision, Permissions: permissions}
+	view := &View{ID: logical.ID, BindingStatus: logical.Status, BindingRevision: logical.BindingRevision, Permissions: permissions,
+		SharingPaused: d.admin && logical.SharingPaused}
 	if container != nil {
 		view.Container = *container
 	} else {
@@ -426,7 +429,7 @@ func (s *Service) snapshot(ctx context.Context, actor *db.SessionUser, id string
 	}
 	unavailable := liveUnavailable || logical.ContainerID != original.ContainerID ||
 		logical.BindingRevision != original.BindingRevision || logical.BindingFingerprint != original.BindingFingerprint ||
-		logical.Status != original.Status || logical.ReviewRequired != original.ReviewRequired
+		logical.Status != original.Status || logical.SharingPaused != original.SharingPaused
 	permissions, err := s.Authz.Effective(ctx, actor, id)
 	if err != nil {
 		return nil, err

@@ -429,18 +429,27 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 	return container, nil
 }
 
-// toObservation is internal only: raw mounts and configuration are hashed by
+// toObservation is internal only: raw mounts and data folders are hashed by
 // the identity package, never shown.
 func toObservation(info *docker.ContainerInspect, container *Container) identity.Observation {
 	labels := info.Config.Labels
 	observation := identity.Observation{ContainerID: container.ID, Name: container.Name, DisplayName: container.DisplayName,
-		GameType: container.GameType, GameConfiguration: map[string]string{}}
+		GameType: container.GameType, Mounts: identity.DockerMounts(info.Mounts)}
 	if project, service, number, ok := games.ComposeLabels(labels); ok {
 		observation.Compose = &identity.ComposeIdentity{Project: project, Service: service, ContainerNumber: number}
 	}
-	adapter := games.ResolveAdapter(container.GameType, container.Labels)
+	for _, root := range container.FileRoots {
+		if mount, ok := files.RootMount(root.Path, observation.Mounts); ok {
+			source := mount.Source
+			if mount.Type == "volume" && mount.Name != "" {
+				source = mount.Name
+			}
+			observation.DataFolders = append(observation.DataFolders,
+				identity.DataFolder{Path: root.Path, Type: mount.Type, Source: source, Destination: mount.Destination})
+		}
+	}
 	credentials := map[string]bool{}
-	if adapter != nil {
+	if adapter := games.ResolveAdapter(container.GameType, container.Labels); adapter != nil {
 		for _, name := range adapter.PasswordEnvCandidates {
 			credentials[name] = true
 		}
@@ -448,30 +457,7 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 	if name := labels[games.LabelConsolePasswordEnv]; name != "" {
 		credentials[name] = true
 	}
-	for key, value := range container.Labels {
-		// Presentation labels can change without a review of the identity,
-		// and so can a longer list of values to redact, and the status query,
-		// which only ever reaches the game's own loopback.
-		if key != games.LabelEnable && key != games.LabelName && key != games.LabelAddress && key != games.LabelSecretEnv &&
-			key != games.LabelQuery && key != games.LabelQueryPort {
-			observation.GameConfiguration[key] = value
-		}
-	}
-	for _, entry := range info.Config.Env {
-		key, value, found := strings.Cut(entry, "=")
-		if !found {
-			continue
-		}
-		if credentials[key] || logging.IsSensitiveKey(key) || key == "RCON_PORT" || key == "ENABLE_RCON" {
-			observation.GameConfiguration["env:"+key] = value
-		}
-	}
-	observation.Secrets = secrets(info.Config.Env, labels, credentials, observation.GameConfiguration)
-	if adapter != nil && adapter.ID == games.StdinConsole {
-		observation.GameConfiguration["stdin:open"] = strconv.FormatBool(info.Config.OpenStdin)
-		observation.GameConfiguration["stdin:once"] = strconv.FormatBool(info.Config.StdinOnce)
-	}
-	observation.Mounts = identity.DockerMounts(info.Mounts)
+	observation.Secrets = secrets(info.Config.Env, labels, credentials, container.Labels)
 	return observation
 }
 
@@ -484,7 +470,7 @@ var secretEnv = regexp.MustCompile(`(?i)pass|pwd|private|salt|webhook|gslt|(^|_)
 // ludock.secret-env, sensitive configuration labels, and passwords inside
 // URLs. Containers print their configuration in ways Ludock can't predict,
 // so a value is redacted wherever it appears.
-func secrets(env []string, labels map[string]string, credentials map[string]bool, configuration map[string]string) []string {
+func secrets(env []string, labels map[string]string, credentials map[string]bool, ludockLabels map[string]string) []string {
 	listed := map[string]bool{}
 	for _, name := range strings.Split(labels[games.LabelSecretEnv], ",") {
 		listed[strings.TrimSpace(name)] = true
@@ -518,8 +504,8 @@ func secrets(env []string, labels map[string]string, credentials map[string]bool
 			}
 		}
 	}
-	for key, value := range configuration {
-		if !strings.HasPrefix(key, "env:") && key != games.LabelConsolePasswordEnv && logging.IsSensitiveKey(key) {
+	for key, value := range ludockLabels {
+		if key != games.LabelConsolePasswordEnv && key != games.LabelSecretEnv && logging.IsSensitiveKey(key) {
 			add(value, false)
 		}
 	}

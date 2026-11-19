@@ -1,0 +1,115 @@
+import { request } from "node:http";
+import { join } from "node:path";
+import { test, expect, signIn, createUser, serverRow, openServer } from "./fixtures.mjs";
+
+/** Recreates a container with changed environment variables and labels, as Portainer or Compose would; a bare KEY removes it. */
+function recreate(container, { env = [], label = [] }) {
+  const query = new URLSearchParams({ container });
+  for (const entry of env) query.append("env", entry);
+  for (const entry of label) query.append("label", entry);
+  return new Promise((resolve, reject) => {
+    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
+      path: "/fake/recreate?" + query }, (response) => {
+      response.resume();
+      response.on("end", resolve);
+    });
+    call.on("error", reject);
+    call.end();
+  });
+}
+
+async function share(adminPage, server, ...capabilities) {
+  const editor = adminPage.locator("[data-grants]");
+  const row = editor.locator(".grants-server", { hasText: server });
+  for (const capability of capabilities) await row.getByLabel(capability, { exact: true }).check();
+  await editor.getByRole("button", { name: "Save server access" }).click();
+  await expect(editor.locator(".alert--success")).toBeVisible();
+}
+
+async function deleteUser(adminPage, username) {
+  await adminPage.goto("/users");
+  await adminPage.locator(".user-row", { hasText: username }).getByRole("button", { name: "Delete" }).click();
+  await adminPage.getByRole("dialog", { name: `Delete ${username}?` }).getByRole("button", { name: "Delete user" }).click();
+  await expect(adminPage.locator("#users .alert--success")).toHaveText(`Deleted ${username}.`);
+}
+
+test("changing a password or label in Docker leaves a server as it was in Ludock", async ({ session }) => {
+  const adminPage = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await createUser(adminPage, "steady", "steady password one", "operator");
+  await share(adminPage, "Survival", "Send console commands");
+  const operator = await session();
+  await signIn(operator, "steady", "steady password one");
+  try {
+    // Another password, the console password set in the environment, and a
+    // new Ludock label.
+    await recreate("minecraft", { env: ["DB_PASS=rotated-db-secret", "RCON_PASSWORD=dev-rcon-secret"],
+      label: ["ludock.console.password-env=RCON_PASSWORD"] });
+
+    await openServer(adminPage, "Survival");
+    await expect(adminPage.getByRole("heading", { name: "This server changed in Docker" })).toHaveCount(0);
+    await adminPage.goto("/");
+    await expect(adminPage.locator(".needs-attention")).not.toContainText("Server changed");
+
+    await operator.goto("/");
+    await serverRow(operator, "Survival").getByRole("link", { name: "Console" }).click();
+    await expect(operator.locator("[data-console-status]")).toHaveText("Connected");
+    await operator.getByLabel("Game command").fill("list");
+    await operator.getByRole("button", { name: "Send" }).click();
+    await expect(operator.locator(".xterm-rows")).toContainText("There are 0 of a max of 10 players online:");
+  } finally {
+    await recreate("minecraft", { env: ["DB_PASS=dev-db-secret", "RCON_PASSWORD"], label: ["ludock.console.password-env"] });
+    await deleteUser(adminPage, "steady");
+  }
+});
+
+test("a new game pauses shared access until an administrator confirms it", async ({ session }) => {
+  const adminPage = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  await createUser(adminPage, "friend", "friend password one", "operator");
+  await share(adminPage, "enshrouded", "Restart", "Manage own schedules");
+  const friend = await session();
+  await signIn(friend, "friend", "friend password one");
+  await friend.getByRole("link", { name: "enshrouded", exact: true }).click();
+  const serverURL = friend.url();
+  await friend.getByRole("tab", { name: "Schedules" }).click();
+  await friend.locator("#schedule-form").getByRole("button", { name: "Add schedule" }).click();
+  await expect(friend.locator("#schedule-list tbody tr")).toHaveCount(1);
+  try {
+    await recreate("enshrouded", { label: ["ludock.game=valheim"] });
+
+    // The administrator keeps full use of the server and sees why sharing
+    // is paused.
+    await adminPage.goto("/");
+    await expect(serverRow(adminPage, "enshrouded")).toContainText("Changed in Docker. Shared access is paused until you confirm.");
+    await expect(adminPage.locator(".needs-attention")).toContainText("Server changed");
+    await openServer(adminPage, "enshrouded");
+    const notice = adminPage.locator(".notice-panel");
+    await expect(notice.getByRole("heading", { name: "This server changed in Docker" })).toBeVisible();
+    await expect(notice).toContainText("Its game or data folders changed.");
+    await expect(adminPage.locator(".detail-actions").getByRole("button", { name: "Start" })).toBeEnabled();
+    await expect(adminPage.getByRole("tab")).toContainText(["Overview", "Activity", "Schedules"]);
+    await adminPage.getByRole("tab", { name: "Schedules" }).click();
+    await expect(adminPage.locator("#schedule-list")).toContainText("The server’s game or data folders changed.");
+
+    // The friend loses the server until then.
+    await friend.goto(serverURL);
+    await expect(friend.getByText("Server not found")).toBeVisible();
+    await friend.goto("/");
+    await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
+
+    await adminPage.getByRole("tab", { name: "Overview" }).click();
+    await notice.getByRole("button", { name: "Confirm and restore access" }).click();
+    await expect(adminPage.locator(".notice-panel")).toHaveCount(0);
+
+    // The friend's server and schedule come back as they were.
+    await friend.goto(serverURL);
+    await expect(friend.getByRole("heading", { level: 1, name: "enshrouded" })).toBeVisible();
+    await friend.getByRole("tab", { name: "Schedules" }).click();
+    const schedule = friend.locator("#schedule-list tbody tr");
+    await expect(schedule).toHaveCount(1);
+    await expect(schedule).not.toContainText("changed");
+    await expect(schedule).toContainText("Restart");
+  } finally {
+    await deleteUser(adminPage, "friend");
+    await recreate("enshrouded", { label: ["ludock.game"] });
+  }
+});

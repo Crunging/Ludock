@@ -295,8 +295,10 @@ templ ServerCard(row ServerRow) {
 			if guidance := StateGuidance(server.State); guidance != "" {
 				<p class="server-row__note">{ guidance }</p>
 			}
-			if server.BindingStatus != "active" {
-				<p class="server-row__warning">Binding { Capitalize(string(server.BindingStatus)) }. Administrator review required.</p>
+			if note := BindingNote(string(server.BindingStatus)); note != "" {
+				<p class="server-row__warning">{ note }</p>
+			} else if server.SharingPaused {
+				<p class="server-row__warning">Changed in Docker. Shared access is paused until you confirm.</p>
 			}
 			if row.ImageUpdate {
 				<p class="server-row__update"><a class="text-link" href={ detailURL(server.ID, "tab=update") }>Image update available</a></p>
@@ -404,8 +406,8 @@ var scheduleReasons = map[string]string{
 	"owner_disabled":        "The schedule owner’s account is disabled.",
 	"owner_access_removed":  "The owner no longer has schedule access.",
 	"action_access_removed": "The owner no longer has access to this action.",
-	"binding_changed":       "Recreate the schedule after the server binding is reviewed.",
-	"binding_unavailable":   "The server binding needs administrator attention.",
+	"sharing_paused":        "Waiting for an administrator to confirm the server’s change.",
+	"binding_unavailable":   "Ludock can’t find the server’s container.",
 	"unavailable":           "Review the schedule settings and server state.",
 }
 
@@ -424,13 +426,12 @@ func describeAttention(item attention.Item) attentionText {
 		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
 	case "binding":
 		title := "Server container missing"
-		switch item.BindingStatus {
-		case "review_required":
-			title = "Binding review required"
-		case "ambiguous":
-			title = "Ambiguous server binding"
+		if item.BindingStatus == "ambiguous" {
+			title = "More than one container for this server"
 		}
 		return attentionText{title, path, "Review server"}
+	case "sharing":
+		return attentionText{"Server changed", path, "Confirm the change"}
 	case "disk":
 		return attentionText{"Disk nearly full", path + "?tab=overview", "Check disk space"}
 	case "memory":
@@ -463,11 +464,9 @@ templ attentionDetail(item attention.Item) {
 		case "memory":
 			<span class="muted">Over { WholePercent(item.Percent) } of its memory limit since @Time(item.Since, "", "")<span>.</span></span>
 		case "binding":
-			if item.BindingStatus == "review_required" {
-				<span class="muted">Review the changed server identity before resuming controls.</span>
-			} else {
-				<span class="muted">Check the container in Docker or its owning manager, then refresh.</span>
-			}
+			<span class="muted">Check the container in Docker or its owning manager, then refresh.</span>
+		case "sharing":
+			<span class="muted">Its game or data folders changed. People you shared it with can’t use it until you confirm.</span>
 		default:
 			if item.State == "docker_unavailable" {
 				<span class="muted">Ludock cannot reach Docker.</span>

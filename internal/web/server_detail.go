@@ -309,52 +309,32 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 	render(w, r, http.StatusOK, views.Alert("success", "Monitoring settings saved."))
 }
 
-// reviewBinding accepts a changed server identity (administrators only).
-func (s *Server) reviewBinding(w http.ResponseWriter, r *http.Request, request *Request) {
+// confirmChange gives back shared access that a change to the server's game
+// or data folders paused (administrators only).
+func (s *Server) confirmChange(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
+	revision, err := strconv.ParseInt(r.PostFormValue("bindingRevision"), 10, 64)
+	if err != nil {
+		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Reload the page and try again"))
+		return
+	}
+	// The confirmation is for the server as Docker has it now.
 	if _, err := s.App.Servers.RefreshNow(ctx); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
-	server, err := s.App.Identity.Get(ctx, id)
-	if err != nil {
+	if err := s.recheckAdmin(ctx, request); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
-	revision, revisionErr := strconv.ParseInt(r.PostFormValue("bindingRevision"), 10, 64)
-	switch {
-	case server == nil || server.PendingFingerprint == "":
-		err = apperr.New("NO_REVIEW", 409, "This server has no pending binding review")
-	case r.PostFormValue("confirmation") != server.DisplayName:
-		err = apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to accept the changed binding")
-	case revisionErr != nil || revision != server.BindingRevision:
-		err = apperr.New("SERVER_REVIEW_CHANGED", 409, "The pending server binding changed; reload the review")
-	}
-	if err != nil {
-		s.fail(w, r, request, err)
+	if err := s.App.Identity.ResumeSharing(ctx, request.User().ID, request.Principal.TokenHash, id, revision); err != nil {
+		s.fail(w, r, request, authz.AdminMutationError(err))
 		return
 	}
-	release, err := s.App.Locks.AcquirePreempting(ctx, []string{"server:" + id}, nil)
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	err = func() error {
-		defer release()
-		if err := s.recheckAdmin(ctx, request); err != nil {
-			return err
-		}
-		_, err := s.App.Identity.ReviewBinding(ctx, request.User().ID, request.Principal.TokenHash, id, server.PendingFingerprint, revision)
-		return authz.AdminMutationError(err)
-	}()
-	if err != nil {
-		s.fail(w, r, request, err)
-		return
-	}
-	s.audit(r, request, "server.binding.reviewed", id, nil)
+	s.audit(r, request, "server.change.confirmed", id, nil)
 	w.Header().Set("HX-Refresh", "true")
-	render(w, r, http.StatusOK, views.Alert("success", "Server binding reviewed."))
+	render(w, r, http.StatusOK, views.Alert("success", "Confirmed. Everyone you shared this server with can use it again."))
 }
 
 // recheckAdmin confirms the session still belongs to an active administrator.

@@ -20,7 +20,7 @@ import (
 
 type Item struct {
 	ID         string
-	Kind       string // binding, availability, schedule, operation
+	Kind       string // binding, sharing, availability, disk, memory, schedule, operation
 	ServerID   string
 	ServerName string
 	// binding
@@ -61,7 +61,7 @@ type Service struct {
 	Refresh func(ctx context.Context) error
 }
 
-var priority = map[string]int{"binding": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
+var priority = map[string]int{"binding": 0, "sharing": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
 
 // List reads current authority after discovery: a stale principal never
 // exposes a revoked server's saved history.
@@ -73,7 +73,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 	}
 	result := &Result{Items: []Item{}}
 	hasVisible := false
-	_, visible, err := s.Authz.EffectiveAll(ctx, actor, servers)
+	current, visible, err := s.Authz.EffectiveAll(ctx, actor, servers)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +99,11 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		if server.Status != identity.StatusActive {
 			item := base
 			item.ID, item.Kind, item.BindingStatus = "binding:"+server.ID, "binding", server.Status
+			result.Items = append(result.Items, item)
+		}
+		if server.SharingPaused && current != nil && current.Role == db.RoleAdmin {
+			item := base
+			item.ID, item.Kind = "sharing:"+server.ID, "sharing"
 			result.Items = append(result.Items, item)
 		}
 		if problem := problems[server.ID]; problem != nil {

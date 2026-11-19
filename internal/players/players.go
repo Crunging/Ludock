@@ -191,7 +191,7 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 	var wait sync.WaitGroup
 	for _, server := range logical {
 		container, found := current[server.ContainerID]
-		if server.Status != identity.StatusActive || server.ReviewRequired || server.ContainerID == "" || !found ||
+		if server.Status != identity.StatusActive || server.ContainerID == "" || !found ||
 			container.State != "running" || !s.Source.Lists(container) {
 			continue
 		}

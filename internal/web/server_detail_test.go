@@ -3,12 +3,16 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -66,14 +70,47 @@ func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 	}
 }
 
-func TestBindingReviewNeedsAPendingReview(t *testing.T) {
+// A server whose game changed is paused for the operator it was shared with:
+// a forged start or confirmation from them fails, a confirmation for an
+// older state of the server fails, and the administrator's confirmation
+// restores the operator's access.
+func TestConfirmChangeRestoresSharing(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	form := url.Values{"_csrf": {CSRFToken(p.admin.Token)}, "confirmation": {"valheim"}, "bindingRevision": {"1"}}
-	response := p.do("POST", "/servers/"+p.server+"/binding-review", p.admin, strings.NewReader(form.Encode()),
-		map[string]string{"HX-Request": "true"})
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "no pending binding review") {
+	ctx := context.Background()
+	operator := p.user("u-operator", "operator", db.RoleOperator)
+	p.grant(operator, authz.ServerView, authz.ServerStart)
+	before, _ := p.app.Identity.Get(ctx, p.server)
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = "minecraft" })
+	if _, err := p.app.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	paused, _ := p.app.Identity.Get(ctx, p.server)
+	if !paused.SharingPaused {
+		t.Fatalf("%+v", paused)
+	}
+	if response := p.post("/servers/"+p.server+"/start", operator, CSRFToken(operator.Token)); response.Code != http.StatusNotFound {
+		t.Fatal("paused operator started the server:", response.Code)
+	}
+	confirm := func(principal *auth.Principal, revision int64) *httptest.ResponseRecorder {
+		form := url.Values{"_csrf": {CSRFToken(principal.Token)}, "bindingRevision": {strconv.FormatInt(revision, 10)}}
+		return p.do("POST", "/servers/"+p.server+"/confirm-change", principal, strings.NewReader(form.Encode()),
+			map[string]string{"HX-Request": "true"})
+	}
+	if response := confirm(operator, paused.BindingRevision); response.Code != http.StatusForbidden {
+		t.Fatal("operator confirmed the change:", response.Code)
+	}
+	if response := confirm(p.admin, before.BindingRevision); response.Code != http.StatusConflict {
+		t.Fatal("confirmed an older state of the server:", response.Code)
+	}
+	if current, _ := p.app.Identity.Get(ctx, p.server); !current.SharingPaused {
+		t.Fatal("sharing resumed without a confirmation")
+	}
+	if response := confirm(p.admin, paused.BindingRevision); response.Code != http.StatusOK {
 		t.Fatal(response.Code, response.Body.String())
+	}
+	if response := p.do("GET", "/servers/"+p.server, operator, nil, nil); response.Code != http.StatusOK {
+		t.Fatal("confirmation did not restore access:", response.Code)
 	}
 }
 

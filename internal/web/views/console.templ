@@ -18,6 +18,8 @@ type ConsoleView struct {
 	Socket        string
 	Running       bool
 	BindingActive bool
+	// Unavailable says why the console can't connect while !BindingActive.
+	Unavailable string
 	ConsoleName   string
 	Placeholder   string
 	Quick         []games.QuickCommand
@@ -106,13 +108,13 @@ templ ConsolePage(page Page, c ConsoleView) {
 			<div class={ "console-terminal", templ.KV("console-terminal--blocked", !c.allowed()) } id="console-output" aria-label="Console output" tabindex="0" data-console-terminal></div>
 			<div class="console-recovery console-recovery--error" role="alert" data-console-error hidden></div>
 			switch {
-				case len(c.Modes) == 0:
-					<div class="console-warning" role="alert">You do not have console or log access to this server.</div>
 				case !c.BindingActive:
 					<div class="console-warning" role="alert">
-						Server identity requires administrator review.
+						{ c.Unavailable }
 						<a class="text-link" href={ templ.SafeURL("/servers/" + c.ServerID) }>Open server details</a>
 					</div>
+				case len(c.Modes) == 0:
+					<div class="console-warning" role="alert">You do not have console or log access to this server.</div>
 				case c.Mode == "logs":
 					<div class="console-warning">
 						Read-only Docker output: the latest 500 lines, with timestamps.<span data-console-paused-note hidden> Live display is paused.</span>

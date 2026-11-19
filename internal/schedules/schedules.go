@@ -38,7 +38,7 @@ const (
 	OwnerDisabled       = "owner_disabled"
 	OwnerAccessRemoved  = "owner_access_removed"
 	ActionAccessRemoved = "action_access_removed"
-	BindingChanged      = "binding_changed"
+	SharingPaused       = "sharing_paused"
 	BindingUnavailable  = "binding_unavailable"
 	Unavailable         = "unavailable"
 )
@@ -48,8 +48,8 @@ var unavailableMessages = map[string]string{
 	OwnerDisabled:       "Suspended: the schedule owner's account is disabled",
 	OwnerAccessRemoved:  "Suspended: required access to manage schedules has been removed",
 	ActionAccessRemoved: "Suspended: required access for this scheduled action has been removed",
-	BindingChanged:      "Suspended: server configuration changed; recreate this schedule after reviewing the server",
-	BindingUnavailable:  "Suspended: the server binding is unavailable or requires administrator review",
+	SharingPaused:       "Paused: the server's game or data folders changed, and an administrator needs to confirm it",
+	BindingUnavailable:  "Suspended: Ludock can't find this server's container",
 	Unavailable:         "Suspended: this schedule cannot currently run; review the server and schedule",
 }
 
@@ -59,11 +59,10 @@ type UnavailableError struct {
 }
 
 func unavailable(reason string) *UnavailableError {
-	binding := reason == BindingChanged || reason == BindingUnavailable
 	code, status := "SCHEDULE_REVOKED", 403
-	if reason == BindingChanged {
-		code, status = "SCHEDULE_BINDING_CHANGED", 409
-	} else if binding {
+	if reason == SharingPaused {
+		code, status = "SCHEDULE_SHARING_PAUSED", 409
+	} else if reason == BindingUnavailable {
 		code, status = "SCHEDULE_BINDING_UNAVAILABLE", 409
 	}
 	return &UnavailableError{Reason: reason, Public: apperr.New(code, status, unavailableMessages[reason])}
@@ -137,8 +136,8 @@ func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) 
 	if user.Disabled {
 		return nil, nil, unavailable(OwnerDisabled)
 	}
-	// Inspect assigned grants before binding availability, so a suspended
-	// binding is not misreported as a removed grant.
+	// Inspect assigned grants before the server's state, so paused sharing
+	// is not misreported as a removed grant.
 	if user.Role != db.RoleAdmin {
 		grant, err := s.Authz.UserGrant(ctx, user.ID, r.serverID)
 		if err != nil {
@@ -161,14 +160,8 @@ func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) 
 	if logical == nil {
 		return nil, nil, unavailable(BindingUnavailable)
 	}
-	var original string
-	err = q.QueryRowContext(ctx, `SELECT binding_fingerprint FROM server_bindings WHERE server_id=? AND binding_revision=? AND accepted=1
-    ORDER BY id DESC LIMIT 1`, r.serverID, r.bindingRevision).Scan(&original)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, err
-	}
-	if original == "" || original != logical.BindingFingerprint {
-		return nil, nil, unavailable(BindingChanged)
+	if logical.SharingPaused && user.Role != db.RoleAdmin {
+		return nil, nil, unavailable(SharingPaused)
 	}
 	binding, err := s.Identity.ResolveBinding(ctx, r.serverID, -1)
 	if err != nil {

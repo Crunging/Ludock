@@ -53,21 +53,29 @@ type Observation struct {
 	GameType    string           `json:"gameType"`
 	Compose     *ComposeIdentity `json:"compose,omitempty"`
 	Mounts      []Mount          `json:"mounts"`
-	// GameConfiguration is input only: values are keyed-hashed, never stored
-	// or returned by this package.
-	GameConfiguration map[string]string `json:"gameConfiguration,omitempty"`
+	// DataFolders are input only: they are keyed-hashed, never stored or
+	// returned by this package.
+	DataFolders []DataFolder `json:"dataFolders,omitempty"`
 	// Secrets are values to redact from console and log output, longest
 	// first. They are not part of the identity and are never stored.
 	Secrets []string `json:"-"`
 }
 
+// DataFolder is a folder Ludock reads, backs up, and restores, with the
+// mount that holds it. Source is the volume name or the host path.
+type DataFolder struct {
+	Path        string `json:"path"`
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+}
+
 type Status string
 
 const (
-	StatusActive         Status = "active"
-	StatusMissing        Status = "missing"
-	StatusAmbiguous      Status = "ambiguous"
-	StatusReviewRequired Status = "review_required"
+	StatusActive    Status = "active"
+	StatusMissing   Status = "missing"
+	StatusAmbiguous Status = "ambiguous"
 )
 
 type Server struct {
@@ -80,11 +88,11 @@ type Server struct {
 	Status             Status
 	BindingRevision    int64
 	BindingFingerprint string
-	PendingFingerprint string
-	PendingGameType    string
-	ReviewRequired     bool
-	FirstSeenAt        int64
-	LastSeenAt         int64
+	// SharingPaused is set when the game or data folders changed: people the
+	// server is shared with can't use it until an administrator confirms.
+	SharingPaused bool
+	FirstSeenAt   int64
+	LastSeenAt    int64
 }
 
 type Store struct{ DB *db.DB }
@@ -189,38 +197,22 @@ func ExternalIdentity(o Observation) (string, error) {
 	return "standalone:" + url.QueryEscape(strings.TrimPrefix(o.Name, "/")), nil
 }
 
-// BindingDigest is the unkeyed digest of what makes a binding material:
-// game type, writable mounts, and game configuration.
+// BindingDigest is the unkeyed digest of what makes a server the same in
+// substance: its game and the data folders Ludock reads, backs up, and
+// restores. Anything else in the container can change without a review.
 func BindingDigest(o Observation) string {
-	type mount struct {
-		Type        string `json:"type"`
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
+	folders := []DataFolder{}
+	for _, folder := range o.DataFolders {
+		folders = append(folders, DataFolder{path.Clean(folder.Path), folder.Type, path.Clean(folder.Source), path.Clean(folder.Destination)})
 	}
-	mounts := []mount{}
-	for _, m := range o.Mounts {
-		if !m.Writable {
-			continue
-		}
-		source := path.Clean(m.Source)
-		if m.Type == "volume" && m.Name != "" {
-			source = m.Name
-		}
-		mounts = append(mounts, mount{m.Type, source, path.Clean(m.Destination)})
-	}
-	slices.SortFunc(mounts, func(a, b mount) int {
-		return cmp.Or(cmp.Compare(a.Type, b.Type), cmp.Compare(a.Source, b.Source), cmp.Compare(a.Destination, b.Destination))
+	slices.SortFunc(folders, func(a, b DataFolder) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Type, b.Type), cmp.Compare(a.Source, b.Source),
+			cmp.Compare(a.Destination, b.Destination))
 	})
-	// encoding/json writes map keys sorted.
-	configuration := o.GameConfiguration
-	if configuration == nil {
-		configuration = map[string]string{}
-	}
 	encoded, _ := json.Marshal(struct {
-		GameType      string            `json:"gameType"`
-		Mounts        []mount           `json:"mounts"`
-		Configuration map[string]string `json:"configuration"`
-	}{o.GameType, mounts, configuration})
+		GameType    string       `json:"gameType"`
+		DataFolders []DataFolder `json:"dataFolders"`
+	}{o.GameType, folders})
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
@@ -231,8 +223,7 @@ func (s *Store) BindingFingerprint(o Observation) (string, error) {
 }
 
 const serverColumns = `id, host_id, external_identity, container_id, display_name, game_type, status,
-  binding_revision, binding_fingerprint, pending_fingerprint, pending_game_type, review_required,
-  first_seen_at, last_seen_at`
+  binding_revision, binding_fingerprint, review_required, first_seen_at, last_seen_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -249,19 +240,19 @@ func ScanServer(row scanner, extra ...any) (*Server, error) {
 
 func scanServer(row scanner, extra ...any) (*Server, error) {
 	var server Server
-	var container, pendingFingerprint, pendingGame sql.NullString
+	var container sql.NullString
 	var status string
-	var review int
+	var paused int
 	if err := row.Scan(append(extra, &server.ID, &server.HostID, &server.ExternalIdentity, &container, &server.DisplayName,
-		&server.GameType, &status, &server.BindingRevision, &server.BindingFingerprint, &pendingFingerprint,
-		&pendingGame, &review, &server.FirstSeenAt, &server.LastSeenAt)...); err != nil {
+		&server.GameType, &status, &server.BindingRevision, &server.BindingFingerprint, &paused,
+		&server.FirstSeenAt, &server.LastSeenAt)...); err != nil {
 		return nil, err
 	}
 	if !ValidID(server.ID) || (container.Valid && !ValidContainerID(container.String)) {
 		return nil, bindingError("INVALID_STORED_IDENTITY", "Stored server identity is invalid; review application data.", 500)
 	}
-	server.ContainerID, server.PendingFingerprint, server.PendingGameType = container.String, pendingFingerprint.String, pendingGame.String
-	server.Status, server.ReviewRequired = Status(status), review == 1
+	server.ContainerID = container.String
+	server.Status, server.SharingPaused = Status(status), paused == 1
 	return &server, nil
 }
 
@@ -311,8 +302,9 @@ func getServer(ctx context.Context, q queryer, id string) (*Server, error) {
 	return server, err
 }
 
-// ResolveBinding returns the server only while its binding is usable.
-// expectedRevision < 0 skips the revision check.
+// ResolveBinding returns the server only while exactly one container is
+// bound to it. expectedRevision < 0 skips the revision check. Paused sharing
+// is checked by authz, per user.
 func (s *Store) ResolveBinding(ctx context.Context, id string, expectedRevision int64) (*Server, error) {
 	server, err := s.Get(ctx, id)
 	if err != nil {
@@ -321,11 +313,11 @@ func (s *Store) ResolveBinding(ctx context.Context, id string, expectedRevision 
 	if server == nil {
 		return nil, bindingError("SERVER_NOT_FOUND", "Server not found", 404)
 	}
-	if server.Status != StatusActive || server.ReviewRequired || server.ContainerID == "" {
-		return nil, bindingError("SERVER_BINDING_UNAVAILABLE", "Server binding is unavailable or requires administrator review", 409)
+	if server.Status != StatusActive || server.ContainerID == "" {
+		return nil, bindingError("SERVER_BINDING_UNAVAILABLE", "Ludock can't find this server's container right now", 409)
 	}
 	if expectedRevision >= 0 && server.BindingRevision != expectedRevision {
-		return nil, bindingError("SERVER_BINDING_CHANGED", "The server binding changed; reload before trying again", 409)
+		return nil, bindingError("SERVER_BINDING_CHANGED", "The server changed in Docker; reload and try again", 409)
 	}
 	return server, nil
 }
@@ -347,7 +339,7 @@ func (s *Store) AssertObservedBinding(ctx context.Context, id string, o Observat
 		return nil, err
 	}
 	if server.ContainerID != o.ContainerID || server.ExternalIdentity != external || server.BindingFingerprint != fingerprint {
-		return nil, bindingError("SERVER_BINDING_CHANGED", "Docker server identity changed; refresh and review before continuing", 409)
+		return nil, bindingError("SERVER_BINDING_CHANGED", "The server changed in Docker; reload and try again", 409)
 	}
 	return server, nil
 }
@@ -436,7 +428,7 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 					return err
 				}
 				if !ambiguous {
-					if err := recordBinding(ctx, tx, id, 1, o.ContainerID, fingerprint, now, true); err != nil {
+					if err := recordBinding(ctx, tx, id, 1, o.ContainerID, fingerprint, now); err != nil {
 						return err
 					}
 				}
@@ -456,42 +448,30 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 				continue
 			}
 			fingerprint := fingerprints[external]
-			material := server.BindingFingerprint != "" && fingerprint != server.BindingFingerprint
-			review := server.ReviewRequired || material
-			changed := server.ContainerID != o.ContainerID
-			if review {
-				changed = changed || server.PendingFingerprint != fingerprint
-			} else {
-				changed = changed || server.BindingFingerprint != fingerprint
+			changed := server.ContainerID != o.ContainerID || server.BindingFingerprint != fingerprint
+			paused := server.SharingPaused
+			// A new game or other data folders make it a different server in
+			// substance, which nobody it was shared with has seen yet.
+			if server.BindingFingerprint != "" && fingerprint != server.BindingFingerprint && !paused {
+				if paused, err = sharedWithOthers(ctx, tx, server.ID); err != nil {
+					return err
+				}
 			}
-			unchanged := !changed && seenRecently && server.DisplayName == o.DisplayName
-			if review {
-				unchanged = unchanged && server.Status == StatusReviewRequired && server.ReviewRequired && server.PendingGameType == o.GameType
-			} else {
-				unchanged = unchanged && server.Status == StatusActive && server.GameType == o.GameType
-			}
-			if unchanged {
+			if !changed && seenRecently && server.DisplayName == o.DisplayName && server.Status == StatusActive &&
+				server.GameType == o.GameType && paused == server.SharingPaused {
 				continue
 			}
 			revision := server.BindingRevision
 			if changed {
 				revision++
 			}
-			if review {
-				_, err = tx.ExecContext(ctx, `UPDATE logical_servers SET container_id = ?, display_name = ?,
-          status = 'review_required', binding_revision = ?, pending_fingerprint = ?,
-          pending_game_type = ?, review_required = 1, last_seen_at = ? WHERE id = ?`,
-					o.ContainerID, o.DisplayName, revision, fingerprint, o.GameType, now, server.ID)
-			} else {
-				_, err = tx.ExecContext(ctx, `UPDATE logical_servers SET container_id = ?, display_name = ?, game_type = ?,
-          status = 'active', binding_revision = ?, binding_fingerprint = ?, last_seen_at = ? WHERE id = ?`,
-					o.ContainerID, o.DisplayName, o.GameType, revision, fingerprint, now, server.ID)
-			}
-			if err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE logical_servers SET container_id = ?, display_name = ?, game_type = ?,
+          status = 'active', binding_revision = ?, binding_fingerprint = ?, review_required = ?, last_seen_at = ? WHERE id = ?`,
+				o.ContainerID, o.DisplayName, o.GameType, revision, fingerprint, paused, now, server.ID); err != nil {
 				return err
 			}
 			if changed {
-				if err := recordBinding(ctx, tx, server.ID, revision, o.ContainerID, fingerprint, now, !review); err != nil {
+				if err := recordBinding(ctx, tx, server.ID, revision, o.ContainerID, fingerprint, now); err != nil {
 					return err
 				}
 			}
@@ -509,23 +489,26 @@ func (s *Store) Apply(ctx context.Context, observations []Observation, hostID st
 	return err
 }
 
-func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision int64, containerID, fingerprint string, now int64, accepted bool) error {
-	acceptedValue := 0
-	if accepted {
-		acceptedValue = 1
-	}
+func recordBinding(ctx context.Context, tx *sql.Tx, serverID string, revision int64, containerID, fingerprint string, now int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO server_bindings
     (server_id, binding_revision, container_id, binding_fingerprint, observed_at, accepted)
-    VALUES (?, ?, ?, ?, ?, ?)`, serverID, revision, containerID, fingerprint, now, acceptedValue)
+    VALUES (?, ?, ?, ?, ?, 1)`, serverID, revision, containerID, fingerprint, now)
 	return err
 }
 
-// ReviewBinding accepts the exact pending binding an administrator reviewed.
-// The caller must freshly reconcile Docker first. The administrator's session
-// and role are checked again in the transaction that accepts the binding.
-// expectedRevision < 0 skips the revision pin.
-func (s *Store) ReviewBinding(ctx context.Context, adminID, tokenHash, id, expectedFingerprint string, expectedRevision int64) (*Server, error) {
-	err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+func sharedWithOthers(ctx context.Context, tx *sql.Tx, serverID string) (bool, error) {
+	var shared bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_grants JOIN users ON users.id = server_grants.user_id
+    WHERE server_grants.server_id = ? AND users.role != 'admin')`, serverID).Scan(&shared)
+	return shared, err
+}
+
+// ResumeSharing gives back the access a change to the server's game or data
+// folders paused, once an administrator confirms the server at
+// expectedRevision. The administrator's session and role are checked again
+// in the same transaction.
+func (s *Store) ResumeSharing(ctx context.Context, adminID, tokenHash, id string, expectedRevision int64) error {
+	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		server, err := getServer(ctx, tx, id)
 		if err != nil {
 			return err
@@ -533,19 +516,13 @@ func (s *Store) ReviewBinding(ctx context.Context, adminID, tokenHash, id, expec
 		if server == nil {
 			return bindingError("SERVER_NOT_FOUND", "Server not found", 404)
 		}
-		if server.Status != StatusReviewRequired || server.ContainerID == "" || server.PendingFingerprint == "" ||
-			server.PendingFingerprint != expectedFingerprint || (expectedRevision >= 0 && server.BindingRevision != expectedRevision) {
-			return bindingError("SERVER_REVIEW_CHANGED", "The pending server binding changed; reload the review", 409)
+		if !server.SharingPaused {
+			return nil
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE logical_servers SET status = 'active', binding_revision = binding_revision + 1,
-      binding_fingerprint = pending_fingerprint, game_type = pending_game_type,
-      pending_fingerprint = NULL, pending_game_type = NULL, review_required = 0 WHERE id = ?`, id); err != nil {
-			return err
+		if server.Status != StatusActive || server.BindingRevision != expectedRevision {
+			return bindingError("SERVER_CHANGED_AGAIN", "The server changed again in Docker; reload and check it before confirming", 409)
 		}
-		return recordBinding(ctx, tx, id, server.BindingRevision+1, server.ContainerID, expectedFingerprint, db.Now(), true)
+		_, err = tx.ExecContext(ctx, "UPDATE logical_servers SET review_required = 0 WHERE id = ?", id)
+		return err
 	})
-	if err != nil {
-		return nil, err
-	}
-	return s.Get(ctx, id)
 }

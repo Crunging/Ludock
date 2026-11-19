@@ -151,7 +151,7 @@ func (s *Service) sampleAll(ctx context.Context, logical []identity.Server, curr
 	)
 	slots := make(chan struct{}, parallel)
 	for _, server := range logical {
-		if server.Status != identity.StatusActive || server.ReviewRequired || server.ContainerID == "" ||
+		if server.Status != identity.StatusActive || server.ContainerID == "" ||
 			current[server.ContainerID].State != "running" {
 			continue
 		}

@@ -288,7 +288,7 @@ func (d DiskState) alertingPaths() string {
 
 func bound(server identity.Server, current map[string]servers.Container) bool {
 	_, found := current[server.ContainerID]
-	return server.Status == identity.StatusActive && !server.ReviewRequired && server.ContainerID != "" && found
+	return server.Status == identity.StatusActive && server.ContainerID != "" && found
 }
 
 // CheckDisk measures the data folders of monitored servers that are due,
