@@ -112,3 +112,29 @@ test("browsing a large folder a page at a time", async ({ page }) => {
     rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test("the last sort chosen while a filter is loading applies", async ({ page }) => {
+  await page.goto("/");
+  await serverRow(page, "Survival").getByRole("button", { name: /More actions/ }).click();
+  await serverRow(page, "Survival").getByRole("link", { name: "Files" }).click();
+  await expect(page.locator(".file-row__name").first()).toBeVisible();
+  // Holds the filter's answer, so two sorts are chosen while it loads.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let waiting = false;
+  await page.route("**/fragments/files/**", async (route) => {
+    if (!waiting) {
+      waiting = true;
+      await held;
+    }
+    await route.continue();
+  });
+  await page.getByLabel("Filter filenames").fill("o");
+  await expect.poll(() => waiting).toBe(true);
+  await page.getByLabel("Sort by").selectOption("name-desc");
+  await page.getByLabel("Sort by").selectOption("size-desc");
+  release();
+  await expect(page).toHaveURL(/q=o&root=[^&]+&sort=size-desc$/);
+  await expect(page.getByLabel("Sort by")).toHaveValue("size-desc");
+  await page.unroute("**/fragments/files/**");
+});

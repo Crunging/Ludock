@@ -6,12 +6,12 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
-    "htmx-ext-sse": "2.2.4",
-    "htmx.org": "2.0.11"
+    "htmx.org": "4.0.2"
   },
   "vendored": {
     "htmx.min.js": "htmx.org/dist/htmx.min.js",
-    "htmx-sse.min.js": "htmx-ext-sse/dist/sse.min.js",
+    "htmx-sse.min.js": "htmx.org/dist/ext/hx-sse.min.js",
+    "htmx-preload.min.js": "htmx.org/dist/ext/hx-preload.min.js",
     "xterm.js": "@xterm/xterm/lib/xterm.js",
     "xterm.css": "@xterm/xterm/css/xterm.css",
     "xterm-addon-fit.js": "@xterm/addon-fit/lib/addon-fit.js",

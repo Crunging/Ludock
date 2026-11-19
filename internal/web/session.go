@@ -79,6 +79,17 @@ func (s *Server) client(r *http.Request) auth.Client {
 
 func isHTMX(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" }
 
+// htmxSource and htmxTarget are the ids of the element that sent an htmx
+// request and of the one its response goes into. htmx sends each as "tag#id".
+func htmxSource(r *http.Request) string { return elementID(r.Header.Get("HX-Source")) }
+
+func htmxTarget(r *http.Request) string { return elementID(r.Header.Get("HX-Target")) }
+
+func elementID(identifier string) string {
+	_, id, _ := strings.Cut(identifier, "#")
+	return id
+}
+
 func (s *Server) principal(r *http.Request) (*auth.Principal, error) {
 	return s.Auth.Session(r.Context(), auth.SessionToken(r))
 }

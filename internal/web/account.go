@@ -81,5 +81,5 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request, request *
 	} else {
 		view.Message = "Session revoked."
 	}
-	render(w, r, http.StatusOK, views.AccountSessions(view), views.AccountStatus(view, true))
+	render(w, r, http.StatusOK, views.AccountSessions(view), views.AccountStatusUpdate(view))
 }

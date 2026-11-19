@@ -9,6 +9,9 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await expect(page.locator(".server-row")).toHaveCount(2);
   await expect(serverRow(page, "Survival")).toContainText("Running");
   await expect(serverRow(page, "Survival")).toContainText("25565");
+  // The strip under the title counts every server, whatever the filters.
+  const fleet = page.locator("#fleet");
+  await expect(fleet).toHaveText("1 running, 1 stopped");
 
   // Typing keeps going while results arrive: the keyboard types into
   // whatever has focus, so a replaced search box would lose the "e".
@@ -17,6 +20,7 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await page.keyboard.type("valh");
   await expect(page.locator(".server-row")).toHaveCount(1);
   await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
+  await expect(fleet).toHaveText("1 running, 1 stopped");
   await page.keyboard.type("e");
   await expect(search).toHaveValue("valhe");
   await expect(search).toBeFocused();
@@ -26,6 +30,7 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   const valheim = serverRow(page, "valheim");
   await valheim.getByRole("button", { name: "Start" }).click();
   await expect(valheim).toContainText("Running");
+  await expect(fleet).toHaveText("2 running");
   await expect(page.locator(".server-row")).toHaveCount(1);
   await expect(search).toHaveValue("valhe");
 
@@ -104,21 +109,28 @@ test("the More menu on the last server opens past the end of the list", async ({
 });
 
 test("list refreshes show local times from the first frame", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator(".server-row time").first()).toBeVisible();
-  // Records every time label the list shows while a refresh swaps it in.
+  await page.goto("/?search=valh");
+  await expect(page.locator(".server-row")).toHaveCount(1);
+  // Records every time label the list shows while a refresh adds a server:
+  // a refresh morphs the list, so rows already there don't change.
   const shown = await page.evaluate(() => new Promise((resolve) => {
     const servers = document.getElementById("servers");
     const texts = [];
-    const observer = new MutationObserver(() => servers.querySelectorAll("time").forEach((time) => texts.push(time.textContent)));
+    const record = () => servers.querySelectorAll("time").forEach((time) => texts.push(time.textContent));
+    const observer = new MutationObserver(record);
     observer.observe(servers, { childList: true, subtree: true, characterData: true });
-    document.body.addEventListener("htmx:afterSettle", function settled(event) {
-      if (event.detail.target !== servers) return;
-      document.body.removeEventListener("htmx:afterSettle", settled);
+    document.body.addEventListener("htmx:after:settle", function settled(event) {
+      if (event.target !== servers) return;
+      document.body.removeEventListener("htmx:after:settle", settled);
+      // The swap settles in the task that changed the list, before the
+      // observer is told.
+      if (observer.takeRecords().length) record();
       observer.disconnect();
       resolve(texts);
     });
-    window.htmx.trigger(document.body, "servers-changed");
+    const search = document.querySelector("#server-filters input[type=search]");
+    search.value = "";
+    search.form.requestSubmit();
   }));
   expect(shown.length).toBeGreaterThan(0);
   expect(shown.filter((text) => text.includes("UTC"))).toEqual([]);

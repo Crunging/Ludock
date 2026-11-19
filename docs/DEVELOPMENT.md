@@ -20,8 +20,10 @@ address. `fakedocker -demo` seeds the servers shown in the README screenshots.
   `_templ.go` files; CI fails when they are out of date.
 - **Assets:** `internal/web/assets` is embedded into the binary: `ludock.css`,
   `ludock.js` (behaviors are `data-*` attributes; pages run no inline scripts),
-  page scripts such as `console.js` and `files.js`, and vendored htmx, its SSE
-  extension, and xterm.js with their licenses.
+  page scripts such as `console.js` and `files.js`, the fonts, and vendored
+  htmx 4, its SSE and preload extensions, and xterm.js, each with its license.
+  The Content Security Policy allows no evaluated script, so htmx attributes
+  never use `js:`, trigger filters, `hx-on`, or the `hx-live` extension.
 - **Real Docker:** set `LUDOCK_DOCKER_SOCKET` to a dedicated test daemon with
   disposable game data, never one running real servers. Native runs also need
   `LUDOCK_HELPER_IMAGE`, a Ludock image pinned by digest, for file and backup
@@ -103,8 +105,8 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 - **Go:** update `go.mod`'s `go` line and the Go image digest in the Dockerfile
   together. Helpers reuse the running Ludock image, so they always match it.
-- **Vendored scripts:** htmx, its SSE extension, and xterm.js live in
-  `internal/web/assets/vendor` with their licenses. Each file is an exact copy
+- **Vendored scripts:** htmx, its SSE and preload extensions, and xterm.js
+  live in `internal/web/assets/vendor` with their licenses. Each file is an exact copy
   of the published file `third_party/browser/package.json` maps it to, so the
   security scan can audit those versions. To update one, change its version
   there, run `npm install --package-lock-only` in that folder, copy the new

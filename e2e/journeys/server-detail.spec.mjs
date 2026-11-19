@@ -267,3 +267,21 @@ test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
   await expect(page).toHaveURL(/\?tab=backups$/);
   await page.unroute(/\?tab=(activity|backups)$/);
 });
+
+test("tabs clicked faster than they open end on the last one", async ({ page }) => {
+  await openServer(page, "Survival");
+  // Nothing holds these pages back: clicks land while earlier tabs are opening.
+  for (const gap of [0, 40]) {
+    await page.evaluate(async (gap) => {
+      for (const name of ["Activity", "Backups", "Schedules", "Update", "Activity", "Schedules", "Backups"]) {
+        [...document.querySelectorAll(".section-tabs a")].find((tab) => tab.textContent.trim() === name).click();
+        await new Promise((done) => setTimeout(done, gap));
+      }
+    }, gap);
+    await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#backup-readiness")).toBeVisible();
+    await expect(page).toHaveURL(/\?tab=backups$/);
+    await page.getByRole("tab", { name: "Overview" }).click();
+    await expect(page.locator("#overview-live")).toBeVisible();
+  }
+});

@@ -46,7 +46,7 @@ templ UsersPage(page Page, u UsersView) {
 
 // UsersContent is replaced after every account change.
 templ UsersContent(u UsersView) {
-	<div id="users" hx-disinherit="*">
+	<div id="users">
 		if u.Error != "" {
 			@Alert("error", u.Error)
 		}
@@ -111,7 +111,7 @@ templ userRow(u UsersView, user db.User) {
 			<span>
 				Created @Time(user.CreatedAt, "date", "")
 				if user.Disabled {
-					· Disabled
+					<strong class="user-row__disabled">Disabled</strong>
 				}
 			</span>
 		</div>
@@ -201,7 +201,7 @@ func (g GrantsView) selectedCount() int {
 }
 
 templ GrantsEditor(g GrantsView) {
-	<form class="grants-editor" id={ "grants-" + g.UserID } hx-post={ "/users/" + g.UserID + "/grants" } hx-target="this" hx-swap="outerHTML" hx-disinherit="*" data-grants>
+	<form class="grants-editor" id={ "grants-" + g.UserID } hx-post={ "/users/" + g.UserID + "/grants" } hx-target="this" hx-swap="outerHTML" data-grants>
 		<h3 tabindex="-1" autofocus>Server access for { g.Username }</h3>
 		<p class="muted">Choose a preset for each server, then adjust its permissions. New servers are not shared automatically.</p>
 		if g.Error != "" {

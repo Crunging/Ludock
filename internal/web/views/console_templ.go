@@ -378,7 +378,7 @@ func ConsolePage(page Page, c ConsoleView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			case c.Mode == "logs":
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "<div class=\"console-warning\">Read-only Docker output · latest 500 lines · timestamps enabled<span data-console-paused-note hidden>· live display paused</span></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "<div class=\"console-warning\">Read-only Docker output: the latest 500 lines, with timestamps.<span data-console-paused-note hidden>Live display is paused.</span></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

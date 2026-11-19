@@ -1,7 +1,9 @@
 package views
 
 import (
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Crunging/Ludock/internal/attention"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -25,7 +27,12 @@ type ServerRow struct {
 	Players        PlayersView
 }
 
+// FleetBlock is one server in the strip of state blocks under the title.
+type FleetBlock struct{ Name, Label, Tone string }
+
 type ServerList struct {
+	// Fleet is every server the viewer can see, whatever the filters.
+	Fleet                []FleetBlock
 	Rows                 []ServerRow
 	Total                int
 	Search, State        string
@@ -84,15 +91,16 @@ templ discoveryHelp() {
 
 templ Dashboard(page Page, list ServerList) {
 	@Shell(page) {
-		<div class="page dashboard-page" sse-connect="/events">
+		<div class="page dashboard-page" hx-sse:connect="/events" hx-trigger="load, live-retry" hx-swap="none">
 			<div class="page__header page__header--actions">
 				<div>
 					<h1 class="page__title">Servers</h1>
 					if !page.Admin {
 						<p class="page__subtitle">Servers shared with your account.</p>
 					}
+					@fleet(list)
 				</div>
-				<button class="secondary-btn" type="button" hx-get="/fragments/servers" hx-include="#server-filters" hx-target="#servers" hx-sync="#servers:queue last" data-busy-label="Refreshing…">Refresh</button>
+				<button class="secondary-btn" type="button" hx-get="/fragments/servers" hx-include="#server-filters" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" data-busy-label="Refreshing…">Refresh</button>
 			</div>
 			<div id="action-error" aria-live="polite"></div>
 			<div class="server-connection" role="status" data-live-status hidden>
@@ -101,7 +109,7 @@ templ Dashboard(page Page, list ServerList) {
 					<p class="muted">Showing the last known state. Ludock reconnects automatically.</p>
 				</div>
 			</div>
-			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, sse:server delay:500ms, servers-changed from:body delay:500ms" hx-swap="innerHTML">
+			<div id="attention" hx-get="/fragments/attention" hx-trigger="load, server from:document delay:500ms, servers-changed from:document delay:500ms" hx-swap="innerHTML">
 				<section class="needs-attention" aria-labelledby="needs-attention-title" aria-busy="true">
 					<div class="needs-attention__heading"><h2 id="needs-attention-title">Needs attention</h2></div>
 					<p class="muted" aria-live="polite">Checking for issues…</p>
@@ -112,7 +120,7 @@ templ Dashboard(page Page, list ServerList) {
 			// so typing is never interrupted. Outside requests queue behind the
 			// list's own, so the newest filters win; controls inside must not
 			// inherit that.
-			<div id="servers" hx-get="/fragments/servers" hx-include="#server-filters" hx-trigger="sse:server delay:300ms, servers-changed from:body, every 60s" hx-swap="innerHTML">
+			<div id="servers" hx-get="/fragments/servers" hx-include="#server-filters" hx-trigger="server from:document delay:300ms, servers-changed from:document, every 60s" hx-swap="innerMorph">
 				@ServerListFragment(list)
 			</div>
 			if page.Admin && list.Total > 0 {
@@ -127,19 +135,55 @@ templ Dashboard(page Page, list ServerList) {
 	}
 }
 
+var toneOrder = map[string]int{"failed": 0, "attention": 1, "active": 2, "ok": 3, "idle": 4}
+
+// fleetSummary counts the servers in each state, problems first:
+// "1 crashed, 2 running, 1 stopped".
+func fleetSummary(blocks []FleetBlock) string {
+	counts := map[string]int{}
+	var labels []FleetBlock
+	for _, block := range blocks {
+		if counts[block.Label] == 0 {
+			labels = append(labels, block)
+		}
+		counts[block.Label]++
+	}
+	slices.SortStableFunc(labels, func(a, b FleetBlock) int { return toneOrder[a.Tone] - toneOrder[b.Tone] })
+	parts := make([]string, len(labels))
+	for index, block := range labels {
+		parts[index] = strconv.Itoa(counts[block.Label]) + " " + strings.ToLower(block.Label)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// fleet draws one state block per server, like the Ludock mark, with the
+// count of each state beside it.
+templ fleet(list ServerList) {
+	<p class="fleet" id="fleet">
+		if len(list.Fleet) > 0 {
+			<span class="fleet__blocks" aria-hidden="true">
+				for _, block := range list.Fleet {
+					<span class={ "marker", "marker--" + block.Tone } title={ block.Name + ": " + block.Label }></span>
+				}
+			</span>
+			<span class="fleet__summary">{ fleetSummary(list.Fleet) }</span>
+		}
+	</p>
+}
+
 // serverFilters narrows the list. Without scripts it submits to the page;
 // the page hides it while there is no list to filter.
 templ serverFilters(list ServerList) {
-	<form class="list-toolbar" id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-sync="#servers:queue last" hx-trigger="submit, input changed delay:250ms from:input">
+	<form class="list-toolbar" id="server-filters" role="search" aria-label="Filter servers" method="get" action="/" hx-get="/fragments/servers" hx-target="#servers" hx-swap="innerMorph" hx-sync="#servers:queue last" hx-trigger="submit, input changed delay:250ms target:input">
 		<label class="search-field">
 			<span class="sr-only">Find a server</span>
 			<input name="search" value={ list.Search } placeholder="Find a server…" type="search"/>
 		</label>
 		<label class="state-filter">
 			<span>State</span>
-			@stateSelect(list, false)
+			@stateSelect(list)
 		</label>
-		@serverCount(list, false)
+		@serverCount(list)
 	</form>
 }
 
@@ -147,15 +191,8 @@ templ serverFilters(list ServerList) {
 // into a live select one at a time would change its selection. A choice
 // submits the form, which stays in place, so a refresh replacing the select
 // can't drop the request.
-templ stateSelect(list ServerList, oob bool) {
-	<select
-		name="state"
-		id="server-state"
-		data-autosubmit
-		if oob {
-			hx-swap-oob="true"
-		}
-	>
+templ stateSelect(list ServerList) {
+	<select name="state" id="server-state" data-autosubmit>
 		<option value="all">All states</option>
 		for _, state := range list.States {
 			<option value={ state } selected?={ list.State == state }>{ ServerStatus(state, "", nil).Label }</option>
@@ -163,23 +200,23 @@ templ stateSelect(list ServerList, oob bool) {
 	</select>
 }
 
-templ serverCount(list ServerList, oob bool) {
-	<span
-		class="list-toolbar__count muted"
-		id="server-count"
-		role="status"
-		if oob {
-			hx-swap-oob="true"
-		}
-	>{ strconv.Itoa(len(list.Rows)) } of { strconv.Itoa(list.Total) } servers</span>
+templ serverCount(list ServerList) {
+	<span class="list-toolbar__count muted" id="server-count" role="status">{ strconv.Itoa(len(list.Rows)) } of { strconv.Itoa(list.Total) } servers</span>
 }
 
-// ServerListResponse is a list refresh: the rows, plus the filter count and
-// state choices, which leave the search box in place.
+// ServerListResponse is a list refresh: the rows, plus the fleet strip, the
+// filter count, and the state choices, which leave the search box in place.
 templ ServerListResponse(list ServerList) {
 	@ServerListFragment(list)
-	@serverCount(list, true)
-	@stateSelect(list, true)
+	@Partial("#fleet", "outerMorph") {
+		@fleet(list)
+	}
+	@Partial("#server-count", "outerHTML") {
+		@serverCount(list)
+	}
+	@Partial("#server-state", "outerHTML") {
+		@stateSelect(list)
+	}
 }
 
 templ ServerListFragment(list ServerList) {
@@ -312,7 +349,10 @@ templ ServerCard(row ServerRow) {
 			}
 			if row.CanFiles || row.CanRestart {
 				<div class="action-menu" data-action-menu>
-					<button type="button" class="secondary-btn action-menu__trigger" aria-label={ "More actions for " + server.DisplayName } aria-expanded="false" aria-controls={ "actions-" + server.ID }>More <span aria-hidden="true">⌄</span></button>
+					<button type="button" class="secondary-btn action-menu__trigger" aria-label={ "More actions for " + server.DisplayName } aria-expanded="false" aria-controls={ "actions-" + server.ID }>
+						More
+						<svg class="chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 4.5 6 8l3.5-3.5"></path></svg>
+					</button>
 					<div class="action-menu__content" id={ "actions-" + server.ID } hidden>
 						if row.CanFiles {
 							<a class="action-menu__action" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
@@ -455,7 +495,7 @@ templ NeedsAttention(view AttentionView) {
 							<strong>{ info.Title }</strong>
 							@attentionDetail(item)
 						</div>
-						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + item.ServerName + " — " + info.Title }>{ info.Action }<span aria-hidden="true"> →</span></a>
+						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + item.ServerName + " — " + info.Title }>{ info.Action }</a>
 					</li>
 				}
 			</ul>

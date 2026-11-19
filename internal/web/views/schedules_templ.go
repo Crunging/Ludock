@@ -111,9 +111,9 @@ func ScheduleRun(ms int64, timezone string, now int64) string {
 	minute := now / 60_000 * 60_000
 	prefix := ""
 	if ms == minute {
-		prefix = "Due now · "
+		prefix = "Due now, "
 	} else if ms < minute {
-		prefix = "Awaiting scheduler · "
+		prefix = "Awaiting scheduler, "
 	}
 	return prefix + ScheduleDate(ms, timezone)
 }
@@ -230,7 +230,7 @@ func ScheduleList(v SchedulesView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\" hx-trigger=\"schedules-changed from:body\" hx-swap=\"outerHTML\" hx-disinherit=\"*\"><table class=\"data-table schedules-table\" aria-label=\"Schedules\"><thead><tr><th scope=\"col\">Action</th><th scope=\"col\">When</th><th scope=\"col\">State</th><th scope=\"col\">Next run</th><th scope=\"col\">Last result</th><th scope=\"col\">Actions</th></tr></thead> <tbody>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\" hx-trigger=\"schedules-changed from:document\" hx-swap=\"outerHTML\"><table class=\"data-table schedules-table\" aria-label=\"Schedules\"><thead><tr><th scope=\"col\">Action</th><th scope=\"col\">When</th><th scope=\"col\">State</th><th scope=\"col\">Next run</th><th scope=\"col\">Last result</th><th scope=\"col\">Actions</th></tr></thead> <tbody>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -668,11 +668,11 @@ func savedSummary(item *schedules.Schedule) string {
 	if item.CreateBackup {
 		summary += " with backup before restart"
 	}
-	summary += " · " + ScheduleWhen(item.Input) + " · " + item.Timezone + " · " + scheduleState(*item)
+	summary += ", " + ScheduleWhen(item.Input) + ", " + item.Timezone + ", " + strings.ToLower(scheduleState(*item))
 	if item.Announcements != nil {
-		return summary + " · Warnings: " + LeadText(item.Announcements.LeadMinutes) + " min before"
+		return summary + ", warnings " + LeadText(item.Announcements.LeadMinutes) + " min before"
 	}
-	return summary + " · Warnings off"
+	return summary + ", warnings off"
 }
 
 func scheduleTarget(f ScheduleForm) string {
@@ -715,7 +715,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disinherit=\"*\"><h3 tabindex=\"-1\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\" hx-target=\"this\" hx-swap=\"outerHTML\"><h3 tabindex=\"-1\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1212,7 +1212,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, "\" hx-include=\"#schedule-form\" hx-trigger=\"load, change from:#schedule-form, input from:#schedule-form delay:400ms, every 30s\" hx-swap=\"innerHTML\"><strong>Next run:</strong></p><p class=\"schedule-form-note\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, "\" hx-include=\"#schedule-form\" hx-sync=\"this:queue last\" hx-trigger=\"load, change from:#schedule-form, input from:#schedule-form delay:400ms, every 30s\" hx-swap=\"innerHTML\"><strong>Next run:</strong></p><p class=\"schedule-form-note\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

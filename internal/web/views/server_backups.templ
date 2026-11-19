@@ -31,7 +31,7 @@ templ BackupsTab(b BackupsView) {
 	}
 	// The rest reloads when the followed operation finishes, so readiness,
 	// the create button, and the list catch up.
-	<div id="backups-tab" hx-get={ string(detailURL(b.ServerID, "tab=backups")) } hx-select="#backups-tab" hx-trigger="operation-finished from:body" hx-swap="outerHTML" hx-disinherit="*">
+	<div id="backups-tab" hx-get={ string(detailURL(b.ServerID, "tab=backups")) } hx-select="#backups-tab" hx-trigger="operation-finished from:document" hx-swap="outerHTML">
 		@backupsTabBody(b)
 	</div>
 }
@@ -40,12 +40,12 @@ templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
 		if b.CanCreate {
-			@CreateBackupButton(b.ServerID, b.ServerName, false, false)
+			@CreateBackupButton(b.ServerID, b.ServerName, false)
 		}
 	</div>
 	<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
 	if b.CanCreate && !b.Blocked && !b.Active {
-		<section class="backup-readiness" id="backup-readiness" aria-labelledby="backup-readiness-title" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML" hx-disinherit="*">
+		<section class="backup-readiness" id="backup-readiness" aria-labelledby="backup-readiness-title" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML">
 			<div class="backup-readiness__status">
 				<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
 				<p role="status">
@@ -86,8 +86,8 @@ templ backupsTabBody(b BackupsView) {
 	}
 }
 
-// CreateBackupButton is replaced out of band once readiness is known.
-templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
+// CreateBackupButton is replaced once readiness is known.
+templ CreateBackupButton(serverID, serverName string, ready bool) {
 	<button
 		id="create-backup"
 		class="primary-btn"
@@ -99,9 +99,6 @@ templ CreateBackupButton(serverID, serverName string, ready, oob bool) {
 		data-confirm-detail="The server stops for the whole copy, then returns to how it was."
 		data-confirm-action="Create backup"
 		data-busy-label="Working…"
-		if oob {
-			hx-swap-oob="true"
-		}
 	>Create backup</button>
 }
 
@@ -154,12 +151,14 @@ templ BackupReadiness(r ReadinessView) {
 			</p>
 		}
 	</section>
-	@CreateBackupButton(r.ServerID, r.ServerName, ready, true)
+	@Partial("#create-backup", "outerHTML") {
+		@CreateBackupButton(r.ServerID, r.ServerName, ready)
+	}
 }
 
 // BackupList is the archive table; it reloads after a deletion.
 templ BackupList(b BackupsView) {
-	<div class="table-scroll" id="backup-list" hx-get={ "/fragments/servers/" + b.ServerID + "/backups" } hx-trigger="backups-changed from:body" hx-swap="outerHTML" hx-disinherit="*">
+	<div class="table-scroll" id="backup-list" hx-get={ "/fragments/servers/" + b.ServerID + "/backups" } hx-trigger="backups-changed from:document" hx-swap="outerHTML">
 		<table class="data-table">
 			<thead>
 				<tr>
@@ -254,7 +253,7 @@ type UpdateView struct {
 }
 
 templ UpdateTab(serverID string, recreate bool) {
-	<div id="update-panel" hx-get={ "/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate] } hx-trigger="load" hx-swap="outerHTML" hx-disinherit="*">
+	<div id="update-panel" hx-get={ "/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate] } hx-trigger="load" hx-swap="outerHTML">
 		<p role="status">Loading server settings…</p>
 	</div>
 }

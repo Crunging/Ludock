@@ -110,7 +110,7 @@ func UsersContent(u UsersView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div id=\"users\" hx-disinherit=\"*\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div id=\"users\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -331,7 +331,7 @@ func userRow(u UsersView, user db.User) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if user.Disabled {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "· Disabled")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<strong class=\"user-row__disabled\">Disabled</strong>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -748,7 +748,7 @@ func GrantsEditor(g GrantsView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "\" hx-target=\"this\" hx-swap=\"outerHTML\" hx-disinherit=\"*\" data-grants><h3 tabindex=\"-1\" autofocus>Server access for ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "\" hx-target=\"this\" hx-swap=\"outerHTML\" data-grants><h3 tabindex=\"-1\" autofocus>Server access for ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
