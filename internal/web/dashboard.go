@@ -93,6 +93,7 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 	row.Players = views.PlayersView{Listed: view.Console != nil && view.Console.ListsPlayers,
 		Running: view.State == "running" && active && !stale}
 	if row.Players.Listed && row.Players.Running {
+		row.Players.Console = view.Console.Name
 		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
 	}
 	if consoleAvailable {

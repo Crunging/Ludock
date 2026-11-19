@@ -6,12 +6,12 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   // Pages are compressed; the server list repeats its markup for each server.
   const response = await page.goto("/");
   expect(response.headers()["content-encoding"]).toBe("gzip");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   await expect(serverRow(page, "Survival")).toContainText("Running");
   await expect(serverRow(page, "Survival")).toContainText("25565");
   // The strip under the title counts every server, whatever the filters.
   const fleet = page.locator("#fleet");
-  await expect(fleet).toHaveText("1 running, 1 stopped");
+  await expect(fleet).toHaveText("1 running, 2 stopped");
 
   // Typing keeps going while results arrive: the keyboard types into
   // whatever has focus, so a replaced search box would lose the "e".
@@ -19,8 +19,8 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await search.click();
   await page.keyboard.type("valh");
   await expect(page.locator(".server-row")).toHaveCount(1);
-  await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
-  await expect(fleet).toHaveText("1 running, 1 stopped");
+  await expect(page.locator("#server-count")).toHaveText("1 of 3 servers");
+  await expect(fleet).toHaveText("1 running, 2 stopped");
   await page.keyboard.type("e");
   await expect(search).toHaveValue("valhe");
   await expect(search).toBeFocused();
@@ -30,7 +30,7 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   const valheim = serverRow(page, "valheim");
   await valheim.getByRole("button", { name: "Start" }).click();
   await expect(valheim).toContainText("Running");
-  await expect(fleet).toHaveText("2 running");
+  await expect(fleet).toHaveText("2 running, 1 stopped");
   await expect(page.locator(".server-row")).toHaveCount(1);
   await expect(search).toHaveValue("valhe");
 
@@ -39,7 +39,7 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await expect(page.locator(".server-row")).toHaveCount(1);
   // Refreshes replace the state choices; choosing one afterwards still filters.
   await search.fill("");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   await page.getByLabel("State").selectOption("running");
   await expect(page).toHaveURL(/\/\?state=running$/);
   await expect(page.locator(".server-row")).toHaveCount(2);
@@ -47,7 +47,7 @@ test("finding servers and starting and stopping one from the list", async ({ pag
   await search.fill("no such server");
   await expect(page.locator(".server-list__empty")).toContainText("No servers match your filters.");
   await page.getByRole("button", { name: "Clear filters" }).click();
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   await expect(search).toHaveValue("");
   await expect(search).toBeFocused();
   await expect(page).toHaveURL(/\/$/);
@@ -214,7 +214,7 @@ test("filters changed while the list is loading all apply", async ({ page }) => 
   await page.getByLabel("State").selectOption("running");
   await page.getByLabel("State").selectOption("all");
   release();
-  await expect(page.locator("#server-count")).toHaveText("1 of 2 servers");
+  await expect(page.locator("#server-count")).toHaveText("1 of 3 servers");
   await expect(page).toHaveURL(/\/\?search=valh$/);
 });
 

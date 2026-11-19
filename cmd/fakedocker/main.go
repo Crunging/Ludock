@@ -109,11 +109,29 @@ func (w writer) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// minecraftRCON serves a Minecraft RCON console and returns its port. Besides
-// list, it takes commands only the fake has: "fake-join NAME" and
-// "fake-leave NAME" change who is online, and "fake-outage SECONDS" makes
-// list fail for that long.
+// minecraftRCON serves a Minecraft RCON console and returns its port.
 func minecraftRCON(password string, online ...string) string {
+	return gameRCON(password, "list", func(online []string) string {
+		return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
+	}, online...)
+}
+
+// palworldRCON serves a Palworld RCON console and returns its port.
+func palworldRCON(password string) string {
+	return gameRCON(password, "ShowPlayers", func(online []string) string {
+		list := "name,playeruid,steamid\n"
+		for index, name := range online {
+			list += fmt.Sprintf("%s,%d,7656119800000%04d\n", name, 1000000+index, index)
+		}
+		return list
+	})
+}
+
+// gameRCON serves an RCON console that answers the game's list command with
+// format, and returns its port. Besides that command, it takes commands only
+// the fake has: "fake-join NAME" and "fake-leave NAME" change who is online,
+// and "fake-outage SECONDS" makes the list fail for that long.
+func gameRCON(password, list string, format func(online []string) string, online ...string) string {
 	var mu sync.Mutex
 	var outageUntil time.Time
 	port, err := fakedocker.ServeRCON(password, func(command string) string {
@@ -121,11 +139,11 @@ func minecraftRCON(password string, online ...string) string {
 		defer mu.Unlock()
 		verb, argument, _ := strings.Cut(command, " ")
 		switch verb {
-		case "list":
+		case list:
 			if time.Now().Before(outageUntil) {
 				return "An unexpected error occurred trying to execute that command"
 			}
-			return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
+			return format(online)
 		case "fake-join":
 			if !slices.Contains(online, argument) {
 				online = append(online, argument)
@@ -188,6 +206,9 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
+	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: false,
+		Env:   []string{"RCON_ENABLED=true", "RCON_PORT=" + palworldRCON("dev-palworld-secret"), "ADMIN_PASSWORD=dev-palworld-secret"},
+		Ports: map[string][]docker.PortBinding{"8211/udp": {{HostIP: "0.0.0.0", HostPort: "8211"}}}})
 }
 
 // seedDemo adds the servers shown in the README screenshots, with files and

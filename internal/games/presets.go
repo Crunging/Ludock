@@ -26,6 +26,8 @@ type ConsolePreset struct {
 	Commands              []QuickCommand // nil uses the adapter's
 	DefaultPort           int
 	PasswordEnvCandidates []string
+	// Players lists who is online through this preset's adapter.
+	Players *PlayerQuery
 }
 
 type Port struct {
@@ -55,13 +57,15 @@ var Integrations = []Integration{
 	{GameType: "factorio", Name: "Factorio", GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Factorio RCON", DefaultPort: 27015,
 			Placeholder: "/players, /server-save, /config get",
-			Commands:    []QuickCommand{{"List players", "/players online"}, {"Save world", "/server-save"}}}},
+			Commands:    []QuickCommand{{"List players", "/players online"}, {"Save world", "/server-save"}},
+			Players:     &PlayerQuery{Command: "/players online", Parse: ParseFactorioPlayers}}},
 	{GameType: "palworld", Name: "Palworld", GamePort: &Port{8211, "udp"},
 		Repositories:       []string{"thijsvanloef/palworld-server-docker", "jammsen/palworld-dedicated-server"},
 		StopTimeoutSeconds: 180, UpdatesOnStart: true,
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Palworld RCON", DefaultPort: 25575,
 			Placeholder: "Info, ShowPlayers, Broadcast Hello",
-			Commands:    []QuickCommand{{"List players", "ShowPlayers"}, {"Save world", "Save"}, {"Server info", "Info"}}}},
+			Commands:    []QuickCommand{{"List players", "ShowPlayers"}, {"Save world", "Save"}, {"Server info", "Info"}},
+			Players:     &PlayerQuery{Command: "ShowPlayers", Parse: ParsePalworldPlayers}}},
 	{GameType: "ark-survival-evolved", Name: "ARK: Survival Evolved", GamePort: &Port{7777, "udp"},
 		Repositories:       []string{"hermsi/ark-server", "hermsi1337/ark-server", "indifferentbroccoli/ark-server-docker"},
 		StopTimeoutSeconds: 180, Aliases: []string{"ark"}, Console: arkConsole()},
@@ -80,11 +84,13 @@ var Integrations = []Integration{
 		Aliases: []string{"projectzomboid"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Project Zomboid RCON", BroadcastTemplate: `servermsg "{message}"`,
 			DefaultPort: 27015, Placeholder: "players, save, servermsg Hello",
-			Commands: []QuickCommand{{"List players", "players"}, {"Save world", "save"}, {"Message players", "servermsg "}}}},
+			Commands: []QuickCommand{{"List players", "players"}, {"Save world", "save"}, {"Message players", "servermsg "}},
+			Players:  &PlayerQuery{Command: "players", Parse: ParseZomboidPlayers}}},
 	{GameType: "conan-exiles", Name: "Conan Exiles", GamePort: &Port{7777, "udp"},
 		Repositories: []string{"indifferentbroccoli/conan-exiles-enhanced-server-docker"}, UpdatesOnStart: true,
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Conan Exiles RCON", BroadcastTemplate: "Broadcast {message}",
-			DefaultPort: 25575, Commands: []QuickCommand{{"List players", "ListPlayers"}, {"Message players", "Broadcast "}}}},
+			DefaultPort: 25575, Commands: []QuickCommand{{"List players", "ListPlayers"}, {"Message players", "Broadcast "}},
+			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers}}},
 	{GameType: "v-rising", Name: "V Rising", GamePort: &Port{9876, "udp"}, Repositories: []string{"trueosiris/vrising"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "V Rising RCON", DefaultPort: 25575,
 			Commands: []QuickCommand{{"Message players", "announce "}}}},
@@ -95,7 +101,8 @@ var Integrations = []Integration{
 		Repositories: []string{"vinanrra/7dtd-server"}, Aliases: []string{"7dtd"},
 		Console: &ConsolePreset{Adapter: TelnetConsole, Name: "7 Days to Die Telnet", BroadcastTemplate: `say "{message}"`,
 			DefaultPort: 8081, Placeholder: "listplayers, saveworld, say Hello",
-			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}}}},
+			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}},
+			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}}},
 	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true},
 	{GameType: "terraria", Name: "Terraria", GamePort: &Port{7777, "tcp"},
@@ -108,7 +115,8 @@ var Integrations = []Integration{
 func arkConsole() *ConsolePreset {
 	return &ConsolePreset{Adapter: SourceRCON, Name: "ARK RCON", BroadcastTemplate: "Broadcast {message}", DefaultPort: 27020,
 		Placeholder: "ListPlayers, SaveWorld, Broadcast Hello",
-		Commands:    []QuickCommand{{"List players", "ListPlayers"}, {"Save world", "SaveWorld"}, {"Message players", "Broadcast "}}}
+		Commands:    []QuickCommand{{"List players", "ListPlayers"}, {"Save world", "SaveWorld"}, {"Message players", "Broadcast "}},
+		Players:     &PlayerQuery{Command: "ListPlayers", Parse: ParseARKPlayers}}
 }
 
 // StopTimeout is the integration's stop grace period in seconds.

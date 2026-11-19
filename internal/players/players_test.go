@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -54,8 +55,8 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 	if err != nil || len(views) != 1 {
 		t.Fatal(views, err)
 	}
-	players := &Service{Servers: service, Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client},
-		Locks: locks.New()}
+	players := &Service{Servers: service, Identity: store,
+		Source: &ConsoleSource{Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
 	t.Cleanup(players.Stop)
 
 	players.Check(ctx, views[0].ID)
@@ -75,5 +76,32 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 			t.Fatal("the second check was dropped:", reading)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Other packages ask how many players a server has. Only a recent, readable
+// reading of the server's current container run counts as known.
+func TestOnlineNeedsFreshReading(t *testing.T) {
+	run := servers.Container{ID: "c1", StateSince: 100}
+	now := time.Now().UnixMilli()
+	for name, c := range map[string]struct {
+		reading *Reading
+		online  int
+		known   bool
+	}{
+		"none":      {nil, 0, false},
+		"current":   {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Players: games.Players{Online: 2}}, 2, true},
+		"empty":     {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now}, 0, true},
+		"failed":    {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now, Failed: true}, 0, false},
+		"stale":     {&Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: now - Fresh.Milliseconds() - 1}, 0, false},
+		"restarted": {&Reading{ContainerID: "c1", StartedAt: 50, CheckedAt: now, Players: games.Players{Online: 2}}, 0, false},
+	} {
+		service := &Service{readings: map[string]*Reading{}}
+		if c.reading != nil {
+			service.readings["s1"] = c.reading
+		}
+		if online, known := service.Online("s1", run); online != c.online || known != c.known {
+			t.Errorf("%s: %d %v", name, online, known)
+		}
 	}
 }

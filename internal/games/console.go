@@ -86,15 +86,23 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 	if configured == "disabled" || configured == "none" {
 		return nil
 	}
+	integration := Lookup(gameType)
 	if adapter, ok := adapters[AdapterID(configured)]; ok && configured != "" {
+		// A label naming the game's own adapter keeps its player list.
+		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID &&
+			integration.Console.Players != nil {
+			adapter.Players = integration.Console.Players
+		}
 		return &adapter
 	}
-	integration := Lookup(gameType)
 	if integration == nil || integration.Console == nil {
 		return nil
 	}
 	preset := integration.Console
 	adapter := adapters[preset.Adapter]
+	if preset.Players != nil {
+		adapter.Players = preset.Players
+	}
 	if preset.Name != "" {
 		adapter.Name = preset.Name
 	}

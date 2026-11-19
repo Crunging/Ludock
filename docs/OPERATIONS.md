@@ -167,15 +167,28 @@ authenticated tunnel.
 
 ### Players online
 
-For Minecraft servers, or any server with `ludock.console: minecraft-rcon`,
-the server list and the server's overview show who is online. Ludock sends
-`list` over RCON about every 30 seconds while the server runs, and again right
-after a console command, using the same helper and password as the console.
-Anyone who can see the server sees the player count and names. Readings stay in
-memory and are never stored. When RCON is off or doesn't answer, the server's
-players show as unavailable. Other games show no player list. A reading gives
-way to anything else that needs the server, such as a console command or a
-backup.
+The server list and the server's overview show who is online for these games:
+
+| Game | Command | Console |
+| --- | --- | --- |
+| Minecraft, or any server with `ludock.console: minecraft-rcon` | `list` | RCON |
+| Factorio | `/players online` | RCON |
+| Palworld | `ShowPlayers` | RCON |
+| ARK: Survival Evolved and Survival Ascended | `ListPlayers` | RCON |
+| Project Zomboid | `players` | RCON |
+| Conan Exiles | `ListPlayers` | RCON |
+| 7 Days to Die | `listplayers` | Telnet |
+
+Ludock sends the command about every 30 seconds while the server runs, and
+again right after a console command, using the same helper and password as the
+console. Only Minecraft reports how many players a server takes. Conan Exiles
+shows character names. Anyone who can see the server sees the player count and
+names. Readings stay in memory and are never stored. When the console is off,
+doesn't answer, or answers with something other than a player list, the
+server's players show as unavailable, never as empty. Other games, including
+Terraria, whose console doesn't return replies, show no player list. A reading
+gives way to anything else that needs the server, such as a console command or
+a backup.
 
 ## Files
 

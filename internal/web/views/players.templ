@@ -12,6 +12,8 @@ type PlayersView struct {
 	Listed bool
 	// Running: the server is running and its live state is known.
 	Running bool
+	// Console is the name of the console players are read over.
+	Console string
 	// Reading is nil until the first one after the server started.
 	Reading *players.Reading
 }
@@ -95,14 +97,14 @@ templ PlayersFact(p PlayersView) {
 		<dd>
 			switch {
 				case !p.Listed:
-					<span class="muted">Not available. Ludock lists players for Minecraft servers with RCON.</span>
+					<span class="muted">Not available. Ludock lists players for supported games whose console can list them.</span>
 				case !p.Running:
 					<span class="muted">Shown while the server is running</span>
 				case p.Reading == nil:
 					<span class="muted">Checking who’s online…</span>
 				case p.Reading.Failed:
 					<span>Couldn’t read players</span>
-					<span class="muted">Ludock reads them over RCON. Check that RCON is on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					<span class="muted">Ludock reads them over { p.Console }. Check that it’s on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
 				default:
 					<span class="overview-figure">{ strconv.Itoa(p.Reading.Online) }</span>
 					<span class="muted">{ onlineText(p.Reading) }</span>

@@ -1,19 +1,15 @@
-// Package players reads who is online on running game servers whose console
-// can list them, and keeps the latest reading of each in memory.
+// Package players reads who is online on running game servers through a
+// Source, and keeps the latest reading of each in memory.
 package players
 
 import (
 	"context"
-	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
-	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -29,6 +25,8 @@ const (
 	readLimit = 30 * time.Second
 	// parallel readings across the fleet.
 	parallel = 4
+	// Fresh is how long a reading counts toward Online.
+	Fresh = 2 * Interval
 )
 
 // Reading is one server's players as Ludock last read them.
@@ -38,7 +36,7 @@ type Reading struct {
 	ContainerID string
 	StartedAt   int64
 	games.Players
-	// Failed: the console could not be read, or did not answer with a
+	// Failed: the source could not be read, or did not answer with a
 	// player list.
 	Failed    bool
 	CheckedAt int64 // Unix ms
@@ -49,12 +47,19 @@ func (r *Reading) same(other *Reading) bool {
 		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names)
 }
 
+// A Source reads who is online on one server.
+type Source interface {
+	// Lists reports whether the source can read the container's players.
+	Lists(container servers.Container) bool
+	// Read returns a reading of the server's current container run, nil when
+	// it no longer lists players, or an error when it took no reading.
+	Read(ctx context.Context, server identity.Server) (*Reading, error)
+}
+
 type Service struct {
 	Servers  *servers.Service
 	Identity *identity.Store
-	Observer *servers.Observer
-	Runtime  *console.Runtime
-	Locks    *locks.Table
+	Source   Source
 	// Changed is told when a server's reading changes. It must not block.
 	Changed func(serverID string)
 
@@ -80,6 +85,17 @@ func (s *Service) Get(serverID string, container servers.Container) *Reading {
 	return reading
 }
 
+// Online is how many players a server's current container run has, and
+// whether that is known: false until a reading succeeds, after one fails, or
+// once the latest is older than Fresh.
+func (s *Service) Online(serverID string, container servers.Container) (int, bool) {
+	reading := s.Get(serverID, container)
+	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
+		return 0, false
+	}
+	return reading.Online, true
+}
+
 // Poll starts a reading for every running server that lists players and is
 // due, and forgets servers that stopped. It waits for the readings.
 func (s *Service) Poll(ctx context.Context) {
@@ -97,7 +113,7 @@ func (s *Service) Poll(ctx context.Context) {
 	for _, server := range logical {
 		container, found := current[server.ContainerID]
 		if server.Status != identity.StatusActive || server.ReviewRequired || server.ContainerID == "" || !found ||
-			container.State != "running" || container.Console == nil || !container.Console.ListsPlayers {
+			container.State != "running" || !s.Source.Lists(container) {
 			continue
 		}
 		listed[server.ID] = true
@@ -178,7 +194,7 @@ func (s *Service) start(ctx context.Context, server identity.Server, wait *sync.
 			return
 		}
 		defer func() { <-s.slots }()
-		reading, err := s.read(ctx, server)
+		reading, err := s.Source.Read(ctx, server)
 		if err != nil {
 			log.Debug("Skipped a player reading", logging.F("serverId", server.ID))
 			return
@@ -187,58 +203,6 @@ func (s *Service) start(ctx context.Context, server identity.Server, wait *sync.
 			s.store(server.ID, reading)
 		}
 	}()
-}
-
-var errSkipped = errors.New("player reading skipped")
-
-// read takes one reading under the server lock, as background work that
-// anything needing the server cancels. It returns nil when the server no
-// longer lists players.
-func (s *Service) read(ctx context.Context, server identity.Server) (*Reading, error) {
-	ctx, cancel := context.WithTimeout(ctx, readLimit)
-	defer cancel()
-	release, err := s.Locks.Acquire([]string{"server:" + server.ID}, cancel)
-	if err != nil {
-		return nil, err
-	}
-	// Held until the console helper, if any, is removed.
-	defer release()
-	observed, _, err := s.Observer.Inspect(ctx, server.ContainerID)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
-		return nil, err
-	}
-	container := observed.Container
-	adapter := games.ResolveAdapter(container.GameType, container.Labels)
-	if container.State != "running" || adapter == nil || adapter.Players == nil {
-		return nil, nil
-	}
-	assertBinding := func() error {
-		_, err := s.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
-		return err
-	}
-	reading := &Reading{ContainerID: container.ID, StartedAt: container.StateSince}
-	response, err := s.Runtime.Query(ctx, console.Target{ContainerID: container.ID, Labels: container.Labels, State: container.State},
-		adapter, adapter.Players.Command, assertBinding)
-	// Work that needed the server cancelled this reading, or Ludock is
-	// stopping: neither says anything about the console.
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return nil, errSkipped
-	}
-	if err == nil {
-		var redacted strings.Builder
-		redactor := console.NewRedactor(observed.Observation.Secrets, func(value string) { redacted.WriteString(value) })
-		redactor.Push(response)
-		redactor.End()
-		players, ok := adapter.Players.Parse(redacted.String())
-		reading.Players, reading.Failed = players, !ok
-	} else {
-		reading.Failed = true
-	}
-	reading.CheckedAt = time.Now().UnixMilli()
-	return reading, nil
 }
 
 func (s *Service) store(serverID string, reading *Reading) {
