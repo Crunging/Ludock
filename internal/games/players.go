@@ -40,16 +40,20 @@ func (p *Players) add(name string) {
 	p.Names = append(p.Names, name)
 }
 
-// replyLines splits a reply into trimmed, non-blank lines. Some RCON servers
-// pad replies with NUL bytes.
-func replyLines(response string) []string {
+// replyLines splits a reply into trimmed, non-blank lines, or reports false
+// when it holds a NUL byte. Some RCON servers pad replies with trailing NULs.
+func replyLines(response string) ([]string, bool) {
+	response = strings.TrimRight(response, "\x00")
+	if strings.Contains(response, "\x00") {
+		return nil, false
+	}
 	var lines []string
-	for _, line := range strings.Split(strings.ReplaceAll(response, "\x00", ""), "\n") {
+	for _, line := range strings.Split(response, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			lines = append(lines, line)
 		}
 	}
-	return lines
+	return lines, true
 }
 
 var (
@@ -94,7 +98,7 @@ var (
 	factorioHeader = regexp.MustCompile(`^Online players \((\d+)\):$`)
 	// Player lines are indented; unindented "[JOIN]" or "[CHAT]" log lines
 	// can arrive in the same reply.
-	factorioPlayer = regexp.MustCompile(`^[ \t]+(.+?)[ \t]+\(online\)[ \t\r]*$`)
+	factorioPlayer = regexp.MustCompile(`^[ \t]+(\S.*?)[ \t]+\(online\)[ \t\r]*$`)
 )
 
 // ParseFactorioPlayers reads Factorio's "/players online":
@@ -103,9 +107,14 @@ var (
 //	  Ada (online)
 //	  Zed (online)
 func ParseFactorioPlayers(response string) (Players, bool) {
+	response = strings.TrimRight(response, "\x00")
+	if strings.Contains(response, "\x00") {
+		return Players{}, false
+	}
 	header := -1
 	var players Players
-	for _, line := range strings.Split(strings.ReplaceAll(response, "\x00", ""), "\n") {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(response, "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case trimmed == "":
@@ -115,8 +124,13 @@ func ParseFactorioPlayers(response string) (Players, bool) {
 			}
 			header, _ = strconv.Atoi(factorioHeader.FindStringSubmatch(trimmed)[1])
 		case factorioPlayer.MatchString(line) && header >= 0:
+			name := factorioPlayer.FindStringSubmatch(line)[1]
+			if seen[name] {
+				return Players{}, false
+			}
+			seen[name] = true
 			players.Online++
-			players.add(factorioPlayer.FindStringSubmatch(line)[1])
+			players.add(name)
 		case strings.HasPrefix(line, "["):
 		default:
 			return Players{}, false
@@ -128,21 +142,25 @@ func ParseFactorioPlayers(response string) (Players, bool) {
 	return players, true
 }
 
+// palworldIDs are a row's player UID, all zeros while the player is still
+// joining, and platform ID.
+var palworldIDs = regexp.MustCompile(`^\d+,[A-Za-z0-9_-]*$`)
+
 // ParsePalworldPlayers reads Palworld's ShowPlayers, a CSV table whose
 // header alone means nobody is online:
 //
 //	name,playeruid,steamid
 //	Ada,1234567890,76561198000000000
 func ParsePalworldPlayers(response string) (Players, bool) {
-	lines := replyLines(response)
-	if len(lines) == 0 || !strings.EqualFold(lines[0], "name,playeruid,steamid") {
+	lines, ok := replyLines(response)
+	if !ok || len(lines) == 0 || !strings.EqualFold(lines[0], "name,playeruid,steamid") {
 		return Players{}, false
 	}
 	var players Players
 	for _, line := range lines[1:] {
 		// Names may contain commas; the two IDs never do.
 		fields := strings.Split(line, ",")
-		if len(fields) < 3 {
+		if len(fields) < 3 || !palworldIDs.MatchString(strings.Join(fields[len(fields)-2:], ",")) {
 			return Players{}, false
 		}
 		players.Online++
@@ -151,13 +169,18 @@ func ParsePalworldPlayers(response string) (Players, bool) {
 	return players, true
 }
 
-var arkPlayer = regexp.MustCompile(`^(\d+)\. (.*), ([0-9A-Za-z]+)$`)
+// arkPlayer ends with a 17-digit Steam ID or a 32-digit hexadecimal Epic or
+// EOS ID.
+var arkPlayer = regexp.MustCompile(`^(\d+)\. (.*), (\d{17}|[0-9A-Fa-f]{32})$`)
 
 // ParseARKPlayers reads ListPlayers from ARK, one numbered row per player
 // such as "0. Ada, 76561198000000000", with Steam IDs on Survival Evolved and
 // EOS IDs on Survival Ascended.
 func ParseARKPlayers(response string) (Players, bool) {
-	lines := replyLines(response)
+	lines, ok := replyLines(response)
+	if !ok {
+		return Players{}, false
+	}
 	if len(lines) == 1 && lines[0] == "No Players Connected" {
 		return Players{}, true
 	}
@@ -182,15 +205,15 @@ var zomboidHeader = regexp.MustCompile(`^Players connected \((\d+)\):$`)
 //	-Ada
 //	-Zed
 func ParseZomboidPlayers(response string) (Players, bool) {
-	lines := replyLines(response)
-	if len(lines) == 0 || !zomboidHeader.MatchString(lines[0]) {
+	lines, ok := replyLines(response)
+	if !ok || len(lines) == 0 || !zomboidHeader.MatchString(lines[0]) {
 		return Players{}, false
 	}
 	count, _ := strconv.Atoi(zomboidHeader.FindStringSubmatch(lines[0])[1])
 	var players Players
 	for _, line := range lines[1:] {
 		name, ok := strings.CutPrefix(line, "-")
-		if !ok {
+		if !ok || strings.TrimSpace(name) == "" {
 			return Players{}, false
 		}
 		players.Online++
@@ -198,6 +221,8 @@ func ParseZomboidPlayers(response string) (Players, bool) {
 	}
 	return players, players.Online == count
 }
+
+var conanHeader = []string{"idx", "char name", "player name", "user id", "platform id", "platform name"}
 
 // ParseConanPlayers reads Conan Exiles' ListPlayers, a table whose header
 // alone means nobody is online:
@@ -207,36 +232,35 @@ func ParseZomboidPlayers(response string) (Players, bool) {
 //
 // Names are characters' names, or the player's while a character has none.
 func ParseConanPlayers(response string) (Players, bool) {
-	lines := replyLines(response)
-	if len(lines) == 0 {
+	lines, ok := replyLines(response)
+	if !ok || len(lines) == 0 {
 		return Players{}, false
 	}
 	header := strings.Split(lines[0], "|")
-	character, player := -1, -1
-	for index, column := range header {
-		switch strings.ToLower(strings.TrimSpace(column)) {
-		case "char name":
-			character = index
-		case "player name":
-			player = index
-		}
-	}
-	if !strings.EqualFold(strings.TrimSpace(header[0]), "idx") || character < 0 || player < 0 {
+	if len(header) != len(conanHeader) {
 		return Players{}, false
 	}
+	for index, column := range header {
+		if strings.ToLower(strings.TrimSpace(column)) != conanHeader[index] {
+			return Players{}, false
+		}
+	}
 	var players Players
+	seen := map[int]bool{}
 	for _, line := range lines[1:] {
 		row := strings.Split(line, "|")
 		if len(row) != len(header) {
 			return Players{}, false
 		}
-		if _, err := strconv.Atoi(strings.TrimSpace(row[0])); err != nil {
+		index, err := strconv.Atoi(strings.TrimSpace(row[0]))
+		if err != nil || index < 0 || seen[index] {
 			return Players{}, false
 		}
+		seen[index] = true
 		players.Online++
-		name := strings.TrimSpace(row[character])
+		name := strings.TrimSpace(row[1])
 		if name == "" {
-			name = row[player]
+			name = row[2]
 		}
 		players.add(name)
 	}
@@ -244,26 +268,34 @@ func ParseConanPlayers(response string) (Players, bool) {
 }
 
 var (
-	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(`)
+	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(.*, ping=\d+$`)
 	sevenDaysTotal  = regexp.MustCompile(`^Total of (\d+) in the game$`)
+	// Log lines the Telnet console streams, such as
+	// "2026-11-19T10:00:00 512.345 INF Player connected".
+	sevenDaysLog = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d \d+\.\d+ [A-Z]{3} `)
 )
 
 // Parse7DaysPlayers reads 7 Days to Die's listplayers: rows such as
-// "0. id=171, Ada, pos=(741.9, 45.1, 951.5), ...", then "Total of 1 in the game".
-// The Telnet console also streams the server log, so other lines are
-// skipped; the rows must add up to the total.
+// "0. id=171, Ada, pos=(741.9, 45.1, 951.5), ..., ping=0", then
+// "Total of 1 in the game". Server log lines in between are skipped; the rows
+// must add up to the total.
 func Parse7DaysPlayers(response string) (Players, bool) {
+	lines, ok := replyLines(response)
+	if !ok {
+		return Players{}, false
+	}
 	total := -1
 	var players Players
-	for _, line := range replyLines(response) {
-		if match := sevenDaysPlayer.FindStringSubmatch(line); match != nil {
+	for _, line := range lines {
+		switch match := sevenDaysPlayer.FindStringSubmatch(line); {
+		case sevenDaysLog.MatchString(line):
+		case match != nil && total < 0:
 			players.Online++
 			players.add(match[1])
-		} else if match := sevenDaysTotal.FindStringSubmatch(line); match != nil {
-			if total >= 0 {
-				return Players{}, false
-			}
-			total, _ = strconv.Atoi(match[1])
+		case sevenDaysTotal.MatchString(line) && total < 0:
+			total, _ = strconv.Atoi(sevenDaysTotal.FindStringSubmatch(line)[1])
+		default:
+			return Players{}, false
 		}
 	}
 	return players, total >= 0 && players.Online == total

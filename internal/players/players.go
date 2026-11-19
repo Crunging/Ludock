@@ -93,7 +93,7 @@ func (s *Service) Online(serverID string, container servers.Container) (int, boo
 	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
 		return 0, false
 	}
-	return max(reading.Online, len(reading.Names)), true
+	return reading.Online, true
 }
 
 // Poll starts a reading for every running server that lists players and is

@@ -150,7 +150,8 @@ func TestParseFactorioPlayers(t *testing.T) {
 		"", "Unknown command \"player\".", "Online players (1):\n", "Online players (0):\n  Ada (online)\n",
 		"Online players (1):\nAda (online)\n", "Online players (1):\n  Ada (offline)\n",
 		"Players (1):\n  Ada (online)\n", "Online players (1):\n  Ada (online)\nOnline players (1):\n  Ada (online)\n",
-		"  Ada (online)\nOnline players (1):\n",
+		"  Ada (online)\nOnline players (1):\n", "Online players (2):\n  Ada (online)\n  Ada (online)\n",
+		"Online players (1):\n  Ada\x00 (online)\n",
 	})
 }
 
@@ -164,7 +165,9 @@ func TestParsePalworldPlayers(t *testing.T) {
 		{"name,playeruid,steamid\nSmith, Jo,1234567890,76561198000000000\n", 1, []string{"Smith, Jo"}},
 		// A player still joining has no name or ID yet, but is online.
 		{"name,playeruid,steamid\n,00000000,00000000000000000\n", 1, nil},
-	}, []string{"", "Unknown command", "Ada,1234567890,76561198000000000", "name,playeruid,steamid\nAda,1234567890\n"})
+	}, []string{"", "Unknown command", "Ada,1234567890,76561198000000000", "name,playeruid,steamid\nAda,1234567890\n",
+		"name,playeruid,steamid\nname,playeruid,steamid\n", "name,playeruid,steamid\nAda,,\n",
+		"name,playeruid,steamid\nAda,12\x0034,76561198000000000\n"})
 }
 
 // ARK numbers rows from 0, with Steam IDs on Survival Evolved and EOS IDs
@@ -178,7 +181,7 @@ func TestParseARKPlayers(t *testing.T) {
 		"", " \n", "Server received, But no response!! \n", "1. Ada, 76561198000000000\n",
 		"0. Ada, 76561198000000000\n0. Zed, 76561198000000001\n", "0. Ada 76561198000000000\n",
 		"01. SteamID: 76561197960435530, Name: Haldor, Ping: 18\n",
-		"0. Ada, 76561198000000000\nNo Players Connected\n",
+		"0. Ada, 76561198000000000\nNo Players Connected\n", "0. Ada, 7656119800\n", "0. Ada, 0002a1b2c3d4e5f6\n",
 	})
 }
 
@@ -189,7 +192,7 @@ func TestParseZomboidPlayers(t *testing.T) {
 		{"Players connected (2): \n-Ada\n-Zed Smith\n", 2, []string{"Ada", "Zed Smith"}},
 	}, []string{
 		"", "Unknown command players", "Players connected (1): \n", "Players connected (0): \n-Ada\n",
-		"Players connected (1): \nAda\n", "Players connected (2): <LINE> -Ada <LINE> -Zed <LINE> ",
+		"Players connected (1): \nAda\n", "Players connected (1): \n-\n", "Players connected (2): <LINE> -Ada <LINE> -Zed <LINE> ",
 	})
 }
 
@@ -204,6 +207,10 @@ func TestParseConanPlayers(t *testing.T) {
 	}, []string{
 		"", "Couldn't find the command: ListPlayers", "Idx | Player name\n",
 		header + "  0 | Ada | ada_1 | 1A2B3C4D\n", header + "  x | Ada | ada_1 | 1A2B3C4D | 7656 | Steam\n",
+		// A header cut short could be any table.
+		"Idx | Char name | Player name\n",
+		header + "  0 | Ada | ada_1 | 1A | 7656 | Steam\n  0 | Zed | zed_2 | 2B | 7657 | Steam\n",
+		header + " -1 | Ada | ada_1 | 1A | 7656 | Steam\n",
 	})
 }
 
@@ -218,7 +225,10 @@ func TestParse7DaysPlayers(t *testing.T) {
 		{"Total of 0 in the game\r\n", 0, nil},
 		{log + "\r\n" + row + "\r\n" + strings.Replace(row, "0. id=171, Aona Suzutsuki", "1. id=172, Zed", 1) +
 			"\r\nTotal of 2 in the game\r\n", 2, []string{"Aona Suzutsuki", "Zed"}},
-	}, []string{"", log, row, row + "\nTotal of 2 in the game", "Total of 0 in the game\nTotal of 0 in the game"})
+	}, []string{"", log, row, row + "\nTotal of 2 in the game", "Total of 0 in the game\nTotal of 0 in the game",
+		// A row cut short, or text that isn't a row or the server log.
+		"0. id=171, Ada, pos=(\nTotal of 1 in the game", "0. id=171, Ada, p\x00os=(\nTotal of 0 in the game",
+		"garbled\nTotal of 0 in the game", "Total of 1 in the game\n" + row})
 }
 
 // Each game with a player list gets it from its preset, also when a label
