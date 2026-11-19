@@ -219,11 +219,12 @@ func TestTelnetIgnoresStreamedLog(t *testing.T) {
 	if response, err := Telnet(ctx, chatty, chattyPort, "telnet-secret", "say password is incorrect", Control{}); err != nil || response != "done" {
 		t.Fatalf("%q %v", response, err)
 	}
-	// Without a banner, the echo of such a command is the first line.
+	// Without a banner, the first line can be chat or the command's echo.
 	quiet, quietPort := listen(t, func(conn net.Conn) {
 		reader := bufio.NewReader(conn)
 		conn.Write([]byte("Please enter password:"))
 		reader.ReadString('\n')
+		conn.Write([]byte("2026-11-19 INF Chat 'Bob': password is incorrect\r\n"))
 		command, _ := reader.ReadString('\n')
 		conn.Write([]byte(command + "done\r\n"))
 		io.Copy(io.Discard, reader)

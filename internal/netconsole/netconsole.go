@@ -393,7 +393,9 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
-	authFailed     = regexp.MustCompile(`(?i)password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed`)
+	// authFailed is a console's own rejection reply, which starts its line;
+	// chat or a command that mentions one does not.
+	authFailed = regexp.MustCompile(`(?i)^(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
 )
 
 type telnetDecoder struct {
@@ -484,12 +486,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// arrives after the command was sent; later lines are the game's own.
 	rejected := func() bool {
 		reply, _, _ := strings.Cut(strings.TrimSpace(decodeText(raw[passwordAt:])), "\n")
-		reply = strings.TrimSpace(reply)
-		// A server with no sign-in banner echoes the command first.
-		if commandSent && strings.EqualFold(reply, strings.TrimSpace(command)) {
-			return false
-		}
-		return authFailed.MatchString(reply)
+		return authFailed.MatchString(strings.TrimSpace(reply))
 	}
 	finish := func() (string, error) {
 		if rejected() {
