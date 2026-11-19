@@ -92,11 +92,12 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	// someone joining: a reading that fails leaves the earlier one in place.
 	settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
 	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled && occupancy.ReadAt >= r.lastRunAt.Int64)
-	// A run that skips acts only before the wait ends.
+	// A run that skips acts only before the wait ends, unless the server is
+	// stopped: only other work held that run, and nobody is there to kick.
 	switch {
 	case now < ends && !empty:
 		return nil
-	case now < ends || data.WaitForEmpty.Then == WaitRun:
+	case now < ends || data.WaitForEmpty.Then == WaitRun || occupancy.Stopped:
 	case occupancy.Known && occupancy.Online > 0:
 		return SkipPlayersOnline
 	default:

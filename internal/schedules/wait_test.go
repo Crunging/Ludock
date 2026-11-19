@@ -367,3 +367,24 @@ func TestWaitIgnoresEarlierEmptyReading(t *testing.T) {
 		t.Fatal("did not act on a reading from during the wait")
 	}
 }
+
+// A stopped server is busy with other work for a whole wait set to skip:
+// the run is recorded as blocked by that work, not as an unreadable player
+// count, since a stopped server has no players to count.
+func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(0, true)
+	players.now.Stopped = true
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.Run(ctx, due+10*minute)
+	f.s.Run(ctx, due+15*minute-15_000)
+	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
+		t.Fatal(last.LastResult)
+	}
+}
