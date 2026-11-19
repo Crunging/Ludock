@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,8 +183,15 @@ func TestAssertNoOtherWriters(t *testing.T) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "stopped", Image: "alpine",
 		Mounts: []docker.MountPoint{{Type: "bind", Source: data, Destination: "/data", RW: true}}})
 	s := &Service{Docker: client}
+	before := len(engine.Requests)
 	if err := s.AssertNoOtherWriters(ctx, server, ""); err != nil {
 		t.Fatal(err)
+	}
+	// The check runs every second of a backup: one list, no inspections.
+	for _, request := range engine.Requests[before:] {
+		if !strings.Contains(request, "/containers/json") && !strings.Contains(request, "/version") {
+			t.Fatal("inspected a container", request)
+		}
 	}
 	engine.AddContainer(fakedocker.GameOptions{Name: "writer", Image: "alpine", Running: true,
 		Mounts: []docker.MountPoint{{Type: "bind", Source: filepath.Join(data, "world"), Destination: "/world", RW: true}}})

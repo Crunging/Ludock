@@ -115,9 +115,9 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		if err != nil {
 			return nil, err
 		}
-		if _, err := j.Backups.Storage.Validate(settings.Destination, id, data.Roots, settings.MaxBytes, checksum); err != nil {
-			return nil, err
-		}
+		// WriteSnapshot validated every entry it wrote and hashed the bytes it
+		// synced, so the archive is not read again while the server is down;
+		// a restore validates it in full before changing data.
 		if err := assertCopy(); err != nil {
 			return nil, err
 		}

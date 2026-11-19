@@ -383,7 +383,7 @@ func (e *Engine) list(w http.ResponseWriter, r *http.Request) {
 		}
 		state, status := c.State.Status, c.State.Status
 		result = append(result, docker.ContainerSummary{ID: id, Names: []string{c.Name}, Image: c.Config.Image,
-			Labels: c.Config.Labels, State: &state, Status: &status})
+			Labels: c.Config.Labels, State: &state, Status: &status, Mounts: c.Mounts})
 	}
 	writeJSON(w, 200, result)
 }

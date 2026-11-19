@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -103,9 +104,17 @@ type Helpers struct {
 	Docker  *docker.Client
 	Images  *launch.Images
 	Storage *Storage
-	// pollInterval and openLimit are shortened in tests.
+	// pollInterval, openLimit, and readLimit are shortened in tests.
 	pollInterval time.Duration
 	openLimit    time.Duration
+	readLimit    time.Duration
+}
+
+func (h *Helpers) backupLimit() time.Duration {
+	if h.readLimit > 0 {
+		return h.readLimit
+	}
+	return helper.BackupLimit
 }
 
 // NewDataHelper starts a helper labelled with the operation, so recovery can
@@ -223,7 +232,8 @@ func (h *Helpers) start(ctx context.Context, id, execID string) (*docker.Conn, e
 }
 
 var (
-	errTimeout = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
+	errTimeout       = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
+	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data root for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
 	errFailed  = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
 )
 
@@ -310,10 +320,14 @@ func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess fun
 	if err != nil {
 		return nil, nil, err
 	}
-	timer := time.AfterFunc(30*time.Minute, func() { conn.Close() })
+	var expired atomic.Bool
+	timer := time.AfterFunc(h.backupLimit(), func() { expired.Store(true); conn.Close() })
 	reader := docker.Stdout(conn)
 	closer := &closeFunc{Reader: reader, close: func() error { timer.Stop(); conn.Close(); return reader.Close() }}
 	complete := func() error {
+		if expired.Load() {
+			return errBackupTimeout
+		}
 		result, err := h.Docker.InspectExec(context.WithoutCancel(ctx), execID)
 		if err != nil || result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 			return fail("UNSAFE_ARCHIVE", "Archive reading failed. Backups require regular files and directories without symbolic links, hard links, special files, or inaccessible paths.")
@@ -473,8 +487,10 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			}
 			return nil
 		}, nil)
-		if err == nil {
-			err = complete()
+		// A stream cut off at the time limit fails as a broken archive; the
+		// limit is the reason.
+		if completeErr := complete(); err == nil || errors.Is(completeErr, errBackupTimeout) {
+			err = completeErr
 		}
 		input.Close()
 		if err != nil {

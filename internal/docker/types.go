@@ -13,6 +13,7 @@ type ContainerSummary struct {
 	State   *string           `json:"State"`
 	Status  *string           `json:"Status"`
 	Created int64             `json:"Created"`
+	Mounts  []MountPoint      `json:"Mounts"`
 }
 
 type HealthState struct {

@@ -262,3 +262,32 @@ func TestStalledArchiveStart(t *testing.T) {
 		t.Fatal("left an archive behind")
 	}
 }
+
+// A root still being read at the backup's time limit fails as a timeout, not
+// as an archive of unsupported files.
+func TestSnapshotTimeLimit(t *testing.T) {
+	_, client := startHelpers(t)
+	base := t.TempDir()
+	data := filepath.Join(base, "game")
+	os.MkdirAll(data, 0o755)
+	os.WriteFile(filepath.Join(data, "world.dat"), make([]byte, 1<<20), 0o644)
+	destination := filepath.Join(base, "backups")
+	os.MkdirAll(destination, 0o755)
+	storage := &Storage{Docker: client, Roots: destination}
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: storage,
+		pollInterval: 1, readLimit: time.Nanosecond}
+	context := serverContext(data)
+	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataHelper.Cleanup()
+	_, _, err = helpers.WriteSnapshot(ctx, context, dataHelper, Settings{Destination: destination, MaxBytes: 1 << 30},
+		"9f9619ff-8b86-4011-b42d-00c04fc964ff", 1<<30, func() error { return nil }, nil)
+	if public, ok := apperr.As(err); !ok || public.Code != "BACKUP_TIMEOUT" || !strings.Contains(public.Message, "4 hours") {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(destination); len(entries) != 0 {
+		t.Fatal("left an archive behind")
+	}
+}
