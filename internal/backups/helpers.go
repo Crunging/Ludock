@@ -234,11 +234,17 @@ func (h *Helpers) start(ctx context.Context, id, execID string) (*docker.Conn, e
 var (
 	errTimeout       = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
 	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data root for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
-	errFailed  = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
+	errFailed        = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
 )
 
 // Exec runs a short helper command (two-minute limit) and returns stdout.
 func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertAccess func() error) ([]byte, error) {
+	return h.ExecWithin(ctx, id, command, assertAccess, 2*time.Minute)
+}
+
+// ExecWithin is Exec with its own time limit, for commands that walk a whole
+// data root.
+func (h *Helpers) ExecWithin(ctx context.Context, id string, command []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
 	execID, err := h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: command, AttachStdout: true, AttachStderr: true})
 	if err != nil {
 		return nil, err
@@ -248,7 +254,7 @@ func (h *Helpers) Exec(ctx context.Context, id string, command []string, assertA
 			return nil, err
 		}
 	}
-	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 2*time.Minute, errTimeout)
+	deadline, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), limit, errTimeout)
 	defer cancel()
 	conn, err := h.start(deadline, id, execID)
 	if err != nil {

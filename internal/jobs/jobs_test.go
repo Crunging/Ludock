@@ -51,6 +51,8 @@ type fixture struct {
 	mu           sync.Mutex
 	commands     []string
 	failStep     string
+	// failTimes, when positive, is how many more times failStep fails.
+	failTimes int
 }
 
 func setup(t *testing.T) *fixture {
@@ -79,7 +81,17 @@ func setup(t *testing.T) *fixture {
 		if len(cmd) > 2 && cmd[0] == helper.Binary {
 			args := append([]string(nil), cmd[2:]...)
 			if failStep != "" && strings.Contains(strings.Join(args, " "), `"operation":"`+failStep+`"`) {
-				return 1
+				f.mu.Lock()
+				fail := f.failTimes >= 0
+				if f.failTimes > 0 {
+					if f.failTimes--; f.failTimes == 0 {
+						f.failTimes = -1
+					}
+				}
+				f.mu.Unlock()
+				if fail {
+					return 1
+				}
 			}
 			for _, mount := range c.CreateRequest.HostConfig.Mounts {
 				for index := range args {
@@ -242,6 +254,42 @@ func TestFailedRestoreRollsBack(t *testing.T) {
 	}
 	if wrong := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "wrong"}); wrong.Status != ops.Failed {
 		t.Fatal("restore without confirmation ran")
+	}
+}
+
+// A restore whose staging cleanup fails after the new data is in place
+// cleans up through a fresh helper; if that fails too, it says which folder
+// to remove, since the folder blocks every later backup.
+func TestRestoreCleanupAfterCommit(t *testing.T) {
+	f := setup(t)
+	backup := f.run(t, "backup", nil)
+	backupID := backup.Result["backupId"].(string)
+	os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("newer"), 0o644)
+	staged := func() bool {
+		entries, _ := os.ReadDir(f.data)
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".ludock-restore-") {
+				return true
+			}
+		}
+		return false
+	}
+	f.mu.Lock()
+	f.failStep, f.failTimes = "cleanup", 1
+	f.mu.Unlock()
+	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
+	if restored.Status != ops.Succeeded || staged() || !f.running() {
+		t.Fatalf("%+v", restored)
+	}
+	if data, _ := os.ReadFile(filepath.Join(f.data, "world", "level.dat")); string(data) == "newer" {
+		t.Fatal("the backup was not restored")
+	}
+	f.mu.Lock()
+	f.failStep, f.failTimes = "cleanup", 0
+	f.mu.Unlock()
+	stuck := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
+	if stuck.Status != ops.Failed || !strings.Contains(stuck.Error, ".ludock-restore-"+stuck.ID) || !staged() || !f.running() {
+		t.Fatalf("%+v", stuck)
 	}
 }
 

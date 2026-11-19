@@ -173,7 +173,10 @@ func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
 			return err
 		}
 	}
-	return syncAll(parent)
+	// Each directory is synced once, after its entries are removed, and the
+	// top-level caller syncs the parent it removed from: a sync per entry made
+	// cleaning up a large world outlast its time limit.
+	return nil
 }
 
 func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
