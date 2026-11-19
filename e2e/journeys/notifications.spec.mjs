@@ -257,6 +257,7 @@ async function findNewerSurvivalImage(page) {
   await page.getByRole("tab", { name: "Update" }).click();
   const check = page.locator("#image-check");
   const checked = check.locator(".image-check__checked time");
+  await expect(check.getByRole("button", { name: "Check now" })).toBeVisible();
   const before = await checked.count() ? await checked.getAttribute("datetime") : null;
   await expect(async () => {
     await check.getByRole("button", { name: "Check now" }).click();
@@ -318,7 +319,7 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     webhook = await openDestination(page, "webhook");
     await sendTest(page, webhook, "Webhook");
 
-    // No type at all is the same as off, and says so.
+    // Saving with no alert type is refused.
     await openAlertTypes(webhook);
     for (const label of ["Failed backups and schedules", "Restores and updates", "Newer images available"]) {
       await webhook.getByLabel(label).uncheck();
