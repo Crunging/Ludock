@@ -89,8 +89,9 @@ func gameService(t *testing.T, engine *fakedocker.Engine) (*Service, string) {
 }
 
 // A Palworld console password of a few digits occurs inside an online
-// player's Steam ID. The list still reads, and a name holding the password
-// shows it redacted.
+// player's Steam ID. The list still reads, a name holding the password shows
+// it redacted, and a name cut to the length limit partway into the password
+// shows none of it.
 func TestSecretInsidePlayerID(t *testing.T) {
 	engine, err := fakedocker.Start(t.TempDir())
 	if err != nil {
@@ -98,7 +99,8 @@ func TestSecretInsidePlayerID(t *testing.T) {
 	}
 	t.Cleanup(func() { engine.Close() })
 	port, err := fakedocker.ServeRCON("4242", func(string) string {
-		return "name,playeruid,steamid\nAda,1234567890,76561198042420001\nx4242y,1234567891,76561198000000002\n"
+		return "name,playeruid,steamid\nAda,1234567890,76561198042420001\nx4242y,1234567891,76561198000000002\n" +
+			strings.Repeat("a", 63) + "4242,1234567892,76561198000000003\n"
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +117,7 @@ func TestSecretInsidePlayerID(t *testing.T) {
 	if err != nil || reading == nil || reading.Failed {
 		t.Fatal(reading, err)
 	}
-	if reading.Online != 2 || strings.Join(reading.Names, ",") != "Ada,x[redacted]y" {
+	if reading.Online != 3 || strings.Join(reading.Names, ",") != "Ada,x[redacted]y,"+strings.Repeat("a", 63) {
 		t.Fatal(reading.Players)
 	}
 }

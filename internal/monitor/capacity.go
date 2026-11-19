@@ -222,8 +222,17 @@ func resetAlerts(ctx context.Context, tx *sql.Tx, serverID string, previous, pol
 	}
 	if !policy.Enabled || previous.MemoryAlert != policy.MemoryAlert || previous.MemoryPercent != policy.MemoryPercent ||
 		previous.MemoryMinutes != policy.MemoryMinutes {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key=?", memoryKey(serverID)); err != nil {
+		// The binding and its first judged minute outlast the alert.
+		var memory MemoryState
+		raw, err := loadState(ctx, tx, memoryKey(serverID), &memory)
+		if err != nil {
 			return err
+		}
+		if raw != "" {
+			encoded, _ := json.Marshal(MemoryState{Revision: memory.Revision, From: memory.From})
+			if _, err := tx.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=?", string(encoded), memoryKey(serverID)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

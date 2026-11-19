@@ -514,7 +514,7 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 	defer action.Done()
 	details := map[string]any{"root": root, "path": path, "name": name, "size": size}
 	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, r.Body, action.Assert); err != nil {
-		if public, ok := apperr.As(err); (ok && public.Status == http.StatusUnauthorized) || !unconfirmed(err) {
+		if !unconfirmed(err) {
 			s.fail(w, r, request, err)
 			return
 		}

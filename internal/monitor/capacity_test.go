@@ -224,7 +224,7 @@ func TestMemoryAlert(t *testing.T) {
 // replacement alerts only once its own samples fill the window, and the old
 // binding's alert ends with it.
 func TestMemoryAlertEndsWithItsBinding(t *testing.T) {
-	s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 3 })
+	s, events, server, configure := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 3 })
 	const minute = 10 * 60_000
 	addSamples(t, s, server.ID, minute, 950, 950, 950)
 	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute)
@@ -239,8 +239,15 @@ func TestMemoryAlertEndsWithItsBinding(t *testing.T) {
 	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 || len(events.events) != 1 {
 		t.Fatal("judged the replacement by the old container's samples", problems, events.events)
 	}
+	// New alert settings keep the replacement's cutoff.
+	policy := DefaultPolicy()
+	policy.Enabled, policy.GraceSeconds, policy.MemoryMinutes, policy.MemoryPercent = true, 60, 3, 89
+	configure(policy)
 	addSamples(t, s, server.ID, minute+3*60_000, 960, 960)
 	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute+2*60_000)
+	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 {
+		t.Fatal("new settings counted the old container's samples", problems)
+	}
 	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute+3*60_000)
 	if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 || len(events.events) != 2 {
 		t.Fatal(problems, events.events)

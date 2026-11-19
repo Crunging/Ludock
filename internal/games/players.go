@@ -26,7 +26,7 @@ type PlayerQuery struct {
 // Name limits keep a hostile or broken response from filling a page.
 const (
 	maxPlayerNames = 200
-	maxNameRunes   = 64
+	MaxNameRunes   = 64
 )
 
 func (p *Players) add(name string) {
@@ -34,8 +34,8 @@ func (p *Players) add(name string) {
 	if name == "" || len(p.Names) == maxPlayerNames {
 		return
 	}
-	if utf8.RuneCountInString(name) > maxNameRunes {
-		name = string([]rune(name)[:maxNameRunes])
+	if utf8.RuneCountInString(name) > MaxNameRunes {
+		name = string([]rune(name)[:MaxNameRunes])
 	}
 	p.Names = append(p.Names, name)
 }

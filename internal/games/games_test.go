@@ -114,7 +114,7 @@ func TestParseMinecraftList(t *testing.T) {
 		}
 	}
 	long, _ := ParseMinecraftList("There are 300 of a max of 500 players online: " + strings.Repeat(strings.Repeat("x", 80)+", ", 300))
-	if len(long.Names) != maxPlayerNames || len([]rune(long.Names[0])) != maxNameRunes {
+	if len(long.Names) != maxPlayerNames || len([]rune(long.Names[0])) != MaxNameRunes {
 		t.Fatalf("%d names, first %d runes", len(long.Names), len([]rune(long.Names[0])))
 	}
 }

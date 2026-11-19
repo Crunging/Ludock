@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/console"
 	"github.com/Crunging/Ludock/internal/games"
@@ -79,7 +81,15 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading
 		if players, ok := probe.Adapter.Players.Parse(result.Response); ok {
 			secrets := append(slices.Clone(observed.Observation.Secrets), result.Secrets...)
 			for index, name := range players.Names {
-				players.Names[index] = console.Redact(secrets, name)
+				var safe strings.Builder
+				redactor := console.NewRedactor(secrets, func(part string) { safe.WriteString(part) })
+				redactor.Push(name)
+				// A name cut to the limit may end partway into a secret, so
+				// that tail stays withheld.
+				if utf8.RuneCountInString(name) < games.MaxNameRunes {
+					redactor.End()
+				}
+				players.Names[index] = safe.String()
 			}
 			reading.Players, reading.Failed, reading.Via = players, false, ViaConsole
 		}
