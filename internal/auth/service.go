@@ -755,6 +755,13 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 			string(role), boolInt(disabled), s.Now(), id); err != nil {
 			return err
 		}
+		// Administrators use every server, so their shares are dropped: one
+		// made a member again starts with nothing shared.
+		if role == db.RoleAdmin {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ?", id); err != nil {
+				return err
+			}
+		}
 		if disabled {
 			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?",
 				"DELETE FROM account_links WHERE user_id = ?"} {
@@ -802,7 +809,7 @@ func (s *Service) DeleteUser(ctx context.Context, principal *Principal, id strin
 		return apperr.New("SELF_DELETE", 409, "You cannot delete your own account")
 	}
 	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
-		last, err := db.RemovesLastAdmin(ctx, tx, id, db.RoleViewer, true)
+		last, err := db.RemovesLastAdmin(ctx, tx, id, db.RoleMember, true)
 		if err != nil {
 			return err
 		}

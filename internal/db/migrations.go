@@ -292,6 +292,35 @@ var Migrations = []Migration{
       ALTER TABLE backups ADD COLUMN reason TEXT NOT NULL DEFAULT '' CHECK (reason IN ('', 'restore', 'update'));
     `,
 	},
+	{
+		// Two kinds of account: administrators and members, whose access is
+		// set per server. Former viewers keep only grants their role allowed,
+		// and administrators hold no grants, so making one a member again
+		// starts with nothing shared.
+		Version: 9,
+		SQL: `
+      CREATE TABLE users_v9 (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+        disabled INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        totp_secret TEXT,
+        totp_pending TEXT,
+        totp_step INTEGER NOT NULL DEFAULT 0 CHECK (totp_step >= 0)
+      ) STRICT;
+      INSERT INTO users_v9 SELECT id, username, password_hash, CASE role WHEN 'admin' THEN 'admin' ELSE 'member' END,
+        disabled, created_at, updated_at, totp_secret, totp_pending, totp_step FROM users;
+      UPDATE server_grants SET capabilities_json = (SELECT json_group_array(value) FROM json_each(server_grants.capabilities_json)
+        WHERE value IN ('server.view', 'logs.read', 'files.read'))
+        WHERE json_valid(capabilities_json) AND json_type(capabilities_json) = 'array' AND user_id IN (SELECT id FROM users WHERE role = 'viewer');
+      DELETE FROM server_grants WHERE user_id IN (SELECT id FROM users WHERE role = 'admin');
+      DROP TABLE users;
+      ALTER TABLE users_v9 RENAME TO users;
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
@@ -348,6 +377,12 @@ func ApplyMigrations(ctx context.Context, conn *sql.Conn, migrations []Migration
 	if err := AssertCompatible(ctx, conn, first, latest); err != nil {
 		return err
 	}
+	// A migration may rebuild a table others reference, which SQLite allows
+	// only with foreign keys off; they are checked before committing.
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -375,6 +410,15 @@ func ApplyMigrations(ctx context.Context, conn *sql.Conn, migrations []Migration
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id = %d", ApplicationID)); err != nil {
 		return err
+	}
+	violations, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	broken := violations.Next()
+	violations.Close()
+	if broken {
+		return errors.New("database migration broke a foreign key")
 	}
 	return tx.Commit()
 }

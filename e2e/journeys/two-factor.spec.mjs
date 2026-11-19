@@ -37,7 +37,7 @@ async function enterCode(page, code) {
 }
 
 test("two-factor sign-in asks for a code from an authenticator app or a recovery code", async ({ session }) => {
-  await createUser(await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE }), "carol", "carol long password", "viewer");
+  await createUser(await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE }), "carol", "carol long password");
   const laptop = await session();
   const phone = await session();
   await signIn(laptop, "carol", "carol long password");
@@ -108,7 +108,7 @@ test("two-factor sign-in asks for a code from an authenticator app or a recovery
 
 test("an administrator turns off two-factor sign-in for a user who lost their phone", async ({ page, session }) => {
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(admin, "dave", "dave long password", "operator");
+  await createUser(admin, "dave", "dave long password");
   await signIn(page, "dave", "dave long password");
   await enroll(page, "dave long password");
 

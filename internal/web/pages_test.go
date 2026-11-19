@@ -93,8 +93,7 @@ func (p *pages) user(id, username string, role db.Role) *auth.Principal {
 
 func (p *pages) grant(principal *auth.Principal, capabilities ...authz.Capability) {
 	p.t.Helper()
-	if _, err := p.app.Authz.SetUserGrants(context.Background(), principal.User.ID,
-		[]authz.GrantInput{{ServerID: p.server, Capabilities: capabilities}}, &p.admin.User, p.admin.TokenHash); err != nil {
+	if err := p.app.Authz.Share(context.Background(), &p.admin.User, p.admin.TokenHash, principal.User.ID, p.server, capabilities); err != nil {
 		p.t.Fatal(err)
 	}
 }
@@ -235,7 +234,7 @@ func TestFailedSignOutKeepsTheCookie(t *testing.T) {
 func TestDiscoveryIsNotPermission(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	page := p.do("GET", "/fragments/servers", viewer, nil, map[string]string{"HX-Request": "true"})
 	if page.Code != http.StatusOK || strings.Contains(page.Body.String(), "valheim") {
 		t.Fatal(page.Code, page.Body.String())
@@ -247,7 +246,7 @@ func TestDiscoveryIsNotPermission(t *testing.T) {
 		t.Fatal(hidden.Code, hidden.Body.String(), missing.Body.String())
 	}
 
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView)
 	page = p.do("GET", "/fragments/servers", operator, nil, map[string]string{"HX-Request": "true"})
 	if !strings.Contains(page.Body.String(), "valheim") || strings.Contains(page.Body.String(), "/servers/"+p.server+"/start") {

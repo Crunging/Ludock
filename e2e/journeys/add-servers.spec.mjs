@@ -1,4 +1,4 @@
-import { test, expect, signIn, createUser, serverRow, openServer } from "./fixtures.mjs";
+import { test, expect, signIn, createUser, serverRow, openServer, shareServer } from "./fixtures.mjs";
 
 // The fake daemon runs "satisfactory" on an image Ludock doesn't recognize,
 // "valheim-old" labeled ludock.enable: "false", and "portainer" with the
@@ -63,7 +63,7 @@ test("a container its owner labeled ludock.enable: \"false\" can't be added", as
 
 test("a non-administrator sees no containers and can't add or remove servers", async ({ session }) => {
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(admin, "friend1", "friend password one", "viewer");
+  await createUser(admin, "friend1", "friend password one");
   const friend = await session();
   await signIn(friend, "friend1", "friend password one");
   await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
@@ -77,10 +77,7 @@ test("a non-administrator sees no containers and can't add or remove servers", a
   expect(add.status()).toBe(403);
 
   // Once shared, the added server shows up, without the administrator's controls.
-  const editor = admin.locator("[data-grants]");
-  await editor.locator(".grants-server", { hasText: "satisfactory" }).getByRole("button", { name: "Status only" }).click();
-  await editor.getByRole("button", { name: "Save server access" }).click();
-  await expect(editor.locator(".alert--success")).toContainText("Server access saved for friend1.");
+  await shareServer(admin, "satisfactory", "friend1", "Can see it");
   await openServer(friend, "satisfactory");
   await expect(friend.getByRole("heading", { name: "Remove from Ludock" })).toHaveCount(0);
   const remove = await friend.request.post(friend.url() + "/remove", { form: { _csrf: csrf }, headers: { "HX-Request": "true" } });
@@ -102,13 +99,9 @@ test("removing servers and adding them back keeps their sharing", async ({ sessi
   await expect(page.locator(".server-row")).toHaveCount(4);
   await friend.reload();
   await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
-  // Saving the friend's access meanwhile keeps the removed server's share.
+  // The friend's share waits for the server, out of sight meanwhile.
   await page.goto("/users");
-  await page.locator(".user-row", { hasText: "friend1" }).getByRole("button", { name: "Server access", exact: true }).click();
-  const editor = page.locator("[data-grants]");
-  await expect(editor.locator(".grants-server", { hasText: "satisfactory" })).toHaveCount(0);
-  await editor.getByRole("button", { name: "Save server access" }).click();
-  await expect(editor.locator(".alert--success")).toContainText("Server access saved for friend1.");
+  await expect(page.locator(".user-row", { hasText: "friend1" })).toContainText("Nothing shared yet");
 
   // The container is untouched and offered again; adding it brings back its
   // sharing.

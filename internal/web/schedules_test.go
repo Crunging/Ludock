@@ -24,7 +24,7 @@ func scheduleForm(values map[string][]string) url.Values {
 func TestSchedulesFollowActionGrants(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.SchedulesManage, authz.ServerStart)
 	page := p.do("GET", "/servers/"+p.server+"?tab=schedules", operator, nil, nil).Body.String()
 	if !strings.Contains(page, `<option value="start"`) || strings.Contains(page, `<option value="stop"`) {
@@ -44,7 +44,7 @@ func TestSchedulesFollowActionGrants(t *testing.T) {
 		t.Fatal(list)
 	}
 	// Viewers without the schedule grant cannot reach the tab or save.
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	p.grant(viewer, authz.ServerView)
 	if response := p.action("/servers/"+p.server+"/schedules", viewer, scheduleForm(nil)); response.StatusCode != http.StatusForbidden {
 		t.Fatal(response.StatusCode)
@@ -59,7 +59,7 @@ func TestSchedulesFollowActionGrants(t *testing.T) {
 func TestCommandSchedulesNeedAGameConsole(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.SchedulesManage, authz.ConsoleExecute, authz.ServerStart)
 	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules", operator, nil, nil).Body.String(); strings.Contains(page, `<option value="command"`) {
 		t.Fatal("offered a command schedule without a game console")

@@ -28,8 +28,8 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
   administrator account controls the Docker socket.
 - Send invite and password reset links privately: anyone who opens one before
   the user does can set the password. They work once and expire after a day.
-- Administrators see every managed server. Other users see only the servers and
-  actions shared with them.
+- Administrators see every managed server. Members see only the servers shared
+  with them, with the access chosen on each server's Sharing tab.
 - Approve narrow backup folders, and keep registry and webhook credentials out
   of game file folders.
 

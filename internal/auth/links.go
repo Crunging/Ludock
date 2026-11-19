@@ -40,12 +40,16 @@ func linkSourceKey(client Client) string { return throttleKey("link-source", cli
 
 // InviteUser creates an account without a password and returns the invite
 // link that sets it. The account can't sign in until the link is used.
-func (s *Service) InviteUser(ctx context.Context, principal *Principal, username string, role db.Role, client Client) (*db.User, *Link, error) {
+// then, if set, runs in the same transaction, such as to share a server.
+func (s *Service) InviteUser(ctx context.Context, principal *Principal, username string, role db.Role, client Client,
+	then func(tx *sql.Tx, id string) error) (*db.User, *Link, error) {
 	var link *Link
 	user, err := s.createUser(ctx, principal, username, "", role, client, func(tx *sql.Tx, id string) error {
 		var err error
-		link, err = s.putLink(ctx, tx, principal, id, client)
-		return err
+		if link, err = s.putLink(ctx, tx, principal, id, client); err != nil || then == nil {
+			return err
+		}
+		return then(tx, id)
 	})
 	if err != nil {
 		return nil, nil, err

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { crc32, gzipSync } from "node:zlib";
-import { test, expect, asAdmin, serverRow, signIn, createUser, fake } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, signIn, createUser, fake, shareServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -276,13 +276,9 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
   }
 });
 
-test("a viewer who can read files is not offered editing", async ({ page, session }) => {
-  await createUser(page, "fileviewer", "file viewer password", "viewer");
-  const survival = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
-  await survival.getByRole("button", { name: "Status only" }).click();
-  await survival.getByLabel("Read and download files").check();
-  await page.locator("[data-grants]").getByRole("button", { name: "Save server access" }).click();
-  await expect(page.locator("[data-grants] .alert--success")).toContainText("Server access saved for fileviewer.");
+test("someone who can read files is not offered editing", async ({ page, session }) => {
+  await createUser(page, "fileviewer", "file viewer password");
+  await shareServer(page, "Survival", "fileviewer", ["Read and download files"]);
 
   const viewer = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(viewer, "fileviewer", "file viewer password");

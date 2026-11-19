@@ -17,15 +17,14 @@ var ctx = context.Background()
 func TestPagesRecheckAccessAndHideTokens(t *testing.T) {
 	d := dbtest.Open(t)
 	admin := &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
-	viewer := &db.SessionUser{ID: "viewer", Username: "viewer", Role: db.RoleViewer}
+	viewer := &db.SessionUser{ID: "viewer", Username: "viewer", Role: db.RoleMember}
 	for _, user := range []*db.SessionUser{admin, viewer} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
 	store := &identity.Store{DB: d}
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "a", Name: "a", DisplayName: "a"}, {ContainerID: "b", Name: "b", DisplayName: "b"}}, "", 0)
 	authorization := &authz.Service{DB: d, Servers: store}
-	authorization.SetUserGrants(ctx, viewer.ID, []authz.GrantInput{{ServerID: list[0].ID, Capabilities: []authz.Capability{authz.ServerView}}}, admin,
-		dbtest.Session(t, d, admin.ID))
+	authorization.Share(ctx, admin, dbtest.Session(t, d, admin.ID), viewer.ID, list[0].ID, []authz.Capability{authz.ServerView})
 	for index := range 5 {
 		server := list[index%2].ID
 		actor := "admin"

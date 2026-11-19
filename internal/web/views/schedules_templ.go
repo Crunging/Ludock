@@ -82,8 +82,8 @@ func ActionLabel(action string) string {
 var unavailableGuidance = map[string]string{
 	"owner_missing":         "Schedule owner no longer exists. Recreate this schedule with an authorized owner.",
 	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
-	"owner_access_removed":  "Schedule owner no longer has schedule access. Ask an administrator to restore server view and schedule management grants.",
-	"action_access_removed": "Schedule owner no longer has access to this action. Ask an administrator to restore the action grant, or edit the schedule to use an allowed action.",
+	"owner_access_removed":  "Schedule owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
+	"action_access_removed": "Schedule owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
 	"binding_unavailable":   "Ludock can’t find this server’s container. The schedule runs again once the server is back in Docker.",
 	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",

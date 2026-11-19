@@ -64,7 +64,7 @@ func TestConsoleSocketAuthorization(t *testing.T) {
 	if _, response, err := p.dial(t, server, p.admin, "logs", "https://attacker.example"); err == nil || response == nil || response.StatusCode != http.StatusForbidden {
 		t.Fatal("cross-origin", err)
 	}
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView)
 	if _, response, err := p.dial(t, server, operator, "shell", ""); err == nil || response == nil || response.StatusCode != http.StatusForbidden {
 		t.Fatal("operator shell", err)

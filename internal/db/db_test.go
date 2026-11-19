@@ -314,7 +314,7 @@ func TestFutureMigrationKeepsRecords(t *testing.T) {
 	if err := ApplyMigrations(bg, conn, Migrations, testKey); err != nil {
 		t.Fatal(err)
 	}
-	conn.ExecContext(bg, "INSERT INTO users (id, username, password_hash, role, disabled, created_at, updated_at) VALUES ('u','player','hash','viewer',0,1,1)")
+	conn.ExecContext(bg, "INSERT INTO users (id, username, password_hash, role, disabled, created_at, updated_at) VALUES ('u','player','hash','member',0,1,1)")
 	next := append(append([]Migration(nil), Migrations...), Migration{Version: LatestVersion() + 1,
 		SQL: "CREATE TABLE test_preferences (user_id TEXT PRIMARY KEY REFERENCES users(id), note TEXT NOT NULL) STRICT;"})
 	if err := ApplyMigrations(bg, conn, next, testKey); err != nil {
@@ -443,5 +443,49 @@ func TestScheduleSaveTimeMigration(t *testing.T) {
 	var changed int64
 	if err := after.QueryRow("SELECT changed_at FROM schedules WHERE id='a'").Scan(&changed); err != nil || changed < started-1000 {
 		t.Fatal(changed, err)
+	}
+}
+
+// Operators and viewers become members without losing their sessions or
+// schedules; a viewer gains nothing their role withheld, even from a malformed
+// grant, and an administrator's leftover grant is gone.
+func TestMemberRoleMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "roles.db")
+	before, err := open(path, Migrations[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('a','a','x','admin',1,1),
+      ('o','o','x','operator',1,1),('v','v','x','viewer',1,1)`,
+		`INSERT INTO sessions(token_hash,session_id,user_id,created_at,expires_at,last_seen_at) VALUES('t','s','v',1,9,1)`,
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1),('t','h','standalone:t','t','minecraft','active',1,'',1,1)`,
+		`INSERT INTO server_grants VALUES('v','t','{"entry":"server.view"}',1),('a','s','["server.view"]',1),('o','s','["server.view","server.start"]',1),
+      ('v','s','["server.view","server.start","files.read"]',1)`,
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('x','s','o','{}',1,1)`,
+	} {
+		if _, err := before.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before.Close()
+	after := mustOpen(t, path)
+	var roles, grants string
+	var sessions, schedules int
+	after.QueryRow("SELECT group_concat(id||'='||role, ',') FROM (SELECT * FROM users ORDER BY id)").Scan(&roles)
+	after.QueryRow("SELECT group_concat(user_id||'='||capabilities_json, ' ') FROM (SELECT * FROM server_grants ORDER BY user_id)").Scan(&grants)
+	after.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions)
+	after.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&schedules)
+	if roles != "a=admin,o=member,v=member" || sessions != 1 || schedules != 1 ||
+		grants != `o=["server.view","server.start"] v=["server.view","files.read"] v={"entry":"server.view"}` {
+		t.Fatal(roles, grants, sessions, schedules)
+	}
+	if got := pragma(t, after.DB, "foreign_keys"); got != "1" {
+		t.Fatalf("foreign_keys = %s", got)
+	}
+	if _, err := after.Exec("INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('z','z','x','viewer',1,1)"); err == nil {
+		t.Fatal("old role accepted")
 	}
 }

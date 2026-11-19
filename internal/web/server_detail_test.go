@@ -19,7 +19,7 @@ import (
 func TestServerDetailFollowsGrants(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	for _, target := range []string{"/servers/" + p.server, "/fragments/servers/" + p.server + "/live",
 		"/fragments/servers/" + p.server + "/overview", "/fragments/servers/" + p.server + "/activity"} {
 		if response := p.do("GET", target, viewer, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusNotFound ||
@@ -46,7 +46,7 @@ func TestServerDetailFollowsGrants(t *testing.T) {
 func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView)
 	form := url.Values{"enabled": {"true"}, "graceSeconds": {"300"}, "diskPercent": {"90"}, "memoryPercent": {"90"}, "memoryMinutes": {"5"}}
 	response := p.do("POST", "/servers/"+p.server+"/availability", operator,
@@ -78,7 +78,7 @@ func TestConfirmChangeRestoresSharing(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	ctx := context.Background()
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.ServerStart)
 	before, _ := p.app.Identity.Get(ctx, p.server)
 	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.Config.Labels["ludock.game"] = "minecraft" })
@@ -120,7 +120,7 @@ func TestOperationFragmentScope(t *testing.T) {
 	p := newPages(t)
 	job, _ := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
 		Kind: "restart", BindingRevision: 1})
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	if response := p.do("GET", "/fragments/servers/"+p.server+"/operations/"+job.ID, viewer, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusNotFound {
 		t.Fatal(response.Code)
 	}
@@ -135,7 +135,7 @@ func TestOperationFragmentScope(t *testing.T) {
 func TestOperationLinkFallsBackToActivity(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	p.grant(viewer, authz.ServerView)
 	if response := p.action("/servers/"+p.server+"/backups", p.admin, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)

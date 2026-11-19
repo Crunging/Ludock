@@ -65,8 +65,8 @@ func setup(t *testing.T) *fixture {
 	service := &servers.Service{DB: d, Identity: store, Authz: authorization, Observer: &servers.Observer{Docker: docker.New(engine.Socket)}}
 	f := &fixture{engine: engine, authz: authorization,
 		admin:    &db.SessionUser{ID: "admin", Role: db.RoleAdmin},
-		friend:   &db.SessionUser{ID: "friend", Role: db.RoleViewer},
-		stranger: &db.SessionUser{ID: "stranger", Role: db.RoleViewer}}
+		friend:   &db.SessionUser{ID: "friend", Role: db.RoleMember},
+		stranger: &db.SessionUser{ID: "stranger", Role: db.RoleMember}}
 	for _, user := range []*db.SessionUser{f.admin, f.friend, f.stranger} {
 		d.CreateUser(ctx, db.UserRecord{User: db.User{ID: user.ID, Username: user.ID, Role: user.Role, CreatedAt: 1}, PasswordHash: "x"})
 	}
@@ -82,7 +82,7 @@ func setup(t *testing.T) *fixture {
 	logical, _ := store.List(ctx, "")
 	for _, server := range logical {
 		if server.ContainerID == "first" {
-			authorization.SetUserGrants(ctx, "friend", []authz.GrantInput{{ServerID: server.ID, Capabilities: []authz.Capability{authz.ServerView}}}, f.admin, f.adminSession)
+			authorization.Share(ctx, f.admin, f.adminSession, "friend", server.ID, []authz.Capability{authz.ServerView})
 		}
 	}
 	return f
@@ -172,12 +172,12 @@ func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 func TestEventsRecheckAccess(t *testing.T) {
 	f := setup(t)
 	socket := f.client(f.friend)
-	f.authz.SetUserGrants(ctx, "friend", nil, f.admin, f.adminSession)
+	f.authz.DB.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ?", "friend")
 	f.hub.dispatch(ctx, []change{{"start", "first", 1}})
 	if len(socket.events()) != 0 {
 		t.Fatal(socket.events())
 	}
-	f.authz.DB.UpdateUserAccess(ctx, "friend", db.RoleOperator, true)
+	f.authz.DB.UpdateUserAccess(ctx, "friend", db.RoleMember, true)
 	f.hub.dispatch(ctx, []change{{"start", "first", 1}})
 	if !socket.closed {
 		t.Fatal("disabled account not closed")

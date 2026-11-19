@@ -195,8 +195,8 @@ func (s *Server) admin(handler func(http.ResponseWriter, *http.Request, *Request
 }
 
 func (s *Server) page(r *http.Request, request *Request, title string) views.Page {
-	role := string(request.Principal.User.Role)
-	if role == "admin" {
+	role := "Member"
+	if request.Principal.User.Role == db.RoleAdmin {
 		role = "Administrator"
 	}
 	return views.Page{Title: title, CSRF: maskCSRF(request.CSRF), Username: request.Principal.User.Username,

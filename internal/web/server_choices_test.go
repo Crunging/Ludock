@@ -40,7 +40,7 @@ func TestAddServerRefusesForgedRequests(t *testing.T) {
 		Mounts: []docker.MountPoint{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"}}})
 	self := p.engine.AddContainer(fakedocker.GameOptions{Name: "ludock", Image: "ghcr.io/crunging/ludock:0.7.0"})
 
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	if response := p.do("GET", "/fragments/unmanaged", operator, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden ||
 		strings.Contains(response.Body.String(), "satisfactory") {
 		t.Fatal(response.Code, response.Body.String())

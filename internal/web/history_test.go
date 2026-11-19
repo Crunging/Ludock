@@ -19,7 +19,7 @@ func TestOperationHistoryFollowsGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewer := p.user("u-viewer", "viewer", db.RoleViewer)
+	viewer := p.user("u-viewer", "viewer", db.RoleMember)
 	list := p.do("GET", "/operations", viewer, nil, nil).Body.String()
 	if strings.Contains(list, job.ID) || !strings.Contains(list, "No operations yet.") {
 		t.Fatal(list)
@@ -47,7 +47,7 @@ func TestOperationHistoryFollowsGrants(t *testing.T) {
 func TestAuditNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
-	operator := p.user("u-operator", "operator", db.RoleOperator)
+	operator := p.user("u-operator", "operator", db.RoleMember)
 	if response := p.do("GET", "/audit", operator, nil, nil); response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/" {
 		t.Fatal(response.Code, response.Header())
 	}

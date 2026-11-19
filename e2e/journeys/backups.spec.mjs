@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -158,12 +158,8 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
 
   // Someone who may create backups but isn't an administrator is offered
   // none of a backup's contents.
-  await createUser(page, "backupmaker", "backup maker password", "operator");
-  const grants = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
-  await grants.getByRole("button", { name: "Status only" }).click();
-  await grants.getByLabel("Create backups").check();
-  await page.locator("[data-grants]").getByRole("button", { name: "Save server access" }).click();
-  await expect(page.locator("[data-grants] .alert--success")).toContainText("Server access saved for backupmaker.");
+  await createUser(page, "backupmaker", "backup maker password");
+  await shareServer(page, "Survival", "backupmaker", ["Create backups"]);
   const operator = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(operator, "backupmaker", "backup maker password");
   await openServer(operator, "Survival");
