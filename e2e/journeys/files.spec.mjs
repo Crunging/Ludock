@@ -163,6 +163,13 @@ test("editing a text file in the browser and saving it", async ({ page }) => {
     await expect(dialog).toContainText("A running game may overwrite this file, or ignore the change until it restarts.");
     const editor = dialog.getByRole("textbox", { name: "Edit server.properties" });
     await expect(editor).toHaveValue(original.toString("utf8"));
+    // Text over the limit is refused and stays in the editor to shorten.
+    const long = "x".repeat(520 * 1024);
+    await editor.fill(long);
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.locator(".alert--error")).toHaveText("The file would be over 512 KiB, so it can’t be saved here.");
+    expect(await editor.inputValue()).toBe(long);
+    expect(readFileSync(properties)).toEqual(original);
     // Exactly what is typed is saved, including no final newline.
     await editor.fill("\nmotd=Edited in the browser\nmax-players=5");
     await dialog.getByRole("button", { name: "Save" }).click();

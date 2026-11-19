@@ -9,7 +9,9 @@
   function unsaved(text) { return text && (text.hasAttribute("data-unsaved") || text.value !== text.defaultValue); }
   // Escape would close the dialog and drop edits.
   document.addEventListener("cancel", function (event) {
-    if (event.target.matches && event.target.matches("dialog") && unsaved(editor(event.target))) event.preventDefault();
+    if (!event.target.matches || !event.target.matches("dialog")) return;
+    var text = editor(event.target);
+    if (unsaved(text) || (text && text.readOnly)) event.preventDefault();
   }, true);
   document.addEventListener("submit", async function (event) {
     var form = event.target.closest && event.target.closest("form[data-file-editor]");
@@ -17,15 +19,22 @@
     event.preventDefault();
     var dialog = form.closest("dialog");
     var button = form.querySelector('button[type="submit"]');
-    if (button.disabled) return;
-    button.disabled = true;
-    button.textContent = "Saving…";
+    var text = form.querySelector("textarea");
+    if (text.readOnly) return;
+    // The response replaces the dialog, so nothing may change meanwhile.
+    var controls = Array.prototype.slice.call(form.querySelectorAll("button"));
+    function busy(on) {
+      text.readOnly = on;
+      controls.forEach(function (control) { control.disabled = on; });
+      button.textContent = on ? "Saving…" : "Save";
+    }
+    busy(true);
     var body;
     try {
       var response = await fetch(form.getAttribute("data-file-editor"), {
         method: "PUT",
         headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": csrf ? csrf.content : "", "HX-Request": "true" },
-        body: form.querySelector("textarea").value,
+        body: text.value,
         credentials: "same-origin",
       });
       if (response.status === 401) {
@@ -45,8 +54,7 @@
       alert.setAttribute("role", "alert");
       alert.textContent = error instanceof TypeError ? "The file could not be saved. Check your connection and try again." : error.message;
       form.querySelector("[data-file-editor-error]").replaceChildren(alert);
-      button.disabled = false;
-      button.textContent = "Save";
+      busy(false);
       return;
     }
     dialog.innerHTML = body;

@@ -350,6 +350,16 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Invalid save request"))
 		return
 	}
+	// These refusals answer with an alert only, so the editor keeps the draft.
+	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
+		s.fail(w, r, request, apperr.New("INVALID_TEXT", 400, "The text can’t be saved as a text file."))
+		return
+	}
+	content := files.EditedContent(string(body), crlf, bom)
+	if len(content) > files.PreviewLimit {
+		s.fail(w, r, request, apperr.New("TEXT_TOO_LARGE", 413, "The file would be over "+datasize.Format(files.PreviewLimit)+", so it can’t be saved here."))
+		return
+	}
 	action, err := s.startAction(r, request, id, authz.FilesWrite)
 	if err != nil {
 		s.fail(w, r, request, err)
@@ -359,25 +369,13 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 	p := s.previewView(action, id, root, path)
 	p.CanEdit, p.Editable, p.Editing, p.Unsaved = true, true, true, true
 	p.Kind, p.Text, p.Version, p.CRLF, p.BOM, p.Size = files.PreviewText, string(body), query.Get("version"), crlf, bom, int64(len(body))
-	status := http.StatusOK
-	switch {
-	case len(body) > files.PreviewLimit:
-		status, p.Error = http.StatusRequestEntityTooLarge, "The text is over "+p.Limit+", so it can’t be saved here."
-	case !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0:
-		status, p.Error = http.StatusBadRequest, "The text can’t be saved as a text file."
-	}
-	if p.Error != "" {
-		render(w, r, status, views.FilePreviewContent(p))
-		return
-	}
-	content := files.EditedContent(string(body), crlf, bom)
 	if err := s.App.Files.Save(action.Ctx, fileTarget(action), root, path, content, p.Version, action.Assert); err != nil {
 		public, ok := apperr.As(err)
 		if ok && public.Status == http.StatusUnauthorized {
 			s.fail(w, r, request, err)
 			return
 		}
-		status = http.StatusConflict
+		status := http.StatusConflict
 		if ok && public.Status < 500 {
 			status = public.Status
 		}

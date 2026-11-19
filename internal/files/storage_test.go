@@ -121,6 +121,7 @@ func TestEditedContentKeepsLineEndings(t *testing.T) {
 		{"a\r\nb\r\n", "a\nb\nc", "a\r\nb\r\nc", true},
 		{"a\r\nb\r\n", "a\r\nb\r\nc\r\n", "a\r\nb\r\nc\r\n", true},
 		{"\ufeffkey=1\r\n", "key=2\n", "\ufeffkey=2\r\n", true},
+		{"\ufeff\ufeffx", "\ufeffy", "\ufeff\ufeffy", true},
 		{"", "new", "new", true},
 		{"a\r\nb\n", "", "", false},
 		{"a\rb", "", "", false},

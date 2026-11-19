@@ -750,7 +750,7 @@ func EditedContent(text string, crlf, bom bool) []byte {
 	if crlf {
 		text = strings.ReplaceAll(text, "\n", "\r\n")
 	}
-	if bom && !strings.HasPrefix(text, "\ufeff") {
+	if bom {
 		text = "\ufeff" + text
 	}
 	return []byte(text)
