@@ -278,17 +278,18 @@ func TestWaitingWarningsCountDownToTheEnd(t *testing.T) {
 func TestWaitingRunsShareReadings(t *testing.T) {
 	s := &Service{}
 	for range 2 {
-		if s.checkPlayers(ctx, "server", due, due) {
+		if _, settled := s.checkPlayers(ctx, "server", due, due); settled {
 			t.Fatal("a reading asked for just now counted as settled")
 		}
 	}
 	for at := due + 15_000; at <= due+90_000; at += 15_000 {
-		first, second := s.checkPlayers(ctx, "server", due, at), s.checkPlayers(ctx, "server", due, at)
+		_, first := s.checkPlayers(ctx, "server", due, at)
+		_, second := s.checkPlayers(ctx, "server", due, at)
 		if settled := at >= due+readingSettleMs; first != settled || second != settled {
 			t.Fatal(at-due, first, second)
 		}
 	}
-	if s.checkPlayers(ctx, "server", due+120_000, due+120_000) {
+	if _, settled := s.checkPlayers(ctx, "server", due+120_000, due+120_000); settled {
 		t.Fatal("a reading from before the wait counted")
 	}
 }
@@ -386,5 +387,28 @@ func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
 	f.s.Run(ctx, due+15*minute-15_000)
 	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
 		t.Fatal(last.LastResult)
+	}
+}
+
+// The first reading of a wait finds nobody, and someone joins before the
+// next: that reading is older than the check just asked for, so the run
+// waits for the new one instead of kicking whoever joined.
+func TestWaitNeedsReadingSinceLatestCheck(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(0, true)
+	players.now.ReadAt = due + 2_000
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitRun)); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.Run(ctx, due+15_000)
+	f.s.Run(ctx, due+30_000)
+	if f.operations(t) != 0 || players.checks != 2 {
+		t.Fatal("acted on a reading older than the latest check", f.operations(t), players.checks)
+	}
+	players.now.ReadAt = due + 32_000
+	f.s.Run(ctx, due+45_000)
+	if f.operations(t) != 1 {
+		t.Fatal("did not act on the reading the latest check produced")
 	}
 }

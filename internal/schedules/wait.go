@@ -87,11 +87,12 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	if err != nil {
 		return err
 	}
-	// An empty count counts only from a reading taken during this wait, once
-	// one asked for during it has had time to land, so it can't predate
-	// someone joining: a reading that fails leaves the earlier one in place.
-	settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
-	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled && occupancy.ReadAt >= r.lastRunAt.Int64)
+	// An empty count counts only from a reading taken since the latest one
+	// was asked for, once one asked for during this wait has had time to
+	// land: an older reading, which a failed one leaves in place, can
+	// predate someone joining.
+	asked, settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
+	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled && occupancy.ReadAt >= asked)
 	// A run that skips acts only before the wait ends, unless the server is
 	// stopped: only other work held that run, and nobody is there to kick.
 	switch {
@@ -114,9 +115,9 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 // checkPlayers asks for a reading of a waiting run's server at once if
 // none was asked for since the wait began, then every playerCheckMs, since
 // readings otherwise run only while someone watches. It reports whether a
-// reading asked for since then has had readingSettleMs to land. Runs on one
-// server share the asks.
-func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now int64) bool {
+// reading asked for since then has had readingSettleMs to land, and when
+// the latest was asked for. Runs on one server share the asks.
+func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now int64) (int64, bool) {
 	s.mu.Lock()
 	if s.checked == nil {
 		s.checked = map[string][2]int64{}
@@ -132,5 +133,5 @@ func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now 
 		s.Players.Check(ctx, serverID)
 	}
 	settled := func(at int64) bool { return at >= since && now-at >= readingSettleMs }
-	return settled(asks[0]) || settled(asks[1])
+	return asks[0], settled(asks[0]) || settled(asks[1])
 }
