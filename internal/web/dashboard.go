@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -65,6 +66,7 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		list.States = append(list.States, state)
 	}
 	sort.Strings(list.States)
+	checks := list.Admin && s.App.Checks.Enabled(ctx)
 	for index := range all {
 		view := all[index]
 		if list.State != "" && list.State != "all" && view.State != list.State {
@@ -75,6 +77,9 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		}
 		row := s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable)
 		row.ShowPlayers = list.ShowPlayers
+		if check := s.App.Checks.Status(ctx, view.ID, view.Container.ID); checks && !list.DiscoveryUnavailable && check != nil {
+			row.ImageUpdate = check.State == update.CheckAvailable
+		}
 		list.Rows = append(list.Rows, row)
 	}
 	return list

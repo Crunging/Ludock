@@ -6,7 +6,9 @@ package fakedocker
 import (
 	"archive/tar"
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,9 +59,13 @@ type Engine struct {
 	// imageConfigs are the container defaults of each image ID.
 	imageConfigs map[string]map[string]any
 	// pulls are the image IDs pulling a reference yields.
-	pulls  map[string]string
-	execs  map[string]*exec
-	events []chan []byte
+	pulls map[string]string
+	// registry is the image ID each published tag points to; registryFail
+	// is the status its registry lookups fail with.
+	registry     map[string]string
+	registryFail map[string]int
+	execs        map[string]*exec
+	events       []chan []byte
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
@@ -80,6 +87,8 @@ type Engine struct {
 	HangCreates int
 	// Requests records "METHOD path" for each request.
 	Requests []string
+	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
+	RegistryAuth []string
 
 	listener net.Listener
 	server   *http.Server
@@ -103,7 +112,7 @@ func Start(dir string) (*Engine, error) {
 	}
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
 		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, pulls: map[string]string{},
-		execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
+		registry: map[string]string{}, registryFail: map[string]int{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
 	engine.server = &http.Server{Handler: http.HandlerFunc(engine.serve)}
 	go engine.server.Serve(listener)
 	return engine, nil
@@ -223,11 +232,12 @@ func (e *Engine) emitLocked(action, id string) {
 }
 
 var (
-	versioned = regexp.MustCompile(`^/v1\.\d+(/.*)$`)
-	container = regexp.MustCompile(`^/containers/([^/]+)(/[a-z]+)?$`)
-	execPath  = regexp.MustCompile(`^/exec/([^/]+)/(start|json)$`)
-	volume    = regexp.MustCompile(`^/volumes/([^/]+)$`)
-	image     = regexp.MustCompile(`^/images/(.+)/json$`)
+	versioned    = regexp.MustCompile(`^/v1\.\d+(/.*)$`)
+	container    = regexp.MustCompile(`^/containers/([^/]+)(/[a-z]+)?$`)
+	execPath     = regexp.MustCompile(`^/exec/([^/]+)/(start|json)$`)
+	volume       = regexp.MustCompile(`^/volumes/([^/]+)$`)
+	image        = regexp.MustCompile(`^/images/(.+)/json$`)
+	distribution = regexp.MustCompile(`^/distribution/(.+)/json$`)
 )
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -256,6 +266,19 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/version":
 		writeJSON(w, 200, map[string]string{"ApiVersion": e.APIVersion, "MinAPIVersion": "1.24"})
+		return
+	case "/fake/registry":
+		// Lets journeys publish a new version of a tag or break its registry:
+		// POST /fake/registry?image=REF&id=IMAGE-ID or &status=CODE.
+		query := r.URL.Query()
+		if id := query.Get("id"); id != "" {
+			e.PublishImage(query.Get("image"), id)
+		}
+		if status := query.Get("status"); status != "" {
+			code, _ := strconv.Atoi(status)
+			e.FailRegistry(query.Get("image"), code)
+		}
+		w.WriteHeader(204)
 		return
 	}
 	match := versioned.FindStringSubmatch(path)
@@ -290,7 +313,10 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/images/create" && r.Method == "POST":
 		reference := r.URL.Query().Get("fromImage")
 		e.mu.Lock()
-		pulled, ok := e.pulls[reference]
+		pulled, ok := e.registry[reference]
+		if !ok {
+			pulled, ok = e.pulls[reference]
+		}
 		if !ok {
 			pulled = "sha256:" + strings.Repeat("1", 64)
 		}
@@ -330,12 +356,30 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		if variant, ok := e.imageConfigs[id+" "+r.URL.Query().Get("platform")]; ok {
 			config = variant
 		}
+		repoDigests := e.repoDigestsLocked(id)
 		e.mu.Unlock()
 		if !ok {
 			fail(w, 404)
 		} else {
-			writeJSON(w, 200, map[string]any{"Id": id, "Config": config})
+			writeJSON(w, 200, map[string]any{"Id": id, "Config": config, "RepoDigests": repoDigests})
 		}
+	case distribution.MatchString(path):
+		reference := distribution.FindStringSubmatch(path)[1]
+		e.mu.Lock()
+		e.RegistryAuth = append(e.RegistryAuth, r.Header.Get("X-Registry-Auth"))
+		status, id := e.registryFail[reference], e.tagLocked(reference)
+		e.mu.Unlock()
+		if status == 0 && id == "" {
+			// Docker answers 401 both for refused credentials and unknown tags.
+			status = 401
+		}
+		if status != 0 {
+			fail(w, status)
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"Descriptor": map[string]any{"mediaType": "application/vnd.oci.image.index.v1+json", "digest": ManifestDigest(id)},
+			"Platforms":  []docker.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}})
 	default:
 		fail(w, 404)
 	}
@@ -362,6 +406,78 @@ func (e *Engine) SetVariantConfig(id string, platform docker.Platform, config ma
 	e.mu.Lock()
 	e.imageConfigs[id+" "+string(encoded)] = config
 	e.mu.Unlock()
+}
+
+// ManifestDigest is the registry digest the fake gives image ID id.
+func ManifestDigest(id string) string {
+	sum := sha256.Sum256([]byte("manifest " + id))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// PublishImage points reference's tag in the fake registry at image ID id,
+// which pulling it then yields. The new image keeps the defaults of the one
+// the tag held.
+func (e *Engine) PublishImage(reference, id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.imageConfigs[id]; !ok {
+		if config, ok := e.imageConfigs[e.tagLocked(reference)]; ok {
+			e.imageConfigs[id] = config
+		}
+	}
+	e.registry[reference] = id
+}
+
+// FailRegistry makes registry lookups of reference fail with status, or
+// succeed again with 0.
+func (e *Engine) FailRegistry(reference string, status int) {
+	e.mu.Lock()
+	e.registryFail[reference] = status
+	e.mu.Unlock()
+}
+
+// tagLocked is the image ID reference's tag points to: the published one,
+// else the local tag, else the image a container created from it runs, as
+// if the registry still held what was pulled.
+func (e *Engine) tagLocked(reference string) string {
+	if id, ok := e.registry[reference]; ok {
+		return id
+	}
+	if id, ok := e.images[reference]; ok {
+		return id
+	}
+	for _, id := range e.order {
+		if c := e.containers[id]; c.Config.Image == reference {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// repoDigestsLocked lists "repository@digest" for each reference whose tag
+// or container uses image ID id, as a pull of it would have recorded.
+func (e *Engine) repoDigestsLocked(id string) []string {
+	references := map[string]bool{}
+	for reference, local := range e.images {
+		if local == id {
+			references[reference] = true
+		}
+	}
+	for _, c := range e.containers {
+		if c.Image == id && c.Config.Image != "" {
+			references[c.Config.Image] = true
+		}
+	}
+	digests := []string{}
+	for reference := range references {
+		repository, _, _ := strings.Cut(reference, "@")
+		if slash, colon := strings.LastIndex(repository, "/"), strings.LastIndex(repository, ":"); colon > slash {
+			repository = repository[:colon]
+		}
+		digests = append(digests, repository+"@"+ManifestDigest(id))
+	}
+	sort.Strings(digests)
+	return slices.Compact(digests)
 }
 
 // SetPull makes pulling reference yield the image ID id.

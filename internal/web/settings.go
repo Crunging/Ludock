@@ -46,8 +46,9 @@ func (s *Server) backupSettingsView(r *http.Request) views.BackupSettingsView {
 
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	view := views.SettingsView{
-		Connection: views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
-		Backups:    s.backupSettingsView(r),
+		Connection:   views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
+		Backups:      s.backupSettingsView(r),
+		ImageUpdates: views.ImageUpdateSettings{Enabled: s.App.Checks.Enabled(r.Context())},
 	}
 	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
 		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration})
@@ -91,6 +92,26 @@ func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, request 
 		}
 	}
 	render(w, r, status, views.ConnectionForm(c))
+}
+
+func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request, request *Request) {
+	enabled := r.PostFormValue("enabled") == "true"
+	err := authz.AdminMutationError(s.App.Checks.SetEnabled(r.Context(), request.User().ID, request.Principal.TokenHash, enabled))
+	status, ok := s.settingStatus(w, r, request, err)
+	if !ok {
+		return
+	}
+	u := views.ImageUpdateSettings{Enabled: enabled}
+	if err != nil {
+		u.Error = publicMessage(err)
+	} else {
+		s.audit(r, request, "settings.image_updates.updated", "", map[string]any{"enabled": enabled})
+		u.Notice = "Image update checks turned off."
+		if enabled {
+			u.Notice = "Image update checks turned on."
+		}
+	}
+	render(w, r, status, views.ImageUpdateSettingsForm(u))
 }
 
 func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, request *Request) {

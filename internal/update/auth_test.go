@@ -33,6 +33,8 @@ func TestRegistryAuthMatchesRegistry(t *testing.T) {
 		"registry.example:5000/game:1.2":  {"username": "player", "password": "hunter2:with-colon", "serveraddress": "registry.example:5000"},
 		"quay.io/owner/game:latest":       nil,
 		"localhost/registry.example:5000": nil,
+		// Docker reads an uppercase first component as a registry host.
+		"REGISTRY/team/game:latest": nil,
 	} {
 		header, err := registryAuth(folder, image)
 		if err != nil {

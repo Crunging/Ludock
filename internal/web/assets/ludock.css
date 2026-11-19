@@ -347,6 +347,8 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 }
 .alert--success { background: color-mix(in srgb, var(--go) 15%, var(--block)); }
 .alert--success::before { background: var(--go); }
+.alert--info { background: color-mix(in srgb, var(--busy) 12%, var(--block)); }
+.alert--info::before { background: var(--busy); }
 .alert--warning { background: color-mix(in srgb, var(--caution) 20%, var(--block)); }
 .alert--warning::before { width: 13px; border-radius: 0; background: var(--caution-mark); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .alert > button:not(.secondary-btn):not(.text-link) { flex: none; padding: 0 4px; border: 0; background: none; font-size: 20px; line-height: 1.1; color: var(--ink-2); }
@@ -555,6 +557,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .server-row__game { color: var(--ink-3); font-size: 14px; }
 .server-row__note, .server-row__warning { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
 .server-row__warning { color: var(--halt-text); }
+.server-row__update { font-size: 13px; color: var(--busy-text); margin-top: 4px; }
 .server-row__state { display: grid; gap: 2px; font-size: 15px; }
 .server-row__state .marker { display: none; }
 .server-row__since { color: var(--ink-3); font-size: 13px; }
@@ -792,6 +795,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .startup-update-note { max-width: 760px; margin: 14px 0 22px; padding: 16px 18px; border-radius: var(--radius-lg); background: var(--block); }
 .startup-update-note h3 { margin-bottom: 4px; }
 .startup-update-note .section-lede { margin-bottom: 0; }
+.image-check { max-width: 760px; margin: 0 0 18px; }
+.image-check .muted { margin: 6px 0; }
 #update-panel > h2 { margin-bottom: 8px; }
 #update-panel > h3 { margin: 22px 0 8px; }
 #update-panel form { max-width: 720px; }

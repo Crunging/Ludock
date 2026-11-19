@@ -66,13 +66,19 @@ func registryAuth(folder, image string) (string, error) {
 	return "", nil
 }
 
-// registryHost is the registry an image reference pulls from. A first path
-// component is a registry only if it looks like a host, as in Docker.
+// registryHost is the registry an image reference pulls from.
 func registryHost(image string) string {
-	if first, _, found := strings.Cut(image, "/"); found && (strings.ContainsAny(first, ".:") || first == "localhost") {
+	if first, _, found := strings.Cut(image, "/"); found && isRegistry(first) {
 		return normalizeRegistry(first)
 	}
 	return "docker.io"
+}
+
+// isRegistry reports whether a reference's first path component names a
+// registry host, by Docker's rules: one with a dot, a port, or an uppercase
+// letter, or localhost.
+func isRegistry(first string) bool {
+	return strings.ContainsAny(first, ".:") || first == "localhost" || strings.ToLower(first) != first
 }
 
 // normalizeRegistry reduces a config.json key such as

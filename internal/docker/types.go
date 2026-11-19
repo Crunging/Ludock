@@ -144,6 +144,19 @@ type ImageInspect struct {
 	Variant      string                     `json:"Variant"`
 	Config       map[string]json.RawMessage `json:"Config"`
 	Manifests    []ImageManifest            `json:"Manifests"`
+	// RepoDigests are "repository@digest" for each registry manifest the
+	// image was pulled as; for a multi-platform tag, its index.
+	RepoDigests []string `json:"RepoDigests"`
+}
+
+// DistributionInspect is what a tag points to in its registry: the digest
+// of its top-level manifest (the index for a multi-platform tag) and the
+// platforms it offers, which can be empty for a single OCI manifest.
+type DistributionInspect struct {
+	Descriptor struct {
+		Digest string `json:"digest"`
+	} `json:"Descriptor"`
+	Platforms []Platform `json:"Platforms"`
 }
 
 type ContainerStats struct {

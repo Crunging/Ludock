@@ -46,6 +46,10 @@ type Jobs struct {
 	Console  *console.Runtime
 	Backups  *backups.Service
 	Updates  *update.Service
+	// Pulled runs after an update pulls a server's image, whether or not
+	// it recreated the container, since the pull changes what the image
+	// records about its registry version.
+	Pulled func(serverID string)
 	// SaveSettle is how long to wait after a save command; tests shorten it.
 	SaveSettle time.Duration
 	// ReplacementSettle is how long an updated container without a

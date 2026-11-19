@@ -14,8 +14,10 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
+	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -294,6 +296,10 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		})
 		if err = s.recheckCapability(r, request, id, capability, admin); err == nil {
 			u.Capability = &result
+			if admin {
+				u.ChecksOff = !s.App.Checks.Enabled(r.Context())
+				u.Check = s.App.Checks.Status(r.Context(), id, resolved.Container.ID)
+			}
 		}
 	}
 	if err != nil {
@@ -303,6 +309,38 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 		}
 	}
 	render(w, r, http.StatusOK, views.UpdatePanel(u))
+}
+
+// checkImage asks the registry about a server's image now and shows the
+// result (administrators only).
+func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Request) {
+	id := r.PathValue("id")
+	resolved, _, err := s.resolveFresh(r, request, id, authz.ServerUpdate)
+	if err == nil {
+		err = s.recheckAdmin(r.Context(), request)
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	capability := &update.Capability{}
+	if integration := games.ImageIntegration(resolved.Container.Image); integration != nil {
+		capability.UpdatesOnStart = integration.UpdatesOnStart
+	}
+	u := views.UpdateView{ServerID: id, ChecksOff: !s.App.Checks.Enabled(r.Context()), Capability: capability}
+	if !u.ChecksOff {
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		u.Check = s.App.Checks.CheckNow(ctx, id, resolved.Container)
+		cancel()
+		// The check can wait behind another; the session may have lost the
+		// administrator role meanwhile.
+		if err := s.recheckAdmin(r.Context(), request); err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+		u.ChecksOff = !s.App.Checks.Enabled(r.Context())
+	}
+	render(w, r, http.StatusOK, views.ImageCheck(u))
 }
 
 func (s *Server) recheckCapability(r *http.Request, request *Request, id string, capability authz.Capability, admin bool) error {
