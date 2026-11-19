@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"errors"
 	"io"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -356,6 +357,16 @@ func (u *unpacker) tar(input io.Reader) error {
 	}
 }
 
+// stageFolder is the relative folder holding the archive, and so its staging
+// folder.
+func (h *fileHelper) stageFolder() string {
+	parts, _ := components(h.request.Path)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts[:len(parts)-1], "/")
+}
+
 func (h *fileHelper) sweepUnpacks(parent fd) {
 	children, err := names(parent)
 	if err != nil {
@@ -367,7 +378,7 @@ func (h *fileHelper) sweepUnpacks(parent fd) {
 		}
 		if info, err := lstatAt(parent, child); err == nil && stagingFolder(info) &&
 			time.Since(time.UnixMilli(int64(mtimeMs(info)))) > 2*UnpackDuration {
-			h.removeEntry(parent, child, 0)
+			h.removeStage(parent, child)
 		}
 	}
 }
@@ -387,7 +398,9 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	if err != nil {
 		return err
 	}
-	if !stagingFolder(info) {
+	// An excluded mount isn't in the helper, so it would see and delete the
+	// files the mount hides from the game.
+	if !stagingFolder(info) || h.check(path.Join(h.stageFolder(), name), true) != nil {
 		return errUnsafe
 	}
 	return h.removeEntry(parent, name, 0)

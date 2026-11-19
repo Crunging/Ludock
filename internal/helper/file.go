@@ -768,6 +768,10 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 			return
 		}
+		// A selection may have changed some entries already.
+		if request.Operation == "delete-paths" || request.Operation == "move" {
+			os.Exit(FilePartial)
+		}
 		os.Exit(1)
 	})
 	defer deadline.Stop()
@@ -834,5 +838,8 @@ func renameNoReplace(parent fd, name string, targetParent fd, targetName string,
 	if err := unix.Linkat(int(parent), name, int(targetParent), targetName, 0); err != nil {
 		return err
 	}
-	return unix.Unlinkat(int(parent), name, 0)
+	if err := unix.Unlinkat(int(parent), name, 0); err != nil {
+		return errPartial
+	}
+	return nil
 }

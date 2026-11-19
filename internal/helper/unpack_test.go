@@ -285,6 +285,16 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
 		t.Fatal("removed a folder Ludock didn't make")
 	}
+	// Files an excluded mount hides from the game are never removed.
+	os.MkdirAll(filepath.Join(fresh, "hidden"), 0o755)
+	os.Chmod(fresh, 0o700)
+	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID,
+		Blocked: []string{fresh + "/hidden"}}, nil); code == 0 {
+		t.Fatal("removed a staging folder over an excluded mount")
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "hidden")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Selections act on entries of one folder; a move never replaces a name,
