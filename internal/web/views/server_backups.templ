@@ -325,6 +325,8 @@ templ ImageCheck(u UpdateView) {
 			}
 			<p class="muted image-check__status">
 				switch {
+					case check != nil && check.State == update.CheckPending && check.CheckedAt != 0:
+						Ludock is waiting for a fresh answer from the registry.
 					case check == nil || check.State == update.CheckPending:
 						Ludock hasn’t checked the registry for a newer image yet.
 					case check.State == update.CheckCurrent:

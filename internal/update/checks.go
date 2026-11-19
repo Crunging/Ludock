@@ -288,6 +288,7 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	for key, image := range state.Images {
 		if !used[key] {
 			delete(state.Images, key)
+			delete(c.forgotten, key)
 			changed = true
 		} else if image.NextAt <= now && (due == "" || image.NextAt < state.Images[due].NextAt) {
 			due = key
@@ -569,9 +570,10 @@ func compareDigests(key string, repoDigests []string, remote string) string {
 }
 
 // offers reports whether a tag's platforms include one Docker would pull
-// for platform: the same OS and architecture, and a variant no newer than
-// the server's, such as arm/v6 for arm/v7. An empty list or platform can't
-// rule it out.
+// for platform: the same OS and architecture, and the same variant or, for
+// whole-number variants, an older one, such as arm/v6 for arm/v7. Other
+// variant fallbacks are left out rather than risk an update Docker can't
+// pull. An empty list or platform can't rule it out.
 func offers(platforms []docker.Platform, platform string) bool {
 	if len(platforms) == 0 || platform == "" {
 		return true
@@ -591,8 +593,8 @@ func offers(platforms []docker.Platform, platform string) bool {
 		if offered.Variant == "" || wanted == "" || offered.Variant == wanted {
 			return true
 		}
-		have, errHave := strconv.ParseFloat(strings.TrimPrefix(offered.Variant, "v"), 64)
-		want, errWant := strconv.ParseFloat(strings.TrimPrefix(wanted, "v"), 64)
+		have, errHave := strconv.Atoi(strings.TrimPrefix(offered.Variant, "v"))
+		want, errWant := strconv.Atoi(strings.TrimPrefix(wanted, "v"))
 		return errHave == nil && errWant == nil && have <= want
 	})
 }
