@@ -147,6 +147,11 @@ func (h *restoreHelper) removeEntry(parent fd, name string, depth int) error {
 		if !sameInode(before, pinned) {
 			return errUnsafe
 		}
+		// A mount inside the data, such as one the host added under a bind
+		// source, is never emptied.
+		if same, err := sameMount(parent, directory); err != nil || !same {
+			return errUnsafe
+		}
 		children, err := names(directory)
 		if err != nil {
 			return err
@@ -334,6 +339,23 @@ func (h *restoreHelper) run() (any, error) {
 	return ok, syncAll(stage, root)
 }
 
+// sameMount reports whether two open directories are on one mount. Mount IDs
+// also tell apart bind mounts of one filesystem; kernels without them
+// (before 5.8) compare devices.
+func sameMount(left, right fd) (bool, error) {
+	var a, b unix.Statx_t
+	if err := unix.Statx(int(left), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &a); err != nil {
+		return false, err
+	}
+	if err := unix.Statx(int(right), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &b); err != nil {
+		return false, err
+	}
+	if a.Mask&b.Mask&unix.STATX_MNT_ID != 0 {
+		return a.Mnt_id == b.Mnt_id, nil
+	}
+	return a.Dev_major == b.Dev_major && a.Dev_minor == b.Dev_minor, nil
+}
+
 func itemParts(item string) ([]string, error) {
 	parts, err := recordParts(item)
 	if err != nil || len(parts) > 62 {
@@ -348,24 +370,16 @@ func itemParts(item string) ([]string, error) {
 }
 
 // itemParent pins the folder holding an item below base. Every folder on
-// the way is a real directory on base's filesystem, so neither a link nor a
+// the way is a real directory on base's mount, so neither a link nor a
 // nested mount can redirect the item.
 func (h *restoreHelper) itemParent(base fd, parts []string) (fd, error) {
-	info, err := fstat(base)
-	if err != nil {
-		return -1, err
-	}
 	current := base
 	for _, name := range parts[:len(parts)-1] {
 		next, err := h.t.openAt(current, name, directoryFlags, 0)
 		if err != nil {
 			return -1, err
 		}
-		pinned, err := fstat(next)
-		if err != nil {
-			return -1, err
-		}
-		if pinned.Dev != info.Dev {
+		if same, err := sameMount(base, next); err != nil || !same {
 			return -1, errUnsafe
 		}
 		current = next
@@ -390,14 +404,13 @@ func movable(parent fd, name string, device uint64) (*unix.Stat_t, error) {
 }
 
 // move renames an item to an absent destination and proves the same inode
-// arrived.
+// arrived. An absent item may have moved in an interrupted earlier attempt,
+// so both folders are synced either way.
 func move(from fd, name string, to fd, target string, info *unix.Stat_t) error {
-	if _, err := lstatAt(to, target); err == nil {
-		return errUnsafe
-	} else if !isNotExist(err) {
-		return err
+	if info == nil {
+		return syncAll(from, to)
 	}
-	if err := unix.Renameat(int(from), name, int(to), target); err != nil {
+	if err := unix.Renameat2(int(from), name, int(to), target, unix.RENAME_NOREPLACE); err != nil {
 		return err
 	}
 	moved, err := lstatAt(to, target)
@@ -447,7 +460,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		info, err := movable(parent, name, rootInfo.Dev)
-		if err != nil || info == nil {
+		if err != nil {
 			return err
 		}
 		return move(parent, name, old, "item", info)
@@ -483,7 +496,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		info, err := movable(parent, name, rootInfo.Dev)
-		if err != nil || info == nil {
+		if err != nil {
 			return err
 		}
 		return move(parent, name, stage, "returned", info)
@@ -493,7 +506,7 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 			return err
 		}
 		info, err := movable(old, "item", rootInfo.Dev)
-		if err != nil || info == nil {
+		if err != nil {
 			return err
 		}
 		parent, err := h.itemParent(root, parts)

@@ -14,12 +14,14 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
 // backupBrowser lists one folder of a backup for an administrator who can
-// read the server's archives.
-func (s *Server) backupBrowser(r *http.Request, serverID, backupID string) *views.BackupBrowser {
+// read the server's archives; check confirms that access again after the
+// scan, which can take a while.
+func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check func() error) *views.BackupBrowser {
 	query := r.URL.Query()
 	browser := &views.BackupBrowser{ServerID: serverID, Path: query.Get("path"), Limit: views.FilePage}
 	if limit, err := strconv.Atoi(query.Get("limit")); err == nil && limit > views.FilePage {
@@ -40,6 +42,9 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string) *view
 		browser.Root = backup.Roots[index]
 	}
 	entries, err := s.App.Backups.Storage.ListFolder(backup.Destination(), backup.ID, backup.Roots, browser.Root.ID, browser.Path)
+	if err == nil {
+		err = check()
+	}
 	if err != nil {
 		browser.Error = publicMessage(err)
 		return browser
@@ -61,7 +66,13 @@ func (s *Server) backupFolder(w http.ResponseWriter, r *http.Request, request *R
 		s.fail(w, r, request, err)
 		return
 	}
-	browser := s.backupBrowser(r, id, r.PathValue("backup"))
+	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), id)
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	browser := s.backupBrowser(r, id, r.PathValue("backup"), s.archiveAccess(r.Context(), request, id))
+	browser.CanRestore = restoreOffered(snapshot.Server, snapshot.DiscoveryUnavailable)
 	render(w, r, http.StatusOK, views.BackupFolder(*browser))
 }
 
@@ -86,11 +97,14 @@ func (s *Server) downloadBackupFile(w http.ResponseWriter, r *http.Request, requ
 		return
 	}
 	started := false
-	err = s.App.Backups.Storage.ReadFile(backup.Destination(), backup.ID, backup.Roots, root, item, func(file backups.ArchiveItem, body io.Reader) error {
+	err = s.App.Backups.Storage.ReadFile(backup.Destination(), backup.ID, backup.Roots, root, item, func(size int64, body io.Reader) error {
+		if err := check(); err != nil {
+			return err
+		}
 		started = true
 		w.Header().Set("Content-Disposition", contentDisposition(path.Base(item)))
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		s.audit(r, request, "backup.file_downloaded", id, map[string]any{"backupId": backupID, "root": root, "path": item})
 		copyChecked(w, body, check)
 		return nil
@@ -160,4 +174,9 @@ func restoreItemInput(backup *backups.Backup, root, item string) (map[string]any
 		return nil, apperr.New("UNSAFE_PATH", http.StatusBadRequest, "That path isn’t allowed.")
 	}
 	return map[string]any{"root": root, "item": item}, nil
+}
+
+// restoreOffered is whether the backups tab offers restores for a server.
+func restoreOffered(view *servers.View, discoveryUnavailable bool) bool {
+	return can(view, authz.BackupsRestore) && view.BindingStatus == "active" && !discoveryUnavailable && view.ActiveOperation == nil
 }

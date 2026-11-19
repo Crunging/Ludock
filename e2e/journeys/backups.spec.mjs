@@ -4,6 +4,10 @@ import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded,
 
 asAdmin();
 
+// Other journeys list Survival's data, so a folder added here is removed.
+const restoreFolder = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft", "restore-one");
+test.afterEach(() => rmSync(restoreFolder(), { recursive: true, force: true }));
+
 test("backing up, downloading, restoring, and deleting a backup", async ({ page }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
@@ -85,13 +89,15 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
 });
 
 test("browsing a backup, downloading one file, and restoring it alone", async ({ page, session }) => {
-  const folder = join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft", "restore-one");
+  const folder = restoreFolder();
   const level = join(folder, "world", "level.dat");
   const notes = join(folder, "notes.txt");
   rmSync(folder, { recursive: true, force: true });
   mkdirSync(join(folder, "world"), { recursive: true });
   writeFileSync(level, "yesterday's world");
   writeFileSync(notes, "yesterday's notes");
+  mkdirSync(join(folder, "chunks"));
+  for (let index = 1; index <= 501; index++) writeFileSync(join(folder, "chunks", `chunk-${index}.dat`), "");
 
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
@@ -108,9 +114,18 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Browse" }).click();
   await expect(page.getByRole("heading", { name: /^Backup from/ })).toBeVisible();
   const names = page.locator("#backup-folder .file-row__name");
-  await expect(names.filter({ hasText: "restore-one" })).toContainText("3 items");
+  await expect(names.filter({ hasText: "restore-one" })).toContainText("505 items");
   await page.getByRole("link", { name: "restore-one", exact: true }).click();
-  await expect(names).toHaveText(["world 1 item", "notes.txt"]);
+  await expect(names).toHaveText(["chunks 501 items", "world 1 item", "notes.txt"]);
+
+  // Items past the first page can be restored too.
+  await page.getByRole("link", { name: "chunks", exact: true }).click();
+  await expect(page.locator("#backup-folder [role=status]")).toHaveText("Showing 500 of 501 items");
+  await page.getByRole("button", { name: "Show 1 more" }).click();
+  const last = page.locator("#backup-folder .file-row", { hasText: "chunk-501.dat" });
+  await last.getByRole("button", { name: "Actions for chunk-501.dat" }).click();
+  await expect(last.getByRole("link", { name: "Restore…" })).toBeVisible();
+  await page.locator(".file-breadcrumbs").getByRole("link", { name: "restore-one" }).click();
   await page.getByRole("link", { name: "world", exact: true }).click();
   await expect(page.locator(".file-breadcrumbs a[aria-current=page]")).toHaveText("world");
   const row = page.locator("#backup-folder .file-row", { hasText: "level.dat" });

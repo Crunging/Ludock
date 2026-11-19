@@ -76,25 +76,25 @@ func TestListFolderAndReadFile(t *testing.T) {
 	}
 
 	var read []byte
-	err = storage.ReadFile(directory, id, roots, "root-0", "world/region/r.0.mca", func(item ArchiveItem, body io.Reader) error {
+	err = storage.ReadFile(directory, id, roots, "root-0", "world/region/r.0.mca", func(_ int64, body io.Reader) error {
 		read, err = io.ReadAll(body)
 		return err
 	})
 	if err != nil || string(read) != big {
 		t.Fatal(len(read), err)
 	}
-	if err := storage.ReadFile(directory, id, roots, "root-0", "world", func(ArchiveItem, io.Reader) error { return nil }); !apperr.Is(err, "BACKUP_PATH_NOT_FOUND") {
+	if err := storage.ReadFile(directory, id, roots, "root-0", "world", func(int64, io.Reader) error { return nil }); !apperr.Is(err, "BACKUP_PATH_NOT_FOUND") {
 		t.Fatal("read a folder as a file:", err)
 	}
 
-	item, staged, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", "world/region")
-	if err != nil || item.Type != "directory" || staged != 4096+73728 {
-		t.Fatal(item, staged, err)
+	staged, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", "world/region")
+	if err != nil || staged != 4096+73728 {
+		t.Fatal(staged, err)
 	}
-	if _, _, err := storage.ValidateItem(directory, id, roots, 1<<30, strings.Repeat("0", 64), "root-0", "world"); !apperr.Is(err, "BACKUP_CHECKSUM") {
+	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, strings.Repeat("0", 64), "root-0", "world"); !apperr.Is(err, "BACKUP_CHECKSUM") {
 		t.Fatal(err)
 	}
-	if _, _, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", ""); !apperr.Is(err, "UNSAFE_PATH") {
+	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", ""); !apperr.Is(err, "UNSAFE_PATH") {
 		t.Fatal("accepted a whole root as an item:", err)
 	}
 }

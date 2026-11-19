@@ -39,8 +39,8 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	}
 	if b.Admin && b.CanRead {
 		if id := r.URL.Query().Get("browse"); id != "" {
-			b.Browse = s.backupBrowser(r, view.ID, id)
-			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, b.CanRestore && !b.Blocked && !b.Active
+			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
+			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
 			return b
 		}
 		s.readBackups(r, &b)

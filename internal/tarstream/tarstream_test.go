@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -115,5 +116,40 @@ func TestRejectsMalformedArchives(t *testing.T) {
 	Walk(bytes.NewReader(archive), func(*Header, io.Reader) error { return nil }, func(chunk []byte) error { seen += len(chunk); return nil })
 	if seen != len(archive) {
 		t.Fatal("onChunk missed bytes", seen)
+	}
+}
+
+type countingFile struct {
+	*bytes.Reader
+	read int
+}
+
+func (c *countingFile) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	c.read += n
+	return n, err
+}
+
+// Walking an unhashed seekable archive without reading bodies reads about
+// its first buffer and two blocks per large entry, not the bodies.
+func TestWalkSkipsBodiesBySeeking(t *testing.T) {
+	var archive bytes.Buffer
+	for index := range 20 {
+		header, err := EncodeHeader(Header{Name: "file" + strconv.Itoa(index), Type: "file", Mode: 0o644, Size: 100000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive.Write(header)
+		archive.Write(make([]byte, 100000))
+		archive.Write(Padding(100000))
+	}
+	archive.Write(End())
+	input := &countingFile{Reader: bytes.NewReader(archive.Bytes())}
+	entries := 0
+	if err := Walk(input, func(*Header, io.Reader) error { entries++; return nil }, nil); err != nil {
+		t.Fatal(err)
+	}
+	if entries != 20 || input.read > 65536+20*2048 {
+		t.Fatal(entries, input.read)
 	}
 }

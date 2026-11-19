@@ -318,7 +318,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				staged, err = j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum)
 			} else {
 				var bytes int64
-				_, bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum, roots[0].ID, item)
+				bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, settings.MaxBytes, row.Checksum, roots[0].ID, item)
 				staged = map[string]int64{roots[0].ID: bytes}
 			}
 			if err != nil {

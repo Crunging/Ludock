@@ -176,16 +176,9 @@ func (s *Storage) ListFolder(directory, id string, roots []Root, rootID, folder 
 	return sorted, nil
 }
 
-// ArchiveItem is a file or folder of a backup chosen for download or restore.
-type ArchiveItem struct {
-	Type       string
-	Size       int64
-	ModifiedAt float64
-}
-
-// ReadFile passes one file's header and body from a backup to read, which
+// ReadFile passes one file's size and body from a backup to read, which
 // must finish with the body before it returns.
-func (s *Storage) ReadFile(directory, id string, roots []Root, rootID, path string, read func(item ArchiveItem, body io.Reader) error) error {
+func (s *Storage) ReadFile(directory, id string, roots []Root, rootID, path string, read func(size int64, body io.Reader) error) error {
 	if path, err := CleanPath(path); err != nil || path == "" {
 		return errUnsafePath
 	}
@@ -198,8 +191,7 @@ func (s *Storage) ReadFile(directory, id string, roots []Root, rootID, path stri
 			return errPathNotFound
 		}
 		found = true
-		_, _, mtime, _ := EntryMetadata(header)
-		if err := read(ArchiveItem{Type: header.Type, Size: header.Size, ModifiedAt: mtime}, body); err != nil {
+		if err := read(header.Size, body); err != nil {
 			return err
 		}
 		return errStop
@@ -211,17 +203,17 @@ func (s *Storage) ReadFile(directory, id string, roots []Root, rootID, path stri
 }
 
 // ValidateItem checks a whole archive and its checksum as Validate does, and
-// returns the chosen item and the bytes restoring it stages.
-func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int64, checksum, rootID, path string) (ArchiveItem, int64, error) {
+// returns the bytes restoring one item stages.
+func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int64, checksum, rootID, path string) (int64, error) {
 	if clean, err := CleanPath(path); err != nil || clean == "" {
-		return ArchiveItem{}, 0, errUnsafePath
+		return 0, errUnsafePath
 	}
 	file, err := s.Open(directory, id)
 	if err != nil {
-		return ArchiveItem{}, 0, err
+		return 0, err
 	}
 	defer file.Close()
-	var item ArchiveItem
+	found := false
 	var staged int64
 	hash := sha256.New()
 	_, err = validateStream(file, roots, maxBytes, func(chunk []byte) { hash.Write(chunk) }, func(header *tarstream.Header) {
@@ -229,22 +221,19 @@ func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int6
 		if entryRoot != rootID {
 			return
 		}
-		if rest == path {
-			_, _, mtime, _ := EntryMetadata(header)
-			item = ArchiveItem{Type: header.Type, Size: header.Size, ModifiedAt: mtime}
-		}
 		if rest == path || strings.HasPrefix(rest, path+"/") {
+			found = found || rest == path
 			staged += max(4096, (header.Size+4095)/4096*4096)
 		}
 	})
 	if err != nil {
-		return ArchiveItem{}, 0, err
+		return 0, err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != checksum {
-		return ArchiveItem{}, 0, fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
+		return 0, fail("BACKUP_CHECKSUM", "The backup checksum does not match. Restore was stopped before changing game data.")
 	}
-	if item.Type == "" {
-		return ArchiveItem{}, 0, errPathNotFound
+	if !found {
+		return 0, errPathNotFound
 	}
-	return item, staged, nil
+	return staged, nil
 }
