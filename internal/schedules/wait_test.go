@@ -136,6 +136,7 @@ func TestWaitForEmptyEnds(t *testing.T) {
 	}
 
 	f.s.DB.Exec("DELETE FROM schedules")
+	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
 	var notified []string
 	f.s.Notify = func(key, message string) { notified = append(notified, key) }
 	f.withPlayers(0, false)
@@ -385,6 +386,30 @@ func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
 	f.s.Run(ctx, due)
 	f.s.Run(ctx, due+10*minute)
 	f.s.Run(ctx, due+15*minute-15_000)
+	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
+		t.Fatal(last.LastResult)
+	}
+}
+
+// A running server is confirmed empty during a wait set to skip, but other
+// work holds it until the wait ends, and its readings stop meanwhile. The
+// run is recorded as blocked by that work, not as an unreadable count.
+func TestWaitRunningServerBusyToTheEnd(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(0, true)
+	players.now.ReadAt = due + 1_000
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.Run(ctx, due+30_000)
+	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != WaitingResult {
+		t.Fatal(last.LastResult)
+	}
+	f.s.Run(ctx, due+10*minute)
 	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
 		t.Fatal(last.LastResult)
 	}
