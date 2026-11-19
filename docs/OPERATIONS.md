@@ -328,8 +328,9 @@ container in Docker, and its owning manager's logs.
 
 Minecraft (both editions), Palworld, Counter-Strike 2, Conan Exiles, Rust,
 Valheim, Satisfactory, Enshrouded, Don't Starve Together, and Core Keeper images
-download the latest game files when they start, so every **Restart** updates the
-game, as **Update** notes. Choose **Take a backup first** to back up before it.
+download the latest game files when they start, unless the image's own settings
+pin a version or skip updates, so every **Restart** updates the game, as
+**Update** notes. Choose **Take a backup first** to back up before it.
 
 **Update server** pulls a newer version of the server's image and recreates its
 container with the same settings. It needs an administrator and nothing else:
