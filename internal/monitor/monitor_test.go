@@ -226,6 +226,7 @@ func TestSilentGameOutage(t *testing.T) {
 		t.Fatal(found)
 	}
 	game = GameUnknown
+	s.Check(ctx, state("running", "unhealthy"), 65_000)
 	s.Check(ctx, state("running", "healthy"), 70_000)
 	if found, _ := problem(s, server.ID, 70_000); found == nil {
 		t.Fatal("an unknown game recovered")

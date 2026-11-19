@@ -345,8 +345,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		if running && s.Game != nil {
 			game := s.Game(server.ID, container)
 			// A game that stopped answering recovers only by answering, even
-			// after Ludock restarts.
-			if healthy && game == GameUnknown && r.lastState.String == NotAnswering {
+			// after Ludock restarts and whatever the health check says.
+			if game == GameUnknown && r.lastState.String == NotAnswering {
 				continue
 			}
 			silent = game == GameNotAnswering
