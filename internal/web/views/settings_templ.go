@@ -107,7 +107,7 @@ func SettingsPage(page Page, s SettingsView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</section><section class=\"settings-section settings-section--divided\" aria-labelledby=\"notification-settings-title\"><h2 id=\"notification-settings-title\" tabindex=\"-1\">Notifications</h2><p class=\"section-lede\">Receive outage and recovery alerts, backup or schedule failures, restore and update results, and newer server images. Turn on as many destinations as you like; each gets every alert. Enable availability monitoring separately on each server’s Overview for outage alerts.</p><div class=\"notification-destinations\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</section><section class=\"settings-section settings-section--divided\" aria-labelledby=\"notification-settings-title\"><h2 id=\"notification-settings-title\" tabindex=\"-1\">Notifications</h2><p class=\"section-lede\">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, restore and update results, and newer server images. Turn on as many destinations as you like; each gets every alert. Enable availability monitoring separately on each server’s Overview for outage, disk, and memory alerts.</p><div class=\"notification-destinations\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

@@ -138,3 +138,25 @@ func FreeBytes(stat *unix.Statfs_t) int64 {
 	}
 	return int64(stat.Bavail) * unit
 }
+
+// Space reads a filesystem's size, capped like FreeBytes.
+func Space(stat *unix.Statfs_t) FileSpace {
+	unit := stat.Frsize
+	if unit <= 0 {
+		unit = stat.Bsize
+	}
+	blocks := func(count uint64) int64 {
+		if unit <= 0 {
+			return 0
+		}
+		if count > uint64(1<<62/unit) {
+			return 1 << 62
+		}
+		return int64(count) * unit
+	}
+	used := uint64(0)
+	if stat.Blocks > stat.Bfree {
+		used = stat.Blocks - stat.Bfree
+	}
+	return FileSpace{Total: blocks(stat.Blocks), Used: blocks(used), Available: FreeBytes(stat)}
+}

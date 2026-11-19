@@ -44,7 +44,7 @@ func TestMonitoringSettingsNeedAdmin(t *testing.T) {
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView)
-	form := url.Values{"enabled": {"true"}, "graceSeconds": {"300"}}
+	form := url.Values{"enabled": {"true"}, "graceSeconds": {"300"}, "diskPercent": {"90"}, "memoryPercent": {"90"}, "memoryMinutes": {"5"}}
 	response := p.do("POST", "/servers/"+p.server+"/availability", operator,
 		strings.NewReader(url.Values{"_csrf": {CSRFToken(operator.Token)}, "enabled": {"true"}, "graceSeconds": {"300"}}.Encode()),
 		map[string]string{"HX-Request": "true"})

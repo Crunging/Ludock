@@ -702,6 +702,12 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .overview-meter > span { display: block; height: 100%; border-radius: 2.5px; background: var(--busy); }
 .overview-ports { list-style: none; padding: 0; display: grid; gap: 2px; }
 .overview-ports li { display: flex; gap: 8px; align-items: baseline; }
+.overview-disks { list-style: none; padding: 0; display: grid; gap: 10px; min-width: 0; }
+.overview-disks li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 0; }
+.overview-disks code { flex-basis: 100%; overflow-wrap: anywhere; font-size: 13.5px; }
+.overview-disks__figure { font-weight: 600; }
+.overview-disks .muted { font-size: 14px; }
+.overview-meter--alert > span { background: var(--halt); }
 /* Capacity reads as one block per player slot, like the state markers. */
 .player-slots { display: flex; flex-wrap: wrap; gap: var(--gap); flex-basis: 100%; margin: 2px 0; }
 .player-slot { width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1.5px var(--edge); }

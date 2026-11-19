@@ -1758,6 +1758,10 @@ func describeAttention(item attention.Item) attentionText {
 			title = "Ambiguous server binding"
 		}
 		return attentionText{title, path, "Review server"}
+	case "disk":
+		return attentionText{"Disk nearly full", path + "?tab=overview", "Check disk space"}
+	case "memory":
+		return attentionText{"Memory near its limit", path + "?tab=overview", "Check memory"}
 	}
 	title := "Server unavailable"
 	if item.State == "docker_unavailable" {
@@ -1799,7 +1803,7 @@ func attentionDetail(item attention.Item) templ.Component {
 			var templ_7745c5c3_Var71 string
 			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(scheduleReasons[item.Reason])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 449, Col: 53}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 453, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 			if templ_7745c5c3_Err != nil {
@@ -1809,26 +1813,106 @@ func attentionDetail(item attention.Item) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		case "binding":
-			if item.BindingStatus == "review_required" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "<span class=\"muted\">Review the changed server identity before resuming controls.</span>")
+		case "disk":
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "<span class=\"muted\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			if item.Path != "" {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 132, "<code>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var72 string
+				templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.JoinStringErrs(item.Path)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 457, Col: 22}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var72))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "</code> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 132, "<span class=\"muted\">Check the container in Docker or its owning manager, then refresh.</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 134, "A data folder ")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 135, "is ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var73 string
+			templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.JoinStringErrs(WholePercent(item.Percent))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 461, Col: 35}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var73))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 136, " full, since ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = Time(item.Since, "", "").Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 137, "<span>.</span></span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		case "memory":
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 138, "<span class=\"muted\">Over ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var74 string
+			templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.JoinStringErrs(WholePercent(item.Percent))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 464, Col: 56}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var74))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 139, " of its memory limit since ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = Time(item.Since, "", "").Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 140, "<span>.</span></span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		case "binding":
+			if item.BindingStatus == "review_required" {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "<span class=\"muted\">Review the changed server identity before resuming controls.</span>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			} else {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 142, "<span class=\"muted\">Check the container in Docker or its owning manager, then refresh.</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 		default:
 			if item.State == "docker_unavailable" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "<span class=\"muted\">Ludock cannot reach Docker.</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "<span class=\"muted\">Ludock cannot reach Docker.</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 134, "<span class=\"muted\">Monitoring detected a problem since ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 144, "<span class=\"muted\">Monitoring detected a problem since ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1836,7 +1920,7 @@ func attentionDetail(item attention.Item) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 135, "<span>.</span></span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "<span>.</span></span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1868,25 +1952,25 @@ func NeedsAttention(view AttentionView) templ.Component {
 			templ_7745c5c3_ElementWriter := templ_7745c5c3_Buffer
 			templ_7745c5c3_Buffer := templ.GetBuffer()
 			var templ_7745c5c3_ElementScripts []templ.ComponentScript
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 136, "<section class=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "<section class=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var73 = []any{"needs-attention", templ.KV("needs-attention--clear", clear)}
-			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_ElementWriter, templ_7745c5c3_Var73...)
+			var templ_7745c5c3_Var76 = []any{"needs-attention", templ.KV("needs-attention--clear", clear)}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_ElementWriter, templ_7745c5c3_Var76...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var74 string
-			templ_7745c5c3_Var74, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.CSSClasses(templ_7745c5c3_Var73).String()).Resolve(ctx)
+			var templ_7745c5c3_Var77 string
+			templ_7745c5c3_Var77, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.CSSClasses(templ_7745c5c3_Var76).String()).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 1, Col: 0}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var74)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var77)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 137, "\" aria-labelledby=\"needs-attention-title\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 147, "\" aria-labelledby=\"needs-attention-title\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1900,136 +1984,136 @@ func NeedsAttention(view AttentionView) templ.Component {
 			}
 			templ.ReleaseBuffer(templ_7745c5c3_Buffer)
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 138, "><div class=\"needs-attention__heading\"><h2 id=\"needs-attention-title\">Needs attention</h2>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 148, "><div class=\"needs-attention__heading\"><h2 id=\"needs-attention-title\">Needs attention</h2>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if len(view.Items) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 139, "<span class=\"muted\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 149, "<span class=\"muted\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var75 string
-			templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(len(view.Items)))
+			var templ_7745c5c3_Var78 string
+			templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(len(view.Items)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 471, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 486, Col: 55}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 140, " ")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var78))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var76 string
-			templ_7745c5c3_Var76, templ_7745c5c3_Err = templ.JoinStringErrs(map[bool]string{true: "item", false: "items"}[len(view.Items) == 1])
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 471, Col: 127}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var76))
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 150, " ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "</span>")
+			var templ_7745c5c3_Var79 string
+			templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(map[bool]string{true: "item", false: "items"}[len(view.Items) == 1])
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 486, Col: 127}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 151, "</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 142, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 152, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if view.Error != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "<div class=\"needs-attention__error\" role=\"alert\"><p>Unable to load attention items: ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 153, "<div class=\"needs-attention__error\" role=\"alert\"><p>Unable to load attention items: ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var77 string
-			templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.JoinStringErrs(view.Error)
+			var templ_7745c5c3_Var80 string
+			templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinStringErrs(view.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 476, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 491, Col: 51}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var77))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 144, "</p><button class=\"secondary-btn\" type=\"button\" hx-get=\"/fragments/attention\" hx-target=\"#attention\">Retry attention check</button></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 154, "</p><button class=\"secondary-btn\" type=\"button\" hx-get=\"/fragments/attention\" hx-target=\"#attention\">Retry attention check</button></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if view.DiscoveryUnavailable {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "<p class=\"needs-attention__warning\">Docker is unavailable. These items use saved state; current server availability cannot be verified. ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 155, "<p class=\"needs-attention__warning\">Docker is unavailable. These items use saved state; current server availability cannot be verified. ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if view.Admin {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "<a href=\"/diagnostics\" class=\"text-link\">Check diagnostics</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 156, "<a href=\"/diagnostics\" class=\"text-link\">Check diagnostics</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 147, "</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 157, "</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if len(view.Items) == 0 && view.Error == "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 148, "<p class=\"muted\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 158, "<p class=\"muted\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if view.DiscoveryUnavailable {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 149, "No attention items in the saved state you can access.")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 159, "No attention items in the saved state you can access.")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 150, "Nothing right now.")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "Nothing right now.")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 151, "</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 161, "</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if len(view.Items) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 152, "<ul class=\"needs-attention__list\" data-collapse-after=\"10\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 162, "<ul class=\"needs-attention__list\" data-collapse-after=\"10\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			for _, item := range view.Items {
 				info := describeAttention(item)
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 153, "<li><div class=\"needs-attention__description\"><span class=\"needs-attention__server\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 163, "<li><div class=\"needs-attention__description\"><span class=\"needs-attention__server\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var78 string
-				templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(item.ServerName)
+				var templ_7745c5c3_Var81 string
+				templ_7745c5c3_Var81, templ_7745c5c3_Err = templ.JoinStringErrs(item.ServerName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 503, Col: 62}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 518, Col: 62}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var78))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 154, "</span> <strong>")
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var81))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var79 string
-				templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(info.Title)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 504, Col: 27}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 164, "</span> <strong>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 155, "</strong>")
+				var templ_7745c5c3_Var82 string
+				templ_7745c5c3_Var82, templ_7745c5c3_Err = templ.JoinStringErrs(info.Title)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 519, Col: 27}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var82))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 165, "</strong>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -2037,62 +2121,62 @@ func NeedsAttention(view AttentionView) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 156, "</div><a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 166, "</div><a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var80 string
-				templ_7745c5c3_Var80, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(info.Link)).ResolveURL(ctx)
+				var templ_7745c5c3_Var83 string
+				templ_7745c5c3_Var83, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(info.Link)).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 507, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 522, Col: 40}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var80)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 157, "\" class=\"text-link needs-attention__action\" aria-label=\"")
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var83)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var81 string
-				templ_7745c5c3_Var81, templ_7745c5c3_Err = templruntime.NewAttributeExpression(info.Action + ": " + item.ServerName + " — " + info.Title).Resolve(ctx)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 507, Col: 157}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var81)
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 167, "\" class=\"text-link needs-attention__action\" aria-label=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 158, "\">")
+				var templ_7745c5c3_Var84 string
+				templ_7745c5c3_Var84, templ_7745c5c3_Err = templruntime.NewAttributeExpression(info.Action + ": " + item.ServerName + " — " + info.Title).Resolve(ctx)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 522, Col: 157}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var84)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var82 string
-				templ_7745c5c3_Var82, templ_7745c5c3_Err = templ.JoinStringErrs(info.Action)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 507, Col: 173}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var82))
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 168, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 159, "</a></li>")
+				var templ_7745c5c3_Var85 string
+				templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.JoinStringErrs(info.Action)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `dashboard.templ`, Line: 522, Col: 173}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var85))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 169, "</a></li>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "</ul>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 170, "</ul>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if hasOperation(view.Items) {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 161, "<p class=\"muted needs-attention__note\">Includes issues from each server’s most recent 100 operations.</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 171, "<p class=\"muted needs-attention__note\">Includes issues from each server’s most recent 100 operations.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 162, "</section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 172, "</section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

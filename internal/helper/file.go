@@ -41,6 +41,14 @@ type FileVersion struct {
 	SHA256 string `json:"sha256"`
 }
 
+// FileSpace is the filesystem under a root. Used and Available leave out
+// blocks reserved for root, as df does.
+type FileSpace struct {
+	Total     int64 `json:"total"`
+	Used      int64 `json:"used"`
+	Available int64 `json:"available"`
+}
+
 type FileEntry struct {
 	Name       string  `json:"name"`
 	Type       string  `json:"type"`
@@ -516,6 +524,12 @@ func (h *fileHelper) run() error {
 	switch operation {
 	case "check":
 		return h.json(map[string]bool{"safe": true})
+	case "space":
+		var stat unix.Statfs_t
+		if err := unix.Fstatfs(int(root), &stat); err != nil {
+			return err
+		}
+		return h.json(Space(&stat))
 	case "backup":
 		if err := h.check(relative, true); err != nil {
 			return err

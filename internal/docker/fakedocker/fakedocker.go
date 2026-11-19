@@ -64,8 +64,11 @@ type Engine struct {
 	// is the status its registry lookups fail with.
 	registry     map[string]string
 	registryFail map[string]int
-	execs        map[string]*exec
-	events       []chan []byte
+	// disks are the helper "space" results of host paths that journeys set,
+	// or "" for a failed measurement.
+	disks  map[string]string
+	execs  map[string]*exec
+	events []chan []byte
 	// Exec handles exec commands; nil exits 0 without output.
 	Exec ExecHandler
 	// OnStart runs when a container starts, under no lock, e.g. to fill in
@@ -112,7 +115,7 @@ func Start(dir string) (*Engine, error) {
 	}
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
 		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, pulls: map[string]string{},
-		registry: map[string]string{}, registryFail: map[string]int{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
+		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
 	engine.server = &http.Server{Handler: http.HandlerFunc(engine.serve)}
 	go engine.server.Serve(listener)
 	return engine, nil
@@ -280,6 +283,37 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(204)
 		return
+	case "/fake/disk":
+		// Sets what measuring the disk under a host path reports:
+		// POST /fake/disk?path=PATH&used=BYTES&available=BYTES, &fail=1 for a
+		// failed measurement, or neither to measure for real.
+		query := r.URL.Query()
+		used, _ := strconv.ParseInt(query.Get("used"), 10, 64)
+		available, _ := strconv.ParseInt(query.Get("available"), 10, 64)
+		e.mu.Lock()
+		switch {
+		case query.Get("fail") != "":
+			e.disks[query.Get("path")] = ""
+		case query.Get("used") != "":
+			encoded, _ := json.Marshal(map[string]int64{"total": used + available, "used": used, "available": available})
+			e.disks[query.Get("path")] = string(encoded)
+		default:
+			delete(e.disks, query.Get("path"))
+		}
+		e.mu.Unlock()
+		w.WriteHeader(204)
+		return
+	case "/fake/stats":
+		// Sets a container's memory in use: POST /fake/stats?container=NAME&memory=BYTES.
+		query := r.URL.Query()
+		memory, _ := strconv.ParseFloat(query.Get("memory"), 64)
+		e.mu.Lock()
+		if c := e.find(query.Get("container")); c != nil {
+			c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Stats = memory, nil
+		}
+		e.mu.Unlock()
+		w.WriteHeader(204)
+		return
 	}
 	match := versioned.FindStringSubmatch(path)
 	if match == nil {
@@ -426,6 +460,15 @@ func (e *Engine) PublishImage(reference, id string) {
 		}
 	}
 	e.registry[reference] = id
+}
+
+// Disk is the measurement a journey set for a host path: its JSON, or ""
+// for a failure. ok is false when the path is measured for real.
+func (e *Engine) Disk(path string) (result string, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	result, ok = e.disks[path]
+	return result, ok
 }
 
 // FailRegistry makes registry lookups of reference fail with status, or
@@ -645,6 +688,10 @@ func (c *Container) inspection() map[string]any {
 			binds = append(binds, bind)
 		}
 		host = map[string]any{"NetworkMode": "bridge", "Binds": binds}
+	}
+	if c.Host.Memory > 0 {
+		host = maps.Clone(host)
+		host["Memory"] = c.Host.Memory
 	}
 	result["HostConfig"] = host
 	if settings, ok := result["NetworkSettings"].(map[string]any); ok {

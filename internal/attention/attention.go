@@ -1,5 +1,6 @@
 // Package attention lists what needs a viewer's attention: unavailable
-// bindings, outages, suspended schedules, and recent failed work.
+// bindings, outages, disk and memory alerts, suspended schedules, and recent
+// failed work.
 package attention
 
 import (
@@ -27,6 +28,10 @@ type Item struct {
 	// availability
 	State           string
 	OutageStartedAt int64
+	// disk and memory; Path is empty for a viewer who can't read files.
+	Path    string
+	Percent float64
+	Since   int64
 	// schedule
 	ScheduleID string
 	Action     string
@@ -56,7 +61,7 @@ type Service struct {
 	Refresh func(ctx context.Context) error
 }
 
-var priority = map[string]int{"binding": 0, "availability": 1, "schedule": 2, "operation": 3}
+var priority = map[string]int{"binding": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
 
 // List reads current authority after discovery: a stale principal never
 // exposes a revoked server's saved history.
@@ -74,6 +79,10 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 	}
 	// An unreadable source fails the list instead of hiding its items.
 	problems, err := s.Monitor.Problems(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := s.Monitor.ResourceProblems(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +105,16 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			item := base
 			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.OutageStartedAt
 			result.Items = append(result.Items, item)
+		}
+		if server.Status == identity.StatusActive {
+			for _, resource := range resources[server.ID] {
+				item := base
+				item.ID, item.Kind, item.Percent, item.Since = resource.Kind+":"+server.ID+":"+resource.Path, resource.Kind, resource.Percent, resource.Since
+				if slices.Contains(permissions, authz.FilesRead) {
+					item.Path = resource.Path
+				}
+				result.Items = append(result.Items, item)
+			}
 		}
 		if slices.Contains(permissions, authz.SchedulesManage) && s.Schedules != nil {
 			list, err := s.Schedules.List(ctx, actor, server.ID)

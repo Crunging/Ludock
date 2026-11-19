@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -84,6 +85,18 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 					for index := range args {
 						args[index] = strings.ReplaceAll(args[index], `"`+mount.Target, `"`+mount.Source)
 					}
+				}
+			}
+			// Journeys set disk figures with POST /fake/disk.
+			var request helper.FileRequest
+			if args[0] == "file" && len(args) > 1 && json.Unmarshal([]byte(args[1]), &request) == nil && request.Operation == "space" {
+				if result, ok := engine.Disk(request.Root); ok {
+					if result == "" {
+						stderr([]byte(helper.FileFailure))
+						return 1
+					}
+					stdout([]byte(result))
+					return 0
 				}
 			}
 			var out, errs bytes.Buffer
@@ -222,7 +235,7 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		// A quarter of one core of four, and 1.5 GiB of a 4 GiB limit once
 		// 0.5 GiB of reclaimable file cache is left out.
 		c.Stats.CPUStats.CPUUsage.TotalUsage, c.Stats.CPUStats.SystemCPUUsage, c.Stats.CPUStats.OnlineCPUs = 125e6, 2e9, 4
-		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit = 2*(1<<30), 4*(1<<30)
+		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 2*(1<<30), 4*(1<<30), 4*(1<<30)
 		c.Stats.MemoryStats.Stats = map[string]float64{"inactive_file": 0.5 * (1 << 30)}
 		// Like the real image, which generates a password when given none.
 		c.Files = map[string]string{"/data/.rcon-cli.env": "password=dev-rcon-secret\n"}
@@ -240,10 +253,14 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	if err != nil {
 		panic(err)
 	}
-	engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
+	valheimID := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
 		Labels: map[string]string{"ludock.query.port": fmt.Sprint(valheimQuery)},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
+	// 1 GiB of a 2 GiB limit; journeys change the use with POST /fake/stats.
+	engine.Update(valheimID, func(c *fakedocker.Container) {
+		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 1<<30, 2*(1<<30), 2*(1<<30)
+	})
 	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: false,
 		Env:   []string{"RCON_ENABLED=true", "RCON_PORT=" + palworldRCON("dev-palworld-secret"), "ADMIN_PASSWORD=dev-palworld-secret"},
 		Ports: map[string][]docker.PortBinding{"8211/udp": {{HostIP: "0.0.0.0", HostPort: "8211"}}}})

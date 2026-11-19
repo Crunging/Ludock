@@ -19,18 +19,36 @@ func (r *recorder) notify(key, message string) { r.events = append(r.events, mes
 
 func setup(t *testing.T) (*Service, *recorder, identity.Server) {
 	t.Helper()
+	s, events, server, _ := setupWith(t, nil)
+	return s, events, server
+}
+
+// setupWith monitors one server with the default policy and a 60-second
+// grace period, changed by change. configure saves another policy.
+func setupWith(t *testing.T, change func(*Policy)) (s *Service, events *recorder, server identity.Server, configure func(Policy)) {
+	t.Helper()
 	d := dbtest.Open(t)
 	store := &identity.Store{DB: d}
 	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
-	events := &recorder{}
-	s := &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
+	events = &recorder{}
+	s = &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
 	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Configure(ctx, "admin", dbtest.Session(t, d, "admin"), list[0].ID, Policy{Enabled: true, GraceSeconds: 60}); err != nil {
-		t.Fatal(err)
+	session := dbtest.Session(t, d, "admin")
+	configure = func(policy Policy) {
+		t.Helper()
+		if _, err := s.Configure(ctx, "admin", session, list[0].ID, policy); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return s, events, list[0]
+	policy := DefaultPolicy()
+	policy.Enabled, policy.GraceSeconds = true, 60
+	if change != nil {
+		change(&policy)
+	}
+	configure(policy)
+	return s, events, list[0], configure
 }
 
 func state(value, health string) map[string]servers.Container {
