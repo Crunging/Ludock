@@ -85,6 +85,9 @@ type Engine struct {
 	// HangExecStarts makes the next N exec starts accept the request and never
 	// answer, as a stalled daemon can. The exec ends when the client hangs up.
 	HangExecStarts int
+	// LoseUploads makes the next N file-helper uploads finish and then fail
+	// their exec inspection, as a daemon that loses the result can.
+	LoseUploads int
 	// HangCreates makes the next N container creates make the container and
 	// never answer, as a daemon whose response is lost can.
 	HangCreates int
@@ -104,6 +107,7 @@ type exec struct {
 	options   docker.ExecCreate
 	running   bool
 	exitCode  *int
+	lost      bool
 }
 
 func Start(dir string) (*Engine, error) {
@@ -300,6 +304,13 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			delete(e.disks, query.Get("path"))
 		}
+		e.mu.Unlock()
+		w.WriteHeader(204)
+		return
+	case "/fake/lose-upload":
+		// Makes the next file write finish and then report an unknown result.
+		e.mu.Lock()
+		e.LoseUploads++
 		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
@@ -934,7 +945,12 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 	if action == "json" {
 		e.mu.Lock()
 		info := docker.ExecInspect{Running: instance.running, ExitCode: instance.exitCode}
+		lost := instance.lost
 		e.mu.Unlock()
+		if lost {
+			fail(w, 500)
+			return
+		}
 		writeJSON(w, 200, info)
 		return
 	}
@@ -971,6 +987,10 @@ func (e *Engine) execRequest(w http.ResponseWriter, r *http.Request, id, action 
 		e.mu.Lock()
 		instance.running = false
 		instance.exitCode = &code
+		if e.LoseUploads > 0 && slices.ContainsFunc(instance.options.Cmd, func(arg string) bool { return strings.Contains(arg, `"operation":"upload"`) }) {
+			e.LoseUploads--
+			instance.lost = true
+		}
 		e.mu.Unlock()
 	})
 }

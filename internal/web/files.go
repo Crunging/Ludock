@@ -213,6 +213,15 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.FileActionDialog(d))
 }
 
+var fileAudit = map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted"}
+
+// unconfirmed reports whether a failed file write may still have completed:
+// the failure came after the helper could have committed it.
+func unconfirmed(err error) bool {
+	public, ok := apperr.As(err)
+	return !ok || public.Status >= 500
+}
+
 // fileChange runs a folder creation, rename, or deletion and reports the
 // result over the dialog: client errors keep it open with the draft.
 func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request, *Request) {
@@ -252,16 +261,17 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 				s.fail(w, r, request, err)
 				return
 			}
-			if ok && public.Status < 500 {
+			if !unconfirmed(err) {
 				d.Error = public.Message
 				render(w, r, public.Status, views.FileActionDialog(d))
 				return
 			}
-			// A write may have completed before it failed to report.
 			target := d.Name
 			if kind == "create" {
 				target = name
 			}
+			details["confirmed"] = false
+			s.audit(r, request, fileAudit[kind], action.Logical.ID, details)
 			message = "The result for “" + target + "” could not be confirmed. The change may have completed. Review the folder before starting another action."
 			w.Header().Set("HX-Retarget", "#file-feedback")
 			w.Header().Set("HX-Reswap", "innerHTML")
@@ -269,8 +279,7 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 			render(w, r, http.StatusOK, views.Alert("error", message))
 			return
 		}
-		audit := map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted"}[kind]
-		s.audit(r, request, audit, action.Logical.ID, details)
+		s.audit(r, request, fileAudit[kind], action.Logical.ID, details)
 		w.Header().Set("HX-Retarget", "#file-feedback")
 		w.Header().Set("HX-Reswap", "innerHTML")
 		w.Header().Set("HX-Trigger", "files-changed")
@@ -381,12 +390,17 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 			s.fail(w, r, request, err)
 			return
 		}
-		status := http.StatusConflict
-		if ok && public.Status < 500 {
-			status = public.Status
+		details := map[string]any{"root": root, "path": path, "size": len(content)}
+		if unconfirmed(err) {
+			// The draft stays in the editor in case the write did not happen.
+			details["confirmed"] = false
+			s.audit(r, request, "server.file.edited", action.Logical.ID, details)
+			p.Error = "The save of “" + p.Name + "” could not be confirmed. It may have completed. Copy your text, then reopen the file to check it before saving again."
+			render(w, r, http.StatusOK, views.FilePreviewContent(p))
+			return
 		}
-		p.Error = publicMessage(err)
-		render(w, r, status, views.FilePreviewContent(p))
+		p.Error = public.Message
+		render(w, r, public.Status, views.FilePreviewContent(p))
 		return
 	}
 	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": path, "size": len(content)})
@@ -498,10 +512,18 @@ func (s *Server) fileUpload(w http.ResponseWriter, r *http.Request, request *Req
 		return
 	}
 	defer action.Done()
+	details := map[string]any{"root": root, "path": path, "name": name, "size": size}
 	if err := s.App.Files.Upload(action.Ctx, fileTarget(action), root, path, name, size, r.Body, action.Assert); err != nil {
-		s.fail(w, r, request, err)
+		if public, ok := apperr.As(err); (ok && public.Status == http.StatusUnauthorized) || !unconfirmed(err) {
+			s.fail(w, r, request, err)
+			return
+		}
+		// 202 tells the page the upload stopped without a known result.
+		details["confirmed"] = false
+		s.audit(r, request, "server.file.uploaded", action.Logical.ID, details)
+		render(w, r, http.StatusAccepted, views.Alert("error", "The result for “"+name+"” could not be confirmed. The upload may have completed. Review the folder before uploading again."))
 		return
 	}
-	s.audit(r, request, "server.file.uploaded", action.Logical.ID, map[string]any{"root": root, "path": path, "name": name, "size": size})
+	s.audit(r, request, "server.file.uploaded", action.Logical.ID, details)
 	w.WriteHeader(http.StatusCreated)
 }
