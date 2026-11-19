@@ -190,6 +190,9 @@ func (e *Engine) RemoveContainer(id string) {
 }
 
 func (e *Engine) removeLocked(id string) {
+	// The event carries the labels, so it is built before the container goes;
+	// subscribers act on it only after the lock is released.
+	e.emitLocked("destroy", id)
 	delete(e.containers, id)
 	for index, existing := range e.order {
 		if existing == id {
@@ -197,12 +200,19 @@ func (e *Engine) removeLocked(id string) {
 			break
 		}
 	}
-	e.emitLocked("destroy", id)
 }
 
 func (e *Engine) emitLocked(action, id string) {
-	event, _ := json.Marshal(map[string]any{"Type": "container", "Action": action, "Actor": map[string]string{"ID": id},
-		"id": id, "time": time.Now().Unix()})
+	// Docker sends the container's labels and name as actor attributes.
+	attributes := map[string]string{}
+	if c := e.containers[id]; c != nil {
+		for key, value := range c.Config.Labels {
+			attributes[key] = value
+		}
+		attributes["name"] = strings.TrimPrefix(c.Name, "/")
+	}
+	event, _ := json.Marshal(map[string]any{"Type": "container", "Action": action,
+		"Actor": map[string]any{"ID": id, "Attributes": attributes}, "id": id, "time": time.Now().Unix()})
 	event = append(event, '\n')
 	for _, events := range e.events {
 		select {

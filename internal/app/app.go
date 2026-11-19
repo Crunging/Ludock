@@ -210,7 +210,9 @@ func (a *App) Tick(ctx context.Context) {
 			}
 		}()
 	}
-	if a.polling.TryLock() {
+	// Player counts are shown only on pages that follow server changes, and a
+	// reading can start a console helper, so nobody watching means no reading.
+	if a.Events.Watched() && a.polling.TryLock() {
 		a.background.Add(1)
 		go func() {
 			defer a.background.Done()

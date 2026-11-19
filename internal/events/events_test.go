@@ -153,6 +153,13 @@ func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 	if _, ok := stateChange(dockerEvent{Action: "exec_create: secret-password"}); ok {
 		t.Fatal("exec event accepted")
 	}
+	// A helper's start and destroy would otherwise force a discovery each.
+	var helper dockerEvent
+	helper.Action, helper.Actor.ID = "destroy", "abc123"
+	helper.Actor.Attributes = map[string]string{"ludock.internal": "console-helper"}
+	if _, ok := stateChange(helper); ok {
+		t.Fatal("helper event accepted")
+	}
 	f := setup(t)
 	owner := f.client(f.admin)
 	f.hub.dispatch(ctx, []change{{"start", "unknown-container", 1}})

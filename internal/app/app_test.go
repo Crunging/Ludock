@@ -2,12 +2,16 @@ package app
 
 import (
 	"context"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/config"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/events"
 )
 
 // A page read just before the background tick does not stand in for the
@@ -41,4 +45,51 @@ func TestTickDiscoversAfterARecentRead(t *testing.T) {
 	if listings() == before {
 		t.Fatal("the tick reused a page read's discovery")
 	}
+}
+
+// Player counts are read only while someone has a page open that follows
+// server changes: a reading can start a console helper on every tick.
+func TestTickReadsPlayersOnlyWhileWatched(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	var mu sync.Mutex
+	readings := 0
+	port, err := fakedocker.ServeRCON("secret", func(string) string {
+		mu.Lock()
+		readings++
+		mu.Unlock()
+		return "There are 0 of a max of 10 players online:"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1"},
+		Env:    []string{"RCON_PORT=" + strconv.Itoa(port), "RCON_PASSWORD=secret"}})
+	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return readings
+	}
+	a.Tick(context.Background())
+	a.background.Wait()
+	if count() != 0 {
+		t.Fatal("read players with nobody watching")
+	}
+	unsubscribe := a.Events.Subscribe(&events.Subscriber{Validate: func(context.Context) *db.SessionUser { return nil },
+		Send: func(events.Event) {}, Close: func(string) {}})
+	defer unsubscribe()
+	a.Tick(context.Background())
+	a.background.Wait()
+	if count() != 1 {
+		t.Fatal("did not read players for a watched page", count())
+	}
+	a.Events.Stop()
 }

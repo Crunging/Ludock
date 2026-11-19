@@ -66,6 +66,8 @@ type dockerEvent struct {
 	Action string `json:"Action"`
 	Actor  struct {
 		ID string `json:"ID"`
+		// Attributes include the container's labels.
+		Attributes map[string]string `json:"Attributes"`
 	} `json:"Actor"`
 	ID   string   `json:"id"`
 	Time *float64 `json:"time"`
@@ -77,7 +79,9 @@ type change struct {
 }
 
 func stateChange(event dockerEvent) (change, bool) {
-	if !StateActions[event.Action] {
+	// Ludock's own helpers come and go with every file listing and console
+	// query; none of them is a server.
+	if !StateActions[event.Action] || event.Actor.Attributes["ludock.internal"] != "" {
 		return change{}, false
 	}
 	id := event.Actor.ID
@@ -104,6 +108,13 @@ func Decode(source io.Reader, deliver func(dockerEvent)) error {
 		}
 		return nil
 	})
+}
+
+// Watched reports whether anyone has a page open that follows server changes.
+func (h *Hub) Watched() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subscribers) > 0
 }
 
 // Subscribe adds a viewer and starts the Docker stream if needed. The
@@ -239,8 +250,9 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	for index := range changes {
 		previouslyVisible[index] = map[*Subscriber]bool{}
 	}
+	visibleBefore := h.visibility(before)
 	for _, subscriber := range subscribers {
-		_, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), before)
+		_, visible, err := visibleBefore(ctx, subscriber.Validate(ctx))
 		if err != nil {
 			continue
 		}
@@ -258,8 +270,9 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 		return err
 	}
 	current := byContainer(after)
+	visibleAfter := h.visibility(after)
 	for _, subscriber := range subscribers {
-		user, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), after)
+		user, visible, err := visibleAfter(ctx, subscriber.Validate(ctx))
 		if err != nil {
 			continue
 		}
@@ -304,6 +317,29 @@ func (h *Hub) Changed(ctx context.Context, serverID string) {
 		if visible, err := h.Authz.Has(ctx, user, serverID, authz.ServerView); err == nil && visible {
 			subscriber.Send(Event{Action: "changed", ServerID: serverID, Time: time.Now().Unix()})
 		}
+	}
+}
+
+// visibility is EffectiveAll for one batch, read once per account: an account
+// often has several pages open, each its own subscriber.
+func (h *Hub) visibility(servers []identity.Server) func(context.Context, *db.SessionUser) (*db.SessionUser, map[string][]authz.Capability, error) {
+	type result struct {
+		user    *db.SessionUser
+		visible map[string][]authz.Capability
+	}
+	seen := map[string]result{}
+	return func(ctx context.Context, actor *db.SessionUser) (*db.SessionUser, map[string][]authz.Capability, error) {
+		if actor == nil {
+			return h.Authz.EffectiveAll(ctx, nil, servers)
+		}
+		if cached, ok := seen[actor.ID]; ok {
+			return cached.user, cached.visible, nil
+		}
+		user, visible, err := h.Authz.EffectiveAll(ctx, actor, servers)
+		if err == nil {
+			seen[actor.ID] = result{user, visible}
+		}
+		return user, visible, err
 	}
 }
 
