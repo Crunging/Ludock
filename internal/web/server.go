@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -155,7 +156,7 @@ func (s *Server) policy(next http.Handler) http.Handler {
 					panic(recovered)
 				}
 				log.Error("Unhandled request error", logging.F("requestId", id), logging.F("method", r.Method),
-					logging.F("path", r.URL.Path))
+					logging.F("path", r.URL.Path), logging.F("panicType", fmt.Sprintf("%T", recovered)))
 				if recorder.status == 0 {
 					http.Error(recorder, "Internal server error", http.StatusInternalServerError)
 				}

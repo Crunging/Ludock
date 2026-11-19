@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -198,7 +200,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		log.Error("Unhandled request error", logging.F("method", r.Method), logging.F("path", r.URL.Path))
+		log.Error("Unhandled request error", append([]logging.Field{logging.F("method", r.Method), logging.F("path", r.URL.Path)},
+			causeFields(err)...)...)
 		public = apperr.New("INTERNAL", 500, "Internal server error")
 	}
 	if public.RetryAfterMs > 0 {
@@ -233,9 +236,23 @@ func publicMessage(err error) string {
 		return public.Message
 	}
 	if !errors.Is(err, context.Canceled) {
-		log.Error("Unhandled request error")
+		log.Error("Unhandled request error", causeFields(err)...)
 	}
 	return "Internal server error"
+}
+
+// causeFields describe an unexpected error by its types and any Docker
+// status. Their messages can name host paths, so they are never logged.
+func causeFields(err error) []logging.Field {
+	var kinds []string
+	for current := err; current != nil && len(kinds) < 8; current = errors.Unwrap(current) {
+		kinds = append(kinds, fmt.Sprintf("%T", current))
+	}
+	fields := []logging.Field{logging.F("errorTypes", strings.Join(kinds, " > "))}
+	if status := docker.StatusCode(err); status != 0 {
+		fields = append(fields, logging.F("dockerStatus", status))
+	}
+	return fields
 }
 
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }
