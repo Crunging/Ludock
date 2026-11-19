@@ -47,7 +47,26 @@ type Service struct {
 	// event announces to open pages. It must not block.
 	Changed func(serverID string)
 	Store   *identity.Store
+	// Game reports whether a running game answers its status query. It may
+	// be nil.
+	Game func(serverID string, container servers.Container) GameAnswer
 }
+
+type GameAnswer int8
+
+const (
+	GameNotChecked GameAnswer = iota
+	GameAnswering
+	// GameNotAnswering: the game answered in this container run, then
+	// stopped.
+	GameNotAnswering
+	// GameUnknown: no recent query says, or the game hasn't answered yet.
+	GameUnknown
+)
+
+// NotAnswering is the last state of a running container whose game stopped
+// answering its status query.
+const NotAnswering = "not_answering"
 
 // ParsePolicy validates a policy, applying defaults.
 func ParsePolicy(raw []byte) (Policy, error) {
@@ -203,6 +222,22 @@ func (s *Service) suppressed(serverID string, policy Policy, until, now int64, a
 	return !policy.Enabled || policy.Maintenance || until > now || active || (s.Locks != nil && s.Locks.ServerBusy(serverID))
 }
 
+// Monitored lists the servers whose monitoring is on and not paused for
+// maintenance.
+func (s *Service) Monitored(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.rows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	monitored := map[string]bool{}
+	for serverID, r := range rows {
+		if policy, err := ParsePolicy([]byte(r.policy)); err == nil && policy.Enabled && !policy.Maintenance {
+			monitored[serverID] = true
+		}
+	}
+	return monitored, nil
+}
+
 type Problem struct {
 	State           string
 	OutageStartedAt int64
@@ -304,6 +339,19 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			r.intentional = 0
 		}
 		healthy := running && container.Health != "unhealthy" && container.Health != "starting"
+		// Silence names the outage even when a health check that asks the
+		// game, as Minecraft's does, also fails.
+		silent := false
+		if running && s.Game != nil {
+			game := s.Game(server.ID, container)
+			// A game that stopped answering recovers only by answering, even
+			// after Ludock restarts.
+			if healthy && game == GameUnknown && r.lastState.String == NotAnswering {
+				continue
+			}
+			silent = game == GameNotAnswering
+			healthy = healthy && !silent
+		}
 		// State is saved before any alert: the saved outage start keys each
 		// alert, so an unsaved state could later alert again under a new key.
 		if healthy {
@@ -339,6 +387,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		lastState := string(server.Status)
 		if unavailable {
 			lastState = "docker_unavailable"
+		} else if silent {
+			lastState = NotAnswering
 		} else if found && server.ContainerID != "" {
 			lastState = container.State
 		}
@@ -356,8 +406,13 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 			message := server.DisplayName + " is unavailable."
 			if unavailable {
 				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
+			} else if silent {
+				message = server.DisplayName + " is running, but the game stopped answering."
 			}
 			s.notify("outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
+			s.changed(server.ID)
+		} else if changed && notify && r.lastState.String != lastState {
+			// Pages show the reason of an outage past its grace.
 			s.changed(server.ID)
 		}
 	}

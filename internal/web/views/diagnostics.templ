@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/games"
@@ -15,6 +16,13 @@ type DiagnosticsView struct {
 func consoleName(integration games.Integration) string {
 	if adapter := games.ResolveAdapter(integration.GameType, nil); adapter != nil {
 		return adapter.Name
+	}
+	return "—"
+}
+
+func queryName(integration games.Integration) string {
+	if query := integration.Query; query != nil {
+		return query.Name() + ", port " + strconv.Itoa(query.Port)
 	}
 	return "—"
 }
@@ -105,6 +113,7 @@ templ DiagnosticsPage(page Page, d DiagnosticsView) {
 								<th>Game</th>
 								<th>Recognized images</th>
 								<th>Console</th>
+								<th>Status query</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -113,6 +122,7 @@ templ DiagnosticsPage(page Page, d DiagnosticsView) {
 									<td>{ game.Name }</td>
 									<td>{ strings.Join(game.Repositories, ", ") }</td>
 									<td>{ consoleName(game) }</td>
+									<td>{ queryName(game) }</td>
 								</tr>
 							}
 						</tbody>

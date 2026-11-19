@@ -174,26 +174,12 @@ func (r *Runtime) GameCommand(ctx context.Context, target Target, adapter *games
 	return nil
 }
 
-// Query sends one command through a network console adapter and returns the
-// response with the console password removed. Other secrets are left for
-// the caller to redact.
-func (r *Runtime) Query(ctx context.Context, target Target, adapter *games.Adapter, command string, assertAccess func() error) (string, error) {
-	if assertAccess != nil {
-		if err := assertAccess(); err != nil {
-			return "", err
-		}
-	}
-	if target.State != "running" {
-		return "", errNotRunning
-	}
-	if adapter.Transport == games.TransportContainerStdin {
-		return "", errors.New("this game console does not return responses")
-	}
-	return r.query(ctx, target, adapter, adapter.Command(command), assertAccess)
-}
-
 func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapter, command string, assertAccess func() error) (string, error) {
-	host, port, password, err := r.networkTarget(ctx, target, adapter)
+	env, err := r.environment(ctx, target.ContainerID)
+	if err != nil {
+		return "", err
+	}
+	host, port, password, err := r.networkTarget(ctx, target, adapter, env)
 	if err != nil {
 		return "", err
 	}
@@ -209,8 +195,15 @@ func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapt
 	if host != "" {
 		response, err = netconsole.Execute(ctx, string(adapter.Transport), host, port, password, command, netconsole.Control{AssertAccess: assertAccess})
 	} else {
-		response, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(adapter.Transport),
+		var reply helperReply
+		reply, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(adapter.Transport),
 			Port: port, Password: password, Command: command}, assertAccess)
+		if err == nil && reply.Response == nil {
+			err = errors.New("game console command failed")
+		}
+		if err == nil {
+			response = *reply.Response
+		}
 	}
 	if err != nil {
 		return "", err
@@ -234,16 +227,21 @@ var (
 	badHost   = regexp.MustCompile(`[/\\\s@?#]`)
 )
 
-func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *games.Adapter) (string, int, string, error) {
-	info, err := r.Docker.Inspect(ctx, target.ContainerID)
+func (r *Runtime) environment(ctx context.Context, containerID string) (map[string]string, error) {
+	info, err := r.Docker.Inspect(ctx, containerID)
 	if err != nil {
-		return "", 0, "", err
+		return nil, err
 	}
 	env := map[string]string{}
 	for _, entry := range info.Config.Env {
 		key, value, _ := strings.Cut(entry, "=")
 		env[key] = value
 	}
+	return env, nil
+}
+
+func (r *Runtime) networkTarget(ctx context.Context, target Target, adapter *games.Adapter, env map[string]string) (string, int, string, error) {
+	var err error
 	raw := target.Labels[games.LabelConsolePort]
 	if raw == "" {
 		raw = env["RCON_PORT"]
@@ -612,7 +610,12 @@ func (r *Runtime) stdin(ctx context.Context, containerID, command string, out Ou
 // namespace, for consoles that listen only on the container's loopback.
 // The helper is removed before returning, even after timeouts or revocation,
 // because the caller holds the server lock until Docker confirms it.
-func (r *Runtime) networkHelper(ctx context.Context, containerID string, request helper.NetworkConsoleRequest, assertAccess func() error) (string, error) {
+type helperReply struct {
+	Response *string
+	Status   *helper.StatusResult
+}
+
+func (r *Runtime) networkHelper(ctx context.Context, containerID string, request helper.NetworkConsoleRequest, assertAccess func() error) (helperReply, error) {
 	check := func() error {
 		if ctx.Err() != nil {
 			return errCancelled
@@ -625,10 +628,10 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		return nil
 	}
 	if err := check(); err != nil {
-		return "", err
+		return helperReply{}, err
 	}
 	if len(request.Password)+len(request.Command) > netconsole.MaxBytes {
-		return "", errors.New("Console command or credential is too large")
+		return helperReply{}, errors.New("Console command or credential is too large")
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -660,7 +663,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 	}
 	image, err := r.Images.Resolve(ctx)
 	if err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	name := "ludock-console-" + identity.NewUUID()
 	// Never race create/start: wait for the outcome, then remove even a
@@ -690,30 +693,30 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		}
 	}()
 	if err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	if err := check(); err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	conn, err := r.Docker.Attach(ctx, helperRef, docker.AttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
 	if err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	if err := r.Docker.Start(ctx, helperRef); err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	if err := check(); err != nil {
-		return "", failure(err)
+		return helperReply{}, failure(err)
 	}
 	preparation.Stop()
 	commandTimer := time.AfterFunc(10*time.Second, func() { cancel(errTimedOut) })
 	defer commandTimer.Stop()
 	encoded, _ := json.Marshal(request)
 	if _, err := conn.Write(append(encoded, '\n')); err != nil {
-		return "", failure(errors.New("game console command failed"))
+		return helperReply{}, failure(errors.New("game console command failed"))
 	}
 	stdout := docker.Stdout(conn)
 	reader := bufio.NewReaderSize(stdout, 64*1024)
@@ -724,39 +727,40 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		chunk, err := reader.ReadSlice('\n')
 		total += len(chunk)
 		if total > maxWire {
-			return "", failure(errLimited)
+			return helperReply{}, failure(errLimited)
 		}
 		line = append(line, chunk...)
 		if err == bufio.ErrBufferFull {
 			continue
 		}
 		if err != nil {
-			return "", failure(errors.New("game console helper ended without a response"))
+			return helperReply{}, failure(errors.New("game console helper ended without a response"))
 		}
 		var record struct {
-			Type     string  `json:"type"`
-			Response *string `json:"response"`
+			Type     string               `json:"type"`
+			Response *string              `json:"response"`
+			Status   *helper.StatusResult `json:"status"`
 		}
 		decodeErr := json.Unmarshal(line, &record)
 		line = nil
 		if decodeErr != nil {
-			return "", failure(errors.New("invalid console helper response"))
+			return helperReply{}, failure(errors.New("invalid console helper response"))
 		}
 		if err := check(); err != nil {
-			return "", failure(err)
+			return helperReply{}, failure(err)
 		}
 		switch {
 		case record.Type == "authorize":
 			if _, err := conn.Write([]byte("{\"type\":\"authorized\"}\n")); err != nil {
-				return "", failure(errors.New("game console command failed"))
+				return helperReply{}, failure(errors.New("game console command failed"))
 			}
-		case record.Type == "result" && record.Response != nil:
-			if len(*record.Response) > netconsole.MaxBytes+65536 {
-				return "", failure(errLimited)
+		case record.Type == "result" && (record.Response != nil || record.Status != nil):
+			if record.Response != nil && len(*record.Response) > netconsole.MaxBytes+65536 {
+				return helperReply{}, failure(errLimited)
 			}
-			return *record.Response, nil
+			return helperReply{Response: record.Response, Status: record.Status}, nil
 		default:
-			return "", failure(errors.New("game console command failed"))
+			return helperReply{}, failure(errors.New("game console command failed"))
 		}
 	}
 }

@@ -1,5 +1,6 @@
 // Package players reads who is online on running game servers through a
-// Source, and keeps the latest reading of each in memory.
+// Source, and keeps the latest reading of each in memory, along with
+// whether the game answers its status query.
 package players
 
 import (
@@ -37,14 +38,74 @@ type Reading struct {
 	StartedAt   int64
 	games.Players
 	// Failed: the source could not be read, or did not answer with a
-	// player list.
-	Failed    bool
+	// player list or count.
+	Failed bool
+	// Via is how the players were read.
+	Via       Via
 	CheckedAt int64 // Unix ms
+	// Answer is the latest status query outcome in this container run, from
+	// AnswerAt; AnsweredAt is the last time the game answered, or 0.
+	Answer     Answer
+	AnswerAt   int64
+	AnsweredAt int64
 }
+
+type Via string
+
+const (
+	ViaConsole Via = "console"
+	ViaQuery   Via = "query"
+)
+
+type Answer int8
+
+const (
+	// NotAsked: no status query ran, which says nothing about the game.
+	NotAsked Answer = iota
+	Answered
+	Silent
+)
 
 func (r *Reading) same(other *Reading) bool {
 	return other != nil && r.ContainerID == other.ContainerID && r.StartedAt == other.StartedAt && r.Failed == other.Failed &&
-		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names)
+		r.Online == other.Online && r.Max == other.Max && slices.Equal(r.Names, other.Names) && r.Via == other.Via &&
+		r.Answer == other.Answer && (r.AnsweredAt == 0) == (other.AnsweredAt == 0)
+}
+
+// Game is whether a game answers its status query.
+type Game int8
+
+const (
+	// NotChecked: the game has no status query.
+	NotChecked Game = iota
+	// Waiting: the game hasn't answered yet in this container run, such as
+	// while it starts, or because its query port is wrong or off.
+	Waiting
+	Answering
+	// NotAnswering: the game answered in this run, then stopped.
+	NotAnswering
+	// Unknown: the game answered in this run, but no recent query says
+	// whether it still does.
+	Unknown
+)
+
+// Game reports whether a server's current container run answers its status
+// query, and since when it last did.
+func (s *Service) Game(serverID string, container servers.Container) (Game, int64) {
+	if container.Query == nil || container.State != "running" {
+		return NotChecked, 0
+	}
+	reading := s.Get(serverID, container)
+	if reading == nil || reading.AnsweredAt == 0 {
+		return Waiting, 0
+	}
+	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > Fresh {
+		return Unknown, reading.AnsweredAt
+	}
+	if reading.Answer == Silent {
+		return NotAnswering, reading.AnsweredAt
+	}
+	return Answering, reading.AnsweredAt
 }
 
 // A Source reads who is online on one server.
@@ -60,6 +121,9 @@ type Service struct {
 	Servers  *servers.Service
 	Identity *identity.Store
 	Source   Source
+	// Monitored lists the servers whose availability is monitored, which
+	// are read even while nobody watches. It may be nil.
+	Monitored func(ctx context.Context) map[string]bool
 	// Changed is told when a server's reading changes. It must not block.
 	Changed func(serverID string)
 
@@ -96,9 +160,18 @@ func (s *Service) Online(serverID string, container servers.Container) (int, boo
 	return reading.Online, true
 }
 
-// Poll starts a reading for every running server that lists players and is
-// due, and forgets servers that stopped. It waits for the readings.
-func (s *Service) Poll(ctx context.Context) {
+// Poll starts a reading for every running server that is due: those that
+// list players while someone watches, and monitored ones whose game answers
+// a status query. It forgets servers that stopped, and waits for the
+// readings.
+func (s *Service) Poll(ctx context.Context, watched bool) {
+	var monitored map[string]bool
+	if s.Monitored != nil {
+		monitored = s.Monitored(ctx)
+	}
+	if !watched && len(monitored) == 0 {
+		return
+	}
 	current, err := s.Servers.Refresh(ctx)
 	if err != nil {
 		return
@@ -118,7 +191,7 @@ func (s *Service) Poll(ctx context.Context) {
 		}
 		listed[server.ID] = true
 		// A game whose health check is still starting isn't taking players.
-		if container.Health == "starting" {
+		if container.Health == "starting" || !(watched || (monitored[server.ID] && container.Query != nil)) {
 			continue
 		}
 		if reading := s.Get(server.ID, container); reading != nil && now.Sub(time.UnixMilli(reading.CheckedAt)) < Interval-early {
@@ -208,6 +281,13 @@ func (s *Service) start(ctx context.Context, server identity.Server, wait *sync.
 func (s *Service) store(serverID string, reading *Reading) {
 	s.mu.Lock()
 	previous := s.readings[serverID]
+	// A reading without a query outcome keeps the last one of the same run.
+	if previous != nil && previous.ContainerID == reading.ContainerID && previous.StartedAt == reading.StartedAt {
+		if reading.Answer == NotAsked {
+			reading.Answer, reading.AnswerAt = previous.Answer, previous.AnswerAt
+		}
+		reading.AnsweredAt = max(reading.AnsweredAt, previous.AnsweredAt)
+	}
 	s.readings[serverID] = reading
 	s.mu.Unlock()
 	if !reading.same(previous) && s.Changed != nil {

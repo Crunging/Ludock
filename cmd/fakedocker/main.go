@@ -109,16 +109,23 @@ func (w writer) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// minecraftRCON serves a Minecraft RCON console and returns its port.
-func minecraftRCON(password string, online ...string) string {
-	return gameRCON(password, "list", func(online []string) string {
+// minecraftGame serves a Minecraft RCON console and Server List Ping, and
+// returns their ports.
+func minecraftGame(password string, online ...string) (string, string) {
+	game := &fakeGame{online: online}
+	rcon := game.rcon(password, "list", func(online []string) string {
 		return fmt.Sprintf("There are %d of a max of 10 players online: %s", len(online), strings.Join(online, ", "))
-	}, online...)
+	})
+	query, err := fakedocker.ServeMinecraftStatus(game.status)
+	if err != nil {
+		panic(err)
+	}
+	return rcon, fmt.Sprint(query)
 }
 
 // palworldRCON serves a Palworld RCON console and returns its port.
 func palworldRCON(password string) string {
-	return gameRCON(password, "ShowPlayers", func(online []string) string {
+	return (&fakeGame{}).rcon(password, "ShowPlayers", func(online []string) string {
 		list := "name,playeruid,steamid\n"
 		for index, name := range online {
 			list += fmt.Sprintf("%s,%d,7656119800000%04d\n", name, 1000000+index, index)
@@ -127,37 +134,54 @@ func palworldRCON(password string) string {
 	})
 }
 
-// gameRCON serves an RCON console that answers the game's list command with
+// fakeGame is who is online on a fake game, shared by its console and
+// status query.
+type fakeGame struct {
+	mu                     sync.Mutex
+	online                 []string
+	outageUntil, hungUntil time.Time
+}
+
+func (g *fakeGame) status() (int, int, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.online), 10, !time.Now().Before(g.hungUntil)
+}
+
+// rcon serves an RCON console that answers the game's list command with
 // format, and returns its port. "say MESSAGE" answers with the message as
-// players see it. Besides those, it takes commands only the fake has:
-// "fake-join NAME" and "fake-leave NAME" change who is online, and
-// "fake-outage SECONDS" makes the list fail for that long.
-func gameRCON(password, list string, format func(online []string) string, online ...string) string {
-	var mu sync.Mutex
-	var outageUntil time.Time
+// players see it. Besides those, it takes commands only the fake has: "fake-join NAME" and "fake-leave NAME" change who is online,
+// "fake-outage SECONDS" makes the list fail for that long, and "fake-hang
+// SECONDS" also silences the status query, as a game that hangs while its
+// container runs.
+func (g *fakeGame) rcon(password, list string, format func(online []string) string) string {
 	port, err := fakedocker.ServeRCON(password, func(command string) string {
-		mu.Lock()
-		defer mu.Unlock()
+		g.mu.Lock()
+		defer g.mu.Unlock()
 		verb, argument, _ := strings.Cut(command, " ")
 		switch verb {
 		case list:
-			if time.Now().Before(outageUntil) {
+			if time.Now().Before(g.outageUntil) {
 				return "An unexpected error occurred trying to execute that command"
 			}
-			return format(online)
+			return format(g.online)
 		case "say":
 			return "[Server] " + argument
 		case "fake-join":
-			if !slices.Contains(online, argument) {
-				online = append(online, argument)
+			if !slices.Contains(g.online, argument) {
+				g.online = append(g.online, argument)
 			}
 			return argument + " joined the game"
 		case "fake-leave":
-			online = slices.DeleteFunc(online, func(name string) bool { return name == argument })
+			g.online = slices.DeleteFunc(g.online, func(name string) bool { return name == argument })
 			return argument + " left the game"
-		case "fake-outage":
+		case "fake-outage", "fake-hang":
 			seconds, _ := strconv.Atoi(argument)
-			outageUntil = time.Now().Add(time.Duration(seconds) * time.Second)
+			g.outageUntil = time.Now().Add(time.Duration(seconds) * time.Second)
+			if verb == "fake-hang" {
+				g.hungUntil = g.outageUntil
+				return "The game hangs for " + argument + " seconds"
+			}
 			return "RCON player lists fail for " + argument + " seconds"
 		}
 		return ""
@@ -178,10 +202,11 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		return path
 	}
 	mc := data("minecraft")
+	rcon, query := minecraftGame("dev-rcon-secret")
 	id := engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server:java21", Running: true,
 		Labels: map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games", "com.docker.compose.service": "minecraft",
-			"com.docker.compose.container-number": "1"},
-		Env: []string{"RCON_PORT=" + minecraftRCON("dev-rcon-secret"), "EULA=TRUE", "DB_PASS=dev-db-secret",
+			"com.docker.compose.container-number": "1", "ludock.query.port": query},
+		Env: []string{"RCON_PORT=" + rcon, "EULA=TRUE", "DB_PASS=dev-db-secret",
 			"STATS_URL=postgres://stats:dev-url-secret@db/stats"},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: mc, Destination: mc, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "25565"}}}})
@@ -206,7 +231,17 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
 	})
 	valheim := data("valheim")
+	// Valheim has no console; its status query says two of ten are online,
+	// and goes silent while a file named fake-silent is in its data folder.
+	valheimQuery, err := fakedocker.ServeA2S("Valheim", func() (int, int, bool) {
+		_, silent := os.Stat(filepath.Join(valheim, "fake-silent"))
+		return 2, 10, silent != nil
+	})
+	if err != nil {
+		panic(err)
+	}
 	engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
+		Labels: map[string]string{"ludock.query.port": fmt.Sprint(valheimQuery)},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
 	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: false,
@@ -253,7 +288,9 @@ func seedDemo(engine *fakedocker.Engine, dir string) {
 
 	id, minecraft := server("minecraft", "Friends\u2019 survival world", "itzg/minecraft-server:java21", "25565/tcp", true, 3*time.Hour)
 	engine.Update(id, func(c *fakedocker.Container) {
-		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + minecraftRCON("demo-rcon-secret", "Mara", "Theo")}
+		rcon, query := minecraftGame("demo-rcon-secret", "Mara", "Theo")
+		c.Config.Labels["ludock.query.port"] = query
+		c.Config.Env = []string{"EULA=TRUE", "RCON_PASSWORD=demo-rcon-secret", "RCON_PORT=" + rcon}
 		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21.4",
 			"[Server thread/INFO]: Preparing level \"world\"", "[Server thread/INFO]: Done (4.1s)! For help, type \"help\"",
 			"[Server thread/INFO]: Mara joined the game", "[Server thread/INFO]: Theo joined the game"}

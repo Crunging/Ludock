@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/attention"
+	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -25,6 +26,7 @@ type ServerRow struct {
 	BackupSummary  bool
 	ShowPlayers    bool
 	Players        PlayersView
+	Game           GameView
 	// ImageUpdate: a newer image is available (shown to administrators).
 	ImageUpdate bool
 }
@@ -433,6 +435,8 @@ func describeAttention(item attention.Item) attentionText {
 	title := "Server unavailable"
 	if item.State == "docker_unavailable" {
 		title = "Availability cannot be verified"
+	} else if item.State == monitor.NotAnswering {
+		title = "Game not answering"
 	}
 	return attentionText{title, path + "?tab=overview", "Check availability"}
 }

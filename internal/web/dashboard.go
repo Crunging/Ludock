@@ -55,7 +55,7 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		if backupSummary(request.User(), view) {
 			list.ShowBackup = true
 		}
-		if view.Console != nil && view.Console.ListsPlayers {
+		if (view.Console != nil && view.Console.ListsPlayers) || view.Query != nil {
 			list.ShowPlayers = true
 		}
 	}
@@ -95,11 +95,21 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		CanRestart: view.State == "running" && can(&view, authz.ServerRestart), CanBackup: can(&view, authz.BackupsCreate),
 		CanFiles: can(&view, authz.FilesRead) && len(view.FileRoots) > 0, BackupSummary: backupSummary(request.User(), &view)}
 	// A saved state is not live, so it has no players.
-	row.Players = views.PlayersView{Listed: view.Console != nil && view.Console.ListsPlayers,
-		Running: view.State == "running" && active && !stale}
+	consoleLists := view.Console != nil && view.Console.ListsPlayers
+	row.Players = views.PlayersView{Listed: consoleLists || view.Query != nil, Running: view.State == "running" && active && !stale}
 	if row.Players.Listed && row.Players.Running {
-		row.Players.Console = view.Console.Name
+		if consoleLists {
+			row.Players.Console = view.Console.Name
+		}
+		if view.Query != nil {
+			row.Players.Query = view.Query.Name()
+		}
 		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
+	}
+	row.Game = views.GameView{Running: row.Players.Running}
+	if view.Query != nil {
+		row.Game.Query = view.Query.Name()
+		row.Game.State, row.Game.AnsweredAt = s.App.Players.Game(view.ID, view.Container)
 	}
 	if consoleAvailable {
 		row.ConsoleLabel = "Console"

@@ -3,6 +3,8 @@ package games
 import (
 	"strings"
 	"testing"
+
+	"github.com/Crunging/Ludock/internal/gamequery"
 )
 
 func TestParseAddress(t *testing.T) {
@@ -251,6 +253,46 @@ func TestResolveAdapterPlayers(t *testing.T) {
 		"palworld": {LabelConsole: "telnet-console"}, "unknown": {LabelConsole: "source-rcon"}} {
 		if adapter := ResolveAdapter(game, labels); adapter != nil && adapter.Players != nil {
 			t.Errorf("%s %v lists players", game, labels)
+		}
+	}
+}
+
+// Labels turn a game's status query off, move its port, or enable one for
+// a game without a preset; an invalid port turns it off rather than
+// guessing. The image's documented port variable wins over the default.
+func TestResolveQuery(t *testing.T) {
+	cases := []struct {
+		game     string
+		labels   map[string]string
+		env      map[string]string
+		protocol gamequery.Protocol
+		port     int
+	}{
+		{"minecraft", nil, nil, gamequery.MinecraftPing, 25565},
+		{"minecraft", nil, map[string]string{"SERVER_PORT": "25570"}, gamequery.MinecraftPing, 25570},
+		{"minecraft", map[string]string{LabelQueryPort: "30000"}, map[string]string{"SERVER_PORT": "25570"}, gamequery.MinecraftPing, 30000},
+		{"minecraft", nil, map[string]string{"SERVER_PORT": "nope"}, gamequery.MinecraftPing, 0},
+		{"valheim", nil, nil, gamequery.ValveA2S, 2457},
+		{"ark", nil, map[string]string{"QUERY_PORT": "27016"}, gamequery.ValveA2S, 27016},
+		{"v-rising", map[string]string{LabelQuery: "a2s", LabelQueryPort: "9877"}, nil, gamequery.ValveA2S, 9877},
+		{"minecraft", map[string]string{LabelQuery: "A2S", LabelQueryPort: "25565"}, nil, gamequery.ValveA2S, 25565},
+		{"v-rising", map[string]string{LabelQuery: "a2s"}, nil, "", 0},
+		{"factorio", nil, nil, "", 0},
+		{"minecraft", map[string]string{LabelQuery: "disabled"}, nil, "", 0},
+		{"minecraft", map[string]string{LabelQuery: "gopher"}, nil, "", 0},
+		{"minecraft", map[string]string{LabelQueryPort: "70000"}, nil, "", 0},
+		{"minecraft", map[string]string{LabelQueryPort: ""}, nil, "", 0},
+	}
+	for _, c := range cases {
+		query := ResolveQuery(c.game, c.labels)
+		if c.protocol == "" {
+			if query != nil {
+				t.Errorf("%s %v: %+v", c.game, c.labels, query)
+			}
+			continue
+		}
+		if query == nil || query.Protocol != c.protocol || query.QueryPort(c.env) != c.port {
+			t.Errorf("%s %v %v: %+v", c.game, c.labels, c.env, query)
 		}
 	}
 }

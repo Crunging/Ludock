@@ -119,8 +119,23 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	}}
 	monitoring.Changed = func(serverID string) { go a.Events.Changed(context.Background(), serverID) }
 	a.Players = &players.Service{Servers: serverService, Identity: store,
-		Source:  &players.ConsoleSource{Identity: store, Observer: observer, Runtime: runtime, Locks: table},
-		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) }}
+		Source:  &players.GameSource{Identity: store, Observer: observer, Runtime: runtime, Locks: table},
+		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) },
+		Monitored: func(ctx context.Context) map[string]bool {
+			monitored, _ := monitoring.Monitored(ctx)
+			return monitored
+		}}
+	monitoring.Game = func(serverID string, container servers.Container) monitor.GameAnswer {
+		switch game, _ := a.Players.Game(serverID, container); game {
+		case players.NotChecked:
+			return monitor.GameNotChecked
+		case players.Answering:
+			return monitor.GameAnswering
+		case players.NotAnswering:
+			return monitor.GameNotAnswering
+		}
+		return monitor.GameUnknown
+	}
 	a.Sessions.Commanded = func(serverID string) { a.Players.Check(context.Background(), serverID) }
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
 		Refresh: func(ctx context.Context) error {
@@ -139,7 +154,7 @@ func (a *App) Start(ctx context.Context) {
 		select {
 		case <-a.stop:
 		default:
-			a.pollPlayers(ctx)
+			a.pollPlayers(ctx, true)
 		}
 	}
 	// Requests wait for recovery to take its operations' locks; Start runs
@@ -225,15 +240,14 @@ func (a *App) Tick(ctx context.Context) {
 		}()
 	}
 	// Player counts are shown only on pages that follow server changes, and a
-	// reading can start a console helper, so nobody watching means no reading.
-	if a.Events.Watched() {
-		a.pollPlayers(ctx)
-	}
+	// reading can start a console helper, so nobody watching means no reading
+	// except the status queries of monitored servers.
+	a.pollPlayers(ctx, a.Events.Watched())
 	a.deliver(ctx)
 }
 
 // pollPlayers reads players beside other work, once at a time.
-func (a *App) pollPlayers(ctx context.Context) {
+func (a *App) pollPlayers(ctx context.Context, watched bool) {
 	if !a.polling.TryLock() {
 		return
 	}
@@ -241,7 +255,7 @@ func (a *App) pollPlayers(ctx context.Context) {
 	go func() {
 		defer a.background.Done()
 		defer a.polling.Unlock()
-		a.Players.Poll(ctx)
+		a.Players.Poll(ctx, watched)
 	}()
 }
 

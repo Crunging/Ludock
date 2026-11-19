@@ -297,6 +297,7 @@ templ OverviewLive(d ServerDetail) {
 			if d.Row.ShowPlayers {
 				@PlayersFact(d.Row.Players)
 			}
+			@GameFact(d.Row.Game)
 			<div>
 				<dt>Connect</dt>
 				<dd>
@@ -481,7 +482,9 @@ templ AvailabilityStatus(d ServerDetail) {
 				}
 				<dt>Last observed state</dt>
 				<dd>
-					if a.State.LastState != "" {
+					if a.State.LastState == monitor.NotAnswering {
+						Running, but the game isn’t answering
+					} else if a.State.LastState != "" {
 						{ Capitalize(a.State.LastState) }
 					} else {
 						Not observed yet
@@ -500,6 +503,8 @@ templ AvailabilityStatus(d ServerDetail) {
 					if d.Admin {
 						<a class="text-link" href="/diagnostics">Check Docker connectivity in Diagnostics</a>
 					}
+				} else if a.State.LastState == monitor.NotAnswering {
+					The container is running, but the game stopped answering its status query. Check its logs and console; a restart may bring it back.
 				} else {
 					Review the container’s state and health in its owning manager. A running container can still be unhealthy or starting.
 				}

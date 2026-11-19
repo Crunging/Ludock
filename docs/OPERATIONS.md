@@ -71,6 +71,8 @@ labels:
 | `ludock.console` | Console adapter: `minecraft-rcon`, `source-rcon`, `rust-webrcon`, `telnet-console`, or `stdin-console`; `disabled` or `none` turns commands off |
 | `ludock.console.host` / `ludock.console.port` | Direct console address, or the console port inside the container |
 | `ludock.console.password-env` | **Name** of the game container's environment variable that holds the console password, never the password itself |
+| `ludock.query` | Status query: `minecraft-ping` or `a2s`; `disabled` or `none` turns it off. Naming a protocol enables it for any game, with `ludock.query.port` |
+| `ludock.query.port` | The status query port inside the container |
 | `ludock.secret-env` | Comma-separated **names** of more environment variables whose values are hidden from logs and consoles. Names that look like credentials, such as `RCON_PASSWORD`, `DB_PASS`, `API_KEY`, or `ACCESS_CODE`, and passwords inside URLs are hidden already |
 | `ludock.files` | Comma-separated container folders for file access and backups; empty turns both off |
 
@@ -78,23 +80,33 @@ labels:
 
 **Diagnostics → Supported games** shows the same list, defined in
 [`internal/games/presets.go`](../internal/games/presets.go). The console port is
-where Ludock sends commands, not the port players use.
+where Ludock sends commands, not the port players use. The status query port is
+where Ludock asks the game whether it answers; when the image documents a
+variable for it, such as `SERVER_PORT` or `QUERY_PORT`, its value wins.
 
-| Game | Recognized images | Console | Console port |
-| --- | --- | --- | --- |
-| Minecraft | `itzg/minecraft-server` | Minecraft RCON | 25575 |
-| Factorio | `factoriotools/factorio` | Source RCON | 27015 |
-| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Source RCON | 25575 |
-| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | Source RCON | 27020 |
-| ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | Source RCON | 27020 |
-| Counter-Strike 2 | `joedwards32/cs2` | Source RCON | 27015 |
-| Project Zomboid | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Source RCON | 27015 |
-| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Source RCON | 25575 |
-| V Rising | `trueosiris/vrising` | Source RCON | 25575 |
-| Rust | `didstopia/rust-server` | WebRCON | 28016 |
-| 7 Days to Die | `vinanrra/7dtd-server` | Telnet | 8081 |
-| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | None | — |
-| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Process stdin | — |
+| Game | Recognized images | Console | Console port | Status query |
+| --- | --- | --- | --- | --- |
+| Minecraft | `itzg/minecraft-server` | Minecraft RCON | 25575 | Server List Ping, 25565 (`SERVER_PORT`) |
+| Factorio | `factoriotools/factorio` | Source RCON | 27015 | — |
+| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Source RCON | 25575 | — |
+| ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | Source RCON | 27020 | Steam, 27015 (`SERVER_LIST_PORT`, `QUERY_PORT`) |
+| ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | Source RCON | 27020 | — |
+| Counter-Strike 2 | `joedwards32/cs2` | Source RCON | 27015 | Steam, 27015 (`CS2_PORT`) |
+| Project Zomboid | `renegademaster/zomboid-dedicated-server`, `renegade-master/zomboid-dedicated-server`, `renegade_master/zomboid-dedicated-server` | Source RCON | 27015 | — |
+| Conan Exiles | `indifferentbroccoli/conan-exiles-enhanced-server-docker` | Source RCON | 25575 | Steam, 27015 (`QUERY_PORT`) |
+| V Rising | `trueosiris/vrising` | Source RCON | 25575 | — |
+| Rust | `didstopia/rust-server` | WebRCON | 28016 | — |
+| 7 Days to Die | `vinanrra/7dtd-server` | Telnet | 8081 | — |
+| Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | None | — | Steam, 2457 |
+| Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Process stdin | — | — |
+
+Steam is Valve's A2S_INFO server query. Valheim answers it only when the
+server is public (`SERVER_PUBLIC`). The others aren't queried by default:
+Factorio has its own protocol, ARK: Survival Ascended no longer answers server
+queries, Rust's query port depends on how the image passes its ports, and the
+Palworld, Project Zomboid, V Rising, and 7 Days to Die images don't document a
+query port. If yours answers one, set `ludock.query: a2s` and
+`ludock.query.port`.
 
 ## Servers
 
@@ -167,7 +179,9 @@ authenticated tunnel.
 
 ### Players online
 
-The server list and the server's overview show who is online for these games:
+The server list and the server's overview show who is online for these games,
+and how many for any game with a status query (see
+[Supported games](#supported-games)):
 
 | Game | Command | Console |
 | --- | --- | --- |
@@ -189,6 +203,13 @@ server's players show as unavailable, never as empty. Other games, including
 Terraria, whose console doesn't return replies, show no player list. A reading
 gives way to anything else that needs the server, such as a console command or
 a backup.
+
+When the game also has a status query, Ludock asks it in the same helper. A
+console list wins, since it names players; the query's count shows when the
+console isn't set up or can't list them, so games without a console password
+still show how many are online. A query gives counts only, never names: the
+names Minecraft sends are a sample that plugins often change, and Ludock
+doesn't send Valve's separate player query. The Steam count leaves out bots.
 
 ## Files
 
@@ -409,8 +430,25 @@ running it.
 ## Availability alerts
 
 Monitoring is off by default. An administrator turns it on from a server's
-**Overview**. It follows Docker's running state and health check, not whether
-players can connect.
+**Overview**. It follows Docker's running state and health check and, for
+games with a status query, whether the game itself answers.
+
+- **Game not answering:** Ludock asks a monitored game about every 30 seconds,
+  from a short-lived helper that shares the game's network and connects to
+  `127.0.0.1`, so the query port doesn't need publishing; Ludock never queries
+  other hosts. A game that answered since its container started and then stops
+  answering while the container runs is an outage after the grace period,
+  even if a health check that asks the game also fails,
+  reported as **Game not answering**, and it recovers when the game answers
+  again. A game that hasn't answered yet in this container run, such as one
+  still starting or whose query port is wrong or off, never alerts. Ludock
+  keeps answers in memory, so after Ludock restarts a game must answer once
+  before its silence counts again; an outage already reported stays until the
+  game answers. The
+  overview's **Game** entry shows whether the game is answering, hasn't
+  answered yet, or isn't checked. A reply that isn't a valid status, including
+  Minecraft's pre-1.7 legacy ping and split Steam replies, counts as no
+  answer.
 
 - **Grace period:** how long to wait before reporting an outage; 120 seconds by
   default.
