@@ -20,8 +20,9 @@ keep both private.
   unsupported schema, and leaves it unchanged.
 - **First administrator:** until one exists, the setup page asks for the
   one-time code Ludock prints to its logs at startup (or `LUDOCK_SETUP_CODE`).
-  The code has no deadline; each restart prints a new generated one. Failed attempts are
-  limited per client address.
+  The code has no deadline. A generated code is replaced at each restart until
+  setup is done; a configured one stays the same. Failed attempts are limited
+  per client address.
 
 ### Remote access
 

@@ -112,7 +112,8 @@ func TestFirstViewerReadsPlayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
-		Labels: map[string]string{"ludock.console.host": "127.0.0.1"},
+		// Without a status query, monitoring reads nothing unwatched.
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.query": "disabled"},
 		Env:    []string{"RCON_PORT=" + strconv.Itoa(port), "RCON_PASSWORD=secret"}})
 	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
 	if err != nil {
