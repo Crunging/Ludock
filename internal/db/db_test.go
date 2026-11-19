@@ -417,3 +417,31 @@ func TestGetLoginThrottleExpiry(t *testing.T) {
 		t.Fatal("expired window kept")
 	}
 }
+
+// Schedules saved before their save time was recorded get the upgrade time,
+// so none runs late for a minute before the upgrade.
+func TestScheduleSaveTimeMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schedules.db")
+	before, err := open(path, Migrations[:4])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('u','u','x','admin',1,1)`,
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('a','s','u','{}',1,1)`,
+	} {
+		if _, err := before.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before.Close()
+	started := Now()
+	after := mustOpen(t, path)
+	var changed int64
+	if err := after.QueryRow("SELECT changed_at FROM schedules WHERE id='a'").Scan(&changed); err != nil || changed < started-1000 {
+		t.Fatal(changed, err)
+	}
+}

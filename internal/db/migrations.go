@@ -236,6 +236,9 @@ var Migrations = []Migration{
 		Version: 5,
 		SQL: `
       ALTER TABLE schedules ADD COLUMN changed_at INTEGER CHECK (changed_at >= 0);
+      -- Earlier saves weren't recorded, so existing schedules run nothing late
+      -- from before this upgrade.
+      UPDATE schedules SET changed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER);
     `,
 	},
 }

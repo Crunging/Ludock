@@ -484,6 +484,11 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// arrives after the command was sent; later lines are the game's own.
 	rejected := func() bool {
 		reply, _, _ := strings.Cut(strings.TrimSpace(decodeText(raw[passwordAt:])), "\n")
+		reply = strings.TrimSpace(reply)
+		// A server with no sign-in banner echoes the command first.
+		if commandSent && strings.EqualFold(reply, strings.TrimSpace(command)) {
+			return false
+		}
 		return authFailed.MatchString(reply)
 	}
 	finish := func() (string, error) {

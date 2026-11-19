@@ -250,9 +250,8 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 	for index := range changes {
 		previouslyVisible[index] = map[*Subscriber]bool{}
 	}
-	visibleBefore := h.visibility(before)
 	for _, subscriber := range subscribers {
-		_, visible, err := visibleBefore(ctx, subscriber.Validate(ctx))
+		_, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), before)
 		if err != nil {
 			continue
 		}
@@ -270,9 +269,8 @@ func (h *Hub) dispatch(ctx context.Context, changes []change) error {
 		return err
 	}
 	current := byContainer(after)
-	visibleAfter := h.visibility(after)
 	for _, subscriber := range subscribers {
-		user, visible, err := visibleAfter(ctx, subscriber.Validate(ctx))
+		user, visible, err := h.Authz.EffectiveAll(ctx, subscriber.Validate(ctx), after)
 		if err != nil {
 			continue
 		}
@@ -317,31 +315,6 @@ func (h *Hub) Changed(ctx context.Context, serverID string) {
 		if visible, err := h.Authz.Has(ctx, user, serverID, authz.ServerView); err == nil && visible {
 			subscriber.Send(Event{Action: "changed", ServerID: serverID, Time: time.Now().Unix()})
 		}
-	}
-}
-
-// visibility is EffectiveAll for one batch, read once per account and role:
-// an account often has several pages open, each its own subscriber, and a
-// role change between their validations must not reuse the old answer.
-func (h *Hub) visibility(servers []identity.Server) func(context.Context, *db.SessionUser) (*db.SessionUser, map[string][]authz.Capability, error) {
-	type result struct {
-		user    *db.SessionUser
-		visible map[string][]authz.Capability
-	}
-	seen := map[string]result{}
-	return func(ctx context.Context, actor *db.SessionUser) (*db.SessionUser, map[string][]authz.Capability, error) {
-		if actor == nil {
-			return h.Authz.EffectiveAll(ctx, nil, servers)
-		}
-		key := actor.ID + "\x00" + string(actor.Role)
-		if cached, ok := seen[key]; ok {
-			return cached.user, cached.visible, nil
-		}
-		user, visible, err := h.Authz.EffectiveAll(ctx, actor, servers)
-		if err == nil {
-			seen[key] = result{user, visible}
-		}
-		return user, visible, err
 	}
 }
 
