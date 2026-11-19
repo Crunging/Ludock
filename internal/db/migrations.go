@@ -313,9 +313,14 @@ var Migrations = []Migration{
       ) STRICT;
       INSERT INTO users_v9 SELECT id, username, password_hash, CASE role WHEN 'admin' THEN 'admin' ELSE 'member' END,
         disabled, created_at, updated_at, totp_secret, totp_pending, totp_step FROM users;
-      UPDATE server_grants SET capabilities_json = (SELECT json_group_array(value) FROM json_each(server_grants.capabilities_json)
-        WHERE value IN ('server.view', 'logs.read', 'files.read'))
-        WHERE json_valid(capabilities_json) AND json_type(capabilities_json) = 'array' AND user_id IN (SELECT id FROM users WHERE role = 'viewer');
+      -- A grant that isn't a plain list of names gave nothing and gives nothing.
+      UPDATE server_grants SET capabilities_json = CASE
+          WHEN json_valid(capabilities_json) AND json_type(capabilities_json) = 'array'
+            AND NOT EXISTS (SELECT 1 FROM json_each(server_grants.capabilities_json) WHERE type != 'text')
+          THEN (SELECT json_group_array(value) FROM json_each(server_grants.capabilities_json)
+            WHERE value IN ('server.view', 'logs.read', 'files.read'))
+          ELSE '[]' END
+        WHERE user_id IN (SELECT id FROM users WHERE role = 'viewer');
       DELETE FROM server_grants WHERE user_id IN (SELECT id FROM users WHERE role = 'admin');
       DROP TABLE users;
       ALTER TABLE users_v9 RENAME TO users;

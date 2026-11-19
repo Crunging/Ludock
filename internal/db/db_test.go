@@ -461,8 +461,9 @@ func TestMemberRoleMigration(t *testing.T) {
 		`INSERT INTO sessions(token_hash,session_id,user_id,created_at,expires_at,last_seen_at) VALUES('t','s','v',1,9,1)`,
 		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
 		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
-      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1),('t','h','standalone:t','t','minecraft','active',1,'',1,1)`,
-		`INSERT INTO server_grants VALUES('v','t','{"entry":"server.view"}',1),('a','s','["server.view"]',1),('o','s','["server.view","server.start"]',1),
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1),('t','h','standalone:t','t','minecraft','active',1,'',1,1),
+      ('u','h','standalone:u','u','minecraft','active',1,'',1,1)`,
+		`INSERT INTO server_grants VALUES('v','t','{"entry":"server.view"}',1),('v','u','["server.view",1e400]',1),('a','s','["server.view"]',1),('o','s','["server.view","server.start"]',1),
       ('v','s','["server.view","server.start","files.read"]',1)`,
 		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('x','s','o','{}',1,1)`,
 	} {
@@ -475,11 +476,11 @@ func TestMemberRoleMigration(t *testing.T) {
 	var roles, grants string
 	var sessions, schedules int
 	after.QueryRow("SELECT group_concat(id||'='||role, ',') FROM (SELECT * FROM users ORDER BY id)").Scan(&roles)
-	after.QueryRow("SELECT group_concat(user_id||'='||capabilities_json, ' ') FROM (SELECT * FROM server_grants ORDER BY user_id)").Scan(&grants)
+	after.QueryRow("SELECT group_concat(user_id||'='||capabilities_json, ' ') FROM (SELECT * FROM server_grants ORDER BY user_id, server_id)").Scan(&grants)
 	after.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions)
 	after.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&schedules)
 	if roles != "a=admin,o=member,v=member" || sessions != 1 || schedules != 1 ||
-		grants != `o=["server.view","server.start"] v=["server.view","files.read"] v={"entry":"server.view"}` {
+		grants != `o=["server.view","server.start"] v=["server.view","files.read"] v=[] v=[]` {
 		t.Fatal(roles, grants, sessions, schedules)
 	}
 	if got := pragma(t, after.DB, "foreign_keys"); got != "1" {

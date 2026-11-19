@@ -143,9 +143,12 @@ func (s *Server) revokeUserLink(w http.ResponseWriter, r *http.Request, request 
 
 func (s *Server) updateUserAccess(w http.ResponseWriter, r *http.Request, request *Request) {
 	var disabled *bool
-	if value := r.PostFormValue("disabled"); value != "" {
+	switch r.PostFormValue("disabled") {
+	case "true":
 		disabled = new(bool)
-		*disabled = value == "true"
+		*disabled = true
+	case "false":
+		disabled = new(bool)
 	}
 	user, err := s.App.Auth.ChangeAccess(r.Context(), request.Principal, r.PathValue("id"), db.Role(r.PostFormValue("role")),
 		disabled, request.Client)
