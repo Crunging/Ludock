@@ -1398,9 +1398,9 @@ func OverviewLive(d ServerDetail) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var50 string
-				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(Capitalize(next.Action))
+				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(ActionLabel(next.Action))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 380, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_detail.templ`, Line: 380, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -2004,7 +2004,7 @@ func ActivityPanel(a ActivityView) templ.Component {
 	})
 }
 
-var operationStatuses = []string{"queued", "running", "succeeded", "already_current", "failed", "interrupted"}
+var operationStatuses = []string{"queued", "running", "succeeded", "already_current", "skipped", "failed", "interrupted"}
 
 // ActivityList is the filtered operation list; it reloads itself. Like the
 // server list, its refreshes read the filters from the form and share its

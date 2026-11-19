@@ -16,11 +16,14 @@ import (
 )
 
 var scheduleActionCapabilities = map[string]authz.Capability{"start": authz.ServerStart, "stop": authz.ServerStop,
-	"restart": authz.ServerRestart, "backup": authz.BackupsCreate}
+	"restart": authz.ServerRestart, "backup": authz.BackupsCreate, "command": authz.ConsoleExecute}
 
 func scheduleActions(view *servers.View) []string {
 	var actions []string
 	for _, action := range schedules.Actions {
+		if action == "command" && view.Console == nil {
+			continue
+		}
 		if can(view, scheduleActionCapabilities[action]) {
 			actions = append(actions, action)
 		}
@@ -57,7 +60,8 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	view := &d.Row.Server
 	v := views.SchedulesView{ServerID: view.ID, Selected: query.Get("schedule"), Editing: query.Get("edit"),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Now: db.Now(), CanResume: map[string]bool{},
-		Form: s.scheduleForm(d)}
+		ShowReplies: can(view, authz.ConsoleExecute),
+		Form:        s.scheduleForm(d)}
 	switch query.Get("saved") {
 	case "created":
 		v.Message = "Schedule created."
@@ -125,6 +129,9 @@ func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 		}
 	}
 	slices.Sort(input.Days)
+	if input.Action == "command" {
+		input.Command = r.PostFormValue("command")
+	}
 	leads := r.PostFormValue("leadMinutes")
 	if input.Action != "restart" {
 		input.CreateBackup = false
@@ -194,6 +201,9 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 	}
 	var saved *schedules.Schedule
 	err = parseErr
+	if err == nil && input.Action == "command" && d.Row.Server.Console == nil {
+		err = apperr.New("INVALID_REQUEST", 400, "This server's game console doesn't accept commands")
+	}
 	if err == nil {
 		if scheduleID == "" {
 			saved, err = s.App.Schedules.Create(ctx, request.User(), serverID, draftForSave(input))
@@ -275,6 +285,10 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 	if err == nil {
 		if input.Announcements != nil && len(input.Announcements.LeadMinutes) == 0 {
 			input.Announcements = nil
+		}
+		// The preview shows timing, which a command not yet typed doesn't change.
+		if input.Action == "command" {
+			input.Command = "preview"
 		}
 		if input.Validate() == nil {
 			lastSlot := ""

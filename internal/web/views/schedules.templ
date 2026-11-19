@@ -21,9 +21,11 @@ type SchedulesView struct {
 	// CanResume lists schedules the viewer may resume with their settings.
 	CanResume map[string]bool
 	Blocked   bool
-	Message   string
-	Now       int64
-	Form      ScheduleForm
+	// ShowReplies shows command replies, which are console output.
+	ShowReplies bool
+	Message     string
+	Now         int64
+	Form        ScheduleForm
 }
 
 // ScheduleForm is the add or edit form, with the viewer's draft.
@@ -55,6 +57,15 @@ var actionHelp = map[string]string{
 	"stop":    "Stops the server at the selected time. Connected players will be disconnected.",
 	"restart": "Stops and starts the server at the selected time. Connected players will be disconnected.",
 	"backup":  "Each backup stops the server for the copy and restores its previous running state. An administrator must enable backup storage in Settings first.",
+	"command": "Sends the command to the game console, as if typed on the console page. A run is skipped when the server isn’t running or is busy with other work.",
+}
+
+// ActionLabel names a schedule action.
+func ActionLabel(action string) string {
+	if action == "command" {
+		return "Send command"
+	}
+	return Capitalize(action)
 }
 
 var unavailableGuidance = map[string]string{
@@ -140,7 +151,7 @@ func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
 
 templ SchedulesTab(v SchedulesView) {
 	<h2>Schedules</h2>
-	<p class="section-lede">Start, stop, restart, or back up this server at set times, or once at a chosen date and time.</p>
+	<p class="section-lede">Start, stop, restart, back up, or send a console command to this server at set times, or once at a chosen date and time.</p>
 	<details class="disclosure">
 		<summary>How schedules run</summary>
 		<p>Each schedule runs in its own time zone, and only while its owner still has access to the action. Missed times and daylight-saving gaps are skipped; a repeated hour runs once.</p>
@@ -157,7 +168,7 @@ templ SchedulesTab(v SchedulesView) {
 	if v.Form.EditID != "" || len(v.Form.Actions) > 0 {
 		@ScheduleEditor(v.Form)
 	} else {
-		<p class="section-note">No schedule actions are granted. An administrator must also grant the specific start, stop, restart, or backup action. Existing schedules can still be paused or deleted.</p>
+		<p class="section-note">No schedule actions are granted. An administrator must also grant the specific start, stop, restart, backup, or console action. Existing schedules can still be paused or deleted.</p>
 	}
 }
 
@@ -196,7 +207,10 @@ templ ScheduleList(v SchedulesView) {
 						}
 					>
 						<td>
-							{ Capitalize(item.Action) }
+							{ ActionLabel(item.Action) }
+							if item.Command != "" {
+								<small class="table-detail schedule-command"><code>{ item.Command }</code></small>
+							}
 							if item.CreateBackup {
 								<small class="table-detail">Backup before restart</small>
 							}
@@ -234,6 +248,14 @@ templ ScheduleList(v SchedulesView) {
 								{ item.LastResult }
 							} else {
 								No runs yet
+							}
+							if item.LastOperation != nil && item.LastOperation.Status == "skipped" {
+								<small class="table-detail">{ guidance(item.LastOperation.Result) }</small>
+							}
+							if item.LastOperation != nil && v.ShowReplies {
+								if text := CommandReply(item.LastOperation.Result); text != "" {
+									<small class="table-detail schedule-reply">Reply: { text }</small>
+								}
 							}
 							if item.LastRunAt != 0 {
 								<small class="table-detail">{ ScheduleDate(item.LastRunAt, item.Timezone) }</small>
@@ -302,6 +324,9 @@ func toggleValues(item schedules.Schedule) string {
 
 func savedSummary(item *schedules.Schedule) string {
 	summary := item.Action
+	if item.Command != "" {
+		summary += " “" + item.Command + "”"
+	}
 	if item.CreateBackup {
 		summary += " with backup before restart"
 	}
@@ -376,7 +401,7 @@ templ ScheduleEditor(f ScheduleForm) {
 				<select name="action" required>
 					<option value="" disabled selected?={ !slices.Contains(f.Actions, input.Action) }>Select action</option>
 					for _, action := range f.Actions {
-						<option value={ action } selected?={ input.Action == action }>{ Capitalize(action) }</option>
+						<option value={ action } selected?={ input.Action == action }>{ ActionLabel(action) }</option>
 					}
 				</select>
 			</label>
@@ -411,6 +436,13 @@ templ ScheduleEditor(f ScheduleForm) {
 				</label>
 			}
 		</fieldset>
+		if slices.Contains(f.Actions, "command") || input.Action == "command" {
+			<label data-shown-when="action=command" hidden?={ input.Action != "command" }>
+				Console command
+				<input name="command" value={ input.Command } maxlength={ strconv.Itoa(schedules.MaxCommandLength) } autocapitalize="none" autocomplete="off" spellcheck="false" aria-describedby="schedule-command-help"/>
+				<small id="schedule-command-help">One line, sent exactly as typed in the console. Anyone who can see this schedule can read it, so leave passwords out.</small>
+			</label>
+		}
 		if f.CanCreateBackup || input.CreateBackup {
 			<label class="check-label" data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
 				<input type="checkbox" name="createBackup" value="true" id="schedule-backup" checked?={ input.CreateBackup }/>

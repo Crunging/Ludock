@@ -30,6 +30,9 @@ const (
 	AlreadyCurrent = "already_current"
 	Failed         = "failed"
 	Interrupted    = "interrupted"
+	// Skipped work decided not to act, such as a scheduled command for a
+	// stopped server.
+	Skipped = "skipped"
 )
 
 type Job struct {
@@ -135,13 +138,16 @@ type Handler struct {
 
 // Lanes: start, stop, and plain restart are short and never touch backup
 // storage, so they run beside each other and beside one data operation.
+// Scheduled console commands are sent at their time or not at all, so they
+// have their own lane.
 // Everything else, including unknown kinds, runs one at a time.
 const (
 	laneLifecycle = "lifecycle"
 	laneData      = "data"
+	laneConsole   = "console"
 )
 
-var laneCapacity = map[string]int{laneLifecycle: 4, laneData: 1}
+var laneCapacity = map[string]int{laneLifecycle: 4, laneData: 1, laneConsole: 4}
 
 type Runner struct {
 	DB    *db.DB
@@ -486,6 +492,8 @@ func laneFor(rw *row) string {
 	switch rw.kind {
 	case "start", "stop":
 		return laneLifecycle
+	case "command":
+		return laneConsole
 	case "restart":
 		input, err := parseObject(rw.input)
 		if err == nil && input["createBackup"] == true {
@@ -634,6 +642,8 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 			status := Succeeded
 			if result["alreadyCurrent"] == true {
 				status = AlreadyCurrent
+			} else if result["skipped"] == true {
+				status = Skipped
 			}
 			r.persist(ctx, "finish", func() error { return r.finish(ctx, job, status, result, "") })
 			return

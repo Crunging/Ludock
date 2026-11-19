@@ -1,6 +1,48 @@
-import { test, expect, asAdmin, createUser, openServer, signIn } from "./fixtures.mjs";
+import { test, expect, asAdmin, createUser, dockerAction, openServer, signIn } from "./fixtures.mjs";
 
 asAdmin();
+
+// Fills in a one-time run at the current UTC minute, which the scheduler's
+// next check, at most 15 seconds away, runs. A minute about to end is waited
+// out so the run can't fall into the past while the form is filled.
+async function dueNow(form) {
+  await expect(form.getByRole("button", { name: /^Use my time zone \(/ })).toBeVisible();
+  let now = new Date();
+  if (now.getUTCSeconds() >= 45) {
+    await new Promise((done) => setTimeout(done, (61 - now.getUTCSeconds()) * 1000));
+    now = new Date();
+  }
+  await form.getByLabel("Time zone").fill("UTC");
+  await form.getByLabel("Once").check();
+  await form.getByLabel("Date").fill(now.toISOString().slice(0, 10));
+  await form.getByLabel("Time", { exact: true }).fill(now.toISOString().slice(11, 16));
+}
+
+// The list refreshes only after changes made on the page, so the run's
+// result is read by reloading.
+async function expectResult(page, row, text) {
+  await expect(async () => {
+    await page.reload();
+    await expect(row.locator(".schedule-result")).toContainText(text, { timeout: 1000 });
+  }).toPass({ timeout: 45_000, intervals: [2000] });
+}
+
+async function addCommand(page, command) {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Schedules" }).click();
+  const form = page.locator("#schedule-form");
+  await form.getByLabel("Action").selectOption("command");
+  await expect(form.getByText("Anyone who can see this schedule can read it, so leave passwords out.")).toBeVisible();
+  await dueNow(form);
+  // The preview shows the time before a command is typed.
+  await expect(page.locator("#schedule-preview")).toContainText("(UTC)");
+  await form.getByLabel("Console command").fill(command);
+  await form.getByRole("button", { name: "Add schedule" }).click();
+  await expect(page).toHaveURL(/saved=created/);
+  const row = page.locator("#schedule-list tbody tr", { hasText: command });
+  await expect(row.locator("td").first()).toContainText("Send command");
+  return row;
+}
 
 test("scheduling, editing, pausing, and deleting a restart", async ({ page, session }) => {
   await openServer(page, "Survival");
@@ -97,4 +139,38 @@ test("a new schedule starts on an action its operator can use", async ({ page, s
   await expect(form.getByText("Stops and starts the server at the selected time.")).toBeVisible();
   await expect(form.getByText("Starts the server if it is stopped.")).toBeHidden();
   await expect(operator.locator("#schedule-preview")).toContainText("08:00");
+  // Sending commands needs console access too.
+  await expect(form.getByLabel("Action").locator("option", { hasText: "Send command" })).toHaveCount(0);
+
+  await survival.getByLabel("Send console commands").check();
+  await page.getByRole("button", { name: "Save server access" }).click();
+  await expect(page.locator("[data-grants] .alert--success")).toBeVisible();
+  await operator.reload();
+  await operator.locator("#schedule-form").getByLabel("Action").selectOption("command");
+  await expect(operator.locator("#schedule-form").getByLabel("Console command")).toBeVisible();
+});
+
+test("a scheduled command reaches the game console", async ({ page }) => {
+  test.setTimeout(120_000);
+  // The fake game answers "say" with what players see.
+  const row = await addCommand(page, "say Saving soon");
+  await expectResult(page, row, "Succeeded");
+  await expect(row.locator(".schedule-reply")).toHaveText("Reply: [Server] Saving soon");
+  await expect(row.locator("td").nth(2)).toHaveText("Completed");
+  await row.getByRole("link", { name: "View activity" }).click();
+  await expect(page.locator("#selected-operation")).toContainText("Command");
+  await expect(page.locator("#selected-operation")).toContainText("Succeeded");
+});
+
+test("a scheduled command skips a stopped server", async ({ page }) => {
+  test.setTimeout(120_000);
+  // Stopped first, so no scheduler check can send the command before.
+  await dockerAction("minecraft", "stop");
+  try {
+    const row = await addCommand(page, "save-all");
+    await expectResult(page, row, "Skipped: the server wasn't running");
+    await expect(row.getByRole("link", { name: "View activity" })).toHaveCount(0);
+  } finally {
+    await dockerAction("minecraft", "start");
+  }
 });

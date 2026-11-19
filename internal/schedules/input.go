@@ -9,7 +9,10 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -31,6 +34,7 @@ type Input struct {
 	Timezone      string         `json:"timezone"`
 	Days          []int          `json:"days,omitempty"`
 	Date          string         `json:"date,omitempty"`
+	Command       string         `json:"command,omitempty"`
 }
 
 // Clock returns the time-math view.
@@ -43,7 +47,10 @@ var (
 	datePattern = regexp.MustCompile(`^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$`)
 )
 
-var Actions = []string{"start", "stop", "restart", "backup"}
+var Actions = []string{"start", "stop", "restart", "backup", "command"}
+
+// MaxCommandLength is the longest scheduled console command, in characters.
+const MaxCommandLength = 500
 
 // DefaultLeadMinutes are the countdown warnings offered by default.
 var DefaultLeadMinutes = []int{10, 5, 1}
@@ -84,6 +91,9 @@ func (i *Input) Validate() error {
 	default:
 		return invalid("Choose a schedule kind")
 	}
+	if err := i.validateCommand(); err != nil {
+		return err
+	}
 	if i.CreateBackup && i.Action != "restart" {
 		return invalid("Backup before restart is only available for restart schedules")
 	}
@@ -109,6 +119,30 @@ func (i *Input) Validate() error {
 	return nil
 }
 
+// validateCommand trims the command and keeps it to one line without control
+// characters, so a schedule sends exactly one command.
+func (i *Input) validateCommand() error {
+	if i.Action != "command" {
+		if i.Command != "" {
+			return invalid("Only command schedules send a console command")
+		}
+		return nil
+	}
+	i.Command = strings.TrimSpace(i.Command)
+	if i.Command == "" {
+		return invalid("Enter a console command")
+	}
+	if !utf8.ValidString(i.Command) || utf8.RuneCountInString(i.Command) > MaxCommandLength {
+		return apperr.Newf("INVALID_REQUEST", 400, "Console commands can be up to %d characters", MaxCommandLength)
+	}
+	if strings.ContainsFunc(i.Command, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp)
+	}) {
+		return invalid("Console commands must be one line without control characters")
+	}
+	return nil
+}
+
 // ParseSaved decodes stored settings strictly, applying defaults.
 func ParseSaved(raw string) (Input, error) {
 	input := Input{Enabled: true}
@@ -126,8 +160,11 @@ func ParseSaved(raw string) (Input, error) {
 // Capabilities are what the owner needs for a run.
 func (i Input) Capabilities() []authz.Capability {
 	capability := authz.Capability("server." + i.Action)
-	if i.Action == "backup" {
+	switch i.Action {
+	case "backup":
 		capability = authz.BackupsCreate
+	case "command":
+		capability = authz.ConsoleExecute
 	}
 	result := []authz.Capability{capability}
 	if i.CreateBackup {
@@ -151,6 +188,6 @@ func (i Input) key() string {
 	days := slices.Clone(i.Days)
 	slices.Sort(days)
 	days = slices.Compact(days)
-	encoded, _ := json.Marshal([]any{i.Kind, i.Action, i.CreateBackup, i.Announcements, i.Enabled, i.Time, i.Timezone, days, i.Date})
+	encoded, _ := json.Marshal([]any{i.Kind, i.Action, i.Command, i.CreateBackup, i.Announcements, i.Enabled, i.Time, i.Timezone, days, i.Date})
 	return string(encoded)
 }

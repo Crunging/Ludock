@@ -44,7 +44,7 @@ type Query struct {
 	From, To    int64  // inclusive Unix ms; -1 when unset
 }
 
-var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Failed, ops.Interrupted}
+var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Skipped, ops.Failed, ops.Interrupted}
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 

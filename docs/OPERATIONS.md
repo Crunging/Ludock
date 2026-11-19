@@ -340,9 +340,10 @@ created them.
 
 ## Schedules
 
-Schedules start, stop, restart, or back up a server at a time on chosen days,
-or once at a date and time. They default to your browser's time zone, and
-**Create paused** saves one without running it.
+Schedules start, stop, restart, or back up a server, or send a command to its
+game console, at a time on chosen days or once at a date and time. They
+default to your browser's time zone, and **Create paused** saves one without
+running it.
 
 - **Backups before restarting:** a restart schedule can back up first, like
   **Take a backup first**. It needs backup access, and the server must be
@@ -354,6 +355,16 @@ or once at a date and time. They default to your browser's time zone, and
   Exiles, Rust, 7 Days to Die, or Terraria. Warnings are best effort: each is
   tried at most once and is skipped when the server is stopped or busy, the
   console fails, or it can't start at least 30 seconds before the restart.
+- **Console commands:** **Send command** takes one line of up to 500
+  characters, such as `save-all` or `say Restarting at noon`, and sends it
+  through the game console as if typed there, never through the shell. It
+  needs console access and a server with a game console. A run is skipped
+  when the server isn't running or is busy with other work; it doesn't start
+  the server or wait, and a send interrupted by a Ludock restart is recorded
+  as interrupted, never repeated. The schedule list shows whether the command was sent
+  and, to people with console access, the start of the game's reply, with
+  secrets redacted. Anyone who can see the schedule can read its command, so
+  leave passwords out.
 - **Who:** operators manage their own schedules and administrators manage all
   of them. A schedule runs with its owner's current access. Editing or resuming
   needs schedule access and access to the action; pausing doesn't.
