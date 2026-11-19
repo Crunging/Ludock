@@ -681,7 +681,7 @@ func (r *Runtime) networkHelper(ctx context.Context, containerID string, request
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "console-helper"},
 		HostConfig: &docker.HostConfig{NetworkMode: "container:" + containerID, ReadonlyRootfs: true, AutoRemove: true,
 			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"}, PidsLimit: 64, Memory: 256 * 1024 * 1024,
-			NanoCpus: 1_000_000_000}})
+			NanoCpus: 1_000_000_000, LogConfig: launch.NoLogs}})
 	helperRef := created
 	if helperRef == "" {
 		// A lost create response may still have created the named helper.

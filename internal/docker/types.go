@@ -211,6 +211,11 @@ type HostConfig struct {
 	Memory         int64           `json:"Memory,omitempty"`
 	NanoCpus       int64           `json:"NanoCpus,omitempty"`
 	Init           bool            `json:"Init,omitempty"`
+	LogConfig      *LogConfig      `json:"LogConfig,omitempty"`
+}
+
+type LogConfig struct {
+	Type string `json:"Type"`
 }
 
 type Healthcheck struct {

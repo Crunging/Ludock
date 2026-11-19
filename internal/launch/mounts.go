@@ -38,6 +38,12 @@ const (
 // HelperEnv keeps helper Go runtimes small.
 var HelperEnv = []string{"GOMAXPROCS=1", "GOMEMLIMIT=96MiB"}
 
+// NoLogs keeps Docker's logging driver from storing a helper's output, such
+// as a game console's raw reply, before Ludock redacts it. Attach and exec
+// streams still work; only the mount validator, read through its logs,
+// keeps logging.
+var NoLogs = &docker.LogConfig{Type: "none"}
+
 var digits = regexp.MustCompile(`^\d+$`)
 
 func trimSlash(value string) string { return strings.TrimSuffix(path.Clean(value), "/") }

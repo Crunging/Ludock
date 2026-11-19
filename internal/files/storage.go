@@ -265,7 +265,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "file-helper"}, Env: launch.HelperEnv,
 		HostConfig: &docker.HostConfig{Mounts: projections, NetworkMode: "none", ReadonlyRootfs: true, AutoRemove: true,
 			CapDrop: []string{"ALL"}, CapAdd: capabilities, SecurityOpt: []string{"no-new-privileges"},
-			PidsLimit: 64, Memory: 256 * 1024 * 1024, NanoCpus: 1_000_000_000},
+			PidsLimit: 64, Memory: 256 * 1024 * 1024, NanoCpus: 1_000_000_000, LogConfig: launch.NoLogs},
 	})
 	if err != nil {
 		proof.Cleanup()

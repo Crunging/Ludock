@@ -142,7 +142,7 @@ func (h *Helpers) NewDataHelper(ctx context.Context, context *servers.Context, r
 		Labels: map[string]string{"ludock.enable": "false", "ludock.internal": "backup-helper", "ludock.operation": operationID},
 		HostConfig: &docker.HostConfig{Mounts: plan.Mounts, NetworkMode: "none", ReadonlyRootfs: true, PidsLimit: 64,
 			Memory: 256 * 1024 * 1024, NanoCpus: 1_000_000_000, CapDrop: []string{"ALL"}, CapAdd: capabilities,
-			SecurityOpt: []string{"no-new-privileges"}}})
+			SecurityOpt: []string{"no-new-privileges"}, LogConfig: launch.NoLogs}})
 	if err != nil {
 		proof.Cleanup()
 		return nil, err

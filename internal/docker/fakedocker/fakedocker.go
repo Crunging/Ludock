@@ -93,6 +93,8 @@ type Engine struct {
 	HangCreates int
 	// Requests records "METHOD path" for each request.
 	Requests []string
+	// Creates records each container create body.
+	Creates []docker.ContainerCreate
 	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
 	RegistryAuth []string
 
@@ -473,6 +475,24 @@ func (e *Engine) PublishImage(reference, id string) {
 	e.registry[reference] = id
 }
 
+// HelperLogging maps each kind of helper created (its ludock.internal
+// label) to the logging driver it asked for, "" for Docker's default.
+func (e *Engine) HelperLogging() map[string]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	kinds := map[string]string{}
+	for _, body := range e.Creates {
+		if kind := body.Labels["ludock.internal"]; kind != "" {
+			driver := ""
+			if body.HostConfig != nil && body.HostConfig.LogConfig != nil {
+				driver = body.HostConfig.LogConfig.Type
+			}
+			kinds[kind] = driver
+		}
+	}
+	return kinds
+}
+
 // Disk is the measurement a journey set for a host path: its JSON, or ""
 // for a failure. ok is false when the path is measured for real.
 func (e *Engine) Disk(path string) (result string, ok bool) {
@@ -571,6 +591,7 @@ func (e *Engine) create(w http.ResponseWriter, r *http.Request) {
 	imageID, known := e.images[body.Image]
 	defaults := e.imageConfigs[imageID]
 	taken := name != "" && e.find(name) != nil
+	e.Creates = append(e.Creates, body)
 	e.mu.Unlock()
 	if !known {
 		fail(w, 404)

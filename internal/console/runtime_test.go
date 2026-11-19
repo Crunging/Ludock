@@ -345,6 +345,10 @@ func TestProbeUsesOneHelper(t *testing.T) {
 		!result.Status.Answered || result.Status.Online != 3 || helpers() != 1 {
 		t.Fatalf("%+v %v, %d helpers", result, err, helpers())
 	}
+	// The helper prints the raw reply, which Docker must not log.
+	if logging := engine.HelperLogging(); logging["console-helper"] != "none" {
+		t.Fatal(logging)
+	}
 	target.Labels = map[string]string{"ludock.console.password-env": "MISSING"}
 	result, err = runtime.Probe(ctx, target, probe, nil)
 	if err != nil || result.ResponseErr == nil || result.Status == nil || !result.Status.Answered || helpers() != 2 {

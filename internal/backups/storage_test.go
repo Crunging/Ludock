@@ -111,7 +111,7 @@ func TestPlanRefusesNestedAndOverlappingRoots(t *testing.T) {
 }
 
 func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
-	_, client := startHelpers(t)
+	engine, client := startHelpers(t)
 	base := t.TempDir()
 	data := filepath.Join(base, "game")
 	os.MkdirAll(filepath.Join(data, "world"), 0o755)
@@ -126,6 +126,9 @@ func TestSnapshotValidateAndStageRoundTrip(t *testing.T) {
 	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if logging := engine.HelperLogging(); logging["backup-helper"] != "none" {
+		t.Fatal(logging)
 	}
 	settings := Settings{Destination: destination, RetentionCount: 3, MaxBytes: 1 << 30, ReserveBytes: 0}
 	id := "6f9619ff-8b86-4011-b42d-00c04fc964ff"
