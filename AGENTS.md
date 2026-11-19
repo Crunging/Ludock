@@ -27,9 +27,10 @@ everyday pages. Hold every change to that:
 - **Nothing depends on Ludock.** It operates servers and never defines them.
   Removing it leaves every server as it was, and a backup is a plain tar
   archive that restores without it.
-- **It acts on its own only where that is safe to assume.** Watching servers
-  is on from the start. Anything that stops or restarts one, such as backups
-  or automatic recovery, is offered in one click, not turned on silently.
+- **It acts on its own only where that is safe to assume.** Watching a
+  server harms nothing, so it can be on by default. Anything that stops or
+  restarts one, such as backups or automatic recovery, is offered in one
+  click, not turned on silently.
 
 The README is the pitch and quick start, and `docs/OPERATIONS.md` is the
 reference: everyday tasks come first there, advanced options after.
