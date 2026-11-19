@@ -42,7 +42,8 @@ async function toggle(page, label, on) {
 async function expectAttention(page, text, shown, timeout = 100_000) {
   const attention = expect.poll(async () => {
     await page.goto("/");
-    await expect(page.locator("#attention")).not.toBeEmpty();
+    // The placeholder shown while it loads is busy.
+    await expect(page.locator("#attention > .needs-attention:not([aria-busy])")).toBeVisible();
     return page.locator("#attention").textContent();
   }, { timeout, intervals: [5_000] });
   await (shown ? attention.toContain(text) : attention.not.toContain(text));

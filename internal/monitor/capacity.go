@@ -83,7 +83,7 @@ type MemoryState struct {
 // started, lasts until the value falls Hysteresis points below it.
 func over(alerting bool, percent float64, threshold int) bool {
 	if alerting {
-		return percent >= float64(threshold-Hysteresis)
+		return percent > float64(threshold-Hysteresis)
 	}
 	return percent >= float64(threshold)
 }
@@ -168,16 +168,20 @@ func loadState(ctx context.Context, q querier, key string, value any) (string, e
 	return raw, json.Unmarshal([]byte(raw), value)
 }
 
-// saveState replaces a state only if it is still previous, so a reset saved
-// with a policy meanwhile is kept. It returns the new raw value.
-func (s *Service) saveState(ctx context.Context, key, previous string, value any) (string, bool, error) {
+// saveState replaces a state only if it is still previous and the policy
+// it was judged by is still saved, so a policy saved meanwhile and its reset
+// are kept. It returns the new raw value.
+func (s *Service) saveState(ctx context.Context, watched monitored, key, previous string, value any) (string, bool, error) {
 	encoded, _ := json.Marshal(value)
+	const unchanged = "EXISTS (SELECT 1 FROM availability WHERE server_id=? AND policy_json=?)"
 	var result sql.Result
 	var err error
 	if previous == "" {
-		result, err = s.DB.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO NOTHING", key, string(encoded))
+		result, err = s.DB.ExecContext(ctx, "INSERT INTO settings(key,value_json) SELECT ?,? WHERE "+unchanged+" ON CONFLICT(key) DO NOTHING",
+			key, string(encoded), watched.serverID, watched.raw)
 	} else {
-		result, err = s.DB.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=? AND value_json=?", string(encoded), key, previous)
+		result, err = s.DB.ExecContext(ctx, "UPDATE settings SET value_json=? WHERE key=? AND value_json=? AND "+unchanged,
+			string(encoded), key, previous, watched.serverID, watched.raw)
 	}
 	if err != nil {
 		return "", false, err
@@ -225,7 +229,7 @@ func (s *Service) Disk(ctx context.Context, serverID string) (DiskState, error) 
 
 // watched reads the servers, the policies of those monitored now, and the
 // servers with active operations.
-func (s *Service) watched(ctx context.Context) ([]identity.Server, map[string]Policy, map[string]bool, error) {
+func (s *Service) watched(ctx context.Context) ([]identity.Server, map[string]monitored, map[string]bool, error) {
 	logical, err := s.Store.List(ctx, "")
 	if err != nil {
 		return nil, nil, nil, err
@@ -238,13 +242,30 @@ func (s *Service) watched(ctx context.Context) ([]identity.Server, map[string]Po
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	policies := map[string]Policy{}
+	policies := map[string]monitored{}
 	for serverID, r := range rows {
 		if policy, err := ParsePolicy([]byte(r.policy)); err == nil && policy.Enabled && !policy.Maintenance {
-			policies[serverID] = policy
+			policies[serverID] = monitored{Policy: policy, serverID: serverID, raw: r.policy}
 		}
 	}
 	return logical, policies, active, nil
+}
+
+// monitored is a policy as a check read it.
+type monitored struct {
+	Policy
+	serverID, raw string
+}
+
+// alertingPaths names the folders that alert, to tell when the set changes.
+func (d DiskState) alertingPaths() string {
+	var paths []string
+	for _, folder := range d.Folders {
+		if folder.AlertSince != 0 {
+			paths = append(paths, folder.Path)
+		}
+	}
+	return strings.Join(paths, "\x00")
 }
 
 func bound(server identity.Server, current map[string]servers.Container) bool {
@@ -286,7 +307,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			continue
 		}
 		next, ended := evaluateDisk(previous, spaces, policy.DiskPercent, now)
-		saved, changed, err := s.saveState(ctx, diskKey(server.ID), raw, next)
+		saved, changed, err := s.saveState(ctx, policy, diskKey(server.ID), raw, next)
 		if err != nil || !changed {
 			log.Warn("Could not save a server's disk space; it will be measured again")
 			continue
@@ -297,8 +318,8 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent()))
 			}
 		}
-		s.raiseDisk(ctx, server, saved, next)
-		if len(ended) > 0 || next.alerting() != previous.alerting() {
+		s.raiseDisk(ctx, server, policy, saved, next)
+		if next.alertingPaths() != previous.alertingPaths() {
 			s.changed(server.ID)
 		}
 	}
@@ -307,7 +328,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 
 // raiseDisk sends the alerts saved but not yet sent, then records them as
 // sent. Each is keyed by its saved start, so a retry sends it once.
-func (s *Service) raiseDisk(ctx context.Context, server identity.Server, raw string, state DiskState) {
+func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy monitored, raw string, state DiskState) {
 	sent := false
 	for index := range state.Folders {
 		folder := &state.Folders[index]
@@ -320,7 +341,7 @@ func (s *Service) raiseDisk(ctx context.Context, server identity.Server, raw str
 		folder.Notified, sent = true, true
 	}
 	if sent {
-		if _, _, err := s.saveState(ctx, diskKey(server.ID), raw, state); err != nil {
+		if _, _, err := s.saveState(ctx, policy, diskKey(server.ID), raw, state); err != nil {
 			log.Warn("Could not save a server's disk alert; it may be sent again")
 		}
 	}
@@ -368,7 +389,7 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		if next == previous && (next.AlertSince == 0 || next.Notified) {
 			continue
 		}
-		saved, changed, err := s.saveState(ctx, memoryKey(server.ID), raw, next)
+		saved, changed, err := s.saveState(ctx, policy, memoryKey(server.ID), raw, next)
 		if err != nil || !changed {
 			log.Warn("Could not save a server's memory alert; it will be checked again")
 			continue
@@ -384,7 +405,7 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 			s.notify("memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
 				fmt.Sprintf("%s has used over %d%% of its memory limit for %d minutes.", server.DisplayName, policy.MemoryPercent, policy.MemoryMinutes))
 			next.Notified = true
-			if _, _, err := s.saveState(ctx, memoryKey(server.ID), saved, next); err != nil {
+			if _, _, err := s.saveState(ctx, policy, memoryKey(server.ID), saved, next); err != nil {
 				log.Warn("Could not save a server's memory alert; it may be sent again")
 			}
 			s.changed(server.ID)

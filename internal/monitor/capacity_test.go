@@ -21,7 +21,7 @@ func TestDiskAlertHysteresis(t *testing.T) {
 		percent  int64
 		alerting bool
 		ended    int
-	}{{89, false, 0}, {90, true, 0}, {89, true, 0}, {86, true, 0}, {90, true, 0}, {85, true, 0}, {84, false, 1}, {89, false, 0}}
+	}{{89, false, 0}, {90, true, 0}, {89, true, 0}, {86, true, 0}, {90, true, 0}, {85, false, 1}, {89, false, 0}}
 	for index, step := range steps {
 		var ended []Folder
 		state, ended = evaluateDisk(state, space(step.percent), 90, int64(index+1))
@@ -73,7 +73,7 @@ func TestMemorySustainedTime(t *testing.T) {
 	if got := evaluateMemory(alerting, samples(minute, 860), minute, limit, 90, 5); got != alerting {
 		t.Fatal("ended above the hysteresis line", got)
 	}
-	if got := evaluateMemory(alerting, samples(minute, 849), minute, limit, 90, 5); got != (MemoryState{}) {
+	if got := evaluateMemory(alerting, samples(minute, 850), minute, limit, 90, 5); got != (MemoryState{}) {
 		t.Fatal("didn't end below the hysteresis line", got)
 	}
 	if got := evaluateMemory(alerting, samples(minute-60_000, 100), minute, limit, 90, 5); got != alerting {
@@ -191,5 +191,19 @@ func TestMemoryAlert(t *testing.T) {
 	s.CheckMemory(ctx, map[string]int64{}, state("exited", ""), minute+60_000)
 	if len(events.events) != 2 || events.events[1] != "Minecraft’s memory use is no longer near its limit." {
 		t.Fatal(events.events)
+	}
+}
+
+// Monitoring turned off while a disk is measured keeps the measurement from
+// saving or sending an alert under the old policy.
+func TestPolicySavedDuringADiskMeasurement(t *testing.T) {
+	s, events, server, configure := setupWith(t, nil)
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) {
+		configure(DefaultPolicy())
+		return space(95), nil
+	}
+	s.CheckDisk(ctx, state("running", ""), 1000)
+	if disk, _ := s.Disk(ctx, server.ID); len(events.events) != 0 || disk.CheckedAt != 0 {
+		t.Fatal(events.events, disk)
 	}
 }
