@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/resources"
+	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -72,6 +73,9 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 				if item.Enabled && item.NextRunAt != 0 && (d.NextSchedule == nil || item.NextRunAt < d.NextSchedule.NextRunAt) {
 					d.NextSchedule = item
 				}
+				if item.WaitingUntil != 0 && d.WaitingSchedule == nil {
+					d.WaitingSchedule = item
+				}
 			}
 		}
 	}
@@ -108,6 +112,13 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 		a.Kinds = append(a.Kinds, kind)
 	}
 	slices.Sort(a.Kinds)
+	// A run waiting for players to leave is shown to people who see schedules.
+	if manages, _ := s.App.Authz.Has(r.Context(), request.User(), id, authz.SchedulesManage); manages || a.Admin {
+		list, _ := s.App.Schedules.List(r.Context(), request.User(), id)
+		if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.WaitingUntil != 0 }); index >= 0 {
+			a.Waiting = &list[index]
+		}
+	}
 	if a.SelectedID != "" {
 		s.selectOperation(r, &a)
 	}

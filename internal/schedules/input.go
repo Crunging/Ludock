@@ -23,6 +23,23 @@ type Announcements struct {
 	LeadMinutes []int `json:"leadMinutes"`
 }
 
+// WaitForEmpty holds a restart or stop until no one is online, for up to
+// Minutes after its scheduled time. Then is "skip" or "run": what happens
+// when players are still online, or their count is unknown, at the end.
+type WaitForEmpty struct {
+	Minutes int    `json:"minutes"`
+	Then    string `json:"then"`
+}
+
+const (
+	WaitSkip = "skip"
+	WaitRun  = "run"
+	// MaxWaitMinutes keeps a wait, with its grace, well inside the shortest
+	// gap between two recurring runs, a 23-hour day.
+	MaxWaitMinutes     = 360
+	DefaultWaitMinutes = 30
+)
+
 // Input is a schedule's settings, as stored in JSON.
 type Input struct {
 	Kind          string         `json:"kind"`
@@ -35,6 +52,7 @@ type Input struct {
 	Days          []int          `json:"days,omitempty"`
 	Date          string         `json:"date,omitempty"`
 	Command       string         `json:"command,omitempty"`
+	WaitForEmpty  *WaitForEmpty  `json:"waitForEmpty,omitempty"`
 }
 
 // Clock returns the time-math view.
@@ -96,6 +114,21 @@ func (i *Input) Validate() error {
 	}
 	if i.CreateBackup && i.Action != "restart" {
 		return invalid("Backup before restart is only available for restart schedules")
+	}
+	if wait := i.WaitForEmpty; wait != nil {
+		if i.Action != "restart" && i.Action != "stop" {
+			return invalid("Waiting for an empty server is only available for restarts and stops")
+		}
+		if wait.Minutes < 1 || wait.Minutes > MaxWaitMinutes {
+			return apperr.Newf("INVALID_REQUEST", 400, "Wait between 1 and %d minutes for players to leave", MaxWaitMinutes)
+		}
+		if wait.Then != WaitSkip && wait.Then != WaitRun {
+			return invalid("Choose what happens if players are still online")
+		}
+		// A warning announces a restart, so it needs one that happens.
+		if i.Announcements != nil && wait.Then != WaitRun {
+			return invalid("Countdown warnings need the restart to go ahead when the wait ends")
+		}
 	}
 	if i.Announcements != nil {
 		if i.Action != "restart" {
@@ -188,6 +221,6 @@ func (i Input) key() string {
 	days := slices.Clone(i.Days)
 	slices.Sort(days)
 	days = slices.Compact(days)
-	encoded, _ := json.Marshal([]any{i.Kind, i.Action, i.Command, i.CreateBackup, i.Announcements, i.Enabled, i.Time, i.Timezone, days, i.Date})
+	encoded, _ := json.Marshal([]any{i.Kind, i.Action, i.Command, i.CreateBackup, i.Announcements, i.WaitForEmpty, i.Enabled, i.Time, i.Timezone, days, i.Date})
 	return string(encoded)
 }

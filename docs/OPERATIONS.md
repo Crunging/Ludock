@@ -418,6 +418,21 @@ running it.
   Warnings are best effort: each is tried at most once and is skipped when the
   server is stopped or busy, the console fails, or it can't start at least 30
   seconds before the restart.
+- **Waiting for an empty server:** a restart or stop can **Wait until no one
+  is online**, on servers whose players Ludock can read. When players are
+  online at the scheduled time, the run waits, up to 1 to 360 minutes (30 by
+  default) from that time, and goes ahead as soon as nobody is online; a
+  stopped server counts as empty. While it waits, the schedule list, the
+  server's overview, and its Activity tab say until when, and Ludock checks
+  who is online about every 30 seconds. If players are still online when the
+  wait ends, the run is skipped or goes ahead anyway, as chosen. A count
+  Ludock can't read, such as while the console doesn't answer, counts as
+  players online, and a skip for that reason sends a notification. A restart
+  that backs up first waits before the backup. Countdown warnings need **Go
+  ahead anyway** and count down to the end of the wait. The wait survives a
+  Ludock restart; one that ended more than five minutes before Ludock came
+  back is recorded as missed. Pausing, editing, or deleting the schedule
+  ends the wait, and the run rechecks the owner's access when it acts.
 - **Console commands:** **Send command** takes one line of up to 500
   characters, such as `save-all` or `say Restarting at noon`, and sends it
   through the game console as if typed there, never through the shell. It

@@ -153,11 +153,17 @@ func (s *Service) Get(serverID string, container servers.Container) *Reading {
 // whether that is known: false until a reading succeeds, after one fails, or
 // once the latest is older than Fresh.
 func (s *Service) Online(serverID string, container servers.Container) (int, bool) {
+	online, _, known := s.OnlineAt(serverID, container)
+	return online, known
+}
+
+// OnlineAt is Online with when that reading was taken, in Unix milliseconds.
+func (s *Service) OnlineAt(serverID string, container servers.Container) (int, int64, bool) {
 	reading := s.Get(serverID, container)
 	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
-		return 0, false
+		return 0, 0, false
 	}
-	return reading.Online, true
+	return reading.Online, reading.CheckedAt, true
 }
 
 // Poll starts a reading for every running server that is due: those that
