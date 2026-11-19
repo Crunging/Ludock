@@ -1,7 +1,12 @@
-import { readFileSync } from "node:fs";
-import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded } from "./fixtures.mjs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser } from "./fixtures.mjs";
 
 asAdmin();
+
+// Other journeys list Survival's data, so a folder added here is removed.
+const restoreFolder = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "minecraft", "restore-one");
+test.afterEach(() => rmSync(restoreFolder(), { recursive: true, force: true }));
 
 test("backing up, downloading, restoring, and deleting a backup", async ({ page }) => {
   await openServer(page, "Survival");
@@ -81,4 +86,96 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page 
     await page.reload();
     await expect(rows).toHaveCount(2, { timeout: 1_000 });
   }).toPass({ timeout: 45_000 });
+});
+
+test("browsing a backup, downloading one file, and restoring it alone", async ({ page, session }) => {
+  const folder = restoreFolder();
+  const level = join(folder, "world", "level.dat");
+  const notes = join(folder, "notes.txt");
+  rmSync(folder, { recursive: true, force: true });
+  mkdirSync(join(folder, "world"), { recursive: true });
+  writeFileSync(level, "yesterday's world");
+  writeFileSync(notes, "yesterday's notes");
+  mkdirSync(join(folder, "chunks"));
+  for (let index = 1; index <= 501; index++) writeFileSync(join(folder, "chunks", `chunk-${index}.dat`), "");
+
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Backups" }).click();
+  // Work an earlier journey started on Survival may still be finishing.
+  await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
+  await expectOperationSucceeded(page);
+  await page.getByRole("link", { name: "Dismiss" }).click();
+  writeFileSync(level, "today's world");
+  writeFileSync(notes, "today's notes");
+
+  // Browsing a backup changes nothing and walks it folder by folder.
+  await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Browse" }).click();
+  await expect(page.getByRole("heading", { name: /^Backup from/ })).toBeVisible();
+  const names = page.locator("#backup-folder .file-row__name");
+  await expect(names.filter({ hasText: "restore-one" })).toContainText("505 items");
+  await page.getByRole("link", { name: "restore-one", exact: true }).click();
+  await expect(names).toHaveText(["chunks 501 items", "world 1 item", "notes.txt"]);
+
+  // Items past the first page can be restored too.
+  await page.getByRole("link", { name: "chunks", exact: true }).click();
+  await expect(page.locator("#backup-folder [role=status]")).toHaveText("Showing 500 of 501 items");
+  await page.getByRole("button", { name: "Show 1 more" }).click();
+  const last = page.locator("#backup-folder .file-row", { hasText: "chunk-501.dat" });
+  await last.getByRole("button", { name: "Actions for chunk-501.dat" }).click();
+  await expect(last.getByRole("link", { name: "Restore…" })).toBeVisible();
+  await page.locator(".file-breadcrumbs").getByRole("link", { name: "restore-one" }).click();
+  await page.getByRole("link", { name: "world", exact: true }).click();
+  await expect(page.locator(".file-breadcrumbs a[aria-current=page]")).toHaveText("world");
+  const row = page.locator("#backup-folder .file-row", { hasText: "level.dat" });
+  await expect(row).toContainText("17 B");
+
+  await row.getByRole("button", { name: "Actions for level.dat" }).click();
+  const [download] = await Promise.all([page.waitForEvent("download"), row.getByRole("link", { name: "Download" }).click()]);
+  expect(download.suggestedFilename()).toBe("level.dat");
+  expect(readFileSync(await download.path(), "utf8")).toBe("yesterday's world");
+  const fileURL = await row.locator("a[download]").getAttribute("href");
+
+  // Restoring one file names it, replaces only it, and starts the server again.
+  await row.getByRole("button", { name: "Actions for level.dat" }).click();
+  await row.getByRole("link", { name: "Restore…" }).click();
+  const confirm = page.locator("#restore-item");
+  await expect(confirm.getByRole("heading")).toHaveText("Restore the file “level.dat”?");
+  await expect(confirm.locator("code")).toHaveText(level);
+  const submit = confirm.getByRole("button", { name: "Restore file" });
+  await expect(submit).toBeDisabled();
+  await confirm.getByLabel(/Type Survival to confirm/).fill("Survival");
+  await submit.click();
+  await expectOperationSucceeded(page);
+  await expect(page.locator("#selected-operation")).toContainText("restore-one/world/level.dat");
+  expect(readFileSync(level, "utf8")).toBe("yesterday's world");
+  expect(readFileSync(notes, "utf8")).toBe("today's notes");
+  await expect(page.locator(".detail-header")).toContainText("Running");
+  // No safety backup of everything was taken.
+  await page.getByRole("link", { name: "Dismiss" }).click();
+  const backupCount = await page.locator("#backup-list tbody tr").count();
+
+  // Someone who may create backups but isn't an administrator is offered
+  // none of a backup's contents.
+  await createUser(page, "backupmaker", "backup maker password", "operator");
+  const grants = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
+  await grants.getByRole("button", { name: "Status only" }).click();
+  await grants.getByLabel("Create backups").check();
+  await page.locator("[data-grants]").getByRole("button", { name: "Save server access" }).click();
+  await expect(page.locator("[data-grants] .alert--success")).toContainText("Server access saved for backupmaker.");
+  const operator = await session({ storageState: { cookies: [], origins: [] } });
+  await signIn(operator, "backupmaker", "backup maker password");
+  await openServer(operator, "Survival");
+  await operator.getByRole("tab", { name: "Backups" }).click();
+  await expect(operator.getByText("Archive access and restoration require an administrator.")).toBeVisible();
+  await expect(operator.getByRole("link", { name: "Browse" })).toHaveCount(0);
+  const backupID = new URL(fileURL, page.url()).pathname.split("/")[4];
+  await operator.goto(`${new URL(operator.url()).pathname}?tab=backups&browse=${backupID}`);
+  await expect(operator.locator(".backup-browser")).toHaveCount(0);
+  for (const path of [fileURL, fileURL.replace(/^\/servers\/([^/]+)\/backups\/([^/]+)\/file/, "/fragments/servers/$1/backups/$2/folder")]) {
+    const refused = await operator.request.get(path, { maxRedirects: 0 });
+    expect(refused.status()).not.toBe(200);
+  }
+  expect(backupCount).toBeGreaterThan(0);
 });

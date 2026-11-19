@@ -751,6 +751,10 @@ templ SelectedOperation(a ActivityView) {
 			<dl class="metadata-list">
 				<dt>Action</dt>
 				<dd>{ Capitalize(operation.Kind) }</dd>
+				if item, _ := operation.Input["item"].(string); item != "" && a.Archives {
+					<dt>Restored item</dt>
+					<dd>{ item }</dd>
+				}
 				<dt>Status</dt>
 				<dd>
 					@Pip(OperationTones[operation.Status])

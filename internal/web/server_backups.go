@@ -4,14 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
@@ -41,6 +38,11 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		s.selectOperation(r, &b.Operation)
 	}
 	if b.Admin && b.CanRead {
+		if id := r.URL.Query().Get("browse"); id != "" {
+			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))
+			b.Browse.ServerName, b.Browse.CanRestore = view.DisplayName, restoreOffered(view, d.DiscoveryUnavailable)
+			return b
+		}
 		s.readBackups(r, &b)
 		if id := r.URL.Query().Get("restore"); id != "" {
 			for index := range b.Backups {
@@ -179,11 +181,21 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm the restore"))
 		return
 	}
-	if _, err := s.App.Backups.Get(r.Context(), id, backupID); err != nil {
+	backup, err := s.App.Backups.Get(r.Context(), id, backupID)
+	if err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
-	s.enqueue(w, r, request, resolved, user, "restore", map[string]any{"backupId": backupID, "confirmation": confirmation})
+	input, err := restoreItemInput(backup, r.PostFormValue("root"), r.PostFormValue("item"))
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+	input["backupId"], input["confirmation"] = backupID, confirmation
+	s.enqueue(w, r, request, resolved, user, "restore", input)
 }
 
 func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -213,16 +225,7 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, request *R
 func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	id, backupID := r.PathValue("id"), r.PathValue("backup")
-	check := func() error {
-		current, err := s.App.Auth.Recheck(context.WithoutCancel(ctx), request.Principal)
-		if err == nil {
-			err = auth.RequireAdmin(current)
-		}
-		if err == nil {
-			_, err = s.App.Authz.Assert(context.WithoutCancel(ctx), &current.User, id, authz.BackupsRead)
-		}
-		return err
-	}
+	check := s.archiveAccess(ctx, request, id)
 	if _, err := s.App.Authz.Assert(ctx, request.User(), id, authz.BackupsRead); err != nil {
 		s.fail(w, r, request, err)
 		return
@@ -241,32 +244,7 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request, request 
 	s.audit(r, request, "backup.downloaded", id, map[string]any{"backupId": backupID})
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Content-Disposition", `attachment; filename="ludock-`+backupID+`.tar"`)
-	controller := http.NewResponseController(w)
-	buffer := make([]byte, 256*1024)
-	checked := time.Now()
-	for {
-		controller.SetWriteDeadline(time.Now().Add(time.Minute))
-		n, err := archive.Read(buffer)
-		// Check after the read, which can block on slow storage, so no chunk
-		// is sent more than a second after access was last confirmed.
-		if n > 0 && time.Since(checked) >= time.Second {
-			if check() != nil {
-				panic(http.ErrAbortHandler)
-			}
-			checked = time.Now()
-		}
-		if n > 0 {
-			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
-				return
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			panic(http.ErrAbortHandler)
-		}
-	}
+	copyChecked(w, archive, check)
 }
 
 func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Request) {

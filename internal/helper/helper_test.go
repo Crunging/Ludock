@@ -458,3 +458,86 @@ func TestExtractExitOnFullDisk(t *testing.T) {
 		t.Error("an unsafe archive reported as a full disk")
 	}
 }
+
+// Rolling back a one-item restore whose replacement is still staged keeps a
+// live entry something else created after the old copy moved out, and keeps
+// the old copy; once the replacement is installed, rollback takes it back
+// and returns the old copy.
+func TestRestoreItemRollbackOwnership(t *testing.T) {
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	for _, dir := range []string{"world", stage + "/old", stage + "/new/world"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+	}
+	os.WriteFile(filepath.Join(root, stage, "old", "item"), []byte("current"), 0o644)
+	os.WriteFile(filepath.Join(root, stage, "new", "world", "level.dat"), []byte("backup"), 0o644)
+	os.WriteFile(filepath.Join(root, "world", "level.dat"), []byte("someone else"), 0o644)
+	step := func(operation string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world/level.dat"})
+		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	if step("rollbackClean") == 0 {
+		t.Fatal("took back an entry the swap never installed")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "someone else" {
+		t.Fatal(string(data))
+	}
+	os.Remove(filepath.Join(root, "world", "level.dat"))
+	if step("moveNew") != 0 || step("rollbackClean") != 0 || step("rollbackOld") != 0 {
+		t.Fatal("rollback after the swap failed")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "world", "level.dat")); string(data) != "current" {
+		t.Fatal(string(data))
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, stage, "returned")); string(data) != "backup" {
+		t.Fatal(string(data))
+	}
+}
+
+// The folder picked for a one-item restore holds something cleanup could
+// never remove, first a named pipe and then another filesystem mounted
+// inside it, such as a disk the host mounted under the data: the restore is
+// refused before the server stops and never moves the folder aside.
+func TestRestoreItemRefusesUnremovableFolder(t *testing.T) {
+	root := t.TempDir()
+	stage := ".ludock-restore-0f9619ff-8b86-4011-b42d-00c04fc964ff"
+	for _, dir := range []string{"world/region", "world/mods/cache", stage + "/old"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+	}
+	step := func(operation string) int {
+		request, _ := json.Marshal(RestoreRequest{Root: root, Stage: stage, Operation: operation, Item: "world"})
+		return RunRestore(string(request), io.Discard, io.Discard)
+	}
+	if step("check") != 0 {
+		t.Fatal("refused a folder on one mount")
+	}
+	pipe := filepath.Join(root, "world/region/console.pipe")
+	if err := unix.Mkfifo(pipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if step("check") == 0 || step("moveOld") == 0 {
+		t.Fatal("accepted a folder with a named pipe inside it")
+	}
+	os.Remove(pipe)
+	var mounted unix.Stat_t
+	if err := unix.Stat(filepath.Join(root, "world/mods/cache"), &mounted); err != nil {
+		t.Fatal(err)
+	}
+	mountOf = func(descriptor fd) (uint64, error) {
+		var info unix.Stat_t
+		if err := unix.Fstat(int(descriptor), &info); err != nil {
+			return 0, err
+		}
+		if info.Ino == mounted.Ino {
+			return 2, nil
+		}
+		return 1, nil
+	}
+	t.Cleanup(func() { mountOf = mountID })
+	if step("check") == 0 || step("moveOld") == 0 {
+		t.Fatal("accepted a folder with a mount inside it")
+	}
+	if _, err := os.Stat(filepath.Join(root, "world/mods/cache")); err != nil {
+		t.Fatal("the folder was moved", err)
+	}
+}

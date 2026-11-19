@@ -1,6 +1,10 @@
 package views
 
 import (
+	"net/url"
+	"strconv"
+	"strings"
+
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/update"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -21,6 +25,8 @@ type BackupsView struct {
 	Backups      []backups.Backup
 	HistoryError string
 	Restore      *backups.Backup
+	// Browse, when set, replaces the tab with one folder of a backup.
+	Browse *BackupBrowser
 }
 
 func (b BackupsView) archives() bool { return b.Admin && b.CanRead }
@@ -32,7 +38,11 @@ templ BackupsTab(b BackupsView) {
 	// The rest reloads when the followed operation finishes, so readiness,
 	// the create button, and the list catch up.
 	<div id="backups-tab" hx-get={ string(detailURL(b.ServerID, "tab=backups")) } hx-select="#backups-tab" hx-trigger="operation-finished from:document" hx-swap="outerHTML">
-		@backupsTabBody(b)
+		if b.Browse != nil {
+			@BackupBrowserView(*b.Browse)
+		} else {
+			@backupsTabBody(b)
+		}
 	</div>
 }
 
@@ -194,6 +204,7 @@ templ BackupList(b BackupsView) {
 						<td>
 							<div class="inline-actions">
 								if backup.State == "complete" {
+									<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&browse="+backup.ID) } { inPage()... }>Browse</a>
 									<a class="secondary-btn" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
 								}
 								if b.CanRestore && !b.Blocked && !b.Active && backup.State == "complete" {
@@ -239,6 +250,250 @@ templ RestoreForm(b BackupsView) {
 		<div class="inline-actions">
 			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore game data</button>
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>Cancel</a>
+		</div>
+	</form>
+}
+
+// BackupBrowser is one folder of a backup, for administrators.
+type BackupBrowser struct {
+	ServerID, ServerName string
+	Backup               backups.Backup
+	Roots                []backups.Root
+	Root                 backups.Root
+	Path                 string
+	// Entries holds the first Limit of the folder's Total items.
+	Entries      []backups.ArchiveEntry
+	Total, Limit int
+	Error        string
+	CanRestore   bool
+	// Pick is the item of this folder chosen for restoring.
+	Pick *backups.ArchiveEntry
+}
+
+func (b BackupBrowser) values(path string) url.Values {
+	values := url.Values{"browse": {b.Backup.ID}, "root": {b.Root.ID}}
+	if path != "" {
+		values.Set("path", path)
+	}
+	return values
+}
+
+func (b BackupBrowser) folderURL(path string) templ.SafeURL {
+	return detailURL(b.ServerID, "tab=backups&"+b.values(path).Encode())
+}
+
+func (b BackupBrowser) rootURL(root backups.Root) templ.SafeURL {
+	b.Root = root
+	return b.folderURL("")
+}
+
+func (b BackupBrowser) pickURL(name string) templ.SafeURL {
+	values := b.values(b.Path)
+	values.Set("pick", name)
+	return detailURL(b.ServerID, "tab=backups&"+values.Encode())
+}
+
+func (b BackupBrowser) moreURL() string {
+	values := b.values(b.Path)
+	values.Set("limit", strconv.Itoa(b.Limit+FilePage))
+	return "/fragments/servers/" + b.ServerID + "/backups/" + b.Backup.ID + "/folder?" + values.Encode()
+}
+
+func (b BackupBrowser) child(name string) string {
+	if b.Path == "" {
+		return name
+	}
+	return b.Path + "/" + name
+}
+
+func (b BackupBrowser) fileURL(name string) templ.SafeURL {
+	values := url.Values{"root": {b.Root.ID}, "path": {b.child(name)}}
+	return templ.SafeURL("/servers/" + b.ServerID + "/backups/" + b.Backup.ID + "/file?" + values.Encode())
+}
+
+func (b BackupBrowser) crumbs() [][2]string {
+	return FilesView{Path: b.Path}.breadcrumbs()
+}
+
+// livePath is where an item of this folder lives in the server's data.
+func (b BackupBrowser) livePath(name string) string {
+	return strings.TrimSuffix(b.Root.Path, "/") + "/" + b.child(name)
+}
+
+func itemCount(count int) string {
+	if count == 1 {
+		return "1 item"
+	}
+	return intText(count) + " items"
+}
+
+templ BackupBrowserView(b BackupBrowser) {
+	<section class="file-manager backup-browser" aria-labelledby="backup-browser-title">
+		<div class="section-heading">
+			<h2 id="backup-browser-title">
+				if b.Backup.ID != "" {
+					Backup from @Time(b.Backup.CreatedAt, "", "")
+				} else {
+					Backup
+				}
+			</h2>
+			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>All backups</a>
+		</div>
+		<p class="section-lede">Look through what this backup holds without changing anything. Download a file, or restore one file or folder in place of the server’s current copy.</p>
+		if b.Error != "" {
+			<p class="alert alert--error" role="alert">Unable to open this backup: { b.Error }</p>
+		} else {
+			if len(b.Roots) > 1 {
+				<nav class="inline-actions" aria-label="Data folders">
+					for _, root := range b.Roots {
+						<a
+							class="secondary-btn"
+							href={ b.rootURL(root) }
+							if root.ID == b.Root.ID {
+								aria-current="page"
+							}
+							{ inPage()... }
+						>{ root.Path }</a>
+					}
+				</nav>
+			}
+			<div class="file-toolbar">
+				<nav class="file-breadcrumbs" aria-label="Current folder">
+					<a
+						href={ b.folderURL("") }
+						if b.Path == "" {
+							aria-current="page"
+						}
+						{ inPage()... }
+					>{ b.Root.Path }</a>
+					for index, crumb := range b.crumbs() {
+						<span>
+							<b aria-hidden="true">/</b>
+							<a
+								href={ b.folderURL(crumb[1]) }
+								if index == len(b.crumbs())-1 {
+									aria-current="page"
+								}
+								{ inPage()... }
+							>{ crumb[0] }</a>
+						</span>
+					}
+				</nav>
+			</div>
+			if b.Pick != nil && b.CanRestore {
+				@RestoreItemForm(b, *b.Pick)
+			}
+			@BackupFolder(b)
+		}
+	</section>
+}
+
+// BackupFolder is a backup folder's items; Show more replaces it.
+templ BackupFolder(b BackupBrowser) {
+	<div id="backup-folder">
+		if b.Error != "" {
+			<p class="alert alert--error" role="alert">Unable to open this backup: { b.Error }</p>
+		} else {
+			<div class="file-filter-summary">
+				<p>Folders first</p>
+				<p role="status">Showing { intText(len(b.Entries)) } of { intText(b.Total) } items</p>
+			</div>
+			<div class="file-list">
+				<div class="file-list__header">
+					<span>Name</span>
+					<span>Size</span>
+					<span>Modified</span>
+					<span>Actions</span>
+				</div>
+				if b.Total == 0 {
+					<p class="file-list__empty">This folder is empty.</p>
+				}
+				for index, entry := range b.Entries {
+					<div class="file-row">
+						<div class="file-row__name">
+							@fileIcon(entry.Type)
+							if entry.Type == "directory" {
+								<a href={ b.folderURL(b.child(entry.Name)) } { inPage()... }>{ entry.Name }</a>
+								<small>{ itemCount(entry.Items) }</small>
+							} else {
+								<span>{ entry.Name }</span>
+							}
+						</div>
+						<span>{ FormatBytes(entry.Size) }</span>
+						<span>
+							if entry.ModifiedAt > 0 {
+								@Time(int64(entry.ModifiedAt*1000), "", "")
+							} else {
+								—
+							}
+						</span>
+						<div class="file-row__actions">
+							if entry.Type == "file" || b.CanRestore {
+								<div class="action-menu" data-action-menu>
+									<button type="button" class="secondary-btn action-menu__trigger action-menu__trigger--compact" aria-label={ "Actions for " + entry.Name } aria-expanded="false" aria-controls={ "backup-item-" + intText(index) }>
+										<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5"></circle><circle cx="8" cy="8" r="1.5"></circle><circle cx="13" cy="8" r="1.5"></circle></svg>
+									</button>
+									<div class="action-menu__content" id={ "backup-item-" + intText(index) } hidden>
+										if entry.Type == "file" {
+											<a class="action-menu__action" href={ b.fileURL(entry.Name) } download>Download</a>
+										}
+										if b.CanRestore {
+											<a class="action-menu__action action-menu__action--danger" href={ b.pickURL(entry.Name) } { inPage()... }>Restore…</a>
+										}
+									</div>
+								</div>
+							}
+						</div>
+					</div>
+				}
+				if remaining := b.Total - len(b.Entries); remaining > 0 {
+					<div class="file-list__more">
+						<button class="secondary-btn" type="button" hx-get={ b.moreURL() } hx-target="#backup-folder" hx-swap="outerMorph" hx-sync="#backup-folder:queue last" data-busy-label="Loading…">Show { intText(min(remaining, FilePage)) } more</button>
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// RestoreItemForm confirms replacing one file or folder with its copy in
+// the backup.
+templ RestoreItemForm(b BackupBrowser, item backups.ArchiveEntry) {
+	{{ kind := map[bool]string{true: "folder", false: "file"}[item.Type == "directory"] }}
+	<form class="danger-panel stack-form" id="restore-item" hx-post={ "/servers/" + b.ServerID + "/restores" } hx-target="#restore-status">
+		<h3>Restore the { kind } “{ item.Name }”?</h3>
+		<p>
+			The backup’s copy replaces <code>{ b.livePath(item.Name) }</code> in the server’s data, or brings it back if it was deleted.
+			if item.Type == "directory" {
+				Everything now inside that folder is replaced.
+			}
+			The rest of the server’s data stays as it is.
+		</p>
+		<dl class="metadata-list">
+			<dt>Backup’s copy</dt>
+			<dd>
+				{ FormatBytes(item.Size) }
+				if item.Type == "directory" {
+					in { itemCount(item.Items) }
+				}
+			</dd>
+			if item.ModifiedAt > 0 {
+				<dt>Modified</dt>
+				<dd>@Time(int64(item.ModifiedAt*1000), "", "")</dd>
+			}
+		</dl>
+		<p>Ludock stops the server while it swaps the copies, then returns it to how it was. If the swap fails, the current copy is put back. Once the restore succeeds the current copy isn’t kept, so back up the server first if you might want it again.</p>
+		<input type="hidden" name="backupId" value={ b.Backup.ID }/>
+		<input type="hidden" name="root" value={ b.Root.ID }/>
+		<input type="hidden" name="item" value={ b.child(item.Name) }/>
+		<label>
+			<span>Type <strong>{ b.ServerName }</strong> to confirm</span>
+			<input name="confirmation" autocomplete="off" required data-confirm-value={ b.ServerName }/>
+		</label>
+		<div id="restore-status" aria-live="polite"></div>
+		<div class="inline-actions">
+			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore { kind }</button>
+			<a class="secondary-btn" href={ b.folderURL(b.Path) } { inPage()... }>Cancel</a>
 		</div>
 	</form>
 }

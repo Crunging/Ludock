@@ -549,6 +549,8 @@ var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for r
 type StageTarget struct {
 	Root Root
 	Path string
+	// Item, when set, stages only that path below the root and what it holds.
+	Item string
 }
 
 // ExtractToStage streams an archive into the helper's restore stage of
@@ -567,6 +569,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	}
 	var mu sync.Mutex
 	extractions := map[string]*extraction{}
+	items := map[string]string{}
 	closeAll := func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -616,6 +619,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		extraction := &extraction{conn: conn, completed: make(chan error, 1)}
 		mu.Lock()
 		extractions[target.Root.ID] = extraction
+		items[target.Root.ID] = target.Item
 		mu.Unlock()
 		go func() {
 			err := docker.Demux(conn, nil, nil)
@@ -663,6 +667,9 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 		rootID, entry, found := strings.Cut(strings.TrimPrefix(name, "snapshot/"), "/")
 		extraction := extractions[rootID]
 		if !found || extraction == nil {
+			return nil
+		}
+		if item := items[rootID]; item != "" && entry != item && !strings.HasPrefix(entry, item+"/") {
 			return nil
 		}
 		uid, gid, mtime, err := EntryMetadata(header)

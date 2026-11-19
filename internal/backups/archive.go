@@ -102,6 +102,11 @@ var errCapacity = fail("BACKUP_CAPACITY", "The archive exceeds the configured si
 
 // ValidateStream checks a whole archive and every recorded root.
 func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte)) (map[string]int64, error) {
+	return validateStream(input, roots, maxBytes, onChunk, nil)
+}
+
+// validateStream is ValidateStream that also shows onEntry each valid entry.
+func validateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func([]byte), onEntry func(*tarstream.Header)) (map[string]int64, error) {
 	names := map[string]bool{}
 	found := map[string]bool{}
 	// staged estimates each root's extracted size in 4 KiB filesystem
@@ -118,6 +123,9 @@ func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 			return fail("UNSAFE_ARCHIVE", "The archive has duplicate paths or too many entries.")
 		}
 		names[name] = true
+		if onEntry != nil {
+			onEntry(header)
+		}
 		total += header.Size
 		if total > maxBytes {
 			return errCapacity

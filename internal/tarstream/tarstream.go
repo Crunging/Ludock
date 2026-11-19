@@ -249,11 +249,18 @@ type source struct {
 	buffer  []byte
 	eof     bool
 	onChunk func([]byte) error
+	// seeked limits reads to one block from a seek until a body is read, so
+	// skipping large bodies doesn't read ahead into them.
+	seeked bool
 }
 
 func (s *source) take(limit int) ([]byte, error) {
 	for len(s.pending) == 0 && !s.eof {
-		n, err := s.reader.Read(s.buffer)
+		buffer := s.buffer
+		if s.seeked {
+			buffer = s.buffer[:blockSize]
+		}
+		n, err := s.reader.Read(buffer)
 		if n > 0 {
 			chunk := s.buffer[:n]
 			if s.onChunk != nil {
@@ -289,6 +296,31 @@ func (s *source) exact(size int64) ([]byte, error) {
 	return result, nil
 }
 
+// skip discards size bytes. An unhashed seekable input seeks past them, so
+// listing an archive reads its headers, not its file bodies; a seek past
+// the end shows up as truncation at the next read.
+func (s *source) skip(size int64) error {
+	buffered := min(size, int64(len(s.pending)))
+	s.pending = s.pending[buffered:]
+	size -= buffered
+	if seeker, ok := s.reader.(io.Seeker); ok && s.onChunk == nil && size > 0 && !s.eof {
+		_, err := seeker.Seek(size, io.SeekCurrent)
+		s.seeked = true
+		return err
+	}
+	for size > 0 {
+		part, err := s.take(int(min(size, 65536)))
+		if err != nil {
+			return err
+		}
+		if len(part) == 0 {
+			return ErrInvalid
+		}
+		size -= int64(len(part))
+	}
+	return nil
+}
+
 func allZero(data []byte) bool {
 	for _, b := range data {
 		if b != 0 {
@@ -307,6 +339,7 @@ func (b *body) Read(p []byte) (int, error) {
 	if b.remaining == 0 {
 		return 0, io.EOF
 	}
+	b.source.seeked = false
 	part, err := b.source.take(int(min(int64(len(p)), b.remaining, 65536)))
 	if err != nil {
 		return 0, err
@@ -419,7 +452,7 @@ func Walk(input io.Reader, visit func(*Header, io.Reader) error, onChunk func([]
 		if err := visit(header, entry); err != nil {
 			return err
 		}
-		if _, err := io.Copy(io.Discard, entry); err != nil {
+		if err := s.skip(entry.remaining); err != nil {
 			return err
 		}
 		padding, err := s.exact(int64(len(Padding(header.Size))))
