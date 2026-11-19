@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -152,24 +153,19 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	if err != nil {
 		return nil, "", err
 	}
-	var candidates []string
-	if q.ServerID != "" {
-		candidates = []string{q.ServerID}
-	} else {
-		servers, err := s.Identity.List(ctx, "")
-		if err != nil {
-			return nil, "", err
-		}
-		for _, server := range servers {
-			candidates = append(candidates, server.ID)
-		}
+	servers, err := s.Identity.List(ctx, "")
+	if err != nil {
+		return nil, "", err
+	}
+	// One read of the account and its grants covers every server.
+	_, permissions, err := s.Authz.EffectiveAll(ctx, actor, servers)
+	if err != nil {
+		return nil, "", err
 	}
 	var visible []string
-	for _, id := range candidates {
-		if ok, err := s.Authz.Has(ctx, actor, id, authz.ServerView); err != nil {
-			return nil, "", err
-		} else if ok {
-			visible = append(visible, id)
+	for _, server := range servers {
+		if (q.ServerID == "" || server.ID == q.ServerID) && slices.Contains(permissions[server.ID], authz.ServerView) {
+			visible = append(visible, server.ID)
 		}
 	}
 	if len(visible) == 0 {

@@ -267,7 +267,11 @@ func (j *Jobs) saveWorld(ctx context.Context, job *ops.Context, server *servers.
 	if settle == 0 {
 		settle = 5 * time.Second
 	}
-	time.Sleep(settle)
+	select {
+	case <-time.After(settle):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return assertAccess()
 }
 
@@ -476,7 +480,11 @@ func (j *Jobs) recoverLifecycle(ctx context.Context, job *ops.Context) (map[stri
 			if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.Job.BindingRevision); err != nil {
 				return nil, j.awaitStopDeadline(ctx, job, true, err)
 			}
-			time.Sleep(min(j.poll(), remaining))
+			select {
+			case <-time.After(min(j.poll(), remaining)):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 			refreshed, err := j.resolve(ctx, job, permission, true)
 			if err != nil {
 				// Retry transient daemon failures within the deadline; changes to
