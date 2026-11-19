@@ -27,13 +27,13 @@ test("a list refresh that changed nothing sends no list and keeps an open menu",
   expect(second.request().headers()["if-none-match"]).toBe(tag);
   expect(second.status()).toBe(304);
   await expect(restart).toBeVisible();
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
 });
 
 test("losing the connection says so, and the page catches up when it returns", async ({ page, context }) => {
   expectOffline(page);
   await page.goto("/");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   const notice = page.locator("[data-connection-notice]");
 
   // A refresh that can't be sent keeps the list and says why; back online,
@@ -41,7 +41,7 @@ test("losing the connection says so, and the page catches up when it returns", a
   await context.setOffline(true);
   await page.evaluate(() => window.htmx.trigger(document.body, "servers-changed"));
   await expect(notice).toContainText("Can’t reach Ludock. Showing the last known state");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   let caughtUp = page.waitForResponse(/\/fragments\/servers(\?|$)/);
   await context.setOffline(false);
   await caughtUp;
@@ -84,7 +84,7 @@ test("a change that fails after a refresh replaced its button still says so", as
 
 test("a refresh queued behind another is checked against what that one showed", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   await expect.poll(async () => (await refreshList(page)).status()).toBe(304);
   // The next refresh shows other content; one more queues behind it while it loads.
   let release;
@@ -103,6 +103,6 @@ test("a refresh queued behind another is checked against what that one showed", 
   await page.evaluate(() => window.htmx.trigger(document.body, "servers-changed"));
   release();
   await expect.poll(() => queuedTag).toBe('"other"');
-  await expect(page.locator(".server-row")).toHaveCount(2);
+  await expect(page.locator(".server-row")).toHaveCount(3);
   await page.unroute(/\/fragments\/servers(\?|$)/);
 });

@@ -116,3 +116,128 @@ func TestParseMinecraftList(t *testing.T) {
 		t.Fatalf("%d names, first %d runes", len(long.Names), len([]rune(long.Names[0])))
 	}
 }
+
+type playerCase struct {
+	response string
+	online   int
+	names    []string
+}
+
+func checkPlayers(t *testing.T, parse func(string) (Players, bool), lists []playerCase, rejected []string) {
+	t.Helper()
+	for _, c := range lists {
+		got, ok := parse(c.response)
+		if !ok || got.Online != c.online || got.Max != 0 || strings.Join(got.Names, "|") != strings.Join(c.names, "|") {
+			t.Errorf("%q: %+v %v", c.response, got, ok)
+		}
+	}
+	for _, response := range rejected {
+		if got, ok := parse(response); ok {
+			t.Errorf("%q parsed as %+v", response, got)
+		}
+	}
+}
+
+// Factorio indents each player under a counted header, and can mix log
+// lines into the reply; a count that doesn't match its rows is not trusted.
+func TestParseFactorioPlayers(t *testing.T) {
+	checkPlayers(t, ParseFactorioPlayers, []playerCase{
+		{"Online players (0):\n", 0, nil},
+		{"Online players (1):\r\n  Ada (online)\r\n", 1, []string{"Ada"}},
+		{"\nOnline players (2):\n  Zed (online)\n  Alice_Smith (online)\n", 2, []string{"Zed", "Alice_Smith"}},
+		{"[JOIN] Zed joined the game\nOnline players (1):\n  Zed (online)\n", 1, []string{"Zed"}},
+	}, []string{
+		"", "Unknown command \"player\".", "Online players (1):\n", "Online players (0):\n  Ada (online)\n",
+		"Online players (1):\nAda (online)\n", "Online players (1):\n  Ada (offline)\n",
+		"Players (1):\n  Ada (online)\n", "Online players (1):\n  Ada (online)\nOnline players (1):\n  Ada (online)\n",
+		"  Ada (online)\nOnline players (1):\n",
+	})
+}
+
+// Palworld answers with a CSV table, padded with NULs on some versions;
+// names keep their commas.
+func TestParsePalworldPlayers(t *testing.T) {
+	checkPlayers(t, ParsePalworldPlayers, []playerCase{
+		{"name,playeruid,steamid\n", 0, nil},
+		{"name,playeruid,steamid\n\x00\x00", 0, nil},
+		{"name,playeruid,steamid\nAda,1234567890,76561198000000000\nZed,987654321,76561198000000001\n", 2, []string{"Ada", "Zed"}},
+		{"name,playeruid,steamid\nSmith, Jo,1234567890,76561198000000000\n", 1, []string{"Smith, Jo"}},
+		// A player still joining has no name or ID yet, but is online.
+		{"name,playeruid,steamid\n,00000000,00000000000000000\n", 1, nil},
+	}, []string{"", "Unknown command", "Ada,1234567890,76561198000000000", "name,playeruid,steamid\nAda,1234567890\n"})
+}
+
+// ARK numbers rows from 0, with Steam IDs on Survival Evolved and EOS IDs
+// on Survival Ascended, and says so when nobody is online.
+func TestParseARKPlayers(t *testing.T) {
+	checkPlayers(t, ParseARKPlayers, []playerCase{
+		{"No Players Connected\n \n", 0, nil},
+		{"\n0. Ada, 76561198000000000\n1. Zed Smith, 76561198000000001\n \n", 2, []string{"Ada", "Zed Smith"}},
+		{"0. Ada, Lovelace, 0002a1b2c3d4e5f60718293a4b5c6d7e\n", 1, []string{"Ada, Lovelace"}},
+	}, []string{
+		"", " \n", "Server received, But no response!! \n", "1. Ada, 76561198000000000\n",
+		"0. Ada, 76561198000000000\n0. Zed, 76561198000000001\n", "0. Ada 76561198000000000\n",
+		"01. SteamID: 76561197960435530, Name: Haldor, Ping: 18\n",
+		"0. Ada, 76561198000000000\nNo Players Connected\n",
+	})
+}
+
+// Project Zomboid counts players in its header, then lists each after a dash.
+func TestParseZomboidPlayers(t *testing.T) {
+	checkPlayers(t, ParseZomboidPlayers, []playerCase{
+		{"Players connected (0): \n", 0, nil},
+		{"Players connected (2): \n-Ada\n-Zed Smith\n", 2, []string{"Ada", "Zed Smith"}},
+	}, []string{
+		"", "Unknown command players", "Players connected (1): \n", "Players connected (0): \n-Ada\n",
+		"Players connected (1): \nAda\n", "Players connected (2): <LINE> -Ada <LINE> -Zed <LINE> ",
+	})
+}
+
+// Conan Exiles answers with a table whose header alone means nobody is
+// online; a character's name stands for its player.
+func TestParseConanPlayers(t *testing.T) {
+	header := "Idx | Char name | Player name | User ID | Platform ID | Platform Name\n"
+	checkPlayers(t, ParseConanPlayers, []playerCase{
+		{header, 0, nil},
+		{header + "  0 | Ada       | ada_1       | 1A2B3C4D | 76561198000000000 | Steam\n" +
+			"  1 |           | zed_2       | 5E6F7A8B | 76561198000000001 | Steam\n", 2, []string{"Ada", "zed_2"}},
+	}, []string{
+		"", "Couldn't find the command: ListPlayers", "Idx | Player name\n",
+		header + "  0 | Ada | ada_1 | 1A2B3C4D\n", header + "  x | Ada | ada_1 | 1A2B3C4D | 7656 | Steam\n",
+	})
+}
+
+// The 7 Days to Die Telnet console streams its log into the reply; only the
+// player rows and their total count.
+func TestParse7DaysPlayers(t *testing.T) {
+	row := "0. id=171, Aona Suzutsuki, pos=(741.9, 45.1, 951.5), rot=(-11.2, -406.4, 0.0), remote=True, health=92, " +
+		"deaths=4, zombies=4, players=1, score=2, level=1, pltfmid=Steam_76561198010715714, " +
+		"crossid=EOS_0002bfc568d6401ca9de387e0ae914c9, ip=192.168.0.81, ping=0"
+	log := "2026-11-19T10:00:00 512.345 INF Executing command 'listplayers' by Telnet from 127.0.0.1:50000"
+	checkPlayers(t, Parse7DaysPlayers, []playerCase{
+		{"Total of 0 in the game\r\n", 0, nil},
+		{log + "\r\n" + row + "\r\n" + strings.Replace(row, "0. id=171, Aona Suzutsuki", "1. id=172, Zed", 1) +
+			"\r\nTotal of 2 in the game\r\n", 2, []string{"Aona Suzutsuki", "Zed"}},
+	}, []string{"", log, row, row + "\nTotal of 2 in the game", "Total of 0 in the game\nTotal of 0 in the game"})
+}
+
+// Each game with a player list gets it from its preset, also when a label
+// names the game's own adapter; other adapters and games have none.
+func TestResolveAdapterPlayers(t *testing.T) {
+	for game, command := range map[string]string{"minecraft": "list", "factorio": "/players online", "palworld": "ShowPlayers",
+		"ark-survival-evolved": "ListPlayers", "ark-survival-ascended": "ListPlayers", "project-zomboid": "players",
+		"conan-exiles": "ListPlayers", "7-days-to-die": "listplayers"} {
+		if adapter := ResolveAdapter(game, nil); adapter == nil || adapter.Players == nil || adapter.Players.Command != command {
+			t.Errorf("%s: %+v", game, adapter)
+		}
+	}
+	if adapter := ResolveAdapter("palworld", map[string]string{LabelConsole: "source-rcon"}); adapter.Players == nil {
+		t.Error("the game's own adapter lost its player list")
+	}
+	for game, labels := range map[string]map[string]string{"terraria": nil, "cs2": nil, "v-rising": nil, "rust": nil,
+		"palworld": {LabelConsole: "telnet-console"}, "unknown": {LabelConsole: "source-rcon"}} {
+		if adapter := ResolveAdapter(game, labels); adapter != nil && adapter.Players != nil {
+			t.Errorf("%s %v lists players", game, labels)
+		}
+	}
+}

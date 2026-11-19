@@ -1,12 +1,12 @@
-import { test, expect, asAdmin, serverRow, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, serverRow, openServer } from "./fixtures.mjs";
 
 asAdmin();
 
-// The fake Minecraft console takes fake-join, fake-leave, and fake-outage,
-// which change what its list command answers.
-async function command(page, text) {
+// The fake game consoles take fake-join, fake-leave, and fake-outage, which
+// change what their list command answers.
+async function command(page, text, server = "Survival") {
   await page.goto("/");
-  await serverRow(page, "Survival").getByRole("link", { name: "Console" }).click();
+  await serverRow(page, server).getByRole("link", { name: "Console" }).click();
   await expect(page.locator("[data-console-status]")).toHaveText("Connected");
   await page.getByLabel("Game command").fill(text);
   await page.getByRole("button", { name: "Send" }).click();
@@ -51,10 +51,38 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   // events start a moment later; its next refresh, within 10 seconds,
   // shows the reading.
   await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
-  await expect(players).toContainText("Check that RCON is on");
+  await expect(players).toContainText("Ludock reads them over Minecraft RCON.");
   await page.goto("/");
   await expect(survival).toContainText("Unavailable");
 
   await openServer(page, "valheim");
-  await expect(page.locator(".overview-players")).toContainText("Not available. Ludock lists players for Minecraft servers with RCON.");
+  await expect(page.locator(".overview-players")).toContainText("Not available. Ludock lists players for supported games whose console can list them.");
+});
+
+test("seeing who is online on a Palworld server", async ({ page }) => {
+  await dockerAction("palworld", "start");
+  try {
+    // Palworld says who is online but not how many it takes.
+    await openServer(page, "palworld");
+    const players = page.locator(".overview-players");
+    await expect(players).toContainText(/0\s*online/, { timeout: 30_000 });
+    await expect(players.locator(".player-slot")).toHaveCount(0);
+
+    const console = await page.context().newPage();
+    await command(console, "fake-join Ada <b>", "palworld");
+    await expect(players.getByRole("list", { name: "Online players" }).getByRole("listitem")).toHaveText(["Ada <b>"]);
+    await expect(players).toContainText(/1\s*online/);
+
+    await page.goto("/");
+    const row = serverRow(page, "palworld").locator(".server-row__players");
+    await expect(row).toContainText("1");
+    await expect(row).toContainText("Ada <b>");
+
+    await command(console, "fake-outage 20", "palworld");
+    await openServer(page, "palworld");
+    await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
+    await expect(players).toContainText("Ludock reads them over Palworld RCON.");
+  } finally {
+    await dockerAction("palworld", "stop");
+  }
 });

@@ -10,9 +10,10 @@ scripts/dev.sh
 
 Open <http://127.0.0.1:3000> and use the setup code printed in the output.
 The script builds Ludock and `cmd/fakedocker`, an in-memory Docker Engine API
-with a running Minecraft server and a stopped Valheim server, and keeps their
-data in `data/dev/`. Rerun it after changes, and set `LUDOCK_LISTEN` for another
-address. `fakedocker -demo` seeds the servers shown in the README screenshots.
+with a running Minecraft server and stopped Valheim and Palworld servers, and
+keeps their data in `data/dev/`. Rerun it after changes, and set `LUDOCK_LISTEN`
+for another address. `fakedocker -demo` seeds the servers shown in the README
+screenshots.
 
 - **Templates:** pages are [templ](https://templ.guide) components in
   `internal/web/views`. After editing a `.templ` file, run
