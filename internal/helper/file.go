@@ -84,6 +84,8 @@ const (
 	FileArchiveLimit  = 6
 	FileArchiveFull   = 7
 	FileNotArchive    = 8
+	// FilePartial is a selection that failed after changing some entries.
+	FilePartial = 9
 )
 
 type fileHelper struct {
@@ -620,7 +622,7 @@ func (h *fileHelper) run() error {
 		if err != nil {
 			return err
 		}
-		if err := h.removeEntry(parent, stage, 0); err != nil && !isNotExist(err) {
+		if err := h.removeStage(parent, stage); err != nil {
 			return err
 		}
 		return h.json(map[string]bool{"ok": true})
@@ -791,6 +793,8 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return FileArchiveFull
 		case errors.Is(err, errNotArchive):
 			return FileNotArchive
+		case errors.Is(err, errPartial):
+			return FilePartial
 		}
 		return 1
 	}
@@ -800,6 +804,7 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 var (
 	errNameTaken   = errors.New("the name is in use")
 	errFileChanged = errors.New("the file changed")
+	errPartial     = errors.New("part of the selection changed")
 )
 
 func nameTaken(err error) error {

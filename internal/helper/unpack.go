@@ -365,11 +365,32 @@ func (h *fileHelper) sweepUnpacks(parent fd) {
 		if !unpackStage.MatchString(child) {
 			continue
 		}
-		if info, err := lstatAt(parent, child); err == nil && isDir(info) &&
+		if info, err := lstatAt(parent, child); err == nil && stagingFolder(info) &&
 			time.Since(time.UnixMilli(int64(mtimeMs(info)))) > 2*UnpackDuration {
 			h.removeEntry(parent, child, 0)
 		}
 	}
+}
+
+// stagingFolder reports a folder only a helper could have made: private to
+// the helper's user, so a game running as another user can't plant one for
+// Ludock to delete.
+func stagingFolder(info *unix.Stat_t) bool {
+	return isDir(info) && info.Uid == uint32(unix.Geteuid()) && info.Mode&0o777 == 0o700
+}
+
+func (h *fileHelper) removeStage(parent fd, name string) error {
+	info, err := lstatAt(parent, name)
+	if isNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !stagingFolder(info) {
+		return errUnsafe
+	}
+	return h.removeEntry(parent, name, 0)
 }
 
 // unpack extracts an archive into a hidden staging folder beside it, then
@@ -426,6 +447,9 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	}
 	u := &unpacker{h: h, stage: stage, owner: owner, limits: limits, allowed: allowed, reserve: *h.request.Reserve,
 		umask: currentUmask(), buffer: make([]byte, 64*1024)}
+	if err := u.room(0); err != nil {
+		return err
+	}
 	archive := preader(descriptor)
 	var magic [512]byte
 	n, _ := unix.Pread(int(descriptor), magic[:], 0)
@@ -453,6 +477,9 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 		return err
 	}
 	if err := u.stopped(); err != nil {
+		return err
+	}
+	if err := u.room(0); err != nil {
 		return err
 	}
 	// Written data is durable before its name appears.
@@ -497,9 +524,6 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 	if err != nil {
 		return result, err
 	}
-	if !h.isStage(parent, stageName, stageInfo) || h.stop.Load() {
-		return result, errStopped
-	}
 	for attempt := 1; ; attempt++ {
 		candidate := base
 		if attempt > 1 {
@@ -512,6 +536,9 @@ func (h *fileHelper) finishUnpack(parent fd, archive, stageName string, stage fd
 			continue
 		} else if !isNotExist(err) {
 			return result, err
+		}
+		if !h.isStage(parent, stageName, stageInfo) || h.stop.Load() {
+			return result, errStopped
 		}
 		if err := renameNoReplace(source, sourceName, parent, candidate, info); errors.Is(err, unix.EEXIST) {
 			continue

@@ -267,8 +267,10 @@ written to a temporary file and replace the destination only once complete, so
 allow space for both.
 
 To unpack a zip, tar, or tar.gz archive, such as a world or mod pack you
-uploaded, choose **Unpack** from its menu. Archives are recognized by their
-content, whatever their name. The contents go into a new folder beside the
+uploaded, choose **Unpack** from its menu. It's offered for files named like
+archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.mcworld`, `.mcpack`,
+`.mcaddon`, `.mrpack`); Ludock reads the content to tell the formats apart, so
+a `.zip` that's really a tar still unpacks. The contents go into a new folder beside the
 archive: the archive's only folder when it has exactly one, such as `world/`,
 otherwise a folder named after the archive. If that name is taken, Ludock adds
 a number, such as `world (2)`; unpacking never replaces anything. Ludock

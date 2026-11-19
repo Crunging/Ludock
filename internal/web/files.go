@@ -176,7 +176,7 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request, request *Requ
 		f.ListError = f.Error
 	}
 	// Keep the address bar on the page, so reloads keep the filter.
-	if htmxSource(r) != "file-list" && f.Root.ID != "" {
+	if htmxSource(r) != "file-list" && f.Root.ID != "" && f.ListError == "" {
 		values := url.Values{"root": {f.Root.ID}}
 		if f.Path != "" {
 			values.Set("path", f.Path)

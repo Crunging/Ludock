@@ -262,6 +262,12 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	fresh := filepath.Join(root, ".ludock-unpack-"+stageID)
 	os.MkdirAll(filepath.Join(stale, "half"), 0o755)
 	os.MkdirAll(filepath.Join(fresh, "half"), 0o755)
+	os.Chmod(stale, 0o700)
+	os.Chmod(fresh, 0o700)
+	// A folder another user could have made under the same name is left.
+	planted := filepath.Join(root, ".ludock-unpack-7c9e6679-7425-40de-944b-e07fc1f90ae7")
+	os.MkdirAll(filepath.Join(planted, "game data"), 0o755)
+	unix.UtimesNano(planted, []unix.Timespec{unix.NsecToTimespec(0), unix.NsecToTimespec(0)})
 	old := unix.NsecToTimespec(0)
 	unix.UtimesNano(stale, []unix.Timespec{old, old})
 	if _, code := unpackFile(t, root, "other.tar", tarArchive(t, []archived{{name: "x", body: "x"}})); code == 0 {
@@ -275,6 +281,9 @@ func TestUnpackStagingCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
 		t.Fatal("cleanup kept the staging folder")
+	}
+	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
+		t.Fatal("removed a folder Ludock didn't make")
 	}
 }
 

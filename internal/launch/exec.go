@@ -36,6 +36,8 @@ var archiveErrors = map[int]*apperr.Error{
 		datasize.Format(helper.Unpack.Bytes)+" or 100 times its own size, or has too many entries or nested folders."),
 	helper.FileArchiveFull: apperr.New("ARCHIVE_NO_SPACE", 409, "The archive wasn’t unpacked: the disk would run short of free space."),
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
+	// A 5xx status reports the result as unconfirmed.
+	helper.FilePartial: apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
 }
 
 type ExecOptions struct {

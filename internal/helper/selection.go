@@ -49,9 +49,9 @@ func (h *fileHelper) selection(root fd, operation string) error {
 	}
 	switch operation {
 	case "delete-paths":
-		for _, item := range items {
+		for index, item := range items {
 			if err := h.removeEntry(parent, item.name, 0); err != nil {
-				return err
+				return partial(index, err)
 			}
 		}
 		return h.json(map[string]bool{"ok": true})
@@ -76,6 +76,14 @@ func (h *fileHelper) selection(root fd, operation string) error {
 		return err
 	}
 	return h.move(root, parent, items)
+}
+
+// partial marks a failure after earlier entries of a selection changed.
+func partial(done int, err error) error {
+	if done > 0 {
+		return errPartial
+	}
+	return err
 }
 
 // mountOf is the deepest nested mount holding value, or "" for the root's.
@@ -121,9 +129,9 @@ func (h *fileHelper) move(root, parent fd, items []selected) error {
 			return err
 		}
 	}
-	for _, item := range items {
+	for index, item := range items {
 		if err := renameNoReplace(parent, item.name, target, item.name, item.info); err != nil {
-			return nameTaken(err)
+			return partial(index, nameTaken(err))
 		}
 	}
 	return h.json(map[string]bool{"ok": true})

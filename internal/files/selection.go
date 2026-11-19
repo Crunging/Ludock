@@ -19,7 +19,8 @@ const MaxSelection = 500
 
 // selectionBytes bounds a selection's names, which reach the helper as one
 // command argument.
-const selectionBytes = 48 << 10
+// JSON may encode a byte as six; a form, as three.
+const selectionBytes = 16 << 10
 
 // selection checks the names of entries in one folder of a root and returns
 // their paths.
@@ -135,11 +136,17 @@ func (s *Service) Unpack(ctx context.Context, target Target, rootID, relative st
 		access.Cleanup(true)
 		// A helper that refused the archive removed its staging folder; one cut
 		// off may not have, so once it is gone a new helper removes it.
-		if !slices.ContainsFunc([]string{"ARCHIVE_UNSAFE", "ARCHIVE_TOO_LARGE", "ARCHIVE_NO_SPACE", "NOT_AN_ARCHIVE", "FILE_NAME_TAKEN"},
-			func(code string) bool { return apperr.Is(err, code) }) {
-			s.removeStage(context.WithoutCancel(ctx), target, root, normalized, stage)
+		if slices.ContainsFunc([]string{"ARCHIVE_UNSAFE", "ARCHIVE_TOO_LARGE", "ARCHIVE_NO_SPACE", "NOT_AN_ARCHIVE", "FILE_NAME_TAKEN",
+			"UNSAFE_OR_CHANGED_FILE_PATH"}, func(code string) bool { return apperr.Is(err, code) }) {
+			return nil, err
 		}
-		return nil, err
+		s.removeStage(context.WithoutCancel(ctx), target, root, normalized, stage)
+		// A helper cut off by a timeout or revoked access may have published
+		// its result before Docker removed it.
+		if public, ok := apperr.As(err); ok && public.Status == 401 {
+			return nil, err
+		}
+		return nil, apperr.New("FILE_UNCONFIRMED", 500, "The unpack was interrupted")
 	}
 	access.Cleanup(false)
 	var result helper.UnpackResult
