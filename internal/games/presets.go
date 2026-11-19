@@ -121,6 +121,30 @@ var Integrations = []Integration{
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Terraria console", BroadcastTemplate: "say {message}",
 			Placeholder: "playing, save, say Hello",
 			Commands:    []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}}}},
+	// Bedrock 1.26.50 and later take players on TCP and no longer on UDP.
+	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},
+		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, Aliases: []string{"bedrock"},
+		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Bedrock console", BroadcastTemplate: "say {message}",
+			Placeholder: "list, gamerule dofiretick false, say Hello",
+			Commands:    []QuickCommand{{"List players", "list"}, {"Message players", "say "}}}},
+	{GameType: "satisfactory", Name: "Satisfactory", GamePort: &Port{7777, "udp"},
+		Repositories: []string{"robtme/satisfactory-server", "wolveix/satisfactory-server"}, UpdatesOnStart: true},
+	{GameType: "enshrouded", Name: "Enshrouded", GamePort: &Port{15637, "udp"},
+		Repositories: []string{"sknnr/enshrouded-dedicated-server", "mornedhels/enshrouded-server"}, UpdatesOnStart: true,
+		// Enshrouded takes players and answers queries on one port.
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 15637, PortEnv: []string{"SERVER_QUERYPORT", "PORT"}}},
+	{GameType: "dont-starve-together", StopTimeoutSeconds: 360, Name: "Don't Starve Together", GamePort: &Port{10999, "udp"},
+		Repositories: []string{"jamesits/dst-server"}, UpdatesOnStart: true, Aliases: []string{"dst", "don-t-starve-together"}},
+	// Core Keeper connects through Steam's relay by default and takes direct
+	// connections only on a port the image leaves unset.
+	{GameType: "core-keeper", Name: "Core Keeper", Repositories: []string{"escaping/core-keeper-dedicated"},
+		UpdatesOnStart: true, Aliases: []string{"corekeeper"}},
+	{GameType: "vintage-story", Name: "Vintage Story", GamePort: &Port{42420, "tcp"},
+		Repositories: []string{"zsuatem/vintagestory", "devidian/vintagestory"}, Aliases: []string{"vintagestory"},
+		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Vintage Story console", BroadcastTemplate: "/announce {message}",
+			Placeholder: "/list clients, /autosavenow, /announce Hello",
+			Commands: []QuickCommand{{"List players", "/list clients"}, {"Save world", "/autosavenow"},
+				{"Message players", "/announce "}}}},
 }
 
 func arkConsole() *ConsolePreset {

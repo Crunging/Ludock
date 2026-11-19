@@ -274,6 +274,14 @@ func TestResolveQuery(t *testing.T) {
 		{"minecraft", nil, map[string]string{"SERVER_PORT": "nope"}, gamequery.MinecraftPing, 0},
 		{"valheim", nil, nil, gamequery.ValveA2S, 2457},
 		{"ark", nil, map[string]string{"QUERY_PORT": "27016"}, gamequery.ValveA2S, 27016},
+		{"enshrouded", nil, nil, gamequery.ValveA2S, 15637},
+		{"enshrouded", nil, map[string]string{"SERVER_QUERYPORT": "15700"}, gamequery.ValveA2S, 15700},
+		{"enshrouded", nil, map[string]string{"PORT": "15800"}, gamequery.ValveA2S, 15800},
+		{"minecraft-bedrock", nil, nil, "", 0},
+		{"satisfactory", nil, nil, "", 0},
+		{"dont-starve-together", nil, nil, "", 0},
+		{"core-keeper", nil, nil, "", 0},
+		{"vintage-story", nil, nil, "", 0},
 		{"v-rising", map[string]string{LabelQuery: "a2s", LabelQueryPort: "9877"}, nil, gamequery.ValveA2S, 9877},
 		{"minecraft", map[string]string{LabelQuery: "A2S", LabelQueryPort: "25565"}, nil, gamequery.ValveA2S, 25565},
 		{"v-rising", map[string]string{LabelQuery: "a2s"}, nil, "", 0},
@@ -293,6 +301,96 @@ func TestResolveQuery(t *testing.T) {
 		}
 		if query == nil || query.Protocol != c.protocol || query.QueryPort(c.env) != c.port {
 			t.Errorf("%s %v %v: %+v", c.game, c.labels, c.env, query)
+		}
+	}
+}
+
+// Each image is recognized by its repository alone, whether pulled from
+// Docker Hub or another registry, by tag or by digest; a lookalike is not.
+func TestImageIntegrationRecognizesNewGames(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for repository, game := range map[string]string{
+		"itzg/minecraft-bedrock-server":     "minecraft-bedrock",
+		"robtme/satisfactory-server":        "satisfactory",
+		"wolveix/satisfactory-server":       "satisfactory",
+		"sknnr/enshrouded-dedicated-server": "enshrouded",
+		"mornedhels/enshrouded-server":      "enshrouded",
+		"jamesits/dst-server":               "dont-starve-together",
+		"escaping/core-keeper-dedicated":    "core-keeper",
+		"zsuatem/vintagestory":              "vintage-story",
+		"devidian/vintagestory":             "vintage-story",
+	} {
+		for _, image := range []string{repository, "docker.io/" + repository + ":latest", "ghcr.io/" + repository + ":1.2.3",
+			repository + digest, "registry.example.com:5000/" + repository + ":stable" + digest} {
+			if got := InferGameType(image); got != game {
+				t.Errorf("%s: %s", image, got)
+			}
+		}
+	}
+	for _, image := range []string{"itzg/minecraft-bedrock-server-proxy", "sknnr/enshrouded", "vintagestory", "escaping/core-keeper"} {
+		if got := InferGameType(image); got != "unknown" {
+			t.Errorf("%s: %s", image, got)
+		}
+	}
+	// Java and Bedrock editions stay apart.
+	if InferGameType("itzg/minecraft-server") != "minecraft" {
+		t.Error("java edition")
+	}
+}
+
+// The new games connect where their images document, wait longer to stop
+// only where an image says the game needs it, and update on start only when
+// every listed image does.
+func TestNewGameIntegrations(t *testing.T) {
+	for game, want := range map[string]struct {
+		port    *Port
+		stop    int
+		updates bool
+	}{
+		"minecraft-bedrock":    {&Port{19132, "tcp"}, 120, true},
+		"satisfactory":         {&Port{7777, "udp"}, 120, true},
+		"enshrouded":           {&Port{15637, "udp"}, 120, true},
+		"dont-starve-together": {&Port{10999, "udp"}, 360, true},
+		"core-keeper":          {nil, 120, true},
+		"vintage-story":        {&Port{42420, "tcp"}, 120, false},
+	} {
+		integration := Lookup(game)
+		if integration == nil {
+			t.Errorf("%s: missing", game)
+			continue
+		}
+		if (integration.GamePort == nil) != (want.port == nil) || (want.port != nil && *integration.GamePort != *want.port) ||
+			integration.StopTimeout() != want.stop || integration.UpdatesOnStart != want.updates {
+			t.Errorf("%s: %+v", game, integration)
+		}
+	}
+	for alias, game := range map[string]string{"bedrock": "minecraft-bedrock", "dst": "dont-starve-together",
+		"Don't Starve Together": "dont-starve-together", "corekeeper": "core-keeper", "VintageStory": "vintage-story"} {
+		if integration := Lookup(alias); integration == nil || integration.GameType != game {
+			t.Errorf("%s: %+v", alias, integration)
+		}
+	}
+}
+
+// Bedrock and Vintage Story read commands from the process's input, with
+// their own broadcast syntax; the others have no console Ludock speaks.
+func TestNewGameConsoles(t *testing.T) {
+	for game, broadcast := range map[string]string{"minecraft-bedrock": "say {message}", "vintage-story": "/announce {message}"} {
+		adapter := ResolveAdapter(game, nil)
+		if adapter == nil || adapter.Transport != TransportContainerStdin || adapter.Players != nil ||
+			BroadcastTemplate(game, nil) != broadcast {
+			t.Errorf("%s: %+v", game, adapter)
+		}
+	}
+	// Bedrock has no single save command; the stop doesn't send one.
+	for _, command := range ResolveAdapter("minecraft-bedrock", nil).Commands {
+		if command.Label == "Save world" {
+			t.Error("bedrock save shortcut")
+		}
+	}
+	for _, game := range []string{"satisfactory", "enshrouded", "dont-starve-together", "core-keeper"} {
+		if adapter := ResolveAdapter(game, nil); adapter != nil {
+			t.Errorf("%s: %+v", game, adapter)
 		}
 	}
 }
