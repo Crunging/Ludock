@@ -205,6 +205,20 @@ func TestTelnetIgnoresStreamedLog(t *testing.T) {
 	if err != nil || response != "Chat 'Bob': my password is incorrect\r\nTotal of 2 in the game" {
 		t.Fatalf("%q %v", response, err)
 	}
+	// Chat right after sign-in, before the command, is not a rejection, and
+	// neither is a command that says the word.
+	chatty, chattyPort := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\nChat 'Bob': password is incorrect\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "done\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if response, err := Telnet(ctx, chatty, chattyPort, "telnet-secret", "say password is incorrect", Control{}); err != nil || response != "done" {
+		t.Fatalf("%q %v", response, err)
+	}
 }
 
 // A rejection that arrives after the command was sent still fails the

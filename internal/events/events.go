@@ -320,8 +320,9 @@ func (h *Hub) Changed(ctx context.Context, serverID string) {
 	}
 }
 
-// visibility is EffectiveAll for one batch, read once per account: an account
-// often has several pages open, each its own subscriber.
+// visibility is EffectiveAll for one batch, read once per account and role:
+// an account often has several pages open, each its own subscriber, and a
+// role change between their validations must not reuse the old answer.
 func (h *Hub) visibility(servers []identity.Server) func(context.Context, *db.SessionUser) (*db.SessionUser, map[string][]authz.Capability, error) {
 	type result struct {
 		user    *db.SessionUser
@@ -332,12 +333,13 @@ func (h *Hub) visibility(servers []identity.Server) func(context.Context, *db.Se
 		if actor == nil {
 			return h.Authz.EffectiveAll(ctx, nil, servers)
 		}
-		if cached, ok := seen[actor.ID]; ok {
+		key := actor.ID + "\x00" + string(actor.Role)
+		if cached, ok := seen[key]; ok {
 			return cached.user, cached.visible, nil
 		}
 		user, visible, err := h.Authz.EffectiveAll(ctx, actor, servers)
 		if err == nil {
-			seen[actor.ID] = result{user, visible}
+			seen[key] = result{user, visible}
 		}
 		return user, visible, err
 	}

@@ -393,7 +393,7 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
-	authFailed     = regexp.MustCompile(`(?i)incorrect|invalid password|authentication failed`)
+	authFailed     = regexp.MustCompile(`(?i)password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed`)
 )
 
 type telnetDecoder struct {
@@ -480,11 +480,14 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// Die stream their log, including player chat, to every Telnet client.
 	passwordAt, commandAt := 0, 0
 	errSignIn := errors.New("Telnet console authentication failed")
-	finish := func() (string, error) {
-		// A rejection slower than the command timer is the first line after
-		// the password, ahead of any echo.
+	// The reply to the password is the first line after it, even when it
+	// arrives after the command was sent; later lines are the game's own.
+	rejected := func() bool {
 		reply, _, _ := strings.Cut(strings.TrimSpace(decodeText(raw[passwordAt:])), "\n")
-		if authFailed.MatchString(reply) {
+		return authFailed.MatchString(reply)
+	}
+	finish := func() (string, error) {
+		if rejected() {
 			return "", errSignIn
 		}
 		return CleanTelnet(decodeText(raw[commandAt:]), command), nil
@@ -534,7 +537,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 				commandTimer.Reset(telnetCommandGap)
 				continue
 			}
-			if passwordSent && !commandSent && authFailed.MatchString(decodeText(raw[passwordAt:])) {
+			if passwordSent && !commandSent && rejected() {
 				return "", errSignIn
 			}
 			if commandSent {

@@ -64,9 +64,10 @@ type Access struct {
 	allowedAt map[authz.Capability]time.Time
 }
 
-// allowedReuse is how long Allowed trusts its last confirmation. Output
-// checks it per line, and a check is several database reads; the idle watcher
-// revalidates on its own, uncached.
+// allowedReuse is how long Allowed trusts its last confirmation of log
+// reading. Log output checks it per line, and a check is several database
+// reads; the idle watcher revalidates on its own, uncached. Command output is
+// always checked afresh.
 const allowedReuse = time.Second
 
 // Authorize resolves the server for capability, or reports why not and
@@ -135,6 +136,9 @@ func (a *Access) User() *db.SessionUser {
 func (a *Access) Allowed(required authz.Capability) bool {
 	if !a.channel.Open() {
 		return false
+	}
+	if required != authz.LogsRead {
+		return a.permitted(required)
 	}
 	a.mu.Lock()
 	fresh := time.Since(a.allowedAt[required]) < allowedReuse
