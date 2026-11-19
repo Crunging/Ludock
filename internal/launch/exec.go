@@ -21,6 +21,7 @@ var (
 	ErrFailed      = apperr.New("FILE_OPERATION_FAILED", 409, "File operation failed")
 	ErrUnsafe      = apperr.New("UNSAFE_OR_CHANGED_FILE_PATH", 409, "The path changed, is unsafe, or cannot be accessed")
 	ErrNameTaken   = apperr.New("FILE_NAME_TAKEN", 409, "A file or folder with that name already exists")
+	ErrFileChanged = apperr.New("FILE_CHANGED", 409, "The file changed since you opened it, so your edit was not saved. Copy your text, then reopen the file to see the new version.")
 	ErrOutputLimit = apperr.New("FILE_OUTPUT_LIMIT", 409, "File operation failed")
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
 )
@@ -215,6 +216,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileNameTaken {
 		return nil, ErrNameTaken
+	}
+	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileChanged {
+		return nil, ErrFileChanged
 	}
 	if info.Running || info.ExitCode == nil || *info.ExitCode != 0 {
 		return nil, ErrUnsafe

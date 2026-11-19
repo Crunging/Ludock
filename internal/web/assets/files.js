@@ -1,6 +1,62 @@
 // File uploads: one raw PUT per file, in order, into the folder shown.
 // The server checks the size limit, the name, and access while it writes.
 "use strict";
+// The file editor saves raw text with a PUT, since form bodies are capped
+// far below the preview limit; the response replaces the dialog's content.
+(function () {
+  var csrf = document.querySelector('meta[name="csrf-token"]');
+  function editor(dialog) { return dialog.querySelector("form[data-file-editor] textarea"); }
+  function unsaved(text) { return text && (text.hasAttribute("data-unsaved") || text.value !== text.defaultValue); }
+  // Escape would close the dialog and drop edits.
+  document.addEventListener("cancel", function (event) {
+    if (event.target.matches && event.target.matches("dialog") && unsaved(editor(event.target))) event.preventDefault();
+  }, true);
+  document.addEventListener("submit", async function (event) {
+    var form = event.target.closest && event.target.closest("form[data-file-editor]");
+    if (!form) return;
+    event.preventDefault();
+    var dialog = form.closest("dialog");
+    var button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Saving…";
+    var body;
+    try {
+      var response = await fetch(form.getAttribute("data-file-editor"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": csrf ? csrf.content : "", "HX-Request": "true" },
+        body: form.querySelector("textarea").value,
+        credentials: "same-origin",
+      });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      body = await response.text();
+      if (!/file-preview-title/.test(body)) {
+        // Other failures come back as an alert fragment; show only its text.
+        var template = document.createElement("template");
+        template.innerHTML = body;
+        throw new Error(template.content.textContent.trim() || "The file could not be saved (HTTP " + response.status + ").");
+      }
+    } catch (error) {
+      var alert = document.createElement("div");
+      alert.className = "alert alert--error";
+      alert.setAttribute("role", "alert");
+      alert.textContent = error instanceof TypeError ? "The file could not be saved. Check your connection and try again." : error.message;
+      form.querySelector("[data-file-editor-error]").replaceChildren(alert);
+      button.disabled = false;
+      button.textContent = "Save";
+      return;
+    }
+    dialog.innerHTML = body;
+    if (window.htmx) window.htmx.process(dialog);
+    var focus = dialog.querySelector("textarea, [autofocus]");
+    if (focus) focus.focus();
+    if (!dialog.querySelector("form[data-file-editor]") && window.htmx) window.htmx.trigger(document.body, "files-changed");
+  });
+})();
+
 (function () {
   var page = document.querySelector("[data-files]");
   var zone = document.querySelector("[data-dropzone]");

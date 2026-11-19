@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
@@ -277,7 +278,9 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 	}
 }
 
-// filePreview shows a file inline, reading at most files.PreviewLimit.
+// filePreview shows a file inline, reading at most files.PreviewLimit, and
+// with edit=1 opens it in the editor. A request from inside the dialog gets
+// only the dialog's content.
 func (s *Server) filePreview(w http.ResponseWriter, r *http.Request, request *Request) {
 	query := r.URL.Query()
 	id, root, path := r.PathValue("id"), query.Get("root"), query.Get("path")
@@ -287,10 +290,10 @@ func (s *Server) filePreview(w http.ResponseWriter, r *http.Request, request *Re
 		return
 	}
 	defer action.Done()
-	p := views.FilePreview{ServerID: id, Name: path[strings.LastIndex(path, "/")+1:], Limit: datasize.Format(files.PreviewLimit),
-		Download: "/files/" + id + "/download?" + url.Values{"root": {root}, "path": {path}}.Encode()}
-	if index := slices.IndexFunc(action.Container.FileRoots, func(item files.Root) bool { return item.ID == root }); index >= 0 {
-		p.Path = strings.TrimSuffix(action.Container.FileRoots[index].Path, "/") + "/" + path
+	p := s.previewView(action, id, root, path)
+	if p.CanEdit, err = s.App.Authz.Has(action.Ctx, request.User(), id, authz.FilesWrite); err != nil {
+		s.fail(w, r, request, err)
+		return
 	}
 	preview, err := s.App.Files.Preview(action.Ctx, fileTarget(action), root, path, action.Assert)
 	if err != nil {
@@ -301,9 +304,94 @@ func (s *Server) filePreview(w http.ResponseWriter, r *http.Request, request *Re
 		}
 		p.Error = publicMessage(err)
 	} else {
-		p.Name, p.Size, p.Kind, p.Text = preview.Name, preview.Size, preview.Kind, preview.Text
+		setPreview(&p, preview)
+		p.Editing = query.Get("edit") == "1" && p.CanEdit && p.Kind == files.PreviewText && p.Editable
+	}
+	if htmxTarget(r) == "file-action" {
+		render(w, r, http.StatusOK, views.FilePreviewContent(p))
+		return
 	}
 	render(w, r, http.StatusOK, views.FilePreviewDialog(p))
+}
+
+func (s *Server) previewView(action *serverAction, id, root, path string) views.FilePreview {
+	p := views.FilePreview{ServerID: id, Root: root, File: path, Name: path[strings.LastIndex(path, "/")+1:],
+		Limit: datasize.Format(files.PreviewLimit), Download: "/files/" + id + "/download?" + url.Values{"root": {root}, "path": {path}}.Encode()}
+	if index := slices.IndexFunc(action.Container.FileRoots, func(item files.Root) bool { return item.ID == root }); index >= 0 {
+		p.Path = strings.TrimSuffix(action.Container.FileRoots[index].Path, "/") + "/" + path
+	}
+	return p
+}
+
+func setPreview(p *views.FilePreview, preview *files.Preview) {
+	p.Name, p.Size, p.Kind, p.Text = preview.Name, preview.Size, preview.Kind, preview.Text
+	p.Editable, p.Version, p.CRLF, p.BOM = preview.Editable, preview.Version, preview.CRLF, preview.BOM
+}
+
+// fileSave replaces a previewed text file with the editor's text, sent raw
+// (application/octet-stream) with line breaks as LF, like an upload. It
+// answers with the dialog's content: the new preview, or the editor with
+// the submitted text and the reason it was not saved.
+func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Request) {
+	kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if kind != "application/octet-stream" {
+		http.Error(w, "Saves must use application/octet-stream", http.StatusUnsupportedMediaType)
+		return
+	}
+	query := r.URL.Query()
+	id, root, path := r.PathValue("id"), query.Get("root"), query.Get("path")
+	crlf, bom := query.Get("crlf") == "1", query.Get("bom") == "1"
+	// The body is read before the action rechecks access and takes the locks.
+	controller := http.NewResponseController(w)
+	controller.SetReadDeadline(time.Now().Add(time.Minute))
+	body, err := io.ReadAll(io.LimitReader(r.Body, files.PreviewLimit+1))
+	controller.SetReadDeadline(time.Time{})
+	if err != nil {
+		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Invalid save request"))
+		return
+	}
+	action, err := s.startAction(r, request, id, authz.FilesWrite)
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	defer action.Done()
+	p := s.previewView(action, id, root, path)
+	p.CanEdit, p.Editable, p.Editing, p.Unsaved = true, true, true, true
+	p.Kind, p.Text, p.Version, p.CRLF, p.BOM, p.Size = files.PreviewText, string(body), query.Get("version"), crlf, bom, int64(len(body))
+	status := http.StatusOK
+	switch {
+	case len(body) > files.PreviewLimit:
+		status, p.Error = http.StatusRequestEntityTooLarge, "The text is over "+p.Limit+", so it can’t be saved here."
+	case !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0:
+		status, p.Error = http.StatusBadRequest, "The text can’t be saved as a text file."
+	}
+	if p.Error != "" {
+		render(w, r, status, views.FilePreviewContent(p))
+		return
+	}
+	content := files.EditedContent(string(body), crlf, bom)
+	if err := s.App.Files.Save(action.Ctx, fileTarget(action), root, path, content, p.Version, action.Assert); err != nil {
+		public, ok := apperr.As(err)
+		if ok && public.Status == http.StatusUnauthorized {
+			s.fail(w, r, request, err)
+			return
+		}
+		status = http.StatusConflict
+		if ok && public.Status < 500 {
+			status = public.Status
+		}
+		p.Error = publicMessage(err)
+		render(w, r, status, views.FilePreviewContent(p))
+		return
+	}
+	s.audit(r, request, "server.file.edited", action.Logical.ID, map[string]any{"root": root, "path": path, "size": len(content)})
+	saved, _ := files.ReadPreview(bytes.NewReader(content))
+	saved.Name, saved.Size = p.Name, int64(len(content))
+	p = s.previewView(action, id, root, path)
+	setPreview(&p, &saved)
+	p.CanEdit, p.Notice = true, "Saved “"+p.Name+"”."
+	render(w, r, http.StatusOK, views.FilePreviewContent(p))
 }
 
 func contentDisposition(name string) string {
