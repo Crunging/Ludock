@@ -80,7 +80,7 @@ func serve() int {
 		return 1
 	}
 	defer database.Close()
-	setup, err := auth.NewSetupWindow(func() int64 { return time.Now().UnixMilli() }, auth.SetupWindowMs, cfg.SetupCode)
+	setup, err := auth.NewSetup(cfg.SetupCode)
 	if err != nil {
 		log.Error(startupError(err, "Could not prepare initial setup. Check LUDOCK_SETUP_CODE."))
 		return 1

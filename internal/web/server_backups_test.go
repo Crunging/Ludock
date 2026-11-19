@@ -102,16 +102,19 @@ func TestArchiveAccessNeedsAnAdministrator(t *testing.T) {
 	}
 }
 
+// Updating needs an administrator, skipping its backup needs the server's
+// name typed, and a container Docker removes on stop is never replaced.
 func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleOperator)
 	p.grant(operator, authz.ServerView, authz.ServerRestart)
-	values := url.Values{"createBackup": {"true"}, "confirmed": {"true"}}
+	values := url.Values{"createBackup": {"true"}}
 	if response := p.action("/servers/"+p.server+"/updates", operator, values); response.StatusCode != http.StatusForbidden {
 		t.Fatal(response.StatusCode)
 	}
-	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"true"}}); response.StatusCode != http.StatusBadRequest {
+	// Skipping the backup needs the server's name typed.
+	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"false"}}); response.StatusCode != http.StatusBadRequest {
 		t.Fatal(response.StatusCode)
 	}
 	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", operator, nil, map[string]string{"HX-Request": "true"}).Body.String()

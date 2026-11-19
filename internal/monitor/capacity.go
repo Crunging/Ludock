@@ -19,12 +19,15 @@ import (
 
 const (
 	// DiskInterval is how often a monitored server's data folders are
-	// measured, in milliseconds. Each measurement starts a file helper per
-	// folder.
-	DiskInterval = 10 * 60_000
-	// diskAlertingInterval applies while a folder alerts, so freed space
+	// measured while someone has a page open, in milliseconds. Each
+	// measurement starts a file helper per folder, so with nobody watching
+	// they are measured every DiskIdleInterval.
+	DiskInterval     = 10 * 60_000
+	DiskIdleInterval = 30 * 60_000
+	// The alerting intervals apply while a folder alerts, so freed space
 	// clears it soon.
-	diskAlertingInterval = 60_000
+	diskAlertingInterval     = 60_000
+	diskIdleAlertingInterval = 5 * 60_000
 	// Hysteresis is how many percentage points below its threshold a value
 	// must fall to end an alert.
 	Hysteresis = 5
@@ -293,9 +296,10 @@ func bound(server identity.Server, current map[string]servers.Container) bool {
 }
 
 // CheckDisk measures the data folders of monitored servers that are due,
-// running or not. current is the tick's discovery result, or nil when
-// Docker is unreachable; then nothing is measured.
-func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Container, now int64) error {
+// running or not, more often while someone is watching. current is the
+// tick's discovery result, or nil when Docker is unreachable; then nothing
+// is measured.
+func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Container, now int64, watched bool) error {
 	if current == nil || s.MeasureDisk == nil {
 		return nil
 	}
@@ -322,9 +326,14 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 				previous.Folders[index].AlertSince, previous.Folders[index].Notified = 0, false
 			}
 		}
-		interval := int64(DiskInterval)
-		if previous.alerting() {
+		interval := int64(DiskIdleInterval)
+		switch alerting := previous.alerting(); {
+		case alerting && watched:
 			interval = diskAlertingInterval
+		case alerting:
+			interval = diskIdleAlertingInterval
+		case watched:
+			interval = DiskInterval
 		}
 		if previous.CheckedAt != 0 && now-previous.CheckedAt < interval {
 			continue

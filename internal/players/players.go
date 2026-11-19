@@ -21,13 +21,19 @@ const (
 	// Interval is how often a running server's players are read. The tick
 	// that polls runs every 15 s, so a reading this close to due is taken.
 	Interval = 30 * time.Second
-	early    = 5 * time.Second
+	// IdleInterval is how often a monitored game's status is read while
+	// nobody watches, since each reading starts a helper container.
+	IdleInterval = 2 * time.Minute
+	early        = 5 * time.Second
 	// readLimit bounds one reading, including a console helper's setup.
 	readLimit = 30 * time.Second
 	// parallel readings across the fleet.
 	parallel = 4
 	// Fresh is how long a reading counts toward Online.
 	Fresh = 2 * Interval
+	// answerFresh is how long a game's answer counts, which spans an idle
+	// poll and the tick it waits for.
+	answerFresh = IdleInterval + Interval
 )
 
 // Reading is one server's players as Ludock last read them.
@@ -99,7 +105,7 @@ func (s *Service) Game(serverID string, container servers.Container) (Game, int6
 	if reading == nil || reading.AnsweredAt == 0 {
 		return Waiting, 0
 	}
-	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > Fresh {
+	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > answerFresh {
 		return Unknown, reading.AnsweredAt
 	}
 	if reading.Answer == Silent {
@@ -168,8 +174,8 @@ func (s *Service) OnlineAt(serverID string, container servers.Container) (int, i
 
 // Poll starts a reading for every running server that is due: those that
 // list players while someone watches, and monitored ones whose game answers
-// a status query. It forgets servers that stopped, and waits for the
-// readings.
+// a status query, less often while nobody watches. It forgets servers that
+// stopped, and waits for the readings.
 func (s *Service) Poll(ctx context.Context, watched bool) {
 	var monitored map[string]bool
 	if s.Monitored != nil {
@@ -187,6 +193,10 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 		return
 	}
 	now := time.Now()
+	due := Interval
+	if !watched {
+		due = IdleInterval
+	}
 	listed := map[string]bool{}
 	var wait sync.WaitGroup
 	for _, server := range logical {
@@ -200,7 +210,7 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 		if container.Health == "starting" || !(watched || (monitored[server.ID] && container.Query != nil)) {
 			continue
 		}
-		if reading := s.Get(server.ID, container); reading != nil && now.Sub(time.UnixMilli(reading.CheckedAt)) < Interval-early {
+		if reading := s.Get(server.ID, container); reading != nil && now.Sub(time.UnixMilli(reading.CheckedAt)) < due-early {
 			continue
 		}
 		s.start(ctx, server, &wait)

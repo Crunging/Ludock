@@ -18,6 +18,11 @@ keep both private.
   and run `docker compose up -d --force-recreate ludock`.
 - **Existing data:** Ludock refuses to start on an unrelated database or an
   unsupported schema, and leaves it unchanged.
+- **First administrator:** until one exists, the setup page asks for the
+  one-time code Ludock prints to its logs at startup (or `LUDOCK_SETUP_CODE`).
+  The code has no deadline. A generated code is replaced at each restart until
+  setup is done; a configured one stays the same. Failed attempts are limited
+  per client address.
 
 ### Remote access
 
@@ -437,11 +442,12 @@ pin a version or skip updates, so every **Restart** updates the game, as
 **Update server** pulls a newer version of the server's image and recreates its
 container with the same settings. It needs an administrator and nothing else:
 Ludock works through the Docker socket alone, whichever tool created the
-container.
+container. **Back up first** is ticked when you may back up; skipping it asks
+you to type the server's name. Ludock confirms before it starts.
 
 - Ludock pulls the image tag the container was created from. If the image
-  hasn't changed, nothing else happens; **Recreate anyway** recreates the
-  container regardless.
+  hasn't changed, nothing else happens; **Advanced → Update even if the image
+  is already current** recreates the container regardless.
 - It stops the server, optionally takes a backup, and creates the new
   container beside the stopped original. The new container keeps the original's
   environment, command, ports, networks, static addresses, restart policy,
@@ -506,13 +512,16 @@ tab asks right away, at most once every 10 seconds.
 ## Schedules
 
 Schedules start, stop, restart, or back up a server, or send a command to its
-game console, at a time on chosen days or once at a date and time. They
-default to your browser's time zone, and **Create paused** saves one without
-running it.
+game console, at a time on chosen days or once at a date and time. A new
+schedule starts as a daily restart at 08:00 in your browser's time zone,
+backing up first when backup storage is set up, the server has data folders,
+and you may back up. The time zone, waiting for an empty server, and countdown
+warnings are under **More options**. To keep a new schedule from running,
+**Pause** it in the list.
 
-- **Backups before restarting:** a restart schedule can back up first, like
+- **Backups before restarting:** a restart schedule can **Back up first**, like
   **Take a backup first**. It needs backup access, and the server must be
-  running when it runs.
+  running when it runs. If the backup fails, the server stays stopped.
 - **Countdown warnings:** a restart schedule can announce the restart through the
   game console, at 10, 5, and 1 minutes before by default or up to ten times you
   choose from 1 to 60 minutes. It needs console access and a game with a
@@ -561,16 +570,21 @@ running it.
 
 ## Availability alerts
 
-Monitoring is off by default. An administrator turns it on from a server's
-**Overview**. It follows Docker's running state and health check, for games
-with a status query whether the game itself answers, and the server's disk
-space and memory.
+Every server is monitored from the moment Ludock finds it: add a
+[notification destination](#notifications) to hear about problems. Monitoring
+follows Docker's running state and health check, for games with a status query
+whether the game itself answers, and the server's disk space and memory. A
+server already stopped when Ludock first finds it stays quiet until it runs.
+An administrator can turn a server's monitoring off, or **Pause alerts for
+maintenance**, on its **Overview**; the levels below are under **Alert
+levels**.
 
-- **Game not answering:** Ludock asks a monitored game about every 30 seconds,
-  from a short-lived helper that shares the game's network and connects to
+- **Game not answering:** Ludock asks a monitored game about every 30 seconds
+  while someone has Ludock open and every 2 minutes otherwise, from a
+  short-lived helper that shares the game's network and connects to
   `127.0.0.1`, so the query port doesn't need publishing; Ludock never queries
   other hosts. A game that answered since its container started and then stops
-  answering while the container runs is an outage after the grace period,
+  answering while the container runs is an outage after the wait before alerting,
   even if a health check that asks the game also fails,
   reported as **Game not answering**, and it recovers when the game answers
   again. A game that hasn't answered yet in this container run, such as one
@@ -583,11 +597,13 @@ space and memory.
   Minecraft's pre-1.7 legacy ping and split Steam replies, counts as no
   answer.
 
-- **Disk nearly full:** about every 10 minutes, Ludock measures the free and
-  total space of the filesystem under each data folder of a monitored server,
-  even while it's stopped, from a short-lived read-only file helper. It alerts
-  when a folder's disk reaches the alert level, 90% full by default, and
-  measures that folder every minute until it falls 5 points below the level.
+- **Disk nearly full:** about every 10 minutes while someone has Ludock open,
+  and every 30 minutes otherwise, Ludock measures the free and total space of
+  the filesystem under each data folder of a monitored server, even while it's
+  stopped, from a short-lived read-only file helper. It alerts when a folder's
+  disk reaches the alert level, 90% full by default, and measures that folder
+  every minute (every 5 with nobody watching) until it falls 5 points below the
+  level.
   **Overview** shows each folder's disk, by container path, to people who can
   read its files. A measurement that fails, such as for a mount the file
   helpers can't reach, shows as not measured and neither raises nor clears an
@@ -597,16 +613,16 @@ space and memory.
   limit by default, for 5 minutes, and the alert ends once memory falls 5
   points below the level or the server stops. Containers without a limit
   never alert.
-- **Grace period:** how long to wait before reporting an outage; 120 seconds by
-  default.
+- **Wait before alerting:** how long an outage lasts before it's reported; 120
+  seconds by default.
 - **Settings:** each alert can be turned off or given its own level on the
   server's **Overview**. Changing an alert's settings ends its current alert
   without a recovery message, and a disk is measured again on the next check.
 - **Quiet times:** stops and operations started through Ludock don't alert, and
   a stopped server stays quiet until it runs again, though its disk still
   alerts. Disks and memory aren't checked while an operation runs.
-  **Maintenance mode** pauses alerts without stopping the server or its
-  schedules.
+  **Pause alerts for maintenance** pauses alerts without stopping the server or
+  its schedules.
 - **Docker outages** show availability as unknown, and disks and memory keep
   their last state.
 

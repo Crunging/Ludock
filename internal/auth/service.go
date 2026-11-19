@@ -58,7 +58,7 @@ type Principal struct {
 type Service struct {
 	DB     *db.DB
 	Authz  *authz.Service
-	Setup  *SetupWindow
+	Setup  *Setup
 	Work   *PasswordWork
 	Hasher Hasher
 	// Now returns Unix milliseconds; tests replace it.
@@ -67,7 +67,7 @@ type Service struct {
 	setupScope string
 }
 
-func NewService(d *db.DB, authorization *authz.Service, setup *SetupWindow) *Service {
+func NewService(d *db.DB, authorization *authz.Service, setup *Setup) *Service {
 	return &Service{DB: d, Authz: authorization, Setup: setup, Work: NewPasswordWork(), Hasher: Argon2{},
 		Now: func() int64 { return time.Now().UnixMilli() }, setupScope: identity.NewUUID()}
 }
@@ -129,7 +129,7 @@ func (s *Service) SetupState(ctx context.Context) (SetupState, error) {
 	if err != nil {
 		return SetupState{}, err
 	}
-	return s.Setup.State(required), nil
+	return SetupState{Required: required}, nil
 }
 
 // LogSetupInstructions prints a generated setup code to the console once.
@@ -140,10 +140,9 @@ func (s *Service) LogSetupInstructions(ctx context.Context, console func(string)
 		return
 	}
 	if code := s.Setup.TakeGeneratedCode(); code != "" {
-		console("Ludock initial setup code: " + code + "\nEnter this one-time code in the setup page within five minutes.\n")
+		console("Ludock initial setup code: " + code + "\nEnter this one-time code on the setup page to create the first administrator.\n")
 	}
-	log.Info("Initial administrator setup is available", logging.F("durationMinutes", SetupWindowMs/60_000),
-		logging.F("closesAt", time.UnixMilli(s.Setup.ExpiresAt).UTC().Format("2006-01-02T15:04:05.000Z")))
+	log.Info("Initial administrator setup is available")
 }
 
 func (s *Service) newToken() string {
@@ -182,8 +181,7 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 		return nil, err
 	}
 	sourceKey := throttleKey("setup-source", s.setupScope+":"+client.source())
-	// Completed or expired setup stays authoritative even for a blocked
-	// source.
+	// Completed setup stays authoritative even for a blocked source.
 	if err := s.Setup.assertOpen(required); err != nil {
 		return nil, err
 	}

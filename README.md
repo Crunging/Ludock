@@ -44,8 +44,8 @@ platforms.
    ```
 
 2. Print the one-time setup code, then open `http://<docker-host>:3000` and use
-   it to create the first administrator within five minutes. If it expires,
-   `docker compose restart ludock` prints a new one.
+   it to create the first administrator. The code works until someone uses
+   it; if you lose it, `docker compose restart ludock` prints a new one.
 
    ```bash
    docker compose logs ludock

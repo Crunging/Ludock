@@ -196,22 +196,16 @@
       preset.form.querySelectorAll("input[name=days]").forEach(function (box) { box.checked = days.indexOf(box.value) >= 0; });
       preset.form.querySelectorAll("button[data-days]").forEach(function (other) { other.setAttribute("aria-pressed", String(other === preset)); });
       preset.form.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
-    }
-    var zone = event.target.closest && event.target.closest("button[data-local-timezone]");
-    if (zone && zone.form) {
-      zone.form.elements[zone.getAttribute("data-local-timezone")].value = localTimezone;
-      zone.form.dispatchEvent(new Event("change", { bubbles: true }));
     }
   });
   function timezones(root) {
     (root || document).querySelectorAll("input[data-default-local-timezone]").forEach(function (input) {
+      // A zone other than the browser's is shown, not tucked away.
+      var disclosure = input.closest("details");
+      if (input.value && input.value !== localTimezone && disclosure) disclosure.open = true;
       if (input.value) return;
       input.value = localTimezone;
       if (input.form) input.form.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    (root || document).querySelectorAll("button[data-local-timezone]").forEach(function (button) {
-      button.textContent = "Use my time zone (" + localTimezone + ")";
     });
     (root || document).querySelectorAll("datalist[data-timezones]").forEach(function (list) {
       if (list.options.length || !Intl.supportedValuesOf) return;

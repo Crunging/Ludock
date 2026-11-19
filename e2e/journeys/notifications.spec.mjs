@@ -1,7 +1,7 @@
 import { createServer, request } from "node:http";
 import { createServer as createTCPServer } from "node:net";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, openServer } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -288,11 +288,12 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
 
     // Enshrouded goes down behind Ludock's back after a start through Ludock.
     await openServer(page, "enshrouded");
-    await page.getByLabel("Monitor this server").check();
-    await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
+    // Watched by default; a short wait makes the alert quick.
+    await expect(page.getByLabel("Monitor this server")).toBeChecked();
+    await page.getByText("Alert levels").click();
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
-    await page.getByLabel("Failure grace period (seconds)").fill("11");
-    await page.getByLabel("Failure grace period (seconds)").press("Tab");
+    await page.getByLabel("Wait before alerting (seconds)").fill("11");
+    await page.getByLabel("Wait before alerting (seconds)").press("Tab");
     expect((await saved).ok()).toBe(true);
     await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
     await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
@@ -328,10 +329,12 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     await expect(webhook.locator(".alert--error")).toHaveText("Choose at least one alert type");
     await expect(webhook.getByLabel("Server problems")).not.toBeChecked();
   } finally {
+    // A stop through Ludock leaves it watched but quiet for later journeys.
+    await dockerAction("enshrouded", "start");
     await openServer(page, "enshrouded");
-    await page.getByLabel("Monitor this server").setChecked(false);
-    await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
-    await dockerAction("enshrouded", "stop");
+    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+    await expectOperationSucceeded(page);
     await page.goto("/settings");
     const webhook = await openDestination(page, "webhook");
     await openAlertTypes(webhook);

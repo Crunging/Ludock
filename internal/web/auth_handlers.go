@@ -61,10 +61,6 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if state.Required && state.Locked {
-		views.SetupExpired().Render(r.Context(), w)
-		return
-	}
 	next := r.URL.Query().Get("next")
 	if next != "" {
 		next = safeNext(next)
@@ -79,12 +75,6 @@ func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, form views.
 		form.Error = public.Message
 		if public.RetryAfterMs > 0 {
 			w.Header().Set("Retry-After", itoa(max(1, (public.RetryAfterMs+999)/1000)))
-		}
-		if public.Code == "SETUP_LOCKED" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(status)
-			views.SetupExpired().Render(r.Context(), w)
-			return
 		}
 	} else if err != nil {
 		s.fail(w, r, nil, err)

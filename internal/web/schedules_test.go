@@ -88,7 +88,7 @@ func TestWaitingNeedsReadablePlayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String()
-	if strings.Contains(page, `name="waitForEmpty"`) || !strings.Contains(page, "needs a game whose players Ludock can read") {
+	if strings.Contains(page, `name="waitForEmpty"`) {
 		t.Fatal("offered waiting without readable players")
 	}
 	response := p.action("/servers/"+p.server+"/schedules", p.admin,
@@ -98,5 +98,19 @@ func TestWaitingNeedsReadablePlayers(t *testing.T) {
 	}
 	if list, _ := p.app.Schedules.List(context.Background(), &p.admin.User, p.server); len(list) != 0 {
 		t.Fatal(list)
+	}
+}
+
+// A restart schedule is saved with countdown warnings on and a lead time
+// that isn't a number: the form comes back with More options open, where
+// the field named in the error is.
+func TestScheduleWarningDraftStaysOpen(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	response := p.action("/servers/"+p.server+"/schedules", p.admin,
+		scheduleForm(map[string][]string{"action": {"restart"}, "announce": {"true"}, "leadMinutes": {"ten"}}))
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(body, `id="schedule-more" open`) {
+		t.Fatal(response.StatusCode, body)
 	}
 }

@@ -221,11 +221,12 @@ test("filters changed while the list is loading all apply", async ({ page }) => 
 test("an outage reaches an open server list when its grace period ends, and clears", async ({ page }) => {
   test.setTimeout(150_000);
   await openServer(page, "valheim");
+  // On by default, unless a journey before this one turned it off.
   await page.getByLabel("Monitor this server").check();
+  await page.getByText("Alert levels").click();
+  await page.getByLabel("Wait before alerting (seconds)").fill("10");
+  await page.getByLabel("Wait before alerting (seconds)").press("Tab");
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
-  await page.getByLabel("Failure grace period (seconds)").fill("10");
-  await page.getByLabel("Failure grace period (seconds)").press("Tab");
-  await expect(page.getByLabel("Failure grace period (seconds)")).toHaveValue("10");
   // Starting through Ludock ends any earlier stop's quiet time.
   await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();

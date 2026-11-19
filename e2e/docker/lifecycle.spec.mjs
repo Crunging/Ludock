@@ -33,11 +33,12 @@ test("an update recreates the server with its settings and unnamed volume", asyn
     if (await checkAgain.count()) await checkAgain.click();
     await expect(form).toContainText(gameImage, { timeout: 2_000 });
   }).toPass();
-  await form.getByLabel(/Recreate anyway/).check();
-  await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
+  await form.locator("summary", { hasText: "Advanced" }).click();
+  await form.getByLabel("Update even if the image is already current").check();
+  await form.getByLabel("Back up first").uncheck();
   await form.getByLabel(/Type Test Game to skip the backup/).fill("Test Game");
-  await form.getByLabel(/I understand/).check();
   await form.getByRole("button").last().click();
+  await page.getByRole("dialog", { name: "Update Test Game?" }).getByRole("button", { name: /^Update/ }).click();
   await expectOperationSucceeded(page);
   await expect.poll(gameContainer).not.toBe(before);
   const replacement = inspect(gameContainer());

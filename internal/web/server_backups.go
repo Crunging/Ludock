@@ -391,10 +391,6 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 	if forceRecreate {
 		capability = authz.ServerRecreate
 	}
-	if r.PostFormValue("confirmed") != "true" {
-		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Confirm that connected players will be disconnected"))
-		return
-	}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err != nil {
 		s.fail(w, r, request, err)

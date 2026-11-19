@@ -182,12 +182,66 @@ func TestGameAnswers(t *testing.T) {
 	check("query skipped", Answering)
 	service.store("s1", reading(Silent, now))
 	check("silent after answering", NotAnswering)
-	service.readings["s1"].AnswerAt = now - Fresh.Milliseconds() - 1
+	// An answer outlasts an idle poll's gap, then goes stale.
+	service.readings["s1"].AnswerAt = now - IdleInterval.Milliseconds()
+	check("between idle polls", NotAnswering)
+	service.readings["s1"].AnswerAt = now - answerFresh.Milliseconds() - 1
 	check("stale", Unknown)
 	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 200, State: "running", Query: query}); got != Waiting {
 		t.Errorf("restarted: %d", got)
 	}
 	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 100, State: "running"}); got != NotChecked {
 		t.Errorf("no query: %d", got)
+	}
+}
+
+type countingSource struct {
+	Source
+	reads int
+	run   servers.Container
+}
+
+func (c *countingSource) Read(context.Context, identity.Server) (*Reading, error) {
+	c.reads++
+	return &Reading{ContainerID: c.run.ID, StartedAt: c.run.StateSince, CheckedAt: time.Now().UnixMilli()}, nil
+}
+
+// A monitored game's status is read every Interval while someone watches
+// and every IdleInterval otherwise, since each reading starts a helper.
+func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
+	ctx := context.Background()
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true})
+	players, server := gameService(t, engine)
+	current, _ := players.Servers.Refresh(ctx)
+	source := &countingSource{Source: players.Source}
+	for _, container := range current {
+		source.run = container
+	}
+	if source.run.Query == nil {
+		t.Fatal("no status query")
+	}
+	players.Source = source
+	players.Monitored = func(context.Context) map[string]bool { return map[string]bool{server: true} }
+	age := func(by time.Duration) {
+		players.mu.Lock()
+		players.readings[server].CheckedAt = time.Now().Add(-by).UnixMilli()
+		players.mu.Unlock()
+	}
+	players.Poll(ctx, false)
+	age(Interval)
+	players.Poll(ctx, false)
+	if source.reads != 1 {
+		t.Fatal("unwatched reads:", source.reads)
+	}
+	players.Poll(ctx, true)
+	age(IdleInterval)
+	players.Poll(ctx, false)
+	if source.reads != 3 {
+		t.Fatal("reads:", source.reads)
 	}
 }

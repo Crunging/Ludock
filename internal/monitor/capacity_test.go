@@ -95,7 +95,7 @@ func TestDiskAlertOncePerEpisode(t *testing.T) {
 		return space(percent), nil
 	}
 	check := func(now int64) {
-		if err := s.CheckDisk(ctx, state("exited", ""), now); err != nil {
+		if err := s.CheckDisk(ctx, state("exited", ""), now, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -135,7 +135,7 @@ func TestDiskAlertEndsWithItsBinding(t *testing.T) {
 	s, events, server, _ := setupWith(t, nil)
 	percent := int64(95)
 	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return space(percent), nil }
-	if err := s.CheckDisk(ctx, state("exited", ""), 1000); err != nil {
+	if err := s.CheckDisk(ctx, state("exited", ""), 1000, true); err != nil {
 		t.Fatal(err)
 	}
 	if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 {
@@ -145,7 +145,7 @@ func TestDiskAlertEndsWithItsBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	percent = 88
-	if err := s.CheckDisk(ctx, state("exited", ""), 2000); err != nil {
+	if err := s.CheckDisk(ctx, state("exited", ""), 2000, true); err != nil {
 		t.Fatal(err)
 	}
 	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 || len(events.events) != 1 {
@@ -158,14 +158,14 @@ func TestDiskAlertEndsWithItsBinding(t *testing.T) {
 func TestDiskThresholdChange(t *testing.T) {
 	s, events, server, configure := setupWith(t, nil)
 	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return space(93), nil }
-	s.CheckDisk(ctx, state("running", ""), 1000)
+	s.CheckDisk(ctx, state("running", ""), 1000, true)
 	policy := DefaultPolicy()
 	policy.Enabled, policy.DiskPercent = true, 95
 	configure(policy)
 	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 {
 		t.Fatal(problems)
 	}
-	s.CheckDisk(ctx, state("running", ""), 2000)
+	s.CheckDisk(ctx, state("running", ""), 2000, true)
 	disk, _ := s.Disk(ctx, server.ID)
 	if len(events.events) != 1 || disk.CheckedAt != 2000 || disk.Folders[0].AlertSince != 0 {
 		t.Fatal(events.events, disk)
@@ -177,7 +177,7 @@ func TestDiskThresholdChange(t *testing.T) {
 func TestDiskMeasurementSkipped(t *testing.T) {
 	s, events, server, _ := setupWith(t, nil)
 	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return nil, errors.New("busy") }
-	s.CheckDisk(ctx, state("running", ""), 1000)
+	s.CheckDisk(ctx, state("running", ""), 1000, true)
 	if disk, _ := s.Disk(ctx, server.ID); disk.CheckedAt != 0 || len(events.events) != 0 {
 		t.Fatal(disk, events.events)
 	}
@@ -262,7 +262,7 @@ func TestPolicySavedDuringADiskMeasurement(t *testing.T) {
 		configure(DefaultPolicy())
 		return space(95), nil
 	}
-	s.CheckDisk(ctx, state("running", ""), 1000)
+	s.CheckDisk(ctx, state("running", ""), 1000, true)
 	if disk, _ := s.Disk(ctx, server.ID); len(events.events) != 0 || disk.CheckedAt != 0 {
 		t.Fatal(events.events, disk)
 	}
@@ -274,5 +274,28 @@ func TestAlertEndsExactlyAtTheLine(t *testing.T) {
 	state, _ := evaluateDisk(DiskState{}, space(60), 60, 1)
 	if state, _ = evaluateDisk(state, space(55), 60, 2); state.alerting() {
 		t.Fatal("55% kept a 60% alert")
+	}
+}
+
+// With nobody watching, disks are measured every DiskIdleInterval; once
+// someone opens a page, a measurement older than DiskInterval is redone.
+func TestDiskMeasuredLessOftenUnwatched(t *testing.T) {
+	s, _, _, _ := setupWith(t, nil)
+	measured := 0
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) {
+		measured++
+		return space(50), nil
+	}
+	for _, now := range []int64{1000, DiskInterval + 2000, DiskIdleInterval + 2000} {
+		if err := s.CheckDisk(ctx, state("running", ""), now, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if measured != 2 {
+		t.Fatal("unwatched measurements:", measured)
+	}
+	s.CheckDisk(ctx, state("running", ""), DiskIdleInterval+DiskInterval+3000, true)
+	if measured != 3 {
+		t.Fatal("a watched page got a stale measurement:", measured)
 	}
 }
