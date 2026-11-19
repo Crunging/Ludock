@@ -98,10 +98,8 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 		case data.WaitForEmpty.Then == WaitRun:
 		case occupancy.Known && occupancy.Online > 0:
 			return SkipPlayersOnline
-		case occupancy.Known:
-			// Empty, but not yet from a settled reading.
-			return nil
 		default:
+			// Includes a zero not yet from a settled reading.
 			return errWaitUnknown
 		}
 	}

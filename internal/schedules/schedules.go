@@ -809,6 +809,10 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 			}
 		}
 		err = s.queue(ctx, r, data, state, user, binding, slot, now)
+		// A stopped server busy with other work keeps the run's full wait.
+		if apperr.Is(err, "OPERATION_CONFLICT") && data.WaitForEmpty != nil {
+			return s.startWaiting(ctx, r, slot, scheduledAt, now)
+		}
 		// A command is sent now or not at all, never after other work.
 		if apperr.Is(err, "OPERATION_CONFLICT") && data.Action == "command" {
 			return SkipBusy

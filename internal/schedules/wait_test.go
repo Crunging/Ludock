@@ -8,6 +8,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/ops"
 )
 
 type fakePlayers struct {
@@ -284,5 +285,47 @@ func TestWaitingRunsShareReadings(t *testing.T) {
 	}
 	if s.checkPlayers(ctx, "server", due+120_000, due+120_000) {
 		t.Fatal("a reading from before the wait counted")
+	}
+}
+
+// At the end of a wait set to skip, a zero not yet confirmed by a settled
+// reading counts as unknown, so the run never acts after its limit; and a
+// stopped server busy with other work keeps the run's whole wait.
+func TestWaitEdges(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(0, true)
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(10, WaitSkip)); err != nil {
+		t.Fatal(err)
+	}
+	// Found waiting by a service that has asked for no reading yet, as
+	// after a Ludock restart just before the end of the wait.
+	if _, err := f.s.DB.Exec("UPDATE schedules SET last_slot=?,last_run_at=?,last_result=?", "2026-09-09T08:00:America/Los_Angeles", due, WaitingResult); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due+10*minute-15_000)
+	f.s.Run(ctx, due+10*minute)
+	f.s.Run(ctx, due+10*minute+30_000)
+	if last := f.first(t, admin); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Skipped: Ludock couldn't tell") {
+		t.Fatal(last)
+	}
+
+	f.s.DB.Exec("DELETE FROM schedules")
+	players.now.Stopped = true
+	if _, err := f.s.Create(ctx, admin, f.serverID, waitingRestart(30, WaitSkip)); err != nil {
+		t.Fatal(err)
+	}
+	busy, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	f.s.Run(ctx, due+6*minute)
+	if last := f.first(t, admin); f.operations(t) != 1 || last.WaitingUntil != due+30*minute {
+		t.Fatal(last)
+	}
+	f.s.DB.Exec("UPDATE operations SET status='succeeded' WHERE id=?", busy.ID)
+	f.s.Run(ctx, due+7*minute)
+	if f.operations(t) != 2 {
+		t.Fatal("did not run once the other work finished")
 	}
 }
