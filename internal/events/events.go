@@ -51,6 +51,9 @@ type Hub struct {
 	Authz    *authz.Service
 	// Refresh reconciles the fleet (servers.Service.Refresh).
 	Refresh func(ctx context.Context) error
+	// Watching, when set, is told when the first viewer subscribes. It must
+	// not block.
+	Watching func()
 
 	mu          sync.Mutex
 	subscribers map[*Subscriber]bool
@@ -126,6 +129,9 @@ func (h *Hub) Subscribe(subscriber *Subscriber) func() {
 		h.subscribers = map[*Subscriber]bool{}
 	}
 	h.subscribers[subscriber] = true
+	if len(h.subscribers) == 1 && h.Watching != nil && !h.stopped {
+		h.Watching()
+	}
 	if h.cancel == nil && !h.stopped {
 		h.startLocked()
 	}

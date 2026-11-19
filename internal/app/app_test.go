@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/config"
 	"github.com/Crunging/Ludock/internal/db"
@@ -92,4 +93,47 @@ func TestTickReadsPlayersOnlyWhileWatched(t *testing.T) {
 		t.Fatal("did not read players for a watched page", count())
 	}
 	a.Events.Stop()
+}
+
+// The first page to open reads players right away, not at the next tick.
+func TestFirstViewerReadsPlayers(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	read := make(chan struct{}, 8)
+	port, err := fakedocker.ServeRCON("secret", func(string) string {
+		read <- struct{}{}
+		return "There are 0 of a max of 10 players online:"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1"},
+		Env:    []string{"RCON_PORT=" + strconv.Itoa(port), "RCON_PASSWORD=secret"}})
+	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.Start(ctx)
+	defer a.Stop()
+	// Let the startup tick, with nobody watching, pass.
+	time.Sleep(500 * time.Millisecond)
+	select {
+	case <-read:
+		t.Fatal("read players before anyone watched")
+	default:
+	}
+	unsubscribe := a.Events.Subscribe(&events.Subscriber{Validate: func(context.Context) *db.SessionUser { return nil },
+		Send: func(events.Event) {}, Close: func(string) {}})
+	defer unsubscribe()
+	select {
+	case <-read:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waited for the next tick to read players")
+	}
 }
