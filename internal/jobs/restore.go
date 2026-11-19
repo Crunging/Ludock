@@ -252,8 +252,10 @@ func (j *Jobs) cleanupRestore(ctx context.Context, server *servers.Context, job 
 	return saveRestore(job, restoreRecovery{Status: "cleaned"}, "")
 }
 
+// rootsEqual ignores order: a root's ID is derived from its path, and
+// Docker or the ludock.files label may list the same roots in a new order.
 func rootsEqual(left []backups.Root, right []backups.Root) bool {
-	return slices.Equal(left, right)
+	return len(left) == len(right) && !slices.ContainsFunc(left, func(root backups.Root) bool { return !slices.Contains(right, root) })
 }
 
 func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {

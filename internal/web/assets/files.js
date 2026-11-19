@@ -198,3 +198,51 @@
     if (controller) event.preventDefault();
   });
 })();
+
+// Selecting several entries: checkboxes and the selection bar appear only
+// once someone chooses Select, and leave after a change reloads the folder.
+(function () {
+  var manager = document.querySelector(".file-manager");
+  var bar = document.querySelector("[data-selection-bar]");
+  if (!manager || !bar) return;
+  var count = bar.querySelector("[data-selection-count]");
+  function rows() { return Array.from(manager.querySelectorAll("[data-file-select]")); }
+  function update() {
+    var all = rows();
+    var checked = all.filter(function (box) { return box.checked; }).length;
+    count.textContent = checked + " selected";
+    bar.querySelectorAll("[data-selection-action]").forEach(function (button) {
+      button.disabled = checked === 0 || button.hasAttribute("data-selection-blocked");
+    });
+    var every = manager.querySelector("[data-file-select-all]");
+    if (every) {
+      every.checked = all.length > 0 && checked === all.length;
+      every.indeterminate = checked > 0 && checked < all.length;
+    }
+  }
+  function selecting(on) {
+    manager.toggleAttribute("data-selecting", on);
+    bar.hidden = !on;
+    manager.querySelectorAll("[data-file-select-mode]").forEach(function (button) {
+      if (button.hasAttribute("aria-pressed")) button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    if (!on) rows().forEach(function (box) { box.checked = false; });
+    update();
+    var focus = on ? manager.querySelector("[data-file-select]") : manager.querySelector(".file-toolbar [data-file-select-mode]");
+    if (focus) focus.focus();
+  }
+  manager.addEventListener("click", function (event) {
+    var toggle = event.target.closest && event.target.closest("[data-file-select-mode]");
+    if (toggle) selecting(!manager.hasAttribute("data-selecting"));
+  });
+  manager.addEventListener("change", function (event) {
+    if (event.target.matches("[data-file-select-all]")) {
+      rows().forEach(function (box) { box.checked = event.target.checked; });
+    }
+    if (event.target.matches("[data-file-select], [data-file-select-all]")) update();
+  });
+  document.addEventListener("htmx:after:swap", update);
+  document.addEventListener("files-changed", function () {
+    if (manager.hasAttribute("data-selecting")) selecting(false);
+  });
+})();

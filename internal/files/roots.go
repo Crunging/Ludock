@@ -3,11 +3,12 @@
 package files
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"path"
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -132,7 +133,7 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 		if nested || len(roots) >= 8 {
 			continue
 		}
-		roots = append(roots, Root{ID: "root-" + strconv.Itoa(len(roots)), Name: rootName(gameType, candidate), Path: candidate})
+		roots = append(roots, Root{ID: RootID(candidate), Name: rootName(gameType, candidate), Path: candidate})
 	}
 	return roots
 }
@@ -152,6 +153,13 @@ func RootMount(rootPath string, mounts []identity.Mount) (identity.Mount, bool) 
 		return identity.Mount{}, false
 	}
 	return owners[0], true
+}
+
+// RootID derives a root's ID from its container path, so an ID kept by a
+// page or a backup can only ever name the folder it was given for.
+func RootID(rootPath string) string {
+	sum := sha256.Sum256([]byte(rootPath))
+	return "root-" + hex.EncodeToString(sum[:6])
 }
 
 func rootName(gameType, rootPath string) string {

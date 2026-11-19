@@ -108,7 +108,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Observer: observer, Servers: serverService,
-		Images: images, Files: &files.Service{Docker: client, Images: images, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,
+		Images: images, Files: &files.Service{DB: database, Docker: client, Images: images, Managed: observer.Managed}, Backups: backupService, Runner: runner, Jobs: jobService,
 		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates, Checks: checks,
 		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
 		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
@@ -172,6 +172,9 @@ func (a *App) Start(ctx context.Context) {
 			return err
 		}
 		if err := a.Console.RemoveLeftovers(ctx); err != nil {
+			return err
+		}
+		if err := a.Files.RemoveStages(ctx, a.fileTarget); err != nil {
 			return err
 		}
 		return a.Runner.Start(ctx, lift)

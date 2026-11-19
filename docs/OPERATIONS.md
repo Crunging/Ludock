@@ -266,6 +266,33 @@ Stop a game before replacing a world or configuration it has open. Uploads are
 written to a temporary file and replace the destination only once complete, so
 allow space for both.
 
+To unpack a zip, tar, or tar.gz archive, such as a world or mod pack you
+uploaded, choose **Unpack** from its menu. It's offered for files named like
+archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.mcworld`, `.mcpack`,
+`.mcaddon`, `.mrpack`); Ludock reads the content to tell the formats apart, so
+a `.zip` that's really a tar still unpacks. The contents go into a new folder beside the
+archive: the archive's only folder when it has exactly one, such as `world/`,
+otherwise a folder named after the archive. If that name is taken, Ludock adds
+a number, such as `world (2)`; unpacking never replaces anything. Ludock
+treats every archive as untrusted: entries with absolute paths, `..`, control
+characters, or backslashes refuse the whole archive; links, hard links, and
+special files are left out; and new files and folders get the same
+permissions and owner as an upload. Unpacking works in a hidden staging folder
+and keeps the free space set as **Minimum free space** under backup settings.
+A refused or interrupted unpack removes its staging folder. Ludock records
+each staging folder before unpacking, so one left when Ludock stopped is
+removed the next time it starts; after three starts that can't remove it,
+Ludock logs a warning and stops trying.
+
+Choose **Select** to pick several entries of one folder, then download them as
+one tar archive, move them into another folder of the same storage location,
+or delete them. Moves follow the rules for renames: they never replace a name,
+cross into or out of a nested mount, or move a symbolic link.
+
+A storage location's ID in a page address comes from its container path, so a
+page opened before the server's mounts or `ludock.files` label changed can
+only act on the folder it showed.
+
 Users who can change files can also edit a previewed text file and save it.
 A save is written like an upload and keeps the file's permissions, owner, line
 endings, and byte order mark. If the file changed after the editor opened, the
@@ -276,6 +303,8 @@ are download-only, since a browser can't keep them.
 | --- | --- |
 | Upload size | 2 GiB; set `LUDOCK_MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
 | Text preview and editing | 512 KiB; larger or binary files are downloaded instead |
+| Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size (plus 1 MiB); 30 minutes |
+| Selection | 500 entries of one folder |
 | Folder listing | 10,000 entries |
 | Upload or download | 30 minutes; uploads also stop after 60 seconds without data |
 | Other file actions | 55 seconds |

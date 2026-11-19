@@ -48,7 +48,7 @@ func (a *App) measureDisk(ctx context.Context, server identity.Server) ([]monito
 		return nil, err
 	}
 	container := observed.Container
-	target := files.Target{ContainerID: container.ID, Name: container.Name, GameType: container.GameType, Roots: container.FileRoots}
+	target := files.Target{ServerID: server.ID, ContainerID: container.ID, Name: container.Name, GameType: container.GameType, Roots: container.FileRoots}
 	assertBinding := func() error {
 		_, err := a.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
 		return err
@@ -68,4 +68,26 @@ func (a *App) measureDisk(ctx context.Context, server identity.Server) ([]monito
 		spaces = append(spaces, monitor.DiskSpace{Path: root.Path, Total: space.Total, Available: space.Available, Used: space.Used})
 	}
 	return spaces, nil
+}
+
+// fileTarget is a server's current container for file work, or nil when the
+// server is gone.
+func (a *App) fileTarget(ctx context.Context, id string) (*files.Target, error) {
+	server, err := a.Identity.Get(ctx, id)
+	if err != nil || server == nil {
+		return nil, err
+	}
+	if server.Status != identity.StatusActive || server.ContainerID == "" {
+		return nil, errors.New("server container unavailable")
+	}
+	observed, _, err := a.Observer.Inspect(ctx, server.ContainerID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := a.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
+		return nil, err
+	}
+	container := observed.Container
+	return &files.Target{ServerID: server.ID, ContainerID: container.ID, Name: container.Name, GameType: container.GameType,
+		Roots: container.FileRoots}, nil
 }

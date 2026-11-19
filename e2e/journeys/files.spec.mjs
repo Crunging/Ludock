@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { crc32, gzipSync } from "node:zlib";
 import { test, expect, asAdmin, serverRow, signIn, createUser, fake } from "./fixtures.mjs";
 
 asAdmin();
@@ -292,8 +293,244 @@ test("a viewer who can read files is not offered editing", async ({ page, sessio
   await expect(dialog.getByRole("link", { name: "Download" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Edit" })).toHaveCount(0);
   // Asking for the editor directly still shows only the preview.
-  const fragment = await viewer.request.get(`${new URL(viewer.url()).pathname.replace("/files/", "/fragments/files/")}/preview?root=root-0&path=server.properties&edit=1`);
+  const root = await viewer.locator("[data-files-root]").getAttribute("data-files-root");
+  const fragment = await viewer.request.get(`${new URL(viewer.url()).pathname.replace("/files/", "/fragments/files/")}/preview?root=${root}&path=server.properties&edit=1`);
   const body = await fragment.text();
   expect(body).toContain("Contents of server.properties");
   expect(body).not.toContain("data-file-editor");
+
+  // Selecting offers downloading only, and archives offer no unpacking.
+  writeFileSync(join(survivalData(), "viewer-pack.zip"), zip([{ name: "a.txt", body: "a" }]));
+  try {
+    await viewer.reload();
+    await viewer.getByRole("button", { name: "Select" }).click();
+    const bar = viewer.locator("[data-selection-bar]");
+    await expect(bar.getByRole("button", { name: "Download" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: /Move|Delete/ })).toHaveCount(0);
+    await viewer.getByRole("button", { name: "Actions for viewer-pack.zip" }).click();
+    await expect(viewer.locator("#file-list").getByRole("link", { name: "Download" }).first()).toBeVisible();
+    await expect(viewer.getByRole("button", { name: "Unpack" })).toHaveCount(0);
+  } finally {
+    rmSync(join(survivalData(), "viewer-pack.zip"), { force: true });
+  }
+});
+
+// Archives are built here, so the journeys need no archiving tools.
+function tar(entries) {
+  const blocks = [];
+  for (const { name, body = "", type = "0", link = "" } of entries) {
+    const data = Buffer.from(body);
+    const header = Buffer.alloc(512);
+    header.write(name, 0);
+    header.write("0000644\0", 100);
+    header.write("0000000\0", 108);
+    header.write("0000000\0", 116);
+    header.write(data.length.toString(8).padStart(11, "0") + "\0", 124);
+    header.write("00000000000\0", 136);
+    header.write("        ", 148);
+    header.write(type, 156);
+    header.write(link, 157);
+    header.write("ustar\u000000", 257);
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return Buffer.concat(blocks);
+}
+
+function zip(entries) {
+  const files = [], directory = [];
+  let offset = 0;
+  for (const { name, body = "" } of entries) {
+    const path = Buffer.from(name), data = Buffer.from(body), sum = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(sum, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(path.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(sum, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(path.length, 28);
+    central.writeUInt32LE(offset, 42);
+    files.push(local, path, data);
+    directory.push(central, path);
+    offset += 30 + path.length + data.length;
+  }
+  const listing = Buffer.concat(directory);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(listing.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...files, listing, end]);
+}
+
+async function rowAction(page, name, action) {
+  await page.getByRole("button", { name: `Actions for ${name}`, exact: true }).click();
+  await page.getByRole("button", { name: action, exact: true }).click();
+}
+
+test("uploading a world archive and unpacking it into a new folder", async ({ page }) => {
+  const data = survivalData();
+  try {
+    await openFiles(page);
+    const names = page.locator(".file-row__name");
+    await page.locator("[data-upload-input]").setInputFiles([
+      { name: "Skyblock.zip", mimeType: "application/zip", buffer: zip([
+        { name: "Skyblock/level.dat", body: "level" }, { name: "Skyblock/region/r.0.0.mca", body: "region" }]) },
+      { name: "plugins.tar.gz", mimeType: "application/gzip", buffer: gzipSync(tar([
+        { name: "essentials.jar", body: "jar" }, { name: "config/essentials.yml", body: "motd: hi" },
+        { name: "escape", type: "2", link: "/etc" }])) },
+    ]);
+    await expect(page.locator("#file-feedback")).toHaveText("2 files uploaded.");
+
+    // An archive with one folder inside becomes that folder.
+    await rowAction(page, "Skyblock.zip", "Unpack");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Nothing that exists is replaced.");
+    await dialog.getByRole("button", { name: "Unpack" }).click();
+    await expect(page.locator("#file-feedback")).toHaveText("Unpacked “Skyblock.zip” into “Skyblock”.");
+    await page.getByRole("link", { name: "Skyblock", exact: true }).click();
+    await expect(names).toHaveText(["region", "level.dat"]);
+    expect(readFileSync(join(data, "Skyblock", "region", "r.0.0.mca"), "utf8")).toBe("region");
+    await page.locator(".file-breadcrumbs").getByRole("link", { name: "minecraft" }).click();
+
+    // Unpacking again never replaces what's there.
+    await rowAction(page, "Skyblock.zip", "Unpack");
+    await dialog.getByRole("button", { name: "Unpack" }).click();
+    await expect(page.locator("#file-feedback")).toHaveText("Unpacked “Skyblock.zip” into “Skyblock (2)”.");
+
+    // Several top-level entries go into a folder named after the archive;
+    // links inside it are left out.
+    await rowAction(page, "plugins.tar.gz", "Unpack");
+    await dialog.getByRole("button", { name: "Unpack" }).click();
+    await expect(page.locator("#file-feedback")).toHaveText(
+      "Unpacked “plugins.tar.gz” into “plugins”. Left out links and special files: 1 item.");
+    expect(readdirSync(join(data, "plugins")).sort()).toEqual(["config", "essentials.jar"]);
+    await expect(names).toContainText(["plugins", "Skyblock", "Skyblock (2)"]);
+    await page.goto("/audit?action=server.file.unpacked");
+    await expect(page.locator(".audit-entry").first()).toContainText("server.file.unpacked");
+  } finally {
+    for (const name of ["Skyblock", "Skyblock (2)", "plugins", "Skyblock.zip", "plugins.tar.gz"]) rmSync(join(data, name), { recursive: true, force: true });
+  }
+});
+
+test("an archive that escapes its folder or unpacks too large is refused and leaves nothing behind", async ({ page }) => {
+  const data = survivalData();
+  const before = readdirSync(data).sort();
+  try {
+    await openFiles(page);
+    await page.locator("[data-upload-input]").setInputFiles([
+      { name: "escape.tar", mimeType: "application/x-tar", buffer: tar([{ name: "fine.txt", body: "fine" }, { name: "../../escape.txt", body: "x" }]) },
+      // Four MiB of zeros compress to a few KiB: far past 100 times.
+      { name: "bomb.tar.gz", mimeType: "application/gzip", buffer: gzipSync(tar([{ name: "zeros.bin", body: "\0".repeat(4 << 20) }])) },
+      { name: "notes.zip", mimeType: "application/zip", buffer: Buffer.from("not really an archive") },
+    ]);
+    await expect(page.locator("#file-feedback")).toHaveText("3 files uploaded.");
+    const dialog = page.getByRole("dialog");
+    for (const [name, message] of [
+      ["escape.tar", "The archive wasn’t unpacked: it has entries with unsafe names, such as paths that lead outside its folder."],
+      ["bomb.tar.gz", "The archive wasn’t unpacked: it unpacks to more than 20 GiB or 100 times its own size, or has too many entries or nested folders."],
+      ["notes.zip", "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."],
+    ]) {
+      await rowAction(page, name, "Unpack");
+      await dialog.getByRole("button", { name: "Unpack" }).click();
+      await expect(dialog.locator(".alert--error")).toHaveText(message);
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+    }
+    expect(readdirSync(data).sort()).toEqual([...before, "bomb.tar.gz", "escape.tar", "notes.zip"].sort());
+    expect(existsSync(join(data, "..", "escape.txt")) || existsSync(join(data, "..", "..", "escape.txt"))).toBe(false);
+  } finally {
+    for (const name of ["escape.tar", "bomb.tar.gz", "notes.zip"]) rmSync(join(data, name), { force: true });
+  }
+});
+
+test("selecting several entries and deleting them", async ({ page }) => {
+  const folder = join(survivalData(), "logs");
+  mkdirSync(folder);
+  try {
+    for (const name of ["2026-01.log", "2026-02.log", "latest.log"]) writeFileSync(join(folder, name), name);
+    await openFiles(page);
+    // Selecting stays out of the way until someone asks for it.
+    await expect(page.locator(".file-row__select").first()).toBeHidden();
+    await expect(page.locator("[data-selection-bar]")).toBeHidden();
+    await page.getByRole("link", { name: "logs", exact: true }).click();
+    await page.getByRole("button", { name: "Select" }).click();
+    const bar = page.locator("[data-selection-bar]");
+    await expect(bar).toContainText("0 selected");
+    await expect(bar.getByRole("button", { name: "Delete…" })).toBeDisabled();
+    await page.getByRole("checkbox", { name: "Select 2026-01.log" }).check();
+    await page.getByRole("checkbox", { name: "Select 2026-02.log" }).check();
+    await expect(bar).toContainText("2 selected");
+    await bar.getByRole("button", { name: "Delete…" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading")).toHaveText("Delete 2 items?");
+    await expect(dialog.locator("li")).toHaveText(["2026-01.log", "2026-02.log"]);
+    await dialog.getByRole("button", { name: "Delete 2 items" }).click();
+    await expect(page.locator("#file-feedback")).toHaveText("Deleted 2 items.");
+    await expect(page.locator(".file-row__name")).toHaveText(["latest.log"]);
+    await expect(bar).toBeHidden();
+    expect(readdirSync(folder)).toEqual(["latest.log"]);
+
+    // Select all picks every entry shown; Cancel clears the selection.
+    await page.getByRole("button", { name: "Select" }).click();
+    await page.getByRole("checkbox", { name: "Select all shown" }).check();
+    await expect(bar).toContainText("1 selected");
+    await bar.getByRole("button", { name: "Cancel" }).click();
+    await expect(bar).toBeHidden();
+    await expect(page.locator("[data-file-select]")).not.toBeChecked();
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test("moving and downloading a selection", async ({ page }) => {
+  const folder = join(survivalData(), "move-test");
+  mkdirSync(join(folder, "dest", "inner"), { recursive: true });
+  try {
+    writeFileSync(join(folder, "a.txt"), "a");
+    writeFileSync(join(folder, "b.txt"), "b");
+    writeFileSync(join(folder, "dest", "b.txt"), "older b");
+    await openFiles(page);
+    await page.getByRole("link", { name: "move-test" }).click();
+    await page.getByRole("button", { name: "Select" }).click();
+    await page.getByRole("checkbox", { name: "Select a.txt" }).check();
+    await page.getByRole("checkbox", { name: "Select b.txt" }).check();
+    const bar = page.locator("[data-selection-bar]");
+
+    const [download] = await Promise.all([page.waitForEvent("download"), bar.getByRole("button", { name: "Download" }).click()]);
+    expect(download.suggestedFilename()).toBe("move-test selection.tar");
+    const archive = readFileSync(await download.path());
+    expect(archive.subarray(0, 5).toString()).toBe("a.txt");
+    expect(archive.includes(Buffer.from("b.txt"))).toBe(true);
+
+    await bar.getByRole("button", { name: "Move…" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading")).toHaveText("Move 2 items");
+    const move = dialog.getByRole("button", { name: "Move here" });
+    await expect(move).toBeDisabled();
+    await dialog.getByRole("button", { name: "dest", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "inner" })).toBeVisible();
+    // A name already in the folder is never replaced.
+    await move.click();
+    await expect(dialog.locator(".alert--error")).toHaveText("A file or folder with that name already exists");
+    expect(readFileSync(join(folder, "dest", "b.txt"), "utf8")).toBe("older b");
+    await dialog.getByRole("button", { name: "inner" }).click();
+    await dialog.getByRole("button", { name: "Move here" }).click();
+    await expect(page.locator("#file-feedback")).toHaveText("Moved 2 items to “move-test/dest/inner”.");
+    await expect(page.locator(".file-row__name")).toHaveText(["dest"]);
+    expect(readdirSync(join(folder, "dest", "inner")).sort()).toEqual(["a.txt", "b.txt"]);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

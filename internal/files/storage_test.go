@@ -40,6 +40,7 @@ type fixture struct {
 	target  Target
 	data    string
 	game    string
+	root    string
 }
 
 func setup(t *testing.T) *fixture {
@@ -75,7 +76,7 @@ func setup(t *testing.T) *fixture {
 	if len(roots) != 1 {
 		t.Fatal(roots)
 	}
-	return &fixture{engine: engine, service: service, target: Target{ContainerID: game, Name: "mc", GameType: "minecraft", Roots: roots}, data: data, game: game}
+	return &fixture{engine: engine, service: service, target: Target{ContainerID: game, Name: "mc", GameType: "minecraft", Roots: roots}, data: data, game: game, root: roots[0].ID}
 }
 
 func (f *fixture) helpersLeft(t *testing.T) {
@@ -90,7 +91,7 @@ func (f *fixture) helpersLeft(t *testing.T) {
 func TestPreviewCapAndBinaryDetection(t *testing.T) {
 	f := setup(t)
 	for name, want := range map[string]PreviewKind{"server.properties": PreviewText, "level.dat": PreviewBinary, "big.log": PreviewLarge} {
-		preview, err := f.service.Preview(ctx, f.target, "root-0", name, nil)
+		preview, err := f.service.Preview(ctx, f.target, f.root, name, nil)
 		if err != nil || preview.Kind != want {
 			t.Fatalf("%s: %+v %v", name, preview, err)
 		}
@@ -146,19 +147,19 @@ func TestSaveRefusesChangedFile(t *testing.T) {
 	f := setup(t)
 	name := filepath.Join(f.data, "server.properties")
 	os.Chmod(name, 0o640)
-	preview, err := f.service.Preview(ctx, f.target, "root-0", "server.properties", nil)
+	preview, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(name, []byte("motd=other\n"), 0o640)
-	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("motd=mine\n"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
+	if err := f.service.Save(ctx, f.target, f.root, "server.properties", []byte("motd=mine\n"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(name); string(data) != "motd=other\n" {
 		t.Fatal(string(data))
 	}
-	preview, _ = f.service.Preview(ctx, f.target, "root-0", "server.properties", nil)
-	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("motd=mine\n"), preview.Version, nil); err != nil {
+	preview, _ = f.service.Preview(ctx, f.target, f.root, "server.properties", nil)
+	if err := f.service.Save(ctx, f.target, f.root, "server.properties", []byte("motd=mine\n"), preview.Version, nil); err != nil {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(name)
@@ -166,7 +167,7 @@ func TestSaveRefusesChangedFile(t *testing.T) {
 		t.Fatal(string(data), info.Mode())
 	}
 	os.Remove(name)
-	if err := f.service.Save(ctx, f.target, "root-0", "server.properties", []byte("x"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
+	if err := f.service.Save(ctx, f.target, f.root, "server.properties", []byte("x"), preview.Version, nil); !apperr.Is(err, "FILE_CHANGED") {
 		t.Fatal("recreated a deleted file", err)
 	}
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
@@ -187,7 +188,7 @@ func (zeroFree) Read(p []byte) (int, error) {
 func TestAccessRecheckAndTargetChanges(t *testing.T) {
 	f := setup(t)
 	denied := apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
-	if _, err := f.service.List(ctx, f.target, "root-0", "", func() error { return denied }); !apperr.Is(err, "FORBIDDEN") {
+	if _, err := f.service.List(ctx, f.target, f.root, "", func() error { return denied }); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
 	f.helpersLeft(t)
@@ -199,18 +200,18 @@ func TestAccessRecheckAndTargetChanges(t *testing.T) {
 			f.engine.Update(f.game, func(game *fakedocker.Container) { game.Config.Labels = map[string]string{"changed": "yes"} })
 		}
 	}
-	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); !apperr.Is(err, "FILE_TARGET_CHANGED") {
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); !apperr.Is(err, "FILE_TARGET_CHANGED") {
 		t.Fatal(err)
 	}
 	f.helpersLeft(t)
 	f.engine.OnStart = previous
 	// The root's mount became read-only.
 	f.engine.Update(f.game, func(game *fakedocker.Container) { game.Mounts[0].RW = false })
-	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); !apperr.Is(err, "FILE_ROOT_CHANGED") {
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); !apperr.Is(err, "FILE_ROOT_CHANGED") {
 		t.Fatal(err)
 	}
 	f.engine.Update(f.game, func(game *fakedocker.Container) { game.Mounts[0].RW = true; game.Name = "/renamed" })
-	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); !apperr.Is(err, "FILE_TARGET_CHANGED") {
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); !apperr.Is(err, "FILE_TARGET_CHANGED") {
 		t.Fatal(err)
 	}
 }
@@ -229,7 +230,7 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 		}
 	}
 	for range 2 {
-		if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+		if _, err := f.service.List(ctx, f.target, f.root, "", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -237,7 +238,7 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 		t.Fatal("started", started, "helpers for two listings")
 	}
 	f.engine.Update(f.game, func(game *fakedocker.Container) { game.Config.Labels = map[string]string{"changed": "yes"} })
-	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if started != 2 {
@@ -261,7 +262,7 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 func TestIdleListingHelperIsRemoved(t *testing.T) {
 	f := setup(t)
 	f.service.ListerIdle = 50 * time.Millisecond
-	if _, err := f.service.List(ctx, f.target, "root-0", "", nil); err != nil {
+	if _, err := f.service.List(ctx, f.target, f.root, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	helpers := func(kind string) int {
@@ -288,7 +289,7 @@ func TestIdleListingHelperIsRemoved(t *testing.T) {
 // its logs.
 func TestHelpersKeepNoLogs(t *testing.T) {
 	f := setup(t)
-	if err := f.service.Mkdir(ctx, f.target, "root-0", "", "logs", nil); err != nil {
+	if err := f.service.Mkdir(ctx, f.target, f.root, "", "logs", nil); err != nil {
 		t.Fatal(err)
 	}
 	if logging := f.engine.HelperLogging(); logging["file-helper"] != "none" || logging["mount-validator"] != "" {
@@ -300,12 +301,12 @@ func TestHelpersKeepNoLogs(t *testing.T) {
 func TestFailedChangeRemovesHelper(t *testing.T) {
 	f := setup(t)
 	for name, change := range map[string]func() error{
-		"mkdir": func() error { return f.service.Mkdir(ctx, f.target, "root-0", "", "World", nil) },
+		"mkdir": func() error { return f.service.Mkdir(ctx, f.target, f.root, "", "World", nil) },
 		"rename": func() error {
-			return f.service.Rename(ctx, f.target, "root-0", "missing.txt", "other.txt", nil)
+			return f.service.Rename(ctx, f.target, f.root, "missing.txt", "other.txt", nil)
 		},
 		"upload": func() error {
-			return f.service.Upload(ctx, f.target, "root-0", "", "short.txt", 10, strings.NewReader("short"), nil)
+			return f.service.Upload(ctx, f.target, f.root, "", "short.txt", 10, strings.NewReader("short"), nil)
 		},
 	} {
 		// The changed data may still be written, so removal is retried until

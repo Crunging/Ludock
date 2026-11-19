@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/helper"
 )
@@ -27,6 +28,18 @@ var (
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
 )
 
+// archiveErrors are the public reasons an archive was not unpacked, by the
+// helper's exit code.
+var archiveErrors = map[int]*apperr.Error{
+	helper.FileArchiveUnsafe: apperr.New("ARCHIVE_UNSAFE", 422, "The archive wasn’t unpacked: it has entries with unsafe names, such as paths that lead outside its folder."),
+	helper.FileArchiveLimit: apperr.New("ARCHIVE_TOO_LARGE", 413, "The archive wasn’t unpacked: it unpacks to more than "+
+		datasize.Format(helper.Unpack.Bytes)+" or 100 times its own size, or has too many entries or nested folders."),
+	helper.FileArchiveFull: apperr.New("ARCHIVE_NO_SPACE", 409, "The archive wasn’t unpacked: the disk would run short of free space."),
+	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
+	// A 5xx status reports the result as unconfirmed.
+	helper.FilePartial: apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
+}
+
 type ExecOptions struct {
 	Cmd []string
 	// Input is streamed to stdin; Trailer follows it only after the whole
@@ -35,8 +48,10 @@ type ExecOptions struct {
 	Input   io.Reader
 	Trailer []byte
 	// AssertAccess runs before the exec, after it is created, and between
-	// input chunks.
+	// input chunks; with Limit, also every second while the command runs.
 	AssertAccess func() error
+	// Limit replaces the one-minute bound of a command without input.
+	Limit time.Duration
 }
 
 // limitedBuffer does not embed bytes.Buffer, whose ReadFrom would bypass
@@ -96,6 +111,8 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	limit := time.Minute
 	if options.Input != nil {
 		limit = 30 * time.Minute
+	} else if options.Limit > 0 {
+		limit = options.Limit
 	}
 	// Docker can accept the connection and never answer it.
 	deadline, cancelDeadline := context.WithTimeout(ctx, limit)
@@ -146,6 +163,26 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}
 	})
 	defer stop()
+	if options.Input == nil && options.Limit > 0 {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		finished := make(chan struct{})
+		defer close(finished)
+		go func() {
+			for {
+				select {
+				case <-finished:
+					return
+				case <-ticker.C:
+					if err := check(); err != nil {
+						fail(err)
+						conn.Close()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	// Set once the whole input and its trailer are written, before the write
 	// side closes: the helper can read that close and exit before the sender
@@ -221,6 +258,9 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileChanged {
 		return nil, ErrFileChanged
+	}
+	if !info.Running && info.ExitCode != nil && archiveErrors[*info.ExitCode] != nil {
+		return nil, archiveErrors[*info.ExitCode]
 	}
 	if info.Running || info.ExitCode == nil || *info.ExitCode != 0 {
 		return nil, ErrUnsafe

@@ -160,6 +160,7 @@ templ FilesPage(page Page, f FilesView) {
 						</nav>
 						<div class="file-toolbar__actions">
 							<button class="secondary-btn" type="button" hx-get={ "/fragments/files/" + f.ServerID } hx-include=".file-filters" hx-target="#file-list" hx-swap="outerMorph" hx-sync="#file-list:queue last" data-busy-label="Refreshing…">Refresh</button>
+							<button class="secondary-btn" type="button" aria-pressed="false" data-file-select-mode>Select</button>
 							if f.CanManage {
 								<button class="secondary-btn" type="button" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=create&" + f.query(f.Path) } hx-target="#file-dialog">New folder</button>
 							}
@@ -196,7 +197,22 @@ templ FilesPage(page Page, f FilesView) {
 						</label>
 						<noscript><button class="secondary-btn" type="submit">Apply</button></noscript>
 					</form>
-					@FileList(f)
+					<form class="file-selection" id="file-selection" method="get" action={ templ.SafeURL("/files/" + f.ServerID + "/download-selection") }>
+						<input type="hidden" name="root" value={ f.Root.ID }/>
+						<input type="hidden" name="path" value={ f.Path }/>
+						<div class="file-selection-bar" data-selection-bar hidden>
+							<span role="status" data-selection-count>0 selected</span>
+							<div class="file-selection-bar__actions">
+								<button class="secondary-btn" type="submit" disabled data-selection-action>Download</button>
+								if f.CanManage {
+									<button class="secondary-btn" type="button" disabled data-selection-action data-selection-blocked?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/move" } hx-include="#file-selection" hx-target="#file-dialog">Move…</button>
+									<button class="secondary-btn secondary-btn--danger" type="button" disabled data-selection-action data-selection-blocked?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=delete-selection" } hx-include="#file-selection" hx-target="#file-dialog">Delete…</button>
+								}
+								<button class="secondary-btn" type="button" data-file-select-mode>Cancel</button>
+							</div>
+						</div>
+						@FileList(f)
+					</form>
 					if !f.CanManage {
 						<p class="file-manager__note">Your account can browse and download files but cannot change them.</p>
 					}
@@ -228,7 +244,10 @@ templ FileList(f FilesView) {
 		</div>
 		<div class="file-list">
 			<div class="file-list__header">
-				<span>Name</span>
+				<span class="file-list__name-header">
+					<input class="file-row__select" type="checkbox" aria-label="Select all shown" data-file-select-all/>
+					Name
+				</span>
 				<span>Size</span>
 				<span>Modified</span>
 				<span>Actions</span>
@@ -246,6 +265,7 @@ templ FileList(f FilesView) {
 			for index, entry := range f.Entries {
 				<div class="file-row">
 					<div class="file-row__name">
+						<input class="file-row__select" type="checkbox" name="name" value={ entry.Name } aria-label={ "Select " + entry.Name } data-file-select/>
 						@fileIcon(entry.Type)
 						switch entry.Type {
 							case "directory":
@@ -280,6 +300,9 @@ templ FileList(f FilesView) {
 								if entry.Type != "symlink" {
 									<a class="action-menu__action" href={ templ.SafeURL("/files/" + f.ServerID + "/download?" + f.entryQuery(entry.Name)) } download>Download</a>
 								}
+								if f.CanManage && entry.Type == "file" && ArchiveName(entry.Name) {
+									<button type="button" class="action-menu__action" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=unpack&type=file&" + f.entryQuery(entry.Name) } hx-target="#file-dialog">Unpack</button>
+								}
 								if f.CanManage && entry.Type != "symlink" {
 									<button type="button" class="action-menu__action" disabled?={ f.Blocked } hx-get={ "/fragments/files/" + f.ServerID + "/dialog?action=rename&type=" + entry.Type + "&" + f.entryQuery(entry.Name) } hx-target="#file-dialog">Rename</button>
 								}
@@ -300,20 +323,43 @@ templ FileList(f FilesView) {
 	</div>
 }
 
-// FileDialog is a new-folder, rename, or delete dialog.
+// FileDialog is a new-folder, rename, delete, unpack, or delete-selection
+// dialog.
 type FileDialog struct {
 	ServerID, ServerName string
-	Action               string // create, rename, delete
+	Action               string
 	Root                 files.Root
-	// Path is the folder for create, else the entry.
+	// Path is the folder for create and delete-selection, else the entry.
 	Path, Name, Type string
-	Value            string
-	Error            string
+	// Names are a selection's entries in Path.
+	Names []string
+	Value string
+	Error string
+}
+
+// ArchiveName reports a name Unpack is offered for. The helper decides by
+// content, so a misnamed archive still unpacks.
+func ArchiveName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, suffix := range []string{".zip", ".tar", ".tar.gz", ".tgz", ".mcworld", ".mcpack", ".mcaddon", ".mrpack"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// shownNames lists a selection's first names; the rest are counted.
+func shownNames(names []string) ([]string, int) {
+	if len(names) > 8 {
+		return names[:7], len(names) - 7
+	}
+	return names, 0
 }
 
 func (d FileDialog) folderLabel() string {
 	folder := d.Path
-	if d.Action != "create" {
+	if d.Action != "create" && d.Action != "delete-selection" {
 		folder = parentPath(d.Path)
 	}
 	if folder == "" {
@@ -335,6 +381,10 @@ func (d FileDialog) title() string {
 		return "New folder"
 	case "rename":
 		return "Rename “" + d.Name + "”"
+	case "unpack":
+		return "Unpack “" + d.Name + "”?"
+	case "delete-selection":
+		return "Delete " + ItemCount(len(d.Names)) + "?"
 	}
 	return "Delete “" + d.Name + "”?"
 }
@@ -345,6 +395,10 @@ func (d FileDialog) submitLabel() string {
 		return "Create folder"
 	case d.Action == "rename":
 		return "Rename"
+	case d.Action == "unpack":
+		return "Unpack"
+	case d.Action == "delete-selection":
+		return "Delete " + ItemCount(len(d.Names))
 	case d.Type == "directory":
 		return "Delete folder"
 	case d.Type == "symlink":
@@ -353,15 +407,41 @@ func (d FileDialog) submitLabel() string {
 	return "Delete file"
 }
 
+func (d FileDialog) busyLabel() string {
+	if d.Action == "unpack" {
+		return "Unpacking…"
+	}
+	return "Working…"
+}
+
 templ FileActionDialog(d FileDialog) {
 	<dialog class="file-action-dialog" id="file-action" aria-labelledby="file-action-title" aria-describedby="file-action-description" data-open-on-load>
 		<form hx-post={ "/files/" + d.ServerID + "/" + d.Action } hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
 			<input type="hidden" name="root" value={ d.Root.ID }/>
 			<input type="hidden" name="path" value={ d.Path }/>
 			<input type="hidden" name="type" value={ d.Type }/>
+			for _, name := range d.Names {
+				<input type="hidden" name="name" value={ name }/>
+			}
 			<h2 id="file-action-title">{ d.title() }</h2>
 			<div id="file-action-description" class="file-action-dialog__description">
 				<p>{ d.ServerName }, in { d.folderLabel() }</p>
+				if d.Action == "unpack" {
+					<p>The contents go into a new folder here, named after the archive or the one folder inside it. Nothing that exists is replaced.</p>
+					<p>To swap in a new world or configuration, stop the game first.</p>
+				}
+				if d.Action == "delete-selection" {
+					{{ shown, more := shownNames(d.Names) }}
+					<ul class="file-action-dialog__names">
+						for _, name := range shown {
+							<li>{ name }</li>
+						}
+						if more > 0 {
+							<li>and { intText(more) } more</li>
+						}
+					</ul>
+					<p>This permanently deletes them, including everything in any folders. Stop the game first if it uses them.</p>
+				}
 				if d.Action == "delete" {
 					<p>
 						switch d.Type {
@@ -375,7 +455,7 @@ templ FileActionDialog(d FileDialog) {
 					</p>
 				}
 			</div>
-			if d.Action != "delete" {
+			if d.Action == "create" || d.Action == "rename" {
 				<label class="file-action-dialog__field">
 					if d.Action == "create" {
 						Folder name
@@ -389,11 +469,87 @@ templ FileActionDialog(d FileDialog) {
 				@Alert("error", d.Error)
 			}
 			<div class="file-action-dialog__actions">
-				<button class="secondary-btn" type="button" data-dialog-close autofocus?={ d.Action == "delete" }>Cancel</button>
-				<button class={ "primary-btn", templ.KV("secondary-btn--danger", d.Action == "delete") } type="submit" data-busy-label="Working…">{ d.submitLabel() }</button>
+				<button class="secondary-btn" type="button" data-dialog-close autofocus?={ d.Action != "create" && d.Action != "rename" }>Cancel</button>
+				<button class={ "primary-btn", templ.KV("secondary-btn--danger", d.Action == "delete" || d.Action == "delete-selection") } type="submit" data-busy-label={ d.busyLabel() }>{ d.submitLabel() }</button>
 			</div>
 		</form>
 	</dialog>
+}
+
+// FileMove chooses the folder a selection moves to, one level at a time.
+type FileMove struct {
+	ServerID, ServerName string
+	Root                 files.Root
+	// Path is the selection's folder; To is the folder being shown.
+	Path, To string
+	Names    []string
+	Folders  []string
+	Error    string
+	// ListError replaces Folders when To can't be listed.
+	ListError string
+}
+
+func (m FileMove) browse(to string) string {
+	values := url.Values{"root": {m.Root.ID}, "path": {m.Path}, "name": m.Names, "to": {to}}
+	return "/fragments/files/" + m.ServerID + "/move?" + values.Encode()
+}
+
+func (m FileMove) crumbs() [][2]string {
+	return FilesView{Path: m.To}.breadcrumbs()
+}
+
+templ FileMoveDialog(m FileMove) {
+	<dialog class="file-action-dialog" id="file-action" aria-labelledby="file-action-title" aria-describedby="file-action-description" data-open-on-load>
+		@FileMoveContent(m)
+	</dialog>
+}
+
+// FileMoveContent is the move dialog's content, swapped in place while
+// browsing for a folder.
+templ FileMoveContent(m FileMove) {
+	<form hx-post={ "/files/" + m.ServerID + "/move" } hx-target="#file-action" hx-swap="outerHTML" data-close-on-success>
+		<input type="hidden" name="root" value={ m.Root.ID }/>
+		<input type="hidden" name="path" value={ m.Path }/>
+		<input type="hidden" name="to" value={ m.To }/>
+		for _, name := range m.Names {
+			<input type="hidden" name="name" value={ name }/>
+		}
+		<h2 id="file-action-title">Move { ItemCount(len(m.Names)) }</h2>
+		<div id="file-action-description" class="file-action-dialog__description">
+			<p>Choose a folder in { m.Root.Name }. Stop the game first if it uses these files.</p>
+		</div>
+		<nav class="file-breadcrumbs file-move__crumbs" aria-label="Folder to move to">
+			<button type="button" hx-get={ m.browse("") } hx-target="#file-action" hx-swap="innerHTML" aria-current?={ m.To == "" }>{ m.Root.Name }</button>
+			for _, crumb := range m.crumbs() {
+				<span>
+					<b aria-hidden="true">/</b>
+					<button type="button" hx-get={ m.browse(crumb[1]) } hx-target="#file-action" hx-swap="innerHTML" aria-current?={ m.To == crumb[1] }>{ crumb[0] }</button>
+				</span>
+			}
+		</nav>
+		<ul class="file-move__folders" aria-label="Folders">
+			if m.ListError != "" {
+				<li class="file-move__empty" role="alert">{ m.ListError }</li>
+			} else if len(m.Folders) == 0 {
+				<li class="file-move__empty">No folders here</li>
+			}
+			for _, folder := range m.Folders {
+				<li>
+					<button type="button" hx-get={ m.browse(FilesView{Path: m.To}.child(folder)) } hx-target="#file-action" hx-swap="innerHTML">
+						@fileIcon("directory")
+						{ folder }
+					</button>
+				</li>
+			}
+		</ul>
+		if m.Error != "" {
+			@Alert("error", m.Error)
+		}
+		<div class="file-action-dialog__actions">
+			<button class="secondary-btn" type="button" data-dialog-close>Cancel</button>
+			<button class="primary-btn" type="submit" disabled?={ m.To == m.Path } data-busy-label="Moving…">Move here</button>
+		</div>
+	</form>
 }
 
 type FilePreview struct {
