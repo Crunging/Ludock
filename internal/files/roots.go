@@ -116,16 +116,7 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 		if normalized == "" || textutil.Length(normalized) > 512 || slices.Contains(paths, normalized) || SensitiveSystemPath(normalized) {
 			continue
 		}
-		var owners []identity.Mount
-		for _, mount := range mounts {
-			if Within(normalized, normalizedMountPath(mount.Destination)) {
-				owners = append(owners, mount)
-			}
-		}
-		sort.SliceStable(owners, func(i, j int) bool {
-			return textutil.Length(owners[i].Destination) > textutil.Length(owners[j].Destination)
-		})
-		if len(owners) == 0 || !SafeWritableDataMount(owners[0]) {
+		if owner, ok := RootMount(normalized, mounts); !ok || !SafeWritableDataMount(owner) {
 			continue
 		}
 		paths = append(paths, normalized)
@@ -144,6 +135,23 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 		roots = append(roots, Root{ID: "root-" + strconv.Itoa(len(roots)), Name: rootName(gameType, candidate), Path: candidate})
 	}
 	return roots
+}
+
+// RootMount is the deepest mount that holds rootPath.
+func RootMount(rootPath string, mounts []identity.Mount) (identity.Mount, bool) {
+	var owners []identity.Mount
+	for _, mount := range mounts {
+		if Within(rootPath, normalizedMountPath(mount.Destination)) {
+			owners = append(owners, mount)
+		}
+	}
+	sort.SliceStable(owners, func(i, j int) bool {
+		return textutil.Length(owners[i].Destination) > textutil.Length(owners[j].Destination)
+	})
+	if len(owners) == 0 {
+		return identity.Mount{}, false
+	}
+	return owners[0], true
 }
 
 func rootName(gameType, rootPath string) string {

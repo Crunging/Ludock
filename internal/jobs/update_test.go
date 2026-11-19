@@ -335,10 +335,15 @@ func TestUpdateRecoveryEndsWhenPolicyCannotBeRestored(t *testing.T) {
 	release()
 }
 
-// A new version that declares another volume gets it created, and since the
-// server's writable data changed, an administrator reviews the binding.
-func TestUpdateNewImageVolumeNeedsReview(t *testing.T) {
+// A new version that declares another volume gets it created. It is a new
+// data folder, so access shared with others pauses until an administrator
+// confirms the change.
+func TestUpdateNewImageVolumePausesSharing(t *testing.T) {
 	f := setup(t)
+	if _, err := f.jobs.DB.Exec(`INSERT INTO users(id, username, role, password_hash, created_at, updated_at) VALUES ('friend', 'friend', 'viewer', 'x', 1, 1);
+    INSERT INTO server_grants(user_id, server_id, capabilities_json, updated_at) VALUES ('friend', ?, '["server.view"]', 1)`, f.serverID); err != nil {
+		t.Fatal(err)
+	}
 	f.engine.SetImageConfig("sha256:"+strings.Repeat("1", 64), map[string]any{"Volumes": map[string]any{"/cache": map[string]any{}}})
 	if job := f.run(t, "update", skipBackup); job.Status != ops.Succeeded {
 		t.Fatalf("%+v", job)
@@ -347,8 +352,8 @@ func TestUpdateNewImageVolumeNeedsReview(t *testing.T) {
 	if current == nil || !slices.ContainsFunc(current.Mounts, func(m docker.MountPoint) bool { return m.Destination == "/cache" && m.Type == "volume" }) {
 		t.Fatalf("volume not created: %+v", current)
 	}
-	if logical, _ := f.jobs.Identity.Get(ctx, f.serverID); logical.Status != identity.StatusReviewRequired {
-		t.Fatalf("binding not held for review: %+v", logical)
+	if logical, _ := f.jobs.Identity.Get(ctx, f.serverID); logical.Status != identity.StatusActive || !logical.SharingPaused {
+		t.Fatalf("sharing not paused: %+v", logical)
 	}
 }
 

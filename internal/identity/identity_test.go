@@ -17,8 +17,8 @@ var ctx = context.Background()
 
 func observation(change func(*Observation)) Observation {
 	o := Observation{ContainerID: "docker-a", Name: "minecraft-1", DisplayName: "Minecraft", GameType: "minecraft",
-		Mounts:            []Mount{{Type: "bind", Source: "/srv/minecraft", Destination: "/data", Writable: true}},
-		GameConfiguration: map[string]string{"ludock.console": "minecraft-rcon"}}
+		Mounts:      []Mount{{Type: "bind", Source: "/srv/minecraft", Destination: "/data", Writable: true}},
+		DataFolders: []DataFolder{{Path: "/data", Type: "bind", Source: "/srv/minecraft", Destination: "/data"}}}
 	if change != nil {
 		change(&o)
 	}
@@ -41,35 +41,42 @@ func wantCode(t *testing.T, err error, code string) {
 	}
 }
 
-// Binding digest covers material settings only.
+// Only the game and the data folders Ludock reads, backs up, and restores
+// make a server different in substance; mounts outside them and every other
+// setting change freely.
 func TestBindingDigestScope(t *testing.T) {
 	base := BindingDigest(observation(nil))
 	same := []func(*Observation){
 		func(o *Observation) { o.ContainerID, o.Name, o.DisplayName = "docker-b", "renamed", "Renamed" },
-		func(o *Observation) { o.Mounts[0].Source = "/srv//minecraft/" },
+		func(o *Observation) { o.DataFolders[0].Source = "/srv//minecraft/" },
 		func(o *Observation) {
-			o.Mounts = append(o.Mounts, Mount{Type: "bind", Source: "/srv/mods", Destination: "/mods"})
+			o.Mounts = append(o.Mounts, Mount{Type: "volume", Source: "/var/lib/docker/volumes/x/_data", Name: "x", Destination: "/cache", Writable: true})
 		},
+		func(o *Observation) { o.Compose = &ComposeIdentity{"p", "s", "1"} },
+		func(o *Observation) { o.Secrets = []string{"rotated-password"} },
 	}
 	for index, change := range same {
 		if BindingDigest(observation(change)) != base {
 			t.Errorf("change %d altered the digest", index)
 		}
 	}
-	two := func(first, second Mount) func(*Observation) {
-		return func(o *Observation) { o.Mounts = []Mount{first, second} }
+	two := func(first, second DataFolder) func(*Observation) {
+		return func(o *Observation) { o.DataFolders = []DataFolder{first, second} }
 	}
-	a := Mount{Type: "bind", Source: "/srv/a", Destination: "/a", Writable: true}
-	b := Mount{Type: "volume", Source: "/var/lib/docker/volumes/b/_data", Name: "b", Destination: "/b", Writable: true}
+	a := DataFolder{Path: "/a", Type: "bind", Source: "/srv/a", Destination: "/a"}
+	b := DataFolder{Path: "/b/world", Type: "volume", Source: "b", Destination: "/b"}
 	if BindingDigest(observation(two(a, b))) != BindingDigest(observation(two(b, a))) {
-		t.Error("mount order altered the digest")
+		t.Error("folder order altered the digest")
 	}
 	different := []func(*Observation){
 		func(o *Observation) { o.GameType = "valheim" },
-		func(o *Observation) { o.Mounts[0].Source = "/srv/other" },
-		func(o *Observation) { o.Mounts[0].Destination = "/world" },
-		func(o *Observation) { o.GameConfiguration["ludock.console"] = "attach" },
-		func(o *Observation) { o.GameConfiguration = nil },
+		func(o *Observation) { o.DataFolders[0].Source = "/srv/other" },
+		func(o *Observation) { o.DataFolders[0].Path = "/data/world" },
+		func(o *Observation) { o.DataFolders[0].Destination = "/" },
+		func(o *Observation) { o.DataFolders[0].Type = "volume" },
+		func(o *Observation) { o.DataFolders[0].ReadOnly = true },
+		func(o *Observation) { o.DataFolders = append(o.DataFolders, b) },
+		func(o *Observation) { o.DataFolders = nil },
 	}
 	for index, change := range different {
 		if BindingDigest(observation(change)) == base {
@@ -166,65 +173,76 @@ func TestDuplicateComposeIdentityIsAmbiguous(t *testing.T) {
 	}
 }
 
-func TestMaterialChangesNeedReview(t *testing.T) {
-	s := &Store{DB: dbtest.Open(t)}
-	if err := s.DB.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+func addUser(t *testing.T, s *Store, id string, role db.Role) {
+	t.Helper()
+	if err := s.DB.CreateUser(ctx, db.UserRecord{User: db.User{ID: id, Username: id, Role: role, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
 		t.Fatal(err)
-	}
-	session := dbtest.Session(t, s.DB, "admin")
-	original := reconcile(t, s, 0, observation(nil))[0]
-	changed := observation(func(o *Observation) {
-		o.Mounts = []Mount{{Type: "bind", Source: "/srv/unrelated-world", Destination: "/data", Writable: true}}
-	})
-	pending := reconcile(t, s, 0, changed)[0]
-	if pending.ID != original.ID || pending.Status != StatusReviewRequired || pending.BindingFingerprint != original.BindingFingerprint ||
-		pending.PendingFingerprint == original.BindingFingerprint {
-		t.Fatalf("%+v", pending)
-	}
-	_, err := s.ResolveBinding(ctx, pending.ID, -1)
-	wantCode(t, err, "SERVER_BINDING_UNAVAILABLE")
-	_, err = s.ReviewBinding(ctx, "admin", session, pending.ID, "stale-fingerprint", -1)
-	wantCode(t, err, "SERVER_REVIEW_CHANGED")
-	// A revoked session cannot accept the binding.
-	if _, err := s.ReviewBinding(ctx, "admin", "revoked-session", pending.ID, pending.PendingFingerprint, -1); !errors.Is(err, db.ErrSessionGone) {
-		t.Fatal(err)
-	}
-	reviewed, err := s.ReviewBinding(ctx, "admin", session, pending.ID, pending.PendingFingerprint, -1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, _ := s.BindingFingerprint(changed)
-	if reviewed.Status != StatusActive || reviewed.BindingFingerprint != want || reviewed.BindingRevision <= pending.BindingRevision {
-		t.Fatalf("%+v", reviewed)
-	}
-	for _, candidate := range []Observation{
-		observation(func(o *Observation) { o.Mounts = changed.Mounts; o.GameType = "factorio" }),
-		observation(func(o *Observation) {
-			o.Mounts = changed.Mounts
-			o.GameConfiguration = map[string]string{"ludock.console": "different"}
-		}),
-	} {
-		if fingerprint, _ := s.BindingFingerprint(candidate); fingerprint == reviewed.BindingFingerprint {
-			t.Fatal("material change kept fingerprint")
-		}
-	}
-	// Read-only mounts are not material.
-	readOnly := observation(func(o *Observation) {
-		o.Mounts = append(o.Mounts, Mount{Type: "bind", Source: "/etc", Destination: "/etc", Writable: false})
-	})
-	if BindingDigest(readOnly) != BindingDigest(observation(nil)) {
-		t.Fatal("read-only mount changed digest")
 	}
 }
 
-// Review survives disappearance and reversion.
-func TestReviewSurvivesDisappearance(t *testing.T) {
+func share(t *testing.T, s *Store, userID, serverID string) {
+	t.Helper()
+	if _, err := s.DB.Exec(`INSERT INTO server_grants(user_id, server_id, capabilities_json, updated_at) VALUES (?, ?, '["server.view"]', 1)`,
+		userID, serverID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A new game or other data folders take effect at once. They pause sharing
+// only when the server has grants, including an administrator's, which
+// applies again if the account becomes an operator. An administrator
+// confirms the server as it is now to resume it.
+func TestMaterialChangePausesSharing(t *testing.T) {
 	s := &Store{DB: dbtest.Open(t)}
+	addUser(t, s, "admin", db.RoleAdmin)
+	addUser(t, s, "other-admin", db.RoleAdmin)
+	session := dbtest.Session(t, s.DB, "admin")
 	original := reconcile(t, s, 0, observation(nil))[0]
+	moved := func(o *Observation) {
+		o.DataFolders = []DataFolder{{Path: "/data", Type: "bind", Source: "/srv/unrelated-world", Destination: "/data"}}
+	}
+	unshared := reconcile(t, s, 0, observation(moved))[0]
+	want, _ := s.BindingFingerprint(observation(moved))
+	if unshared.SharingPaused || unshared.BindingFingerprint != want || unshared.BindingRevision != original.BindingRevision+1 {
+		t.Fatalf("%+v", unshared)
+	}
+	share(t, s, "other-admin", original.ID)
+	paused := reconcile(t, s, 0, observation(func(o *Observation) { moved(o); o.GameType = "factorio" }))[0]
+	if !paused.SharingPaused || paused.Status != StatusActive || paused.GameType != "factorio" || paused.BindingRevision != unshared.BindingRevision+1 {
+		t.Fatalf("%+v", paused)
+	}
+	if _, err := s.ResolveBinding(ctx, paused.ID, paused.BindingRevision); err != nil {
+		t.Fatal("administrators lost the server:", err)
+	}
+	// Recreating the container without another material change keeps it paused.
+	recreated := reconcile(t, s, 0, observation(func(o *Observation) { moved(o); o.GameType = "factorio"; o.ContainerID = "docker-b" }))[0]
+	if !recreated.SharingPaused {
+		t.Fatalf("%+v", recreated)
+	}
+	wantCode(t, s.ResumeSharing(ctx, "admin", session, paused.ID, paused.BindingRevision), "SERVER_CHANGED_AGAIN")
+	if err := s.ResumeSharing(ctx, "admin", "revoked-session", paused.ID, recreated.BindingRevision); !errors.Is(err, db.ErrSessionGone) {
+		t.Fatal(err)
+	}
+	if err := s.ResumeSharing(ctx, "admin", session, paused.ID, recreated.BindingRevision); err != nil {
+		t.Fatal(err)
+	}
+	resumed, _ := s.Get(ctx, paused.ID)
+	if resumed.SharingPaused || resumed.BindingRevision != recreated.BindingRevision {
+		t.Fatalf("%+v", resumed)
+	}
+}
+
+// A pause survives the container disappearing and coming back as it was
+// before the change: nobody confirmed either version since.
+func TestPauseSurvivesDisappearance(t *testing.T) {
+	s := &Store{DB: dbtest.Open(t)}
+	addUser(t, s, "friend", db.RoleViewer)
+	original := reconcile(t, s, 0, observation(nil))[0]
+	share(t, s, "friend", original.ID)
 	reconcile(t, s, 0, observation(func(o *Observation) { o.GameType = "factorio" }))
 	reconcile(t, s, 0)
 	reappeared := reconcile(t, s, 0, observation(nil))[0]
-	if reappeared.ID != original.ID || reappeared.Status != StatusReviewRequired || !reappeared.ReviewRequired {
+	if reappeared.ID != original.ID || reappeared.Status != StatusActive || !reappeared.SharingPaused {
 		t.Fatalf("%+v", reappeared)
 	}
 }

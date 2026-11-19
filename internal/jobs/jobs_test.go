@@ -439,11 +439,6 @@ func twoRootBackup(t *testing.T, f *fixture) any {
 	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
 		t.Fatal(err)
 	}
-	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	if _, err := f.jobs.Identity.ReviewBinding(ctx, f.admin.ID, f.adminSession, f.serverID, logical.PendingFingerprint,
-		logical.BindingRevision); err != nil {
-		t.Fatal(err)
-	}
 	settings, _, _ := f.jobs.Backups.SavedSettings(ctx)
 	settings.ReserveBytes = 1 << 20
 	if _, err := f.jobs.Backups.SaveSettings(ctx, *settings, f.admin, f.adminSession); err != nil {

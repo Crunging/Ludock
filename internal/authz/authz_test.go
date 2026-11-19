@@ -124,7 +124,8 @@ func TestStaleActorsAreRechecked(t *testing.T) {
 	}
 }
 
-// Material change suspends grants until review.
+// A material change hides a shared server from its operator, not from an
+// administrator, until an administrator confirms it.
 func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	s, servers := setup(t)
 	first := servers[slices.IndexFunc(servers, func(server identity.Server) bool { return server.GameType == "minecraft" })]
@@ -141,10 +142,10 @@ func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	result, _ := s.Servers.Reconcile(ctx, replaced, "", 0)
 	pending := result[slices.IndexFunc(result, func(server identity.Server) bool { return server.ID == first.ID })]
 	if ok, _ := s.Has(ctx, operator, first.ID, ServerView); ok {
-		t.Fatal("suspended server visible")
+		t.Fatal("paused server visible")
 	}
-	if got := effective(t, s, admin, first.ID); !slices.Equal(got, []Capability{ServerView}) {
-		t.Fatal(got)
+	if got := effective(t, s, admin, first.ID); !slices.Equal(got, All) {
+		t.Fatal("administrator lost the paused server:", got)
 	}
 	if _, err := s.Assert(ctx, operator, first.ID, ServerStop); !apperr.Is(err, "SERVER_NOT_FOUND") {
 		t.Fatal(err)
@@ -152,9 +153,11 @@ func TestMaterialChangeSuspendsGrants(t *testing.T) {
 	if grants, _ := s.UserGrants(ctx, operator.ID); len(grants) != 1 {
 		t.Fatal("grant deleted")
 	}
-	s.Servers.ReviewBinding(ctx, admin.ID, adminSession, first.ID, pending.PendingFingerprint, -1)
+	if err := s.Servers.ResumeSharing(ctx, admin.ID, adminSession, first.ID, pending.BindingRevision); err != nil {
+		t.Fatal(err)
+	}
 	if ok, _ := s.Has(ctx, operator, first.ID, ServerStop); !ok {
-		t.Fatal("review did not restore grant")
+		t.Fatal("confirming did not restore grant")
 	}
 }
 

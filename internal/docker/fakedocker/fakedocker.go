@@ -316,6 +316,19 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
+	case "/fake/recreate":
+		// Recreates a container with changed settings under a new ID, as
+		// Compose or Portainer would: POST /fake/recreate?container=NAME
+		// with any number of env=KEY=VALUE and label=KEY=VALUE; a KEY alone
+		// removes it.
+		query := r.URL.Query()
+		e.mu.Lock()
+		if c := e.find(query.Get("container")); c != nil {
+			e.recreateLocked(c, query["env"], query["label"])
+		}
+		e.mu.Unlock()
+		w.WriteHeader(204)
+		return
 	case "/fake/stats":
 		// Sets a container's memory in use: POST /fake/stats?container=NAME&memory=BYTES.
 		query := r.URL.Query()
@@ -733,6 +746,32 @@ func (c *Container) inspection() map[string]any {
 		result["ImageManifestDescriptor"] = c.ImageManifestDescriptor
 	}
 	return result
+}
+
+func (e *Engine) recreateLocked(c *Container, env, labels []string) {
+	replacement := *c
+	replacement.ID = newID()
+	replacement.Config.Env = slices.Clone(c.Config.Env)
+	for _, entry := range env {
+		key, _, set := strings.Cut(entry, "=")
+		replacement.Config.Env = slices.DeleteFunc(replacement.Config.Env, func(existing string) bool { return strings.HasPrefix(existing, key+"=") })
+		if set {
+			replacement.Config.Env = append(replacement.Config.Env, entry)
+		}
+	}
+	replacement.Config.Labels = maps.Clone(c.Config.Labels)
+	for _, entry := range labels {
+		if key, value, set := strings.Cut(entry, "="); set {
+			replacement.Config.Labels[key] = value
+		} else {
+			delete(replacement.Config.Labels, key)
+		}
+	}
+	index := slices.Index(e.order, c.ID)
+	e.removeLocked(c.ID)
+	e.containers[replacement.ID] = &replacement
+	e.order = slices.Insert(e.order, index, replacement.ID)
+	e.emitLocked("create", replacement.ID)
 }
 
 func (e *Engine) find(reference string) *Container {

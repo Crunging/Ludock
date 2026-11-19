@@ -64,8 +64,8 @@ func TestPublicMetadataExcludesSecrets(t *testing.T) {
 			t.Errorf("container exposes %s", secret)
 		}
 	}
-	if observed.Observation.GameConfiguration["env:RCON_PASSWORD"] != "private-password" || observed.Observation.Compose == nil {
-		t.Fatal("observation lost identity inputs")
+	if len(observed.Observation.DataFolders) != 1 || observed.Observation.DataFolders[0].Source != "rust" || observed.Observation.Compose == nil {
+		t.Fatalf("observation lost identity inputs: %+v", observed.Observation)
 	}
 	if secrets := observed.Observation.Secrets; len(secrets) != 1 || secrets[0] != "private-password" {
 		t.Fatal(secrets)
@@ -385,5 +385,39 @@ func TestMemoryInUseExcludesReclaimableCache(t *testing.T) {
 		if got := memoryInUse(&stats); got != want {
 			t.Errorf("%s: got %v, want %v", name, got, want)
 		}
+	}
+}
+
+// A server's identity follows the data Files shows, nested mounts included,
+// and nothing else: a rotated password or another label leaves it as it was.
+func TestIdentityFollowsDataFolders(t *testing.T) {
+	engine, s := setup(t)
+	mounts := []docker.MountPoint{{Type: "volume", Source: "/var/lib/docker/volumes/mc/_data", Name: "mc", Destination: "/data", RW: true},
+		{Type: "bind", Source: "/srv/worlds/one", Destination: "/data/world", RW: true},
+		{Type: "bind", Source: "/srv/unrelated", Destination: "/backups", RW: true}}
+	id := engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Labels: map[string]string{"ludock.files": "/data"}, Env: []string{"RCON_PASSWORD=one", "DB_PASS=one", "RCON_PORT=25575"}, Mounts: mounts})
+	base := identity.BindingDigest(inspectTest(t, s, id).Observation)
+	digest := func(change func(*fakedocker.Container)) string {
+		t.Helper()
+		engine.Update(id, change)
+		return identity.BindingDigest(inspectTest(t, s, id).Observation)
+	}
+	if digest(func(c *fakedocker.Container) {
+		c.Config.Env = []string{"RCON_PASSWORD=two", "DB_PASS=two", "RCON_PORT=25576", "ENABLE_RCON=false"}
+		c.Config.Labels["ludock.console"] = "attach"
+		c.Config.Labels["ludock.console.password-env"] = "DB_PASS"
+		c.Mounts[2].Source = "/srv/elsewhere"
+	}) != base {
+		t.Fatal("a setting outside the game and its data folders changed the identity")
+	}
+	if digest(func(c *fakedocker.Container) { c.Mounts[1].Source = "/srv/worlds/two" }) == base {
+		t.Fatal("a different nested world kept the identity")
+	}
+	if digest(func(c *fakedocker.Container) {
+		c.Mounts[1].Source = "/srv/worlds/one"
+		c.Config.Labels["ludock.files"] = "/data/world"
+	}) == base {
+		t.Fatal("other data folders kept the identity")
 	}
 }

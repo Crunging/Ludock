@@ -250,22 +250,18 @@ func (s *Service) EffectiveAll(ctx context.Context, actor *db.SessionUser, serve
 	return user, result, nil
 }
 
-func usable(server *identity.Server) bool {
-	return server.Status == identity.StatusActive && !server.ReviewRequired
-}
-
 // roleCapabilities applies the account's role to its grant on a server.
+// Administrators keep full use of a server whose sharing is paused.
 func roleCapabilities(user *db.SessionUser, server *identity.Server, assigned []Capability) []Capability {
 	if user.Role == db.RoleAdmin {
-		// Administrators can inspect status and review metadata even when acting
-		// on the container is forbidden. This never authorizes Docker reads or
-		// mutation.
-		if usable(server) {
+		// Administrators can inspect status and history of a server without a
+		// container. This never authorizes Docker reads or mutation.
+		if server.Status == identity.StatusActive {
 			return slices.Clone(All)
 		}
 		return []Capability{ServerView}
 	}
-	if !usable(server) || !slices.Contains(assigned, ServerView) {
+	if server.Status != identity.StatusActive || server.SharingPaused || !slices.Contains(assigned, ServerView) {
 		return nil
 	}
 	var result []Capability

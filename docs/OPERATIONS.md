@@ -155,8 +155,7 @@ needs `ludock.address`. Ports published only on loopback are never offered.
 
 When detection can't know the address, such as behind a port-forwarding router,
 a tunnel, or a Minecraft SRV record, set `ludock.address` to exactly what
-players type. The port is optional, changing it doesn't need a binding review,
-and invalid values are ignored and reported in **Diagnostics**.
+players type. The port is optional, and invalid values are ignored and reported in **Diagnostics**.
 
 ## Consoles
 
@@ -469,7 +468,8 @@ running it.
   the time zone. If Ludock is down at that time and back more than five minutes
   late, the run is recorded as missed and never runs late.
 - **Limits:** 100 schedules per server and 1,000 in total, including paused
-  ones. When a server's binding changes, recreate its schedules.
+  ones. Schedules survive changes to the container; see
+  [Server identity](#server-identity).
 
 ## Availability alerts
 
@@ -597,11 +597,17 @@ that user out everywhere, or use `ludock recover` (below).
 ### Server identity
 
 A Compose server is identified by its project, service, and replica, and a
-standalone container by its name. Recreating a container keeps its history and
-sharing; renaming a standalone container makes a new server. If a server's
-game, mounts, or project change, non-administrators lose access until an
-administrator chooses **Accept binding**; its schedules then need to be
-recreated, and older backups restore only if they match the accepted data.
+standalone container by its name. Recreating or changing a container in your
+own tools keeps its history, sharing, and schedules: a new password, port,
+console setting, label, or environment variable is simply picked up. Renaming
+a standalone container makes a new server.
+
+Only a change to the server's game or to the data folders Ludock reads, backs
+up, and restores asks for anything. Administrators keep full use of the
+server. If it's shared with anyone else, their access and their schedules
+pause until an administrator opens the server and chooses **Confirm and
+restore access**, since what they were given has changed. Backups taken
+before the change restore only onto the same data folders.
 
 ### History
 

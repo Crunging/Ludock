@@ -84,8 +84,8 @@ var unavailableGuidance = map[string]string{
 	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
 	"owner_access_removed":  "Schedule owner no longer has schedule access. Ask an administrator to restore server view and schedule management grants.",
 	"action_access_removed": "Schedule owner no longer has access to this action. Ask an administrator to restore the action grant, or edit the schedule to use an allowed action.",
-	"binding_changed":       "Server identity changed. Ask an administrator to review the binding, then recreate this schedule.",
-	"binding_unavailable":   "Server binding is unavailable. Ask an administrator to resolve its identity before this schedule can run.",
+	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
+	"binding_unavailable":   "Ludock can’t find this server’s container. The schedule runs again once the server is back in Docker.",
 	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
 }
 
@@ -1691,7 +1691,7 @@ func SchedulePreview(enabled bool, text string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, " <small class=\"table-detail\">Preview assumes the owner has access and the server binding is active.</small>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, " <small class=\"table-detail\">Preview assumes the owner keeps access and the server stays in Docker.</small>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

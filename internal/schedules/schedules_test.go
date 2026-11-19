@@ -192,7 +192,7 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 
 func schedtimeRecurringGrace() int64 { return 15 * 60_000 }
 
-// Revoked actions disabled owners and binding changes.
+// Revoked actions, disabled owners, and paused sharing stop a schedule.
 func TestScheduleAuthorityChanges(t *testing.T) {
 	f := setup(t)
 	f.s.Create(ctx, friend, f.serverID, base)
@@ -213,13 +213,20 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 		t.Fatal(f.first(t, admin))
 	}
 	f.s.DB.UpdateUserAccess(ctx, friend.ID, db.RoleOperator, false)
-	// A reviewed material change keeps the schedule suspended.
+	// A material change pauses the friend's schedule until an administrator
+	// confirms it, and the same schedule then runs again.
 	changed := f.obs
 	changed.GameType = "factorio"
 	pending, _ := f.s.Identity.Reconcile(ctx, []identity.Observation{changed}, "", 0)
-	f.s.Identity.ReviewBinding(ctx, admin.ID, adminSession, f.serverID, pending[0].PendingFingerprint, -1)
 	f.s.Run(ctx, due+2*86400_000)
-	if f.operations(t) != 0 || !strings.Contains(f.first(t, admin).LastResult, "server configuration changed") {
+	if f.operations(t) != 0 || f.first(t, admin).NextRunUnavailableReason != SharingPaused ||
+		!strings.HasPrefix(f.first(t, admin).LastResult, "Paused: the server's game or data folders changed") {
+		t.Fatal(f.first(t, admin))
+	}
+	if err := f.s.Identity.ResumeSharing(ctx, admin.ID, adminSession, f.serverID, pending[0].BindingRevision); err != nil {
+		t.Fatal(err)
+	}
+	if f.first(t, admin).NextRunUnavailableReason != "" {
 		t.Fatal(f.first(t, admin))
 	}
 	f.s.DB.DeleteUser(ctx, friend.ID)

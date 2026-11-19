@@ -131,8 +131,8 @@ templ ServerDetailPage(page Page, d ServerDetail) {
 templ detailBody(d ServerDetail) {
 	{{ server := d.Row.Server }}
 	@DetailLive(d)
-	if d.Admin && server.BindingStatus == "review_required" {
-		@BindingReview(server.ID, server.DisplayName, server.BindingRevision)
+	if server.SharingPaused {
+		@ConfirmChange(server.ID, server.BindingRevision)
 	}
 	<div id="detail-status" aria-live="polite"></div>
 	<nav class="section-tabs" aria-label="Server management">
@@ -227,9 +227,7 @@ templ DetailLive(d ServerDetail) {
 				<p class="section-note" role="status">{ guidance }</p>
 			}
 		} else {
-			<div class="alert alert--error" role="alert">
-				This server’s binding is { Capitalize(string(server.BindingStatus)) }. Operations are blocked until an administrator reviews the identity.
-			</div>
+			<div class="alert alert--error" role="alert">{ BindingNote(string(server.BindingStatus)) } Controls come back once Docker has exactly one container for it.</div>
 		}
 		// The notice points to progress the page doesn't already show.
 		if operation := server.ActiveOperation; operation != nil && d.Tab != "activity" && operation.ID != d.Operation {
@@ -243,20 +241,27 @@ templ DetailLive(d ServerDetail) {
 	</div>
 }
 
-templ BindingReview(serverID, serverName string, revision int64) {
-	<form class="danger-panel stack-form" hx-post={ "/servers/" + serverID + "/binding-review" } hx-target="#binding-review-status">
-		<h3>Review changed server identity</h3>
+templ ConfirmChange(serverID string, revision int64) {
+	<form class="notice-panel stack-form" hx-post={ "/servers/" + serverID + "/confirm-change" } hx-target="#confirm-change-status">
+		<h3>This server changed in Docker</h3>
 		<p>
-			Verify that this is the same intended server and game data. Accepting the new binding re-enables existing user grants. Schedules for changed game data stay suspended; review and recreate them separately. Old backups remain subject to compatibility checks.
+			Its game or data folders changed. People you shared it with can’t use it, and their schedules wait, until you confirm it’s still the server you meant to share. You can keep using it as usual.
 		</p>
 		<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(revision, 10) }/>
-		<label>
-			<span>Type <strong>{ serverName }</strong> to accept the changed binding</span>
-			<input name="confirmation" autocomplete="off" required data-confirm-value={ serverName }/>
-		</label>
-		<div id="binding-review-status" aria-live="polite"></div>
-		<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Accept binding</button>
+		<div id="confirm-change-status" aria-live="polite"></div>
+		<button class="primary-btn" type="submit" data-busy-label="Confirming…">Confirm and restore access</button>
 	</form>
+}
+
+// BindingNote explains a server without exactly one container, or is empty.
+func BindingNote(status string) string {
+	switch status {
+	case "missing":
+		return "Ludock can’t find this server’s container in Docker."
+	case "ambiguous":
+		return "More than one container claims to be this server."
+	}
+	return ""
 }
 
 var healthNotes = map[string]string{"starting": "Health check is starting", "healthy": "Health check passing", "unhealthy": "Health check failing"}
