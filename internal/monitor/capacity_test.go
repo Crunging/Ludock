@@ -219,6 +219,34 @@ func TestMemoryAlert(t *testing.T) {
 	}
 }
 
+// An administrator accepts a replacement container with a lower memory
+// limit. The old container's samples, near the new limit, don't count: the
+// replacement alerts only once its own samples fill the window, and the old
+// binding's alert ends with it.
+func TestMemoryAlertEndsWithItsBinding(t *testing.T) {
+	s, events, server, _ := setupWith(t, func(policy *Policy) { policy.MemoryMinutes = 3 })
+	const minute = 10 * 60_000
+	addSamples(t, s, server.ID, minute, 950, 950, 950)
+	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute)
+	if len(events.events) != 1 {
+		t.Fatal(events.events)
+	}
+	if _, err := s.DB.Exec("UPDATE logical_servers SET binding_revision=binding_revision+1 WHERE id=?", server.ID); err != nil {
+		t.Fatal(err)
+	}
+	addSamples(t, s, server.ID, minute+60_000, 960)
+	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute+60_000)
+	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 || len(events.events) != 1 {
+		t.Fatal("judged the replacement by the old container's samples", problems, events.events)
+	}
+	addSamples(t, s, server.ID, minute+3*60_000, 960, 960)
+	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute+2*60_000)
+	s.CheckMemory(ctx, map[string]int64{server.ID: 1000}, state("running", ""), minute+3*60_000)
+	if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 || len(events.events) != 2 {
+		t.Fatal(problems, events.events)
+	}
+}
+
 // Monitoring turned off while a disk is measured keeps the measurement from
 // saving or sending an alert under the old policy.
 func TestPolicySavedDuringADiskMeasurement(t *testing.T) {
