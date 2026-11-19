@@ -273,7 +273,7 @@ const sevenDaysVector = `-?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?, -?\d+(?:\.\d+)?`
 
 var (
 	sevenDaysPlayer = regexp.MustCompile(`^\d+\. id=\d+, (.*?), pos=\(` + sevenDaysVector + `\), rot=\(` + sevenDaysVector +
-		`\), remote=(?:True|False), .*, ping=\d+$`)
+		`\), remote=(?:True|False), health=\d+, deaths=\d+, zombies=\d+, players=\d+, score=-?\d+, level=\d+, .*, ping=-?\d+$`)
 	sevenDaysTotal = regexp.MustCompile(`^Total of (\d+) in the game$`)
 	// Log lines the Telnet console streams, such as
 	// "2026-11-19T10:00:00 512.345 INF Player connected".

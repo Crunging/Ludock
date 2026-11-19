@@ -231,7 +231,7 @@ func TestParse7DaysPlayers(t *testing.T) {
 	}, []string{"", log, row, row + "\nTotal of 2 in the game", "Total of 0 in the game\nTotal of 0 in the game",
 		// A row cut short, or text that isn't a row or the server log.
 		"0. id=171, Ada, pos=(\nTotal of 1 in the game", "0. id=171, Ada, p\x00os=(\nTotal of 0 in the game",
-		"garbled\nTotal of 0 in the game", "0. id=171, Ada, pos=(garbage, ping=0\nTotal of 1 in the game", "Total of 1 in the game\n" + row})
+		"garbled\nTotal of 0 in the game", "0. id=171, Ada, pos=(garbage, ping=0\nTotal of 1 in the game", "0. id=171, Ada, pos=(1, 2, 3), rot=(4, 5, 6), remote=True, garbage, ping=0\nTotal of 1 in the game", "Total of 1 in the game\n" + row})
 }
 
 // Each game with a player list gets it from its preset, also when a label
