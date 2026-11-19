@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
@@ -70,7 +71,8 @@ func (c candidate) external() string {
 // a folder that holds one, can control every container on the host.
 var engineSockets = []string{"docker.sock", "podman.sock", "containerd.sock", "crio.sock"}
 
-var hostFolders = []string{"/", "/run", "/var/run", "/var/lib/docker", "/run/containerd", "/run/podman"}
+// hostFolders can't be bound, nor can any folder that holds one.
+var hostFolders = []string{"/run", "/var/run", "/var/lib/docker", "/var/lib/containerd", "/var/lib/containers"}
 
 // controlsHost reports a container that can take over its host: privileged,
 // or given an engine socket, the host's root, or the folders holding them.
@@ -88,8 +90,13 @@ func (c candidate) controlsHost() bool {
 				return true
 			}
 		}
-		if mount.Type == "bind" && slices.Contains(hostFolders, path.Clean(mount.Source)) {
-			return true
+		if mount.Type == "bind" && mount.Source != "" {
+			source := path.Clean(mount.Source)
+			for _, folder := range hostFolders {
+				if source == "/" || folder == source || strings.HasPrefix(folder, source+"/") {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -299,7 +306,22 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 			entry.Ports = append(entry.Ports, port)
 		}
 	}
+	// Docker reports no live mappings for a stopped container.
+	if len(entry.Ports) == 0 {
+		for key, bindings := range info.Host.PortBindings {
+			number, kind, _ := strings.Cut(key, "/")
+			for _, binding := range bindings {
+				if public := parseLeadingInt(binding.HostPort); public > 0 {
+					entry.Ports = append(entry.Ports, Port{Private: parseLeadingInt(number), Public: public, Type: cmp.Or(kind, "tcp")})
+				}
+			}
+		}
+		slices.SortFunc(entry.Ports, func(a, b Port) int { return cmp.Or(cmp.Compare(a.Public, b.Public), cmp.Compare(a.Type, b.Type)) })
+	}
 	entry.Game = games.Suggest(container.Image, container.Name, gamePorts(entry.Ports))
+	if game := choices[entry.External].Game; game != "" {
+		entry.Game = game
+	}
 	return entry, nil
 }
 
@@ -314,7 +336,7 @@ func gamePorts(ports []Port) []games.Port {
 // Add makes Ludock manage a container an administrator picked from the
 // unmanaged list. game is a game type, "unknown" for another game, or ""
 // for the suggestion. It returns the new server after discovery.
-func (s *Service) Add(ctx context.Context, adminID, tokenHash, containerID, game string) (*identity.Server, error) {
+func (s *Service) Add(ctx context.Context, adminID, tokenHash, containerID, game string, audit db.AuditEntry) (*identity.Server, error) {
 	entry, err := s.Observer.Addable(ctx, containerID)
 	if err != nil {
 		return nil, err
@@ -335,7 +357,8 @@ func (s *Service) Add(ctx context.Context, adminID, tokenHash, containerID, game
 	if game != games.InferGameType(entry.Image) {
 		choice.Game = game
 	}
-	if err := s.Identity.SetChoice(ctx, adminID, tokenHash, entry.External, choice, nil); err != nil {
+	audit.Action, audit.Details = "server.added", map[string]any{"container": entry.Name, "gameType": game}
+	if err := s.Identity.SetChoice(ctx, adminID, tokenHash, entry.External, choice, &audit, nil); err != nil {
 		return nil, err
 	}
 	if _, err := s.RefreshNow(ctx); err != nil {
@@ -361,7 +384,7 @@ func (s *Service) byExternal(ctx context.Context, external string) (*identity.Se
 // would: its sharing, schedules, and backups are kept for when it is added
 // again, and it leaves the server list once its container is out of
 // discovery.
-func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string) (*identity.Server, error) {
+func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string, audit db.AuditEntry) (*identity.Server, error) {
 	current, err := s.RefreshNow(ctx)
 	if err != nil {
 		return nil, err
@@ -377,7 +400,14 @@ func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string) (*i
 		return nil, apperr.New("KEPT_BY_LABEL", 409,
 			`Its ludock.enable: "true" label keeps this server in Ludock. Remove the label where the container is defined to take it out.`)
 	}
-	err = s.Identity.SetChoice(ctx, adminID, tokenHash, server.ExternalIdentity, identity.Choice{}, func(tx *sql.Tx) error {
+	audit.Action, audit.TargetType, audit.TargetID = "server.removed", "server", server.ID
+	choices, err := s.Observer.choices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// The game picked when it was added is offered again with it.
+	removed := identity.Choice{Game: choices[server.ExternalIdentity].Game}
+	err = s.Identity.SetChoice(ctx, adminID, tokenHash, server.ExternalIdentity, removed, &audit, func(tx *sql.Tx) error {
 		var active int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM operations WHERE server_id = ? AND status IN ('queued','running')",
 			id).Scan(&active); err != nil {

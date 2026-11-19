@@ -45,16 +45,20 @@ func (s *Store) Choices(ctx context.Context) (map[string]Choice, error) {
 	return choices, rows.Err()
 }
 
-// SetChoice saves an administrator's choice. The administrator's session and
-// role are checked again in the same transaction, and check runs there too
-// before anything is written.
-func (s *Store) SetChoice(ctx context.Context, adminID, tokenHash, external string, choice Choice, check func(tx *sql.Tx) error) error {
+// SetChoice saves an administrator's choice with its audit entry. The
+// administrator's session and role are checked again in the same
+// transaction, and check runs there too before anything is written.
+func (s *Store) SetChoice(ctx context.Context, adminID, tokenHash, external string, choice Choice, audit *db.AuditEntry,
+	check func(tx *sql.Tx) error) error {
 	return s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		if check != nil {
 			if err := check(tx); err != nil {
 				return err
 			}
 		}
-		return s.DB.SetSetting(ctx, tx, choicePrefix+external, choice)
+		if err := s.DB.SetSetting(ctx, tx, choicePrefix+external, choice); err != nil {
+			return err
+		}
+		return s.DB.WriteAudit(ctx, tx, *audit)
 	})
 }

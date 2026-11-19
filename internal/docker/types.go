@@ -76,6 +76,8 @@ type ContainerInspect struct {
 		// Memory is the container's memory limit in bytes; 0 when none.
 		Memory     int64 `json:"Memory"`
 		Privileged bool  `json:"Privileged"`
+		// PortBindings are the configured mappings, kept while stopped.
+		PortBindings map[string][]PortBinding `json:"PortBindings"`
 	} `json:"HostConfig"`
 }
 

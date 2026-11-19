@@ -395,7 +395,9 @@ func (s *Service) SetUserGrants(ctx context.Context, userID string, inputs []Gra
 			}
 			grants = append(grants, validated{input.ServerID, capabilities})
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM server_grants WHERE user_id = ?", userID); err != nil {
+		// The editor doesn't show removed servers; their grants wait for them.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM server_grants WHERE user_id = ? AND server_id NOT IN
+      (SELECT id FROM logical_servers WHERE `+identity.RemovedServer+`)`, userID); err != nil {
 			return err
 		}
 		now := db.Now()

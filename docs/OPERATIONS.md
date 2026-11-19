@@ -50,8 +50,8 @@ administrators until you share it.
 To take a server out, open it and choose **Remove from Ludock**, whether it was
 added by hand or found by itself. The container keeps running as it was. Its
 sharing, schedules, monitoring settings, and backups are kept, and come back if
-you add it again. Until then it leaves the server list, and a schedule that comes
-due is suspended until you resume it.
+you add it again. Until then it leaves the server list, and its scheduled runs
+don't happen.
 
 Ludock remembers these choices in its own database, by Compose project, service,
 and replica, or by container name for a standalone container, so they survive

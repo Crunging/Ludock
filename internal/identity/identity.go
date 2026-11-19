@@ -263,9 +263,9 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// removedServer matches a server an administrator removed in the panel whose
-// container has since left discovery.
-const removedServer = `status = 'missing' AND EXISTS (SELECT 1 FROM settings
+// RemovedServer matches a logical_servers row an administrator removed in
+// the panel whose container has since left discovery.
+const RemovedServer = `status = 'missing' AND EXISTS (SELECT 1 FROM settings
   WHERE key = '` + choicePrefix + `' || external_identity AND json_extract(value_json, '$.managed') = 0)`
 
 // listServers lists a host's servers, or every host's when hostID is "".
@@ -277,7 +277,7 @@ func listServers(ctx context.Context, q queryer, hostID string, withRemoved bool
 		conditions, args = append(conditions, "host_id = ?"), append(args, hostID)
 	}
 	if !withRemoved {
-		conditions = append(conditions, "NOT ("+removedServer+")")
+		conditions = append(conditions, "NOT ("+RemovedServer+")")
 	}
 	query := "SELECT " + serverColumns + " FROM logical_servers"
 	if len(conditions) > 0 {

@@ -83,6 +83,8 @@ test("a non-administrator sees no containers and can't add or remove servers", a
   await expect(editor.locator(".alert--success")).toContainText("Server access saved for friend1.");
   await openServer(friend, "satisfactory");
   await expect(friend.getByRole("heading", { name: "Remove from Ludock" })).toHaveCount(0);
+  const remove = await friend.request.post(friend.url() + "/remove", { form: { _csrf: csrf }, headers: { "HX-Request": "true" } });
+  expect(remove.status()).toBe(403);
 });
 
 test("removing servers and adding them back keeps their sharing", async ({ session }) => {
@@ -100,6 +102,13 @@ test("removing servers and adding them back keeps their sharing", async ({ sessi
   await expect(page.locator(".server-row")).toHaveCount(4);
   await friend.reload();
   await expect(friend.getByText("No servers shared with you yet")).toBeVisible();
+  // Saving the friend's access meanwhile keeps the removed server's share.
+  await page.goto("/users");
+  await page.locator(".user-row", { hasText: "friend1" }).getByRole("button", { name: "Server access", exact: true }).click();
+  const editor = page.locator("[data-grants]");
+  await expect(editor.locator(".grants-server", { hasText: "satisfactory" })).toHaveCount(0);
+  await editor.getByRole("button", { name: "Save server access" }).click();
+  await expect(editor.locator(".alert--success")).toContainText("Server access saved for friend1.");
 
   // The container is untouched and offered again; adding it brings back its
   // sharing.
