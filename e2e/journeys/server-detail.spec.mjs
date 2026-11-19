@@ -11,7 +11,8 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   await expect(facts).toContainText("25565/tcp");
   // Watched without anyone turning it on; the levels wait behind a disclosure.
   await expect(page.getByLabel("Monitor this server")).toBeChecked();
-  await expect(page.locator("#availability-title + p")).toHaveText("No outage detected.");
+  // An earlier journey's restart can still hold alerts back for a moment.
+  await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Waiting for monitoring to resume after a server action)\.$/);
   await expect(page.getByLabel("Wait before alerting (seconds)")).toBeHidden();
   await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
 
