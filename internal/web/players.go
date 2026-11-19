@@ -75,7 +75,8 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	if !games.Online(action) && players.Redacted(name, act.Observation.Secrets) {
 		return "", errSecretName
 	}
-	command, err := players.Command(adapter.Moderation, s.App.Players.Get(act.Logical.ID, act.Container), action, name)
+	command, err := players.Command(adapter.Moderation, s.App.Players.Get(act.Logical.ID, act.Container), action, name,
+		r.PostFormValue("key"))
 	if err != nil {
 		return "", err
 	}

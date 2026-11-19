@@ -2,6 +2,8 @@ package players
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 
@@ -20,15 +22,17 @@ var (
 
 // Command is the console command for action on the player named name. Kick
 // and ban target the one player listed as name in a fresh reading, by the ID
-// that reading gave, which is never shown.
-func Command(moderation *games.Moderation, reading *Reading, action games.PlayerAction, name string) (string, error) {
+// that reading gave, and only while key, from the page that offered the
+// action, is still that ID's key: a confirmation left open never reaches
+// another player who took the name since.
+func Command(moderation *games.Moderation, reading *Reading, action games.PlayerAction, name, key string) (string, error) {
 	if !moderation.Offers(action) {
 		return "", errNotTaken
 	}
 	target := name
 	if games.Online(action) {
 		id, ok := onlineID(reading, name)
-		if !ok {
+		if !ok || key != Key(id) {
 			return "", errNotOnline
 		}
 		target = id
@@ -38,6 +42,20 @@ func Command(moderation *games.Moderation, reading *Reading, action games.Player
 		return "", errBadName
 	}
 	return command, nil
+}
+
+// Key identifies a player's ID on a page without showing it.
+func Key(id string) string {
+	sum := sha256.Sum256([]byte("ludock:player:" + id))
+	return hex.EncodeToString(sum[:12])
+}
+
+// OnlineKey is the key of the player listed as name, or "".
+func OnlineKey(reading *Reading, name string) string {
+	if id, ok := onlineID(reading, name); ok {
+		return Key(id)
+	}
+	return ""
 }
 
 func onlineID(reading *Reading, name string) (string, bool) {

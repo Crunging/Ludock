@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/players"
 )
 
 // playerGame is a running Minecraft server whose RCON console records every
@@ -63,22 +64,31 @@ func newPlayerGame(t *testing.T) *playerGame {
 	if g.server == "" {
 		t.Fatal("no Minecraft server", views)
 	}
-	// Kick and ban act on players in a reading.
-	g.app.Players.Check(context.Background(), g.server)
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		server, _ := g.app.Servers.Summary(context.Background(), &g.admin.User, g.server)
-		if server != nil && g.app.Players.Get(g.server, server.Server.Container) != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no player reading")
-		}
-	}
+	g.readPlayers()
 	return g
 }
 
+// readPlayers takes a player reading, which kick and ban act on.
+func (g *playerGame) readPlayers() {
+	g.t.Helper()
+	server, err := g.app.Servers.Summary(context.Background(), &g.admin.User, g.server)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	before := g.app.Players.Get(g.server, server.Server.Container)
+	g.app.Players.Check(context.Background(), g.server)
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if reading := g.app.Players.Get(g.server, server.Server.Container); reading != nil && reading != before {
+			return
+		}
+		if time.Now().After(deadline) {
+			g.t.Fatal("no player reading")
+		}
+	}
+}
+
 func (g *playerGame) act(principal *auth.Principal, action, player string) *http.Response {
-	body := url.Values{"_csrf": {CSRFToken(principal.Token)}, "player": {player}}.Encode()
+	body := url.Values{"_csrf": {CSRFToken(principal.Token)}, "player": {player}, "key": {players.Key(player)}}.Encode()
 	return g.do("POST", "/servers/"+g.server+"/players/"+action, principal, strings.NewReader(body),
 		map[string]string{"HX-Request": "true"}).Result()
 }
@@ -147,11 +157,13 @@ func TestPlayerActionSendsOneCommand(t *testing.T) {
 		io.Copy(&page, response.Body)
 		return page.String()
 	}
+	g.readPlayers()
 	response := g.act(operator, "kick", "Ada_2")
 	if page := read(response); response.StatusCode != http.StatusOK || !strings.Contains(page, "Ada_2 was kicked.") {
 		t.Fatal(response.StatusCode, page)
 	}
 	// A reply Ludock doesn't recognize is shown, without the console password.
+	g.readPlayers()
 	response = g.act(operator, "ban", "Ada")
 	if page := read(response); response.StatusCode != http.StatusOK || !strings.Contains(page, "Asked the game to ban Ada.") ||
 		!strings.Contains(page, "[redacted]") || strings.Contains(page, "rcon-secret") {

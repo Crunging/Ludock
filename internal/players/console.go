@@ -89,6 +89,11 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading
 				if utf8.RuneCountInString(name) < games.MaxNameRunes {
 					redactor.End()
 				}
+				// A name that held a secret is no longer the account name a
+				// command could take.
+				if safe.String() != name && index < len(players.IDs) && players.IDs[index] == name {
+					players.IDs[index] = ""
+				}
 				players.Names[index] = safe.String()
 			}
 			reading.Players, reading.Failed, reading.Via = players, false, ViaConsole
