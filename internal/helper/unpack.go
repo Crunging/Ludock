@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -61,7 +62,9 @@ func unpackName(id string) (string, error) {
 // backup would refuse are refused here too, so unpacked data never breaks a
 // later backup; .ludock- names are reserved for Ludock's own staging.
 func archiveParts(name string, depth int) ([]string, error) {
-	if name == "" || len(name) > 4096 || strings.ContainsAny(name, "\x00\\") || strings.HasPrefix(name, "/") {
+	// A name that isn't UTF-8 would be listed with replacement characters,
+	// which no later request could turn back into the file's name.
+	if name == "" || len(name) > 4096 || strings.ContainsAny(name, "\x00\\") || strings.HasPrefix(name, "/") || !utf8.ValidString(name) {
 		return nil, errArchiveUnsafe
 	}
 	var parts []string

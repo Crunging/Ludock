@@ -111,7 +111,7 @@ func TestArchiveEntryPaths(t *testing.T) {
 			t.Errorf("%q: %v %v", name, got, err)
 		}
 	}
-	for _, name := range []string{"", "/etc/passwd", "../escape", "world/../../escape", "a\\..\\b", "a\x00b", "line\nbreak",
+	for _, name := range []string{"", "/etc/passwd", "../escape", "world/../../escape", "a\\..\\b", "a\x00b", "line\nbreak", "caf\xe9.txt",
 		".ludock-restore-1/x", strings.Repeat("a", 256), strings.Repeat("a/", 2100)} {
 		if _, err := archiveParts(name, 64); !errors.Is(err, errArchiveUnsafe) {
 			t.Errorf("%q: %v", name, err)
