@@ -79,17 +79,22 @@ async function webhook(page) {
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   await page.goto("/settings");
   const card = page.locator("#notification-webhook-card");
-  if (!(await card.evaluate((details) => details.open))) await card.locator("summary").click();
+  if (!(await card.evaluate((details) => details.open))) await card.locator(":scope > summary").click();
   await card.locator("input[name=url]").fill(`http://127.0.0.1:${server.address().port}/hook`);
   await card.getByLabel("Send alerts to the webhook").check();
+  // Destinations get newer images only once that type is chosen.
+  await card.locator(".notification-alerts summary").click();
+  await card.getByLabel("Newer images available").check();
   await card.getByRole("button", { name: "Save Webhook" }).click();
   await expect(card.locator("form .alert--success")).toHaveText("Webhook settings saved.");
   return {
     alerts: () => bodies.filter((body) => body.message.includes("newer version of its container image")),
     close: async () => {
       await page.goto("/settings");
-      if (!(await card.evaluate((details) => details.open))) await card.locator("summary").click();
+      if (!(await card.evaluate((details) => details.open))) await card.locator(":scope > summary").click();
       await card.getByLabel("Send alerts to the webhook").uncheck();
+      await card.locator(".notification-alerts summary").click();
+      await card.getByLabel("Newer images available").uncheck();
       await card.getByRole("button", { name: "Save Webhook" }).click();
       await expect(card.locator("form .alert--success")).toHaveText("Webhook settings saved.");
       server.close();
@@ -98,7 +103,8 @@ async function webhook(page) {
 }
 
 // A new version of the tag appears in the registry. Administrators see it on
-// the list and the Update tab, every destination is told once, and updating
+// the list and the Update tab, a destination that chose newer images is told
+// once, and updating
 // clears it.
 test("finding a newer image, being told once, and updating to it", async ({ page }) => {
   const hook = await webhook(page);

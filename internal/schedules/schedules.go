@@ -18,6 +18,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -92,7 +93,7 @@ type Service struct {
 	Runner   *ops.Runner
 	Servers  *servers.Service
 	Locks    *locks.Table
-	Notify   func(key, message string)
+	Notify   func(alert notify.Alert, key, message string)
 	Console  Broadcaster
 	Players  Players
 
@@ -693,9 +694,9 @@ func (s *Service) SetEnabled(ctx context.Context, actor *db.SessionUser, serverI
 	return s.mutate(ctx, actor, serverID, id, revision, nil, &enabled)
 }
 
-func (s *Service) notify(key, message string) {
+func (s *Service) notify(alert notify.Alert, key, message string) {
 	if s.Notify != nil {
-		s.Notify(key, message)
+		s.Notify(alert, key, message)
 	}
 }
 
@@ -863,7 +864,7 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	if key == "" {
 		key = "invalid"
 	}
-	s.notify("schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
+	s.notify(notify.FailedWork, "schedule:"+r.id+":"+key, "A scheduled Ludock action could not run. Review its server and permissions.")
 }
 
 // queue enqueues a run's operation and records it on the schedule in one

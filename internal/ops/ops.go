@@ -19,6 +19,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/notify"
 )
 
 var log = logging.New("operations")
@@ -153,7 +154,7 @@ type Runner struct {
 	DB    *db.DB
 	Locks *locks.Table
 	// Notify queues a notification (notifications.Service.Notify).
-	Notify func(key, message string)
+	Notify func(alert notify.Alert, key, message string)
 	// Username resolves an actor ID for history, or "".
 	Username func(id string) string
 	// Changed tells open pages that a server's operation ended: Docker has
@@ -400,7 +401,7 @@ func (r *Runner) notifyScheduledFailure(rw *row) {
 	if rw.kind == "backup" {
 		key = "backup-failed:" + rw.id
 	}
-	r.Notify(key, "A scheduled Ludock action failed. Review its operation details.")
+	r.Notify(notify.FailedWork, key, "A scheduled Ludock action failed. Review its operation details.")
 }
 
 // resourcesBusy returns a job to the queue until its resources are free.

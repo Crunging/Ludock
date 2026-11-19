@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -55,7 +56,7 @@ type Availability struct {
 type Service struct {
 	DB     *db.DB
 	Locks  *locks.Table
-	Notify func(key, message string)
+	Notify func(alert notify.Alert, key, message string)
 	// Changed is told when an alert is raised or cleared, which no Docker
 	// event announces to open pages. It must not block.
 	Changed func(serverID string)
@@ -319,9 +320,9 @@ func (s *Service) Problems(ctx context.Context, now int64) (map[string]*Problem,
 	return problems, nil
 }
 
-func (s *Service) notify(key, message string) {
+func (s *Service) notify(alert notify.Alert, key, message string) {
 	if s.Notify != nil {
-		s.Notify(key, message)
+		s.Notify(alert, key, message)
 	}
 }
 
@@ -409,7 +410,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				continue
 			}
 			if changed && r.notified == 1 {
-				s.notify("recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
+				s.notify(notify.ServerProblems, "recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
 			}
 			// Pages show an outage once its grace ends, even before its alert.
 			if changed && r.outage.Valid {
@@ -424,9 +425,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		if r.outage.Valid {
 			started = r.outage.Int64
 		}
-		notify := now-started >= int64(policy.GraceSeconds)*1000
+		pastGrace := now-started >= int64(policy.GraceSeconds)*1000
 		notified := 0
-		if notify || r.notified == 1 {
+		if pastGrace || r.notified == 1 {
 			notified = 1
 		}
 		lastState := string(server.Status)
@@ -449,16 +450,16 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 		// Raising an alert always changes notified, so it is sent only when
 		// that change was saved against the state read above.
-		if changed && notify && r.notified == 0 {
+		if changed && pastGrace && r.notified == 0 {
 			message := server.DisplayName + " is unavailable."
 			if unavailable {
 				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
 			} else if silent {
 				message = server.DisplayName + " is running, but the game stopped answering."
 			}
-			s.notify("outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
+			s.notify(notify.ServerProblems, "outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
 			s.changed(server.ID)
-		} else if changed && notify && r.lastState.String != lastState {
+		} else if changed && pastGrace && r.lastState.String != lastState {
 			// Pages show the reason of an outage past its grace.
 			s.changed(server.ID)
 		}

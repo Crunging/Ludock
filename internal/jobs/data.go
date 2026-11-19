@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -237,16 +238,16 @@ func (j *Jobs) restoreInitialState(ctx context.Context, server *servers.Context,
 // keepStoppedAfterFailedBackup leaves the server stopped, since starting
 // could update the game and change the world, and says so once stopped.
 func (j *Jobs) keepStoppedAfterFailedBackup(ctx context.Context, server *servers.Context, job *ops.Context) error {
-	return j.keepStopped(ctx, server, job, "the backup failed, so the server was left stopped. Review the operation, then start it.")
+	return j.keepStopped(ctx, server, job, notify.FailedWork, "the backup failed, so the server was left stopped. Review the operation, then start it.")
 }
 
-func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *ops.Context, reason string) error {
+func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *ops.Context, alert notify.Alert, reason string) error {
 	observed, err := j.settleInterruptedStop(ctx, server, job)
 	if err != nil || observed == nil || !slices.Contains(stoppedStates, observed.Container.State) {
 		return err
 	}
 	j.noteAvailability(j.Monitor.SetIntentionalStop(ctx, server.Logical.ID, true))
-	j.notify("operation:"+job.Job.ID, observed.Container.DisplayName+": "+reason)
+	j.notify(alert, "operation:"+job.Job.ID, observed.Container.DisplayName+": "+reason)
 	return nil
 }
 

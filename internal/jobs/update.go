@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -164,7 +165,7 @@ func (j *Jobs) recoverUpdate(ctx context.Context, job *ops.Context) error {
 	}
 	if swap != nil && swap.reached(swapStarting) {
 		return j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
-			return j.keepStopped(ctx, server, job, failedReplacement)
+			return j.keepStopped(ctx, server, job, notify.Results, failedReplacement)
 		})
 	}
 	return j.recoverBackup(ctx, job, true)
@@ -297,7 +298,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
 				}
 			}
-			j.notify("operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Review the operation and actual server state.")
+			j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Review the operation and actual server state.")
 		}
 		return result, err
 	})
@@ -316,7 +317,7 @@ func (j *Jobs) undoUpdate(ctx context.Context, server *servers.Context, job *ops
 			return err
 		}
 		if swap.reached(swapStarting) {
-			return j.keepStopped(ctx, server, job, failedReplacement)
+			return j.keepStopped(ctx, server, job, notify.Results, failedReplacement)
 		}
 	}
 	return j.restoreInitialState(ctx, server, job)
@@ -359,7 +360,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	pulled := image.ID
 	imageChanged := pulled != plan.Spec.Image
 	if !imageChanged && !request.ForceRecreate {
-		j.notify("operation:"+job.Job.ID, server.Container.DisplayName+": configured image is current.")
+		j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": configured image is current.")
 		return map[string]any{"alreadyCurrent": true, "imageChanged": false, "recreated": false}, nil
 	}
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {
@@ -426,7 +427,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if request.ForceRecreate {
 		action = "recreation"
 	}
-	j.notify("operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
+	j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
 	return map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
 		"running": initiallyRunning, "verification": verification}, nil
 }

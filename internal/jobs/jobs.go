@@ -26,6 +26,7 @@ import (
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -42,7 +43,7 @@ type Jobs struct {
 	Docker   *docker.Client
 	Locks    *locks.Table
 	Monitor  *monitor.Service
-	Notify   func(key, message string)
+	Notify   func(alert notify.Alert, key, message string)
 	Console  *console.Runtime
 	Backups  *backups.Service
 	Updates  *update.Service
@@ -98,9 +99,9 @@ func (j *Jobs) Register(runner *ops.Runner) {
 	}})
 }
 
-func (j *Jobs) notify(key, message string) {
+func (j *Jobs) notify(alert notify.Alert, key, message string) {
 	if j.Notify != nil {
-		j.Notify(key, message)
+		j.Notify(alert, key, message)
 	}
 }
 

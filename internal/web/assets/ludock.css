@@ -1084,6 +1084,12 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .notification-destination__body .muted { font-size: 14px; }
 .notification-destination__test { display: grid; gap: 4px; padding-top: 16px; border-top: 1px solid var(--line); }
 .notification-destination__test .alert { margin-bottom: 0; }
+.notification-alerts { margin: 0; }
+.notification-alerts__choice { margin-left: 6px; font-weight: 400; color: var(--ink-3); font-size: 14px; }
+.notification-alerts__options { display: grid; gap: 10px; }
+.notification-alerts__option { align-items: flex-start; }
+.notification-alerts__option input { margin-top: 3px; }
+.notification-alerts__option .muted { display: block; }
 .notification-deliveries { display: grid; gap: 14px; margin-top: 28px; }
 .notification-deliveries__test { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .notification-deliveries__test p { font-size: 14px; }

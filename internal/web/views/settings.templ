@@ -40,6 +40,8 @@ type BackupSettingsView struct {
 type NotificationDestinationView struct {
 	notify.Configuration
 	Open bool
+	// NoAlerts shows a save rejected for choosing no alert type as it was sent.
+	NoAlerts bool
 	// Error and Notice report a save; the Test ones report a test send.
 	Error, Notice         string
 	TestError, TestNotice string
@@ -72,7 +74,7 @@ templ SettingsPage(page Page, s SettingsView) {
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
 				<h2 id="notification-settings-title" tabindex="-1">Notifications</h2>
-				<p class="section-lede">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, restore and update results, and newer server images. Turn on as many destinations as you like; each gets every alert. Enable availability monitoring separately on each server’s Overview for outage, disk, and memory alerts.</p>
+				<p class="section-lede">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, and restore and update results. Turn on as many destinations as you like; each can choose its alert types, and notices of newer server images are off until chosen. Enable availability monitoring separately on each server’s Overview for outage, disk, and memory alerts.</p>
 				<div class="notification-destinations">
 					for _, n := range s.Notifications {
 						@NotificationDestination(n)
@@ -312,6 +314,7 @@ templ NotificationDestination(n NotificationDestinationView) {
 					<input type="checkbox" name="enabled" value="true" checked?={ n.Enabled }/>
 					{ enableLabel(n.Destination) }
 				</label>
+				@alertTypes(n)
 				<p class="muted">Ludock keeps tokens, topics, passwords, and webhook URLs private: they are never shown again. Leave a saved field blank to keep it. Turning a destination off pauses its alerts without deleting its settings.</p>
 				if n.Error != "" {
 					@Alert("error", n.Error)
@@ -323,6 +326,55 @@ templ NotificationDestination(n NotificationDestinationView) {
 			</form>
 			@NotificationTest(n)
 		</div>
+	</details>
+}
+
+func alertDescription(a notify.Alert) string {
+	return map[notify.Alert]string{
+		notify.ServerProblems: "A server goes down or recovers, its game stops answering, or it runs low on disk or memory.",
+		notify.FailedWork:     "A backup fails, or a scheduled action fails or can’t run.",
+		notify.Results:        "A restore or update finishes or fails.",
+		notify.NewerImages:    "A newer image is published for a server. The server list shows this too.",
+	}[a]
+}
+
+// alertChoice summarizes the alert types a destination gets.
+func alertChoice(chosen notify.Alert) string {
+	var labels []string
+	for _, a := range notify.AlertTypes {
+		if chosen.Includes(a) {
+			labels = append(labels, a.Label())
+		}
+	}
+	switch {
+	case len(labels) == len(notify.AlertTypes):
+		return "Everything"
+	case chosen == 0 || chosen == notify.DefaultAlerts:
+		return "Everything except newer images"
+	}
+	return strings.Join(labels, ", ")
+}
+
+templ alertTypes(n NotificationDestinationView) {
+	<details class="disclosure notification-alerts" open?={ n.NoAlerts }>
+		<summary>
+			Alert types
+			if !n.NoAlerts {
+				<span class="notification-alerts__choice">{ alertChoice(n.Config.Alerts) }</span>
+			}
+		</summary>
+		<fieldset class="notification-alerts__options">
+			<legend class="sr-only">{ "Alert types to send to " + n.Destination.Label() }</legend>
+			for _, alert := range notify.AlertTypes {
+				<label class="check-label notification-alerts__option">
+					<input type="checkbox" name="alerts" value={ alert.Name() } checked?={ !n.NoAlerts && n.Config.Alerts.Includes(alert) }/>
+					<span>
+						{ alert.Label() }
+						<span class="muted">{ alertDescription(alert) }</span>
+					</span>
+				</label>
+			}
+		</fieldset>
 	</details>
 }
 

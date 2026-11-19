@@ -221,10 +221,10 @@ func TestPausedDestinationDoesNotBlockOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 12 {
-		s.Notify("event-"+strconv.Itoa(i), "Survival is unavailable.")
+		s.Notify(ServerProblems, "event-"+strconv.Itoa(i), "Survival is unavailable.")
 	}
 	setEnabled(t, s, false)
-	s.Notify("late", "Creative is unavailable.")
+	s.Notify(ServerProblems, "late", "Creative is unavailable.")
 	if err := s.Deliver(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -253,10 +253,10 @@ func TestBoundedRetriesKeepSecretsOut(t *testing.T) {
 		}
 		return nil, errors.New("dial " + webhook + ": refused")
 	})
-	s.Notify("event-1", "Server is unavailable.")
+	s.Notify(ServerProblems, "event-1", "Server is unavailable.")
 	// Another destination that is off queues nothing.
 	s.Configure(ctx, "admin", adminSession, Ntfy, Config{Topic: "alerts"}, false)
-	s.Notify("event-1", "duplicate key ignored")
+	s.Notify(ServerProblems, "event-1", "duplicate key ignored")
 	for range 6 {
 		s.DB.Exec("UPDATE notification_deliveries SET next_attempt_at=0")
 		s.Deliver(ctx)
@@ -310,7 +310,7 @@ func TestEventsAreQueuedAgainAfterAFailure(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'database is locked'); END`); err != nil {
 		t.Fatal(err)
 	}
-	s.Notify("outage:server:1", "Survival is unavailable.")
+	s.Notify(ServerProblems, "outage:server:1", "Survival is unavailable.")
 	time.Sleep(50 * time.Millisecond)
 	s.DB.Exec("DROP TRIGGER busy")
 	deadline := time.Now().Add(5 * time.Second)
@@ -350,7 +350,7 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 	}
 	// Disabled notifications neither queue nor send.
 	setEnabled(t, s, false)
-	s.Notify("event-2", "ignored")
+	s.Notify(ServerProblems, "event-2", "ignored")
 	if _, err := s.QueueTest(ctx, "admin", adminSession, Discord); !apperr.Is(err, "NOTIFICATIONS_DISABLED") {
 		t.Fatal(err)
 	}

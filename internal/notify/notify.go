@@ -299,11 +299,11 @@ func enqueue(ctx context.Context, tx *sql.Tx, key string, d Destination, message
 	return id, err
 }
 
-// Notify queues an event once per key for each destination that is on.
-// Callers fire and forget, and most events never recur, so a failed queue
-// is retried in the background instead of dropping the alert.
-func (s *Service) Notify(key, message string) {
-	if s.queueEvent(key, message) == nil {
+// Notify queues an alert once per key for each destination that is on and
+// gets its type. Callers fire and forget, and most alerts never recur, so a
+// failed queue is retried in the background instead of dropping the alert.
+func (s *Service) Notify(alert Alert, key, message string) {
+	if s.queueEvent(alert, key, message) == nil {
 		return
 	}
 	s.mu.Lock()
@@ -329,7 +329,7 @@ func (s *Service) Notify(key, message string) {
 				log.Error("Could not queue a notification before shutdown; it was dropped")
 				return
 			}
-			if s.queueEvent(key, message) == nil {
+			if s.queueEvent(alert, key, message) == nil {
 				return
 			}
 			delay = min(delay*2, time.Minute)
@@ -341,7 +341,7 @@ func (s *Service) Notify(key, message string) {
 // queueEvent reads the settings in the transaction that queues, so an event
 // raised as a destination is turned off is not left to send once it is
 // turned on again.
-func (s *Service) queueEvent(key, message string) error {
+func (s *Service) queueEvent(alert Alert, key, message string) error {
 	ctx := context.Background()
 	queued := false
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
@@ -350,6 +350,9 @@ func (s *Service) queueEvent(key, message string) error {
 			return err
 		}
 		for _, d := range all.ready() {
+			if !all[d].Alerts.Includes(alert) {
+				continue
+			}
 			if _, err := enqueue(ctx, tx, key, d, message, "event"); err != nil {
 				return err
 			}

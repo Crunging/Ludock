@@ -12,6 +12,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -342,7 +343,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		}
 		for _, folder := range ended {
 			if folder.Notified {
-				s.notify("disk-recovery:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
+				s.notify(notify.ServerProblems, "disk-recovery:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
 					fmt.Sprintf("%s: the disk under %s has space again (%.0f%% full).", server.DisplayName, folder.Path, folder.Percent()))
 			}
 		}
@@ -363,7 +364,7 @@ func (s *Service) raiseDisk(ctx context.Context, server identity.Server, policy 
 		if folder.AlertSince == 0 || folder.Notified {
 			continue
 		}
-		s.notify("disk:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
+		s.notify(notify.ServerProblems, "disk:"+server.ID+":"+folder.Path+":"+strconv.FormatInt(folder.AlertSince, 10),
 			fmt.Sprintf("%s: the disk under %s is %.0f%% full (%s free).", server.DisplayName, folder.Path, folder.Percent(),
 				datasize.Format(folder.AvailableBytes)))
 		folder.Notified, sent = true, true
@@ -435,13 +436,13 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 		if previous.AlertSince != 0 && next.AlertSince == 0 {
 			// Like a disk alert, one that ends with its binding sends no recovery.
 			if previous.Notified && previous.Revision == next.Revision {
-				s.notify("memory-recovery:"+server.ID+":"+strconv.FormatInt(previous.AlertSince, 10),
+				s.notify(notify.ServerProblems, "memory-recovery:"+server.ID+":"+strconv.FormatInt(previous.AlertSince, 10),
 					server.DisplayName+"’s memory use is no longer near its limit.")
 			}
 			s.changed(server.ID)
 		}
 		if next.AlertSince != 0 && !next.Notified {
-			s.notify("memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
+			s.notify(notify.ServerProblems, "memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
 				fmt.Sprintf("%s has used over %d%% of its memory limit for %d minutes.", server.DisplayName, policy.MemoryPercent, policy.MemoryMinutes))
 			next.Notified = true
 			if _, _, err := s.saveState(ctx, policy, memoryKey(server.ID), saved, next); err != nil {
