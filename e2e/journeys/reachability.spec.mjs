@@ -17,12 +17,13 @@ test("a game that stops answering while its container runs is an outage, until i
     // Readings run every 30 seconds.
     await expect(game).toContainText("Answering", { timeout: 35_000 });
     await expect(game).toContainText("Over its Steam server query");
+    // On by default, unless a journey before this one turned it off.
     await page.getByLabel("Monitor this server").check();
-    await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
-    // A grace period no other journey sets, so the change always saves.
-    await page.getByLabel("Failure grace period (seconds)").fill("12");
+    await page.getByText("Alert levels").click();
+    // A wait no other journey sets, so the change always saves.
+    await page.getByLabel("Wait before alerting (seconds)").fill("12");
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
-    await page.getByLabel("Failure grace period (seconds)").press("Tab");
+    await page.getByLabel("Wait before alerting (seconds)").press("Tab");
     expect((await saved).ok()).toBe(true);
     // An earlier stop through Ludock pauses monitoring for its grace period.
     await expect.poll(async () => {

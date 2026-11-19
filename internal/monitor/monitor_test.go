@@ -302,3 +302,47 @@ func TestOutageReasonChangeUpdatesPages(t *testing.T) {
 		t.Fatal(events.events, changes)
 	}
 }
+
+// A server nobody configured is watched: one running when first seen alerts
+// once it goes down, one already stopped stays quiet until it runs, and a
+// server whose monitoring an administrator turned off stays off.
+func TestNewServersAreWatched(t *testing.T) {
+	d := dbtest.Open(t)
+	store := &identity.Store{DB: d}
+	list, _ := store.Reconcile(ctx, []identity.Observation{{ContainerID: "a", Name: "a", DisplayName: "Alpha", GameType: "minecraft"},
+		{ContainerID: "b", Name: "b", DisplayName: "Beta", GameType: "minecraft"}}, "", 0)
+	events := &recorder{}
+	s := &Service{DB: d, Locks: locks.New(), Notify: events.notify, Store: store}
+	both := func(a, b string) map[string]servers.Container {
+		return map[string]servers.Container{"a": {ID: "a", State: a}, "b": {ID: "b", State: b}}
+	}
+	s.Check(ctx, nil, 0)
+	if monitored, _ := s.Monitored(ctx); len(monitored) != 0 {
+		t.Fatal("adopted while Docker was unreachable", monitored)
+	}
+	s.Check(ctx, both("running", "exited"), 1000)
+	s.Check(ctx, both("exited", "exited"), 2000)
+	s.Check(ctx, both("exited", "exited"), 200_000)
+	if len(events.events) != 1 || events.events[0] != "Alpha is unavailable." {
+		t.Fatal(events.events)
+	}
+	s.Check(ctx, both("exited", "running"), 300_000)
+	s.Check(ctx, both("exited", "exited"), 301_000)
+	s.Check(ctx, both("exited", "exited"), 500_000)
+	if len(events.events) != 2 || events.events[1] != "Beta is unavailable." {
+		t.Fatal(events.events)
+	}
+
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	off := DefaultPolicy()
+	off.Enabled = false
+	if _, err := s.Configure(ctx, "admin", dbtest.Session(t, d, "admin"), list[0].ID, off); err != nil {
+		t.Fatal(err)
+	}
+	s.Check(ctx, both("exited", "exited"), 600_000)
+	if saved, _ := s.Get(ctx, list[0].ID); saved.Policy.Enabled {
+		t.Fatal("monitoring turned itself back on")
+	}
+}

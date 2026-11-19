@@ -78,7 +78,7 @@ type App struct {
 	stop         chan struct{}
 }
 
-func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, error) {
+func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	clientIP, err := auth.NewClientIP(cfg.TrustedProxies)
 	if err != nil {
 		return nil, err

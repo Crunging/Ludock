@@ -2,11 +2,19 @@ import { test, expect, asAdmin, createUser, dockerAction, openServer, serverRow,
 
 asAdmin();
 
+/** Opens the schedule form's More options once the page has filled in the
+ * browser's time zone; typing earlier would add to it. */
+async function moreOptions(form) {
+  await expect(form.locator("input[name=timezone]")).not.toHaveValue("");
+  const more = form.locator("#schedule-more");
+  if (!(await more.evaluate((details) => details.open))) await more.locator("summary").click();
+}
+
 // Fills in a one-time run at the current UTC minute, which the scheduler's
 // next check, at most 15 seconds away, runs. A minute about to end is waited
 // out so the run can't fall into the past while the form is filled.
 async function dueNow(form) {
-  await expect(form.getByRole("button", { name: /^Use my time zone \(/ })).toBeVisible();
+  await moreOptions(form);
   let now = new Date();
   if (now.getUTCSeconds() >= 45) {
     await new Promise((done) => setTimeout(done, (61 - now.getUTCSeconds()) * 1000));
@@ -48,9 +56,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
-  // The page fills in the browser's time zone once it loads; typing earlier
-  // would add to it.
-  await expect(form.getByRole("button", { name: /^Use my time zone \(/ })).toBeVisible();
+  await moreOptions(form);
   await form.getByLabel("Time zone").fill("Europe/Berlin");
 
   // A one-time run in the past is refused and the draft stays.
@@ -73,7 +79,10 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(row).toContainText("05:30, weekdays");
   await expect(row).toContainText("Warnings: 10, 5, 1 min before");
 
+  // Its warnings and time zone show without opening More options.
   await row.getByRole("link", { name: "Edit" }).click();
+  await expect(page.locator("#schedule-more")).toHaveAttribute("open", "");
+  await expect(page.locator("#schedule-form").getByLabel("Announce countdown to players")).toBeChecked();
   await page.locator("#schedule-form").getByLabel("Time", { exact: true }).fill("06:45");
   await page.locator("#schedule-form").getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=saved/);
@@ -122,6 +131,36 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await expect(page.locator("#schedule-list")).toContainText("No schedules.");
 });
 
+// The common case needs no choices: a daily restart at 08:00 in the
+// browser's time zone that backs up first. The rest waits under More options.
+test("a new schedule opens on a daily restart that backs up first", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Schedules" }).click();
+  const form = page.locator("#schedule-form");
+  await expect(form.getByLabel("Action")).toHaveValue("restart");
+  await expect(form.getByLabel("Back up first")).toBeChecked();
+  await expect(form.getByRole("button", { name: "Every day" })).toHaveAttribute("aria-pressed", "true");
+  await expect(form.getByLabel("Time", { exact: true })).toHaveValue("08:00");
+  const zone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  await expect(page.locator("#schedule-preview")).toContainText(`08:00 (${zone})`);
+  await expect(form.locator("input[name=timezone]")).toBeHidden();
+  await expect(form.getByLabel("Wait until no one is online")).toBeHidden();
+  await expect(form.getByLabel("Create paused")).toHaveCount(0);
+  await expect(form.getByRole("button", { name: /Use my time zone/ })).toHaveCount(0);
+  await moreOptions(form);
+  await expect(form.locator("input[name=timezone]")).toHaveValue(zone);
+  await expect(form.getByLabel("Wait until no one is online")).toBeVisible();
+
+  await form.getByRole("button", { name: "Add schedule" }).click();
+  await expect(page).toHaveURL(/saved=created/);
+  const row = page.locator("#schedule-list tbody tr", { hasText: "08:00, every day" });
+  await expect(row).toContainText("Backup before restart");
+  await expect(row.locator("td").nth(2)).toHaveText("Enabled");
+  await row.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
+  await expect(row).toHaveCount(0);
+});
+
 test("a new schedule starts on an action its operator can use", async ({ page, session }) => {
   await createUser(page, "scheduler", "scheduler password one", "operator");
   const survival = page.locator("[data-grants] .grants-server", { hasText: "Survival" });
@@ -136,7 +175,9 @@ test("a new schedule starts on an action its operator can use", async ({ page, s
   await operator.getByRole("tab", { name: "Schedules" }).click();
   const form = operator.locator("#schedule-form");
   await expect(form.getByLabel("Action")).toHaveValue("restart");
-  await expect(form.getByText("Stops and starts the server at the selected time.")).toBeVisible();
+  await expect(form.locator(".schedule-form-note").getByText("Connected players are disconnected.").filter({ visible: true })).toHaveCount(1);
+  // Backing up first needs backup access.
+  await expect(form.getByLabel("Back up first")).toHaveCount(0);
   await expect(form.getByText("Starts the server if it is stopped.")).toBeHidden();
   await expect(operator.locator("#schedule-preview")).toContainText("08:00");
   // Sending commands needs console access too.
@@ -192,7 +233,7 @@ async function addWaitingRestart(page, minutes, then) {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
-  await form.getByLabel("Action").selectOption("restart");
+  await form.getByLabel("Back up first").uncheck();
   await dueNow(form);
   await form.getByLabel("Wait until no one is online").check();
   await form.getByLabel("Wait up to (minutes)").fill(String(minutes));

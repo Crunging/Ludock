@@ -10,8 +10,15 @@ const valheimData = () => join(process.env.LUDOCK_E2E_DIR, "docker", "data", "va
 const disk = (percent) => fake("/fake/disk", percent === "fail" ? { path: valheimData(), fail: "1" }
   : percent === undefined ? { path: valheimData() } : { path: valheimData(), used: percent * GiB, available: (100 - percent) * GiB });
 
+/** Opens the monitoring form's Alert levels, unless open. */
+async function levels(page) {
+  const disclosure = page.locator("details", { has: page.getByText("Alert levels") });
+  if (!(await disclosure.evaluate((details) => details.open))) await disclosure.locator("summary").click();
+}
+
 /** Changes a monitoring number and waits for the save. */
 async function setNumber(page, label, value) {
+  await levels(page);
   const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
   await page.getByLabel(label).fill(String(value));
   await page.getByLabel(label).press("Tab");
@@ -19,6 +26,8 @@ async function setNumber(page, label, value) {
 }
 
 async function toggle(page, label, on) {
+  if (label !== "Monitor this server") await levels(page);
+  if ((await page.getByLabel(label).isChecked()) === on) return;
   const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
   await page.getByLabel(label).setChecked(on);
   expect((await saved).ok()).toBe(true);
@@ -41,7 +50,7 @@ test("a stopped server's disk space, a nearly full disk, an unknown measurement,
   try {
     await openServer(page, "valheim");
     const figure = page.locator(".overview-disk");
-    await expect(figure).toContainText("Measured while monitoring is on");
+    // On by default, unless a journey before this one turned it off.
     await toggle(page, "Monitor this server", true);
     // Measured on the next tick, though the server is stopped.
     await expect(figure.locator("code")).toHaveText(valheimData(), { timeout: 45_000 });
@@ -123,7 +132,7 @@ test("memory that stays near its container's limit alerts, until it falls or the
     await fake("/fake/stats", { container: "valheim", memory: 1.95 * GiB });
     await expectAttention(page, "Memory near its limit", true);
     await openServer(page, "valheim");
-    await toggle(page, "Alert when memory stays near the container’s limit", false);
+    await toggle(page, "Alert when memory stays near the server’s limit", false);
     await expect(page.getByLabel("Memory alert level (% of limit)")).toBeHidden();
     await expectAttention(page, "Memory near its limit", false, 10_000);
   } finally {

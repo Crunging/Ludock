@@ -68,7 +68,7 @@ templ loginPage(form LoginForm) {
 				</h1>
 				<p class="login-card__description">
 					if form.Setup {
-						Create your administrator account to manage existing game servers. Setup stays open for five minutes after Ludock starts.
+						Create your administrator account to manage existing game servers.
 					} else {
 						Sign in with your Ludock account.
 					}
@@ -124,19 +124,3 @@ templ loginPage(form LoginForm) {
 	}
 }
 
-templ SetupExpired() {
-	@Document("Setup window expired · Ludock", "", nil, nil) {
-		<main class="login-page">
-			@LudockMark("login-mark")
-			<section class="login-card" aria-labelledby="setup-expired-title">
-				<h1 class="login-card__title" id="setup-expired-title">Setup window expired</h1>
-				<p class="login-card__description">On the Docker host, run these commands from Ludock’s Compose folder:</p>
-				<pre class="login-card__commands"><code>docker compose restart ludock{ "\n" }docker compose logs --tail 50 ludock</code></pre>
-				<p class="login-card__description">
-					Copy the new setup code, choose Check again, and finish within five minutes. If you configured LUDOCK_SETUP_CODE, use that code instead.
-				</p>
-				<a class="login-card__submit" href="/login">Check again</a>
-			</section>
-		</main>
-	}
-}

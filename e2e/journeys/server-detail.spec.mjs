@@ -1,27 +1,37 @@
-import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, expectOperationSucceeded, dockerAction } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
 test.describe.configure({ mode: "parallel" });
 
-test("reviewing a server, setting up monitoring, and following a restart", async ({ page }) => {
+test("reviewing a server, tuning its monitoring, and following a restart", async ({ page }) => {
   await openServer(page, "Survival");
   const facts = page.locator(".overview-facts");
   await expect(facts).toContainText("itzg/minecraft-server:java21");
   await expect(facts).toContainText("25565/tcp");
-  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+  // Watched without anyone turning it on; the levels wait behind a disclosure.
+  await expect(page.getByLabel("Monitor this server")).toBeChecked();
+  await expect(page.locator("#availability-title + p")).toHaveText("No outage detected.");
+  await expect(page.getByLabel("Wait before alerting (seconds)")).toBeHidden();
+  await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
 
   // Monitoring settings save as they change.
-  await page.getByLabel("Monitor this server").check();
-  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
-  await expect(page.locator("#availability-title + p")).not.toHaveText("Monitoring disabled.");
-  await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
-  await page.locator("#availability-result").evaluate((result) => result.replaceChildren());
-  await page.getByLabel("Failure grace period (seconds)").fill("180");
-  await page.getByLabel("Failure grace period (seconds)").press("Tab");
+  await page.getByText("Alert levels").click();
+  await page.getByLabel("Wait before alerting (seconds)").fill("180");
+  await page.getByLabel("Wait before alerting (seconds)").press("Tab");
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await page.reload();
-  await expect(page.getByLabel("Failure grace period (seconds)")).toHaveValue("180");
+  await page.getByText("Alert levels").click();
+  await expect(page.getByLabel("Wait before alerting (seconds)")).toHaveValue("180");
+
+  // Turning monitoring off sticks.
+  await page.getByLabel("Monitor this server").uncheck();
+  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
+  await page.reload();
+  await expect(page.getByLabel("Monitor this server")).not.toBeChecked();
+  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+  await page.getByLabel("Monitor this server").check();
+  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
 
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
@@ -284,4 +294,29 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
     await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.locator("#overview-live")).toBeVisible();
   }
+});
+
+// Nobody configured Enshrouded's monitoring. Stopped when Ludock found it, it
+// stays quiet; once it runs, a stop outside Ludock is an outage.
+test("a server nobody set up is watched", async ({ page }) => {
+  await openServer(page, "enshrouded");
+  const status = page.locator("#availability-title + p");
+  await expect(page.getByLabel("Monitor this server")).toBeChecked();
+  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
+  await dockerAction("enshrouded", "start");
+  try {
+    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
+    await dockerAction("enshrouded", "stop");
+    await expect(status).toHaveText("Availability problem detected. Waiting for the failure grace period.", { timeout: 30_000 });
+    await dockerAction("enshrouded", "start");
+    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
+  } finally {
+    // A stop through Ludock stays quiet for the journeys after this one.
+    await page.goto(page.url());
+    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+    await expectOperationSucceeded(page);
+  }
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
 });

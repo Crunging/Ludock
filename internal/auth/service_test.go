@@ -66,7 +66,7 @@ func newService(t *testing.T, d *db.DB) (*Service, *clock, *fastHasher) {
 		d = dbtest.Open(t)
 	}
 	c := &clock{now: 10_000}
-	window, err := NewSetupWindow(func() int64 { return c.now }, 300_000, setupCode)
+	window, err := NewSetup(setupCode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,16 +191,14 @@ func TestSetupCodeThrottling(t *testing.T) {
 	}
 }
 
-func TestSetupWindowExpires(t *testing.T) {
+// Setup has no deadline: the code still works long after startup.
+func TestSetupStaysOpenUntilCompleted(t *testing.T) {
 	s, c, _ := newService(t, nil)
-	c.now = s.Setup.ExpiresAt
-	_, err := s.CompleteSetup(ctx, "admin", "locked-test-password", setupCode, Client{})
-	wantStatus(t, err, 403)
-	if err.Error() != "Initial setup has expired. Restart the panel to reopen setup." {
+	c.now += 30 * 24 * 60 * 60 * 1000
+	if _, err := s.CompleteSetup(ctx, "admin", "late-but-correct-password", setupCode, Client{IP: "198.51.100.30"}); err != nil {
 		t.Fatal(err)
 	}
-	state, _ := s.SetupState(ctx)
-	if !state.Required || !state.Locked || state.RemainingMs != 0 {
+	if state, _ := s.SetupState(ctx); state.Required {
 		t.Fatalf("%+v", state)
 	}
 }

@@ -11,81 +11,58 @@ import (
 )
 
 const (
-	// SetupWindowMs is how long first-administrator setup stays open after
-	// startup.
-	SetupWindowMs = 5 * 60 * 1000
-	SetupCodeMin  = 32
-	SetupCodeMax  = 128
-	PasswordMin   = 15
-	PasswordMax   = 128
+	SetupCodeMin = 32
+	SetupCodeMax = 128
+	PasswordMin  = 15
+	PasswordMax  = 128
 )
 
 type SetupState struct {
-	Required    bool
-	Locked      bool
-	ExpiresAt   int64
-	RemainingMs int64
+	Required bool
 }
 
-// SetupWindow authorizes first-administrator setup with a one-time code
-// for a limited time after startup.
-type SetupWindow struct {
-	ExpiresAt int64
-	now       func() int64
-
+// Setup authorizes first-administrator setup with a one-time code until the
+// first administrator exists. The code is long and random; attempts are
+// limited per source.
+type Setup struct {
 	mu            sync.Mutex
 	authorization [32]byte
 	generated     string
 	completed     bool
 }
 
-// NewSetupWindow opens a window of durationMs. An empty code generates one
-// that is printed to the console once.
-func NewSetupWindow(now func() int64, durationMs int64, code string) (*SetupWindow, error) {
-	window := &SetupWindow{ExpiresAt: now() + durationMs, now: now}
+// NewSetup takes the configured code. An empty code generates one that is
+// printed to the console once.
+func NewSetup(code string) (*Setup, error) {
+	setup := &Setup{}
 	if code == "" {
 		var random [32]byte
 		if _, err := rand.Read(random[:]); err != nil {
 			return nil, err
 		}
 		code = base64.RawURLEncoding.EncodeToString(random[:])
-		window.generated = code
+		setup.generated = code
 	}
 	if len(code) < SetupCodeMin || len(code) > SetupCodeMax {
 		return nil, apperr.Newf("INVALID_SETUP_CODE", 400, "LUDOCK_SETUP_CODE must be between %d and %d characters", SetupCodeMin, SetupCodeMax)
 	}
-	window.authorization = sha256.Sum256([]byte(code))
-	return window, nil
-}
-
-// State reports setup state; required means no account exists yet.
-func (w *SetupWindow) State(required bool) SetupState {
-	if !required {
-		return SetupState{}
-	}
-	now := w.now()
-	return SetupState{Required: true, Locked: now >= w.ExpiresAt, ExpiresAt: w.ExpiresAt,
-		RemainingMs: max(0, w.ExpiresAt-now)}
+	setup.authorization = sha256.Sum256([]byte(code))
+	return setup, nil
 }
 
 var (
 	errSetupComplete = apperr.New("SETUP_COMPLETE", 409, "Initial setup has already been completed")
-	errSetupLocked   = apperr.New("SETUP_LOCKED", 403, "Initial setup has expired. Restart the panel to reopen setup.")
 	errSetupAuth     = apperr.New("SETUP_AUTHORIZATION_REQUIRED", 403, "Initial setup authorization failed")
 )
 
-func (w *SetupWindow) assertOpen(required bool) error {
-	state := w.State(required)
-	if !state.Required {
+func (w *Setup) assertOpen(required bool) error {
+	if !required {
 		return errSetupComplete
-	}
-	if state.Locked {
-		return errSetupLocked
 	}
 	return nil
 }
 
-func (w *SetupWindow) assertAuthorized(required bool, candidate string) error {
+func (w *Setup) assertAuthorized(required bool, candidate string) error {
 	if err := w.assertOpen(required); err != nil {
 		return err
 	}
@@ -100,7 +77,7 @@ func (w *SetupWindow) assertAuthorized(required bool, candidate string) error {
 }
 
 // TakeGeneratedCode returns a generated code once, for the console.
-func (w *SetupWindow) TakeGeneratedCode() string {
+func (w *Setup) TakeGeneratedCode() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	code := w.generated
@@ -108,7 +85,7 @@ func (w *SetupWindow) TakeGeneratedCode() string {
 	return code
 }
 
-func (w *SetupWindow) markCompleted() {
+func (w *Setup) markCompleted() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.generated = ""

@@ -40,18 +40,37 @@ func canRunSchedule(view *servers.View, input schedules.Input) bool {
 	return !slices.ContainsFunc(input.Capabilities(), func(capability authz.Capability) bool { return !can(view, capability) })
 }
 
-func (s *Server) scheduleForm(d *views.ServerDetail) views.ScheduleForm {
+// scheduleForm opens on a daily restart, backing up first when this person
+// may and the server can be backed up.
+func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.ScheduleForm {
 	view := &d.Row.Server
 	actions := scheduleActions(view)
 	input := schedules.Input{Kind: "recurring", Enabled: true, Time: "08:00", Days: []int{0, 1, 2, 3, 4, 5, 6}}
-	if len(actions) > 0 {
+	if slices.Contains(actions, "restart") {
+		input.Action = "restart"
+	} else if len(actions) > 0 {
 		input.Action = actions[0]
 	}
-	return views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: can(view, authz.BackupsCreate),
+	canBackup := can(view, authz.BackupsCreate)
+	if input.Action == "restart" && canBackup {
+		input.CreateBackup = s.backupReady(r, view)
+	}
+	return views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: canBackup,
 		CanAnnounce: view.Console != nil && view.Console.SupportsBroadcast && can(view, authz.ConsoleExecute),
 		CanWait:     s.App.Players.Source.Lists(view.Container),
 		Blocked:     view.BindingStatus != "active" || d.DiscoveryUnavailable,
 		Input:       input, LeadText: "10, 5, 1"}
+}
+
+// backupReady reports whether backup storage is set up and the server has
+// data folders to back up. The view hides folders from people who can't
+// read files, so they are read from discovery.
+func (s *Server) backupReady(r *http.Request, view *servers.View) bool {
+	if settings, _, err := s.App.Backups.SavedSettings(r.Context()); err != nil || settings == nil {
+		return false
+	}
+	current, err := s.App.Servers.Refresh(r.Context())
+	return err == nil && len(current[view.Container.ID].FileRoots) > 0
 }
 
 // schedulesView reads the schedules tab; edit= opens a saved schedule in
@@ -62,7 +81,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	v := views.SchedulesView{ServerID: view.ID, Selected: query.Get("schedule"), Editing: query.Get("edit"),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Now: db.Now(), CanResume: map[string]bool{},
 		ShowReplies: can(view, authz.ConsoleExecute),
-		Form:        s.scheduleForm(d)}
+		Form:        s.scheduleForm(r, d)}
 	switch query.Get("saved") {
 	case "created":
 		v.Message = "Schedule created."
@@ -112,10 +131,7 @@ func (s *Server) scheduleList(w http.ResponseWriter, r *http.Request, request *R
 func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 	input := schedules.Input{Kind: r.PostFormValue("kind"), Action: r.PostFormValue("action"), Time: r.PostFormValue("time"),
 		Timezone: strings.TrimSpace(r.PostFormValue("timezone")), CreateBackup: r.PostFormValue("createBackup") == "true",
-		Enabled: r.PostFormValue("paused") != "true"}
-	if value := r.PostFormValue("enabled"); value != "" {
-		input.Enabled = value == "true"
-	}
+		Enabled: r.PostFormValue("enabled") != "false"}
 	// The draft keeps both the days and the date, so switching kinds and
 	// back loses neither; draftForSave drops the unused one.
 	input.Date = r.PostFormValue("date")
@@ -181,7 +197,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	serverID := d.Row.Server.ID
-	form := s.scheduleForm(d)
+	form := s.scheduleForm(r, d)
 	form.EditID = scheduleID
 	input, leads, parseErr := parseSchedule(r)
 	form.Input, form.LeadText = input, leads

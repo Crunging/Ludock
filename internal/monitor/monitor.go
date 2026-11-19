@@ -35,9 +35,10 @@ type Policy struct {
 	MemoryMinutes int  `json:"memoryMinutes"`
 }
 
-// DefaultPolicy is a server's policy until an administrator saves one.
+// DefaultPolicy is a server's policy until an administrator saves one:
+// every server is watched unless an administrator turns that off.
 func DefaultPolicy() Policy {
-	return Policy{GraceSeconds: 120, DiskAlert: true, DiskPercent: 90, MemoryAlert: true, MemoryPercent: 90, MemoryMinutes: 5}
+	return Policy{Enabled: true, GraceSeconds: 120, DiskAlert: true, DiskPercent: 90, MemoryAlert: true, MemoryPercent: 90, MemoryMinutes: 5}
 }
 
 type State struct {
@@ -352,6 +353,13 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 	if err != nil {
 		return err
 	}
+	if added, err := s.adopt(ctx, logical, rows, current); err != nil {
+		return err
+	} else if added {
+		if rows, err = s.rows(ctx); err != nil {
+			return err
+		}
+	}
 	for _, server := range logical {
 		r := rows[server.ID]
 		if r == nil {
@@ -465,6 +473,33 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		}
 	}
 	return nil
+}
+
+// adopt starts watching servers seen for the first time with the default
+// policy. One already stopped counts as stopped on purpose, so a server
+// someone left off doesn't alert; it is watched once it runs. Nothing is
+// adopted while Docker is unreachable, since its state is unknown.
+func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map[string]*row, current map[string]servers.Container) (bool, error) {
+	if current == nil {
+		return false, nil
+	}
+	encoded, _ := json.Marshal(DefaultPolicy())
+	added := false
+	for _, server := range logical {
+		if rows[server.ID] != nil {
+			continue
+		}
+		stopped := 1
+		if bound(server, current) && current[server.ContainerID].State == "running" {
+			stopped = 0
+		}
+		if _, err := s.DB.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,intentionally_stopped,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(server_id) DO NOTHING`, server.ID, string(encoded), stopped, db.Now()); err != nil {
+			return false, err
+		}
+		added = true
+	}
+	return added, nil
 }
 
 // transition applies set only if the row still has the policy and state

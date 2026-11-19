@@ -23,7 +23,7 @@ func (a *App) checkDisks(ctx context.Context, current map[string]servers.Contain
 	go func() {
 		defer a.background.Done()
 		defer a.measuring.Unlock()
-		if err := a.Monitor.CheckDisk(ctx, current, now); err != nil {
+		if err := a.Monitor.CheckDisk(ctx, current, now, a.Events.Watched()); err != nil {
 			log.Warn("Disk space checks are temporarily unavailable")
 		}
 	}()

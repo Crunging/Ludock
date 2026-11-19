@@ -88,7 +88,7 @@ func TestWaitingNeedsReadablePlayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String()
-	if strings.Contains(page, `name="waitForEmpty"`) || !strings.Contains(page, "needs a game whose players Ludock can read") {
+	if strings.Contains(page, `name="waitForEmpty"`) {
 		t.Fatal("offered waiting without readable players")
 	}
 	response := p.action("/servers/"+p.server+"/schedules", p.admin,

@@ -30,12 +30,17 @@ async function checkNow(page, text) {
   }).toPass({ timeout: 30_000, intervals: [1_000, 3_000] });
 }
 
-async function updateSurvival(page) {
+/** Starts an update without a backup, confirming in the dialog. */
+async function startUpdate(page) {
   const form = page.locator("#update-panel form");
-  await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
+  await form.getByLabel("Back up first").uncheck();
   await form.getByLabel(/Type Survival to skip the backup/).fill("Survival");
-  await form.getByLabel(/I understand/).check();
   await form.getByRole("button", { name: "Update server" }).click();
+  await page.getByRole("dialog", { name: "Update Survival?" }).getByRole("button", { name: "Update server" }).click();
+}
+
+async function updateSurvival(page) {
+  await startUpdate(page);
   await expectOperationSucceeded(page);
 }
 
@@ -47,22 +52,24 @@ test("updating a server's image, then finding it current", async ({ page }) => {
   const form = page.locator("#update-panel form");
   await expect(form.locator(".metadata-list")).toContainText("itzg/minecraft-server:java21");
   await form.getByText("What gets replaced").click();
-  await expect(form.locator(".disclosure")).toContainText("including unnamed ones");
-  await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
-  await form.getByLabel(/Type Survival to skip the backup/).fill("Survival");
-  await form.getByLabel(/I understand/).check();
+  await expect(form.locator(".disclosure").first()).toContainText("including unnamed ones");
+  await expect(form.getByLabel("Back up first")).toBeChecked();
+  await expect(form.getByLabel("Update even if the image is already current")).toBeHidden();
+  // Cancelling the confirmation starts nothing.
   await form.getByRole("button", { name: "Update server" }).click();
-  await expectOperationSucceeded(page);
+  const confirm = page.getByRole("dialog", { name: "Update Survival?" });
+  await expect(confirm).toContainText("Connected players are disconnected");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(page).not.toHaveURL(/[?&]operation=/);
+  await updateSurvival(page);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
 
   // The replacement is the same server, now running the pulled image.
   await page.getByRole("tab", { name: "Update" }).click();
-  await form.getByLabel("Create a stopped-server backup before recreation").uncheck();
-  await form.getByLabel(/Type Survival to skip the backup/).fill("Survival");
-  await form.getByLabel(/I understand/).check();
-  await form.getByRole("button", { name: "Update server" }).click();
+  await startUpdate(page);
   await expect(page.locator("#selected-operation")).toContainText("Already current", { timeout: 45_000 });
-  await expect(page.getByRole("link", { name: "Recreate anyway" })).toBeVisible();
+  await page.getByRole("link", { name: "Update anyway" }).click();
+  await expect(form.getByLabel("Update even if the image is already current")).toBeChecked();
 });
 
 // A webhook records the alerts Ludock sends.

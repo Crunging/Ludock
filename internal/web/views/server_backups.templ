@@ -642,10 +642,10 @@ templ UpdatePanel(u UpdateView) {
 				if capability.UpdatesOnStart {
 					<p class="section-note">Pulling a newer image needs an administrator.</p>
 				} else {
-					<p class="section-note">This image is not known to update the game on startup. Update it through its owning manager.</p>
+					<p class="section-note">This image isn’t known to update the game when it starts. Update it with the tool that runs it.</p>
 				}
 			} else {
-				<h3>Update container image</h3>
+				<h3>Update the server’s image</h3>
 				if !capability.Available {
 					<p class="section-note">{ capability.UnavailableReason }</p>
 					<div class="inline-actions">
@@ -717,37 +717,46 @@ templ reloadUpdate(serverID, label string) {
 
 templ UpdateForm(u UpdateView) {
 	{{ capability := u.Capability }}
-	<form class="stack-form" hx-post={ "/servers/" + u.ServerID + "/updates" } hx-target="#update-status">
+	<form
+		class="stack-form"
+		hx-post={ "/servers/" + u.ServerID + "/updates" }
+		hx-target="#update-status"
+		hx-confirm={ "Update " + u.ServerName + "?" }
+		data-confirm-detail="Connected players are disconnected while Ludock replaces the server with the newest image."
+		data-confirm-action={ capability.ActionLabel }
+		data-confirm-danger
+	>
 		<p class="section-lede">
-			Pull the newest version of this server’s image and recreate its container with the same settings. This updates the image itself, including its system packages and startup scripts.
+			Download the newest version of this server’s image, including its system packages and startup scripts, and replace the server with it. Its settings and data stay.
 		</p>
 		<dl class="metadata-list">
-			<dt>Configured image</dt>
+			<dt>Image</dt>
 			<dd>{ capability.Image }</dd>
 		</dl>
 		<details class="disclosure">
 			<summary>What gets replaced</summary>
-			<p>The new container keeps the old one’s settings, ports, networks, mounted folders, and volumes, including unnamed ones. Files changed inside the container outside those are lost. Other containers aren’t touched, and the tool that created this one still owns its settings.</p>
-			<p>If the new container stops or reports itself unhealthy right after starting, Ludock restores the previous container and leaves it stopped, since the new version may already have changed the game data.</p>
+			<p>The new server keeps the old one’s settings, ports, networks, mounted folders, and volumes, including unnamed ones. Files changed inside it outside those are lost. Other containers aren’t touched, and the tool that created this one still owns its settings.</p>
+			<p>If the new server stops or reports itself unhealthy right after starting, Ludock puts the previous one back and leaves it stopped, since the new version may already have changed the game data.</p>
 		</details>
 		<label class="check-label">
 			<input type="checkbox" name="createBackup" value="true" id="update-backup" checked?={ u.CanBackup } disabled?={ !u.CanBackup }/>
-			Create a stopped-server backup before recreation
+			Back up first
 		</label>
-		<p class="muted check-help">The server stays stopped until it’s recreated. If it was stopped before, it stays stopped after.</p>
-		<label class="check-label">
-			<input type="checkbox" name="forceRecreate" value="true" id="update-recreate" checked?={ u.Recreate }/>
-			Recreate anyway, even if the configured image is current
-		</label>
-		<p class="muted check-help" data-shown-by="update-recreate" hidden?={ !u.Recreate }>Use this to pick up a game update that installs on startup.</p>
+		<p class="muted check-help">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p>
 		<label data-hidden-by="update-backup" hidden?={ u.CanBackup }>
 			<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
 			<input name="skipBackupConfirmation" autocomplete="off"/>
 		</label>
-		<label class="check-label">
-			<input type="checkbox" name="confirmed" value="true" required/>
-			I understand that connected players will be disconnected and the server’s container will be recreated.
-		</label>
+		<details class="disclosure" open?={ u.Recreate }>
+			<summary>Advanced</summary>
+			<div class="stack-form">
+				<label class="check-label">
+					<input type="checkbox" name="forceRecreate" value="true" id="update-recreate" checked?={ u.Recreate }/>
+					Update even if the image is already current
+				</label>
+				<p class="muted check-help">Picks up a game update that installs on startup.</p>
+			</div>
+		</details>
 		<div id="update-status" aria-live="polite"></div>
 		<button class="primary-btn" type="submit" disabled?={ u.Blocked || u.Active } data-busy-label="Working…">{ capability.ActionLabel }</button>
 	</form>
