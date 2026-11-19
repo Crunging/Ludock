@@ -8,8 +8,11 @@ configuration; Ludock never creates servers or edits their definitions.
 
 Ludock is the simple, plug-and-play panel for game servers people already
 run. Panels such as Pterodactyl own their servers; with Ludock the user stays
-in control and keeps using their own tools beside it. Hold every change to
-that:
+in control and keeps using their own tools beside it. Portainer knows
+containers; Ludock knows games: who is online, saving before a stop, warning
+players before a restart. It is for one person and a few friends first;
+larger communities should still work, without their needs shaping the
+everyday pages. Hold every change to that:
 
 - **It works with no setup.** A new install finds its servers and is useful
   before anyone opens Settings. Detect what can be detected instead of asking
@@ -21,6 +24,12 @@ that:
   variable. Nothing requires them, and everyday pages don't show them.
 - **One obvious way.** Give a task one clear path, in plain words rather than
   Docker terms, with the common choice already made.
+- **Nothing depends on Ludock.** It operates servers and never defines them.
+  Removing it leaves every server as it was, and a backup is a plain tar
+  archive that restores without it.
+- **It acts on its own only where that is safe to assume.** Watching servers
+  is on from the start. Anything that stops or restarts one, such as backups
+  or automatic recovery, is offered in one click, not turned on silently.
 
 The README is the pitch and quick start, and `docs/OPERATIONS.md` is the
 reference: everyday tasks come first there, advanced options after.
