@@ -31,6 +31,9 @@ const (
 	parallel = 4
 	// Fresh is how long a reading counts toward Online.
 	Fresh = 2 * Interval
+	// answerFresh is how long a game's answer counts, which spans an idle
+	// poll and the tick it waits for.
+	answerFresh = IdleInterval + Interval
 )
 
 // Reading is one server's players as Ludock last read them.
@@ -102,7 +105,7 @@ func (s *Service) Game(serverID string, container servers.Container) (Game, int6
 	if reading == nil || reading.AnsweredAt == 0 {
 		return Waiting, 0
 	}
-	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > Fresh {
+	if reading.Answer == NotAsked || time.Since(time.UnixMilli(reading.AnswerAt)) > answerFresh {
 		return Unknown, reading.AnsweredAt
 	}
 	if reading.Answer == Silent {

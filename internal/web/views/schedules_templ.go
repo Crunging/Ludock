@@ -203,7 +203,7 @@ func SchedulesTab(v SchedulesView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<h2>Schedules</h2><p class=\"section-lede\">Run an action at set times, or once. A time Ludock misses is skipped, never run late.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<h2>Schedules</h2><p class=\"section-lede\">Run an action at set times, or once.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1565,7 +1565,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 168, ">If the backup fails, the server stays stopped.</span></span></p><div class=\"inline-actions schedule-form-actions\"><button class=\"primary-btn\" type=\"submit\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 168, ">Backing up first needs the server running. If the backup fails, it stays stopped.</span></span></p><div class=\"inline-actions schedule-form-actions\"><button class=\"primary-btn\" type=\"submit\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

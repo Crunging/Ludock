@@ -179,7 +179,7 @@ func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
 
 templ SchedulesTab(v SchedulesView) {
 	<h2>Schedules</h2>
-	<p class="section-lede">Run an action at set times, or once. A time Ludock misses is skipped, never run late.</p>
+	<p class="section-lede">Run an action at set times, or once.</p>
 	if v.Message != "" {
 		@Alert("success", v.Message)
 	}
@@ -546,7 +546,7 @@ templ ScheduleEditor(f ScheduleForm) {
 				<span data-shown-when={ "action=" + action } hidden?={ input.Action != action }>{ actionHelp[action] }</span>
 			}
 			<span data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
-				<span data-shown-by="schedule-backup" hidden?={ !input.CreateBackup }>If the backup fails, the server stays stopped.</span>
+				<span data-shown-by="schedule-backup" hidden?={ !input.CreateBackup }>Backing up first needs the server running. If the backup fails, it stays stopped.</span>
 			</span>
 		</p>
 		<div class="inline-actions schedule-form-actions">

@@ -476,8 +476,8 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 }
 
 // adopt starts watching servers seen for the first time with the default
-// policy. One already stopped counts as stopped on purpose, so a server
-// someone left off doesn't alert; it is watched once it runs. Nothing is
+// policy. A container already stopped counts as stopped on purpose, so a
+// server someone left off doesn't alert; it is watched once it runs. Nothing is
 // adopted while Docker is unreachable, since its state is unknown.
 func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map[string]*row, current map[string]servers.Container) (bool, error) {
 	if current == nil {
@@ -489,9 +489,9 @@ func (s *Service) adopt(ctx context.Context, logical []identity.Server, rows map
 		if rows[server.ID] != nil {
 			continue
 		}
-		stopped := 1
-		if bound(server, current) && current[server.ContainerID].State == "running" {
-			stopped = 0
+		stopped := 0
+		if state := current[server.ContainerID].State; bound(server, current) && (state == "exited" || state == "created") {
+			stopped = 1
 		}
 		if _, err := s.DB.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,intentionally_stopped,updated_at) VALUES(?,?,?,?)
       ON CONFLICT(server_id) DO NOTHING`, server.ID, string(encoded), stopped, db.Now()); err != nil {

@@ -182,7 +182,10 @@ func TestGameAnswers(t *testing.T) {
 	check("query skipped", Answering)
 	service.store("s1", reading(Silent, now))
 	check("silent after answering", NotAnswering)
-	service.readings["s1"].AnswerAt = now - Fresh.Milliseconds() - 1
+	// An answer outlasts an idle poll's gap, then goes stale.
+	service.readings["s1"].AnswerAt = now - IdleInterval.Milliseconds()
+	check("between idle polls", NotAnswering)
+	service.readings["s1"].AnswerAt = now - answerFresh.Milliseconds() - 1
 	check("stale", Unknown)
 	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 200, State: "running", Query: query}); got != Waiting {
 		t.Errorf("restarted: %d", got)
