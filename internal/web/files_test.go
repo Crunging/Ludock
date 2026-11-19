@@ -31,16 +31,21 @@ func TestFilesFollowGrants(t *testing.T) {
 	if !strings.Contains(page, "File access is not configured") || strings.Contains(page, "data-dropzone") {
 		t.Fatal(page)
 	}
-	for _, target := range []string{"/files/" + p.server + "/create", "/files/" + p.server + "/delete"} {
-		form := url.Values{"_csrf": {CSRFToken(operator.Token)}, "root": {"0"}, "path": {"world"}, "name": {"x"}}
+	// Changes the page never offers a reader are refused when forged.
+	for _, action := range []string{"create", "delete", "delete-selection", "unpack", "move"} {
+		target := "/files/" + p.server + "/" + action
+		form := url.Values{"_csrf": {CSRFToken(operator.Token)}, "root": {"0"}, "path": {"world"}, "name": {"x"}, "to": {""}}
 		response := p.do("POST", target, operator, strings.NewReader(form.Encode()), map[string]string{"HX-Request": "true"})
 		if response.Code != http.StatusForbidden {
 			t.Fatal(target, response.Code)
 		}
 	}
-	if response := p.do("GET", "/fragments/files/"+p.server+"/dialog?action=delete&root=0&path=x", operator, nil,
-		map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
-		t.Fatal("dialog", response.Code)
+	for _, dialog := range []string{"/dialog?action=delete&root=0&path=x", "/dialog?action=unpack&root=0&path=x.zip",
+		"/dialog?action=delete-selection&root=0&name=x", "/move?root=0&name=x"} {
+		if response := p.do("GET", "/fragments/files/"+p.server+dialog, operator, nil,
+			map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
+			t.Fatal(dialog, response.Code)
+		}
 	}
 }
 

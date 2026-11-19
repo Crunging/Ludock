@@ -419,7 +419,7 @@ func (b BackupBrowser) livePath(name string) string {
 	return strings.TrimSuffix(b.Root.Path, "/") + "/" + b.child(name)
 }
 
-func itemCount(count int) string {
+func ItemCount(count int) string {
 	if count == 1 {
 		return "1 item"
 	}
@@ -513,7 +513,7 @@ templ BackupFolder(b BackupBrowser) {
 							@fileIcon(entry.Type)
 							if entry.Type == "directory" {
 								<a href={ b.folderURL(b.child(entry.Name)) } { inPage()... }>{ entry.Name }</a>
-								<small>{ itemCount(entry.Items) }</small>
+								<small>{ ItemCount(entry.Items) }</small>
 							} else {
 								<span>{ entry.Name }</span>
 							}
@@ -573,7 +573,7 @@ templ RestoreItemForm(b BackupBrowser, item backups.ArchiveEntry) {
 			<dd>
 				{ FormatBytes(item.Size) }
 				if item.Type == "directory" {
-					in { itemCount(item.Items) }
+					in { ItemCount(item.Items) }
 				}
 			</dd>
 			if item.ModifiedAt > 0 {

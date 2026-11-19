@@ -1281,7 +1281,7 @@ func (b BackupBrowser) livePath(name string) string {
 	return strings.TrimSuffix(b.Root.Path, "/") + "/" + b.child(name)
 }
 
-func itemCount(count int) string {
+func ItemCount(count int) string {
 	if count == 1 {
 		return "1 item"
 	}
@@ -1749,7 +1749,7 @@ func BackupFolder(b BackupBrowser) templ.Component {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var55 string
-					templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(itemCount(entry.Items))
+					templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(ItemCount(entry.Items))
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 516, Col: 39}
 					}
@@ -2076,7 +2076,7 @@ func RestoreItemForm(b BackupBrowser, item backups.ArchiveEntry) templ.Component
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var71 string
-			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(itemCount(item.Items))
+			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(ItemCount(item.Items))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 576, Col: 31}
 			}

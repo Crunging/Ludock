@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +34,12 @@ type FileRequest struct {
 	UploadID    string   `json:"uploadId,omitempty"`
 	// Expected makes an upload replace only this exact existing file.
 	Expected *FileVersion `json:"expected,omitempty"`
+	// Paths are the entries of one folder that a selection acts on.
+	Paths []string `json:"paths,omitempty"`
+	// Mounts are the nested mounts the helper has, which a move can't cross.
+	Mounts []string `json:"mounts,omitempty"`
+	// Reserve is the free space an unpack leaves.
+	Reserve *int64 `json:"reserve,omitempty"`
 }
 
 // FileVersion identifies a file's content by size and SHA-256.
@@ -71,6 +78,14 @@ const FileNameTaken = 3
 // version is no longer the file's content.
 const FileChanged = 4
 
+// Exit codes for an archive that was not unpacked.
+const (
+	FileArchiveUnsafe = 5
+	FileArchiveLimit  = 6
+	FileArchiveFull   = 7
+	FileNotArchive    = 8
+)
+
 type fileHelper struct {
 	request FileRequest
 	t       tracker
@@ -80,6 +95,7 @@ type fileHelper struct {
 	buffer  []byte
 
 	exit     func(int)
+	stop     atomic.Bool
 	mu       sync.Mutex
 	aborted  bool
 	abortErr error
@@ -588,11 +604,26 @@ func (h *fileHelper) run() error {
 		}
 		return h.json(entries)
 	}
+	switch operation {
+	case "delete-paths", "move", "download-paths":
+		return h.selection(root, operation)
+	}
 	parent, name, err := h.parentOf(root, relative)
 	if err != nil {
 		return err
 	}
 	switch operation {
+	case "unpack":
+		return h.unpack(parent, name)
+	case "unpack-cleanup":
+		stage, err := unpackName(h.request.UploadID)
+		if err != nil {
+			return err
+		}
+		if err := h.removeEntry(parent, stage, 0); err != nil && !isNotExist(err) {
+			return err
+		}
+		return h.json(map[string]bool{"ok": true})
 	case "mkdir":
 		owner, err := fstat(parent)
 		if err != nil {
@@ -713,8 +744,10 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// losing the connection must not leave a writer running.
 	limit := 55 * time.Second
 	switch request.Operation {
-	case "download", "upload":
+	case "download", "upload", "download-paths":
 		limit = 30 * time.Minute
+	case "unpack":
+		limit = UnpackDuration
 	case "backup":
 		// The backend's deadline, started just after this one, ends the read
 		// and reports the timeout; this one only stops a helper it lost.
@@ -723,6 +756,14 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	deadline := time.AfterFunc(limit, func() {
 		if request.Operation == "upload" {
 			h.abortUpload(errors.New("upload deadline"))
+			return
+		}
+		// An unpack stops itself, so it removes its staging folder.
+		if request.Operation == "unpack" {
+			h.stop.Store(true)
+			if h.exit != nil {
+				time.AfterFunc(time.Minute, func() { h.exit(1) })
+			}
 			return
 		}
 		os.Exit(1)
@@ -740,6 +781,16 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		if errors.Is(err, errFileChanged) {
 			return FileChanged
+		}
+		switch {
+		case errors.Is(err, errArchiveUnsafe):
+			return FileArchiveUnsafe
+		case errors.Is(err, errArchiveLimit):
+			return FileArchiveLimit
+		case errors.Is(err, errArchiveFull), errors.Is(err, unix.ENOSPC), errors.Is(err, unix.EDQUOT):
+			return FileArchiveFull
+		case errors.Is(err, errNotArchive):
+			return FileNotArchive
 		}
 		return 1
 	}

@@ -41,6 +41,9 @@ var messages = map[string]string{
 	"FILE_ROOT_CHANGED":           "The file root changed. Refresh and try again.",
 	"FILE_OPERATION_TIMEOUT":      "The file operation timed out. Refresh and try again.",
 	"INVALID_FILE_VERSION":        "Reopen the file before saving it",
+	"INVALID_SELECTION":           "Choose up to 500 items in one folder",
+	"MOVE_INTO_ITSELF":            "A folder can’t be moved into itself",
+	"MOVE_SAME_FOLDER":            "Choose a different folder to move to",
 }
 
 // Error builds a file error with its public message.
@@ -136,6 +139,7 @@ type Access struct {
 	service      *Service
 	container    string
 	blocked      []string
+	mounts       []string
 	assertAccess func() error
 	cleanupOnce  sync.Once
 	cleanupErr   error
@@ -159,7 +163,7 @@ func (a *Access) Cleanup(retry bool) error {
 }
 
 func (a *Access) request(ctx context.Context, request helper.FileRequest, input io.Reader, trailer []byte) ([]byte, error) {
-	request.Blocked = a.blocked
+	request.Blocked, request.Mounts = a.blocked, a.mounts
 	return launch.Exec(ctx, a.service.Docker, a.container, launch.ExecOptions{Cmd: helper.Command("file", request),
 		Input: input, Trailer: trailer, AssertAccess: a.assertAccess})
 }
@@ -233,10 +237,12 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		}
 	}
 	selected := []identity.Mount{*owner}
+	var nested []string
 	for _, mount := range children {
 		destination := normalizedMountPath(mount.Destination)
 		if SafeWritableDataMount(mount) && !slices.ContainsFunc(blocked, func(b string) bool { return Within(destination, b) }) {
 			selected = append(selected, mount)
+			nested = append(nested, destination)
 		}
 	}
 	var projections []docker.MountSettings
@@ -281,7 +287,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		proof.Cleanup()
 		return nil, err
 	}
-	access := &Access{service: s, container: id, blocked: blocked, assertAccess: assertAccess, proof: proof}
+	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof}
 	if err := s.prepare(ctx, access, root, inspection); err != nil {
 		access.Cleanup(false)
 		return nil, err
@@ -651,7 +657,8 @@ func (s *Service) OpenDownload(ctx context.Context, target Target, rootID, relat
 	if err != nil {
 		return nil, err
 	}
-	download, err := s.openDownload(ctx, access, root, normalized, assertAccess, target)
+	name := path.Base(normalized)
+	download, err := s.openDownload(ctx, access, helper.FileRequest{Operation: "download", Root: root.Path, Path: normalized}, name, assertAccess, target)
 	if err != nil {
 		access.Cleanup(false)
 		return nil, err
@@ -659,8 +666,9 @@ func (s *Service) OpenDownload(ctx context.Context, target Target, rootID, relat
 	return download, nil
 }
 
-func (s *Service) openDownload(ctx context.Context, access *Access, root Root, normalized string, assertAccess func() error, target Target) (*Download, error) {
-	request := helper.FileRequest{Operation: "download", Root: root.Path, Path: normalized, Blocked: access.blocked}
+// openDownload starts a download request; a folder's name gains .tar.
+func (s *Service) openDownload(ctx context.Context, access *Access, request helper.FileRequest, name string, assertAccess func() error, target Target) (*Download, error) {
+	request.Blocked = access.blocked
 	execID, err := s.Docker.CreateExec(ctx, access.container, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
 	if err != nil {
 		return nil, err
@@ -693,7 +701,6 @@ func (s *Service) openDownload(ctx context.Context, access *Access, root Root, n
 		conn.Close()
 		return nil, Error("UNSAFE_OR_CHANGED_FILE_PATH", 409)
 	}
-	name := path.Base(normalized)
 	if info.Type == "directory" {
 		name += ".tar"
 	}

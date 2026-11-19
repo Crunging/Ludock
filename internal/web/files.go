@@ -14,8 +14,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/a-h/templ"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
@@ -199,12 +202,17 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	d := views.FileDialog{ServerID: view.ID, ServerName: view.DisplayName, Action: query.Get("action"), Path: query.Get("path"),
 		Type: query.Get("type")}
 	index := slices.IndexFunc(view.FileRoots, func(root files.Root) bool { return root.ID == query.Get("root") })
-	if index < 0 || !slices.Contains([]string{"create", "rename", "delete"}, d.Action) {
+	if index < 0 || !slices.Contains([]string{"create", "rename", "delete", "unpack", "delete-selection"}, d.Action) {
 		s.fail(w, r, request, files.Error("ROOT_NOT_FOUND", 404))
 		return
 	}
 	d.Root = view.FileRoots[index]
-	if d.Action != "create" {
+	if d.Action == "delete-selection" {
+		if d.Names = query["name"]; len(d.Names) == 0 || len(d.Names) > files.MaxSelection {
+			s.fail(w, r, request, files.Error("INVALID_SELECTION", 400))
+			return
+		}
+	} else if d.Action != "create" {
 		d.Name = d.Path[strings.LastIndex(d.Path, "/")+1:]
 	}
 	if d.Action == "rename" {
@@ -213,7 +221,8 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	render(w, r, http.StatusOK, views.FileActionDialog(d))
 }
 
-var fileAudit = map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted"}
+var fileAudit = map[string]string{"create": "server.file.directory.created", "rename": "server.file.renamed", "delete": "server.file.deleted",
+	"delete-selection": "server.file.deleted", "unpack": "server.file.unpacked"}
 
 // unconfirmed reports whether a failed file write may still have completed:
 // the failure came after the helper could have committed it.
@@ -222,13 +231,15 @@ func unconfirmed(err error) bool {
 	return !ok || public.Status >= 500
 }
 
-// fileChange runs a folder creation, rename, or deletion and reports the
-// result over the dialog: client errors keep it open with the draft.
+// fileChange runs a folder creation, rename, deletion, or unpack and reports
+// the result over the dialog: client errors keep it open with the draft.
 func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request, *Request) {
 	return func(w http.ResponseWriter, r *http.Request, request *Request) {
 		root, path, name := r.PostFormValue("root"), r.PostFormValue("path"), r.PostFormValue("name")
 		d := views.FileDialog{ServerID: r.PathValue("id"), Action: kind, Path: path, Type: r.PostFormValue("type"), Value: name}
-		if kind != "create" {
+		if kind == "delete-selection" {
+			d.Names = r.PostForm["name"]
+		} else if kind != "create" {
 			d.Name = path[strings.LastIndex(path, "/")+1:]
 		}
 		action, err := s.startAction(r, request, d.ServerID, authz.FilesWrite)
@@ -254,37 +265,60 @@ func (s *Server) fileChange(kind string) func(http.ResponseWriter, *http.Request
 		case "delete":
 			err = s.App.Files.Delete(action.Ctx, target, root, path, action.Assert)
 			message = "Deleted “" + d.Name + "”."
+		case "delete-selection":
+			err = s.App.Files.DeleteSelection(action.Ctx, target, root, path, d.Names, action.Assert)
+			message, details["names"] = "Deleted "+views.ItemCount(len(d.Names))+".", d.Names
+		case "unpack":
+			var settings backups.Settings
+			if settings, err = s.App.Backups.ForBackup(action.Ctx); err == nil {
+				var result *helper.UnpackResult
+				if result, err = s.App.Files.Unpack(action.Ctx, target, root, path, settings.ReserveBytes, action.Assert); err == nil {
+					message = "Unpacked “" + d.Name + "” into “" + result.Name + "”."
+					if result.Skipped > 0 {
+						message += " Left out links and special files: " + views.ItemCount(result.Skipped) + "."
+					}
+					details["folder"], details["files"], details["skipped"] = result.Name, result.Files, result.Skipped
+				}
+			}
 		}
-		if err != nil {
-			public, ok := apperr.As(err)
-			if ok && public.Status == http.StatusUnauthorized {
-				s.fail(w, r, request, err)
-				return
-			}
-			if !unconfirmed(err) {
-				d.Error = public.Message
-				render(w, r, public.Status, views.FileActionDialog(d))
-				return
-			}
-			target := d.Name
-			if kind == "create" {
-				target = name
-			}
-			details["confirmed"] = false
-			s.audit(r, request, fileAudit[kind], action.Logical.ID, details)
-			message = "The result for “" + target + "” could not be confirmed. The change may have completed. Review the folder before starting another action."
-			w.Header().Set("HX-Retarget", "#file-feedback")
-			w.Header().Set("HX-Reswap", "innerHTML")
-			w.Header().Set("HX-Trigger", "files-changed")
-			render(w, r, http.StatusOK, views.Alert("error", message))
+		subject := "“" + d.Name + "”"
+		switch kind {
+		case "create":
+			subject = "“" + name + "”"
+		case "delete-selection":
+			subject = "the selected items"
+		}
+		s.fileOutcome(w, r, request, action, err, fileAudit[kind], details, message, subject, func(message string) templ.Component {
+			d.Error = message
+			return views.FileActionDialog(d)
+		})
+	}
+}
+
+// fileOutcome reports a file change made from a dialog: a refusal shows the
+// dialog again with its reason; a success, or a result that could not be
+// confirmed, is audited and shown above the folder.
+func (s *Server) fileOutcome(w http.ResponseWriter, r *http.Request, request *Request, action *serverAction, err error, event string,
+	details map[string]any, success, subject string, dialog func(string) templ.Component) {
+	kind := "success"
+	if err != nil {
+		public, ok := apperr.As(err)
+		if ok && public.Status == http.StatusUnauthorized {
+			s.fail(w, r, request, err)
 			return
 		}
-		s.audit(r, request, fileAudit[kind], action.Logical.ID, details)
-		w.Header().Set("HX-Retarget", "#file-feedback")
-		w.Header().Set("HX-Reswap", "innerHTML")
-		w.Header().Set("HX-Trigger", "files-changed")
-		render(w, r, http.StatusOK, views.Alert("success", message))
+		if !unconfirmed(err) {
+			render(w, r, public.Status, dialog(public.Message))
+			return
+		}
+		details["confirmed"] = false
+		kind, success = "error", "The result for "+subject+" could not be confirmed. The change may have completed. Review the folder before starting another action."
 	}
+	s.audit(r, request, event, action.Logical.ID, details)
+	w.Header().Set("HX-Retarget", "#file-feedback")
+	w.Header().Set("HX-Reswap", "innerHTML")
+	w.Header().Set("HX-Trigger", "files-changed")
+	render(w, r, http.StatusOK, views.Alert(kind, success))
 }
 
 // filePreview shows a file inline, reading at most files.PreviewLimit, and
@@ -445,6 +479,12 @@ func (s *Server) fileDownload(w http.ResponseWriter, r *http.Request, request *R
 		return
 	}
 	defer download.Close()
+	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path})
+	s.streamDownload(w, action, download)
+}
+
+// streamDownload sends an open download, rechecking access between chunks.
+func (s *Server) streamDownload(w http.ResponseWriter, action *serverAction, download *files.Download) {
 	w.Header().Set("Content-Disposition", contentDisposition(download.Name))
 	if download.Type == "directory" {
 		w.Header().Set("Content-Type", "application/x-tar")
@@ -454,7 +494,6 @@ func (s *Server) fileDownload(w http.ResponseWriter, r *http.Request, request *R
 			w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
 		}
 	}
-	s.audit(r, request, "server.file.downloaded", action.Logical.ID, map[string]any{"root": root, "path": path})
 	controller := http.NewResponseController(w)
 	buffer := make([]byte, 256*1024)
 	checked := time.Now()
