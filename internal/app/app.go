@@ -72,6 +72,7 @@ type App struct {
 	delivering sync.Mutex
 	polling    sync.Mutex
 	checking   sync.Mutex
+	measuring  sync.Mutex
 	// deliverAgain asks the running delivery pass for another.
 	deliverAgain atomic.Bool
 	stop         chan struct{}
@@ -137,6 +138,8 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		}
 		return monitor.GameUnknown
 	}
+	monitoring.MeasureDisk = a.measureDisk
+	a.Resources.Recorded = monitoring.CheckMemory
 	a.Sessions.Commanded = func(serverID string) { a.Players.Check(context.Background(), serverID) }
 	scheduleService.Players = schedules.ServerPlayers{Servers: serverService, Players: a.Players}
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
@@ -226,6 +229,7 @@ func (a *App) Tick(ctx context.Context) {
 			}
 			a.record(ctx, current, now)
 			a.checkImages(ctx, current, now)
+			a.checkDisks(ctx, current, now)
 		}()
 	}
 	if a.storage.TryLock() {

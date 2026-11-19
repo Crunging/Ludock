@@ -64,6 +64,15 @@ func (s *Server) overview(r *http.Request, request *Request, d *views.ServerDeta
 		return err
 	}
 	d.Availability = availability
+	d.FolderPaths = can(&d.Row.Server, authz.FilesRead)
+	if d.Disk, err = s.App.Monitor.Disk(ctx, id); err != nil {
+		return err
+	}
+	if problems, err := s.App.Monitor.ResourceProblems(ctx); err != nil {
+		return err
+	} else {
+		d.ResourceAlerts = problems[id]
+	}
 	if slices.ContainsFunc(d.Tabs, func(tab views.DetailTab) bool { return tab.ID == "schedules" }) {
 		d.ShowSchedule = true
 		if list, err := s.App.Schedules.List(ctx, request.User(), id); err == nil {
@@ -272,16 +281,22 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 		s.fail(w, r, request, err)
 		return
 	}
-	grace, err := strconv.ParseFloat(r.PostFormValue("graceSeconds"), 64)
-	if err != nil {
-		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Enter a grace period between 10 and 86400 seconds."))
-		return
+	invalid := apperr.New("INVALID_REQUEST", 400,
+		"Enter a grace period of 10 to 86400 seconds, alert levels of 50 to 99%, and a memory time of 1 to 60 minutes.")
+	values := map[string]any{"enabled": r.PostFormValue("enabled") == "true", "maintenance": r.PostFormValue("maintenance") == "true",
+		"diskAlert": r.PostFormValue("diskAlert") == "true", "memoryAlert": r.PostFormValue("memoryAlert") == "true"}
+	for _, name := range []string{"graceSeconds", "diskPercent", "memoryPercent", "memoryMinutes"} {
+		value, err := strconv.ParseFloat(r.PostFormValue(name), 64)
+		if err != nil {
+			s.fail(w, r, request, invalid)
+			return
+		}
+		values[name] = value
 	}
-	raw, _ := json.Marshal(map[string]any{"enabled": r.PostFormValue("enabled") == "true",
-		"maintenance": r.PostFormValue("maintenance") == "true", "graceSeconds": grace})
+	raw, _ := json.Marshal(values)
 	policy, err := monitor.ParsePolicy(raw)
 	if err != nil {
-		s.fail(w, r, request, apperr.New("INVALID_REQUEST", 400, "Enter a grace period between 10 and 86400 seconds."))
+		s.fail(w, r, request, invalid)
 		return
 	}
 	if _, err := s.App.Monitor.Configure(r.Context(), request.User().ID, request.Principal.TokenHash, id, policy); err != nil {

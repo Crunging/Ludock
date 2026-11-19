@@ -72,6 +72,10 @@ type ContainerInspect struct {
 	State           ContainerState  `json:"State"`
 	Mounts          []MountPoint    `json:"Mounts"`
 	NetworkSettings NetworkSettings `json:"NetworkSettings"`
+	Host            struct {
+		// Memory is the container's memory limit in bytes; 0 when none.
+		Memory int64 `json:"Memory"`
+	} `json:"HostConfig"`
 }
 
 // ContainerSpec is an inspection that keeps the configuration Docker reports

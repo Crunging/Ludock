@@ -81,14 +81,18 @@ type Service struct {
 	Authz    *authz.Service
 	// Sample reads a server's statistics after confirming its binding.
 	Sample func(context.Context, identity.Server) (*servers.Stats, error)
+	// Recorded runs after each minute's samples are saved, with each sampled
+	// server's memory limit in KiB (0 when it has none) and the tick's
+	// discovery result. It may be nil.
+	Recorded func(ctx context.Context, limits map[string]int64, current map[string]servers.Container, minute int64) error
 
 	mu   sync.Mutex
 	last int64 // the minute last recorded
 }
 
 type sample struct {
-	serverID    string
-	cpu, memory int64
+	serverID           string
+	cpu, memory, limit int64
 }
 
 // Record samples every running server once per minute and removes samples
@@ -112,7 +116,7 @@ func (s *Service) Record(ctx context.Context, current map[string]servers.Contain
 		}
 		samples = s.sampleAll(ctx, logical, current)
 	}
-	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	if err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		for _, item := range samples {
 			if _, err := tx.ExecContext(ctx, "INSERT INTO resource_samples(server_id,at,cpu,memory) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
 				item.serverID, minute, item.cpu, item.memory); err != nil {
@@ -121,7 +125,20 @@ func (s *Service) Record(ctx context.Context, current map[string]servers.Contain
 		}
 		_, err := tx.ExecContext(ctx, "DELETE FROM resource_samples WHERE at < ?", minute-retained())
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	if s.Recorded == nil {
+		return nil
+	}
+	limits := map[string]int64{}
+	for _, item := range samples {
+		limits[item.serverID] = item.limit
+	}
+	if err := s.Recorded(ctx, limits, current, minute); err != nil {
+		log.Warn("Memory alerts are temporarily unavailable")
+	}
+	return nil
 }
 
 // sampleAll reads the servers whose bound container is running. A server
@@ -148,9 +165,13 @@ func (s *Service) sampleAll(ctx context.Context, logical []identity.Server, curr
 				log.Debug("Could not sample a server's resources; it will be sampled again next minute")
 				return
 			}
+			var limit int64
+			if stats.MemLimited {
+				limit = int64(math.Round(max(0, stats.MemLimitMB) * 1024))
+			}
 			mu.Lock()
 			samples = append(samples, sample{serverID: server.ID, cpu: int64(math.Round(max(0, stats.CPUPercent) * 100)),
-				memory: int64(math.Round(max(0, stats.MemUsageMB) * 1024))})
+				memory: int64(math.Round(max(0, stats.MemUsageMB) * 1024)), limit: limit})
 			mu.Unlock()
 		}(server)
 	}

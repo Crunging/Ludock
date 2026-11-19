@@ -545,7 +545,10 @@ var plainValue = map[string]bool{"true": true, "false": true, "yes": true, "off"
 type Stats struct {
 	CPUPercent float64
 	MemUsageMB float64
+	// MemLimitMB is the host's memory when the container has no limit of
+	// its own (MemLimited false).
 	MemLimitMB float64
+	MemLimited bool
 }
 
 // round2 rounds like Math.round(value * 100) / 100.
@@ -554,14 +557,20 @@ func round2(value float64) float64 { return math.Floor(value*100+0.5) / 100 }
 // Stats inspects, authorizes, and samples a container. The inspection and
 // access check are the caller's own; the sample may be shared.
 func (o *Observer) Stats(ctx context.Context, id string, assertAccess func(identity.Observation) error) (*Stats, error) {
-	observed, _, err := o.Inspect(ctx, id)
+	observed, info, err := o.Inspect(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if err := assertAccess(observed.Observation); err != nil {
 		return nil, err
 	}
-	return o.sample(ctx, id)
+	shared, err := o.sample(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	stats := *shared
+	stats.MemLimited = info.Host.Memory > 0
+	return &stats, nil
 }
 
 func (o *Observer) sample(ctx context.Context, id string) (*Stats, error) {

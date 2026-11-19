@@ -24,6 +24,19 @@ type Policy struct {
 	Enabled      bool `json:"enabled"`
 	Maintenance  bool `json:"maintenance"`
 	GraceSeconds int  `json:"graceSeconds"`
+	// A data folder's disk alerts at DiskPercent full.
+	DiskAlert   bool `json:"diskAlert"`
+	DiskPercent int  `json:"diskPercent"`
+	// Memory alerts at MemoryPercent of the container's limit, held for
+	// MemoryMinutes.
+	MemoryAlert   bool `json:"memoryAlert"`
+	MemoryPercent int  `json:"memoryPercent"`
+	MemoryMinutes int  `json:"memoryMinutes"`
+}
+
+// DefaultPolicy is a server's policy until an administrator saves one.
+func DefaultPolicy() Policy {
+	return Policy{GraceSeconds: 120, DiskAlert: true, DiskPercent: 90, MemoryAlert: true, MemoryPercent: 90, MemoryMinutes: 5}
 }
 
 type State struct {
@@ -50,6 +63,9 @@ type Service struct {
 	// Game reports whether a running game answers its status query. It may
 	// be nil.
 	Game func(serverID string, container servers.Container) GameAnswer
+	// MeasureDisk measures each of a server's data folders after confirming
+	// its binding. An error means it was skipped. It may be nil.
+	MeasureDisk func(ctx context.Context, server identity.Server) ([]DiskSpace, error)
 }
 
 type GameAnswer int8
@@ -71,25 +87,44 @@ const NotAnswering = "not_answering"
 // ParsePolicy validates a policy, applying defaults.
 func ParsePolicy(raw []byte) (Policy, error) {
 	var input struct {
-		Enabled      *bool    `json:"enabled"`
-		Maintenance  *bool    `json:"maintenance"`
-		GraceSeconds *float64 `json:"graceSeconds"`
+		Enabled       *bool    `json:"enabled"`
+		Maintenance   *bool    `json:"maintenance"`
+		GraceSeconds  *float64 `json:"graceSeconds"`
+		DiskAlert     *bool    `json:"diskAlert"`
+		DiskPercent   *float64 `json:"diskPercent"`
+		MemoryAlert   *bool    `json:"memoryAlert"`
+		MemoryPercent *float64 `json:"memoryPercent"`
+		MemoryMinutes *float64 `json:"memoryMinutes"`
 	}
 	decoder := json.NewDecoder(bytesReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil || input.Enabled == nil {
 		return Policy{}, apperr.New("INVALID_REQUEST", 400, "Invalid request")
 	}
-	policy := Policy{Enabled: *input.Enabled, GraceSeconds: 120}
-	if input.Maintenance != nil {
-		policy.Maintenance = *input.Maintenance
+	policy := DefaultPolicy()
+	policy.Enabled = *input.Enabled
+	for _, flag := range []struct {
+		input  *bool
+		output *bool
+	}{{input.Maintenance, &policy.Maintenance}, {input.DiskAlert, &policy.DiskAlert}, {input.MemoryAlert, &policy.MemoryAlert}} {
+		if flag.input != nil {
+			*flag.output = *flag.input
+		}
 	}
-	if input.GraceSeconds != nil {
-		grace := *input.GraceSeconds
-		if grace != float64(int(grace)) || grace < 10 || grace > 86400 {
+	for _, number := range []struct {
+		input    *float64
+		output   *int
+		min, max float64
+	}{{input.GraceSeconds, &policy.GraceSeconds, 10, 86400}, {input.DiskPercent, &policy.DiskPercent, 50, 99},
+		{input.MemoryPercent, &policy.MemoryPercent, 50, 99}, {input.MemoryMinutes, &policy.MemoryMinutes, 1, 60}} {
+		if number.input == nil {
+			continue
+		}
+		value := *number.input
+		if value != float64(int(value)) || value < number.min || value > number.max {
 			return Policy{}, apperr.New("INVALID_REQUEST", 400, "Invalid request")
 		}
-		policy.GraceSeconds = int(grace)
+		*number.output = int(value)
 	}
 	return policy, nil
 }
@@ -155,7 +190,7 @@ func (s *Service) Get(ctx context.Context, serverID string) (*Availability, erro
 		return nil, err
 	}
 	if r == nil {
-		return &Availability{Policy: Policy{GraceSeconds: 120}}, nil
+		return &Availability{Policy: DefaultPolicy()}, nil
 	}
 	policy, err := ParsePolicy([]byte(r.policy))
 	if err != nil {
@@ -165,11 +200,21 @@ func (s *Service) Get(ctx context.Context, serverID string) (*Availability, erro
 		SuppressedUntil: r.suppressed, IntentionallyStopped: r.intentional == 1, LastState: r.lastState.String}}, nil
 }
 
-// Configure saves a policy and resets any outage. The administrator's
+// Configure saves a policy and resets any outage, and any disk or memory
+// alert whose settings changed. The administrator's
 // session and role are checked again in the transaction that saves it.
 func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID string, policy Policy) (*Availability, error) {
 	encoded, _ := json.Marshal(policy)
 	if err := s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
+		var raw string
+		if err := tx.QueryRowContext(ctx, "SELECT policy_json FROM availability WHERE server_id=?", serverID).Scan(&raw); err != nil &&
+			!errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		previous, _ := ParsePolicy([]byte(raw))
+		if err := resetAlerts(ctx, tx, serverID, previous, policy); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?)
       ON CONFLICT(server_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=excluded.updated_at, outage_started_at=NULL, notified=0`,
 			serverID, string(encoded), db.Now())
@@ -183,7 +228,7 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash, serverID st
 // ensureRow adds the default policy only if none exists, so it never
 // replaces one saved concurrently.
 func (s *Service) ensureRow(ctx context.Context, serverID string) error {
-	encoded, _ := json.Marshal(Policy{GraceSeconds: 120})
+	encoded, _ := json.Marshal(DefaultPolicy())
 	_, err := s.DB.ExecContext(ctx, "INSERT INTO availability(server_id,policy_json,updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO NOTHING",
 		serverID, string(encoded), db.Now())
 	return err

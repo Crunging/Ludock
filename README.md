@@ -6,9 +6,9 @@
 
 Ludock is a self-hosted web panel for the Docker game servers you already run.
 Start and stop them, use their consoles, manage their files, take backups,
-schedule restarts, get outage alerts, and update server images from your
-browser. Compose, Portainer, Dockge, or the Docker CLI stays in charge of each
-server's configuration; Ludock never creates or edits it.
+schedule restarts, get alerts for outages and full disks, and update server
+images from your browser. Compose, Portainer, Dockge, or the Docker CLI stays
+in charge of each server's configuration; Ludock never creates or edits it.
 
 ## Screenshots
 

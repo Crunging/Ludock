@@ -431,6 +431,10 @@ func describeAttention(item attention.Item) attentionText {
 			title = "Ambiguous server binding"
 		}
 		return attentionText{title, path, "Review server"}
+	case "disk":
+		return attentionText{"Disk nearly full", path + "?tab=overview", "Check disk space"}
+	case "memory":
+		return attentionText{"Memory near its limit", path + "?tab=overview", "Check memory"}
 	}
 	title := "Server unavailable"
 	if item.State == "docker_unavailable" {
@@ -447,6 +451,17 @@ templ attentionDetail(item attention.Item) {
 			@Time(item.UpdatedAt, "", "muted")
 		case "schedule":
 			<span class="muted">{ scheduleReasons[item.Reason] }</span>
+		case "disk":
+			<span class="muted">
+				if item.Path != "" {
+					<code>{ item.Path }</code>
+				} else {
+					A data folder
+				}
+				is { WholePercent(item.Percent) } full, since @Time(item.Since, "", "")<span>.</span>
+			</span>
+		case "memory":
+			<span class="muted">Over { WholePercent(item.Percent) } of its memory limit since @Time(item.Since, "", "")<span>.</span></span>
 		case "binding":
 			if item.BindingStatus == "review_required" {
 				<span class="muted">Review the changed server identity before resuming controls.</span>

@@ -434,6 +434,29 @@ func (s *Service) List(ctx context.Context, target Target, rootID, relative stri
 	return &Listing{Root: root, Path: normalized, Entries: entries}, nil
 }
 
+// Space measures the filesystem under a root, reusing an idle listing
+// helper when one is kept for it.
+func (s *Service) Space(ctx context.Context, target Target, rootID string, assertAccess func() error) (*helper.FileSpace, error) {
+	root, _, err := resolve(target, rootID, "")
+	if err != nil {
+		return nil, err
+	}
+	access, release, err := s.acquireLister(ctx, target, root, assertAccess)
+	if err != nil {
+		return nil, err
+	}
+	out, err := access.request(ctx, helper.FileRequest{Operation: "space", Root: root.Path}, nil, nil)
+	release(err == nil)
+	if err != nil {
+		return nil, err
+	}
+	var space helper.FileSpace
+	if err := json.Unmarshal(out, &space); err != nil || space.Total <= 0 {
+		return nil, Error("FILE_OPERATION_FAILED", 409)
+	}
+	return &space, nil
+}
+
 // Mkdir creates a folder owned like its parent.
 func (s *Service) Mkdir(ctx context.Context, target Target, rootID, parent, name string, assertAccess func() error) error {
 	if err := ValidateName(name); err != nil {

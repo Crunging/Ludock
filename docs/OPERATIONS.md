@@ -118,8 +118,8 @@ If yours answers one, set `ludock.query: a2s` and `ludock.query.port`.
 ## Servers
 
 The server list shows each server's state, the address players connect to, and
-its latest backup. **Overview** adds uptime, CPU and memory use, the next
-scheduled action, and availability monitoring.
+its latest backup. **Overview** adds uptime, CPU and memory use, disk space for
+its data folders, the next scheduled action, and availability monitoring.
 
 States follow Docker. A server with a health check shows **Starting** until it
 passes and **Unhealthy** while it fails. A stopped server shows **Crashed** after
@@ -458,8 +458,9 @@ running it.
 ## Availability alerts
 
 Monitoring is off by default. An administrator turns it on from a server's
-**Overview**. It follows Docker's running state and health check and, for
-games with a status query, whether the game itself answers.
+**Overview**. It follows Docker's running state and health check, for games
+with a status query whether the game itself answers, and the server's disk
+space and memory.
 
 - **Game not answering:** Ludock asks a monitored game about every 30 seconds,
   from a short-lived helper that shares the game's network and connects to
@@ -478,12 +479,32 @@ games with a status query, whether the game itself answers.
   Minecraft's pre-1.7 legacy ping and split Steam replies, counts as no
   answer.
 
+- **Disk nearly full:** about every 10 minutes, Ludock measures the free and
+  total space of the filesystem under each data folder of a monitored server,
+  even while it's stopped, from a short-lived read-only file helper. It alerts
+  when a folder's disk reaches the alert level, 90% full by default, and
+  measures that folder every minute until it falls 5 points below the level.
+  **Overview** shows each folder's disk, by container path, to people who can
+  read its files. A measurement that fails, such as for a mount the file
+  helpers can't reach, shows as not measured and neither raises nor clears an
+  alert.
+- **Memory near its limit:** for a running container with a memory limit,
+  Ludock alerts when every minute's sample stays at the alert level, 90% of the
+  limit by default, for 5 minutes, and the alert ends once memory falls 5
+  points below the level or the server stops. Containers without a limit
+  never alert.
 - **Grace period:** how long to wait before reporting an outage; 120 seconds by
   default.
+- **Settings:** each alert can be turned off or given its own level on the
+  server's **Overview**. Changing an alert's settings ends its current alert
+  without a recovery message, and a disk is measured again on the next check.
 - **Quiet times:** stops and operations started through Ludock don't alert, and
-  a stopped server stays quiet until it runs again. **Maintenance mode** pauses
-  alerts without stopping the server or its schedules.
-- **Docker outages** show availability as unknown.
+  a stopped server stays quiet until it runs again, though its disk still
+  alerts. Disks and memory aren't checked while an operation runs.
+  **Maintenance mode** pauses alerts without stopping the server or its
+  schedules.
+- **Docker outages** show availability as unknown, and disks and memory keep
+  their last state.
 
 ### Notifications
 
@@ -495,9 +516,12 @@ keep it. For Discord, create a webhook for the alert channel under **Server
 Settings → Integrations**
 ([Discord's guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
 
-Alerts cover outages and recoveries, failed backups and schedules, restore
-and update results, and newer server images. An image alert names the server,
-not its image, since an image reference can name a private registry. Each destination gets its own delivery. The queue checks
+Alerts cover outages and recoveries, nearly full disks and memory near its
+limit and their recoveries, failed backups and schedules, restore and update
+results, and newer server images. Each disk or memory alert is sent once, and
+names the server and, for a disk, the data folder's container path, never a
+host path. An image alert names the server, not its image, since an image
+reference can name a private registry. Each destination gets its own delivery. The queue checks
 every 15 seconds and survives restarts. A delivery gets up to five attempts,
 and **Retry** allows five more. Turning a destination off pauses its
 deliveries. A restart right after a delivery can send a message twice.

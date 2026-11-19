@@ -23,6 +23,11 @@ type ServerDetail struct {
 	Tab                  string
 	Tabs                 []DetailTab
 	Availability         *monitor.Availability
+	Disk                 monitor.DiskState
+	// ResourceAlerts are the server's active disk and memory alerts.
+	ResourceAlerts []monitor.Resource
+	// FolderPaths: the viewer may see data folders' container paths.
+	FolderPaths bool
 	// Resources is the resource history; overview refreshes leave it nil
 	// and keep the one on the page.
 	Resources *resources.History
@@ -268,6 +273,33 @@ func resourcesUnavailable(d ServerDetail) string {
 
 const mib = 1024 * 1024
 
+templ folderName(paths bool, path string) {
+	if paths {
+		<code>{ path }</code>
+	} else {
+		<span>A data folder</span>
+	}
+}
+
+// WholePercent shows a percentage rounded to a whole number.
+func WholePercent(value float64) string { return fmt.Sprintf("%.0f%%", value) }
+
+func diskShare(folder monitor.Folder) string {
+	return fmt.Sprintf("width: %.1f%%", min(100, folder.Percent()))
+}
+
+func diskUnmeasured(d ServerDetail) string {
+	switch {
+	case d.FolderPaths && len(d.Row.Server.FileRoots) == 0:
+		return "No data folders"
+	case d.Availability == nil || !d.Availability.Policy.Enabled:
+		return "Measured while monitoring is on"
+	case !d.Availability.Policy.DiskAlert:
+		return "Measured while disk alerts are on"
+	}
+	return "Not measured yet"
+}
+
 func memoryShare(stats *servers.Stats) string {
 	share := min(100, stats.MemUsageMB/stats.MemLimitMB*100)
 	return fmt.Sprintf("width: %.1f%%", share)
@@ -358,6 +390,30 @@ templ OverviewLive(d ServerDetail) {
 						}
 					} else {
 						<span class="muted">{ resourcesUnavailable(d) }</span>
+					}
+				</dd>
+			</div>
+			<div class="overview-disk">
+				<dt>Disk</dt>
+				<dd>
+					if len(d.Disk.Folders) == 0 {
+						<span class="muted">{ diskUnmeasured(d) }</span>
+					} else {
+						<ul class="overview-disks">
+							for _, folder := range d.Disk.Folders {
+								<li>
+									@folderName(d.FolderPaths, folder.Path)
+									if folder.MeasuredAt != 0 {
+										<span class="overview-disks__figure">{ fmt.Sprintf("%.0f%% full", folder.Percent()) }</span>
+										<span class={ "overview-meter", templ.KV("overview-meter--alert", folder.AlertSince != 0) } aria-hidden="true"><span style={ diskShare(folder) }></span></span>
+										<span class="muted">{ FormatBytes(folder.AvailableBytes) } free of { FormatBytes(folder.TotalBytes) }, measured @Time(folder.MeasuredAt, "sentence", "")</span>
+									}
+									if folder.Unknown {
+										<span class="muted">Couldn’t be measured just now</span>
+									}
+								</li>
+							}
+						</ul>
 					}
 				</dd>
 			</div>
@@ -501,6 +557,15 @@ templ AvailabilityStatus(d ServerDetail) {
 					<dt>Monitoring resumes</dt>
 					<dd>@Time(a.State.SuppressedUntil, "", "")</dd>
 				}
+				for _, alert := range d.ResourceAlerts {
+					if alert.Kind == "disk" {
+						<dt>Disk nearly full</dt>
+						<dd>@folderName(d.FolderPaths, alert.Path) is { WholePercent(alert.Percent) } full, since @Time(alert.Since, "", "")</dd>
+					} else {
+						<dt>Memory near its limit</dt>
+						<dd>Over { WholePercent(alert.Percent) } of the limit since @Time(alert.Since, "", "")</dd>
+					}
+				}
 			</dl>
 		}
 		if described.OutageSince != 0 {
@@ -524,7 +589,7 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 	// Each change saves right away; the result says so.
 	<form class="stack-form" hx-post={ "/servers/" + serverID + "/availability" } hx-target="#availability-result" hx-trigger="change, submit" hx-sync="this:replace">
 		<p class="muted">
-			Alert when this server is down. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.
+			Alert when this server is down, its disk is nearly full, or it’s near its memory limit. Ludock checks Docker’s running state and health check, and ignores stops made through Ludock.
 		</p>
 		<label class="check-label">
 			<input type="checkbox" name="enabled" value="true" id="availability-enabled" checked?={ policy.Enabled }/>
@@ -538,6 +603,36 @@ templ AvailabilityForm(serverID string, policy monitor.Policy) {
 			<p class="muted" id="monitoring-grace-help">
 				How long to wait before reporting an outage, so quick restarts don’t alert. Default 120 seconds.
 			</p>
+			<label class="check-label">
+				<input type="checkbox" name="diskAlert" value="true" id="availability-disk" checked?={ policy.DiskAlert }/>
+				Alert when a data folder’s disk is nearly full
+			</label>
+			<div class="stack-form" data-shown-by="availability-disk" hidden?={ !policy.DiskAlert }>
+				<label class="narrow-field">
+					Disk alert level (% full)
+					<input type="number" name="diskPercent" min="50" max="99" inputmode="numeric" aria-describedby="monitoring-disk-help" required value={ strconv.Itoa(policy.DiskPercent) }/>
+				</label>
+				<p class="muted" id="monitoring-disk-help">
+					Checked about every 10 minutes, even while the server is stopped. The alert ends once the disk is { strconv.Itoa(monitor.Hysteresis) } points below this level. Default 90%.
+				</p>
+			</div>
+			<label class="check-label">
+				<input type="checkbox" name="memoryAlert" value="true" id="availability-memory" checked?={ policy.MemoryAlert }/>
+				Alert when memory stays near the container’s limit
+			</label>
+			<div class="stack-form" data-shown-by="availability-memory" hidden?={ !policy.MemoryAlert }>
+				<label class="narrow-field">
+					Memory alert level (% of limit)
+					<input type="number" name="memoryPercent" min="50" max="99" inputmode="numeric" aria-describedby="monitoring-memory-help" required value={ strconv.Itoa(policy.MemoryPercent) }/>
+				</label>
+				<label class="narrow-field">
+					For at least (minutes)
+					<input type="number" name="memoryMinutes" min="1" max="60" inputmode="numeric" aria-describedby="monitoring-memory-help" required value={ strconv.Itoa(policy.MemoryMinutes) }/>
+				</label>
+				<p class="muted" id="monitoring-memory-help">
+					Only for a running container with a memory limit, which the game is stopped at. The alert ends once memory is { strconv.Itoa(monitor.Hysteresis) } points below this level. Default 90% for 5 minutes.
+				</p>
+			</div>
 			<label class="check-label">
 				<input type="checkbox" name="maintenance" value="true" checked?={ policy.Maintenance }/>
 				Maintenance mode
