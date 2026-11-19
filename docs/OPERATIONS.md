@@ -338,6 +338,35 @@ they stop (`--rm`), Swarm services, and containers whose network, process, or
 IPC namespace another container shares. Update those through the tool that
 created them.
 
+### Newer image checks
+
+About every six hours, Ludock asks each image tag's registry, through Docker's
+Engine API, what the tag points to now, without pulling it. It asks once per
+tag however many servers use it, and spreads the tags out over time. When a
+server's container runs an older version, administrators see **Image update
+available** on the server list and a notice on its **Update** tab, and every
+notification destination is told once per server and version. Nothing updates
+until an administrator chooses **Update server**. **Check now** on the Update
+tab asks right away, at most once every 10 seconds.
+
+- Ludock compares the digest the registry gives for the tag with the digests
+  Docker recorded when it pulled the container's image. For a multi-platform
+  tag both are the tag's index. A tag that no longer offers the server's
+  platform isn't reported. On Docker's classic image store, a change to
+  another platform alone can show as newer; if **Update server** then finds the
+  image current, the notice clears.
+- Only the servers **Update server** supports are checked. Ludock can't compare
+  an image Docker has no registry digest for, such as one built or loaded
+  locally, and says so on the Update tab.
+- A registry that can't be reached or refuses the check isn't an alert: the
+  Update tab says the last check failed, and Ludock tries again within about an
+  hour. Private registries use `LUDOCK_DOCKER_CONFIG`, as pulls do. Docker Hub
+  counts each check against its pull rate limit.
+- For images that download the game when they start, the notice is about the
+  container image, such as its startup scripts and system packages; **Restart**
+  still updates the game.
+- **Settings → Image updates** turns the checks off; they are on by default.
+
 ## Schedules
 
 Schedules start, stop, restart, or back up a server, or send a command to its
@@ -400,8 +429,9 @@ keep it. For Discord, create a webhook for the alert channel under **Server
 Settings → Integrations**
 ([Discord's guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
 
-Alerts cover outages and recoveries, failed backups and schedules, and restore
-and update results. Each destination gets its own delivery. The queue checks
+Alerts cover outages and recoveries, failed backups and schedules, restore
+and update results, and newer server images. An image alert names the server,
+not its image, since an image reference can name a private registry. Each destination gets its own delivery. The queue checks
 every 15 seconds and survives restarts. A delivery gets up to five attempts,
 and **Retry** allows five more. Turning a destination off pauses its
 deliveries. A restart right after a delivery can send a message twice.

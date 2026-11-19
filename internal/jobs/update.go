@@ -353,6 +353,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err != nil {
 		return nil, err
 	}
+	if j.Pulled != nil {
+		defer j.Pulled(server.Logical.ID)
+	}
 	pulled := image.ID
 	imageChanged := pulled != plan.Spec.Image
 	if !imageChanged && !request.ForceRecreate {

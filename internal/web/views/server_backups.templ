@@ -250,6 +250,10 @@ type UpdateView struct {
 	Recreate             bool
 	Capability           *update.Capability
 	Error                string
+	// Check is the newest-image check, nil before it applies; ChecksOff
+	// means an administrator turned the checks off.
+	Check     *update.CheckStatus
+	ChecksOff bool
 }
 
 templ UpdateTab(serverID string, recreate bool) {
@@ -294,9 +298,59 @@ templ UpdatePanel(u UpdateView) {
 						@reloadUpdate(u.ServerID, "Check again")
 					</div>
 				} else {
+					@ImageCheck(u)
 					@UpdateForm(u)
 				}
 			}
+		}
+	</div>
+}
+
+// ImageCheck is what the background check last learned about a newer image.
+templ ImageCheck(u UpdateView) {
+	<div class="image-check" id="image-check">
+		if u.ChecksOff {
+			<p class="muted">Checks for newer images are off. Turn them on in <a class="text-link" href="/settings#image-update-settings-title">Settings</a>.</p>
+		} else {
+			{{ check := u.Check }}
+			if check != nil && check.State == update.CheckAvailable {
+				<div class="alert alert--info image-check__available" role="status">
+					<div>
+						<p><strong>A newer image is available.</strong> Update the server below to use it.</p>
+						if u.Capability.UpdatesOnStart {
+							<p>This is the container image itself, such as its startup scripts and system packages. The game already updates on every restart.</p>
+						}
+					</div>
+				</div>
+			}
+			<p class="muted image-check__status">
+				switch {
+					case check == nil || check.State == update.CheckPending:
+						Ludock hasn’t checked the registry for a newer image yet.
+					case check.State == update.CheckCurrent:
+						This server runs the newest image its tag points to.
+					case check.State == update.CheckUnknown:
+						Ludock can’t tell which registry version this server’s image came from, so it can’t compare it with the registry.
+					case check.State == update.CheckPlatform:
+						The newest image for this tag doesn’t offer this server’s platform, so updating wouldn’t change it.
+				}
+			</p>
+			if check != nil && check.CheckedAt != 0 {
+				<p class="muted image-check__checked">Last checked @Time(check.CheckedAt, "plain", "")</p>
+			}
+			if check != nil && check.Failed {
+				<p class="muted image-check__failed">
+					if check.ConfigProblem {
+						Ludock could not read registry credentials from LUDOCK_DOCKER_CONFIG for the last check.
+					} else {
+						The last check couldn’t reach the registry, or the registry refused it.
+					}
+					Ludock will try again later. Last tried @Time(check.TriedAt, "plain", "")
+				</p>
+			}
+			<div class="inline-actions">
+				<button class="secondary-btn" type="button" hx-post={ "/servers/" + u.ServerID + "/update-check" } hx-target="#image-check" hx-swap="outerHTML" data-busy-label="Checking…">Check now</button>
+			</div>
 		}
 	</div>
 }

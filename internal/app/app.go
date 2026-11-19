@@ -63,6 +63,7 @@ type App struct {
 	Sessions  *console.Sessions
 	Updates   *update.Service
 	Players   *players.Service
+	Checks    *update.Checks
 
 	tick       sync.Mutex
 	sampling   sync.Mutex
@@ -70,6 +71,7 @@ type App struct {
 	storage    sync.Mutex
 	delivering sync.Mutex
 	polling    sync.Mutex
+	checking   sync.Mutex
 	// deliverAgain asks the running delivery pass for another.
 	deliverAgain atomic.Bool
 	stop         chan struct{}
@@ -98,13 +100,15 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
 		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates}
+	checks := &update.Checks{Updates: updates, DB: database, Identity: store, Notify: notifications.Notify}
+	jobService.Pulled = checks.Forget
 	jobService.Register(runner)
 	scheduleService := &schedules.Service{DB: database, Authz: authorization, Identity: store, Runner: runner, Servers: serverService,
 		Locks: table, Notify: notifications.Notify, Console: console.Broadcaster{Runtime: runtime}}
 	a := &App{Config: cfg, DB: database, Docker: client, Locks: table, Identity: store, Authz: authorization,
 		Auth: auth.NewService(database, authorization, setup), ClientIP: clientIP, Observer: observer, Servers: serverService,
 		Images: images, Files: &files.Service{Docker: client, Images: images}, Backups: backupService, Runner: runner, Jobs: jobService,
-		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates,
+		Schedules: scheduleService, Monitor: monitoring, Notify: notifications, Console: runtime, Updates: updates, Checks: checks,
 		History:   &history.Service{DB: database, Authz: authorization, Identity: store},
 		Sessions:  &console.Sessions{DB: database, Authz: authorization, Identity: store, Servers: serverService, Locks: table, Runtime: runtime},
 		Resources: &resources.Service{DB: database, Identity: store, Authz: authorization, Sample: serverService.Sample},
@@ -204,6 +208,7 @@ func (a *App) Tick(ctx context.Context) {
 				log.Warn("Availability checks are temporarily unavailable")
 			}
 			a.record(ctx, current, now)
+			a.checkImages(ctx, current, now)
 		}()
 	}
 	if a.storage.TryLock() {
@@ -263,6 +268,20 @@ func (a *App) deliver(ctx context.Context) {
 				return
 			}
 		}
+	}()
+}
+
+// checkImages looks for newer server images beside the tick, once at a time,
+// since a registry can be slow to answer.
+func (a *App) checkImages(ctx context.Context, current map[string]servers.Container, now int64) {
+	if current == nil || !a.checking.TryLock() {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		defer a.checking.Unlock()
+		a.Checks.Run(ctx, current, now)
 	}()
 }
 

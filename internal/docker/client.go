@@ -629,6 +629,35 @@ func (c *Client) inspectImage(ctx context.Context, reference string, query url.V
 	return &info, c.getJSON(ctx, "/images/"+url.PathEscape(reference)+"/json", query, &info)
 }
 
+// DistributionInspect asks the registry, through Docker, what reference now
+// points to without pulling it. registryAuth is an X-Registry-Auth value or
+// "".
+func (c *Client) DistributionInspect(ctx context.Context, reference, registryAuth string) (*DistributionInspect, error) {
+	if reference == "" || reference == "." || reference == ".." {
+		return nil, errors.New("invalid Docker image reference")
+	}
+	full, err := c.path(ctx, "/distribution/"+url.PathEscape(reference)+"/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	var header http.Header
+	if registryAuth != "" {
+		header = http.Header{"X-Registry-Auth": {registryAuth}}
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	response, err := c.request(ctx, http.MethodGet, full, nil, header)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	var info DistributionInspect
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&info) != nil {
+		return nil, errors.New("docker returned invalid JSON")
+	}
+	return &info, nil
+}
+
 func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, error) {
 	query := url.Values{}
 	filtersQuery(query, filters)

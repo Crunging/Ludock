@@ -25,6 +25,8 @@ type ServerRow struct {
 	BackupSummary  bool
 	ShowPlayers    bool
 	Players        PlayersView
+	// ImageUpdate: a newer image is available (shown to administrators).
+	ImageUpdate bool
 }
 
 // FleetBlock is one server in the strip of state blocks under the title.
@@ -293,6 +295,9 @@ templ ServerCard(row ServerRow) {
 			}
 			if server.BindingStatus != "active" {
 				<p class="server-row__warning">Binding { Capitalize(string(server.BindingStatus)) }. Administrator review required.</p>
+			}
+			if row.ImageUpdate {
+				<p class="server-row__update"><a class="text-link" href={ detailURL(server.ID, "tab=update") }>Image update available</a></p>
 			}
 		</div>
 		<div class="server-row__state">
