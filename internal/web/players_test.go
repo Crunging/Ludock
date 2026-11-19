@@ -26,6 +26,8 @@ type playerGame struct {
 	server string
 	mu     sync.Mutex
 	sent   []string
+	// accounts replaces the game's "list uuids" reply.
+	accounts string
 }
 
 func newPlayerGame(t *testing.T) *playerGame {
@@ -37,11 +39,13 @@ func newPlayerGame(t *testing.T) *playerGame {
 		g.sent = append(g.sent, command)
 		switch command {
 		case "list":
-			return "There are 3 of a max of 10 players online: Ada, Ada_2, Eve"
+			return "There are 2 of a max of 10 players online: Ada, Ada_2"
 		case "list uuids":
-			// Eve is a display name, such as one a team prefix made.
-			return "There are 3 of a max of 10 players online: Ada (00000000-0000-4000-8000-000000000001), " +
-				"Ada_2 (00000000-0000-4000-8000-000000000002), Mallory (00000000-0000-4000-8000-000000000003)"
+			if g.accounts != "" {
+				return g.accounts
+			}
+			return "There are 2 of a max of 10 players online: Ada (00000000-0000-4000-8000-000000000001), " +
+				"Ada_2 (00000000-0000-4000-8000-000000000002)"
 		}
 		if strings.HasPrefix(command, "kick ") {
 			return "Kicked " + strings.TrimPrefix(command, "kick ") + ": Kicked by an operator"
@@ -130,12 +134,9 @@ func TestPlayerActionRefusesForgedRequests(t *testing.T) {
 
 	operator := g.user("u-operator", "operator", db.RoleOperator)
 	g.grantOn(operator, authz.ServerView, authz.ConsoleExecute)
-	// A kick takes a name in the list, and on Minecraft one the game confirms
-	// is an account's, not only a display name.
-	for _, name := range []string{"Zed", "Eve"} {
-		if response := g.act(operator, "kick", name); response.StatusCode != http.StatusConflict {
-			t.Error(name, response.StatusCode)
-		}
+	// A kick takes a name in the list.
+	if response := g.act(operator, "kick", "Zed"); response.StatusCode != http.StatusConflict {
+		t.Error(response.StatusCode)
 	}
 	for _, name := range []string{"", "Ada\nop Eve", "Ada\rop Eve", "Ada op", "@a", "@a[name=Ada]", `"Ada"`, "Ada;stop",
 		"Ada\x00", " Ada", "Ada ", "Ada\t", "Åda", "Ada op", "SeventeenLetters1", "Ada|op", "Ada&&stop", "Ada/op"} {
@@ -202,6 +203,26 @@ func TestPlayerActionNeedsItsAuditEntry(t *testing.T) {
 	}
 	if response := g.act(g.admin, "ban", "Ada"); response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatal(response.StatusCode)
+	}
+	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
+		t.Fatal(sent)
+	}
+}
+
+// Minecraft's list shows display names, which a team prefix can turn into
+// another player's account name. Unless the game's account list matches the
+// names it listed, no kick or ban is sent.
+func TestPlayerActionNeedsMatchingAccounts(t *testing.T) {
+	t.Parallel()
+	g := newPlayerGame(t)
+	g.mu.Lock()
+	g.accounts = "There are 2 of a max of 10 players online: Ada (00000000-0000-4000-8000-000000000001), " +
+		"Bo (00000000-0000-4000-8000-000000000002)"
+	g.mu.Unlock()
+	for _, name := range []string{"Ada", "Ada_2"} {
+		if response := g.act(g.admin, "ban", name); response.StatusCode != http.StatusConflict {
+			t.Error(name, response.StatusCode)
+		}
 	}
 	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
 		t.Fatal(sent)

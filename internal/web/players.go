@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -75,8 +76,8 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	if !games.Online(action) && players.Redacted(name, act.Observation.Secrets) {
 		return "", errSecretName
 	}
-	command, err := players.Command(adapter.Moderation, s.App.Players.Get(act.Logical.ID, act.Container), action, name,
-		r.PostFormValue("key"))
+	reading := s.App.Players.Get(act.Logical.ID, act.Container)
+	command, err := players.Command(adapter.Moderation, reading, action, name, r.PostFormValue("key"))
 	if err != nil {
 		return "", err
 	}
@@ -93,7 +94,7 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	}
 	target := console.Target{ContainerID: act.Logical.ContainerID, Labels: act.Container.Labels, State: act.Container.State}
 	if accounts := adapter.Moderation.Accounts; accounts != nil && games.Online(action) {
-		if err := s.confirmAccount(act, target, adapter, accounts, command); err != nil {
+		if err := s.confirmAccount(act, target, adapter, accounts, command, reading); err != nil {
 			s.audit(r, request, "server.player-action.failed", act.Logical.ID, map[string]any{"action": string(action), "player": name})
 			return "", err
 		}
@@ -124,11 +125,14 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 }
 
 var errUnconfirmed = apperr.New("PLAYER_NOT_CONFIRMED", 409,
-	"The game didn’t confirm that player’s account is online, so nothing was sent. Use the console instead.")
+	"The game didn’t confirm who’s online by account, so nothing was sent. Try again, or use the console.")
 
-// confirmAccount asks the game, under the action's lock, whether command's
-// target is an online account name and not only a display name.
-func (s *Server) confirmAccount(act *serverAction, target console.Target, adapter *games.Adapter, accounts *games.PlayerQuery, command string) error {
+// confirmAccount asks the game, under the action's lock, for the online
+// account names, and goes ahead only when they are exactly the names the
+// reading listed. A display name a team prefix or suffix changed, even into
+// another player's name, then stops every kick and ban.
+func (s *Server) confirmAccount(act *serverAction, target console.Target, adapter *games.Adapter, accounts *games.PlayerQuery,
+	command string, reading *players.Reading) error {
 	var reply strings.Builder
 	err := s.App.Console.GameCommand(act.Ctx, target, adapter, accounts.Command, console.Output{Stdout: func(value string) {
 		if reply.Len() < 1<<20 {
@@ -139,11 +143,15 @@ func (s *Server) confirmAccount(act *serverAction, target console.Target, adapte
 		return err
 	}
 	online, ok := accounts.Parse(reply.String())
-	if !ok {
+	if !ok || reading == nil || len(reading.IDs) != reading.Online {
+		return errUnconfirmed
+	}
+	listed, confirmed := slices.Sorted(slices.Values(reading.IDs)), slices.Sorted(slices.Values(online.IDs))
+	if !slices.Equal(listed, confirmed) {
 		return errUnconfirmed
 	}
 	// Minecraft's commands end with their target.
-	for _, id := range online.IDs {
+	for _, id := range confirmed {
 		if strings.HasSuffix(command, " "+id) {
 			return nil
 		}
