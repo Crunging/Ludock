@@ -288,8 +288,8 @@ func TestWaitingRunsShareReadings(t *testing.T) {
 	}
 }
 
-// At the end of a wait set to skip, a zero not yet confirmed by a settled
-// reading counts as unknown, so the run never acts after its limit; and a
+// A wait set to skip never acts after its limit, even on a zero confirmed
+// only then, which counts as unknown; and a
 // stopped server busy with other work keeps the run's whole wait.
 func TestWaitEdges(t *testing.T) {
 	f := setup(t)
@@ -306,6 +306,13 @@ func TestWaitEdges(t *testing.T) {
 	f.s.Run(ctx, due+10*minute)
 	f.s.Run(ctx, due+10*minute+30_000)
 	if last := f.first(t, admin); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Skipped: Ludock couldn't tell") {
+		t.Fatal(last)
+	}
+	// Nor on a zero that settles after the end.
+	f.s.DB.Exec("UPDATE schedules SET last_result=?,last_run_at=?", WaitingResult, due)
+	f.s.Run(ctx, due+10*minute-20_000)
+	f.s.Run(ctx, due+10*minute+10_000)
+	if last := f.first(t, admin); f.operations(t) != 0 || last.WaitingUntil != 0 {
 		t.Fatal(last)
 	}
 

@@ -91,17 +91,15 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	// that has had time to land, so it can't predate someone joining.
 	settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
 	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled)
-	if !empty {
-		switch {
-		case now < ends:
-			return nil
-		case data.WaitForEmpty.Then == WaitRun:
-		case occupancy.Known && occupancy.Online > 0:
-			return SkipPlayersOnline
-		default:
-			// Includes a zero not yet from a settled reading.
-			return errWaitUnknown
-		}
+	// A run that skips acts only before the wait ends.
+	switch {
+	case now < ends && !empty:
+		return nil
+	case now < ends || data.WaitForEmpty.Then == WaitRun:
+	case occupancy.Known && occupancy.Online > 0:
+		return SkipPlayersOnline
+	default:
+		return errWaitUnknown
 	}
 	err = s.queue(ctx, r, data, state, user, binding, r.lastSlot.String, now)
 	// Other work on the server holds the run, which still waits.
