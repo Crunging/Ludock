@@ -414,7 +414,10 @@ func TestIdentityFollowsDataFolders(t *testing.T) {
 	if digest(func(c *fakedocker.Container) { c.Mounts[1].Source = "/srv/worlds/two" }) == base {
 		t.Fatal("a different nested world kept the identity")
 	}
-	if digest(func(c *fakedocker.Container) { c.Mounts[1].Source = "/srv/worlds/one"; c.Config.Labels["ludock.files"] = "/data/world" }) == base {
+	if digest(func(c *fakedocker.Container) {
+		c.Mounts[1].Source = "/srv/worlds/one"
+		c.Config.Labels["ludock.files"] = "/data/world"
+	}) == base {
 		t.Fatal("other data folders kept the identity")
 	}
 }
