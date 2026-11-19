@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,8 @@ type MemoryState struct {
 // over decides an alert from a percentage: it starts at threshold and, once
 // started, lasts until the value falls Hysteresis points below it.
 func over(alerting bool, percent float64, threshold int) bool {
+	// Rounded so a value exactly at a line, such as 55 of 100, isn't 55.00000000000001.
+	percent = math.Round(percent*1e6) / 1e6
 	if alerting {
 		return percent > float64(threshold-Hysteresis)
 	}

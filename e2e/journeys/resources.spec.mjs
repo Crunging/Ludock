@@ -44,6 +44,7 @@ async function expectAttention(page, text, shown, timeout = 100_000) {
     await page.goto("/");
     // The placeholder shown while it loads is busy.
     await expect(page.locator("#attention > .needs-attention:not([aria-busy])")).toBeVisible();
+    await expect(page.locator("#attention .needs-attention__error")).toHaveCount(0);
     return page.locator("#attention").textContent();
   }, { timeout, intervals: [5_000] });
   await (shown ? attention.toContain(text) : attention.not.toContain(text));
