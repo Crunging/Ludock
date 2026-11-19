@@ -112,6 +112,13 @@ func (s *Server) activity(r *http.Request, request *Request, id string, query ur
 		a.Kinds = append(a.Kinds, kind)
 	}
 	slices.Sort(a.Kinds)
+	// A run waiting for players to leave is shown to people who see schedules.
+	if manages, _ := s.App.Authz.Has(r.Context(), request.User(), id, authz.SchedulesManage); manages || a.Admin {
+		list, _ := s.App.Schedules.List(r.Context(), request.User(), id)
+		if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.WaitingUntil != 0 }); index >= 0 {
+			a.Waiting = &list[index]
+		}
+	}
 	if a.SelectedID != "" {
 		s.selectOperation(r, &a)
 	}
@@ -137,12 +144,6 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 		case "activity":
 			d.Activity = s.activity(r, request, d.Row.Server.ID, r.URL.Query())
 			d.Activity.Archives = d.Admin && can(&d.Row.Server, authz.BackupsRead)
-			if slices.ContainsFunc(d.Tabs, func(tab views.DetailTab) bool { return tab.ID == "schedules" }) {
-				list, _ := s.App.Schedules.List(r.Context(), request.User(), d.Row.Server.ID)
-				if index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.WaitingUntil != 0 }); index >= 0 {
-					d.Activity.Waiting = &list[index]
-				}
-			}
 		case "backups":
 			d.Backups = s.backupsView(r, request, d)
 			d.Operation = d.Backups.Operation.SelectedID

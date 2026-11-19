@@ -796,14 +796,10 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 				return err
 			}
 		}
+		// Who is online is decided from a reading asked for once the run is
+		// due, so even an empty server waits for one.
 		if data.WaitForEmpty != nil {
-			empty, _, err := s.empty(ctx, user, r.serverID, data, binding.BindingRevision)
-			if err != nil {
-				return err
-			}
-			if !empty {
-				return s.startWaiting(ctx, r, slot, scheduledAt, now)
-			}
+			return s.startWaiting(ctx, r, slot, scheduledAt, now)
 		}
 		err = s.queue(ctx, r, data, state, user, binding, slot, now)
 		// A command is sent now or not at all, never after other work.

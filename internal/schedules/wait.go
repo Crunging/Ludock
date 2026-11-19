@@ -8,9 +8,13 @@ import (
 	"github.com/Crunging/Ludock/internal/schedtime"
 )
 
-// playerCheckMs is how often a waiting run asks for a player reading, which
-// can start a console helper.
-const playerCheckMs = 30_000
+const (
+	// playerCheckMs is how often a waiting run asks for a player reading,
+	// which can start a console helper.
+	playerCheckMs = 30_000
+	// readingSettleMs is how long a reading asked for may take to land.
+	readingSettleMs = 10_000
+)
 
 var (
 	errNoPlayerList = apperr.New("INVALID_REQUEST", 400, "Ludock can't read who is online on this server, so it can't wait for players to leave")
@@ -57,7 +61,7 @@ func (s *Service) startWaiting(ctx context.Context, r *row, slot string, schedul
 	if changed, err := result.RowsAffected(); err == nil && changed == 0 {
 		return errScheduleChanged
 	}
-	s.checkPlayers(ctx, r.serverID, now)
+	s.checkPlayers(ctx, r.serverID, scheduledAt, now)
 	return nil
 }
 
@@ -85,10 +89,15 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	if err != nil {
 		return err
 	}
+	// An empty count counts only from a reading asked for during this wait,
+	// so it can't predate someone joining.
+	asked := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
+	if empty && (asked < r.lastRunAt.Int64 || now-asked < readingSettleMs) {
+		return nil
+	}
 	if !empty {
 		switch {
 		case now < ends:
-			s.checkPlayers(ctx, r.serverID, now)
 			return nil
 		case data.WaitForEmpty.Then == WaitSkip && known:
 			return SkipPlayersOnline
@@ -104,23 +113,23 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	return err
 }
 
-// checkPlayers asks for a reading of a waiting run's server at most every
-// playerCheckMs, since readings otherwise run only while someone watches.
-func (s *Service) checkPlayers(ctx context.Context, serverID string, now int64) {
-	if s.Players == nil {
-		return
-	}
+// checkPlayers asks for a reading of a waiting run's server at once if
+// none was asked for since the wait began, then every playerCheckMs, since
+// readings otherwise run only while someone watches. It returns when the
+// previous reading was asked for.
+func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now int64) int64 {
 	s.mu.Lock()
 	if s.checked == nil {
 		s.checked = map[string]int64{}
 	}
 	last := s.checked[serverID]
-	due := now-last >= playerCheckMs || now < last
+	due := last < since || now-last >= playerCheckMs || now < last
 	if due {
 		s.checked[serverID] = now
 	}
 	s.mu.Unlock()
-	if due {
+	if due && s.Players != nil {
 		s.Players.Check(ctx, serverID)
 	}
+	return last
 }

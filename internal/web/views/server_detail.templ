@@ -553,14 +553,6 @@ templ ActivityPanel(a ActivityView) {
 	if a.SelectedID != "" {
 		@SelectedOperation(a)
 	}
-	if waiting := a.Waiting; waiting != nil {
-		<p class="section-note activity-waiting" role="status">
-			A scheduled { waiting.Action } is waiting for players to leave, until
-			@Time(waiting.WaitingUntil, "plain", "")
-			.
-			<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
-		</p>
-	}
 	<div class="section-heading">
 		<h2 id="recent-operations-title" tabindex="-1">Recent operations</h2>
 		<div class="inline-actions">
@@ -606,6 +598,14 @@ templ ActivityList(a ActivityView) {
 	<div id="activity-list" hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-include=".activity-filters" hx-trigger={ liveTrigger(a.ServerID, a.Active) } hx-swap="outerMorph">
 		if a.Error != "" {
 			@Alert("error", a.Error)
+		}
+		if waiting := a.Waiting; waiting != nil {
+			<p class="section-note activity-waiting" role="status">
+				A scheduled { waiting.Action } is waiting for players to leave, until
+				@Time(waiting.WaitingUntil, "plain", "")
+				.
+				<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
+			</p>
 		}
 		<p class="section-note activity-filter-count" aria-live="polite">Showing { strconv.Itoa(len(a.Visible)) } of { strconv.Itoa(a.Total) } recent operations.</p>
 		if a.HiddenActive {

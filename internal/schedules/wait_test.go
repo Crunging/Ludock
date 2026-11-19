@@ -93,9 +93,14 @@ func TestWaitForEmptyWindow(t *testing.T) {
 		t.Fatal("ran a slot twice")
 	}
 
-	// An empty server runs at its time without waiting.
+	// An empty server runs on the tick after a reading asked for at its time,
+	// never on a reading from before.
 	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
 	f.s.Run(ctx, tomorrow+86_400_000)
+	if f.operations(t) != 1 {
+		t.Fatal("acted on a reading from before the run was due")
+	}
+	f.s.Run(ctx, tomorrow+86_400_000+15_000)
 	if f.operations(t) != 2 {
 		t.Fatal("waited on an empty server")
 	}

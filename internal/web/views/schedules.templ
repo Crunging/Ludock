@@ -505,7 +505,7 @@ templ ScheduleEditor(f ScheduleForm) {
 					<div class="stack-form" data-shown-by="schedule-wait" hidden?={ input.WaitForEmpty == nil }>
 						<label>
 							Wait up to (minutes)
-							<input type="number" name="waitMinutes" min="1" max={ strconv.Itoa(schedules.MaxWaitMinutes) } value={ waitMinutes(input) }/>
+							<input type="number" name="waitMinutes" inputmode="numeric" value={ waitMinutes(input) }/>
 							<small>From the scheduled time, 1–{ strconv.Itoa(schedules.MaxWaitMinutes) } minutes. Default: { strconv.Itoa(schedules.DefaultWaitMinutes) }.</small>
 						</label>
 						<fieldset class="weekday-input">
