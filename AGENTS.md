@@ -4,6 +4,29 @@ Ludock is a self-hosted web panel for Docker game servers that already exist.
 Compose, Portainer, Dockge, or the Docker CLI owns each server's
 configuration; Ludock never creates servers or edits their definitions.
 
+## Product
+
+Ludock is the simple, plug-and-play panel for game servers people already
+run. Panels such as Pterodactyl own their servers; with Ludock the user stays
+in control and keeps using their own tools beside it. Hold every change to
+that:
+
+- **It works with no setup.** A new install finds its servers and is useful
+  before anyone opens Settings. Detect what can be detected instead of asking
+  for it.
+- **Defaults do the right thing.** Every option ships with a value most people
+  never change. Don't add a setting where one good behavior will do.
+- **Advanced is optional and out of the way.** Options for unusual setups go
+  behind an "Advanced" disclosure, a container label, or an environment
+  variable. Nothing requires them, and everyday pages don't show them.
+- **One obvious way.** Give a task one clear path, in plain words rather than
+  Docker terms, with the common choice already made.
+
+The README is the pitch and quick start, and `docs/OPERATIONS.md` is the
+reference: everyday tasks come first there, advanced options after.
+
+## Code
+
 It is one Go binary (`cmd/ludock`) serving server-rendered templ pages with
 htmx; the code is in `internal/`. `cmd/fakedocker` is an in-memory Docker
 Engine API for development and tests. Never point development or tests at a
