@@ -200,13 +200,13 @@ func (c *Checks) Forget(serverID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.generation[serverID]++
-	if c.state != nil {
-		if entry := c.state.Servers[serverID]; entry != nil {
+	if state, err := c.loadLocked(context.Background()); err == nil {
+		if entry := state.Servers[serverID]; entry != nil {
 			entry.ContainerID = ""
-			if image := c.state.Images[entry.Image]; image != nil {
+			if image := state.Images[entry.Image]; image != nil {
 				image.Digest, image.NextAt = "", 0
 				c.forgotten[entry.Image]++
-				for _, other := range c.state.Servers {
+				for _, other := range state.Servers {
 					if other.Image == entry.Image {
 						other.Status = CheckPending
 					}

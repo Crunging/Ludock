@@ -237,9 +237,9 @@ func TestChecksForgetAsksAgain(t *testing.T) {
 	}
 }
 
-// Ludock restarts right after Update server pulled an image without
-// recreating the container: the answer from before the pull doesn't come
-// back as an available update.
+// Ludock restarts right before or right after Update server pulls an image
+// without recreating the container: the answer from before the pull doesn't
+// come back as an available update.
 func TestChecksForgetSurvivesRestart(t *testing.T) {
 	f := newChecks(t, "")
 	const reference = "itzg/minecraft-server:java21"
@@ -252,7 +252,7 @@ func TestChecksForgetSurvivesRestart(t *testing.T) {
 		t.Fatalf("%+v", status)
 	}
 	logical, _ := f.servers.Identity.List(context.Background(), "")
-	f.checks.Forget(logical[0].ID)
+	f.restart("").Forget(logical[0].ID)
 	f.restart("")
 	if status := f.status(t, id); status != nil && status.State == CheckAvailable {
 		t.Fatalf("the stale answer came back: %+v", status)
