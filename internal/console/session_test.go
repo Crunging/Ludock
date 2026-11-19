@@ -48,11 +48,12 @@ func (c *fakeChannel) text() string {
 }
 
 type sessionFixture struct {
-	engine   *fakedocker.Engine
-	sessions *Sessions
-	serverID string
-	friend   *db.SessionUser
-	admin    *db.SessionUser
+	engine      *fakedocker.Engine
+	containerID string
+	sessions    *Sessions
+	serverID    string
+	friend      *db.SessionUser
+	admin       *db.SessionUser
 	// adminSession is the admin's token hash.
 	adminSession string
 	authz        *authz.Service
@@ -98,6 +99,7 @@ func sessionSetup(t *testing.T, configure ...func(*fakedocker.GameOptions)) *ses
 	}
 	authorization.SetUserGrants(ctx, friend.ID, []authz.GrantInput{{ServerID: views[0].ID,
 		Capabilities: []authz.Capability{authz.ServerView, authz.LogsRead, authz.ConsoleExecute}}}, admin, adminSession)
+	f.containerID = id
 	f.engine, f.serverID, f.friend, f.admin, f.adminSession, f.authz = engine, views[0].ID, friend, admin, adminSession, authorization
 	f.sessions = &Sessions{DB: d, Authz: authorization, Identity: store, Servers: service, Locks: locks.New(),
 		Runtime: &Runtime{Docker: client, pollInterval: time.Millisecond}, IdleCheck: 20 * time.Millisecond}
@@ -129,6 +131,31 @@ func TestLogsAreRedactedAndStopOnRevocation(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// A busy log stream confirms access about once a second, not for every line.
+func TestLogAccessChecksAreBounded(t *testing.T) {
+	f := sessionSetup(t)
+	lines := make([]string, 2000)
+	for index := range lines {
+		lines[index] = fmt.Sprint("line ", index)
+	}
+	f.engine.Update(f.containerID, func(c *fakedocker.Container) { c.Logs = lines })
+	var checks atomic.Int64
+	validate := func(context.Context) *db.SessionUser { checks.Add(1); return f.friend }
+	channel := &fakeChannel{}
+	streamCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { f.sessions.Logs(streamCtx, channel, validate, f.serverID, ""); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(channel.text(), "line 1999") {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !strings.Contains(channel.text(), "line 1999") || checks.Load() > 200 {
+		t.Fatal(checks.Load())
+	}
 }
 
 // Console runs commands and rejects without access.
