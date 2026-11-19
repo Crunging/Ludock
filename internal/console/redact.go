@@ -25,6 +25,15 @@ func NewRedactor(secrets []string, output func(string)) *Redactor {
 	return &Redactor{secrets: kept, output: output}
 }
 
+// Redact removes secrets from one complete value.
+func Redact(secrets []string, value string) string {
+	var safe strings.Builder
+	redactor := NewRedactor(secrets, func(part string) { safe.WriteString(part) })
+	redactor.Push(value)
+	redactor.End()
+	return safe.String()
+}
+
 func (r *Redactor) Push(value string) {
 	r.pending += value
 	r.emit(false)

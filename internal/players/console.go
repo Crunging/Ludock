@@ -3,7 +3,7 @@ package players
 import (
 	"context"
 	"errors"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/console"
@@ -73,12 +73,14 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading
 		return reading, nil
 	}
 	if probe.Adapter != nil && result.ResponseErr == nil {
-		// Redacted before parsing, so no name carries a secret.
-		var redacted strings.Builder
-		redactor := console.NewRedactor(observed.Observation.Secrets, func(value string) { redacted.WriteString(value) })
-		redactor.Push(result.Response)
-		redactor.End()
-		if players, ok := probe.Adapter.Players.Parse(redacted.String()); ok {
+		// Parsed raw, since a short secret can occur inside a player ID that
+		// the strict parsers check; the names are what is kept, so they are
+		// redacted instead.
+		if players, ok := probe.Adapter.Players.Parse(result.Response); ok {
+			secrets := append(slices.Clone(observed.Observation.Secrets), result.Secrets...)
+			for index, name := range players.Names {
+				players.Names[index] = console.Redact(secrets, name)
+			}
 			reading.Players, reading.Failed, reading.Via = players, false, ViaConsole
 		}
 	}

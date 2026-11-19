@@ -3,7 +3,6 @@ package console
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/Crunging/Ludock/internal/gamequery"
 	"github.com/Crunging/Ludock/internal/games"
@@ -21,10 +20,14 @@ type Probe struct {
 }
 
 type ProbeResult struct {
-	// Response has the console password removed; ResponseErr is set when
-	// the command was asked for and has none.
+	// Response is the raw reply, so parsers see IDs that contain a secret;
+	// anything shown from it is redacted with the server's secrets and
+	// Secrets. ResponseErr is set when the command was asked for and has none.
 	Response    string
 	ResponseErr error
+	// Secrets holds the console password, which can come from a file and so
+	// be missing from the server's redacted environment values.
+	Secrets []string
 	// Status is nil when the query wasn't asked for or never ran, which
 	// says nothing about the game.
 	Status *helper.StatusResult
@@ -102,10 +105,8 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 	if err := check(); err != nil {
 		return ProbeResult{}, err
 	}
-	if console && result.ResponseErr == nil && password != "" {
-		// A password read from a file is not among the server's redacted
-		// environment values.
-		result.Response = strings.ReplaceAll(result.Response, password, "[redacted]")
+	if password != "" {
+		result.Secrets = []string{password}
 	}
 	return result, nil
 }
