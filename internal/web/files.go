@@ -351,13 +351,19 @@ func (s *Server) fileSave(w http.ResponseWriter, r *http.Request, request *Reque
 		return
 	}
 	// These refusals answer with an alert only, so the editor keeps the draft.
+	// A truncated body is refused before normalizing could shrink it.
+	tooLarge := apperr.New("TEXT_TOO_LARGE", 413, "The file would be over "+datasize.Format(files.PreviewLimit)+", so it can’t be saved here.")
+	if len(body) > files.PreviewLimit {
+		s.fail(w, r, request, tooLarge)
+		return
+	}
 	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
 		s.fail(w, r, request, apperr.New("INVALID_TEXT", 400, "The text can’t be saved as a text file."))
 		return
 	}
 	content := files.EditedContent(string(body), crlf, bom)
 	if len(content) > files.PreviewLimit {
-		s.fail(w, r, request, apperr.New("TEXT_TOO_LARGE", 413, "The file would be over "+datasize.Format(files.PreviewLimit)+", so it can’t be saved here."))
+		s.fail(w, r, request, tooLarge)
 		return
 	}
 	action, err := s.startAction(r, request, id, authz.FilesWrite)

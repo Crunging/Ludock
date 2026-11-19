@@ -189,11 +189,17 @@ test("editing a text file in the browser and saving it", async ({ page }) => {
     expect(readFileSync(crlf, "utf8")).toBe("﻿op=alex\r\nlevel=2\r\n");
     expect(statSync(crlf).mode & 0o777).toBe(0o640);
 
-    // Cancel leaves the file as it was.
+    // Cancel leaves the file as it was, and Save waits while it loads.
     await dialog.getByRole("button", { name: "Edit" }).click();
     await dialog.getByRole("textbox").fill("discarded");
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/fragments/files/**/preview?*", async (route) => { await held; await route.continue(); });
     await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    release();
     await expect(dialog.locator("pre")).toContainText("level=2");
+    await page.unroute("**/fragments/files/**/preview?*");
     expect(readFileSync(crlf, "utf8")).toBe("﻿op=alex\r\nlevel=2\r\n");
   } finally {
     writeFileSync(properties, original);

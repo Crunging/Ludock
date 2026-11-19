@@ -13,6 +13,21 @@
     var text = editor(event.target);
     if (unsaved(text) || (text && text.readOnly)) event.preventDefault();
   }, true);
+  // Saving and canceling each replace the dialog, so while either is pending
+  // the editor and its buttons are locked.
+  function lock(form, on) {
+    form.querySelector("textarea").readOnly = on;
+    form.querySelectorAll("button").forEach(function (control) { control.disabled = on; });
+  }
+  function editorForm(ctx) { return ctx.sourceElement && ctx.sourceElement.closest && ctx.sourceElement.closest("form[data-file-editor]"); }
+  document.addEventListener("htmx:before:request", function (event) {
+    var form = editorForm(event.detail.ctx);
+    if (form) lock(form, true);
+  });
+  document.addEventListener("htmx:finally:request", function (event) {
+    var form = editorForm(event.detail.ctx);
+    if (form && form.isConnected) lock(form, false);
+  });
   document.addEventListener("submit", async function (event) {
     var form = event.target.closest && event.target.closest("form[data-file-editor]");
     if (!form) return;
@@ -21,11 +36,8 @@
     var button = form.querySelector('button[type="submit"]');
     var text = form.querySelector("textarea");
     if (text.readOnly) return;
-    // The response replaces the dialog, so nothing may change meanwhile.
-    var controls = Array.prototype.slice.call(form.querySelectorAll("button"));
     function busy(on) {
-      text.readOnly = on;
-      controls.forEach(function (control) { control.disabled = on; });
+      lock(form, on);
       button.textContent = on ? "Saving…" : "Save";
     }
     busy(true);
