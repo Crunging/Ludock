@@ -99,14 +99,21 @@ variable for it, such as `SERVER_PORT` or `QUERY_PORT`, its value wins.
 | 7 Days to Die | `vinanrra/7dtd-server` | Telnet | 8081 | — |
 | Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | None | — | Steam, 2457 |
 | Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Process stdin | — | — |
+| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Process stdin | — | — |
+| Satisfactory | `robtme/satisfactory-server`, `wolveix/satisfactory-server` | None | — | — |
+| Enshrouded | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | None | — | Steam, 15637 (`SERVER_QUERYPORT`, `PORT`) |
+| Don't Starve Together | `jamesits/dst-server` | None | — | — |
+| Core Keeper | `escaping/core-keeper-dedicated` | None | — | — |
+| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Process stdin | — | — |
 
-Steam is Valve's A2S_INFO server query. Valheim answers it only when the
-server is public (`SERVER_PUBLIC`). The others aren't queried by default:
-Factorio has its own protocol, ARK: Survival Ascended no longer answers server
-queries, Rust's query port depends on how the image passes its ports, and the
-Palworld, Project Zomboid, V Rising, and 7 Days to Die images don't document a
-query port. If yours answers one, set `ludock.query: a2s` and
-`ludock.query.port`.
+Steam is Valve's A2S_INFO server query. Valheim answers it only when the server
+is public (`SERVER_PUBLIC`). The others aren't queried by default: Factorio has
+its own protocol, ARK: Survival Ascended no longer answers server queries,
+Rust's query port depends on how the image passes its ports, and the Palworld,
+Project Zomboid, V Rising, and 7 Days to Die images don't document a query port.
+Minecraft: Bedrock Edition and Satisfactory have their own protocols, and the
+Don't Starve Together and Core Keeper images don't document a query port either.
+If yours answers one, set `ludock.query: a2s` and `ludock.query.port`.
 
 ## Servers
 
@@ -125,10 +132,10 @@ in time, so recent progress may not have been saved.
 Stops and restarts run as operations in **Activity**. If the game's console has
 a **Save world** shortcut, Ludock sends it and waits five seconds first; if the
 console isn't available, the stop goes ahead. Docker then allows 120 seconds to
-shut down, or 180 for ARK, Palworld, Valheim, and 7 Days to Die; a longer
-`stop_grace_period` on the container wins. If Ludock restarts during a stop, it
-waits for that stop to finish without sending it again, for at least five
-minutes or the grace period plus a minute.
+shut down, or 180 for ARK, Palworld, Valheim, and 7 Days to Die and 360 for
+Don't Starve Together; a longer `stop_grace_period` on the container wins. If
+Ludock restarts during a stop, it waits for that stop to finish without sending
+it again, for at least five minutes or the grace period plus a minute.
 
 With permission to create backups, the Restart dialog offers **Take a backup
 first**. Ludock checks the backup destination before stopping anything, keeps
@@ -142,7 +149,9 @@ Ludock combines the host in **Settings → Server address** with the host port
 published for the game's own port and protocol; until an administrator sets a
 host, it uses the one in your browser's address bar. A supported game that
 doesn't publish its game port shows no address, and other images use their
-first published port. Ports published only on loopback are never offered.
+first published port, as does Core Keeper, whose port is optional. Minecraft:
+Bedrock Edition connects on TCP 19132; a server on the older UDP transport
+needs `ludock.address`. Ports published only on loopback are never offered.
 
 When detection can't know the address, such as behind a port-forwarding router,
 a tunnel, or a Minecraft SRV record, set `ludock.address` to exactly what
@@ -171,9 +180,10 @@ authenticated tunnel.
   the password the image saved in `/data/.rcon-cli.env`, including one it
   generated, through Docker without running anything in the container. RCON
   must be on, as it is by default (`ENABLE_RCON`).
-- **Terraria** reads commands from the process's input, which needs
-  `stdin_open: true`, `StdinOnce` off, and an image that forwards input to the
-  server.
+- **Terraria, Minecraft: Bedrock Edition, and Vintage Story** read commands
+  from the process's input, which needs `stdin_open: true`, `StdinOnce` off,
+  and an image that forwards input to the server. Replies appear only in the
+  logs.
 - **The administrator shell** needs `/bin/sh` and `timeout` in the image. Each
   command gets 60 seconds, plus five to force it to stop.
 
@@ -193,16 +203,16 @@ and how many for any game with a status query (see
 | Conan Exiles | `ListPlayers` | RCON |
 | 7 Days to Die | `listplayers` | Telnet |
 
-Ludock sends the command about every 30 seconds while the server runs, and
-again right after a console command, using the same helper and password as the
+Ludock sends the command about every 30 seconds while the server runs, and again
+right after a console command, using the same helper and password as the
 console. Only Minecraft reports how many players a server takes. Conan Exiles
 shows character names. Anyone who can see the server sees the player count and
 names. Readings stay in memory and are never stored. When the console is off,
-doesn't answer, or answers with something other than a player list, the
-server's players show as unavailable, never as empty. Other games, including
-Terraria, whose console doesn't return replies, show no player list. A reading
-gives way to anything else that needs the server, such as a console command or
-a backup.
+doesn't answer, or answers with something other than a player list, the server's
+players show as unavailable, never as empty. Other games, including those whose
+console reads the process's input, which returns no replies, show no player
+list. A reading gives way to anything else that needs the server, such as a
+console command or a backup.
 
 When the game also has a status query, Ludock asks it in the same helper. A
 console list wins, since it names players; the query's count shows when the
@@ -316,9 +326,11 @@ container in Docker, and its owning manager's logs.
 
 ## Image updates
 
-Minecraft, Palworld, Counter-Strike 2, Conan Exiles, Rust, and Valheim images
-download the latest game files when they start, so every **Restart** updates the
-game, as **Update** notes. Choose **Take a backup first** to back up before it.
+Minecraft (both editions), Palworld, Counter-Strike 2, Conan Exiles, Rust,
+Valheim, Satisfactory, Enshrouded, Don't Starve Together, and Core Keeper images
+download the latest game files when they start, unless the image's own settings
+pin a version or skip updates, so every **Restart** updates the game, as
+**Update** notes. Choose **Take a backup first** to back up before it.
 
 **Update server** pulls a newer version of the server's image and recreates its
 container with the same settings. It needs an administrator and nothing else:
@@ -401,10 +413,11 @@ running it.
 - **Countdown warnings:** a restart schedule can announce the restart through the
   game console, at 10, 5, and 1 minutes before by default or up to ten times you
   choose from 1 to 60 minutes. It needs console access and a game with a
-  broadcast command: Minecraft, ARK, Counter-Strike 2, Project Zomboid, Conan
-  Exiles, Rust, 7 Days to Die, or Terraria. Warnings are best effort: each is
-  tried at most once and is skipped when the server is stopped or busy, the
-  console fails, or it can't start at least 30 seconds before the restart.
+  broadcast command: Minecraft (both editions), ARK, Counter-Strike 2, Project
+  Zomboid, Conan Exiles, Rust, 7 Days to Die, Terraria, or Vintage Story.
+  Warnings are best effort: each is tried at most once and is skipped when the
+  server is stopped or busy, the console fails, or it can't start at least 30
+  seconds before the restart.
 - **Console commands:** **Send command** takes one line of up to 500
   characters, such as `save-all` or `say Restarting at noon`, and sends it
   through the game console as if typed there, never through the shell. It
