@@ -479,11 +479,20 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// password can report a failed sign-in: game servers such as 7 Days to
 	// Die stream their log, including player chat, to every Telnet client.
 	passwordAt, commandAt := 0, 0
-	finish := func() string { return CleanTelnet(decodeText(raw[commandAt:]), command) }
+	errSignIn := errors.New("Telnet console authentication failed")
+	finish := func() (string, error) {
+		// A rejection slower than the command timer is the first line after
+		// the password, ahead of any echo.
+		reply, _, _ := strings.Cut(strings.TrimSpace(decodeText(raw[passwordAt:])), "\n")
+		if authFailed.MatchString(reply) {
+			return "", errSignIn
+		}
+		return CleanTelnet(decodeText(raw[commandAt:]), command), nil
+	}
 	for {
 		select {
 		case <-quiet.C:
-			return finish(), nil
+			return finish()
 		case <-commandTimer.C:
 			commandAt = len(raw)
 			if err := s.write([]byte(command + "\n")); err != nil {
@@ -505,7 +514,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 					return "", result.err
 				}
 				if commandSent {
-					return finish(), nil
+					return finish()
 				}
 				return "", errors.New("Telnet console closed before the command was sent")
 			}
@@ -526,7 +535,7 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 				continue
 			}
 			if passwordSent && !commandSent && authFailed.MatchString(decodeText(raw[passwordAt:])) {
-				return "", errors.New("Telnet console authentication failed")
+				return "", errSignIn
 			}
 			if commandSent {
 				quiet.Reset(telnetQuiet)

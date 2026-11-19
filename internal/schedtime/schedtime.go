@@ -151,13 +151,15 @@ func Slot(input Input, now int64) string {
 }
 
 // DueSlot is the slot a recurring schedule should run now and its start: the
-// latest matching minute within RecurringGraceMs that is not lastSlot and
-// began at or after notBefore, when the schedule was saved. "" means none.
+// latest matching minute within RecurringGraceMs that is not lastSlot and is
+// not before the minute of notBefore, when the schedule was saved. "" means
+// none.
 func DueSlot(input Input, now int64, lastSlot string, notBefore int64) (string, int64) {
 	location, ok := validClock(input, now)
 	if !ok || input.Kind != "recurring" {
 		return "", 0
 	}
+	notBefore = floorDiv(notBefore, minute) * minute
 	for at := now; at > now-RecurringGraceMs; at -= minute {
 		c := localClock(location, at)
 		if c.minuteStart < notBefore {

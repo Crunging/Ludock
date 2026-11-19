@@ -644,7 +644,9 @@ func RunFile(argument string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "download", "upload":
 		limit = 30 * time.Minute
 	case "backup":
-		limit = BackupLimit
+		// The backend's deadline, started just after this one, ends the read
+		// and reports the timeout; this one only stops a helper it lost.
+		limit = BackupLimit + time.Minute
 	}
 	deadline := time.AfterFunc(limit, func() {
 		if request.Operation == "upload" {

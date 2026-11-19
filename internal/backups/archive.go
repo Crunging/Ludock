@@ -94,6 +94,10 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 	return nil
 }
 
+// maxEntries bounds an archive's entries, its snapshot header included.
+// Tests lower it.
+var maxEntries = 100000
+
 var errCapacity = fail("BACKUP_CAPACITY", "The archive exceeds the configured size limit.")
 
 // ValidateStream checks a whole archive and every recorded root.
@@ -110,7 +114,7 @@ func ValidateStream(input io.Reader, roots []Root, maxBytes int64, onChunk func(
 			return err
 		}
 		name := strings.TrimSuffix(header.Name, "/")
-		if names[name] || len(names) >= 100000 {
+		if names[name] || len(names) >= maxEntries {
 			return fail("UNSAFE_ARCHIVE", "The archive has duplicate paths or too many entries.")
 		}
 		names[name] = true

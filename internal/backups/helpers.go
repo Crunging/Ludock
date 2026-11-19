@@ -427,6 +427,9 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	if err := write(header); err != nil {
 		return 0, "", err
 	}
+	// Restore refuses an archive of more than maxEntries entries, counting
+	// this header, so a backup it would refuse is refused while written.
+	entries := 1
 	for _, root := range data.Roots {
 		if err := assertStopped(); err != nil {
 			return 0, "", err
@@ -463,10 +466,11 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			if err := ValidateEntry(mapped, data.Roots); err != nil {
 				return err
 			}
-			if names[name] || len(names) >= 100000 {
-				return fail("UNSAFE_ARCHIVE", "The selected root has duplicate paths or too many entries.")
+			if names[name] || entries >= maxEntries {
+				return fail("UNSAFE_ARCHIVE", "The selected roots have duplicate paths or too many entries.")
 			}
 			names[name] = true
+			entries++
 			encoded, err := tarstream.EncodeHeader(*mapped)
 			if err != nil {
 				return err
@@ -652,7 +656,7 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 			return err
 		}
 		name := strings.TrimSuffix(header.Name, "/")
-		if names[name] || len(names) >= 100000 {
+		if names[name] || len(names) >= maxEntries {
 			return fail("UNSAFE_ARCHIVE", "The archive contains duplicate paths or too many entries.")
 		}
 		names[name] = true

@@ -240,7 +240,8 @@ func (h *restoreHelper) run() (any, error) {
 		return nil, err
 	}
 	if stage < 0 {
-		return ok, nil
+		// An earlier cleanup may have removed the stage and failed to sync.
+		return ok, syncAll(root)
 	}
 	switch h.request.Operation {
 	case "cleanup":

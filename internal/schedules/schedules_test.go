@@ -149,6 +149,17 @@ func TestLateRunsRespectSavesAndRetryConflicts(t *testing.T) {
 	if f.operations(t) != 0 {
 		t.Fatal("ran a minute that passed before the schedule was saved")
 	}
+	// Saved during its own minute, it still runs for that minute.
+	f.s.DB.Exec("DELETE FROM schedules")
+	db.Now = func() int64 { return due + 30_000 }
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due+45_000)
+	if f.operations(t) != 1 {
+		t.Fatal("skipped the minute the schedule was saved in")
+	}
+	f.s.DB.Exec("DELETE FROM operations")
 	db.Now = func() int64 { return due - 3600_000 }
 	f.s.DB.Exec("DELETE FROM schedules")
 	schedule, err := f.s.Create(ctx, friend, f.serverID, base)

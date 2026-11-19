@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -289,5 +290,41 @@ func TestSnapshotTimeLimit(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(destination); len(entries) != 0 {
 		t.Fatal("left an archive behind")
+	}
+}
+
+// Entries are counted across all roots, as restore counts them, so a backup
+// restore would refuse is never recorded.
+func TestSnapshotEntryLimitSpansRoots(t *testing.T) {
+	_, client := startHelpers(t)
+	base := t.TempDir()
+	destination := filepath.Join(base, "backups")
+	os.MkdirAll(destination, 0o755)
+	context := &servers.Context{}
+	for index, name := range []string{"one", "two"} {
+		data := filepath.Join(base, name)
+		os.MkdirAll(data, 0o755)
+		for file := range 2 {
+			os.WriteFile(filepath.Join(data, strconv.Itoa(file)), []byte("x"), 0o644)
+		}
+		root := "/" + name
+		context.Container.FileRoots = append(context.Container.FileRoots, files.Root{ID: "root-" + strconv.Itoa(index), Path: root})
+		context.Observation.Mounts = append(context.Observation.Mounts, identity.Mount{Type: "bind", Source: data, Destination: root, Writable: true})
+	}
+	previous := maxEntries
+	// The header and each root's folder and two files: seven in all.
+	maxEntries = 6
+	t.Cleanup(func() { maxEntries = previous })
+	helpers := &Helpers{Docker: client, Images: &launch.Images{Docker: client, Configured: image}, Storage: &Storage{Docker: client, Roots: destination},
+		pollInterval: 1}
+	dataHelper, err := helpers.NewDataHelper(ctx, context, true, "op-6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataHelper.Cleanup()
+	_, _, err = helpers.WriteSnapshot(ctx, context, dataHelper, Settings{Destination: destination, MaxBytes: 1 << 30},
+		"af9619ff-8b86-4011-b42d-00c04fc964ff", 1<<30, func() error { return nil }, nil)
+	if !apperr.Is(err, "UNSAFE_ARCHIVE") || !strings.Contains(err.Error(), "too many entries") {
+		t.Fatal(err)
 	}
 }
