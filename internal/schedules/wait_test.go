@@ -11,14 +11,13 @@ import (
 )
 
 type fakePlayers struct {
-	online int
-	known  bool
+	now    Occupancy
 	lists  bool
 	checks int
 }
 
-func (p *fakePlayers) Online(context.Context, *db.SessionUser, string, authz.Capability, int64) (int, bool, error) {
-	return p.online, p.known, nil
+func (p *fakePlayers) Online(context.Context, *db.SessionUser, string, authz.Capability, int64) (Occupancy, error) {
+	return p.now, nil
 }
 
 func (p *fakePlayers) Lists(context.Context, *db.SessionUser, string) (bool, error) {
@@ -37,7 +36,7 @@ func waitingRestart(minutes int, then string) Input {
 }
 
 func (f *fixture) withPlayers(online int, known bool) *fakePlayers {
-	players := &fakePlayers{online: online, known: known, lists: true}
+	players := &fakePlayers{now: Occupancy{Online: online, Known: known}, lists: true}
 	f.s.Players = players
 	return players
 }
@@ -83,7 +82,7 @@ func TestWaitForEmptyWindow(t *testing.T) {
 	// The next day, the server empties during the wait.
 	tomorrow := due + 86_400_000
 	f.s.Run(ctx, tomorrow)
-	players.online = 0
+	players.now.Online = 0
 	f.s.Run(ctx, tomorrow+3*minute)
 	if last := f.first(t, admin); f.operations(t) != 1 || last.LastOperation == nil || last.LastRunAt != tomorrow+3*minute {
 		t.Fatal(last)
@@ -93,16 +92,25 @@ func TestWaitForEmptyWindow(t *testing.T) {
 		t.Fatal("ran a slot twice")
 	}
 
-	// An empty server runs on the tick after a reading asked for at its time,
-	// never on a reading from before.
+	// An empty running server runs once a reading asked for at its time has
+	// had time to land, never on a reading from before; a stopped server runs
+	// at once.
 	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
-	f.s.Run(ctx, tomorrow+86_400_000)
+	day3 := tomorrow + 86_400_000
+	f.s.Run(ctx, day3)
+	f.s.Run(ctx, day3+15_000)
 	if f.operations(t) != 1 {
 		t.Fatal("acted on a reading from before the run was due")
 	}
-	f.s.Run(ctx, tomorrow+86_400_000+15_000)
+	f.s.Run(ctx, day3+30_000)
 	if f.operations(t) != 2 {
 		t.Fatal("waited on an empty server")
+	}
+	f.s.DB.Exec("UPDATE operations SET status='succeeded'")
+	players.now.Stopped = true
+	f.s.Run(ctx, day3+86_400_000)
+	if f.operations(t) != 3 {
+		t.Fatal("waited on a stopped server")
 	}
 }
 
@@ -149,9 +157,10 @@ func TestWaitingRunRecoversAfterRestart(t *testing.T) {
 	}
 	f.s.Run(ctx, due)
 	restarted := &Service{DB: f.s.DB, Authz: f.s.Authz, Identity: f.s.Identity, Runner: f.s.Runner, Locks: f.s.Locks,
-		Players: &fakePlayers{online: 0, known: true, lists: true}}
+		Players: &fakePlayers{now: Occupancy{Known: true}, lists: true}}
 	restarted.Run(ctx, due+20*minute)
 	restarted.Run(ctx, due+20*minute+15_000)
+	restarted.Run(ctx, due+20*minute+30_000)
 	f.s.Run(ctx, due+21*minute)
 	if f.operations(t) != 1 {
 		t.Fatal("a recovered wait did not run exactly once", f.operations(t))
@@ -180,7 +189,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	}
 	f.s.Run(ctx, due)
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
-	players.online = 0
+	players.now.Online = 0
 	f.s.Run(ctx, due+minute)
 	if last := f.first(t, friend); f.operations(t) != 0 || last.WaitingUntil != 0 ||
 		!strings.HasPrefix(last.LastResult, "Suspended: required access for this scheduled action") {
@@ -188,7 +197,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	}
 
 	f.grant(t, authz.ServerView, authz.ServerRestart, authz.SchedulesManage)
-	players.online = 1
+	players.now.Online = 1
 	tomorrow := due + 86_400_000
 	f.s.Run(ctx, tomorrow)
 	saved := f.first(t, friend)
@@ -199,7 +208,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	if err != nil || paused.WaitingUntil != 0 || !strings.Contains(paused.LastResult, "paused while it waited") {
 		t.Fatal(paused, err)
 	}
-	players.online = 0
+	players.now.Online = 0
 	f.s.Run(ctx, tomorrow+minute)
 	if f.operations(t) != 0 {
 		t.Fatal("a paused wait ran")
@@ -255,5 +264,25 @@ func TestWaitingWarningsCountDownToTheEnd(t *testing.T) {
 	f.s.Wait()
 	if claims() != 1 {
 		t.Fatal("did not warn before the end of the wait")
+	}
+}
+
+// Two runs waiting on one server share its reading requests, and each still
+// sees a settled reading even when the other asks first on every tick.
+func TestWaitingRunsShareReadings(t *testing.T) {
+	s := &Service{}
+	for range 2 {
+		if s.checkPlayers(ctx, "server", due, due) {
+			t.Fatal("a reading asked for just now counted as settled")
+		}
+	}
+	for at := due + 15_000; at <= due+90_000; at += 15_000 {
+		first, second := s.checkPlayers(ctx, "server", due, at), s.checkPlayers(ctx, "server", due, at)
+		if settled := at >= due+readingSettleMs; first != settled || second != settled {
+			t.Fatal(at-due, first, second)
+		}
+	}
+	if s.checkPlayers(ctx, "server", due+120_000, due+120_000) {
+		t.Fatal("a reading from before the wait counted")
 	}
 }

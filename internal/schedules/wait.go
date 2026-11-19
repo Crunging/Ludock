@@ -12,8 +12,9 @@ const (
 	// playerCheckMs is how often a waiting run asks for a player reading,
 	// which can start a console helper.
 	playerCheckMs = 30_000
-	// readingSettleMs is how long a reading asked for may take to land.
-	readingSettleMs = 10_000
+	// readingSettleMs is how long a reading asked for may take to land or
+	// fail, including a console helper's setup.
+	readingSettleMs = 30_000
 )
 
 var (
@@ -40,14 +41,11 @@ func (s *Service) assertListsPlayers(ctx context.Context, actor *db.SessionUser,
 	return err
 }
 
-// empty reports whether the server is known to have nobody online, and
-// whether its count is known at all.
-func (s *Service) empty(ctx context.Context, user *db.SessionUser, serverID string, data Input, revision int64) (bool, bool, error) {
+func (s *Service) occupancy(ctx context.Context, user *db.SessionUser, serverID string, data Input, revision int64) (Occupancy, error) {
 	if s.Players == nil {
-		return false, false, nil
+		return Occupancy{}, nil
 	}
-	online, known, err := s.Players.Online(ctx, user, serverID, data.Capabilities()[0], revision)
-	return known && online == 0, known, err
+	return s.Players.Online(ctx, user, serverID, data.Capabilities()[0], revision)
 }
 
 // startWaiting spends the slot on a wait that ends WaitForEmpty.Minutes
@@ -85,23 +83,25 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 	if err != nil {
 		return err
 	}
-	empty, known, err := s.empty(ctx, user, r.serverID, data, binding.BindingRevision)
+	occupancy, err := s.occupancy(ctx, user, r.serverID, data, binding.BindingRevision)
 	if err != nil {
 		return err
 	}
-	// An empty count counts only from a reading asked for during this wait,
-	// so it can't predate someone joining.
-	asked := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
-	if empty && (asked < r.lastRunAt.Int64 || now-asked < readingSettleMs) {
-		return nil
-	}
+	// An empty count counts only from a reading asked for during this wait
+	// that has had time to land, so it can't predate someone joining.
+	settled := s.checkPlayers(ctx, r.serverID, r.lastRunAt.Int64, now)
+	empty := occupancy.Stopped || (occupancy.Known && occupancy.Online == 0 && settled)
 	if !empty {
 		switch {
 		case now < ends:
 			return nil
-		case data.WaitForEmpty.Then == WaitSkip && known:
+		case data.WaitForEmpty.Then == WaitRun:
+		case occupancy.Known && occupancy.Online > 0:
 			return SkipPlayersOnline
-		case data.WaitForEmpty.Then == WaitSkip:
+		case occupancy.Known:
+			// Empty, but not yet from a settled reading.
+			return nil
+		default:
 			return errWaitUnknown
 		}
 	}
@@ -115,21 +115,24 @@ func (s *Service) wait(ctx context.Context, r *row, data Input, now int64) error
 
 // checkPlayers asks for a reading of a waiting run's server at once if
 // none was asked for since the wait began, then every playerCheckMs, since
-// readings otherwise run only while someone watches. It returns when the
-// previous reading was asked for.
-func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now int64) int64 {
+// readings otherwise run only while someone watches. It reports whether a
+// reading asked for since then has had readingSettleMs to land. Runs on one
+// server share the asks.
+func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now int64) bool {
 	s.mu.Lock()
 	if s.checked == nil {
-		s.checked = map[string]int64{}
+		s.checked = map[string][2]int64{}
 	}
-	last := s.checked[serverID]
-	due := last < since || now-last >= playerCheckMs || now < last
+	asks := s.checked[serverID]
+	due := asks[0] < since || now-asks[0] >= playerCheckMs || now < asks[0]
 	if due {
-		s.checked[serverID] = now
+		asks = [2]int64{now, asks[0]}
+		s.checked[serverID] = asks
 	}
 	s.mu.Unlock()
 	if due && s.Players != nil {
 		s.Players.Check(ctx, serverID)
 	}
-	return last
+	settled := func(at int64) bool { return at >= since && now-at >= readingSettleMs }
+	return settled(asks[0]) || settled(asks[1])
 }

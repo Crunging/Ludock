@@ -99,8 +99,9 @@ type Service struct {
 
 	mu         sync.Mutex
 	announcing map[string]bool
-	// checked is when each waiting run last asked for a player reading.
-	checked  map[string]int64
+	// checked is when waiting runs last asked for each server's players,
+	// latest first.
+	checked  map[string][2]int64
 	warnings sync.WaitGroup
 }
 
@@ -797,9 +798,15 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 			}
 		}
 		// Who is online is decided from a reading asked for once the run is
-		// due, so even an empty server waits for one.
+		// due, so a running server waits for one even when it looks empty.
 		if data.WaitForEmpty != nil {
-			return s.startWaiting(ctx, r, slot, scheduledAt, now)
+			occupancy, err := s.occupancy(ctx, user, r.serverID, data, binding.BindingRevision)
+			if err != nil {
+				return err
+			}
+			if !occupancy.Stopped {
+				return s.startWaiting(ctx, r, slot, scheduledAt, now)
+			}
 		}
 		err = s.queue(ctx, r, data, state, user, binding, slot, now)
 		// A command is sent now or not at all, never after other work.

@@ -9,11 +9,17 @@ import (
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
+// Occupancy is who is online on a server. A stopped server has nobody.
+type Occupancy struct {
+	Online         int
+	Known, Stopped bool
+}
+
 // Players is how runs that wait for an empty server read who is online.
 type Players interface {
-	// Online is how many players the server has and whether that is known,
-	// after confirming the user's capability and the binding revision.
-	Online(ctx context.Context, user *db.SessionUser, serverID string, capability authz.Capability, revision int64) (int, bool, error)
+	// Online reads the server's occupancy after confirming the user's
+	// capability and the binding revision.
+	Online(ctx context.Context, user *db.SessionUser, serverID string, capability authz.Capability, revision int64) (Occupancy, error)
 	// Lists reports whether Ludock can read the server's players.
 	Lists(ctx context.Context, user *db.SessionUser, serverID string) (bool, error)
 	// Check asks for a fresh reading without waiting for it.
@@ -26,22 +32,21 @@ type ServerPlayers struct {
 	Players *players.Service
 }
 
-func (p ServerPlayers) Online(ctx context.Context, user *db.SessionUser, serverID string, capability authz.Capability, revision int64) (int, bool, error) {
+func (p ServerPlayers) Online(ctx context.Context, user *db.SessionUser, serverID string, capability authz.Capability, revision int64) (Occupancy, error) {
 	server, err := p.Servers.VerifyAuthorized(ctx, user, serverID, capability, revision)
 	if err != nil {
-		return 0, false, err
+		return Occupancy{}, err
 	}
 	switch server.Container.State {
 	case "running", "paused", "restarting":
 	default:
-		// Nobody plays on a stopped server.
-		return 0, true, nil
+		return Occupancy{Known: true, Stopped: true}, nil
 	}
 	if !p.Players.Source.Lists(server.Container) {
-		return 0, false, nil
+		return Occupancy{}, nil
 	}
 	online, known := p.Players.Online(serverID, server.Container)
-	return online, known, nil
+	return Occupancy{Online: online, Known: known}, nil
 }
 
 func (p ServerPlayers) Lists(ctx context.Context, user *db.SessionUser, serverID string) (bool, error) {

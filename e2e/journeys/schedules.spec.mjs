@@ -236,7 +236,7 @@ test("a scheduled restart waits for players to leave", async ({ page }) => {
   await page.getByRole("tab", { name: "Schedules" }).click();
   await expect(page).toHaveURL(/tab=schedules/);
   const row = page.locator("#schedule-list tbody tr", { hasText: "Waits up to 30 min" }).last();
-  await expectResult(page, row, "Succeeded");
+  await expectResult(page, row, "Succeeded", 75_000);
   await expect(row.locator("td").nth(2)).toHaveText("Completed");
 });
 
