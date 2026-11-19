@@ -250,6 +250,21 @@ func TestTelnetDelayedRejection(t *testing.T) {
 	}
 }
 
+// A rejection after a streamed log line still fails the sign-in, even when
+// the server prompts again instead of hanging up.
+func TestTelnetRejectionAfterLog(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("2026-11-19 INF Chat 'Bob': hi\r\nPassword incorrect, please enter password:\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	if _, err := Telnet(ctx, host, port, "bad", "listplayers", Control{}); err == nil || err.Error() != "Telnet console authentication failed" {
+		t.Fatal(err)
+	}
+}
+
 // A reader stops when its command ends with results unread.
 func TestReaderStopsWithCommand(t *testing.T) {
 	host, port := listen(t, func(conn net.Conn) {

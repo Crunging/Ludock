@@ -394,8 +394,8 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 var (
 	passwordPrompt = regexp.MustCompile(`(?i)password\s*[:>]?`)
 	// authFailed is a console's own rejection reply, which starts its line;
-	// chat or a command that mentions one does not.
-	authFailed = regexp.MustCompile(`(?i)^(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
+	// streamed chat or log lines that mention one do not.
+	authFailed = regexp.MustCompile(`(?im)^\s*(password\s+(is\s+)?incorrect|incorrect\s+password|invalid\s+password|authentication\s+failed|login\s+failed)`)
 )
 
 type telnetDecoder struct {
@@ -482,12 +482,9 @@ func Telnet(ctx context.Context, host string, port int, password, command string
 	// Die stream their log, including player chat, to every Telnet client.
 	passwordAt, commandAt := 0, 0
 	errSignIn := errors.New("Telnet console authentication failed")
-	// The reply to the password is the first line after it, even when it
-	// arrives after the command was sent; later lines are the game's own.
-	rejected := func() bool {
-		reply, _, _ := strings.Cut(strings.TrimSpace(decodeText(raw[passwordAt:])), "\n")
-		return authFailed.MatchString(strings.TrimSpace(reply))
-	}
+	// A rejection can follow streamed log lines, or arrive after the command
+	// was sent; it is the only line that starts with one.
+	rejected := func() bool { return authFailed.MatchString(decodeText(raw[passwordAt:])) }
 	finish := func() (string, error) {
 		if rejected() {
 			return "", errSignIn
