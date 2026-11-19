@@ -148,6 +148,7 @@ func ParseAddress(value string) *Address {
 var configurationLabels = map[string]bool{
 	LabelEnable: true, LabelName: true, LabelGame: true, LabelAddress: true, LabelFiles: true,
 	LabelConsole: true, LabelConsolePort: true, LabelConsoleHost: true, LabelConsolePasswordEnv: true, LabelSecretEnv: true,
+	LabelQuery: true, LabelQueryPort: true,
 }
 
 // ApprovedLabels keeps only the configuration labels Ludock reads.

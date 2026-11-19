@@ -42,7 +42,7 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.AddContainer(fakedocker.GameOptions{Name: "mc", Image: "itzg/minecraft-server", Running: true,
-		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port)},
+		Labels: map[string]string{"ludock.console.host": "127.0.0.1", "ludock.console.port": fmt.Sprint(port), "ludock.query": "disabled"},
 		Env:    []string{"RCON_PASSWORD=secret"}})
 	d := dbtest.Open(t)
 	client := docker.New(engine.Socket)
@@ -56,7 +56,7 @@ func TestCheckDuringReadingReadsAgain(t *testing.T) {
 		t.Fatal(views, err)
 	}
 	players := &Service{Servers: service, Identity: store,
-		Source: &ConsoleSource{Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
+		Source: &GameSource{Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
 	t.Cleanup(players.Stop)
 
 	players.Check(ctx, views[0].ID)
@@ -103,5 +103,48 @@ func TestOnlineNeedsFreshReading(t *testing.T) {
 		if online, known := service.Online("s1", run); online != c.online || known != c.known {
 			t.Errorf("%s: %d %v", name, online, known)
 		}
+	}
+}
+
+// Silence counts only after the game answered in the same container run; a
+// reading whose query never ran keeps the last outcome, which goes unknown
+// once it is old.
+func TestGameAnswers(t *testing.T) {
+	query := &games.StatusQuery{Protocol: "a2s", Port: 2457}
+	run := servers.Container{ID: "c1", StateSince: 100, State: "running", Query: query}
+	now := time.Now().UnixMilli()
+	service := &Service{readings: map[string]*Reading{}}
+	reading := func(answer Answer, at int64) *Reading {
+		r := &Reading{ContainerID: "c1", StartedAt: 100, CheckedAt: at, Answer: answer}
+		if answer != NotAsked {
+			r.AnswerAt = at
+		}
+		if answer == Answered {
+			r.AnsweredAt = at
+		}
+		return r
+	}
+	check := func(step string, want Game) {
+		t.Helper()
+		if got, _ := service.Game("s1", run); got != want {
+			t.Errorf("%s: got %d, want %d", step, got, want)
+		}
+	}
+	check("no reading", Waiting)
+	service.store("s1", reading(Silent, now))
+	check("silent before answering", Waiting)
+	service.store("s1", reading(Answered, now))
+	check("answered", Answering)
+	service.store("s1", reading(NotAsked, now))
+	check("query skipped", Answering)
+	service.store("s1", reading(Silent, now))
+	check("silent after answering", NotAnswering)
+	service.readings["s1"].AnswerAt = now - Fresh.Milliseconds() - 1
+	check("stale", Unknown)
+	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 200, State: "running", Query: query}); got != Waiting {
+		t.Errorf("restarted: %d", got)
+	}
+	if got, _ := service.Game("s1", servers.Container{ID: "c1", StateSince: 100, State: "running"}); got != NotChecked {
+		t.Errorf("no query: %d", got)
 	}
 }

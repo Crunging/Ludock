@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/gamequery"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/launch"
@@ -154,7 +156,11 @@ func TestNetworkTargetResolution(t *testing.T) {
 	engine, runtime, id := setup(t)
 	engine.Update(id, func(c *fakedocker.Container) { c.Config.Env = []string{"RCON_PASSWORD=secret", "RCON_PORT=27015"} })
 	adapter := games.ResolveAdapter("factorio", nil)
-	host, port, password, err := runtime.networkTarget(ctx, Target{ContainerID: id, Labels: map[string]string{}}, adapter)
+	env, err := runtime.environment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port, password, err := runtime.networkTarget(ctx, Target{ContainerID: id, Labels: map[string]string{}}, adapter, env)
 	if err != nil || host != "" || port != 27015 || password != "secret" {
 		t.Fatal(host, port, password, err)
 	}
@@ -166,7 +172,7 @@ func TestNetworkTargetResolution(t *testing.T) {
 	} {
 		var parsed map[string]string
 		json.Unmarshal([]byte(labels), &parsed)
-		_, _, _, err := runtime.networkTarget(ctx, Target{ContainerID: id, Labels: parsed}, adapter)
+		_, _, _, err := runtime.networkTarget(ctx, Target{ContainerID: id, Labels: parsed}, adapter, env)
 		// The console shows these messages, so they are public and name no values.
 		if !apperr.Is(err, "CONSOLE_NOT_CONFIGURED") || !strings.Contains(err.Error(), want) ||
 			strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "MISSING") {
@@ -186,14 +192,14 @@ func TestMinecraftConsolePassword(t *testing.T) {
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.Files = map[string]string{"/data/.rcon-cli.env": "port=25575\r\npassword=generated-secret\r\n"}
 	})
-	host, port, password, err := runtime.networkTarget(ctx, target, adapter)
+	host, port, password, err := resolveTarget(t, runtime, target, adapter)
 	if err != nil || host != "" || port != 25575 || password != "generated-secret" {
 		t.Fatal(host, port, password, err)
 	}
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.Config.Env = []string{"RCON_PASSWORD=given-secret", "RCON_PORT=25580"}
 	})
-	if _, port, password, err = runtime.networkTarget(ctx, target, adapter); err != nil || port != 25580 || password != "given-secret" {
+	if _, port, password, err = resolveTarget(t, runtime, target, adapter); err != nil || port != 25580 || password != "given-secret" {
 		t.Fatal(port, password, err)
 	}
 	for name, content := range map[string]string{"link": "-> /etc/shadow", "large": "password=" + strings.Repeat("x", 5000),
@@ -204,7 +210,7 @@ func TestMinecraftConsolePassword(t *testing.T) {
 				c.Files = nil
 			}
 		})
-		_, _, _, err := runtime.networkTarget(ctx, target, adapter)
+		_, _, _, err := resolveTarget(t, runtime, target, adapter)
 		if err == nil || !strings.Contains(err.Error(), "could not read the console password") {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -297,4 +303,80 @@ func TestStalledHelperCreate(t *testing.T) {
 			t.Fatal("left the helper Docker created")
 		}
 	}
+}
+
+func resolveTarget(t *testing.T, runtime *Runtime, target Target, adapter *games.Adapter) (string, int, string, error) {
+	env, err := runtime.environment(ctx, target.ContainerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime.networkTarget(ctx, target, adapter, env)
+}
+
+// A reading asks the console and the game's status query in one helper,
+// and a console that isn't set up still lets the query run alone.
+func TestProbeUsesOneHelper(t *testing.T) {
+	engine, runtime, id := setup(t)
+	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
+	engine.AddImage(image)
+	runtime.Images = &launch.Images{Docker: runtime.Docker, Configured: image}
+	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, stdout func([]byte)) {
+		helper.RunNetworkConsole(stdin, writerFunc(stdout))
+	}
+	rcon, _ := fakedocker.ServeRCON("secret", func(string) string { return "There are 0 of a max of 5 players online:" })
+	query, _ := fakedocker.ServeMinecraftStatus(func() (int, int, bool) { return 3, 5, true })
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Config.Env = []string{"RCON_PASSWORD=secret", fmt.Sprintf("RCON_PORT=%d", rcon)}
+	})
+	adapter := games.ResolveAdapter("minecraft", nil)
+	probe := Probe{Adapter: adapter, Command: "list", Query: &games.StatusQuery{Protocol: gamequery.MinecraftPing, Port: query}}
+	helpers := func() int {
+		count := 0
+		for _, request := range engine.Requests {
+			if strings.HasPrefix(request, "POST ") && strings.HasSuffix(request, "/containers/create") {
+				count++
+			}
+		}
+		return count
+	}
+	target := Target{ContainerID: id, Labels: map[string]string{}, State: "running"}
+	result, err := runtime.Probe(ctx, target, probe, nil)
+	if err != nil || result.ResponseErr != nil || !strings.Contains(result.Response, "max of 5") || result.Status == nil ||
+		!result.Status.Answered || result.Status.Online != 3 || helpers() != 1 {
+		t.Fatalf("%+v %v, %d helpers", result, err, helpers())
+	}
+	target.Labels = map[string]string{"ludock.console.password-env": "MISSING"}
+	result, err = runtime.Probe(ctx, target, probe, nil)
+	if err != nil || result.ResponseErr == nil || result.Status == nil || !result.Status.Answered || helpers() != 2 {
+		t.Fatalf("%+v %v, %d helpers", result, err, helpers())
+	}
+
+	// A console that takes the connection and never replies still leaves
+	// time for the query's result.
+	stalled, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer stalled.Close()
+	go func() {
+		for {
+			conn, err := stalled.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Config.Env = []string{"RCON_PASSWORD=secret", fmt.Sprintf("RCON_PORT=%d", stalled.Addr().(*net.TCPAddr).Port)}
+	})
+	target.Labels = map[string]string{}
+	result, err = runtime.Probe(ctx, target, probe, nil)
+	if err != nil || result.ResponseErr == nil || result.Status == nil || !result.Status.Answered {
+		t.Fatalf("stalled console: %+v %v", result, err)
+	}
+}
+
+type writerFunc func([]byte)
+
+func (w writerFunc) Write(data []byte) (int, error) {
+	w(data)
+	return len(data), nil
 }

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/Crunging/Ludock/internal/gamequery"
 )
 
 // QuickCommand is a console shortcut; a trailing space expects more input.
@@ -47,13 +49,17 @@ type Integration struct {
 	// StopTimeoutSeconds is the Docker stop grace period; 0 means 120.
 	StopTimeoutSeconds int
 	Console            *ConsolePreset
+	// Query asks the game itself whether it answers, from its documented
+	// default port.
+	Query *StatusQuery
 }
 
 // Integrations lists the supported games. Repository suffixes omit
 // registries.
 var Integrations = []Integration{
 	{GameType: "minecraft", Name: "Minecraft", GamePort: &Port{25565, "tcp"}, Repositories: []string{"itzg/minecraft-server"},
-		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}"}},
+		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}"},
+		Query: &StatusQuery{Protocol: gamequery.MinecraftPing, Port: 25565, PortEnv: []string{"SERVER_PORT"}}},
 	{GameType: "factorio", Name: "Factorio", GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Factorio RCON", DefaultPort: 27015,
 			Placeholder: "/players, /server-save, /config get",
@@ -68,7 +74,8 @@ var Integrations = []Integration{
 			Players:     &PlayerQuery{Command: "ShowPlayers", Parse: ParsePalworldPlayers}}},
 	{GameType: "ark-survival-evolved", Name: "ARK: Survival Evolved", GamePort: &Port{7777, "udp"},
 		Repositories:       []string{"hermsi/ark-server", "hermsi1337/ark-server", "indifferentbroccoli/ark-server-docker"},
-		StopTimeoutSeconds: 180, Aliases: []string{"ark"}, Console: arkConsole()},
+		StopTimeoutSeconds: 180, Aliases: []string{"ark"}, Console: arkConsole(),
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 27015, PortEnv: []string{"SERVER_LIST_PORT", "QUERY_PORT"}}},
 	{GameType: "ark-survival-ascended", Name: "ARK: Survival Ascended", GamePort: &Port{7777, "udp"},
 		Repositories:       []string{"sknnr/ark-ascended-server", "mschnitzer/asa-linux-server"},
 		StopTimeoutSeconds: 180, Aliases: []string{"asa"}, Console: arkConsole()},
@@ -77,7 +84,8 @@ var Integrations = []Integration{
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Source RCON", BroadcastTemplate: "say {message}", DefaultPort: 27015,
 			Placeholder:           "status, changelevel de_dust2, say Hello",
 			Commands:              []QuickCommand{{"Server status", "status"}, {"Message players", "say "}},
-			PasswordEnvCandidates: []string{"CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"}}},
+			PasswordEnvCandidates: []string{"CS2_RCONPW", "SRCDS_RCONPW", "RCON_PASSWORD"}},
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 27015, PortEnv: []string{"CS2_PORT"}}},
 	{GameType: "project-zomboid", Name: "Project Zomboid", GamePort: &Port{16261, "udp"},
 		Repositories: []string{"renegademaster/zomboid-dedicated-server", "renegade-master/zomboid-dedicated-server",
 			"renegade_master/zomboid-dedicated-server"},
@@ -90,7 +98,8 @@ var Integrations = []Integration{
 		Repositories: []string{"indifferentbroccoli/conan-exiles-enhanced-server-docker"}, UpdatesOnStart: true,
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Conan Exiles RCON", BroadcastTemplate: "Broadcast {message}",
 			DefaultPort: 25575, Commands: []QuickCommand{{"List players", "ListPlayers"}, {"Message players", "Broadcast "}},
-			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers}}},
+			Players: &PlayerQuery{Command: "ListPlayers", Parse: ParseConanPlayers}},
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 27015, PortEnv: []string{"QUERY_PORT"}}},
 	{GameType: "v-rising", Name: "V Rising", GamePort: &Port{9876, "udp"}, Repositories: []string{"trueosiris/vrising"},
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "V Rising RCON", DefaultPort: 25575,
 			Commands: []QuickCommand{{"Message players", "announce "}}}},
@@ -104,7 +113,9 @@ var Integrations = []Integration{
 			Commands: []QuickCommand{{"List players", "listplayers"}, {"Save world", "saveworld"}, {"Message players", "say "}},
 			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}}},
 	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
-		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true},
+		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
+		// Valheim answers on its game port plus one, and only when public.
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 2457}},
 	{GameType: "terraria", Name: "Terraria", GamePort: &Port{7777, "tcp"},
 		Repositories: []string{"hexlo/terraria-server-docker", "beardedio/terraria", "ryshe/terraria"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Terraria console", BroadcastTemplate: "say {message}",

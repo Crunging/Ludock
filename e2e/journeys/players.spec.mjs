@@ -29,13 +29,13 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await expect(players.getByRole("list", { name: "Online players" }).getByRole("listitem")).toHaveText(["Mara", "Theo"]);
   await expect(players.locator(".player-slot--taken")).toHaveCount(2);
 
-  // The list shows the count and names; servers that can't list players
-  // show nothing to read.
+  // The list shows the count and names; stopped servers show nothing to
+  // read.
   await page.goto("/");
   const survival = serverRow(page, "Survival").locator(".server-row__players");
   await expect(survival).toContainText("2/10");
   await expect(survival).toContainText("Mara, Theo");
-  await expect(serverRow(page, "valheim").locator(".server-row__players")).toContainText("—Not available");
+  await expect(serverRow(page, "valheim").locator(".server-row__players")).toContainText("—Not running");
 
   // The open list updates as soon as someone leaves.
   await command(console, "fake-leave Theo");
@@ -44,8 +44,18 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await command(console, "fake-leave Mara");
   await expect(survival).toContainText("0/10");
 
-  // A console that stops answering is reported, not shown as empty.
+  // While the console can't list players, the game's status query still
+  // counts them.
+  await command(console, "fake-join Mara");
   await command(console, "fake-outage 20");
+  await openServer(page, "Survival");
+  await expect(players).toContainText("Counted by the game’s Server List Ping", { timeout: 15_000 });
+  await expect(players).toContainText(/1\s*of 10 online/);
+  await expect(players.getByRole("list", { name: "Online players" })).toHaveCount(0);
+  await command(console, "fake-leave Mara");
+
+  // A game that answers neither is reported, not shown as empty.
+  await command(console, "fake-hang 20");
   await openServer(page, "Survival");
   // The page can render just before the failed reading, and its live
   // events start a moment later; its next refresh, within 10 seconds,
@@ -56,7 +66,7 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await expect(survival).toContainText("Unavailable");
 
   await openServer(page, "valheim");
-  await expect(page.locator(".overview-players")).toContainText("Not available. Ludock lists players for supported games whose console can list them.");
+  await expect(page.locator(".overview-players")).toContainText("Shown while the server is running");
 });
 
 test("seeing who is online on a Palworld server", async ({ page }) => {

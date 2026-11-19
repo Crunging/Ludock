@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/gamequery"
 	"github.com/Crunging/Ludock/internal/netconsole"
 )
 
@@ -21,7 +22,24 @@ type NetworkConsoleRequest struct {
 	Port      int    `json:"port"`
 	Password  string `json:"password"`
 	Command   string `json:"command"`
+	// Query asks the game's status query beside the command, or alone when
+	// Transport is empty.
+	Query *StatusRequest `json:"query,omitempty"`
 }
+
+type StatusRequest struct {
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+}
+
+// StatusResult is a status query's outcome; Answered is false for silence
+// and for any reply that isn't a valid status.
+type StatusResult struct {
+	Answered bool `json:"answered"`
+	gamequery.Status
+}
+
+const combinedCommandTimeout = 7 * time.Second
 
 // RunNetworkConsole runs inside the game's network namespace. The backend
 // authorizes each network write over the private attached stdin channel.
@@ -45,34 +63,73 @@ func RunNetworkConsole(stdin io.Reader, stdout io.Writer) int {
 		}
 		return json.Unmarshal(line, target)
 	}
-	run := func() (string, error) {
-		var request NetworkConsoleRequest
-		if err := readRecord(&request); err != nil {
-			return "", err
-		}
-		if !slices.Contains([]string{"source-rcon", "rust-webrcon", "telnet"}, request.Transport) || request.Port < 1 || request.Port > 65535 {
-			return "", errors.New("invalid console request")
-		}
-		authorize := func() error {
-			send(map[string]string{"type": "authorize"})
-			var reply struct{ Type string }
-			if err := readRecord(&reply); err != nil || reply.Type != "authorized" {
-				return errors.New("console access changed")
-			}
-			return nil
-		}
-		// WebRCON sends its credential during the handshake.
-		if err := authorize(); err != nil {
-			return "", err
-		}
-		return netconsole.Execute(context.Background(), request.Transport, "127.0.0.1", request.Port, request.Password,
-			request.Command, netconsole.Control{Authorize: authorize})
-	}
-	response, err := run()
-	if err != nil {
+	var request NetworkConsoleRequest
+	if err := readRecord(&request); err != nil {
 		send(map[string]string{"type": "error"})
 		return 1
 	}
-	send(map[string]string{"type": "result", "response": response})
+	console := request.Transport != ""
+	validPort := func(port int) bool { return port >= 1 && port <= 65535 }
+	if (console && (!slices.Contains([]string{"source-rcon", "rust-webrcon", "telnet"}, request.Transport) || !validPort(request.Port))) ||
+		(request.Query != nil && (!slices.Contains([]string{string(gamequery.MinecraftPing), string(gamequery.ValveA2S)}, request.Query.Protocol) ||
+			!validPort(request.Query.Port))) || (!console && request.Query == nil) {
+		send(map[string]string{"type": "error"})
+		return 1
+	}
+	// The command and the query each ask before writing, one at a time.
+	var authorizeMu sync.Mutex
+	authorize := func() error {
+		authorizeMu.Lock()
+		defer authorizeMu.Unlock()
+		send(map[string]string{"type": "authorize"})
+		var reply struct{ Type string }
+		if err := readRecord(&reply); err != nil || reply.Type != "authorized" {
+			return errors.New("console access changed")
+		}
+		return nil
+	}
+	// A query that never ran is no evidence, so it has no status.
+	var status *StatusResult
+	var queried sync.WaitGroup
+	if request.Query != nil {
+		queried.Add(1)
+		go func() {
+			defer queried.Done()
+			denied := false
+			reply, err := gamequery.Query(context.Background(), gamequery.Protocol(request.Query.Protocol), "127.0.0.1", request.Query.Port,
+				func() error {
+					err := authorize()
+					denied = denied || err != nil
+					return err
+				})
+			if !denied {
+				status = &StatusResult{Answered: err == nil, Status: reply}
+			}
+		}()
+	}
+	var response *string
+	if console {
+		// WebRCON sends its credential during the handshake.
+		// Beside a query, the command ends early enough for the query's
+		// result to reach the backend within its 10-second wait.
+		ctx, cancel := context.Background(), func() {}
+		if request.Query != nil {
+			ctx, cancel = context.WithTimeout(ctx, combinedCommandTimeout)
+		}
+		defer cancel()
+		if authorize() == nil {
+			text, err := netconsole.Execute(ctx, request.Transport, "127.0.0.1", request.Port, request.Password,
+				request.Command, netconsole.Control{Authorize: authorize})
+			if err == nil {
+				response = &text
+			}
+		}
+	}
+	queried.Wait()
+	if response == nil && status == nil {
+		send(map[string]string{"type": "error"})
+		return 1
+	}
+	send(map[string]any{"type": "result", "response": response, "status": status})
 	return 0
 }

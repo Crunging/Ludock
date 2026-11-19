@@ -8,12 +8,15 @@ import (
 )
 
 type PlayersView struct {
-	// Listed: Ludock can read this server's players over its console.
+	// Listed: Ludock can read this server's players over its console or
+	// status query.
 	Listed bool
 	// Running: the server is running and its live state is known.
 	Running bool
-	// Console is the name of the console players are read over.
+	// Console is the name of the console players are read over, and Query
+	// the status query that counts them; either may be "".
 	Console string
+	Query   string
 	// Reading is nil until the first one after the server started.
 	Reading *players.Reading
 }
@@ -71,7 +74,7 @@ templ PlayersCell(p PlayersView) {
 			case p.Reading == nil:
 				<span class="muted">Checking…</span>
 			case p.Reading.Failed:
-				<span class="muted" title="Ludock couldn’t read players over the server’s console">Unavailable</span>
+				<span class="muted" title="Ludock couldn’t read the server’s players">Unavailable</span>
 			default:
 				<span class={ "player-count", templ.KV("player-count--empty", p.Reading.Online == 0) }>
 					// One line, so the count and capacity read as "2/10".
@@ -97,14 +100,18 @@ templ PlayersFact(p PlayersView) {
 		<dd>
 			switch {
 				case !p.Listed:
-					<span class="muted">Not available. Ludock lists players for supported games whose console can list them.</span>
+					<span class="muted">Not available. Ludock lists players for supported games whose console or status query can list them.</span>
 				case !p.Running:
 					<span class="muted">Shown while the server is running</span>
 				case p.Reading == nil:
 					<span class="muted">Checking who’s online…</span>
 				case p.Reading.Failed:
 					<span>Couldn’t read players</span>
-					<span class="muted">Ludock reads them over { p.Console }. Check that it’s on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					if p.Console != "" {
+						<span class="muted">Ludock reads them over { p.Console }. Check that it’s on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					} else {
+						<span class="muted">Ludock counts them with the game’s { p.Query }, which hasn’t said how many are online. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					}
 				default:
 					<span class="overview-figure">{ strconv.Itoa(p.Reading.Online) }</span>
 					<span class="muted">{ onlineText(p.Reading) }</span>
@@ -127,7 +134,50 @@ templ PlayersFact(p PlayersView) {
 					if more := unlisted(p.Reading, detailNames); more > 0 && len(p.Reading.Names) > 0 {
 						<span class="muted">and { strconv.Itoa(more) } more</span>
 					}
-					<span class="overview-players__checked muted">Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					if p.Reading.Via == players.ViaQuery {
+						<span class="overview-players__checked muted">Counted by the game’s { p.Query } @Time(p.Reading.CheckedAt, "plain", "")</span>
+					} else {
+						<span class="overview-players__checked muted">Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+					}
+			}
+		</dd>
+	</div>
+}
+
+// GameView is whether the game answers its status query.
+type GameView struct {
+	// Query is the status query's name, or "" when the game isn't checked.
+	Query      string
+	Running    bool
+	State      players.Game
+	AnsweredAt int64
+}
+
+// GameFact is the overview's entry for whether the game itself answers.
+templ GameFact(g GameView) {
+	<div class="overview-game">
+		<dt>Game</dt>
+		<dd>
+			switch {
+				case g.Query == "":
+					<span>Not checked</span>
+					<span class="muted">Ludock asks supported games that answer a status query.</span>
+				case !g.Running:
+					<span class="muted">Checked while the server is running</span>
+				case g.State == players.Answering:
+					@Pip("ok")
+					<span>Answering</span>
+					<span class="muted">Over its { g.Query }, @Time(g.AnsweredAt, "plain", "")</span>
+				case g.State == players.NotAnswering:
+					@Pip("failed")
+					<span>Not answering</span>
+					<span class="muted">The container is running, but the game stopped answering its { g.Query }. It last answered @Time(g.AnsweredAt, "plain", "")</span>
+				case g.State == players.Unknown:
+					<span>Not checked recently</span>
+					<span class="muted">It last answered its { g.Query } @Time(g.AnsweredAt, "plain", "")</span>
+				default:
+					<span>Not answered yet</span>
+					<span class="muted">Ludock asks over its { g.Query }. A game that’s still starting, or whose query port is wrong or off, doesn’t answer.</span>
 			}
 		</dd>
 	</div>

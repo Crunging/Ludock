@@ -66,9 +66,11 @@ type Container struct {
 	// first published port for other images.
 	ConnectPort int
 	Console     *Console
-	FileRoots   []files.Root
-	Ports       []Port
-	Created     int64
+	// Query asks the game itself whether it answers, or is nil.
+	Query     *games.StatusQuery
+	FileRoots []files.Root
+	Ports     []Port
+	Created   int64
 	// Labels holds approved configuration labels only.
 	Labels map[string]string
 }
@@ -422,6 +424,7 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 			Commands: adapter.Commands, SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != "",
 			ListsPlayers: adapter.Players != nil}
 	}
+	container.Query = games.ResolveQuery(gameType, container.Labels)
 	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info.Mounts))
 	return container, nil
 }
@@ -447,8 +450,10 @@ func toObservation(info *docker.ContainerInspect, container *Container) identity
 	}
 	for key, value := range container.Labels {
 		// Presentation labels can change without a review of the identity,
-		// and so can a longer list of values to redact.
-		if key != games.LabelEnable && key != games.LabelName && key != games.LabelAddress && key != games.LabelSecretEnv {
+		// and so can a longer list of values to redact, and the status query,
+		// which only ever reaches the game's own loopback.
+		if key != games.LabelEnable && key != games.LabelName && key != games.LabelAddress && key != games.LabelSecretEnv &&
+			key != games.LabelQuery && key != games.LabelQueryPort {
 			observation.GameConfiguration[key] = value
 		}
 	}

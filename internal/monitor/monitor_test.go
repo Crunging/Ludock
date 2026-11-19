@@ -210,3 +210,51 @@ func problem(s *Service, serverID string, now int64) (*Problem, error) {
 	problems, err := s.Problems(ctx, now)
 	return problems[serverID], err
 }
+
+// A game that stops answering while its container runs alerts with its own
+// message. While no recent query says it answers, as after Ludock restarts,
+// the outage stays rather than recovering unseen; an answer recovers it.
+func TestSilentGameOutage(t *testing.T) {
+	s, events, server := setup(t)
+	game := GameAnswering
+	s.Game = func(string, servers.Container) GameAnswer { return game }
+	s.Check(ctx, state("running", "healthy"), 1000)
+	game = GameNotAnswering
+	s.Check(ctx, state("running", "healthy"), 2000)
+	s.Check(ctx, state("running", "unhealthy"), 62_000)
+	if found, _ := problem(s, server.ID, 62_000); found == nil || found.State != NotAnswering || found.OutageStartedAt != 2000 {
+		t.Fatal(found)
+	}
+	game = GameUnknown
+	s.Check(ctx, state("running", "unhealthy"), 65_000)
+	s.Check(ctx, state("running", "healthy"), 70_000)
+	if found, _ := problem(s, server.ID, 70_000); found == nil {
+		t.Fatal("an unknown game recovered")
+	}
+	game = GameAnswering
+	s.Check(ctx, state("running", "healthy"), 80_000)
+	if len(events.events) != 2 || events.events[0] != "Minecraft is running, but the game stopped answering." ||
+		events.events[1] != "Minecraft recovered." {
+		t.Fatal(events.events)
+	}
+}
+
+// An outage already shown on pages that turns out to be a silent game tells
+// open pages its new reason, though no new alert goes out.
+func TestOutageReasonChangeUpdatesPages(t *testing.T) {
+	s, events, _ := setup(t)
+	var changes int
+	s.Changed = func(string) { changes++ }
+	game := GameAnswering
+	s.Game = func(string, servers.Container) GameAnswer { return game }
+	s.Check(ctx, state("running", "unhealthy"), 1000)
+	s.Check(ctx, state("running", "unhealthy"), 62_000)
+	if len(events.events) != 1 || changes != 1 {
+		t.Fatal(events.events, changes)
+	}
+	game = GameNotAnswering
+	s.Check(ctx, state("running", "unhealthy"), 70_000)
+	if len(events.events) != 1 || changes != 2 {
+		t.Fatal(events.events, changes)
+	}
+}
