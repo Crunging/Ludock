@@ -212,12 +212,6 @@ async function expectWaiting(page, row) {
 
 test("a scheduled restart waits for players to leave", async ({ page }) => {
   test.setTimeout(150_000);
-  // Only servers whose players Ludock can read offer the option.
-  await openServer(page, "valheim");
-  await page.getByRole("tab", { name: "Schedules" }).click();
-  await page.locator("#schedule-form").getByLabel("Action").selectOption("stop");
-  await expect(page.getByText("Waiting for an empty server needs a game whose console can list players.")).toBeVisible();
-
   const console = await page.context().newPage();
   await consoleCommand(console, "fake-join Mara");
   try {

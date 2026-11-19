@@ -1418,7 +1418,7 @@ func ScheduleEditor(f ScheduleForm) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "<p class=\"section-note\">Waiting for an empty server needs a game whose console can list players.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "<p class=\"section-note\">Waiting for an empty server needs a game whose players Ludock can read.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

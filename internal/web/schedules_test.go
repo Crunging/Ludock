@@ -9,6 +9,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 )
 
 func scheduleForm(values map[string][]string) url.Values {
@@ -69,6 +70,33 @@ func TestCommandSchedulesNeedAGameConsole(t *testing.T) {
 		t.Fatal(response.StatusCode, body)
 	}
 	if list, _ := p.app.Schedules.List(context.Background(), &operator.User, p.server); len(list) != 0 {
+		t.Fatal(list)
+	}
+}
+
+// A server whose players Ludock can't read, here with its status query
+// turned off, offers no waiting for an empty server, and a forged request
+// for one saves nothing.
+func TestWaitingNeedsReadablePlayers(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String(); !strings.Contains(page, `name="waitForEmpty"`) {
+		t.Fatal("a server with a status query was not offered waiting")
+	}
+	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.Config.Labels = map[string]string{"ludock.query": "disabled"} })
+	if _, err := p.app.Servers.RefreshNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	page := p.do("GET", "/servers/"+p.server+"?tab=schedules", p.admin, nil, nil).Body.String()
+	if strings.Contains(page, `name="waitForEmpty"`) || !strings.Contains(page, "needs a game whose players Ludock can read") {
+		t.Fatal("offered waiting without readable players")
+	}
+	response := p.action("/servers/"+p.server+"/schedules", p.admin,
+		scheduleForm(map[string][]string{"action": {"stop"}, "waitForEmpty": {"true"}, "waitMinutes": {"30"}, "waitThen": {"skip"}}))
+	if body := readBody(t, response); response.StatusCode != http.StatusBadRequest {
+		t.Fatal(response.StatusCode, body)
+	}
+	if list, _ := p.app.Schedules.List(context.Background(), &p.admin.User, p.server); len(list) != 0 {
 		t.Fatal(list)
 	}
 }
