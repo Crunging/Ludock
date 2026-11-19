@@ -338,6 +338,7 @@ func (s *Server) checkImage(w http.ResponseWriter, r *http.Request, request *Req
 			s.fail(w, r, request, err)
 			return
 		}
+		u.ChecksOff = !s.App.Checks.Enabled(r.Context())
 	}
 	render(w, r, http.StatusOK, views.ImageCheck(u))
 }

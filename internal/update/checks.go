@@ -188,8 +188,8 @@ func (c *Checks) Status(ctx context.Context, serverID, containerID string) *Chec
 }
 
 // Forget marks a server's result stale after its image was pulled, and
-// makes its tag due: the pull may have found a newer version than the one
-// last seen.
+// drops its tag's last answer until the registry is asked again: the pull
+// may have found a newer version than the one last seen.
 func (c *Checks) Forget(serverID string) {
 	c.init()
 	c.mu.Lock()
@@ -199,7 +199,7 @@ func (c *Checks) Forget(serverID string) {
 		if entry := c.state.Servers[serverID]; entry != nil {
 			entry.ContainerID = ""
 			if image := c.state.Images[entry.Image]; image != nil {
-				image.NextAt = 0
+				image.Digest, image.NextAt = "", 0
 			}
 		}
 	}
@@ -557,9 +557,10 @@ func compareDigests(key string, repoDigests []string, remote string) string {
 	return CheckAvailable
 }
 
-// offers reports whether a tag's platforms include platform's OS and
-// architecture. Variants are left out: Docker can pull a compatible one.
-// An empty list or platform can't rule it out.
+// offers reports whether a tag's platforms include one Docker would pull
+// for platform: the same OS and architecture, and a variant no newer than
+// the server's, such as arm/v6 for arm/v7. An empty list or platform can't
+// rule it out.
 func offers(platforms []docker.Platform, platform string) bool {
 	if len(platforms) == 0 || platform == "" {
 		return true
@@ -568,7 +569,19 @@ func offers(platforms []docker.Platform, platform string) bool {
 	if len(parts) < 2 {
 		return true
 	}
+	wanted := ""
+	if len(parts) == 3 {
+		wanted = parts[2]
+	}
 	return slices.ContainsFunc(platforms, func(offered docker.Platform) bool {
-		return offered.OS == parts[0] && offered.Architecture == parts[1]
+		if offered.OS != parts[0] || offered.Architecture != parts[1] {
+			return false
+		}
+		if offered.Variant == "" || wanted == "" || offered.Variant == wanted {
+			return true
+		}
+		have, okHave := strings.CutPrefix(offered.Variant, "v")
+		want, okWant := strings.CutPrefix(wanted, "v")
+		return okHave && okWant && len(have) == 1 && len(want) == 1 && have <= want
 	})
 }
