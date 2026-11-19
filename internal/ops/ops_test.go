@@ -101,6 +101,25 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	}
 }
 
+// A finished operation is announced, so a page that last refreshed while it
+// ran doesn't keep showing it as running.
+func TestFinishTellsPages(t *testing.T) {
+	r, servers := setup(t, 1)
+	changed := make(chan string, 1)
+	r.Changed = func(serverID string) { changed <- serverID }
+	r.Register("start", Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, nil }})
+	r.Start(ctx, nil)
+	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "start"})
+	select {
+	case id := <-changed:
+		if current, _ := r.Get(ctx, job.ID); id != servers[0] || current.Status != Succeeded {
+			t.Fatal(id, current)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the finished operation was not announced")
+	}
+}
+
 func TestRetriesStateItCouldNotSave(t *testing.T) {
 	r, servers := setup(t, 1)
 	// Writes that set a blocked status fail, as with a full or broken disk.

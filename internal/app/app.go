@@ -118,6 +118,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.SetupWindow) (*App, err
 		return err
 	}}
 	monitoring.Changed = func(serverID string) { go a.Events.Changed(context.Background(), serverID) }
+	runner.Changed = monitoring.Changed
 	a.Players = &players.Service{Servers: serverService, Identity: store,
 		Source:  &players.GameSource{Identity: store, Observer: observer, Runtime: runtime, Locks: table},
 		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) },
