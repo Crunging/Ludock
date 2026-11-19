@@ -156,6 +156,10 @@ type Runner struct {
 	Notify func(key, message string)
 	// Username resolves an actor ID for history, or "".
 	Username func(id string) string
+	// Changed tells open pages that a server's operation ended: Docker has
+	// no event for that, and the container's last one can come well before.
+	// It must not block.
+	Changed func(serverID string)
 
 	mu       sync.Mutex
 	handlers map[string]Handler
@@ -352,6 +356,9 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 		return r.DB.WriteAudit(ctx, tx, entry)
 	}); err != nil {
 		return err
+	}
+	if r.Changed != nil {
+		r.Changed(job.ServerID)
 	}
 	r.DB.PruneAuditIfNeeded(ctx)
 	return nil
