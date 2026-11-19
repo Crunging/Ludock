@@ -308,7 +308,8 @@ test("a server nobody set up is watched", async ({ page }) => {
   try {
     await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
     await dockerAction("enshrouded", "stop");
-    await expect(status).toHaveText("Availability problem detected. Waiting for the failure grace period.", { timeout: 30_000 });
+    // Another journey may have shortened its wait before alerting.
+    await expect(status).toHaveText(/^Availability problem detected\./, { timeout: 30_000 });
     await dockerAction("enshrouded", "start");
     await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
   } finally {
