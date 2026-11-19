@@ -241,6 +241,31 @@ var Migrations = []Migration{
       UPDATE schedules SET changed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER);
     `,
 	},
+	{
+		// Two-factor sign-in. Secrets are sealed with the identity key;
+		// totp_step is the last accepted time step, so a code works once.
+		// A sign-in challenge is the password step of a two-factor sign-in,
+		// bound to the password hash it verified.
+		Version: 6,
+		SQL: `
+      ALTER TABLE users ADD COLUMN totp_secret TEXT;
+      ALTER TABLE users ADD COLUMN totp_pending TEXT;
+      ALTER TABLE users ADD COLUMN totp_step INTEGER NOT NULL DEFAULT 0 CHECK (totp_step >= 0);
+      CREATE TABLE recovery_codes (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        PRIMARY KEY (user_id, code_hash)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE sign_in_challenges (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        password_hash TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX sign_in_challenges_user_idx ON sign_in_challenges(user_id);
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }

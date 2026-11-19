@@ -24,6 +24,8 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
 - Supported game images are added automatically unless labeled
   `ludock.enable: "false"`. Recognizing an image doesn't prove where it came
   from.
+- Ask administrators to turn on two-factor sign-in in **Account**; an
+  administrator account controls the Docker socket.
 - Administrators see every managed server. Other users see only the servers and
   actions shared with them.
 - Approve narrow backup folders, and keep registry and webhook credentials out

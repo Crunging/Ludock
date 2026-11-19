@@ -105,13 +105,16 @@ func draftRole(u UsersView) db.Role {
 }
 
 templ userRow(u UsersView, user db.User) {
-	<section class="settings-card user-row">
+	<section class={ "settings-card user-row", templ.KV("user-row--two-factor", user.TwoFactor && user.ID != u.CurrentID) }>
 		<div class="user-row__identity">
 			<strong>{ user.Username }</strong>
 			<span>
 				Created @Time(user.CreatedAt, "date", "")
 				if user.Disabled {
 					<strong class="user-row__disabled">Disabled</strong>
+				}
+				if user.TwoFactor {
+					<span class="user-row__two-factor">Two-factor on</span>
 				}
 			</span>
 		</div>
@@ -142,6 +145,18 @@ templ userRow(u UsersView, user db.User) {
 			<input type="password" name="password" placeholder="New password" aria-label={ "New password for " + user.Username } autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
 			<button class="secondary-btn" type="submit" data-busy-label="Working…">Reset password</button>
 		</form>
+		if user.TwoFactor && user.ID != u.CurrentID {
+			<button
+				class="secondary-btn"
+				type="button"
+				hx-post={ "/users/" + user.ID + "/reset-two-factor" }
+				hx-target="#users"
+				hx-swap="outerHTML"
+				hx-confirm={ "Turn off two-factor sign-in for " + user.Username + "?" }
+				data-confirm-detail="Use this when they lost their phone and recovery codes. It signs them out everywhere; they sign in with just their password and can set it up again."
+				data-confirm-action="Turn off two-factor"
+			>Turn off two-factor</button>
+		}
 		<button
 			class="secondary-btn secondary-btn--danger"
 			type="button"

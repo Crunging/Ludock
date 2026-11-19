@@ -13,13 +13,21 @@ func (s *Server) accountView(r *http.Request, request *Request) views.AccountVie
 	if err != nil {
 		view.SessionsError = publicMessage(err)
 	}
+	on, left, err := s.Auth.TwoFactorStatus(r.Context(), request.Principal)
+	view.TwoFactor = views.TwoFactorView{On: on, RecoveryLeft: left}
+	if err != nil {
+		view.Error = publicMessage(err)
+	}
 	return view
 }
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, request *Request) {
 	view := s.accountView(r, request)
-	if r.URL.Query().Get("changed") == "1" {
+	switch {
+	case r.URL.Query().Get("changed") == "1":
 		view.Message = "Password changed. Other sessions have been signed out."
+	case r.URL.Query().Get("two-factor") == "off":
+		view.Message = "Two-factor sign-in is off. Other sessions have been signed out."
 	}
 	render(w, r, http.StatusOK, views.AccountPage(s.page(r, request, "Account"), view))
 }
@@ -82,4 +90,67 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request, request *
 		view.Message = "Session revoked."
 	}
 	render(w, r, http.StatusOK, views.AccountSessions(view), views.AccountStatusUpdate(view))
+}
+
+// accountResult renders the account page after a form post, with change
+// applied to its view. A 401 signs the browser out instead.
+func (s *Server) accountResult(w http.ResponseWriter, r *http.Request, request *Request, err error, change func(*views.AccountView)) {
+	status := http.StatusOK
+	public, ok := apperr.As(err)
+	if err != nil {
+		if !ok || public.Status == http.StatusUnauthorized {
+			s.fail(w, r, request, err)
+			return
+		}
+		if public.RetryAfterMs > 0 {
+			w.Header().Set("Retry-After", itoa(max(1, (public.RetryAfterMs+999)/1000)))
+		}
+		status = public.Status
+	}
+	view := s.accountView(r, request)
+	if err != nil {
+		view.Error = public.Message
+	}
+	if change != nil {
+		change(&view)
+	}
+	page := s.page(r, request, "Account")
+	page.Path = "/account"
+	render(w, r, status, views.AccountPage(page, view))
+}
+
+func (s *Server) beginTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {
+	enrollment, err := s.Auth.BeginTwoFactor(r.Context(), request.Principal)
+	s.accountResult(w, r, request, err, func(view *views.AccountView) { view.TwoFactor.Enrollment = enrollment })
+}
+
+// enableTwoFactor replaces the session like a password change, and shows the
+// recovery codes on the page it returns: they can't be fetched again.
+func (s *Server) enableTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {
+	principal, codes, err := s.Auth.EnableTwoFactor(r.Context(), request.Principal, r.PostFormValue("currentPassword"),
+		r.PostFormValue("code"), request.Client)
+	if err != nil {
+		enrollment, pendingErr := s.Auth.PendingTwoFactor(r.Context(), request.Principal)
+		if pendingErr != nil {
+			err = pendingErr
+		}
+		s.accountResult(w, r, request, err, func(view *views.AccountView) { view.TwoFactor.Enrollment = enrollment })
+		return
+	}
+	setSessionCookie(w, r, principal.Token)
+	replaced := &Request{Principal: principal, Client: request.Client, CSRF: CSRFToken(principal.Token)}
+	s.accountResult(w, r, replaced, nil, func(view *views.AccountView) {
+		view.TwoFactor.RecoveryCodes = codes
+		view.Message = "Two-factor sign-in is on. Other sessions have been signed out."
+	})
+}
+
+func (s *Server) disableTwoFactor(w http.ResponseWriter, r *http.Request, request *Request) {
+	principal, err := s.Auth.DisableTwoFactor(r.Context(), request.Principal, r.PostFormValue("currentPassword"), request.Client)
+	if err != nil {
+		s.accountResult(w, r, request, err, nil)
+		return
+	}
+	setSessionCookie(w, r, principal.Token)
+	http.Redirect(w, r, "/account?two-factor=off", http.StatusSeeOther)
 }

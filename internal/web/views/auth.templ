@@ -10,11 +10,43 @@ type LoginForm struct {
 	// ConfirmationError marks a password mismatch.
 	ConfirmationError bool
 	Next              string
+	// Code asks for the second step of a two-factor sign-in.
+	Code bool
 }
 
 const passwordMin = 15
 
 templ LoginPage(form LoginForm) {
+	if form.Code {
+		@codePage(form)
+	} else {
+		@loginPage(form)
+	}
+}
+
+templ codePage(form LoginForm) {
+	@Document("Sign in · Ludock", "", nil, nil) {
+		<main class="login-page">
+			@LudockMark("login-mark")
+			<form class="login-card" method="post" action="/login/code">
+				<h1 class="login-card__title">Enter your code</h1>
+				<p class="login-card__description">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+				if form.Next != "" {
+					<input type="hidden" name="next" value={ form.Next }/>
+				}
+				<label class="login-card__label" for="code">Authentication code</label>
+				<input id="code" name="code" class="login-card__input" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" maxlength="16" required autofocus/>
+				if form.Error != "" {
+					<div class="login-card__error" id="login-error" role="alert">{ form.Error }</div>
+				}
+				<button class="login-card__submit" type="submit" data-busy-label="Signing in...">Continue</button>
+				<p class="login-card__account-help">Lost your phone and your recovery codes? Ask the person who runs this Ludock panel to turn off two-factor sign-in for you. <a href="/login">Start over</a></p>
+			</form>
+		</main>
+	}
+}
+
+templ loginPage(form LoginForm) {
 	@Document(map[bool]string{true: "Set up Ludock", false: "Sign in · Ludock"}[form.Setup], "", nil, nil) {
 		<main class="login-page">
 			@LudockMark("login-mark")

@@ -161,11 +161,12 @@ func (s *Service) sessionInput(userID string, client Client) (db.SessionInput, s
 		CreatedAt: now, ExpiresAt: now + sessionTTLMs, IPAddress: client.IP, UserAgent: client.UserAgent}, token
 }
 
-// createSession signs user in. A non-empty verifiedHash is the password hash
-// the caller verified; the session is refused if the account changed since.
+// createSession signs user in with a password alone. verifiedHash is the
+// password hash the caller verified; the session is refused if the account
+// changed since or now has two-factor sign-in.
 func (s *Service) createSession(ctx context.Context, user db.SessionUser, client Client, verifiedHash string, audit *db.AuditEntry) (*Principal, error) {
 	input, token := s.sessionInput(user.ID, client)
-	input.PasswordHash, input.Audit = verifiedHash, audit
+	input.PasswordHash, input.PasswordOnly, input.Audit = verifiedHash, true, audit
 	if err := s.DB.CreateSession(ctx, input); err != nil {
 		return nil, err
 	}
@@ -249,43 +250,53 @@ func (s *Service) CompleteSetup(ctx context.Context, username, password, code st
 // Password work yields to other requests, so a reset or disabled account
 // invalidates the credentials that were just checked.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*db.SessionUser, error) {
-	user, _, err := s.authenticate(ctx, username, password)
-	return user, err
+	user, err := s.authenticate(ctx, username, password)
+	if user == nil {
+		return nil, err
+	}
+	return &user.SessionUser, err
 }
 
-// authenticate also returns the password hash it verified, which a new
-// session must still match.
-func (s *Service) authenticate(ctx context.Context, username, password string) (*db.SessionUser, string, error) {
+// verifiedUser is an account whose password was just verified.
+type verifiedUser struct {
+	db.SessionUser
+	// PasswordHash is the hash verified, which a new session must still match.
+	PasswordHash string
+	TwoFactor    bool
+}
+
+func (s *Service) authenticate(ctx context.Context, username, password string) (*verifiedUser, error) {
 	record, err := s.DB.FindUserByUsername(ctx, username)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if record == nil || record.Disabled {
 		// Spend comparable time so unknown accounts are not distinguishable.
 		_, err := s.Hasher.Hash(password)
-		return nil, "", err
+		return nil, err
 	}
 	if !s.Hasher.Verify(password, record.PasswordHash) {
-		return nil, "", nil
+		return nil, nil
 	}
 	upgraded := ""
 	if NeedsUpgrade(record.PasswordHash) {
 		if upgraded, err = s.Hasher.Hash(password); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 	current, err := s.DB.FindUserByID(ctx, record.ID)
 	if err != nil || current == nil || current.Disabled || current.PasswordHash != record.PasswordHash {
-		return nil, "", err
+		return nil, err
 	}
 	verified := record.PasswordHash
 	if upgraded != "" {
 		if err := s.DB.UpgradePasswordHashIfUnchanged(ctx, current.ID, record.PasswordHash, upgraded); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		verified = upgraded
 	}
-	return &db.SessionUser{ID: current.ID, Username: current.Username, Role: current.Role}, verified, nil
+	return &verifiedUser{SessionUser: db.SessionUser{ID: current.ID, Username: current.Username, Role: current.Role},
+		PasswordHash: verified, TwoFactor: current.TwoFactor}, nil
 }
 
 var errInvalidCredentials = apperr.New("INVALID_CREDENTIALS", 401, "Invalid username or password")
@@ -298,17 +309,70 @@ func truncateRunes(value string, limit int) string {
 	return string(runes)
 }
 
+// loginKeys are the throttle keys a sign-in attempt counts against.
+type loginKeys struct {
+	source, accountSource, account string
+}
+
+func newLoginKeys(client Client, requested string) loginKeys {
+	keys := loginKeys{source: throttleKey("login-source", client.source())}
+	if requested != "" {
+		keys.accountSource = throttleKey("login-account-source", client.source()+"\x00"+requested)
+	}
+	keys.account = throttleKey("login-account-failures", requested)
+	return keys
+}
+
+func (k loginKeys) blocking() []string {
+	if k.accountSource == "" {
+		return []string{k.source}
+	}
+	return []string{k.source, k.accountSource}
+}
+
+// recordFailure counts a failed password or code against the source, the
+// source and account, and the account.
+func (s *Service) recordFailure(ctx context.Context, keys loginKeys, failedAt int64) error {
+	if _, err := s.DB.RecordLoginFailure(ctx, keys.source, failedAt, loginWindowMs, loginSourceMax, 0); err != nil {
+		return err
+	}
+	if keys.accountSource != "" {
+		if _, err := s.DB.RecordLoginFailure(ctx, keys.accountSource, failedAt, loginWindowMs, loginAccountSourceMax, 0); err != nil {
+			return err
+		}
+	}
+	// Keep the account-wide cooldown short so an attacker cannot lock the
+	// owner out for long. Rejected retries do not extend it.
+	current, err := s.DB.GetLoginThrottle(ctx, keys.account, failedAt, loginWindowMs)
+	if err != nil {
+		return err
+	}
+	step := min(5, max(0, (current.Failures+1-loginAccountCooldownMin)/5))
+	cooldownMs := min(int64(loginAccountCooldownMaxMs), int64(loginAccountCooldownBaseMs)<<step)
+	_, err = s.DB.RecordLoginFailure(ctx, keys.account, failedAt, loginWindowMs, loginAccountCooldownMin, cooldownMs)
+	return err
+}
+
+func (s *Service) clearLoginKeys(ctx context.Context, keys ...string) error {
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if err := s.DB.ClearLoginThrottle(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Login checks a password. An account with two-factor sign-in gets a
+// *CodeRequired error carrying the challenge for CompleteLogin instead of a
+// session.
 func (s *Service) Login(ctx context.Context, username, password string, client Client) (*Principal, error) {
 	now := s.Now()
 	requested := truncateRunes(strings.ToLower(strings.TrimSpace(username)), 32)
-	sourceKey := throttleKey("login-source", client.source())
-	keys := []string{sourceKey}
-	accountSourceKey := ""
-	if requested != "" {
-		accountSourceKey = throttleKey("login-account-source", client.source()+"\x00"+requested)
-		keys = append(keys, accountSourceKey)
-	}
-	if blocked, err := s.tooManyAttempts(ctx, now, keys...); err != nil || blocked {
+	keys := newLoginKeys(client, requested)
+	if blocked, err := s.tooManyAttempts(ctx, now, keys.blocking()...); err != nil || blocked {
 		if err != nil {
 			return nil, err
 		}
@@ -322,19 +386,17 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	if !validUsername || !ValidPassword(password) || required {
 		return nil, errInvalidCredentials
 	}
-	accountKey := throttleKey("login-account-failures", requested)
-	cooldown, err := s.DB.GetLoginThrottle(ctx, accountKey, now, loginWindowMs)
+	cooldown, err := s.DB.GetLoginThrottle(ctx, keys.account, now, loginWindowMs)
 	if err != nil {
 		return nil, err
 	}
 	if cooldown.BlockedUntil > now {
 		return nil, busy(cooldown.BlockedUntil - now)
 	}
-	var user *db.SessionUser
-	var verifiedHash string
+	var user *verifiedUser
 	err = s.Work.Do(passwordWorkSource(client), throttleKey("password-work-login-subject", strings.ToLower(parsedUsername)), func() error {
 		var err error
-		user, verifiedHash, err = s.authenticate(ctx, parsedUsername, password)
+		user, err = s.authenticate(ctx, parsedUsername, password)
 		return err
 	})
 	if errors.Is(err, ErrPasswordWorkBusy) {
@@ -345,23 +407,7 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	}
 	if user == nil {
 		failedAt := s.Now()
-		if _, err := s.DB.RecordLoginFailure(ctx, sourceKey, failedAt, loginWindowMs, loginSourceMax, 0); err != nil {
-			return nil, err
-		}
-		if accountSourceKey != "" {
-			if _, err := s.DB.RecordLoginFailure(ctx, accountSourceKey, failedAt, loginWindowMs, loginAccountSourceMax, 0); err != nil {
-				return nil, err
-			}
-		}
-		// Keep the account-wide cooldown short so an attacker cannot lock the
-		// owner out for long. Rejected retries do not extend it.
-		current, err := s.DB.GetLoginThrottle(ctx, accountKey, failedAt, loginWindowMs)
-		if err != nil {
-			return nil, err
-		}
-		step := min(5, max(0, (current.Failures+1-loginAccountCooldownMin)/5))
-		cooldownMs := min(int64(loginAccountCooldownMaxMs), int64(loginAccountCooldownBaseMs)<<step)
-		if _, err := s.DB.RecordLoginFailure(ctx, accountKey, failedAt, loginWindowMs, loginAccountCooldownMin, cooldownMs); err != nil {
+		if err := s.recordFailure(ctx, keys, failedAt); err != nil {
 			return nil, err
 		}
 		if err := s.DB.WriteAudit(ctx, nil, db.AuditEntry{Action: "auth.login.failed", TargetType: "user",
@@ -370,17 +416,17 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 		}
 		return nil, errInvalidCredentials
 	}
-	if accountSourceKey != "" {
-		if err := s.DB.ClearLoginThrottle(ctx, accountSourceKey); err != nil {
-			return nil, err
-		}
+	if user.TwoFactor {
+		// Failure counts stay until the code is accepted, so a known password
+		// doesn't reset the limit on guessing codes.
+		return nil, s.challenge(ctx, user)
 	}
-	if err := s.DB.ClearLoginThrottle(ctx, accountKey); err != nil {
+	if err := s.clearLoginKeys(ctx, keys.accountSource, keys.account); err != nil {
 		return nil, err
 	}
 	// The insert checks the verified hash again, so a reset or disable after
 	// verification wins. The audit entry commits with the session.
-	principal, err := s.createSession(ctx, *user, client, verifiedHash,
+	principal, err := s.createSession(ctx, user.SessionUser, client, user.PasswordHash,
 		&db.AuditEntry{UserID: user.ID, Action: "auth.login", TargetType: "session", IPAddress: client.IP})
 	if errors.Is(err, db.ErrAccountChanged) {
 		return nil, errInvalidCredentials
@@ -391,8 +437,11 @@ func (s *Service) Login(ctx context.Context, username, password string, client C
 	return principal, nil
 }
 
-// SessionToken extracts the session cookie. The last valid cookie wins.
-func SessionToken(r *http.Request) string {
+// SessionToken extracts the session cookie.
+func SessionToken(r *http.Request) string { return cookieValue(r, SessionCookie) }
+
+// cookieValue reads a cookie by name. The last valid cookie wins.
+func cookieValue(r *http.Request, cookie string) string {
 	value := ""
 	for _, header := range r.Header.Values("Cookie") {
 		for _, part := range strings.Split(header, ";") {
@@ -402,7 +451,7 @@ func SessionToken(r *http.Request) string {
 				continue
 			}
 			name, err := decodeURIComponent(part[:separator])
-			if err != nil || name != SessionCookie {
+			if err != nil || name != cookie {
 				continue
 			}
 			if value, err = decodeURIComponent(part[separator+1:]); err != nil {
@@ -474,57 +523,73 @@ func (s *Service) Logout(ctx context.Context, token string, client Client) error
 		db.AuditEntry{UserID: principal.User.ID, Action: "auth.logout", TargetType: "session", IPAddress: client.IP})
 }
 
-// ChangePassword replaces the signed-in account's password and returns the
-// replacement session. Guesses are throttled per source and per credential.
-func (s *Service) ChangePassword(ctx context.Context, principal *Principal, currentPassword, newPassword string, client Client) (*Principal, error) {
-	if length := textutil.Length(currentPassword); length < 1 || length > PasswordMax || !ValidPassword(newPassword) {
-		return nil, apperr.Newf("INVALID_REQUEST", 400, "New password must be between %d and %d characters", PasswordMin, PasswordMax)
-	}
+// confirmPassword checks the signed-in account's current password and
+// returns the verified record and the credential's throttle key. Guesses are
+// throttled per source and per credential. then runs in the same password
+// work slot once the password is verified.
+func (s *Service) confirmPassword(ctx context.Context, principal *Principal, password string, client Client, then func() error) (*db.UserRecord, string, error) {
 	now := s.Now()
 	sourceKey := throttleKey("password-change-source", client.source())
 	credentialKey := throttleKey("password-change-credential", principal.TokenHash)
 	if blocked, err := s.tooManyAttempts(ctx, now, sourceKey, credentialKey); err != nil || blocked {
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return nil, busy(0)
+		return nil, "", busy(0)
 	}
 	var record *db.UserRecord
 	var verified bool
-	var passwordHash string
 	err := s.Work.Do(passwordWorkSource(client), throttleKey("password-work-change-subject", principal.TokenHash), func() error {
 		var err error
 		if record, err = s.DB.FindUserByID(ctx, principal.User.ID); err != nil {
 			return err
 		}
-		verified = record != nil && s.Hasher.Verify(currentPassword, record.PasswordHash)
+		verified = record != nil && s.Hasher.Verify(password, record.PasswordHash)
 		if _, err := s.Recheck(ctx, principal); err != nil {
 			return err
 		}
-		if verified {
-			passwordHash, err = s.Hasher.Hash(newPassword)
+		if verified && then != nil {
+			err = then()
 		}
 		return err
 	})
 	if errors.Is(err, ErrPasswordWorkBusy) {
-		return nil, busy(0)
+		return nil, "", busy(0)
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !verified {
 		failedAt := s.Now()
 		if _, err := s.DB.RecordLoginFailure(ctx, sourceKey, failedAt, loginWindowMs, loginSourceMax, 0); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if _, err := s.DB.RecordLoginFailure(ctx, credentialKey, failedAt, loginWindowMs, loginAccountSourceMax, 0); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if err := s.DB.WriteAudit(ctx, nil, db.AuditEntry{UserID: principal.User.ID, Action: "auth.password.change-failed",
 			TargetType: "user", TargetID: principal.User.ID, IPAddress: client.IP}); err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return nil, apperr.New("INVALID_PASSWORD", 400, "Current password is incorrect")
+		return nil, "", apperr.New("INVALID_PASSWORD", 400, "Current password is incorrect")
+	}
+	return record, credentialKey, nil
+}
+
+// ChangePassword replaces the signed-in account's password and returns the
+// replacement session.
+func (s *Service) ChangePassword(ctx context.Context, principal *Principal, currentPassword, newPassword string, client Client) (*Principal, error) {
+	if length := textutil.Length(currentPassword); length < 1 || length > PasswordMax || !ValidPassword(newPassword) {
+		return nil, apperr.Newf("INVALID_REQUEST", 400, "New password must be between %d and %d characters", PasswordMin, PasswordMax)
+	}
+	var passwordHash string
+	record, credentialKey, err := s.confirmPassword(ctx, principal, currentPassword, client, func() error {
+		var err error
+		passwordHash, err = s.Hasher.Hash(newPassword)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
 	current, err := s.Recheck(ctx, principal)
 	if err != nil {
@@ -672,8 +737,10 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 			return err
 		}
 		if disabled {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
-				return err
+			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?"} {
+				if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+					return err
+				}
 			}
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: principal.User.ID, Action: "user.access.updated", TargetType: "user",
@@ -767,7 +834,8 @@ func (s *Service) ResetPassword(ctx context.Context, principal *Principal, id, p
 	return adminMutationError(err)
 }
 
-// RecoverPassword resets an account from the console (`ludock recover`).
+// RecoverPassword resets an account from the console (`ludock recover`) and
+// turns off its two-factor sign-in.
 func RecoverPassword(ctx context.Context, d *db.DB, username, password string) (*db.UserRecord, error) {
 	user, err := d.FindUserByUsername(ctx, username)
 	if err != nil || user == nil {
