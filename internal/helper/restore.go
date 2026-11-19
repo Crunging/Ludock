@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -269,6 +270,9 @@ func (h *restoreHelper) run() (any, error) {
 		if err := h.unchanged(root, h.request.Stage, stage); err != nil {
 			return nil, err
 		}
+		if same, err := sameMount(root, stage); err != nil || !same {
+			return nil, errUnsafe
+		}
 		children, err := names(stage)
 		if err != nil {
 			return nil, err
@@ -339,21 +343,34 @@ func (h *restoreHelper) run() (any, error) {
 	return ok, syncAll(stage, root)
 }
 
-// sameMount reports whether two open directories are on one mount. Mount IDs
-// also tell apart bind mounts of one filesystem; kernels without them
-// (before 5.8) compare devices.
+// sameMount reports whether two open directories are on one mount, which
+// also tells apart bind mounts of one filesystem.
 func sameMount(left, right fd) (bool, error) {
-	var a, b unix.Statx_t
-	if err := unix.Statx(int(left), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &a); err != nil {
+	a, err := mountID(left)
+	if err != nil {
 		return false, err
 	}
-	if err := unix.Statx(int(right), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &b); err != nil {
-		return false, err
+	b, err := mountID(right)
+	return err == nil && a == b, err
+}
+
+// mountID reads a descriptor's mount ID from statx, or from fdinfo on
+// kernels before 5.8. It fails when neither knows it.
+func mountID(descriptor fd) (uint64, error) {
+	var info unix.Statx_t
+	if err := unix.Statx(int(descriptor), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &info); err == nil && info.Mask&unix.STATX_MNT_ID != 0 {
+		return info.Mnt_id, nil
 	}
-	if a.Mask&b.Mask&unix.STATX_MNT_ID != 0 {
-		return a.Mnt_id == b.Mnt_id, nil
+	data, err := os.ReadFile("/proc/self/fdinfo/" + strconv.Itoa(int(descriptor)))
+	if err != nil {
+		return 0, err
 	}
-	return a.Dev_major == b.Dev_major && a.Dev_minor == b.Dev_minor, nil
+	for _, line := range strings.Split(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "mnt_id:"); ok {
+			return strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		}
+	}
+	return 0, errUnsafe
 }
 
 func itemParts(item string) ([]string, error) {
@@ -497,6 +514,24 @@ func (h *restoreHelper) runItem(root, stage fd, parts []string) error {
 		}
 		info, err := movable(parent, name, rootInfo.Dev)
 		if err != nil {
+			return err
+		}
+		// Only a live entry the swap installed is taken back: while the
+		// replacement is still staged, a live entry belongs to someone else
+		// and both are kept for review.
+		next, err := h.t.openAt(stage, "new", directoryFlags, 0)
+		if err != nil {
+			return err
+		}
+		staged, err := h.itemParent(next, parts)
+		if err != nil {
+			return err
+		}
+		if _, err := lstatAt(staged, name); err == nil {
+			if info != nil {
+				return errUnsafe
+			}
+		} else if !isNotExist(err) {
 			return err
 		}
 		return move(parent, name, stage, "returned", info)

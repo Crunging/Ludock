@@ -42,8 +42,10 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 		browser.Root = backup.Roots[index]
 	}
 	entries, err := s.App.Backups.Storage.ListFolder(backup.Destination(), backup.ID, backup.Roots, browser.Root.ID, browser.Path)
-	if err == nil {
-		err = check()
+	// Access lost during the scan shows nothing of the backup, not even
+	// whether the folder exists.
+	if refused := check(); refused != nil {
+		return &views.BackupBrowser{ServerID: serverID, Error: publicMessage(refused)}
 	}
 	if err != nil {
 		browser.Error = publicMessage(err)
