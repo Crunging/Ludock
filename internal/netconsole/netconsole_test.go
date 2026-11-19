@@ -125,6 +125,30 @@ func TestTelnet(t *testing.T) {
 	}
 }
 
+// WebRCON never goes through a configured proxy, which would see the
+// password in its URL.
+func TestRustWebRCONIgnoresProxy(t *testing.T) {
+	proxied := make(chan struct{}, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied <- struct{}{}
+		http.Error(w, "proxy", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("http_proxy", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	// A host the proxy would be used for; the dial fails without reaching it.
+	short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	RustWebRCON(short, "192.0.2.1", 28016, "secret", "status", Control{})
+	select {
+	case <-proxied:
+		t.Fatal("WebRCON request went through the proxy")
+	default:
+	}
+}
+
 func TestRustWebRCON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/web secret" {
@@ -160,8 +184,26 @@ func TestRustWebRCON(t *testing.T) {
 }
 
 func TestCleanTelnet(t *testing.T) {
-	if got := CleanTelnet("Welcome\nPassword: \r\nsay hi\nok", "say hi"); got != "ok" {
+	if got := CleanTelnet("say hi\nok", "say hi"); got != "ok" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// Log lines streamed to the console, such as player chat, neither end the
+// sign-in nor replace the command's response.
+func TestTelnetIgnoresStreamedLog(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		conn.Write([]byte("Please enter password:"))
+		reader.ReadString('\n')
+		conn.Write([]byte("Logon successful.\r\n"))
+		command, _ := reader.ReadString('\n')
+		conn.Write([]byte(command + "Chat 'Bob': my password is incorrect\r\nTotal of 2 in the game\r\n"))
+		io.Copy(io.Discard, reader)
+	})
+	response, err := Telnet(ctx, host, port, "telnet-secret", "listplayers", Control{})
+	if err != nil || response != "Chat 'Bob': my password is incorrect\r\nTotal of 2 in the game" {
+		t.Fatalf("%q %v", response, err)
 	}
 }
 
