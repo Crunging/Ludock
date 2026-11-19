@@ -100,3 +100,17 @@ func TestWaitingNeedsReadablePlayers(t *testing.T) {
 		t.Fatal(list)
 	}
 }
+
+// A restart schedule is saved with countdown warnings on and a lead time
+// that isn't a number: the form comes back with More options open, where
+// the field named in the error is.
+func TestScheduleWarningDraftStaysOpen(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	response := p.action("/servers/"+p.server+"/schedules", p.admin,
+		scheduleForm(map[string][]string{"action": {"restart"}, "announce": {"true"}, "leadMinutes": {"ten"}}))
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(body, `id="schedule-more" open`) {
+		t.Fatal(response.StatusCode, body)
+	}
+}

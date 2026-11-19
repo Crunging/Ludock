@@ -167,6 +167,8 @@ func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 		for _, part := range strings.Split(leads, ",") {
 			minute, err := strconv.Atoi(strings.TrimSpace(part))
 			if err != nil {
+				// Kept on, so the form reopens on the field to correct.
+				input.Announcements = &schedules.Announcements{}
 				return input, leads, apperr.New("INVALID_REQUEST", 400, "Enter 1–10 unique whole numbers between 1 and 60.")
 			}
 			minutes = append(minutes, minute)
