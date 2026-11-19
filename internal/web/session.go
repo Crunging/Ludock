@@ -211,7 +211,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, request *Request, 
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		log.Error("Unhandled request error", append([]logging.Field{logging.F("method", r.Method), logging.F("path", r.URL.Path)},
+		log.Error("Unhandled request error", append([]logging.Field{logging.F("method", r.Method), logging.F("path", loggedPath(r))},
 			causeFields(err)...)...)
 		public = apperr.New("INTERNAL", 500, "Internal server error")
 	}

@@ -17,8 +17,26 @@ type UsersView struct {
 	// Draft keeps the create form's username and role after an error.
 	DraftName string
 	DraftRole db.Role
+	// DraftPassword keeps "Set a password now" chosen after an error.
+	DraftPassword bool
 	// OpenGrants opens a user's server access after creation.
 	OpenGrants string
+	// Link is a link just made, shown this once.
+	Link *LinkResult
+}
+
+// LinkResult is a new invite or reset link for the administrator to send.
+type LinkResult struct {
+	Username, URL string
+	Purpose       db.LinkPurpose
+	ExpiresAt     int64
+}
+
+func (l LinkResult) noun() string {
+	if l.Purpose == db.LinkInvite {
+		return "Invite link"
+	}
+	return "Password reset link"
 }
 
 var roleHelp = map[db.Role]string{
@@ -53,16 +71,15 @@ templ UsersContent(u UsersView) {
 		if u.Notice != "" {
 			@Alert("success", u.Notice)
 		}
-		<form class="settings-card" hx-post="/users" hx-target="#users" hx-swap="outerHTML">
+		if u.Link != nil {
+			@linkResult(*u.Link)
+		}
+		<form class="settings-card create-user" hx-post="/users" hx-target="#users" hx-swap="outerHTML">
 			<h2>Create user</h2>
 			<div class="form-grid">
 				<label>
 					<span>Username</span>
 					<input name="username" value={ u.DraftName } minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="create-user-username-help" required/>
-				</label>
-				<label>
-					<span>Initial password</span>
-					<input type="password" name="password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" autocomplete="new-password" aria-describedby="create-user-password-help" required/>
 				</label>
 				<label>
 					<span>Role</span>
@@ -72,8 +89,25 @@ templ UsersContent(u UsersView) {
 						}
 					</select>
 				</label>
+				<label data-shown-when="access=password" hidden?={ !u.DraftPassword }>
+					<span>Initial password</span>
+					// No minlength: the field stays in the form while hidden, and a
+					// partial password would block an invite.
+					<input type="password" name="password" maxlength="128" autocomplete="new-password" aria-describedby="create-user-access-help"/>
+				</label>
 				<button class="primary-btn" type="submit" data-busy-label="Creating…">Create user</button>
 			</div>
+			<fieldset class="create-user__access">
+				<legend>First sign-in</legend>
+				<label>
+					<input type="radio" name="access" value="link" checked?={ !u.DraftPassword } aria-describedby="create-user-access-help"/>
+					Make an invite link
+				</label>
+				<label>
+					<input type="radio" name="access" value="password" checked?={ u.DraftPassword } aria-describedby="create-user-access-help"/>
+					Set a password now
+				</label>
+			</fieldset>
 			<div class="admin-form-help">
 				<p id="create-user-username-help">Usernames use 3–32 letters, numbers, periods, hyphens, or underscores.</p>
 				<p id="create-user-role-help">
@@ -86,7 +120,14 @@ templ UsersContent(u UsersView) {
 						</span>
 					}
 				</p>
-				<p id="create-user-password-help">Use at least { strconv.Itoa(passwordMin) } characters. Share the password securely; the user can change it in Account after signing in.</p>
+				<p id="create-user-access-help">
+					<span data-shown-when="access=link" hidden?={ u.DraftPassword }>
+						You get a one-time link to send them. They choose their own password; the account can’t sign in until they do.
+					</span>
+					<span data-shown-when="access=password" hidden?={ !u.DraftPassword }>
+						Use at least { strconv.Itoa(passwordMin) } characters. Share the password securely; the user can change it in Account after signing in.
+					</span>
+				</p>
 			</div>
 		</form>
 		<div class="settings-list">
@@ -116,6 +157,9 @@ templ userRow(u UsersView, user db.User) {
 				if user.TwoFactor {
 					<span class="user-row__two-factor">Two-factor on</span>
 				}
+				if !user.PasswordSet && user.Link == nil {
+					<strong class="user-row__disabled user-row__no-password">No password yet</strong>
+				}
 			</span>
 		</div>
 		<form hx-post={ "/users/" + user.ID + "/access" } hx-target="#users" hx-swap="outerHTML" hx-trigger="change">
@@ -141,10 +185,24 @@ templ userRow(u UsersView, user db.User) {
 		} else {
 			<span class="muted user-access-summary">All servers</span>
 		}
-		<form class="password-reset" hx-post={ "/users/" + user.ID + "/reset-password" } hx-target="#users" hx-swap="outerHTML">
-			<input type="password" name="password" placeholder="New password" aria-label={ "New password for " + user.Username } autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
-			<button class="secondary-btn" type="submit" data-busy-label="Working…">Reset password</button>
-		</form>
+		<div class="password-reset">
+			if user.ID != u.CurrentID && !user.Disabled {
+				<button class="secondary-btn" type="button" hx-post={ "/users/" + user.ID + "/link" } hx-target="#users" hx-swap="outerHTML" data-busy-label="Working…">
+					if user.PasswordSet {
+						Reset link
+					} else {
+						Invite link
+					}
+				</button>
+			}
+			<details class="password-reset__manual">
+				<summary>Set password</summary>
+				<form hx-post={ "/users/" + user.ID + "/reset-password" } hx-target="#users" hx-swap="outerHTML">
+					<input type="password" name="password" placeholder="New password" aria-label={ "New password for " + user.Username } autocomplete="new-password" minlength={ strconv.Itoa(passwordMin) } maxlength="128" required/>
+					<button class="secondary-btn" type="submit" data-busy-label="Working…">Save</button>
+				</form>
+			</details>
+		</div>
 		if user.TwoFactor && user.ID != u.CurrentID {
 			<button
 				class="secondary-btn"
@@ -170,6 +228,26 @@ templ userRow(u UsersView, user db.User) {
 			data-confirm-action="Delete user"
 			data-confirm-danger
 		>Delete</button>
+		if user.Link != nil {
+			<div class="user-row__link">
+				<p>
+					if user.Link.Purpose == db.LinkInvite {
+						Invite link waiting to be used.
+					} else {
+						Password reset link waiting to be used.
+					}
+					It expires @Time(user.Link.ExpiresAt, "plain", "")<span>.</span>
+				</p>
+				<button
+					class="secondary-btn"
+					type="button"
+					hx-post={ "/users/" + user.ID + "/link/revoke" }
+					hx-target="#users"
+					hx-swap="outerHTML"
+					data-busy-label="Revoking…"
+				>Revoke link</button>
+			</div>
+		}
 		<div
 			id={ "server-grants-" + user.ID }
 			class="grants-region"
@@ -178,6 +256,20 @@ templ userRow(u UsersView, user db.User) {
 				hx-trigger="load"
 			}
 		></div>
+	</section>
+}
+
+templ linkResult(link LinkResult) {
+	<section class="settings-card link-result" aria-labelledby="link-result-title">
+		<h2 id="link-result-title">{ link.noun() + " for " + link.Username }</h2>
+		<p>
+			Send this to { link.Username } privately: anyone who opens it can set the password. It works once and expires @Time(link.ExpiresAt, "", "")<span>.</span>
+			Ludock won’t show it again; make a new link if you lose it.
+		</p>
+		<div class="link-result__field">
+			<input type="text" value={ link.URL } readonly aria-label={ link.noun() + " for " + link.Username } spellcheck="false"/>
+			<button class="primary-btn" type="button" data-copy={ link.URL } data-copied-label="Copied">Copy link</button>
+		</div>
 	</section>
 }
 

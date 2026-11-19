@@ -32,6 +32,18 @@ func IsSameOrigin(r *http.Request) bool {
 		slices.Contains(externalHosts(r), strings.ToLower(origin.host))
 }
 
+// RequestOrigin is the address the browser is using this panel at, such as
+// "https://ludock.example", taken from a same-origin request's Origin.
+// Browsers set Origin themselves, so a forged Host or forwarded header can't
+// point a link built from it at another site.
+func RequestOrigin(r *http.Request) (string, bool) {
+	origin, ok := parseOrigin(r)
+	if !ok || !IsSameOrigin(r) {
+		return "", false
+	}
+	return origin.protocol + "//" + origin.host, true
+}
+
 // OriginDiagnostic describes origin metadata without credentials, for debug
 // logs about rejected requests.
 func OriginDiagnostic(r *http.Request) map[string]string {

@@ -12,6 +12,8 @@ type LoginForm struct {
 	Next              string
 	// Code asks for the second step of a two-factor sign-in.
 	Code bool
+	// PasswordSet says an invite or reset link just set the password.
+	PasswordSet bool
 }
 
 const passwordMin = 15
@@ -30,7 +32,13 @@ templ codePage(form LoginForm) {
 			@LudockMark("login-mark")
 			<form class="login-card" method="post" action="/login/code">
 				<h1 class="login-card__title">Enter your code</h1>
-				<p class="login-card__description">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+				<p class="login-card__description">
+					if form.PasswordSet {
+						Your new password is saved. To finish signing in, enter the 6-digit code from your authenticator app, or one of your recovery codes.
+					} else {
+						Enter the 6-digit code from your authenticator app, or one of your recovery codes.
+					}
+				</p>
 				if form.Next != "" {
 					<input type="hidden" name="next" value={ form.Next }/>
 				}

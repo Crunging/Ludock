@@ -541,6 +541,27 @@ deleting archives, updating, the container shell, and settings are for
 administrators. Removing access also blocks the user's queued work and closes
 their open consoles and log streams.
 
+### Invite and reset links
+
+On **Users**, a new account gets an invite link by default: Ludock shows a
+one-time link to copy and send, and whoever opens it chooses the password and
+is signed in. The account can't sign in until then. For a forgotten password,
+**Reset link** makes a link that sets a new one and signs the user out
+everywhere else. To type a password instead, choose **Set a password now**
+when creating the user, or **Set password** on their row.
+
+A link works once, expires after 24 hours, and is shown only when it's made;
+Ludock stores only a hash of it. The user's row shows a link waiting to be
+used, with **Revoke link**. Making a new link, disabling or deleting the
+account, or changing its password some other way also ends it. Links point at
+the address you're using Ludock at, so make them from the address users will
+open. Opening a link that doesn't work says only that, and failed attempts
+count toward the same per-address limit as sign-ins.
+
+A reset link doesn't get around two-factor sign-in: after the new password,
+the user still enters a code from their authenticator app or a recovery code.
+If they lost both, choose **Turn off two-factor** first.
+
 ### Two-factor sign-in
 
 Anyone can turn on two-factor sign-in in **Account**: scan the QR code with an

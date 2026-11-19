@@ -270,8 +270,9 @@ func (s *Service) authenticate(ctx context.Context, username, password string) (
 	if err != nil {
 		return nil, err
 	}
-	if record == nil || record.Disabled {
-		// Spend comparable time so unknown accounts are not distinguishable.
+	if record == nil || record.Disabled || record.PasswordHash == "" {
+		// Spend comparable time so unknown accounts, and invited ones that
+		// have no password yet, are not distinguishable.
 		_, err := s.Hasher.Hash(password)
 		return nil, err
 	}
@@ -671,27 +672,47 @@ func (s *Service) adminHash(principal *Principal, client Client, password string
 	return hash, err
 }
 
+// CreateUser creates an account with a password the administrator chose.
 func (s *Service) CreateUser(ctx context.Context, principal *Principal, username, password string, role db.Role, client Client) (*db.User, error) {
+	if !ValidPassword(password) {
+		return nil, apperr.Newf("INVALID_REQUEST", 400, "Password must be between %d and %d characters", PasswordMin, PasswordMax)
+	}
+	return s.createUser(ctx, principal, username, password, role, client, nil)
+}
+
+// createUser creates an account; an empty password leaves it without one.
+// then runs in the creating transaction.
+func (s *Service) createUser(ctx context.Context, principal *Principal, username, password string, role db.Role, client Client,
+	then func(tx *sql.Tx, id string) error) (*db.User, error) {
 	if err := RequireAdmin(principal); err != nil {
 		return nil, err
 	}
 	username, valid := ValidUsername(username)
-	if !valid || !ValidPassword(password) || !db.ValidRole(string(role)) {
+	if !valid || !db.ValidRole(string(role)) {
 		return nil, apperr.New("INVALID_REQUEST", 400, "Invalid user details")
 	}
-	hash, err := s.adminHash(principal, client, password)
-	if err != nil {
-		return nil, err
+	hash := ""
+	if password != "" {
+		var err error
+		if hash, err = s.adminHash(principal, client, password); err != nil {
+			return nil, err
+		}
 	}
 	id := identity.NewUUID()
-	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
+	err := s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users
       (id, username, password_hash, role, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
 			id, username, hash, string(role), s.Now(), s.Now()); err != nil {
 			return err
 		}
-		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: principal.User.ID, Action: "user.created", TargetType: "user",
-			TargetID: id, Details: map[string]string{"username": username, "role": string(role)}, IPAddress: client.IP})
+		if err := s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: principal.User.ID, Action: "user.created", TargetType: "user",
+			TargetID: id, Details: map[string]string{"username": username, "role": string(role)}, IPAddress: client.IP}); err != nil {
+			return err
+		}
+		if then != nil {
+			return then(tx, id)
+		}
+		return nil
 	})
 	if db.IsUniqueViolation(err) {
 		return nil, apperr.New("USERNAME_TAKEN", 409, "Username is already in use")
@@ -737,7 +758,8 @@ func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id str
 			return err
 		}
 		if disabled {
-			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?"} {
+			for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM sign_in_challenges WHERE user_id = ?",
+				"DELETE FROM account_links WHERE user_id = ?"} {
 				if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 					return err
 				}
@@ -825,8 +847,10 @@ func (s *Service) ResetPassword(ctx context.Context, principal *Principal, id, p
 		if changed, _ := result.RowsAffected(); changed != 1 {
 			return db.ErrUserNotFound
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
-			return err
+		for _, statement := range []string{"DELETE FROM sessions WHERE user_id = ?", "DELETE FROM account_links WHERE user_id = ?"} {
+			if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+				return err
+			}
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: principal.User.ID, Action: "user.password.reset", TargetType: "user",
 			TargetID: id, IPAddress: client.IP})

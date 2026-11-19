@@ -57,6 +57,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /users", s.admin(s.createUser))
 	m.HandleFunc("POST /users/{id}/access", s.admin(s.updateUserAccess))
 	m.HandleFunc("POST /users/{id}/reset-password", s.admin(s.resetUserPassword))
+	m.HandleFunc("POST /users/{id}/link", s.admin(s.createUserLink))
+	m.HandleFunc("POST /users/{id}/link/revoke", s.admin(s.revokeUserLink))
 	m.HandleFunc("POST /users/{id}/reset-two-factor", s.admin(s.resetUserTwoFactor))
 	m.HandleFunc("POST /users/{id}/delete", s.admin(s.deleteUser))
 	m.HandleFunc("GET /fragments/users/{id}/grants", s.admin(s.userGrants))

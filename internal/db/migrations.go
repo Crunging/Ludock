@@ -266,6 +266,22 @@ var Migrations = []Migration{
       CREATE INDEX sign_in_challenges_user_idx ON sign_in_challenges(user_id);
     `,
 	},
+	{
+		// One-time invite and password reset links, one per account. A link
+		// works only while the account still has password_hash, the hash it
+		// had when the link was made; an invited account's is empty.
+		Version: 7,
+		SQL: `
+      CREATE TABLE account_links (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+        password_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
