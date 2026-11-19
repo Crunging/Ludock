@@ -131,8 +131,14 @@ func (s *Service) Unpack(ctx context.Context, target Target, rootID, relative st
 	if err != nil {
 		return nil, err
 	}
-	stage := identity.NewUUID()
-	request := helper.FileRequest{Operation: "unpack", Root: root.Path, Path: normalized, UploadID: stage, Reserve: &reserve,
+	// Recorded before the helper starts, so startup removes a staging folder
+	// that Ludock stopping cut off.
+	stage := Stage{Server: target.ServerID, Root: root.Path, Archive: normalized, ID: identity.NewUUID()}
+	if err := s.recordStage(ctx, stage); err != nil {
+		access.Cleanup(false)
+		return nil, err
+	}
+	request := helper.FileRequest{Operation: "unpack", Root: root.Path, Path: normalized, UploadID: stage.ID, Reserve: &reserve,
 		Blocked: access.blocked, Mounts: access.mounts}
 	out, err := launch.Exec(ctx, s.Docker, access.container, launch.ExecOptions{Cmd: helper.Command("file", request),
 		AssertAccess: assertAccess, Limit: helper.UnpackDuration + time.Minute})
@@ -142,9 +148,16 @@ func (s *Service) Unpack(ctx context.Context, target Target, rootID, relative st
 		// off may not have, so once it is gone a new helper removes it.
 		if slices.ContainsFunc([]string{"ARCHIVE_UNSAFE", "ARCHIVE_TOO_LARGE", "ARCHIVE_NO_SPACE", "NOT_AN_ARCHIVE", "FILE_NAME_TAKEN"},
 			func(code string) bool { return apperr.Is(err, code) }) {
+			s.forgetStage(ctx, stage.ID)
 			return nil, err
 		}
-		s.removeStage(context.WithoutCancel(ctx), target, root, normalized, stage)
+		cleanup := context.WithoutCancel(ctx)
+		if removeErr := s.removeStage(cleanup, target, root, normalized, stage.ID); removeErr == nil {
+			s.forgetStage(cleanup, stage.ID)
+		} else {
+			log.Warn("Failed to remove an unpack staging folder; it is removed at the next start",
+				logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
+		}
 		// A helper cut off by a timeout or revoked access, or one whose exit
 		// is unknown, may have published its result.
 		if public, ok := apperr.As(err); ok && public.Status == 401 {
@@ -153,20 +166,10 @@ func (s *Service) Unpack(ctx context.Context, target Target, rootID, relative st
 		return nil, errUnconfirmed
 	}
 	access.Cleanup(false)
+	s.forgetStage(ctx, stage.ID)
 	var result helper.UnpackResult
 	if err := json.Unmarshal(out, &result); err != nil || result.Name == "" {
 		return nil, errUnconfirmed
 	}
 	return &result, nil
-}
-
-func (s *Service) removeStage(ctx context.Context, target Target, root Root, archive, stage string) {
-	access, err := s.Acquire(ctx, target, root, false, nil)
-	if err == nil {
-		_, err = access.request(ctx, helper.FileRequest{Operation: "unpack-cleanup", Root: root.Path, Path: archive, UploadID: stage}, nil, nil)
-		access.Cleanup(err != nil)
-	}
-	if err != nil {
-		log.Warn("Failed to remove an unpack staging folder", logging.F("container", target.ContainerID[:min(12, len(target.ContainerID))]))
-	}
 }

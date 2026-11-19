@@ -254,27 +254,23 @@ func TestUnpackLimits(t *testing.T) {
 	}
 }
 
-// A killed helper's staging folder is removed by a later unpack once it is
-// old enough that no helper can still be writing it, and on request.
+// Cleanup removes only the staging folder it is named, so a look-alike Ludock
+// never recorded is left even when it looks like an old one of Ludock's.
 func TestUnpackStagingCleanup(t *testing.T) {
 	root, _ := dataRoot(t)
-	stale := filepath.Join(root, ".ludock-unpack-1b4e28ba-2d11-4ab8-a3e4-1c4d8e9f0a7b")
 	fresh := filepath.Join(root, ".ludock-unpack-"+stageID)
-	os.MkdirAll(filepath.Join(stale, "half"), 0o755)
 	os.MkdirAll(filepath.Join(fresh, "half"), 0o755)
-	os.Chmod(stale, 0o700)
 	os.Chmod(fresh, 0o700)
-	// A folder another user could have made under the same name is left.
 	planted := filepath.Join(root, ".ludock-unpack-7c9e6679-7425-40de-944b-e07fc1f90ae7")
 	os.MkdirAll(filepath.Join(planted, "game data"), 0o755)
-	unix.UtimesNano(planted, []unix.Timespec{unix.NsecToTimespec(0), unix.NsecToTimespec(0)})
+	os.Chmod(planted, 0o700)
 	old := unix.NsecToTimespec(0)
-	unix.UtimesNano(stale, []unix.Timespec{old, old})
+	unix.UtimesNano(planted, []unix.Timespec{old, old})
 	if _, code := unpackFile(t, root, "other.tar", tarArchive(t, []archived{{name: "x", body: "x"}})); code == 0 {
 		t.Fatal("reused a staging name in use")
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatal("stale staging kept")
+	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
+		t.Fatal("an unpack removed a folder Ludock didn't record")
 	}
 	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "other.tar", UploadID: stageID}, nil); code != 0 {
 		t.Fatal(code)
@@ -283,7 +279,11 @@ func TestUnpackStagingCleanup(t *testing.T) {
 		t.Fatal("cleanup kept the staging folder")
 	}
 	if _, err := os.Stat(filepath.Join(planted, "game data")); err != nil {
-		t.Fatal("removed a folder Ludock didn't make")
+		t.Fatal("cleanup removed a folder it wasn't named")
+	}
+	// A folder that is gone took its staging folder with it.
+	if _, code := runFile(t, FileRequest{Operation: "unpack-cleanup", Root: root, Path: "gone/other.tar", UploadID: stageID}, nil); code != 0 {
+		t.Fatal(code)
 	}
 	// Files an excluded mount hides from the game are never removed.
 	os.MkdirAll(filepath.Join(fresh, "hidden"), 0o755)

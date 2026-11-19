@@ -279,8 +279,10 @@ characters, or backslashes refuse the whole archive; links, hard links, and
 special files are left out; and new files and folders get the same
 permissions and owner as an upload. Unpacking works in a hidden staging folder
 and keeps the free space set as **Minimum free space** under backup settings.
-A refused or interrupted unpack removes its staging folder, and the next
-unpack in that folder removes any left by a crash more than an hour old.
+A refused or interrupted unpack removes its staging folder. Ludock records
+each staging folder before unpacking, so one left when Ludock stopped is
+removed the next time it starts; after three starts that can't remove it,
+Ludock logs a warning and stops trying.
 
 Choose **Select** to pick several entries of one folder, then download them as
 one tar archive, move them into another folder of the same storage location,

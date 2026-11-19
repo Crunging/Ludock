@@ -9,7 +9,7 @@ import (
 	"errors"
 	"io"
 	"path"
-	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,8 +32,7 @@ type UnpackLimits struct {
 // Unpack is the limits every unpack uses; tests lower it.
 var Unpack = UnpackLimits{Bytes: 20 << 30, Entries: 100000, Depth: 64, Ratio: 100, Floor: 1 << 20}
 
-// UnpackDuration bounds one unpack. Staging folders older than twice this
-// were left by a helper that was killed and are removed by the next unpack.
+// UnpackDuration bounds one unpack.
 const UnpackDuration = 30 * time.Minute
 
 // UnpackResult is what an unpack created, next to the archive.
@@ -50,8 +49,6 @@ var (
 	errNotArchive    = errors.New("the file is not a supported archive or is damaged")
 	errStopped       = errors.New("the unpack was stopped")
 )
-
-var unpackStage = regexp.MustCompile(`^\.ludock-unpack-[0-9a-f-]{36}$`)
 
 func unpackName(id string) (string, error) {
 	if !uploadIDPattern.MatchString(id) {
@@ -367,29 +364,6 @@ func (h *fileHelper) stageFolder() string {
 	return strings.Join(parts[:len(parts)-1], "/")
 }
 
-func (h *fileHelper) sweepUnpacks(parent fd) {
-	children, err := names(parent)
-	if err != nil {
-		return
-	}
-	for _, child := range children {
-		if !unpackStage.MatchString(child) {
-			continue
-		}
-		if info, err := lstatAt(parent, child); err == nil && stagingFolder(info) &&
-			time.Since(time.UnixMilli(int64(mtimeMs(info)))) > 2*UnpackDuration {
-			h.removeStage(parent, child)
-		}
-	}
-}
-
-// stagingFolder reports a folder only a helper could have made: private to
-// the helper's user, so a game running as another user can't plant one for
-// Ludock to delete.
-func stagingFolder(info *unix.Stat_t) bool {
-	return isDir(info) && info.Uid == uint32(unix.Geteuid()) && info.Mode&0o777 == 0o700
-}
-
 func (h *fileHelper) removeStage(parent fd, name string) error {
 	info, err := lstatAt(parent, name)
 	if isNotExist(err) {
@@ -398,9 +372,16 @@ func (h *fileHelper) removeStage(parent fd, name string) error {
 	if err != nil {
 		return err
 	}
+	// Anything but a folder isn't the staging folder, which was renamed into
+	// place or replaced by the game.
+	if !isDir(info) {
+		return nil
+	}
 	// An excluded mount isn't in the helper, so it would see and delete the
-	// files the mount hides from the game.
-	if !stagingFolder(info) || h.check(path.Join(h.stageFolder(), name), true) != nil {
+	// files the mount hides from the game; a nested mount isn't staging.
+	relative := path.Join(h.stageFolder(), name)
+	absolute := h.absolute(relative)
+	if h.check(relative, true) != nil || slices.ContainsFunc(h.request.Mounts, func(mount string) bool { return within(mount, absolute) }) {
 		return errUnsafe
 	}
 	return h.removeEntry(parent, name, 0)
@@ -418,7 +399,6 @@ func (h *fileHelper) unpack(parent fd, name string) error {
 	if h.request.Reserve == nil || *h.request.Reserve < 0 {
 		return errors.New("invalid reserve")
 	}
-	h.sweepUnpacks(parent)
 	descriptor, err := h.t.openAt(parent, name, fileFlags, 0)
 	if err != nil {
 		return err

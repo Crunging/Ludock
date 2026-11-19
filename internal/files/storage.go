@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/helper"
@@ -60,6 +61,8 @@ func Error(code string, status int) *apperr.Error {
 const PreviewLimit = 512 * 1024
 
 type Target struct {
+	// ServerID is the logical server, which records outlive containers by.
+	ServerID    string
 	ContainerID string
 	Name        string
 	GameType    string
@@ -68,6 +71,7 @@ type Target struct {
 
 // Service accesses server files through helper containers.
 type Service struct {
+	DB     *db.DB
 	Docker *docker.Client
 	Images *launch.Images
 	// Managed reports whether Ludock manages a container, including an

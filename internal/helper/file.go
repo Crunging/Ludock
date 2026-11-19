@@ -611,6 +611,10 @@ func (h *fileHelper) run() error {
 		return h.selection(root, operation)
 	}
 	parent, name, err := h.parentOf(root, relative)
+	// A folder that is gone took its staging folder with it.
+	if operation == "unpack-cleanup" && isNotExist(err) {
+		return h.json(map[string]bool{"ok": true})
+	}
 	if err != nil {
 		return err
 	}

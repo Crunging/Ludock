@@ -27,7 +27,7 @@ import (
 )
 
 func fileTarget(action *serverAction) files.Target {
-	return files.Target{ContainerID: action.Container.ID, Name: action.Container.Name, GameType: action.Container.GameType,
+	return files.Target{ServerID: action.Logical.ID, ContainerID: action.Container.ID, Name: action.Container.Name, GameType: action.Container.GameType,
 		Roots: action.Container.FileRoots}
 }
 
