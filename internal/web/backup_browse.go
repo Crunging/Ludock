@@ -32,6 +32,7 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 		browser.Error = publicMessage(err)
 		return browser
 	}
+	folder := s.App.Backups.ArchiveFolder(backup)
 	browser.Backup, browser.Roots = *backup, backup.Roots
 	if len(backup.Roots) == 0 {
 		browser.Error = "This backup holds no data folders."
@@ -41,7 +42,7 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 	if index := slices.IndexFunc(backup.Roots, func(root backups.Root) bool { return root.ID == query.Get("root") }); index >= 0 {
 		browser.Root = backup.Roots[index]
 	}
-	entries, err := s.App.Backups.Storage.ListFolder(backup.Destination(), backup.ID, backup.Roots, browser.Root.ID, browser.Path)
+	entries, err := s.App.Backups.Storage.ListFolder(folder, backup.ID, backup.Roots, browser.Root.ID, browser.Path)
 	// Access lost during the scan shows nothing of the backup, not even
 	// whether the folder exists.
 	if refused := check(); refused != nil {
@@ -99,7 +100,7 @@ func (s *Server) downloadBackupFile(w http.ResponseWriter, r *http.Request, requ
 		return
 	}
 	started := false
-	err = s.App.Backups.Storage.ReadFile(backup.Destination(), backup.ID, backup.Roots, root, item, func(size int64, body io.Reader) error {
+	err = s.App.Backups.Storage.ReadFile(s.App.Backups.ArchiveFolder(backup), backup.ID, backup.Roots, root, item, func(size int64, body io.Reader) error {
 		if err := check(); err != nil {
 			return err
 		}

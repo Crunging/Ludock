@@ -272,6 +272,9 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 					@Pip("ok")
 					complete
 			}
+			if backup.State == "complete" {
+				@copyState(backup)
+			}
 		</td>
 		<td>
 			<div class="inline-actions">
@@ -315,6 +318,22 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 	</tr>
 }
 
+// copyState says where a backup's second copy stands.
+templ copyState(backup backups.Backup) {
+	switch {
+		case backup.FromCopy:
+			<small class="table-detail backup-copy backup-copy--warning">Missing from the backup folder; using the second copy</small>
+		case backup.CopyState == "complete":
+			<small class="table-detail backup-copy">Second copy saved</small>
+		case backup.Copying:
+			<small class="table-detail backup-copy">Making the second copy…</small>
+		case backup.CopyError != "":
+			<small class="table-detail backup-copy backup-copy--warning">Second copy failed. { backup.CopyError }</small>
+		case backup.CopyState != "":
+			<small class="table-detail backup-copy">Second copy waiting</small>
+	}
+}
+
 // KeepForm marks a backup kept, with an optional note.
 templ KeepForm(b BackupsView) {
 	<form class="keep-panel stack-form" id="keep-backup" hx-post={ "/servers/" + b.ServerID + "/backups/" + b.Keep.ID + "/keep" } hx-target="#keep-status">
@@ -336,6 +355,9 @@ templ RestoreForm(b BackupsView) {
 	<form class="danger-panel stack-form" hx-post={ "/servers/" + b.ServerID + "/restores" } hx-target="#restore-status">
 		<h3>Restore backup from @Time(b.Restore.CreatedAt, "", "")</h3>
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
+		if b.Restore.FromCopy {
+			@Alert("warning", "This backup is missing from the backup folder, so Ludock restores it from the second copy.")
+		}
 		<details class="disclosure">
 			<summary>More about restoring</summary>
 			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t roll back the container image or its settings.</p>
@@ -439,6 +461,9 @@ templ BackupBrowserView(b BackupBrowser) {
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>All backups</a>
 		</div>
 		<p class="section-lede">Look through what this backup holds without changing anything. Download a file, or restore one file or folder in place of the server’s current copy.</p>
+		if b.Backup.FromCopy {
+			@Alert("warning", "This backup is missing from the backup folder, so Ludock is reading the second copy.")
+		}
 		if b.Error != "" {
 			<p class="alert alert--error" role="alert">Unable to open this backup: { b.Error }</p>
 		} else {

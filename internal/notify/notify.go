@@ -344,27 +344,39 @@ func (s *Service) Notify(alert Alert, key, message string) {
 func (s *Service) queueEvent(alert Alert, key, message string) error {
 	ctx := context.Background()
 	queued := false
-	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		all, err := savedIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		for _, d := range all.ready() {
-			if !all[d].Alerts.Includes(alert) {
-				continue
-			}
-			if _, err := enqueue(ctx, tx, key, d, message, "event"); err != nil {
-				return err
-			}
-			queued = true
-		}
-		return nil
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
+		queued, err = s.QueueIn(ctx, tx, alert, key, message)
+		return err
 	})
 	if err == nil && queued {
 		s.poke()
 	}
 	return err
 }
+
+// QueueIn queues an alert like Notify inside tx, for work that must not
+// commit without its alert. It reports whether anything was queued; call
+// Poke once tx commits.
+func (s *Service) QueueIn(ctx context.Context, tx *sql.Tx, alert Alert, key, message string) (bool, error) {
+	all, err := savedIn(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	queued := false
+	for _, d := range all.ready() {
+		if !all[d].Alerts.Includes(alert) {
+			continue
+		}
+		if _, err := enqueue(ctx, tx, key, d, message, "event"); err != nil {
+			return false, err
+		}
+		queued = true
+	}
+	return queued, nil
+}
+
+// Poke sends queued notifications now.
+func (s *Service) Poke() { s.poke() }
 
 // Stop abandons pending queue retries, before the database closes.
 func (s *Service) Stop() {

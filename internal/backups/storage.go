@@ -27,6 +27,9 @@ type Settings struct {
 	// the free-space reserve limits them.
 	MaxBytes     int64 `json:"maxBytes"`
 	ReserveBytes int64 `json:"reserveBytes"`
+	// CopyTo is another approved folder that gets a second copy of every
+	// backup; empty means none.
+	CopyTo string `json:"copyTo,omitempty"`
 }
 
 const (
@@ -36,7 +39,7 @@ const (
 
 // valid checks the limits; Storage.ValidateSettings also checks the folder.
 func (s Settings) valid() bool {
-	return s.Destination != "" && textutil.Length(s.Destination) <= 1024 && s.MaxBytes >= 0 && s.MaxBytes <= maxSetting &&
+	return s.Destination != "" && textutil.Length(s.Destination) <= 1024 && textutil.Length(s.CopyTo) <= 1024 && s.MaxBytes >= 0 && s.MaxBytes <= maxSetting &&
 		s.ReserveBytes >= 0 && s.ReserveBytes <= maxSetting
 }
 
@@ -66,6 +69,37 @@ func RootList(value string) []string {
 		if root = strings.TrimSpace(root); root != "" && !slices.Contains(roots, root) {
 			roots = append(roots, root)
 		}
+	}
+	return roots
+}
+
+// CopyRoot is approved as a second folder, beside the configured roots,
+// whenever a folder is mounted there, so a second copy needs only a volume.
+const CopyRoot = "/backups-copy"
+
+// mountInfo lists the mounts of Ludock's own container; tests replace it.
+var mountInfo = "/proc/self/mountinfo"
+
+// mountedAt reports whether something is mounted exactly at path.
+func mountedAt(path string) bool {
+	data, err := os.ReadFile(mountInfo)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if fields := strings.Fields(line); len(fields) > 4 && fields[4] == path {
+			return true
+		}
+	}
+	return false
+}
+
+// ApprovedRoots are the configured roots, then CopyRoot when it is mounted.
+// With no configured roots backups are off, so CopyRoot isn't offered.
+func (s *Storage) ApprovedRoots() []string {
+	roots := RootList(s.Roots)
+	if len(roots) > 0 && !slices.Contains(roots, CopyRoot) && mountedAt(CopyRoot) {
+		roots = append(roots, CopyRoot)
 	}
 	return roots
 }
@@ -149,24 +183,35 @@ func NewStorage(client *docker.Client, roots []string, self string) *Storage {
 }
 
 // ValidateSettings checks limits, the destination, and that it is a
-// writable mount of Ludock's own container.
+// writable mount of Ludock's own container. The second copy's folder is
+// checked only when saving (ValidateCopyFolder), so a missing one never
+// stops a backup.
 func (s *Storage) ValidateSettings(ctx context.Context, settings Settings) (Settings, error) {
 	if !settings.valid() {
 		return settings, apperr.New("INVALID_REQUEST", 400, "Invalid request")
 	}
-	directory, err := s.ApprovedDirectory(settings.Destination)
-	if err != nil {
+	if _, err := s.validateFolder(ctx, settings.Destination); err != nil {
 		return settings, err
 	}
+	return settings, nil
+}
+
+// validateFolder resolves an approved folder that is a writable mount of
+// Ludock's own container.
+func (s *Storage) validateFolder(ctx context.Context, folder string) (string, error) {
+	directory, err := s.ApprovedDirectory(folder)
+	if err != nil {
+		return "", err
+	}
 	if unix.Access(directory, unix.W_OK|unix.X_OK) != nil {
-		return settings, fail("BACKUP_DESTINATION", "Ludock cannot write to the backup folder. Check its mount and directory permissions, then save again.")
+		return "", fail("BACKUP_DESTINATION", "Ludock cannot write to the backup folder. Check its mount and directory permissions, then save again.")
 	}
 	if !docker.ContainerIDPattern.MatchString(s.Self) {
-		return settings, fail("BACKUP_MOUNT_UNVERIFIED", "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.")
 	}
 	self, err := s.Docker.Inspect(ctx, s.Self)
 	if err != nil {
-		return settings, fail("BACKUP_MOUNT_UNVERIFIED", "Ludock could not verify its backup mount. Set LUDOCK_SELF_CONTAINER to its Docker container name or ID.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock could not verify its backup mount. Set LUDOCK_SELF_CONTAINER to its Docker container name or ID.")
 	}
 	var mount *docker.MountPoint
 	for index := range self.Mounts {
@@ -176,9 +221,9 @@ func (s *Storage) ValidateSettings(ctx context.Context, settings Settings) (Sett
 		}
 	}
 	if mount == nil || !mount.RW || (mount.Type != "bind" && mount.Type != "volume") {
-		return settings, fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be a writable mounted directory in Ludock's container.")
+		return "", fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be a writable mounted directory in Ludock's container.")
 	}
-	return settings, nil
+	return directory, nil
 }
 
 var errDestination = fail("BACKUP_DESTINATION",
@@ -201,13 +246,15 @@ func (s *Storage) resolveDirectory(directory string) (string, error) {
 	if !filepath.IsAbs(directory) || strings.Contains(directory, "\x00") {
 		return "", fail("BACKUP_DESTINATION", "Choose an absolute mounted backup destination inside LUDOCK_BACKUP_ROOTS.")
 	}
-	configured := RootList(s.Roots)
+	configured := s.ApprovedRoots()
 	if len(configured) == 0 {
 		return "", fail("BACKUP_DESTINATION", "No backup roots are configured. Set LUDOCK_BACKUP_ROOTS to a mounted backup folder and recreate Ludock, then save again.")
 	}
 	var roots []string
 	for _, value := range configured {
-		if !filepath.IsAbs(value) || filepath.Clean(value) == "/" {
+		// Only roots that can hold the directory are resolved, so an
+		// unreachable second folder leaves the others usable.
+		if !filepath.IsAbs(value) || filepath.Clean(value) == "/" || !within(filepath.Clean(directory), filepath.Clean(value)) {
 			continue
 		}
 		canonical, err := filepath.EvalSymlinks(value)
@@ -382,13 +429,17 @@ func (s *Storage) Remove(directory, id string, assertAccess func() error) error 
 	if err := checkID(id); err != nil {
 		return err
 	}
+	return s.removeFile(directory, id+".tar", assertAccess)
+}
+
+func (s *Storage) removeFile(directory, name string, assertAccess func() error) error {
 	dir, err := s.pin(directory)
 	if err != nil {
 		return err
 	}
 	defer dir.close()
 	var stat unix.Stat_t
-	err = unix.Fstatat(dir.fd, id+".tar", &stat, unix.AT_SYMLINK_NOFOLLOW)
+	err = unix.Fstatat(dir.fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
@@ -403,8 +454,22 @@ func (s *Storage) Remove(directory, id string, assertAccess func() error) error 
 			return err
 		}
 	}
-	if err := unix.Unlinkat(dir.fd, id+".tar", 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	if err := unix.Unlinkat(dir.fd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}
 	return unix.Fsync(dir.fd)
+}
+
+// present reports whether a published archive is a regular file in directory.
+func (s *Storage) present(directory, id string) bool {
+	if directory == "" || checkID(id) != nil {
+		return false
+	}
+	dir, err := s.pin(directory)
+	if err != nil {
+		return false
+	}
+	defer dir.close()
+	var stat unix.Stat_t
+	return unix.Fstatat(dir.fd, id+".tar", &stat, unix.AT_SYMLINK_NOFOLLOW) == nil && stat.Mode&unix.S_IFMT == unix.S_IFREG
 }

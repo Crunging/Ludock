@@ -164,6 +164,9 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
+	// The second copy is made once the server is back as it was and its
+	// locks are released.
+	defer j.Backups.WakeCopies()
 	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
 		if err := j.assertCapability(ctx, job, authz.BackupsCreate); err != nil {
 			return nil, err

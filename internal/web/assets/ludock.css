@@ -1137,6 +1137,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .backup-storage code, .admin-root-options code, .admin-setup-help code { overflow-wrap: anywhere; }
 .backup-usage { margin-bottom: 8px; color: var(--ink-2); font-size: 15px; }
 .backup-note { color: var(--ink-2); font-style: italic; }
+.backup-copy--warning { color: var(--caution-text); }
 .keep-panel { margin: 0 0 20px; padding: 20px 22px; border-radius: var(--radius-lg); background: var(--block); max-width: 760px; }
 .keep-panel h3 { font-size: 17px; }
 .admin-settings-feedback { display: flex; }

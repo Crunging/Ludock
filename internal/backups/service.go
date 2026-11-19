@@ -38,15 +38,22 @@ type Backup struct {
 	Note   string
 	// Reason is the work that took the backup for its own protection:
 	// "restore" or "update", or empty.
-	Reason      string
-	fingerprint string
-	destination string
+	Reason string
+	// CopyState is the second copy's state: "" for none, "pending",
+	// "complete", or "failed" (still retried); CopyError says why the last
+	// attempt failed.
+	CopyState, CopyError string
+	// FromCopy is set by ArchiveFolder when the archive is read from the
+	// second copy, and Copying by Locate while the copy is being made.
+	FromCopy, Copying bool
+	fingerprint       string
+	destination       string
+	copyDestination   string
+	copyAttempts      int
 }
 
 // Fingerprint is the binding fingerprint the backup was made from.
 func (b *Backup) Fingerprint() string { return b.fingerprint }
-
-func (b *Backup) Destination() string { return b.destination }
 
 type Service struct {
 	DB       *db.DB
@@ -55,6 +62,13 @@ type Service struct {
 	Docker   *docker.Client
 	Observer *servers.Observer
 	Locks    *locks.Table
+	// CopyFailed queues the alert for a second copy that still fails after
+	// several attempts, inside the transaction that records it; problem is
+	// public text. Alerted runs after that transaction commits.
+	CopyFailed func(ctx context.Context, tx *sql.Tx, backupID, serverID, problem string) error
+	Alerted    func()
+
+	copies copies
 
 	// initMu serializes Initialize: a backup that finds no settings waits
 	// for setup already under way instead of failing as unconfigured.
@@ -77,15 +91,19 @@ const settingsKey = "backups"
 var (
 	errNotFound = fail("BACKUP_NOT_FOUND", "Backup not found.")
 	errKept     = fail("BACKUP_KEPT", "This backup is kept. Release it before deleting it.")
+	// errSettingsChanged is a save made from a page older than the settings.
+	errSettingsChanged = fail("BACKUP_SETTINGS_CHANGED", "Backup settings changed in another window. Reload the page and save again.")
 )
 
-const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,COALESCE(kept_at,0),note,reason"
+const backupColumns = "id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,COALESCE(kept_at,0),note,reason," +
+	"copy_destination,copy_state,copy_error,copy_attempts"
 
 func scanBackup(s interface{ Scan(...any) error }) (*Backup, error) {
 	var backup Backup
 	var roots string
 	if err := s.Scan(&backup.ID, &backup.ServerID, &backup.fingerprint, &backup.destination, &roots, &backup.Size,
-		&backup.Checksum, &backup.CreatedAt, &backup.State, &backup.KeptAt, &backup.Note, &backup.Reason); err != nil {
+		&backup.Checksum, &backup.CreatedAt, &backup.State, &backup.KeptAt, &backup.Note, &backup.Reason,
+		&backup.copyDestination, &backup.CopyState, &backup.CopyError, &backup.copyAttempts); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(roots), &backup.Roots)
@@ -124,7 +142,7 @@ func (s *Service) Open(ctx context.Context, serverID, id string) (io.ReadCloser,
 	if err != nil {
 		return nil, err
 	}
-	return s.Storage.Open(backup.destination, backup.ID)
+	return s.Storage.Open(s.ArchiveFolder(backup), backup.ID)
 }
 
 // Delete removes a backup under the server and storage locks. It also
@@ -152,7 +170,11 @@ func (s *Service) Delete(ctx context.Context, serverID, id string, assertAccess 
 			return err
 		}
 	}
-	return s.remove(ctx, backup, assertAccess)
+	// The archive is gone; its copy goes once the second folder is back.
+	if err := s.remove(ctx, backup, assertAccess); !errors.Is(err, errCopyPending) {
+		return err
+	}
+	return nil
 }
 
 // remove marks a backup deleting before unlinking its archive, so an
@@ -198,6 +220,9 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 	if err := s.Storage.RemovePartial(backup.destination, backup.ID); err != nil {
 		return err
 	}
+	if handed, err := s.markCopyRemoval(ctx, backup.ID); err != nil || handed {
+		return cmp.Or(err, errCopyPending)
+	}
 	_, err := s.DB.ExecContext(ctx, "DELETE FROM backups WHERE id=?", backup.ID)
 	return err
 }
@@ -226,15 +251,39 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 	if err != nil {
 		return settings, err
 	}
+	// A second folder that is away doesn't block other changes; the copier
+	// checks it before every copy.
+	saved, _, err := s.SavedSettings(ctx)
+	unchanged := err == nil && saved != nil && saved.CopyTo == settings.CopyTo && saved.Destination == settings.Destination
+	if !unchanged {
+		if err := s.ValidateCopyFolder(ctx, settings); err != nil {
+			return settings, err
+		}
+	}
 	// Validation can wait on Docker; the admin's session is checked again
 	// in the transaction that saves.
 	err = s.DB.AdminMutation(ctx, admin.ID, tokenHash, db.Now(), func(tx *sql.Tx) error {
-		return s.DB.SetSetting(ctx, tx, settingsKey, settings)
+		// Skipped validation holds only if the folders weren't changed since.
+		if unchanged {
+			var current Settings
+			var raw string
+			if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingsKey).Scan(&raw); err != nil ||
+				json.Unmarshal([]byte(raw), &current) != nil || current.CopyTo != settings.CopyTo || current.Destination != settings.Destination {
+				return errSettingsChanged
+			}
+		}
+		if err := s.DB.SetSetting(ctx, tx, settingsKey, settings); err != nil {
+			return err
+		}
+		return retarget(ctx, tx, settings.CopyTo)
 	})
+	if err == nil && settings.CopyTo != "" {
+		s.WakeCopies()
+	}
 	return settings, authz.AdminMutationError(err)
 }
 
-// Initialize enables the single approved root with the default reserve, unless
+// Initialize enables the first approved root with the default reserve, unless
 // an administrator has ever saved backup settings.
 func (s *Service) Initialize(ctx context.Context) error {
 	s.initMu.Lock()
@@ -247,7 +296,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 		testHook("initializing")
 	}
 	roots := RootList(s.Storage.Roots)
-	if len(roots) != 1 {
+	if len(roots) == 0 {
 		return nil
 	}
 	settings := Settings{Destination: roots[0], ReserveBytes: DefaultReserve}
@@ -376,12 +425,17 @@ type StorageStatus struct {
 	ReserveBytes   int64
 	AvailableBytes int64 // -1 when unknown
 	Issues         []Issue
+	// CopyTo is the second copy's folder, if any. Its problem never stops
+	// backups, so it isn't among Issues.
+	CopyTo             string
+	CopyAvailableBytes int64 // -1 when unknown
+	CopyIssue          string
 }
 
 func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	settings, found, _ := s.SavedSettings(ctx)
 	used, kept, err := s.ArchiveBytes(ctx)
-	status := StorageStatus{Configured: found, ArchiveBytes: used, KeptBytes: kept, AvailableBytes: -1}
+	status := StorageStatus{Configured: found, ArchiveBytes: used, KeptBytes: kept, AvailableBytes: -1, CopyAvailableBytes: -1}
 	if err != nil {
 		status.Issues = append(status.Issues, Issue{"BACKUP_RECORDS_UNAVAILABLE", "Ludock could not read its backup records. Try again."})
 		return status, nil
@@ -395,6 +449,13 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 		return status, nil
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
+	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
+		if available, err := s.Storage.AvailableBytes(settings.CopyTo); err != nil {
+			status.CopyIssue = errCopyMissing.Message
+		} else {
+			status.CopyAvailableBytes = available
+		}
+	}
 	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_CAPACITY", "The backup size limit could not be checked."}))
 	}
@@ -526,24 +587,12 @@ func (s *Service) AssertSeparateDestination(ctx context.Context, observation ide
 	if err != nil {
 		return err
 	}
-	targets := []identity.Mount{{Type: "bind", Source: destination, Destination: destination, Writable: true}}
-	proven := false
-	if docker.ContainerIDPattern.MatchString(s.Storage.Self) {
-		self, err := s.Docker.Inspect(ctx, s.Storage.Self)
-		if err != nil && !docker.IsNotFound(err) {
-			return err
-		}
-		if err == nil {
-			for _, mount := range self.Mounts {
-				if destination == mount.Destination || strings.HasPrefix(destination, mount.Destination+"/") {
-					proven = true
-					targets = append(targets, identity.Mount{Type: mount.Type, Name: mount.Name,
-						Source: mount.Source + destination[len(mount.Destination):], Destination: destination, Writable: true})
-				}
-			}
-		}
+	mounts, err := s.hostMounts(ctx, destination)
+	if err != nil {
+		return err
 	}
-	if !proven {
+	targets := append([]identity.Mount{{Type: "bind", Source: destination, Destination: destination, Writable: true}}, mounts...)
+	if len(mounts) == 0 {
 		return fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be mounted into Ludock. Set LUDOCK_SELF_CONTAINER if its Docker hostname does not identify its container.")
 	}
 	for _, source := range observation.Mounts {
@@ -559,6 +608,29 @@ func (s *Service) AssertSeparateDestination(ctx context.Context, observation ide
 	return nil
 }
 
+// hostMounts is how a resolved folder reaches the Docker host through
+// Ludock's own mounts; none when that can't be shown.
+func (s *Service) hostMounts(ctx context.Context, folder string) ([]identity.Mount, error) {
+	if !docker.ContainerIDPattern.MatchString(s.Storage.Self) {
+		return nil, nil
+	}
+	self, err := s.Docker.Inspect(ctx, s.Storage.Self)
+	if docker.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var mounts []identity.Mount
+	for _, mount := range self.Mounts {
+		if within(folder, mount.Destination) {
+			mounts = append(mounts, identity.Mount{Type: mount.Type, Name: mount.Name,
+				Source: mount.Source + folder[len(mount.Destination):], Destination: folder, Writable: true})
+		}
+	}
+	return mounts, nil
+}
+
 // AssertDataOperationState refuses servers in transitional states.
 func AssertDataOperationState(state string) error {
 	if slices.Contains([]string{"paused", "restarting", "removing", "dead"}, state) {
@@ -567,11 +639,17 @@ func AssertDataOperationState(state string) error {
 	return nil
 }
 
+// Record saves a complete backup written to destination. Its second copy
+// follows the setting saved now, not when the backup started, since saving
+// settings retargets only recorded backups.
 func (s *Service) Record(ctx context.Context, backup Backup, fingerprint, destination string) error {
 	roots, _ := json.Marshal(backup.Roots)
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,reason)
-    VALUES(?,?,?,?,?,?,?,?,'complete',?)`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum,
-		backup.CreatedAt, backup.Reason)
+	_, err := s.DB.ExecContext(ctx, `WITH setting(folder) AS (
+      SELECT COALESCE((SELECT json_extract(value_json,'$.copyTo') FROM settings WHERE key='backups'),''))
+    INSERT INTO backups(id,server_id,binding_fingerprint,destination,roots_json,size,checksum,created_at,state,reason,copy_destination,copy_state)
+    SELECT ?,?,?,?,?,?,?,?,'complete',?, CASE WHEN folder=? THEN '' ELSE folder END, CASE WHEN folder IN ('',?) THEN '' ELSE 'pending' END
+    FROM setting`, backup.ID, backup.ServerID, fingerprint, destination, string(roots), backup.Size, backup.Checksum,
+		backup.CreatedAt, backup.Reason, destination, destination)
 	return err
 }
 
@@ -581,7 +659,7 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 	s.deletionMu.Lock()
 	defer s.deletionMu.Unlock()
 	cursor := s.deletionCursor
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE state='deleting' AND (created_at,id) > (?,?)
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+backupColumns+` FROM backups WHERE state='deleting' AND copy_state<>'removing' AND (created_at,id) > (?,?)
     ORDER BY created_at,id LIMIT ?`, cursor.created, cursor.id, deletionBatch)
 	if err != nil {
 		return err
@@ -616,7 +694,7 @@ func (s *Service) FinishDeletions(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		if err := s.finishDeletion(ctx, backup.ID); err != nil && failed == nil {
+		if err := s.finishDeletion(ctx, backup.ID); err != nil && !errors.Is(err, errCopyPending) && failed == nil {
 			failed = err
 		}
 		release()
@@ -675,9 +753,14 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 	if err != nil {
 		return err
 	}
+	// Archives outside the current folder, and second copies, may be on a
+	// disk that is gone; failing to remove them never fails a new backup.
+	failed := func(backup Backup, err error) bool {
+		return err != nil && !errors.Is(err, errCopyPending) && backup.destination == settings.Destination
+	}
 	for _, backup := range list {
-		if backup.State == "deleting" {
-			if err := s.remove(ctx, &backup, nil); err != nil {
+		if backup.State == "deleting" && backup.CopyState != "removing" {
+			if err := s.remove(ctx, &backup, nil); failed(backup, err) {
 				return err
 			}
 		}
@@ -686,7 +769,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 		return slices.Contains(protected, id) || s.Storage.Reading(id)
 	})
 	for _, backup := range expired {
-		if err := s.removeIdle(ctx, backup); err != nil {
+		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
 		}
 	}
@@ -699,7 +782,7 @@ func (s *Service) Prune(ctx context.Context, serverID string, settings Settings,
 		if backup.destination != settings.Destination {
 			continue
 		}
-		if err := s.removeIdle(ctx, backup); err != nil {
+		if err := s.removeIdle(ctx, backup); failed(backup, err) {
 			return err
 		}
 	}

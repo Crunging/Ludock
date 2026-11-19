@@ -1,6 +1,7 @@
 package views
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,9 +32,26 @@ type BackupSettingsView struct {
 	Configured         bool
 	Destination        string
 	MaxGiB, ReserveGiB string
-	Roots              []string
+	// CopyTo is the folder that gets a second copy of every backup, if any.
+	CopyTo string
+	Roots  []string
 	Error              string
 	Saved              bool
+}
+
+// copyRoots are the approved folders a second copy can go to.
+func (b BackupSettingsView) copyRoots() []string {
+	var roots []string
+	for _, root := range b.Roots {
+		if root != b.Destination || root == b.CopyTo {
+			roots = append(roots, root)
+		}
+	}
+	// A saved folder that is away stays chosen.
+	if b.CopyTo != "" && !slices.Contains(roots, b.CopyTo) {
+		roots = append(roots, b.CopyTo)
+	}
+	return roots
 }
 
 // NotificationDestinationView is one destination's card.
@@ -177,6 +195,22 @@ templ BackupSettingsForm(b BackupSettingsView) {
 						<p class="muted" id="backup-limit-help">Optional. Leave empty to let backups use the disk down to the free-space minimum.</p>
 					</div>
 				</div>
+				if roots := b.copyRoots(); len(roots) > 0 {
+					<div>
+						<label>
+							Also copy backups to
+							<select name="copyTo" aria-describedby="backup-copy-help">
+								<option value="" selected?={ b.CopyTo == "" }>No second copy</option>
+								for _, root := range roots {
+									<option value={ root } selected?={ root == b.CopyTo }>{ root }</option>
+								}
+							</select>
+						</label>
+						<p class="muted" id="backup-copy-help">Each backup is copied there after its server is back, so a lost backup disk doesn’t take every backup with it. Choose a folder on another disk or a NAS.</p>
+					</div>
+				} else {
+					<p class="muted" id="backup-copy-help">To keep a second copy of every backup on another disk, mount a folder from that disk at <code>/backups-copy</code> in Ludock’s Compose file, for example <code>/mnt/nas/ludock:/backups-copy</code>, recreate Ludock, and choose it here.</p>
+				}
 				<button class="primary-btn" type="submit" data-busy-label="Saving backup settings…">Save backup settings</button>
 			</div>
 		</details>
@@ -215,11 +249,20 @@ templ BackupStorage(status backups.StorageStatus) {
 			if status.MaxBytes > 0 {
 				<div><dt>Total limit</dt><dd>{ FormatBytes(status.MaxBytes) }</dd></div>
 			}
+			if status.CopyTo != "" {
+				<div class="backup-storage__folder"><dt>Second copy in</dt><dd><code>{ status.CopyTo }</code></dd></div>
+				if status.CopyAvailableBytes >= 0 {
+					<div><dt>Free there</dt><dd>{ FormatBytes(status.CopyAvailableBytes) }</dd></div>
+				}
+			}
 		</dl>
-		if len(status.Issues) > 0 {
+		if len(status.Issues) > 0 || status.CopyIssue != "" {
 			<ul class="backup-storage__issues">
 				for _, issue := range status.Issues {
 					<li>{ issue.Message }</li>
+				}
+				if status.CopyIssue != "" {
+					<li>{ status.CopyIssue }</li>
 				}
 			</ul>
 		}

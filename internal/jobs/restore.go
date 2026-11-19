@@ -316,12 +316,15 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := j.assertCapability(ctx, job, authz.BackupsRestore); err != nil {
 				return nil, err
 			}
+			// A restore reads the second copy when the archive is missing
+			// from its own folder.
+			folder := j.Backups.ArchiveFolder(row)
 			var staged map[string]int64
 			if item == "" {
-				staged, err = j.Backups.Storage.Validate(row.Destination(), row.ID, row.Roots, row.Size, row.Checksum)
+				staged, err = j.Backups.Storage.Validate(folder, row.ID, row.Roots, row.Size, row.Checksum)
 			} else {
 				var bytes int64
-				bytes, err = j.Backups.Storage.ValidateItem(row.Destination(), row.ID, row.Roots, row.Size, row.Checksum, roots[0].ID, item)
+				bytes, err = j.Backups.Storage.ValidateItem(folder, row.ID, row.Roots, row.Size, row.Checksum, roots[0].ID, item)
 				staged = map[string]int64{roots[0].ID: bytes}
 			}
 			if err != nil {
@@ -389,7 +392,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := assertAccess(); err != nil {
 				return nil, err
 			}
-			if err := j.Backups.Helpers.ExtractToStage(ctx, row.Destination(), row.ID, data.Container, targets, stageName(job),
+			if err := j.Backups.Helpers.ExtractToStage(ctx, folder, row.ID, data.Container, targets, stageName(job),
 				row.Roots, row.Size, settings.ReserveBytes, row.Checksum, assertAccess); err != nil {
 				return nil, err
 			}
