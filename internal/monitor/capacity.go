@@ -64,6 +64,8 @@ type DiskState struct {
 	// CheckedAt is the last attempt; 0 makes the next tick measure.
 	CheckedAt int64    `json:"checkedAt"`
 	Folders   []Folder `json:"folders"`
+	// Revision is the binding the folders were measured under.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 func (d DiskState) alerting() bool {
@@ -297,6 +299,15 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 		if err != nil {
 			return err
 		}
+		shown := previous.alertingPaths()
+		// An accepted replacement may bring another disk: its folders start
+		// without the old binding's alerts and are measured at once.
+		if previous.Revision != server.BindingRevision {
+			previous.CheckedAt = 0
+			for index := range previous.Folders {
+				previous.Folders[index].AlertSince, previous.Folders[index].Notified = 0, false
+			}
+		}
 		interval := int64(DiskInterval)
 		if previous.alerting() {
 			interval = diskAlertingInterval
@@ -310,6 +321,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			continue
 		}
 		next, ended := evaluateDisk(previous, spaces, policy.DiskPercent, now)
+		next.Revision = server.BindingRevision
 		saved, changed, err := s.saveState(ctx, policy, diskKey(server.ID), raw, next)
 		if err != nil || !changed {
 			log.Warn("Could not save a server's disk space; it will be measured again")
@@ -322,7 +334,7 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			}
 		}
 		s.raiseDisk(ctx, server, policy, saved, next)
-		if next.alertingPaths() != previous.alertingPaths() {
+		if next.alertingPaths() != shown {
 			s.changed(server.ID)
 		}
 	}

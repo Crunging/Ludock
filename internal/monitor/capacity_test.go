@@ -128,6 +128,31 @@ func TestDiskAlertOncePerEpisode(t *testing.T) {
 	}
 }
 
+// An administrator accepts a replacement container whose data folder has
+// the same path on another disk, 88% full: it is measured at once and judged
+// on its own, not kept alerting by the old disk's alert.
+func TestDiskAlertEndsWithItsBinding(t *testing.T) {
+	s, events, server, _ := setupWith(t, nil)
+	percent := int64(95)
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) { return space(percent), nil }
+	if err := s.CheckDisk(ctx, state("exited", ""), 1000); err != nil {
+		t.Fatal(err)
+	}
+	if problems, _ := s.ResourceProblems(ctx); len(problems[server.ID]) != 1 {
+		t.Fatal(problems)
+	}
+	if _, err := s.DB.Exec("UPDATE logical_servers SET binding_revision=binding_revision+1 WHERE id=?", server.ID); err != nil {
+		t.Fatal(err)
+	}
+	percent = 88
+	if err := s.CheckDisk(ctx, state("exited", ""), 2000); err != nil {
+		t.Fatal(err)
+	}
+	if problems, _ := s.ResourceProblems(ctx); len(problems) != 0 || len(events.events) != 1 {
+		t.Fatal(problems, events.events)
+	}
+}
+
 // Changing a disk threshold ends the alert without a recovery and measures
 // again on the next tick.
 func TestDiskThresholdChange(t *testing.T) {
