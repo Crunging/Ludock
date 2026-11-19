@@ -61,7 +61,10 @@ func (s *Server) renderLink(w http.ResponseWriter, r *http.Request, form views.L
 		w.Header().Set("Retry-After", itoa(max(1, (public.RetryAfterMs+999)/1000)))
 	}
 	if public.Code == "LINK_INVALID" || form.Username == "" {
-		clearLinkCookie(w, r)
+		// The cookie of a link opened in another tab stays for that tab.
+		if public.Code == "LINK_INVALID" {
+			clearLinkCookie(w, r)
+		}
 		render(w, r, public.Status, views.LinkUnavailable(public.Message))
 		return
 	}

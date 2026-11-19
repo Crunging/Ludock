@@ -98,7 +98,7 @@ func TestLinkUsesTheBrowserOrigin(t *testing.T) {
 }
 
 // Opening a link moves its token into a cookie scoped to the link page, and
-// the response keeps the token out of referrers and caches.
+// the response keeps the token out of referrers, caches, and request logs.
 func TestOpeningALinkHidesItsToken(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -124,6 +124,11 @@ func TestOpeningALinkHidesItsToken(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Choose a new password") || strings.Contains(page.Body.String(), link.Token) {
 		t.Fatal(page.Code, page.Body.String())
 	}
+	for _, path := range []string{"/link/" + link.Token, "//link/" + link.Token, "/link/" + link.Token + "/.."} {
+		if logged := loggedPath(httptest.NewRequest("GET", "http://panel.example"+path, nil)); strings.Contains(logged, link.Token) {
+			t.Fatal(logged)
+		}
+	}
 	if unknown := p.do("GET", "/link/unknown-token", nil, nil, nil); unknown.Code != http.StatusNotFound ||
 		!strings.Contains(unknown.Body.String(), "This link doesn't work") {
 		t.Fatal(unknown.Code, unknown.Body.String())
@@ -148,8 +153,8 @@ func TestLinkFormBelongsToItsLink(t *testing.T) {
 		p.handler.ServeHTTP(response, request)
 		return response
 	}
-	if response := submit(linkFormKey(firstLink.Token)); response.Code != http.StatusConflict {
-		t.Fatal(response.Code, response.Body.String())
+	if response := submit(linkFormKey(firstLink.Token)); response.Code != http.StatusConflict || len(response.Result().Cookies()) != 0 {
+		t.Fatal(response.Code, response.Result().Cookies(), response.Body.String())
 	}
 	if response := submit(linkFormKey(secondLink.Token)); response.Code != http.StatusSeeOther {
 		t.Fatal(response.Code, response.Body.String())
