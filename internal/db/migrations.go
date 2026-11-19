@@ -230,6 +230,14 @@ var Migrations = []Migration{
         WHERE key = 'notifications';
     `,
 	},
+	{
+		// A recurring run may start late, but never for a minute before its
+		// schedule was last saved.
+		Version: 5,
+		SQL: `
+      ALTER TABLE schedules ADD COLUMN changed_at INTEGER CHECK (changed_at >= 0);
+    `,
+	},
 }
 
 func LatestVersion() int { return Migrations[len(Migrations)-1].Version }
