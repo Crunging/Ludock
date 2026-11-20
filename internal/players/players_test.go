@@ -83,7 +83,7 @@ func gameService(t *testing.T, engine *fakedocker.Engine) (*Service, string) {
 		t.Fatal(views, err)
 	}
 	players := &Service{Servers: service, Identity: store,
-		Source: &GameSource{Identity: store, Observer: observer, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
+		Source: &GameSource{Servers: service, Runtime: &console.Runtime{Docker: client}, Locks: locks.New()}}
 	t.Cleanup(players.Stop)
 	return players, views[0].ID
 }

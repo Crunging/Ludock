@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -150,7 +151,7 @@ func TestRestoreItemInterrupted(t *testing.T) {
 		{"root": map[string]any{"id": rootID, "path": f.data}, "item": "world/level.dat", "phase": "replaced"}}})
 	running := true
 	recovery, _ := json.Marshal(ops.Recovery{ContainerID: logical.ContainerID, Fingerprint: logical.BindingFingerprint,
-		LockKeys: []string{"server:" + f.serverID}, InitialRunning: &running, StopStarted: true, StopSettled: true,
+		LockKeys: []string{locks.ServerKey(f.serverID)}, InitialRunning: &running, StopStarted: true, StopSettled: true,
 		StoppedStartedAt: stopped.State.StartedAt, DataUnsafe: true, Restore: journal})
 	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running',phase='restore_replaced',recovery_json=? WHERE id=?", string(recovery), job.ID); err != nil {
 		t.Fatal(err)

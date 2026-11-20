@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -135,7 +136,7 @@ func TestRecoveryNeverActs(t *testing.T) {
 			}
 		}},
 		"server busy": {before: func(s *Service, serverID string) {
-			if _, err := s.Locks.Acquire([]string{"server:" + serverID}, nil); err != nil {
+			if _, err := s.Locks.Acquire([]string{locks.ServerKey(serverID)}, nil); err != nil {
 				t.Fatal(err)
 			}
 		}},

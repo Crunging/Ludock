@@ -291,9 +291,9 @@ func TestBackgroundHoldersAreCancelled(t *testing.T) {
 	r, servers := setup(t, 1)
 	cancelled := make(chan struct{})
 	var release func()
-	release, _ = r.Locks.Acquire([]string{"server:" + servers[0]}, func() { close(cancelled); go release() })
+	release, _ = r.Locks.Acquire([]string{locks.ServerKey(servers[0])}, func() { close(cancelled); go release() })
 	r.Register("stop", Handler{Run: func(_ context.Context, c *Context) (map[string]any, error) {
-		return c.WithLocks([]string{"server:" + servers[0]}, func() (map[string]any, error) { return nil, nil })
+		return c.WithLocks([]string{locks.ServerKey(servers[0])}, func() (map[string]any, error) { return nil, nil })
 	}})
 	r.Start(ctx, nil)
 	job, _ := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "stop"})

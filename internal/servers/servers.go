@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 )
 
 type Service struct {
@@ -518,10 +519,27 @@ func (s *Service) verify(ctx context.Context, id string, expectedRevision int64,
 		LockKeys: LockKeys(id, observed.Observation)}, nil
 }
 
+// Observe confirms a saved server against its own container for background
+// work, which runs on Ludock's own authority. assert checks the saved binding
+// again right before each later step.
+func (s *Service) Observe(ctx context.Context, server identity.Server) (observed *Observed, assert func() error, err error) {
+	observed, _, err = s.Observer.Inspect(ctx, server.ContainerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := s.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
+		return nil, nil, err
+	}
+	return observed, func() error {
+		_, err := s.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
+		return err
+	}, nil
+}
+
 // LockKeys are the resources an operation on this server must hold: the
 // server, its Compose project, and every writable data source.
 func LockKeys(id string, observation identity.Observation) []string {
-	keys := []string{"server:" + id}
+	keys := []string{locks.ServerKey(id)}
 	if observation.Compose != nil {
 		keys = append(keys, "project:"+observation.Compose.Project)
 	}

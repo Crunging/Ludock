@@ -7,6 +7,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/servers"
 )
@@ -32,24 +33,17 @@ func (a *App) checkDisks(ctx context.Context, current map[string]servers.Contain
 func (a *App) measureDisk(ctx context.Context, server identity.Server) ([]monitor.DiskSpace, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	release, err := a.Locks.Acquire([]string{"server:" + server.ID}, cancel)
+	release, err := a.Locks.Acquire([]string{locks.ServerKey(server.ID)}, cancel)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	observed, _, err := a.Observer.Inspect(ctx, server.ContainerID)
+	observed, assertBinding, err := a.Servers.Observe(ctx, server)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := a.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
 		return nil, err
 	}
 	container := observed.Container
 	target := files.Target{ServerID: server.ID, ContainerID: container.ID, Name: container.Name, GameType: container.GameType, Roots: container.FileRoots}
-	assertBinding := func() error {
-		_, err := a.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
-		return err
-	}
 	spaces := []monitor.DiskSpace{}
 	for _, root := range target.Roots {
 		space, err := a.Files.Space(ctx, target, root.ID, assertBinding)
@@ -77,11 +71,8 @@ func (a *App) fileTarget(ctx context.Context, id string) (*files.Target, error) 
 	if server.Status != identity.StatusActive || server.ContainerID == "" {
 		return nil, errors.New("server container unavailable")
 	}
-	observed, _, err := a.Observer.Inspect(ctx, server.ContainerID)
+	observed, _, err := a.Servers.Observe(ctx, *server)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := a.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
 		return nil, err
 	}
 	container := observed.Container

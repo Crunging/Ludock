@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -40,7 +41,7 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 		}
 		return j.assertCapability(ctx, job, authz.BackupsCreate)
 	}
-	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
 		current, err := j.resolve(ctx, job, authz.ServerRestart, true)
 		if err != nil {
 			return nil, err
@@ -284,7 +285,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 	}
 	keys := slices.Clone(server.LockKeys)
 	if request.CreateBackup {
-		keys = append(keys, "backups:storage")
+		keys = append(keys, locks.StorageKey)
 	}
 	return job.WithLocks(keys, func() (result map[string]any, err error) {
 		plan, err := j.Updates.Check(ctx, server)

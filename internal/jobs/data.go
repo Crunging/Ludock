@@ -11,6 +11,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -269,7 +270,7 @@ func (j *Jobs) keepStopped(ctx context.Context, server *servers.Context, job *op
 // recoveryLocks reclaims the saved shared-volume and path locks before any
 // Docker request can fail or hang.
 func recoveryLocks(job *ops.Context) []string {
-	return append([]string{"server:" + job.Job.ServerID, "backups:storage"}, job.Job.Recovery.LockKeys...)
+	return append([]string{locks.ServerKey(job.Job.ServerID), locks.StorageKey}, job.Job.Recovery.LockKeys...)
 }
 
 // removeOperationHelpers removes this operation's helpers. Failing to list

@@ -9,6 +9,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/identity"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -167,7 +168,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 	// The second copy is made once the server is back as it was and its
 	// locks are released.
 	defer j.Backups.WakeCopies()
-	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
 		if err := j.assertCapability(ctx, job, authz.BackupsCreate); err != nil {
 			return nil, err
 		}

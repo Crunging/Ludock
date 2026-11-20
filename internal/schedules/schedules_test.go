@@ -554,7 +554,7 @@ func TestCommandSkippedWhileServerBusy(t *testing.T) {
 	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
 		t.Fatal(err)
 	}
-	release, err := f.s.Locks.Acquire([]string{"server:" + f.serverID}, nil)
+	release, err := f.s.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/files"
 	"github.com/Crunging/Ludock/internal/helper"
+	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
@@ -300,7 +301,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 		return nil, err
 	}
 	// The archive is validated once its locks are held.
-	return job.WithLocks(append(slices.Clone(server.LockKeys), "backups:storage"), func() (result map[string]any, err error) {
+	return job.WithLocks(append(slices.Clone(server.LockKeys), locks.StorageKey), func() (result map[string]any, err error) {
 		var data *backups.DataHelper
 		var restored map[string]any
 		assertAccess := func() error { return j.dataAuthority(ctx, server, job) }

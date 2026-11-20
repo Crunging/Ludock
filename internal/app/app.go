@@ -141,7 +141,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	monitoring.Changed = func(serverID string) { go a.Events.Changed(context.Background(), serverID) }
 	runner.Changed = monitoring.Changed
 	a.Players = &players.Service{Servers: serverService, Identity: store,
-		Source:  &players.GameSource{Identity: store, Observer: observer, Runtime: runtime, Locks: table},
+		Source:  &players.GameSource{Servers: serverService, Runtime: runtime, Locks: table},
 		Changed: func(serverID string) { go a.Events.Changed(context.Background(), serverID) },
 		Monitored: func(ctx context.Context) map[string]bool {
 			monitored, _ := monitoring.Monitored(ctx)

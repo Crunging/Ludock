@@ -19,10 +19,9 @@ import (
 // console's own helper and password, and its status query, in the same
 // helper. A console list wins over a query's count, since it names players.
 type GameSource struct {
-	Identity *identity.Store
-	Observer *servers.Observer
-	Runtime  *console.Runtime
-	Locks    *locks.Table
+	Servers *servers.Service
+	Runtime *console.Runtime
+	Locks   *locks.Table
 }
 
 func (c *GameSource) Lists(container servers.Container) bool {
@@ -36,17 +35,14 @@ var errSkipped = errors.New("player reading skipped")
 func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, readLimit)
 	defer cancel()
-	release, err := c.Locks.Acquire([]string{"server:" + server.ID}, cancel)
+	release, err := c.Locks.Acquire([]string{locks.ServerKey(server.ID)}, cancel)
 	if err != nil {
 		return nil, err
 	}
 	// Held until the console helper, if any, is removed.
 	defer release()
-	observed, _, err := c.Observer.Inspect(ctx, server.ContainerID)
+	observed, assertBinding, err := c.Servers.Observe(ctx, server)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := c.Identity.AssertObservedBinding(ctx, server.ID, observed.Observation, server.BindingRevision); err != nil {
 		return nil, err
 	}
 	container := observed.Container
@@ -57,10 +53,6 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server) (*Reading
 	}
 	if container.State != "running" || (probe.Adapter == nil && probe.Query == nil) {
 		return nil, nil
-	}
-	assertBinding := func() error {
-		_, err := c.Identity.ResolveBinding(ctx, server.ID, server.BindingRevision)
-		return err
 	}
 	reading := &Reading{ContainerID: container.ID, StartedAt: container.StateSince, Failed: true}
 	result, err := c.Runtime.Probe(ctx, console.Target{ContainerID: container.ID, Labels: container.Labels, State: container.State},

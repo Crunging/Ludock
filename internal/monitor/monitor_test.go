@@ -111,7 +111,7 @@ func TestMonitorSuppression(t *testing.T) {
 	// Observed running again: monitoring resumes.
 	s.Check(ctx, state("running", ""), 300_000)
 	s.Check(ctx, state("exited", ""), 400_000)
-	release, _ := s.Locks.Acquire([]string{"server:" + server.ID}, nil)
+	release, _ := s.Locks.Acquire([]string{locks.ServerKey(server.ID)}, nil)
 	s.Check(ctx, state("exited", ""), 500_000)
 	release()
 	if len(events.events) != 0 {
