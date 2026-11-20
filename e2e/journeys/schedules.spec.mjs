@@ -70,19 +70,19 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await form.getByLabel("Action").selectOption("restart");
   await form.getByRole("button", { name: "Weekdays" }).click();
   await form.getByLabel("Time", { exact: true }).fill("05:30");
-  await form.getByLabel("Announce countdown to players").check();
+  await expect(form.getByLabel("Warn players in the game")).toBeChecked();
   await expect(page.locator("#schedule-preview")).toContainText("05:30 (Europe/Berlin)");
   await form.getByRole("button", { name: "Add schedule" }).click();
 
   await expect(page).toHaveURL(/saved=created/);
   const row = page.locator("#schedule-list tbody tr").first();
   await expect(row).toContainText("05:30, weekdays");
-  await expect(row).toContainText("Warnings: 10, 5, 1 min before");
+  await expect(row).toContainText("Warnings: 5, 1 min before");
 
-  // Its warnings and time zone show without opening More options.
+  // Editing keeps its warnings, said in one line.
   await row.getByRole("link", { name: "Edit" }).click();
-  await expect(page.locator("#schedule-more")).toHaveAttribute("open", "");
-  await expect(page.locator("#schedule-form").getByLabel("Announce countdown to players")).toBeChecked();
+  await expect(page.locator("#schedule-preview")).toContainText("Anyone still on is warned in the game 5 and 1 minutes before it goes ahead.");
+  await expect(page.locator("#schedule-form").getByLabel("Warn players in the game")).toBeChecked();
   await page.locator("#schedule-form").getByLabel("Time", { exact: true }).fill("06:45");
   await page.locator("#schedule-form").getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(/saved=saved/);
@@ -132,7 +132,8 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
 });
 
 // The common case needs no choices: a daily restart at 08:00 in the
-// browser's time zone that backs up first. The rest waits under More options.
+// browser's time zone that backs up first, waits for players to leave, and
+// warns anyone still on. The rest waits under More options.
 test("a new schedule opens on a daily restart that backs up first", async ({ page }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Schedules" }).click();
@@ -143,18 +144,28 @@ test("a new schedule opens on a daily restart that backs up first", async ({ pag
   await expect(form.getByLabel("Time", { exact: true })).toHaveValue("08:00");
   const zone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   await expect(page.locator("#schedule-preview")).toContainText(`08:00 (${zone})`);
+  await expect(page.locator("#schedule-preview")).toContainText(
+    "Players: Waits up to 30 minutes for everyone to leave. Anyone still on is warned in the game 5 and 1 minutes before it goes ahead.");
   await expect(form.locator("input[name=timezone]")).toBeHidden();
   await expect(form.getByLabel("Wait until no one is online")).toBeHidden();
   await expect(form.getByLabel("Create paused")).toHaveCount(0);
   await expect(form.getByRole("button", { name: /Use my time zone/ })).toHaveCount(0);
   await moreOptions(form);
   await expect(form.locator("input[name=timezone]")).toHaveValue(zone);
-  await expect(form.getByLabel("Wait until no one is online")).toBeVisible();
+  await expect(form.getByLabel("Wait until no one is online")).toBeChecked();
+  // A backup offers the same, and the line says what turning one off means.
+  await form.getByLabel("Action").selectOption("backup");
+  await form.getByLabel("Warn players in the game").uncheck();
+  await expect(page.locator("#schedule-preview")).toContainText("then goes ahead without warning anyone still on.");
+  await form.getByLabel("Warn players in the game").check();
+  await form.getByLabel("Action").selectOption("restart");
 
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
   const row = page.locator("#schedule-list tbody tr", { hasText: "08:00, every day" });
   await expect(row).toContainText("Backup before restart");
+  await expect(row).toContainText("Waits up to 30 min for an empty server, then goes ahead");
+  await expect(row).toContainText("Warnings: 5, 1 min before");
   await expect(row.locator("td").nth(2)).toHaveText("Enabled");
   await row.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
@@ -232,6 +243,8 @@ async function addWaitingRestart(page, minutes, then) {
   await form.getByLabel("Wait until no one is online").check();
   await form.getByLabel("Wait up to (minutes)").fill(String(minutes));
   await form.getByLabel(then).check();
+  // Warnings announce a run that goes ahead, so skipping turns them off.
+  if (then === "Skip this run") await form.getByLabel("Warn players in the game").uncheck();
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
   const summary = `Waits up to ${minutes} min for an empty server, then ${then === "Skip this run" ? "skips" : "goes ahead"}`;
@@ -294,5 +307,38 @@ test("a waiting restart goes ahead anyway at the end of its wait", async ({ page
     await expectResult(page, row, "Succeeded", 100_000);
   } finally {
     await consoleCommand(console, "fake-leave Ada");
+  }
+});
+
+// A member who manages schedules sees the administrator's schedule, and who
+// set it up, but can only read it.
+test("a member sees the owner's schedules read-only", async ({ page, session }) => {
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Schedules" }).click();
+  const form = page.locator("#schedule-form");
+  await form.getByLabel("Time", { exact: true }).fill("03:10");
+  await form.getByRole("button", { name: "Add schedule" }).click();
+  await expect(page).toHaveURL(/saved=created/);
+  try {
+    await createUser(page, "planner", "planner password one");
+    await shareServer(page, "Survival", "planner", ["Restart", "Set up their own schedules"]);
+    const member = await session({ storageState: { cookies: [], origins: [] } });
+    await signIn(member, "planner", "planner password one");
+    await member.getByRole("link", { name: "Survival", exact: true }).click();
+    await expect(member.locator(".overview-facts")).not.toContainText("Nothing scheduled");
+    await member.getByRole("tab", { name: "Schedules" }).click();
+    const row = member.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
+    await expect(row).toContainText("Set up by admin");
+    await expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
+    await expect(row.getByRole("button", { name: "Pause" })).toBeDisabled();
+    await expect(row.getByRole("button", { name: "Delete" })).toBeDisabled();
+  } finally {
+    await page.goto("/servers");
+    await openServer(page, "Survival");
+    await page.getByRole("tab", { name: "Schedules" }).click();
+    const row = page.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
+    await row.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
+    await expect(row).toHaveCount(0);
   }
 });

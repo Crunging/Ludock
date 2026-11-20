@@ -631,6 +631,8 @@ type UpdateView struct {
 	// means an administrator turned the checks off.
 	Check     *update.CheckStatus
 	ChecksOff bool
+	// Warn offers to warn players first (WarnOn, WarnOff, or "").
+	Warn string
 }
 
 templ UpdateTab(serverID string, recreate bool) {
@@ -758,6 +760,14 @@ templ UpdateForm(u UpdateView) {
 			Back up first
 		</label>
 		<p class="muted check-help">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p>
+		if u.Warn != "" {
+			{{ option := WarnOption("update", u.Warn) }}
+			<label class="check-label">
+				<input type="checkbox" name={ option.Name } value="true" checked?={ option.Checked }/>
+				{ option.Label }
+			</label>
+			<p class="muted check-help">Once the new image is downloaded, tells players in the game that the server restarts for an update in 1 minute, then goes ahead.</p>
+		}
 		<label data-hidden-by="update-backup" hidden?={ u.CanBackup }>
 			<span>Type <strong>{ u.ServerName }</strong> to skip the backup</span>
 			<input name="skipBackupConfirmation" autocomplete="off"/>

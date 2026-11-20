@@ -41,7 +41,8 @@ func canRunSchedule(view *servers.View, input schedules.Input) bool {
 }
 
 // scheduleForm opens on a daily restart, backing up first when this person
-// may and the server can be backed up.
+// may and the server can be backed up, and as considerate to players as the
+// game allows.
 func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.ScheduleForm {
 	view := &d.Row.Server
 	actions := scheduleActions(view)
@@ -55,11 +56,27 @@ func (s *Server) scheduleForm(r *http.Request, d *views.ServerDetail) views.Sche
 	if input.Action == "restart" && canBackup {
 		input.CreateBackup = s.backupReady(r, view)
 	}
-	return views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: canBackup,
-		CanAnnounce: view.Console != nil && view.Console.SupportsBroadcast && can(view, authz.ConsoleExecute),
-		CanWait:     s.App.Players.Source.Lists(view.Container),
-		Blocked:     view.BindingStatus != "active" || d.DiscoveryUnavailable,
-		Input:       input, LeadText: "10, 5, 1"}
+	form := views.ScheduleForm{ServerID: view.ID, Actions: actions, CanCreateBackup: canBackup,
+		CanAnnounce: canWarn(view), CanWait: s.App.Players.Source.Lists(view.Container),
+		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable}
+	// The form keeps these for whichever disconnecting action is chosen.
+	considerate := input
+	considerate.Action = "restart"
+	considerate.Considerate(form.CanAnnounce, form.CanWait)
+	input.WaitForEmpty, input.Announcements = considerate.WaitForEmpty, considerate.Announcements
+	form.Input, form.LeadText = input, views.LeadText(schedules.DefaultLeadMinutes)
+	return form
+}
+
+// canWarn: schedules can warn players on this server, which takes the
+// owner's console access.
+func canWarn(view *servers.View) bool {
+	return broadcasts(view) && can(view, authz.ConsoleExecute)
+}
+
+// broadcasts: the server's game has a command that messages every player.
+func broadcasts(view *servers.View) bool {
+	return view.Console != nil && view.Console.SupportsBroadcast
 }
 
 // backupReady reports whether backup storage is set up and the server has
@@ -80,6 +97,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	view := &d.Row.Server
 	v := views.SchedulesView{ServerID: view.ID, Selected: query.Get("schedule"), Editing: query.Get("edit"),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Now: db.Now(), CanResume: map[string]bool{},
+		Viewer: request.User().ID, Admin: request.User().Role == db.RoleAdmin,
 		ShowReplies: can(view, authz.ConsoleExecute),
 		Form:        s.scheduleForm(r, d)}
 	switch query.Get("saved") {
@@ -101,7 +119,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 	}
 	if v.Editing != "" {
 		v.Form.EditID = v.Editing
-		index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.ID == v.Editing })
+		index := slices.IndexFunc(list, func(item schedules.Schedule) bool { return item.ID == v.Editing && v.Editable(item) })
 		if index < 0 {
 			v.Form.Missing = true
 		} else {
@@ -126,8 +144,8 @@ func (s *Server) scheduleList(w http.ResponseWriter, r *http.Request, request *R
 	render(w, r, http.StatusOK, views.ScheduleList(s.schedulesView(r, request, d)))
 }
 
-// parseSchedule reads the form's draft; restart-only settings are dropped
-// for other actions, as the form hides them.
+// parseSchedule reads the form's draft; settings an action can't use are
+// dropped, as the form hides them.
 func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 	input := schedules.Input{Kind: r.PostFormValue("kind"), Action: r.PostFormValue("action"), Time: r.PostFormValue("time"),
 		Timezone: strings.TrimSpace(r.PostFormValue("timezone")), CreateBackup: r.PostFormValue("createBackup") == "true",
@@ -149,7 +167,7 @@ func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 	if input.Action == "command" {
 		input.Command = r.PostFormValue("command")
 	}
-	if (input.Action == "restart" || input.Action == "stop") && r.PostFormValue("waitForEmpty") == "true" {
+	if schedules.Disconnects(input.Action) && r.PostFormValue("waitForEmpty") == "true" {
 		minutes, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("waitMinutes")))
 		input.WaitForEmpty = &schedules.WaitForEmpty{Minutes: minutes, Then: r.PostFormValue("waitThen")}
 		if err != nil {
@@ -160,9 +178,8 @@ func parseSchedule(r *http.Request) (schedules.Input, string, error) {
 	leads := r.PostFormValue("leadMinutes")
 	if input.Action != "restart" {
 		input.CreateBackup = false
-		return input, leads, nil
 	}
-	if r.PostFormValue("announce") == "true" {
+	if schedules.Disconnects(input.Action) && r.PostFormValue("announce") == "true" {
 		var minutes []int
 		for _, part := range strings.Split(leads, ",") {
 			minute, err := strconv.Atoi(strings.TrimSpace(part))
@@ -204,7 +221,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, request *R
 	input, leads, parseErr := parseSchedule(r)
 	form.Input, form.LeadText = input, leads
 	if leads == "" {
-		form.LeadText = "10, 5, 1"
+		form.LeadText = views.LeadText(schedules.DefaultLeadMinutes)
 	}
 	form.Revision, _ = strconv.ParseInt(r.PostFormValue("revision"), 10, 64)
 	latest := func() *schedules.Schedule {
@@ -305,6 +322,10 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 	}
 	input, _, err := parseSchedule(r)
 	input = draftForSave(input)
+	players := ""
+	if err == nil {
+		players = views.PlayersPlan(input)
+	}
 	text := "Choose a valid time, time zone, and at least one day."
 	if input.Kind == "once" {
 		text = "Choose a future date and time that exists in this time zone."
@@ -338,5 +359,5 @@ func (s *Server) previewSchedule(w http.ResponseWriter, r *http.Request, request
 			}
 		}
 	}
-	render(w, r, http.StatusOK, views.SchedulePreview(input.Enabled, text))
+	render(w, r, http.StatusOK, views.SchedulePreview(input.Enabled, text, players))
 }

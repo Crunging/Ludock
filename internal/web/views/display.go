@@ -104,7 +104,7 @@ func Capitalize(value string) string {
 }
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
-	"stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
+	"warning": "Giving players 1 minute", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
 	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
 
 // OperationLabel describes an operation's progress.

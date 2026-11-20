@@ -34,8 +34,10 @@ var checklistKeys = []string{views.ChecklistAlerts, views.ChecklistBackups, view
 // checklistState is what decides which items show.
 type checklistState struct {
 	AlertsOn bool
-	// Unbacked names the servers a nightly backup would cover.
-	Unbacked, UnbackedIDs []string
+	// Unbacked names the servers a nightly backup would cover; of those,
+	// UnbackedWarn can warn players and UnbackedWait can wait for them.
+	Unbacked, UnbackedIDs      []string
+	UnbackedWarn, UnbackedWait int
 	// Unrecovered names the servers automatic restart could be turned on for.
 	Unrecovered, UnrecoveredIDs []string
 	// LocalHost is the loopback or private host players are shown, or "".
@@ -57,7 +59,8 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 		add(views.ChecklistItem{Key: views.ChecklistAlerts})
 	}
 	if len(state.Unbacked) > 0 {
-		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs})
+		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs,
+			Warn: state.UnbackedWarn, Wait: state.UnbackedWait})
 	}
 	if len(state.Unrecovered) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistRecovery, Names: state.Unrecovered, IDs: state.UnrecoveredIDs})
@@ -145,7 +148,12 @@ func backsUp(schedule schedules.Schedule) bool {
 	return schedule.Kind == "recurring" && (schedule.Action == "backup" || (schedule.Action == "restart" && schedule.CreateBackup))
 }
 
-type backupTarget struct{ ID, Name string }
+type backupTarget struct {
+	ID, Name string
+	// Warn and Wait: a schedule can warn this server's players and wait
+	// for them to leave.
+	Warn, Wait bool
+}
 
 // backupTargets lists the servers that can be backed up and have no
 // recurring backup, and the times existing recurring backups use.
@@ -168,7 +176,8 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 			}
 		}
 		if !covered && view.BindingStatus == "active" && len(view.FileRoots) > 0 && view.Can(authz.BackupsCreate) {
-			targets = append(targets, backupTarget{view.ID, view.DisplayName})
+			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName, Warn: canWarn(&view),
+				Wait: s.App.Players.Source.Lists(view.Container)})
 		}
 	}
 	return targets, taken, nil
@@ -187,7 +196,7 @@ func (s *Server) recoveryTargets(ctx context.Context, all []servers.View) ([]bac
 			return nil, err
 		}
 		if availability.Policy.Enabled && !availability.Policy.Maintenance && !availability.Policy.Recover {
-			targets = append(targets, backupTarget{view.ID, view.DisplayName})
+			targets = append(targets, backupTarget{ID: view.ID, Name: view.DisplayName})
 		}
 	}
 	return targets, nil
@@ -213,6 +222,12 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 			for _, target := range targets {
 				state.Unbacked = append(state.Unbacked, target.Name)
 				state.UnbackedIDs = append(state.UnbackedIDs, target.ID)
+				if target.Warn {
+					state.UnbackedWarn++
+				}
+				if target.Wait {
+					state.UnbackedWait++
+				}
 			}
 		}
 		if targets, err := s.recoveryTargets(ctx, all); err == nil {
@@ -257,7 +272,8 @@ func (s *Server) checklistFragment(w http.ResponseWriter, r *http.Request, reque
 var checklistBackups sync.Mutex
 
 // scheduleNightlyBackups makes an ordinary nightly backup schedule, owned by
-// the administrator who clicked, for each server that has none.
+// the administrator who clicked, for each server that has none, as
+// considerate to players as a new schedule.
 func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, request *Request) {
 	ctx := r.Context()
 	timezone := strings.TrimSpace(r.PostFormValue("timezone"))
@@ -289,6 +305,7 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 	for index, at := range backupTimes(taken, len(targets)) {
 		input := schedules.Input{Kind: "recurring", Action: "backup", Enabled: true, Time: at, Timezone: timezone,
 			Days: []int{0, 1, 2, 3, 4, 5, 6}}
+		input.Considerate(targets[index].Warn, targets[index].Wait)
 		// Create audits each schedule and rechecks the account; the session
 		// is checked here, as it may end while earlier ones are made.
 		if err := s.recheckAdmin(ctx, request); err != nil {

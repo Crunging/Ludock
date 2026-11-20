@@ -19,7 +19,9 @@ click, and goes away once done.
   each server with data folders and no repeating schedule that backs it up (a
   backup, or a restart with **Back up first**; paused ones count) gets a daily
   one between 04:00 and 06:00 in your browser's time zone,
-  a few minutes apart. It appears once backup storage is on.
+  a few minutes apart. Like a new schedule, each waits for players to leave
+  and warns anyone still on where the game allows. It appears once backup
+  storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
   servers whose game Ludock can check (see
   [Restart a game that hangs](#restart-a-game-that-hangs)).
@@ -189,12 +191,20 @@ Each action is one console command, recorded in **Activity**.
 On the server's **Schedules** tab, a new schedule starts as a daily restart at
 08:00 in your time zone, backing up first when it can. Pick the action (Start,
 Stop, Restart, Backup, or Send command), the days or a single date, and choose
-**Add schedule**. Under **More options**:
+**Add schedule**.
 
-- **Wait until no one is online** holds a restart or stop until the server is
-  empty, for up to 30 minutes by default, then skips or goes ahead as chosen.
-- **Announce countdown to players** warns players through the game console 10,
-  5, and 1 minutes before a restart, or at times you choose.
+A restart, stop, or backup is considerate by default where the game allows: it
+waits up to 30 minutes for everyone to leave, then goes ahead, warning anyone
+still on in the game 5 and 1 minutes before. The form says in one line what
+players will experience. To change it, open **More options**:
+
+- **Wait until no one is online** sets how long to wait, and whether to skip
+  the run or go ahead if players are still on.
+- **Warn players in the game** sets when the warnings go out.
+
+Everyone who can set up schedules on a server sees all of its schedules and
+who set each up, so nobody adds a second nightly backup by accident. Only the
+owner or an administrator can change one.
 
 **Pause** a schedule in the list to stop it without deleting it.
 
@@ -229,6 +239,14 @@ waits five seconds before stopping. Docker then gives the game 120 seconds to
 shut down (more for slow savers such as ARK, Palworld, Valheim, 7 Days to Die,
 and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer.
+
+When someone may be online and the game can message its players, the Restart
+and Stop dialogs and the **Update** tab offer **Warn players and wait 1
+minute**, ticked when players are online. Ludock tells players in the game,
+waits the minute (shown in **Activity**), then goes ahead; an update warns once
+the new image is downloaded. If Ludock restarts during the minute, it finishes
+the wait afterwards; if it was down for more than five minutes past the time
+players were given, it leaves the server alone and says so in **Activity**.
 
 **Take a backup first** in the Restart dialog checks the backup folder, stops
 the server, backs it up, and starts it once. If the backup fails, the server
@@ -314,7 +332,8 @@ again.
 ### Schedules
 
 - A schedule runs with its owner's current access. Members with **Full
-  access** manage their own; administrators manage all of them.
+  access** see every schedule on the server and manage their own;
+  administrators manage all of them.
 - If Ludock can't run a schedule on time, such as while it's restarting, a
   repeating schedule still runs within 15 minutes and otherwise skips that
   time; a one-time schedule runs within five minutes and otherwise is recorded
@@ -322,15 +341,17 @@ again.
   repeated one runs once.
 - **Back up first** needs the server running when the schedule runs. If the
   backup fails, the server stays stopped.
-- **Wait until no one is online** works on servers whose players Ludock can
-  read, and waits 1 to 360 minutes. A player count Ludock can't read counts as
-  players online. Countdown warnings need **Go ahead anyway** and count down to
-  the end of the wait.
-- **Countdown warnings** are best effort: each is sent at most once, and
-  skipped when the console doesn't answer.
+- **Wait until no one is online** works on restarts, stops, and backups on
+  servers whose players Ludock can read, and waits 1 to 360 minutes. A player
+  count Ludock can't read counts as players online. Warnings need **Go ahead
+  anyway** and count down to the end of the wait.
+- **Warnings** need a game that can message its players (see
+  [Supported games](REFERENCE.md#supported-games)) and the owner's permission to send console commands.
+  They are best effort: each is sent at most once, and skipped when the
+  console doesn't answer.
 - **Send command** sends one line, up to 500 characters, through the game
   console. It doesn't start a stopped server. Anyone who can see the schedule
-  can read the command, so leave passwords out.
+  and send console commands can read the command, so leave passwords out.
 
 ### Players
 

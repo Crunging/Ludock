@@ -255,7 +255,9 @@ type fakeGame struct {
 	outageUntil, hungUntil time.Time
 	// allowed and banned are the game's lists, and seen everyone who joined.
 	allowed, banned, seen []string
-	allowlistOn           bool
+	// said is every message broadcast with "say".
+	said        []string
+	allowlistOn bool
 	// publish writes files into the game's container.
 	publish func(files map[string]string)
 }
@@ -269,7 +271,8 @@ func (g *fakeGame) status() (int, int, bool) {
 // rcon serves an RCON console that answers the game's list command with
 // format, and the game's own commands with commands, and returns its port.
 // "say MESSAGE" answers with the message as players see it. Besides those,
-// it takes commands only the fake has: "fake-join NAME" and "fake-leave
+// it takes commands only the fake has: "fake-said" lists what "say" sent,
+// "fake-join NAME" and "fake-leave
 // NAME" change who is online, "fake-outage SECONDS" makes the list fail for
 // that long, and "fake-hang SECONDS" also silences the status query, as a
 // game that hangs while its container runs.
@@ -291,7 +294,10 @@ func (g *fakeGame) rcon(password, list string, format func(online []string) stri
 			}
 			return format(g.online)
 		case "say":
+			g.said = append(g.said, argument)
 			return "[Server] " + argument
+		case "fake-said":
+			return "Said: " + strings.Join(g.said, " | ")
 		case "fake-join":
 			if slices.Contains(g.banned, argument) {
 				return argument + " is banned"

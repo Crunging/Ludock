@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -190,9 +191,14 @@ func (s *Service) authority(ctx context.Context, q queryer, r *row, data Input) 
 
 type Schedule struct {
 	Input
-	ID                       string
-	ServerID                 string
-	OwnerID                  string
+	ID       string
+	ServerID string
+	OwnerID  string
+	// OwnerName is the owner's username, or "" once the account is gone.
+	OwnerName string
+	// CommandHidden: the viewer can't send console commands, so another
+	// owner's command is left out.
+	CommandHidden            bool
 	LastResult               string
 	LastOperation            *ops.Job
 	LastRunAt                int64
@@ -352,20 +358,20 @@ func assertUnchanged(ctx context.Context, tx *sql.Tx, before, serverID string, u
 	return err
 }
 
-// List lists a server's schedules: every schedule for administrators, the
-// actor's own for others.
+// List lists every schedule on a server, whoever owns it. Another owner's
+// console command is shown only to someone who could send it themselves.
 func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID string) ([]Schedule, error) {
 	current, err := s.manager(ctx, actor, serverID, true)
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT " + columns + " FROM schedules WHERE server_id=? ORDER BY created_at,id LIMIT ?"
-	args := []any{serverID, MaxPerServer}
-	if current.Role != db.RoleAdmin {
-		query = "SELECT " + columns + " FROM schedules WHERE server_id=? AND owner_id=? ORDER BY created_at,id LIMIT ?"
-		args = []any{serverID, current.ID, MaxPerServer}
+	commands := current.Role == db.RoleAdmin
+	if !commands {
+		if commands, err = s.Authz.Has(ctx, current, serverID, authz.ConsoleExecute); err != nil {
+			return nil, err
+		}
 	}
-	rows, err := s.DB.QueryContext(ctx, query, args...)
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+columns+" FROM schedules WHERE server_id=? ORDER BY created_at,id LIMIT ?", serverID, MaxPerServer)
 	if err != nil {
 		return nil, err
 	}
@@ -394,15 +400,38 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 		outcomes[key] = err
 		return err
 	}
+	names := map[string]string{}
+	ownerName := func(id string) string {
+		name, ok := names[id]
+		if !ok {
+			if user, err := s.DB.FindUserByID(ctx, id); err == nil && user != nil {
+				name = user.Username
+			}
+			names[id] = name
+		}
+		return name
+	}
 	now := db.Now()
 	var result []Schedule
 	for _, r := range saved {
 		view, err := s.public(ctx, r, now, check)
 		if err != nil {
 			// A damaged saved schedule is still listed for removal.
-			result = append(result, Schedule{ID: r.id, ServerID: r.serverID, OwnerID: r.ownerID, Revision: r.revision,
-				LastResult: r.lastResult.String, NextRunUnavailableReason: Unavailable})
-			continue
+			view = &Schedule{ID: r.id, ServerID: r.serverID, OwnerID: r.ownerID, Revision: r.revision,
+				LastResult: r.lastResult.String, NextRunUnavailableReason: Unavailable}
+		}
+		view.OwnerName = ownerName(r.ownerID)
+		if !commands {
+			if view.Command != "" && r.ownerID != current.ID {
+				view.Command, view.CommandHidden = "", true
+			}
+			// A command's reply is console output.
+			if operation := view.LastOperation; operation != nil && operation.Result["reply"] != nil {
+				stripped := *operation
+				stripped.Result = maps.Clone(operation.Result)
+				delete(stripped.Result, "reply")
+				view.LastOperation = &stripped
+			}
 		}
 		result = append(result, *view)
 	}
@@ -1044,7 +1073,7 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 			// Console output and errors may contain secrets; a skipped warning
 			// never affects the scheduled action.
 			if err := s.announce(context.WithoutCancel(ctx), r, data, runAt, lead); err != nil {
-				log.Debug("Skipped a restart countdown warning", logging.F("scheduleId", r.id))
+				log.Debug("Skipped a schedule countdown warning", logging.F("scheduleId", r.id))
 			}
 		}()
 	}
@@ -1099,11 +1128,7 @@ func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64,
 	if template == "" {
 		return nil
 	}
-	plural := "s"
-	if lead == 1 {
-		plural = ""
-	}
-	message := fmt.Sprintf("Server restart in %d minute%s.", lead, plural)
+	message := WarningMessage(data.Action, lead)
 	return s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", message), func() error {
 		if _, _, err := assertCurrent(); err != nil {
 			return err

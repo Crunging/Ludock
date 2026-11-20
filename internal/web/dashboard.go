@@ -124,6 +124,9 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		}
 		row.Players.Reading = s.App.Players.Get(view.ID, view.Container)
 	}
+	if row.CanStop || row.CanRestart {
+		row.Warn = s.warnOffer(&view)
+	}
 	row.Game = views.GameView{Running: row.Players.Running}
 	if view.Query != nil {
 		row.Game.Query = view.Query.Name()
@@ -248,6 +251,7 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 	return func(w http.ResponseWriter, r *http.Request, request *Request) {
 		capability := authz.Capability("server." + kind)
 		createBackup := kind == "restart" && r.PostFormValue("createBackup") == "true"
+		warn := r.PostFormValue(jobs.WarnInput) == "true"
 		resolved, err := s.App.Servers.ResolveAuthorized(r.Context(), request.User(), r.PathValue("id"), capability, -1)
 		if err != nil {
 			s.fail(w, r, request, err)
@@ -266,9 +270,12 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 			s.fail(w, r, request, err)
 			return
 		}
-		var input map[string]any
+		input := map[string]any{}
 		if createBackup {
-			input = map[string]any{"createBackup": true}
+			input["createBackup"] = true
+		}
+		if warn && s.warnPlayers(resolved) {
+			input[jobs.WarnInput] = true
 		}
 		job, err := s.App.Runner.Enqueue(r.Context(), nil, ops.EnqueueOptions{ServerID: resolved.Logical.ID, ActorID: current.User.ID,
 			Kind: kind, BindingRevision: resolved.Logical.BindingRevision, Input: input, IdempotencyKey: requestKey(r)})
@@ -281,6 +288,47 @@ func (s *Server) queueLifecycle(kind string) func(http.ResponseWriter, *http.Req
 		}
 		changed(w)
 	}
+}
+
+// warnOffer is whether a restart, stop, or update offers to warn players
+// first: "on" while players are online, "off" while their count is unknown,
+// and "" when nobody is online or the game can't message them.
+func (s *Server) warnOffer(view *servers.View) string {
+	if view.State != "running" || !jobs.CanWarn(view.Container) {
+		return ""
+	}
+	online, known := s.App.Players.Online(view.ID, view.Container)
+	switch {
+	case known && online == 0:
+		return ""
+	case known:
+		return views.WarnOn
+	}
+	return views.WarnOff
+}
+
+// updateWarnOffer is warnOffer for an update, which stops the server only
+// after downloading the new image: someone can join meanwhile, so the
+// warning stays on offer, unticked, while nobody is online.
+func (s *Server) updateWarnOffer(view *servers.View) string {
+	return updateOffer(s.warnOffer(view), view.State == "running" && jobs.CanWarn(view.Container))
+}
+
+func updateOffer(offer string, canWarn bool) string {
+	if offer == "" && canWarn {
+		return views.WarnOff
+	}
+	return offer
+}
+
+// warnPlayers decides a request to warn players first: a server found empty
+// since the page was shown goes down at once.
+func (s *Server) warnPlayers(server *servers.Context) bool {
+	if server.Container.State != "running" || !jobs.CanWarn(server.Container) {
+		return false
+	}
+	online, known := s.App.Players.Online(server.Logical.ID, server.Container)
+	return !known || online > 0
 }
 
 // requestKey is the optional idempotency key of a form submission.

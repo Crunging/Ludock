@@ -210,10 +210,10 @@ templ DetailLive(d ServerDetail) {
 								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#detail-status" data-busy-label="Working…">Start</button>
 							}
 							if d.Row.CanStop {
-								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false)... }>Stop</button>
+								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, d.Row.Warn)... }>Stop</button>
 							}
 							if d.Row.CanRestart {
-								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup)... }>Restart</button>
+								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup, d.Row.Warn)... }>Restart</button>
 							}
 						</div>
 					}

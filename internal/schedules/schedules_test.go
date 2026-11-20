@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -254,8 +255,8 @@ func TestStaleEditsAndOwnership(t *testing.T) {
 	if current.Revision != 2 || current.Enabled || current.Time != "08:00" {
 		t.Fatal(current)
 	}
-	// Another operator can't see or change the friend's schedule; a stale
-	// admin principal is rechecked.
+	// A member can't change another owner's schedule; a stale admin
+	// principal is rechecked.
 	owned, _ := f.s.Create(ctx, admin, f.serverID, base)
 	stale := &db.SessionUser{ID: friend.ID, Username: friend.Username, Role: db.RoleAdmin}
 	if _, err := f.s.Update(ctx, stale, f.serverID, owned.ID, 1, later); !apperr.Is(err, "NOT_FOUND") {
@@ -561,5 +562,38 @@ func TestCommandSkippedWhileServerBusy(t *testing.T) {
 	last := f.first(t, admin)
 	if f.operations(t) != 0 || last.LastResult != string(SkipBusy) || last.LastRunAt != due || len(notified) != 0 {
 		t.Fatal(last, notified)
+	}
+}
+
+// Everyone who manages a server's schedules sees all of them, with their
+// owners, but another owner's console command only once they could send it
+// themselves.
+func TestOthersCommandsNeedConsoleAccess(t *testing.T) {
+	f := setup(t)
+	command := base
+	command.Action, command.Command = "command", "op someone"
+	if _, err := f.s.Create(ctx, admin, f.serverID, command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Create(ctx, friend, f.serverID, base); err != nil {
+		t.Fatal(err)
+	}
+	owned := func() Schedule {
+		list, err := f.s.List(ctx, friend, f.serverID)
+		if err != nil || len(list) != 2 {
+			t.Fatal(list, err)
+		}
+		index := slices.IndexFunc(list, func(item Schedule) bool { return item.OwnerID == admin.ID })
+		if other := list[1-index]; other.OwnerName != "friend" || list[index].OwnerName != "owner" {
+			t.Fatal(list)
+		}
+		return list[index]
+	}
+	if command := owned(); command.Command != "" || !command.CommandHidden {
+		t.Fatal("showed another owner's command without console access")
+	}
+	f.grant(t, authz.ServerView, authz.ServerStart, authz.SchedulesManage, authz.ConsoleExecute)
+	if command := owned(); command.Command != "op someone" || command.CommandHidden {
+		t.Fatal(command)
 	}
 }

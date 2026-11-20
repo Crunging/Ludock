@@ -71,13 +71,25 @@
     dialog.querySelector("h2").textContent = ctx.confirm;
     dialog.querySelector("#confirm-dialog-detail").textContent = detail;
     dialog.querySelector("#confirm-dialog-detail").hidden = !detail;
-    var optionName = elt.getAttribute("data-confirm-option");
-    var option = dialog.querySelector("[data-confirm-option]");
-    var checkbox = option.querySelector("input");
-    option.hidden = !optionName;
-    checkbox.checked = false;
-    option.querySelector("span").textContent = elt.getAttribute("data-confirm-option-label") || "";
-    option.querySelector("p").textContent = elt.getAttribute("data-confirm-option-help") || "";
+    var options = [];
+    try {
+      options = JSON.parse(elt.getAttribute("data-confirm-options") || "[]");
+    } catch (error) {
+      options = [];
+    }
+    var list = dialog.querySelector("[data-confirm-options]");
+    var template = dialog.querySelector("template[data-confirm-option]");
+    list.replaceChildren();
+    var boxes = options.map(function (option) {
+      var node = template.content.firstElementChild.cloneNode(true);
+      var box = node.querySelector("input");
+      box.checked = !!option.checked;
+      node.querySelector("span").textContent = option.label || "";
+      node.querySelector("p").textContent = option.help || "";
+      list.append(node);
+      return { name: option.name, box: box };
+    });
+    list.hidden = boxes.length === 0;
     button.textContent = elt.getAttribute("data-confirm-action") || "Confirm";
     button.className = elt.hasAttribute("data-confirm-danger") ? "secondary-btn secondary-btn--danger" : "primary-btn";
     dialog.returnValue = "";
@@ -92,7 +104,9 @@
         event.detail.dropRequest();
         return;
       }
-      if (optionName && checkbox.checked) ctx.request.body.set(optionName, "true");
+      boxes.forEach(function (option) {
+        if (option.box.checked) ctx.request.body.set(option.name, "true");
+      });
       event.detail.issueRequest();
     }, { once: true });
     dialog.showModal();

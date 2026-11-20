@@ -686,8 +686,8 @@ func Shell(page Page) templ.Component {
 // ConfirmDialog asks before requests with hx-confirm. The requesting
 // element fills it in: hx-confirm is the question, data-confirm-detail the
 // explanation, data-confirm-action the button, and data-confirm-danger marks
-// an action that can't be undone. data-confirm-option names a checkbox
-// parameter sent as "true" when ticked, with its -label and -help text.
+// an action that can't be undone. data-confirm-options lists checkboxes
+// (ConfirmOptions), each sent as its name set to "true" when ticked.
 func ConfirmDialog() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -705,7 +705,7 @@ func ConfirmDialog() templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<dialog class=\"lifecycle-confirmation\" id=\"confirm-dialog\" aria-labelledby=\"confirm-dialog-title\" aria-describedby=\"confirm-dialog-detail\"><form method=\"dialog\"><h2 id=\"confirm-dialog-title\"></h2><p id=\"confirm-dialog-detail\"></p><div data-confirm-option hidden><label class=\"check-label lifecycle-confirmation__option\"><input type=\"checkbox\"> <span></span></label><p class=\"lifecycle-confirmation__help\"></p></div><div class=\"lifecycle-confirmation__actions\"><button class=\"secondary-btn\" type=\"submit\" value=\"cancel\" autofocus>Cancel</button> <button class=\"primary-btn\" type=\"submit\" value=\"confirm\" data-confirm-button>Confirm</button></div></form></dialog>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<dialog class=\"lifecycle-confirmation\" id=\"confirm-dialog\" aria-labelledby=\"confirm-dialog-title\" aria-describedby=\"confirm-dialog-detail\"><form method=\"dialog\"><h2 id=\"confirm-dialog-title\"></h2><p id=\"confirm-dialog-detail\"></p><div data-confirm-options hidden></div><template data-confirm-option><div class=\"lifecycle-confirmation__option\"><label class=\"check-label\"><input type=\"checkbox\"> <span></span></label><p class=\"lifecycle-confirmation__help\"></p></div></template><div class=\"lifecycle-confirmation__actions\"><button class=\"secondary-btn\" type=\"submit\" value=\"cancel\" autofocus>Cancel</button> <button class=\"primary-btn\" type=\"submit\" value=\"confirm\" data-confirm-button>Confirm</button></div></form></dialog>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

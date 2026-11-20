@@ -66,7 +66,8 @@ test("a new install lists what's left to set up, and does it in a click", async 
     // nightly backup for each server that can be backed up.
     await item(page, "Back up your servers").getByRole("button", { name: "Back up every night" }).click();
     const dialog = page.getByRole("dialog", { name: "Back up 2 servers every night?" });
-    await expect(dialog).toContainText("Each backup stops its server for a few minutes, disconnecting anyone playing");
+    await expect(dialog).toContainText("for everyone to leave");
+    await expect(dialog).toContainText("Each server goes offline for a few minutes during its backup, then starts again.");
     await dialog.getByRole("button", { name: "Back up every night" }).click();
     await expect(checklist.locator(".alert--success")).toHaveText(
       "Nightly backups scheduled: Survival at 04:00, valheim at 04:15 (Europe/Berlin).");
@@ -78,6 +79,9 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await expect(schedule).toContainText("Backup");
     await expect(schedule).toContainText("04:00, every day");
     await expect(schedule).toContainText("Europe/Berlin");
+    // As considerate as a schedule made by hand.
+    await expect(schedule).toContainText("Waits up to 30 min for an empty server, then goes ahead");
+    await expect(schedule).toContainText("Warnings: 5, 1 min before");
 
     // Automatic restart: one click, after saying what it does, turns it on
     // for each monitored server whose game can answer.
