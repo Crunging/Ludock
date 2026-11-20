@@ -433,6 +433,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, request *Request
 			}
 		},
 	}
+	// A server's page shows only that server's players; a server the viewer
+	// can't see is followed by nobody.
+	if server := r.URL.Query().Get("server"); server != "" {
+		if visible, err := s.App.Authz.Has(r.Context(), user, server, authz.ServerView); err != nil || !visible {
+			server = ""
+		}
+		subscriber.Follows = func(id string) bool { return server != "" && id == server }
+	}
 	unsubscribe := s.App.Events.Subscribe(subscriber)
 	defer unsubscribe()
 	fmt.Fprint(w, "retry: 5000\n\n")

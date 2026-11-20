@@ -262,8 +262,9 @@ func (c *countingSource) Read(_ context.Context, _ identity.Server, ask Ask) (*R
 	return &Reading{ContainerID: c.run.ID, StartedAt: c.run.StateSince, CheckedAt: time.Now().UnixMilli(), partial: !ask.Players}, nil
 }
 
-// A monitored game's status is read every Interval while someone watches
-// and every IdleInterval otherwise, since each reading starts a helper.
+// A monitored game's status is read every Interval while a page showing it
+// is open and every IdleInterval otherwise, such as while only another
+// server's page is, since each reading starts a helper.
 func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
 	ctx := context.Background()
 	engine, err := fakedocker.Start(t.TempDir())
@@ -288,22 +289,26 @@ func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
 		players.readings[server].CheckedAt = time.Now().Add(-by).UnixMilli()
 		players.mu.Unlock()
 	}
-	players.Poll(ctx, false)
+	all := func(string) bool { return true }
+	// Another server's page is open: this one is read as if nobody watched.
+	other := func(id string) bool { return id != server }
+	players.Poll(ctx, nil)
 	age(Interval)
-	players.Poll(ctx, false)
+	players.Poll(ctx, nil)
+	players.Poll(ctx, other)
 	if source.reads != 1 {
 		t.Fatal("unwatched reads:", source.reads)
 	}
-	players.Poll(ctx, true)
+	players.Poll(ctx, all)
 	age(IdleInterval)
-	players.Poll(ctx, false)
+	players.Poll(ctx, nil)
 	if source.reads != 3 || source.lists != 1 {
 		t.Fatal("reads:", source.reads, "lists:", source.lists)
 	}
 	// A page opening after a query-only reading gets the list at once, and
 	// the list then counts as fresh.
-	players.Poll(ctx, true)
-	players.Poll(ctx, true)
+	players.Poll(ctx, all)
+	players.Poll(ctx, all)
 	if source.reads != 4 || source.lists != 2 {
 		t.Fatal("reads:", source.reads, "lists:", source.lists)
 	}

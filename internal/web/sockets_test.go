@@ -211,3 +211,48 @@ func TestEventStreamLimit(t *testing.T) {
 		response.Body.Close()
 	}
 }
+
+// A server's page follows only that server's players, so only it is read
+// often, and a server the viewer can't see is followed by no one; the
+// server list follows every server.
+func TestEventStreamFollowsItsServer(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	server := httptest.NewServer(p.handler)
+	t.Cleanup(server.Close)
+	open := func(principal *auth.Principal, query string) func() {
+		request, _ := http.NewRequest("GET", server.URL+"/events"+query, nil)
+		request.Header.Set("Cookie", auth.SessionCookie+"="+principal.Token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatal(response, err)
+		}
+		// The stream subscribes before its first line.
+		response.Body.Read(make([]byte, 1))
+		return func() {
+			response.Body.Close()
+			for deadline := time.Now().Add(5 * time.Second); p.app.Events.Watched(); time.Sleep(10 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the stream stayed subscribed")
+				}
+			}
+		}
+	}
+	member := p.user("u-member", "member", db.RoleMember)
+	closed := open(member, "?server="+p.server)
+	if p.app.Events.Follows(p.server) {
+		t.Fatal("followed a server the viewer can't see")
+	}
+	closed()
+	p.grant(member, authz.ServerView)
+	closed = open(member, "?server="+p.server)
+	if !p.app.Events.Follows(p.server) || p.app.Events.Follows("another-server") {
+		t.Fatal("a server page didn't follow only its server")
+	}
+	closed()
+	closed = open(p.admin, "")
+	if !p.app.Events.Follows("another-server") {
+		t.Fatal("the server list didn't follow every server")
+	}
+	closed()
+}

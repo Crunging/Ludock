@@ -127,7 +127,7 @@ func headerClass(d ServerDetail) string {
 
 templ ServerDetailPage(page Page, d ServerDetail) {
 	@Shell(page) {
-		<div class="page server-detail" hx-sse:connect="/events" hx-trigger="load, live-retry" hx-swap="none">
+		<div class="page server-detail" hx-sse:connect={ "/events?" + url.Values{"server": {d.Row.Server.ID}}.Encode() } hx-trigger="load, live-retry" hx-swap="none">
 			<a class="text-link back-link" href="/"><span aria-hidden="true">←</span> All servers</a>
 			// In-page links replace only this part, so the event stream stays open.
 			<div id="detail-body">

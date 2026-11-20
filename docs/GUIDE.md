@@ -403,8 +403,9 @@ again, and its entry in **Activity** says which.
 
 ### Players
 
-While someone has the server list or a server's page open, Ludock reads who
-is online about every 30 seconds. It asks the game's console only when the
+While someone has the server list open, Ludock reads who is online on its
+servers about every 30 seconds, and while a server's page is open, on that
+server. It asks the game's console only when the
 game's status check can't say the list is unchanged, since games such as
 Minecraft log every console connection: once the console has listed the
 players, a status check that names the same players, or says nobody is

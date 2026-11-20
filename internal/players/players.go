@@ -205,15 +205,16 @@ func (s *Service) ListedAt(serverID string, container servers.Container) (int, i
 }
 
 // Poll starts a reading for every running server that is due: those that
-// list players while someone watches, and monitored ones whose game answers
-// a status query, less often and with the query alone while nobody watches.
-// It forgets servers that stopped, and waits for the readings.
-func (s *Service) Poll(ctx context.Context, watched bool) {
+// list players while an open page shows them (watched, which may be nil for
+// none), and monitored ones whose game answers a status query, less often
+// and with the query alone otherwise. It forgets servers that stopped, and
+// waits for the readings.
+func (s *Service) Poll(ctx context.Context, watched func(serverID string) bool) {
 	var monitored map[string]bool
 	if s.Monitored != nil {
 		monitored = s.Monitored(ctx)
 	}
-	if !watched && len(monitored) == 0 {
+	if watched == nil && len(monitored) == 0 {
 		return
 	}
 	current, err := s.Servers.Refresh(ctx)
@@ -225,10 +226,6 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 		return
 	}
 	now := time.Now()
-	due := Interval
-	if !watched {
-		due = IdleInterval
-	}
 	listed := map[string]bool{}
 	var wait sync.WaitGroup
 	for _, server := range logical {
@@ -238,6 +235,11 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 			continue
 		}
 		listed[server.ID] = true
+		watched := watched != nil && watched(server.ID)
+		due := Interval
+		if !watched {
+			due = IdleInterval
+		}
 		// A game whose health check is still starting isn't taking players.
 		if container.Health == "starting" || !(watched || (monitored[server.ID] && container.Query != nil)) {
 			continue

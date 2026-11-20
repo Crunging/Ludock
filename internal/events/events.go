@@ -42,6 +42,9 @@ type Subscriber struct {
 	Send func(Event)
 	// Close ends the subscription after authentication expired.
 	Close func(reason string)
+	// Follows reports whether the viewer's page shows a server's players;
+	// nil follows every server's, as the server list does.
+	Follows func(serverID string) bool
 }
 
 // Hub streams Docker events while anyone listens.
@@ -51,8 +54,8 @@ type Hub struct {
 	Authz    *authz.Service
 	// Refresh reconciles the fleet (servers.Service.Refresh).
 	Refresh func(ctx context.Context) error
-	// Watching, when set, is told when the first viewer subscribes. It must
-	// not block.
+	// Watching, when set, is told when a viewer subscribes. It must not
+	// block.
 	Watching func()
 
 	mu          sync.Mutex
@@ -120,6 +123,18 @@ func (h *Hub) Watched() bool {
 	return len(h.subscribers) > 0
 }
 
+// Follows reports whether any open page shows a server's players.
+func (h *Hub) Follows(serverID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for subscriber := range h.subscribers {
+		if subscriber.Follows == nil || subscriber.Follows(serverID) {
+			return true
+		}
+	}
+	return false
+}
+
 // Subscribe adds a viewer and starts the Docker stream if needed. The
 // returned function removes it.
 func (h *Hub) Subscribe(subscriber *Subscriber) func() {
@@ -129,7 +144,7 @@ func (h *Hub) Subscribe(subscriber *Subscriber) func() {
 		h.subscribers = map[*Subscriber]bool{}
 	}
 	h.subscribers[subscriber] = true
-	if len(h.subscribers) == 1 && h.Watching != nil && !h.stopped {
+	if h.Watching != nil && !h.stopped {
 		h.Watching()
 	}
 	if h.cancel == nil && !h.stopped {

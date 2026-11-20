@@ -190,7 +190,7 @@ func (a *App) Start(ctx context.Context) {
 		select {
 		case <-a.stop:
 		default:
-			a.pollPlayers(ctx, true)
+			a.pollPlayers(ctx)
 		}
 	}
 	// Requests wait for recovery to take its operations' locks; Start runs
@@ -279,9 +279,9 @@ func (a *App) Tick(ctx context.Context) {
 	a.copyBackups(ctx)
 	a.saveData(ctx)
 	// Player counts are shown only on pages that follow server changes, and a
-	// reading can start a console helper, so nobody watching means no reading
-	// except the status queries of monitored servers.
-	a.pollPlayers(ctx, a.Events.Watched())
+	// reading starts a helper, so a server no open page shows is read only
+	// for the status query of a monitored one.
+	a.pollPlayers(ctx)
 	a.deliver(ctx)
 }
 
@@ -309,8 +309,12 @@ func (a *App) saveData(ctx context.Context) {
 }
 
 // pollPlayers reads players beside other work, once at a time.
-func (a *App) pollPlayers(ctx context.Context, watched bool) {
+func (a *App) pollPlayers(ctx context.Context) {
 	a.runAlone(&a.polling, func() {
+		var watched func(string) bool
+		if a.Events.Watched() {
+			watched = a.Events.Follows
+		}
 		a.Players.Poll(ctx, watched)
 	})
 }
