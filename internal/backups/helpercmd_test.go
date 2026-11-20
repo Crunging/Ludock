@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"regexp"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,7 +34,8 @@ type commandHelper struct {
 	helpers *Helpers
 	id      string
 	started chan string
-	release chan struct{}
+	// next lets one blocked command finish; release, closed at cleanup, all.
+	next, release chan struct{}
 }
 
 func newCommandHelper(t *testing.T) *commandHelper {
@@ -43,7 +46,8 @@ func newCommandHelper(t *testing.T) *commandHelper {
 	t.Cleanup(func() { engine.Close() })
 	client := docker.New(engine.Socket)
 	h := &commandHelper{engine: engine, client: client, helpers: &Helpers{Docker: client, pollInterval: 1},
-		id: engine.AddContainer(fakedocker.GameOptions{Name: "helper", Running: true}), started: make(chan string, 8), release: make(chan struct{})}
+		id: engine.AddContainer(fakedocker.GameOptions{Name: "helper", Running: true}), started: make(chan string, 8),
+		next: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() { close(h.release) })
 	engine.Exec = func(_ *fakedocker.Container, cmd []string, _ *bufio.Reader, stdout, _ func([]byte)) int {
 		switch cmd[0] {
@@ -55,14 +59,42 @@ func newCommandHelper(t *testing.T) *commandHelper {
 		case "big":
 			stdout(bytes.Repeat([]byte("x"), 4*1024*1024+1))
 			h.started <- cmd[0]
-			<-h.release
+			h.wait()
 		case "block":
 			h.started <- cmd[0]
-			<-h.release
+			h.wait()
 		}
 		return 0
 	}
 	return h
+}
+
+func (h *commandHelper) wait() {
+	select {
+	case <-h.next:
+	case <-h.release:
+	}
+}
+
+// finishOne lets a blocked command finish, unless cleanup already did.
+func (h *commandHelper) finishOne() {
+	select {
+	case h.next <- struct{}{}:
+	case <-h.release:
+	}
+}
+
+// hangStarts leaves exec starts unanswered and reports each one's arrival.
+func (h *commandHelper) hangStarts() chan struct{} {
+	arrived := make(chan struct{}, 1)
+	h.engine.Hang = func(request string) bool {
+		if regexp.MustCompile(execStart).MatchString(request) {
+			arrived <- struct{}{}
+			return true
+		}
+		return false
+	}
+	return arrived
 }
 
 func (h *commandHelper) exec(ctx context.Context, cmd []string, assertAccess func() error, limit time.Duration) ([]byte, error) {
@@ -74,7 +106,7 @@ func (h *commandHelper) releaseAfter(wait time.Duration) {
 	go func() {
 		<-h.started
 		time.Sleep(wait)
-		h.release <- struct{}{}
+		h.finishOne()
 	}()
 }
 
@@ -124,7 +156,7 @@ func TestExecWithinCases(t *testing.T) {
 	t.Run("caller cancelled while running is ignored", func(t *testing.T) {
 		h := newCommandHelper(t)
 		cancelled, cancel := context.WithCancel(ctx)
-		go func() { <-h.started; cancel(); time.Sleep(300 * time.Millisecond); h.release <- struct{}{} }()
+		go func() { <-h.started; cancel(); time.Sleep(300 * time.Millisecond); h.finishOne() }()
 		if _, err := h.exec(cancelled, []string{"block"}, nil, time.Minute); err != nil {
 			t.Fatal(err)
 		}
@@ -158,6 +190,14 @@ func TestExecWithinCases(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("no time left", func(t *testing.T) {
+		h := newCommandHelper(t)
+		for _, limit := range []time.Duration{0, -time.Second} {
+			if _, err := h.exec(ctx, []string{"ok"}, nil, limit); !apperr.Is(err, "BACKUP_TIMEOUT") {
+				t.Fatal(limit, err)
+			}
+		}
+	})
 	t.Run("start sent and never answered", func(t *testing.T) {
 		h := newCommandHelper(t)
 		h.engine.HangExecStarts = 1
@@ -174,13 +214,15 @@ func TestExecWithinCases(t *testing.T) {
 	})
 	t.Run("start answer lost waits for Docker", func(t *testing.T) {
 		h := newCommandHelper(t)
-		h.engine.AddFault(execStart, 0, true, 1)
-		outage := make(chan struct{})
-		go func() { time.Sleep(200 * time.Millisecond); h.engine.Outage(500 * time.Millisecond); close(outage) }()
+		arrived := h.hangStarts()
+		var back atomic.Int64
+		go func() {
+			<-arrived
+			back.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
+			h.engine.Outage(500 * time.Millisecond)
+		}()
 		_, err := h.exec(ctx, []string{"ok"}, nil, time.Minute)
-		select {
-		case <-outage:
-		default:
+		if back.Load() == 0 || time.Now().UnixNano() < back.Load() {
 			t.Fatal("returned before Docker came back")
 		}
 		var open *docker.StreamOpenError
@@ -190,12 +232,14 @@ func TestExecWithinCases(t *testing.T) {
 	})
 	t.Run("stream cut by Docker restarting", func(t *testing.T) {
 		h := newCommandHelper(t)
-		outage := make(chan struct{})
-		go func() { <-h.started; h.engine.Outage(500 * time.Millisecond); close(outage) }()
+		var back atomic.Int64
+		go func() {
+			<-h.started
+			back.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
+			h.engine.Outage(500 * time.Millisecond)
+		}()
 		_, err := h.exec(ctx, []string{"block"}, nil, time.Minute)
-		select {
-		case <-outage:
-		default:
+		if back.Load() == 0 || time.Now().UnixNano() < back.Load() {
 			t.Fatal("returned before Docker came back")
 		}
 		if !apperr.Is(err, "DATA_OPERATION_FAILED") {

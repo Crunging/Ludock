@@ -81,7 +81,8 @@ type ExecOptions struct {
 	// Settle makes the command outlast the caller's context and its stream,
 	// for a next step that writes the same data: Exec returns only once
 	// Docker confirms it ended or no longer knows it, or Limit passed and the
-	// helper is stopped. Its create has no StepLimit.
+	// helper is stopped. It takes no Input, its create has no StepLimit, and
+	// its Limit is used as given.
 	Settle bool
 	// Poll is how often a settling command is inspected; zero means 250ms.
 	Poll time.Duration
@@ -161,7 +162,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	limit := time.Minute
 	if options.Input != nil {
 		limit = 30 * time.Minute
-	} else if options.Limit > 0 {
+	} else if options.Limit > 0 || options.Settle {
 		limit = options.Limit
 	}
 	parent := ctx

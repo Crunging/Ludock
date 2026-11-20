@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -180,9 +181,16 @@ func TestExecCases(t *testing.T) {
 	})
 	t.Run("start answer lost returns at once", func(t *testing.T) {
 		engine, client, id := setup(t)
-		engine.AddFault(execStart, 0, true, 1)
+		arrived := make(chan struct{}, 1)
+		engine.Hang = func(request string) bool {
+			if regexp.MustCompile(execStart).MatchString(request) {
+				arrived <- struct{}{}
+				return true
+			}
+			return false
+		}
 		outage := make(chan struct{})
-		go func() { time.Sleep(200 * time.Millisecond); engine.Outage(time.Second); close(outage) }()
+		go func() { <-arrived; engine.Outage(time.Second); close(outage) }()
 		_, err := Exec(ctx, client, id, ExecOptions{Cmd: []string{"ok"}})
 		var open *docker.StreamOpenError
 		select {
@@ -206,9 +214,17 @@ func TestExecCases(t *testing.T) {
 				commandCtx = docker.RideOut(ctx, nil)
 			}
 			_, err := Exec(commandCtx, client, id, ExecOptions{Cmd: []string{"block"}})
-			// Without riding out, the inspection finds Docker unreachable; riding
-			// it out, the restarted Docker no longer knows the exec.
-			if (!rideOut && (!docker.Unavailable(err) || docker.IsNotFound(err))) || (rideOut && !docker.IsNotFound(err)) {
+			select {
+			case <-outage:
+				if !rideOut {
+					t.Fatal("waited for Docker to come back")
+				}
+			default:
+			}
+			// The single inspection finds Docker unreachable, or the exec already
+			// forgotten; riding it out, the restarted Docker no longer knows it.
+			if _, public := apperr.As(err); public || err == nil || (!docker.Unavailable(err) && !docker.IsNotFound(err)) ||
+				(rideOut && !docker.IsNotFound(err)) {
 				t.Fatal(rideOut, err)
 			}
 			<-outage
