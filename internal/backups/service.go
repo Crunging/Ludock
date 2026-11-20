@@ -57,9 +57,6 @@ type Backup struct {
 	copyPrevious string
 }
 
-// Fingerprint is the binding fingerprint the backup was made from.
-func (b *Backup) Fingerprint() string { return b.fingerprint }
-
 type Service struct {
 	DB       *db.DB
 	Storage  *Storage

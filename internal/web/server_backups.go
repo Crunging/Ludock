@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRead: can(view, authz.BackupsRead), CanCreate: can(view, authz.BackupsCreate),
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders}
+		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders, BindingRevision: view.BindingRevision}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -100,6 +101,7 @@ func (s *Server) fitBrowser(ctx context.Context, view *servers.View, browser *vi
 		return
 	}
 	browser.Fit = s.backupFits(ctx, view, []backups.Backup{browser.Backup})[browser.Backup.ID]
+	browser.BindingRevision = view.BindingRevision
 	browser.CanRestore = browser.Fit.Refusal == ""
 }
 
@@ -236,7 +238,9 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, apperr.New("BACKUP_FOLDERS_DIFFER", http.StatusConflict, fit.Refusal))
 		return
 	}
-	if fit.Moved && r.PostFormValue(jobs.MovedInput) != "true" {
+	// The confirmation holds only for the storage the page showed.
+	if fit.Moved && (r.PostFormValue(jobs.MovedInput) != "true" ||
+		r.PostFormValue("bindingRevision") != strconv.FormatInt(resolved.Logical.BindingRevision, 10)) {
 		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", http.StatusBadRequest,
 			"This backup was taken when the server’s data lived somewhere else. Reload the page and confirm the restore again."))
 		return

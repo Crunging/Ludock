@@ -30,6 +30,9 @@ type BackupsView struct {
 	// Fits says, for each backup, whether it restores onto the server as it
 	// is now; nil while that is unknown.
 	Fits map[string]backups.Fit
+	// BindingRevision is the server's binding the page showed; a moved
+	// restore is confirmed only for it.
+	BindingRevision int64
 	// Keep is the backup whose keep form is open.
 	Keep *backups.Backup
 	// Browse, when set, replaces the tab with one folder of a backup.
@@ -372,6 +375,7 @@ templ RestoreForm(b BackupsView) {
 		if moved {
 			<p class="restore-moved"><strong>This backup was taken when the server’s data lived somewhere else.</strong> Restoring it replaces the game data in { rootList(b.Restore.Roots) } where the server keeps it now.</p>
 			<input type="hidden" name="dataMoved" value="true"/>
+			<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(b.BindingRevision, 10) }/>
 		}
 		<p>This replaces the server’s current game data. Ludock stops the server and takes a safety backup first; if that fails, nothing is replaced.</p>
 		if b.Restore.FromCopy {
@@ -406,8 +410,10 @@ type BackupBrowser struct {
 	Total, Limit int
 	Error        string
 	CanRestore   bool
-	// Fit is whether the backup restores onto the server as it is now.
-	Fit backups.Fit
+	// Fit is whether the backup restores onto the server as it is now, at
+	// BindingRevision.
+	Fit             backups.Fit
+	BindingRevision int64
 }
 
 // rootList names data folders in a sentence.
@@ -642,6 +648,7 @@ templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
 		<input type="hidden" name="item" value={ b.child(item.Name) }/>
 		if b.Fit.Moved {
 			<input type="hidden" name="dataMoved" value="true"/>
+			<input type="hidden" name="bindingRevision" value={ strconv.FormatInt(b.BindingRevision, 10) }/>
 		}
 		<button class="action-menu__action action-menu__action--danger" type="submit">Restore…</button>
 	</form>

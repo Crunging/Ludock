@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -94,8 +95,8 @@ func (p *pages) backup(t *testing.T, id, server, fingerprint string) {
 }
 
 // A backup taken before the server's data moved to other host storage
-// restores only with the confirmation the page sends; a forged request
-// without it is refused before anything is queued.
+// restores only with the confirmation the page sends, for the binding the
+// page showed; a forged or stale request is refused before anything is queued.
 func TestRestoreAfterDataMovedNeedsConfirmation(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -113,7 +114,14 @@ func TestRestoreAfterDataMovedNeedsConfirmation(t *testing.T) {
 	if !strings.Contains(page, "Taken when the server’s data lived somewhere else") || !strings.Contains(page, `name="dataMoved" value="true"`) {
 		t.Fatal(page)
 	}
+	var revision int64
+	p.app.DB.QueryRow("SELECT binding_revision FROM logical_servers WHERE id=?", p.server).Scan(&revision)
 	values.Set("dataMoved", "true")
+	values.Set("bindingRevision", strconv.FormatInt(revision-1, 10))
+	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusBadRequest {
+		t.Fatal("stale", response.StatusCode)
+	}
+	values.Set("bindingRevision", strconv.FormatInt(revision, 10))
 	if response := p.action("/servers/"+p.server+"/restores", p.admin, values); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode, readBody(t, response))
 	}
