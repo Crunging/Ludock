@@ -252,7 +252,12 @@ func TestWarningReadsPlayersWhenItRuns(t *testing.T) {
 		}{{"someone", 1, true}, {"nobody", 0, false}, {"unknown", -1, true}} {
 			t.Run(kind+"/"+c.name, func(t *testing.T) {
 				f := setup(t)
+				// Long enough that work that skips the wait can't be mistaken
+				// for one that waited, however slow the machine.
 				f.jobs.WarningLead = 300 * time.Millisecond
+				if !c.warns {
+					f.jobs.WarningLead = 30 * time.Second
+				}
 				source := f.withPlayers(c.online)
 				started := time.Now()
 				input := map[string]any{WarnInput: true}
@@ -260,7 +265,7 @@ func TestWarningReadsPlayersWhenItRuns(t *testing.T) {
 					input["request"] = skipBackup["request"]
 				}
 				job := f.run(t, kind, input)
-				waited := time.Since(started) >= 300*time.Millisecond
+				waited := time.Since(started) >= f.jobs.WarningLead
 				reads, unheld := source.counts()
 				if job.Status != ops.Succeeded || reads != 1 || unheld != 0 {
 					t.Fatalf("%+v, %d readings, %d without the lock", job, reads, unheld)
