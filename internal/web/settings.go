@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/advanced"
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -55,6 +57,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *R
 		ImageUpdates: views.ImageUpdateSettings{Enabled: s.App.Checks.Enabled(r.Context())},
 		Advanced: views.AdvancedSettings{Upload: s.uploadLimitView(r), Logging: s.loggingView(r),
 			Proxies: s.proxyView(r)},
+		Ludock: s.App.Checks.SelfStatus(r.Context()),
 	}
 	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
 		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration})
@@ -100,6 +103,23 @@ func (s *Server) saveConnection(w http.ResponseWriter, r *http.Request, request 
 	render(w, r, status, views.ConnectionForm(c))
 }
 
+// checkLudock asks the registry about Ludock's own image now.
+func (s *Server) checkLudock(w http.ResponseWriter, r *http.Request, request *Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	check := s.App.Checks.CheckSelfNow(ctx)
+	cancel()
+	// The check can wait behind another; the session may have lost the
+	// administrator role meanwhile.
+	if err := s.recheckAdmin(r.Context(), request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	if !s.App.Checks.Enabled(r.Context()) {
+		check = nil
+	}
+	render(w, r, http.StatusOK, views.LudockCheck(check))
+}
+
 func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request, request *Request) {
 	enabled := r.PostFormValue("enabled") == "true"
 	err := authz.AdminMutationError(s.App.Checks.SetEnabled(r.Context(), request.User().ID, request.Principal.TokenHash, enabled))
@@ -117,7 +137,17 @@ func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request,
 			u.Notice = "Image update checks turned on."
 		}
 	}
-	render(w, r, status, views.ImageUpdateSettingsForm(u))
+	if err != nil {
+		render(w, r, status, views.ImageUpdateSettingsForm(u))
+		return
+	}
+	ludock := s.App.Checks.SelfStatus(r.Context())
+	// SelfStatus waits on Docker; the session may have lost the role meanwhile.
+	if err := s.recheckAdmin(r.Context(), request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	render(w, r, status, views.ImageUpdateSettingsSaved(u, ludock))
 }
 
 func (s *Server) uploadLimitView(r *http.Request) views.UploadLimitSettings {

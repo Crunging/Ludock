@@ -7,6 +7,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/update"
 )
 
 type SettingsView struct {
@@ -15,6 +16,8 @@ type SettingsView struct {
 	Notifications     []NotificationDestinationView
 	ImageUpdates      ImageUpdateSettings
 	Advanced          AdvancedSettings
+	// Ludock is the check of Ludock's own image, or nil when there is none.
+	Ludock *update.CheckStatus
 }
 
 type AdvancedSettings struct {
@@ -124,6 +127,7 @@ templ SettingsPage(page Page, s SettingsView) {
 			<section class="settings-section settings-section--divided" aria-labelledby="image-update-settings-title">
 				<h2 id="image-update-settings-title" tabindex="-1">Image updates</h2>
 				@ImageUpdateSettingsForm(s.ImageUpdates)
+				@LudockCheck(s.Ludock)
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
 				<h2 id="notification-settings-title" tabindex="-1">Notifications</h2>
@@ -275,6 +279,54 @@ templ ImageUpdateSettingsForm(u ImageUpdateSettings) {
 		}
 		<button class="primary-btn" type="submit" data-busy-label="Saving…">Save image update settings</button>
 	</form>
+}
+
+// ImageUpdateSettingsSaved is the saved form and the Ludock check, which the
+// setting turns on or off with the server checks.
+templ ImageUpdateSettingsSaved(u ImageUpdateSettings, ludock *update.CheckStatus) {
+	@ImageUpdateSettingsForm(u)
+	@Partial("#ludock-check", "outerHTML") {
+		@LudockCheck(ludock)
+	}
+}
+
+// LudockCheck shows whether Ludock's own image tag points to a newer image.
+// Images Ludock can't compare show nothing.
+templ LudockCheck(check *update.CheckStatus) {
+	<div class="image-check ludock-check" id="ludock-check">
+		if check != nil && check.State != update.CheckUnknown && check.State != update.CheckPlatform {
+			<h3>Ludock itself</h3>
+			switch check.State {
+				case update.CheckAvailable:
+					<div class="alert alert--info" role="status">
+						<div>
+							<p><strong>A newer Ludock is available.</strong> Ludock doesn’t update itself. Where you started it, in the folder with its compose.yaml, run:</p>
+							<pre><code>docker compose pull ludock{ "\n" }docker compose up -d ludock</code></pre>
+						</div>
+					</div>
+				case update.CheckCurrent:
+					<p class="muted">Ludock runs the newest image its tag points to.</p>
+				default:
+					<p class="muted">Ludock hasn’t checked the registry for a newer version of itself yet.</p>
+			}
+			if check.CheckedAt != 0 {
+				<p class="muted">Last checked @Time(check.CheckedAt, "plain", "")</p>
+			}
+			if check.Failed {
+				<p class="muted">
+					if check.ConfigProblem {
+						Ludock could not read registry credentials from LUDOCK_DOCKER_CONFIG for the last check.
+					} else {
+						The last check couldn’t reach the registry, or the registry refused it.
+					}
+					Ludock will try again later. Last tried @Time(check.TriedAt, "plain", "")
+				</p>
+			}
+			<div class="inline-actions">
+				<button class="secondary-btn" type="button" hx-post="/settings/ludock-check" hx-target="#ludock-check" hx-swap="outerHTML" data-busy-label="Checking…">Check now</button>
+			</div>
+		}
+	</div>
 }
 
 templ BackupSettingsForm(b BackupSettingsView) {

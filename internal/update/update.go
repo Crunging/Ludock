@@ -51,6 +51,12 @@ type Plan struct {
 
 var imageID = regexp.MustCompile(`^(sha256:)?[0-9a-f]{12,64}$`)
 
+// pinnedReference reports whether a container's configured image names no
+// tag that could move: empty, pinned by digest, or an image ID.
+func pinnedReference(image string) bool {
+	return image == "" || strings.Contains(image, "@") || imageID.MatchString(image)
+}
+
 // Check reads the server's container from Docker and confirms that Ludock
 // can replace it.
 func (s *Service) Check(ctx context.Context, server *servers.Context) (*Plan, error) {
@@ -94,7 +100,7 @@ func (s *Service) check(ctx context.Context, server *servers.Context, earlier *P
 	if decodeInto(spec.Config, &config) != nil || decodeInto(spec.HostConfig, &host) != nil || spec.ID != server.Container.ID {
 		return nil, apperr.New("INVALID_CONTAINER", 409, "Docker returned an unreadable container configuration")
 	}
-	if config.Image == "" || strings.Contains(config.Image, "@") || imageID.MatchString(config.Image) {
+	if pinnedReference(config.Image) {
 		return nil, errPinned
 	}
 	if host.AutoRemove {

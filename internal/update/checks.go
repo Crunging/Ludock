@@ -35,6 +35,10 @@ const (
 	// checkNowSpacing keeps repeated Check now presses off the registry:
 	// Docker Hub counts each lookup against its pull rate limit.
 	checkNowSpacing = 10 * time.Second
+
+	// selfID keys Ludock's own container among the servers; logical server
+	// IDs are UUIDs, so it can't collide with one.
+	selfID = "ludock"
 )
 
 // Check states a server can be in. Servers Update server doesn't support
@@ -59,6 +63,9 @@ type Checks struct {
 	DB       *db.DB
 	Identity *identity.Store
 	Notify   func(alert notify.Alert, key, message string)
+	// Self names Ludock's own container (LUDOCK_SELF_CONTAINER or HOSTNAME),
+	// whose image is checked like a server's.
+	Self string
 
 	// run serializes passes that reach Docker; mu guards state, which pages
 	// read without waiting for a registry.
@@ -253,6 +260,10 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	if err != nil {
 		return
 	}
+	self, found, selfErr := c.self(ctx)
+	if found {
+		active[selfID] = self
+	}
 	c.mu.Lock()
 	state, err := c.loadLocked(ctx)
 	if err != nil {
@@ -261,7 +272,9 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	}
 	changed := false
 	for id := range state.Servers {
-		if _, ok := active[id]; !ok {
+		// Ludock's own entry survives a failed lookup, so a version already
+		// announced isn't announced again.
+		if _, ok := active[id]; !ok && (id != selfID || selfErr == nil) {
 			delete(state.Servers, id)
 			changed = true
 		}
@@ -301,7 +314,7 @@ func (c *Checks) Run(ctx context.Context, current map[string]servers.Container, 
 	var checked []string
 	if due != "" {
 		for id, entry := range state.Servers {
-			if entry.Image == due {
+			if _, ok := active[id]; ok && entry.Image == due {
 				checked = append(checked, id)
 			}
 		}
@@ -381,6 +394,46 @@ func (c *Checks) CheckNow(ctx context.Context, serverID string, container server
 	return c.Status(ctx, serverID, container.ID)
 }
 
+// self is Ludock's own container, or found false when Ludock doesn't run in
+// one it can identify, such as a development build.
+func (c *Checks) self(ctx context.Context) (container servers.Container, found bool, err error) {
+	if c.Self == "" {
+		return servers.Container{}, false, nil
+	}
+	info, err := c.Updates.Docker.Inspect(ctx, c.Self)
+	if docker.IsNotFound(err) {
+		return servers.Container{}, false, nil
+	}
+	if err != nil {
+		return servers.Container{}, false, err
+	}
+	return servers.Container{ID: info.ID, Image: info.Config.Image, DisplayName: "Ludock"}, true, nil
+}
+
+// SelfStatus is the check state of Ludock's own image, or nil when the
+// checks are off or there is nothing to check: Ludock doesn't run in a
+// container it can identify, or its image is pinned.
+func (c *Checks) SelfStatus(ctx context.Context) *CheckStatus {
+	if !c.Enabled(ctx) {
+		return nil
+	}
+	self, found, err := c.self(ctx)
+	if !found || err != nil {
+		return nil
+	}
+	return c.Status(ctx, selfID, self.ID)
+}
+
+// CheckSelfNow asks the registry about Ludock's own image right away, as
+// CheckNow does for a server.
+func (c *Checks) CheckSelfNow(ctx context.Context) *CheckStatus {
+	self, found, err := c.self(ctx)
+	if !found || err != nil {
+		return nil
+	}
+	return c.CheckNow(ctx, selfID, self)
+}
+
 // observation is what Docker says about one server's container and image.
 type observation struct {
 	serverID   string
@@ -400,6 +453,9 @@ func (c *Checks) observe(ctx context.Context, serverID string, container servers
 	c.mu.Lock()
 	o := observation{serverID: serverID, container: container, generation: c.generation[serverID]}
 	c.mu.Unlock()
+	if serverID == selfID {
+		return c.observeSelf(ctx, o)
+	}
 	plan, err := c.Updates.check(ctx, &servers.Context{Container: container}, nil, true)
 	if err != nil {
 		// Public errors are the cases Update server refuses.
@@ -413,6 +469,34 @@ func (c *Checks) observe(ctx context.Context, serverID string, container servers
 		return o
 	}
 	o.supported, o.reference, o.key, o.repoDigests, o.platform = true, plan.Image, imageKey(plan.Image), info.RepoDigests, plan.Platform()
+	return o
+}
+
+// observeSelf reads Ludock's own container. Only its image reference
+// matters: Ludock is updated through the tool that started it, not replaced
+// by Update server.
+func (c *Checks) observeSelf(ctx context.Context, o observation) observation {
+	spec, err := c.Updates.Docker.InspectSpec(ctx, o.container.ID)
+	if err != nil {
+		o.retry = !docker.IsNotFound(err)
+		return o
+	}
+	var config struct{ Image string }
+	if decodeInto(spec.Config, &config) != nil || pinnedReference(config.Image) {
+		return o
+	}
+	info, err := c.Updates.Docker.InspectImageConfig(ctx, spec.Image)
+	if err != nil {
+		o.retry = true
+		return o
+	}
+	// A build that wasn't pulled from the tag's registry has nothing to
+	// compare, so it isn't checked at all.
+	if compareDigests(imageKey(config.Image), info.RepoDigests, "") == CheckUnknown {
+		return o
+	}
+	plan := &Plan{Spec: spec, previous: info}
+	o.supported, o.reference, o.key, o.repoDigests, o.platform = true, config.Image, imageKey(config.Image), info.RepoDigests, plan.Platform()
 	return o
 }
 
@@ -465,7 +549,11 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool
 	digest := image.Digest
 	c.mu.Unlock()
 	if announce && c.Notify != nil {
-		c.Notify(notify.NewerImages, "image-update:"+o.serverID+":"+digest, updateMessage(o.container))
+		message := updateMessage(o.container)
+		if o.serverID == selfID {
+			message = "A newer version of Ludock is available. Update it with the tool that started it, such as docker compose pull and docker compose up -d in the folder with its compose.yaml."
+		}
+		c.Notify(notify.NewerImages, "image-update:"+o.serverID+":"+digest, message)
 	}
 }
 
