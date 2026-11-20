@@ -101,6 +101,43 @@ func TestAcquirePreemptingWaitsForBackground(t *testing.T) {
 	warning()
 }
 
+// A yielding acquire cancels a background holder and takes the keys once its
+// cleanup releases them, conflicts at once with a foreground holder, and
+// gives up when its context ends.
+func TestAcquireYieldingWaitsOnlyForBackground(t *testing.T) {
+	table := New()
+	var release func()
+	release, _ = table.Acquire([]string{"server:a"}, func() {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			release()
+		}()
+	})
+	foreground, err := table.AcquireYielding(context.Background(), []string{"server:a"})
+	if err != nil || !table.ServerBusy("a") {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if _, err := table.AcquireYielding(context.Background(), []string{"server:a"}); err != ErrConflict {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited >= foregroundWait {
+		t.Fatal(waited)
+	}
+	foreground()
+	release, _ = table.Acquire([]string{"server:a"}, func() {})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	if _, err := table.AcquireYielding(ctx, []string{"server:a"}); err != ErrConflict {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited >= backgroundYield/2 {
+		t.Fatal(waited)
+	}
+	release()
+}
+
 func TestFenceHoldsBackAllButRecovery(t *testing.T) {
 	table := New()
 	lift := table.Fence()
