@@ -349,7 +349,7 @@ func TestRevokedBackupDeletion(t *testing.T) {
 	f := setup(t)
 	id := f.run(t, "backup", nil).Result["backupId"].(string)
 	checks := 0
-	err := f.jobs.Backups.Delete(ctx, f.serverID, id, func() error {
+	_, err := f.jobs.Backups.Delete(ctx, f.serverID, id, false, func() error {
 		if checks++; checks > 1 {
 			return apperr.New("FORBIDDEN", 403, "Forbidden")
 		}

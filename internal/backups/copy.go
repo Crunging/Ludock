@@ -50,6 +50,11 @@ var copyStall = 2 * time.Minute
 var measureWait = 5 * time.Second
 
 var (
+	errFolderAway    = fail("BACKUP_FOLDER_AWAY", "The folder this backup was saved in can’t be reached.")
+	errFolderStalled = fail("BACKUP_FOLDER_STALLED", "The backup folder isn’t responding. Check its disk or network share, then try again.")
+)
+
+var (
 	errCopyMissing  = fail("BACKUP_COPY_FOLDER", "The second folder is missing or not mounted.")
 	errCopyReadOnly = fail("BACKUP_COPY_FOLDER", "Ludock can’t write to the second folder.")
 	errCopySpace    = fail("BACKUP_COPY_SPACE", "The second folder is down to its free-space reserve.")
@@ -421,7 +426,10 @@ type copies struct {
 	stuck   map[string]bool
 	// measuring holds folders whose free-space reading hasn't returned.
 	measuring map[string]bool
-	wake      chan struct{}
+	// hung counts each folder's looks (reach) that were given up on and
+	// haven't returned.
+	hung map[string]int
+	wake chan struct{}
 }
 
 // measure claims a folder's free-space reading; false while an earlier one
@@ -689,7 +697,11 @@ func (s *Service) makeCopy(ctx context.Context, backup *Backup, reserve int64) e
 		}
 		// The previous second copy stands in for an archive missing from the
 		// backup folder; CopyFile checks it against the original's checksum.
-		source, err := s.Storage.Open(s.ArchiveFolder(backup), backup.ID)
+		folder, err := s.ArchiveFolder(backup)
+		if err != nil {
+			return err
+		}
+		source, err := s.Storage.Open(folder, backup.ID)
 		if err != nil {
 			return errCopySource
 		}
@@ -762,32 +774,157 @@ func (s *Service) finishCopyRemovals(ctx context.Context) error {
 	return nil
 }
 
-// ArchiveFolder is where a backup's archive is read from: its own folder,
-// or a second copy when the archive is missing there, preferring the one in
-// the chosen folder. It sets FromCopy.
-func (s *Service) ArchiveFolder(backup *Backup) string {
-	if backup.CopyState != "complete" && backup.copyPrevious == "" || s.Storage.present(backup.destination, backup.ID) {
-		return backup.destination
+// reach runs fn, a look into folder, on a goroutine of its own. It gives fn
+// up with stalled after limit without progress. A look blocked in the kernel
+// can't be cancelled, so until it returns, later looks into that folder fail
+// at once instead of piling up on it.
+func (s *Service) reach(folder string, stalled error, limit time.Duration, fn func(progress func()) error) error {
+	c := &s.copies
+	c.mu.Lock()
+	if c.hung[folder] > 0 {
+		c.mu.Unlock()
+		return stalled
 	}
-	if backup.CopyState == "complete" && s.Storage.present(backup.copyDestination, backup.ID) {
-		backup.FromCopy = true
-		return backup.copyDestination
+	c.mu.Unlock()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	done := make(chan error, 1)
+	// Both guarded by c.mu: whichever side comes second settles the count.
+	finished, abandoned := false, false
+	go func() {
+		if testHook != nil {
+			testHook("reaching")
+		}
+		err := fn(func() { last.Store(time.Now().UnixNano()) })
+		c.mu.Lock()
+		finished = true
+		if abandoned {
+			if c.hung[folder]--; c.hung[folder] <= 0 {
+				delete(c.hung, folder)
+			}
+		}
+		c.mu.Unlock()
+		done <- err
+	}()
+	ticker := time.NewTicker(min(limit/4, time.Second))
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-ticker.C:
+		}
+		if time.Since(time.Unix(0, last.Load())) <= limit {
+			continue
+		}
+		c.mu.Lock()
+		if finished {
+			c.mu.Unlock()
+			return <-done
+		}
+		abandoned = true
+		if c.hung == nil {
+			c.hung = map[string]int{}
+		}
+		c.hung[folder]++
+		c.mu.Unlock()
+		return stalled
 	}
-	if backup.copyPrevious != "" && s.Storage.present(backup.copyPrevious, backup.ID) {
-		backup.FromCopy = true
-		return backup.copyPrevious
-	}
-	return backup.destination
 }
 
-// Locate sets FromCopy and Copying on complete backups.
-func (s *Service) Locate(list []Backup) {
-	for index := range list {
-		if backup := &list[index]; backup.State == "complete" {
-			s.ArchiveFolder(backup)
-			backup.Copying = s.Copying(backup.ID)
+// look reports whether a backup's archive is in folder, within measureWait.
+func (s *Service) look(folder, id string, stalled error) (bool, error) {
+	var found bool
+	err := s.reach(folder, stalled, measureWait, func(func()) error {
+		var err error
+		found, err = s.Storage.present(folder, id)
+		return err
+	})
+	return err == nil && found, err
+}
+
+// ArchiveFolder is where a backup's archive is read from: its own folder,
+// or a second copy when the archive is missing there, preferring the one in
+// the chosen folder. It sets FromCopy and FolderAway, and fails when a
+// folder it must look into isn't responding.
+func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
+	backup.FromCopy = false
+	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
+	if errors.Is(err, errFolderStalled) {
+		return "", err
+	}
+	backup.FolderAway = err != nil
+	if found {
+		return backup.destination, nil
+	}
+	var copies []string
+	if backup.CopyState == "complete" {
+		copies = append(copies, backup.copyDestination)
+	}
+	for _, folder := range append(copies, backup.copyPrevious) {
+		if folder == "" {
+			continue
+		}
+		found, err := s.look(folder, backup.ID, errCopyStalled)
+		if errors.Is(err, errCopyStalled) {
+			return "", err
+		}
+		if found {
+			backup.FromCopy = true
+			return folder, nil
 		}
 	}
+	return backup.destination, nil
+}
+
+// Locate sets FromCopy and FolderAway on backups and Copying on complete
+// ones. It returns the first folder that isn't responding.
+func (s *Service) Locate(list []Backup) error {
+	var stalled error
+	for index := range list {
+		backup := &list[index]
+		switch backup.State {
+		case "complete":
+			if _, err := s.ArchiveFolder(backup); err != nil && stalled == nil {
+				stalled = err
+			}
+			backup.Copying = s.Copying(backup.ID)
+		case "deleting":
+			err := s.reach(backup.destination, errFolderStalled, measureWait, func(func()) error {
+				return s.Storage.reachable(backup.destination)
+			})
+			backup.FolderAway = errors.Is(err, errFolderAway)
+			if errors.Is(err, errFolderStalled) && stalled == nil {
+				stalled = err
+			}
+		}
+	}
+	return stalled
+}
+
+// Validate checks a backup's archive in folder, from ArchiveFolder, as
+// Storage.Validate does, or one item of it as ValidateItem does, and gives
+// up when the folder stops responding.
+func (s *Service) Validate(backup *Backup, folder, rootID, item string) (map[string]int64, error) {
+	stalled := errFolderStalled
+	if backup.FromCopy {
+		stalled = errCopyStalled
+	}
+	var staged map[string]int64
+	err := s.reach(folder, stalled, copyStall, func(progress func()) error {
+		if item == "" {
+			var err error
+			staged, err = s.Storage.Validate(folder, backup.ID, backup.Roots, backup.Size, backup.Checksum, progress)
+			return err
+		}
+		bytes, err := s.Storage.ValidateItem(folder, backup.ID, backup.Roots, backup.Size, backup.Checksum, rootID, item, progress)
+		staged = map[string]int64{rootID: bytes}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return staged, nil
 }
 
 // retarget points every copy not in the newly saved folder at it. A copy

@@ -204,7 +204,7 @@ func (s *Storage) ReadFile(directory, id string, roots []Root, rootID, path stri
 
 // ValidateItem checks a whole archive and its checksum as Validate does, and
 // returns the bytes restoring one item stages.
-func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int64, checksum, rootID, path string) (int64, error) {
+func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int64, checksum, rootID, path string, progress func()) (int64, error) {
 	if clean, err := CleanPath(path); err != nil || clean == "" {
 		return 0, errUnsafePath
 	}
@@ -216,7 +216,12 @@ func (s *Storage) ValidateItem(directory, id string, roots []Root, maxBytes int6
 	found := false
 	var staged int64
 	hash := sha256.New()
-	_, err = validateStream(file, roots, maxBytes, func(chunk []byte) { hash.Write(chunk) }, func(header *tarstream.Header) {
+	_, err = validateStream(file, roots, maxBytes, func(chunk []byte) {
+		hash.Write(chunk)
+		if progress != nil {
+			progress()
+		}
+	}, func(header *tarstream.Header) {
 		entryRoot, rest := archivePath(header)
 		if entryRoot != rootID {
 			return

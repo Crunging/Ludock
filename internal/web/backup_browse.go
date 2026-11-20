@@ -32,8 +32,12 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 		browser.Error = publicMessage(err)
 		return browser
 	}
-	folder := s.App.Backups.ArchiveFolder(backup)
+	folder, err := s.App.Backups.ArchiveFolder(backup)
 	browser.Backup, browser.Roots = *backup, backup.Roots
+	if err != nil {
+		browser.Error = publicMessage(err)
+		return browser
+	}
 	if len(backup.Roots) == 0 {
 		browser.Error = "This backup holds no data folders."
 		return browser
@@ -95,8 +99,13 @@ func (s *Server) downloadBackupFile(w http.ResponseWriter, r *http.Request, requ
 		s.fail(w, r, request, err)
 		return
 	}
+	folder, err := s.App.Backups.ArchiveFolder(backup)
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
 	started := false
-	err = s.App.Backups.Storage.ReadFile(s.App.Backups.ArchiveFolder(backup), backup.ID, backup.Roots, root, item, func(size int64, body io.Reader) error {
+	err = s.App.Backups.Storage.ReadFile(folder, backup.ID, backup.Roots, root, item, func(size int64, body io.Reader) error {
 		if err := check(); err != nil {
 			return err
 		}

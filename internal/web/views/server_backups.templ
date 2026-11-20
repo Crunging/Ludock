@@ -26,6 +26,8 @@ type BackupsView struct {
 	LatestBackup *servers.BackupSummary
 	Backups      []backups.Backup
 	HistoryError string
+	// FolderIssue says a backup folder isn't responding.
+	FolderIssue string
 	Restore      *backups.Backup
 	// Fits says, for each backup, whether it restores onto the server as it
 	// is now; nil while that is unknown.
@@ -210,6 +212,9 @@ templ BackupList(b BackupsView) {
 		if usage := b.usage(); usage != "" {
 			<p class="backup-usage" id="backup-usage">{ usage }</p>
 		}
+		if b.FolderIssue != "" {
+			@Alert("warning", b.FolderIssue)
+		}
 		// Not in a scrolling wrapper, which would clip each row's menu.
 		<div>
 			<table class="data-table">
@@ -282,6 +287,8 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 			}
 			if complete {
 				@copyState(backup)
+			} else if backup.FolderAway {
+				<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached</small>
 			}
 		</td>
 		<td>
@@ -320,11 +327,18 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 							if kept {
 								title="Release this backup before deleting it"
 							}
-							hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
 							hx-target="#detail-status"
-							hx-confirm="Delete this backup?"
-							data-confirm-detail="The archive is deleted permanently."
-							data-confirm-action="Delete backup"
+							if backup.FolderAway {
+								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete?folderAway=1" }
+								hx-confirm="Remove this backup from Ludock?"
+								data-confirm-detail="Ludock can’t reach the folder this backup was saved in, so its archive may still be there. Ludock stops listing it and deletes its second copy."
+								data-confirm-action="Remove backup"
+							} else {
+								hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
+								hx-confirm="Delete this backup?"
+								data-confirm-detail="The archive is deleted permanently."
+								data-confirm-action="Delete backup"
+							}
 							data-confirm-danger
 							data-busy-label="Deleting…"
 						>Delete</button>
@@ -338,8 +352,12 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 // copyState says where a backup's second copy stands.
 templ copyState(backup backups.Backup) {
 	switch {
+		case backup.FromCopy && backup.FolderAway:
+			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached; using the second copy</small>
 		case backup.FromCopy:
 			<small class="table-detail backup-copy backup-copy--warning">Missing from the backup folder; using the second copy</small>
+		case backup.FolderAway:
+			<small class="table-detail backup-copy backup-copy--warning">Its backup folder can’t be reached</small>
 		case backup.CopyState == "complete":
 			<small class="table-detail backup-copy">Second copy saved</small>
 		case backup.Copying:

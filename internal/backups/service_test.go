@@ -69,7 +69,7 @@ func TestRefusedDeletionSurvivesCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { testHook = nil })
 	checks := 0
-	err := s.Delete(ctx, backup.ServerID, backup.ID, func() error {
+	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func() error {
 		if checks++; checks > 1 {
 			go func() { cleaned <- s.FinishDeletions(ctx) }()
 			<-listed
@@ -97,7 +97,7 @@ func TestRefusedDeletionWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := 0
-	err := s.Delete(ctx, backup.ServerID, backup.ID, func() error {
+	_, err := s.Delete(ctx, backup.ServerID, backup.ID, false, func() error {
 		if checks++; checks > 1 {
 			return forbidden
 		}
@@ -222,7 +222,7 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 	}
 	// ids is oldest first: keep the oldest, read the second.
 	s.DB.Exec("UPDATE backups SET kept_at=1, note='before 1.21' WHERE id=?", ids[0])
-	if err := s.Delete(ctx, first.ServerID, ids[0], nil); !apperr.Is(err, "BACKUP_KEPT") {
+	if _, err := s.Delete(ctx, first.ServerID, ids[0], false, nil); !apperr.Is(err, "BACKUP_KEPT") {
 		t.Fatal("deleted a kept backup", err)
 	}
 	archive, err := s.Storage.Open(destination, ids[1])
@@ -259,7 +259,7 @@ func TestPruneSparesKeptAndOpenArchives(t *testing.T) {
 	s.DB.Exec("UPDATE backups SET kept_at=1 WHERE id=?", ids[4])
 	backup, _ := s.Get(ctx, first.ServerID, ids[4])
 	backup.KeptAt = 0
-	if err := s.remove(ctx, backup, nil); !errors.Is(err, errKept) {
+	if err := s.remove(ctx, backup, nil, false); !errors.Is(err, errKept) {
 		t.Fatal(err)
 	}
 	if left := present(); !slices.Equal(left, []string{ids[0], ids[4], ids[5], ids[6]}) {

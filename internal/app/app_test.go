@@ -122,7 +122,7 @@ func TestFirstViewerReadsPlayers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.Start(ctx)
-	defer a.Stop()
+	defer a.Stop(time.Now().Add(time.Minute))
 	// Let the startup tick, with nobody watching, pass.
 	time.Sleep(500 * time.Millisecond)
 	select {
@@ -159,7 +159,7 @@ func TestStartRemovesLeftoverConsoleHelpers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.Start(ctx)
-	defer a.Stop()
+	defer a.Stop(time.Now().Add(time.Minute))
 	if release, err := a.Locks.Acquire([]string{"server:x"}, nil); err == nil {
 		release()
 		t.Fatal("work took a server before the leftover helper was removed")
@@ -176,5 +176,39 @@ func TestStartRemovesLeftoverConsoleHelpers(t *testing.T) {
 	}
 	if engine.Container(leftover) != nil {
 		t.Fatal("left the console helper")
+	}
+}
+
+// Docker kills a container ten seconds after asking it to stop. Work that
+// keeps a server, such as a request or command still running, holds a
+// stopping Ludock only until its deadline; the work is left for startup
+// recovery, as a kill would leave it.
+func TestStopIsBounded(t *testing.T) {
+	engine, err := fakedocker.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	a, err := New(config.Config{DockerSocket: engine.Socket}, dbtest.Open(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.Start(ctx)
+	var release func()
+	for deadline := time.Now().Add(10 * time.Second); release == nil; time.Sleep(20 * time.Millisecond) {
+		release, _ = a.Locks.Acquire([]string{"server:stuck"}, nil)
+		if time.Now().After(deadline) {
+			t.Fatal("startup recovery never finished")
+		}
+	}
+	t.Cleanup(release)
+	cancel()
+	started := time.Now()
+	if a.Stop(started.Add(300 * time.Millisecond)) {
+		t.Fatal("reported a clean stop while work still held a server")
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatal("stopping waited", waited)
 	}
 }

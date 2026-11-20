@@ -274,7 +274,7 @@ func TestRemovingABackupRemovesItsCopy(t *testing.T) {
 
 	os.Remove(filepath.Join(f.main, list[2].ID+".tar"))
 	missing, _ := f.s.Get(ctx, f.serverID, list[2].ID)
-	if folder := f.s.ArchiveFolder(missing); folder != f.copies || !missing.FromCopy {
+	if folder, _ := f.s.ArchiveFolder(missing); folder != f.copies || !missing.FromCopy {
 		t.Fatal("not read from the copy", folder)
 	}
 	archive, err := f.s.Open(ctx, f.serverID, list[2].ID)
@@ -289,7 +289,7 @@ func TestRemovingABackupRemovesItsCopy(t *testing.T) {
 
 	unplugged := f.copies + "-unplugged"
 	os.Rename(f.copies, unplugged)
-	if err := f.s.Delete(ctx, f.serverID, list[3].ID, nil); err != nil {
+	if _, err := f.s.Delete(ctx, f.serverID, list[3].ID, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(f.main, list[3].ID+".tar")) {
@@ -474,7 +474,7 @@ func TestChangingTheSecondFolderCopiesAgain(t *testing.T) {
 	}
 	os.Remove(filepath.Join(f.main, backup.ID+".tar"))
 	missing := mustGet(t, f, backup.ID)
-	if folder := f.s.ArchiveFolder(missing); folder != f.copies || !missing.FromCopy {
+	if folder, _ := f.s.ArchiveFolder(missing); folder != f.copies || !missing.FromCopy {
 		t.Fatal("the old copy no longer stands in", folder)
 	}
 	if err := f.s.CopyDue(ctx); err != nil {
@@ -495,7 +495,7 @@ func TestChangingTheSecondFolderCopiesAgain(t *testing.T) {
 	if state, _, _, _ := f.row(t, backup.ID); state != "" {
 		t.Fatal("still counted as saved with no folder chosen", state)
 	}
-	if err := f.s.Delete(ctx, f.serverID, backup.ID, nil); err != nil {
+	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.CopyDue(ctx); err != nil {
@@ -668,5 +668,156 @@ func TestSlowVerificationIsNotAStall(t *testing.T) {
 	}
 	if state, _, _, problem := f.row(t, backup.ID); state != "complete" {
 		t.Fatal(state, problem)
+	}
+}
+
+// The disk a backup folder was on is lost, and the owner makes the second
+// folder the backup folder. Retention leaves those backups listed with their
+// copies, since the folder may only be unmounted for now. Deleting one by
+// hand asks first, then removes it from Ludock with its second copy,
+// leaving whatever is still in the old folder.
+func TestBackupsInALostFolder(t *testing.T) {
+	f := newCopyFixture(t)
+	var list []Backup
+	for index := range 5 {
+		list = append(list, f.add(t, "world data", int64(index+1)*60_000))
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lost := f.main + "-lost"
+	if err := os.Rename(f.main, lost); err != nil {
+		t.Fatal(err)
+	}
+	f.settings = Settings{Destination: f.copies, CopyChosen: true}
+	if _, err := f.s.DB.Exec(`UPDATE settings SET value_json=? WHERE key='backups'`,
+		`{"destination":"`+f.copies+`","maxBytes":0,"reserveBytes":0,"copyTo":"","copyChosen":true}`); err != nil {
+		t.Fatal(err)
+	}
+	copyOf := func(backup Backup) string { return filepath.Join(f.copies, backup.ID+".tar") }
+
+	if err := f.s.Prune(ctx, f.serverID, f.settings, list[4].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.FinishDeletions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range list {
+		if found, _ := f.s.Exists(ctx, backup.ID, true); !found || !exists(copyOf(backup)) {
+			t.Fatal("retention hid or removed a backup it couldn't reach", backup.ID)
+		}
+	}
+
+	listed, err := f.s.List(ctx, f.serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Locate(listed); err != nil {
+		t.Fatal(err)
+	}
+	if !listed[0].FolderAway || !listed[0].FromCopy {
+		t.Fatalf("%+v", listed[0])
+	}
+
+	if _, err := f.s.Delete(ctx, f.serverID, list[0].ID, false, nil); !apperr.Is(err, "BACKUP_FOLDER_AWAY") {
+		t.Fatal("deleted without saying the archive stays behind", err)
+	}
+	if found, _ := f.s.Exists(ctx, list[0].ID, true); !found {
+		t.Fatal("a refused deletion changed the backup")
+	}
+	left, err := f.s.Delete(ctx, f.serverID, list[0].ID, true, nil)
+	if err != nil || !left {
+		t.Fatal(left, err)
+	}
+	if err := f.s.CopyDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := f.s.Exists(ctx, list[0].ID, false); found || exists(copyOf(list[0])) {
+		t.Fatal("kept the record or the second copy")
+	}
+	if !exists(filepath.Join(lost, list[0].ID+".tar")) {
+		t.Fatal("touched the old folder")
+	}
+	// A backup whose folder is back is deleted as usual.
+	if err := os.Rename(lost, f.main); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := f.s.Delete(ctx, f.serverID, list[1].ID, true, nil); err != nil || left || exists(filepath.Join(f.main, list[1].ID+".tar")) {
+		t.Fatal(left, err)
+	}
+}
+
+// A backup folder that stops responding is given up on within a few seconds,
+// so the Backups tab and a restore holding the server's locks don't wait on
+// it. Until the stuck look returns, others fail at once instead of piling up.
+func TestStalledBackupFolderIsGivenUp(t *testing.T) {
+	f := newCopyFixture(t)
+	backup := f.add(t, "world data", 60_000)
+	defer func(wait, stall time.Duration) { measureWait, copyStall = wait, stall }(measureWait, copyStall)
+	measureWait, copyStall = 50*time.Millisecond, 50*time.Millisecond
+	release := make(chan struct{})
+	var looks atomic.Int32
+	testHook = func(point string) {
+		if point == "reaching" && looks.Add(1) == 1 {
+			<-release
+		}
+	}
+	defer func() { testHook = nil }()
+
+	listed, _ := f.s.List(ctx, f.serverID)
+	started := time.Now()
+	if err := f.s.Locate(listed); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	if _, err := f.s.ArchiveFolder(&listed[0]); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, nil); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited > time.Second || looks.Load() != 1 {
+		t.Fatal("looks waited on a stuck folder", waited, looks.Load())
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if folder, err := f.s.ArchiveFolder(&listed[0]); err == nil {
+			if folder != f.main {
+				t.Fatal(folder)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the folder stayed stuck after its look returned")
+		}
+	}
+	if found, _ := f.s.Exists(ctx, backup.ID, true); !found {
+		t.Fatal("a stuck folder changed the backup")
+	}
+
+	// A restore's check of the archive gives up when reading stalls, and
+	// one that keeps reading is not a stall.
+	stall := make(chan struct{})
+	testHook = func(point string) {
+		if point == "reaching" {
+			<-stall
+		}
+	}
+	if _, err := f.s.Validate(&listed[0], f.main, "", ""); !errors.Is(err, errFolderStalled) {
+		t.Fatal(err)
+	}
+	close(stall)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.s.copies.mu.Lock()
+		hung := f.s.copies.hung[f.main]
+		f.s.copies.mu.Unlock()
+		if hung == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled read never returned")
+		}
 	}
 }

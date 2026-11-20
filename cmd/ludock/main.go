@@ -122,18 +122,27 @@ func serve() int {
 		}
 	case <-ctx.Done():
 	}
-	// Running operations finish their cleanup before exit. A second signal
-	// exits at once; startup recovery reconciles whatever they left.
+	// Running work gets a few seconds to finish, well inside the ten Docker
+	// waits before killing the container. Work still running then is left as
+	// a kill would leave it: operations are saved before they act, and
+	// startup recovery resumes or reconciles them. A second signal exits at
+	// once.
 	stop()
 	log.Info("Shutting down; signal again to exit without waiting for running operations")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	deadline := time.Now().Add(shutdownGrace)
+	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline.Add(-shutdownGrace/2))
 	defer cancel()
 	// End long-lived connections first: Shutdown waits for every handler, and
 	// event streams and console sockets otherwise stay open.
 	server.CloseSockets()
 	server.CloseStreams()
 	failed := httpServer.Shutdown(shutdownCtx) != nil
-	services.Stop()
+	if !services.Stop(deadline) {
+		// Exiting without closing the database leaves that work exactly as
+		// a kill would, the case recovery is built for.
+		log.Warn("Stopped before running work finished; it resumes or is checked on the next start")
+		os.Exit(0)
+	}
 	if failed {
 		log.Error("Failed to shut down cleanly")
 		return 1
@@ -141,6 +150,9 @@ func serve() int {
 	log.Info("Shutdown complete")
 	return 0
 }
+
+// shutdownGrace is how long a stopping Ludock waits for running work.
+const shutdownGrace = 6 * time.Second
 
 // recoverAccount resets a password and turns off two-factor sign-in from the
 // console. The new password comes

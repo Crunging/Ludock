@@ -87,14 +87,14 @@ func TestListFolderAndReadFile(t *testing.T) {
 		t.Fatal("read a folder as a file:", err)
 	}
 
-	staged, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", "world/region")
+	staged, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", "world/region", nil)
 	if err != nil || staged != 4096+73728 {
 		t.Fatal(staged, err)
 	}
-	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, strings.Repeat("0", 64), "root-0", "world"); !apperr.Is(err, "BACKUP_CHECKSUM") {
+	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, strings.Repeat("0", 64), "root-0", "world", nil); !apperr.Is(err, "BACKUP_CHECKSUM") {
 		t.Fatal(err)
 	}
-	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", ""); !apperr.Is(err, "UNSAFE_PATH") {
+	if _, err := storage.ValidateItem(directory, id, roots, 1<<30, checksum, "root-0", "", nil); !apperr.Is(err, "UNSAFE_PATH") {
 		t.Fatal("accepted a whole root as an item:", err)
 	}
 }
