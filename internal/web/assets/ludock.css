@@ -513,6 +513,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .needs-attention__description { display: grid; gap: 2px; font-size: 15px; }
 .needs-attention__server { color: var(--ink-2); font-size: 13px; }
 .needs-attention__action { flex: none; white-space: nowrap; }
+.needs-attention__actions { flex: none; display: flex; gap: 10px; align-items: center; white-space: nowrap; }
 .needs-attention__warning, .needs-attention__error { margin-bottom: 10px; color: var(--ink-2); font-size: 15px; }
 .needs-attention__note { margin-top: 10px; font-size: 13px; }
 .needs-attention__expand { margin-top: 12px; }

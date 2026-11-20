@@ -203,7 +203,8 @@ templ DetailLive(d ServerDetail) {
 					if d.Row.ConsoleLabel != "" || d.Row.CanFiles {
 						<div class="detail-actions__group">
 							if d.Row.ConsoleLabel != "" {
-								<a class="primary-btn" href={ templ.SafeURL("/console/" + server.ID) }>{ d.Row.ConsoleLabel }</a>
+								// Start is the primary action of a stopped server.
+								<a class={ templ.KV("primary-btn", !d.Row.CanStart), templ.KV("secondary-btn", d.Row.CanStart) } href={ templ.SafeURL("/console/" + server.ID) }>{ d.Row.ConsoleLabel }</a>
 							}
 							if d.Row.CanFiles {
 								<a class="secondary-btn" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
@@ -213,7 +214,7 @@ templ DetailLive(d ServerDetail) {
 					if d.Row.CanStart || d.Row.CanStop || d.Row.CanRestart {
 						<div class="detail-actions__group">
 							if d.Row.CanStart {
-								<button type="button" class="secondary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#detail-status" data-busy-label="Working…">Start</button>
+								<button type="button" class="primary-btn" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#detail-status" data-busy-label="Working…">Start</button>
 							}
 							if d.Row.CanStop {
 								<button type="button" class="secondary-btn secondary-btn--danger" disabled?={ d.Row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#detail-status" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, d.Row.Warn)... }>Stop</button>

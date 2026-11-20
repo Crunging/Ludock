@@ -306,6 +306,19 @@ func (r *Runner) Get(ctx context.Context, id string) (*Job, error) {
 	return result.job()
 }
 
+// LastOutcome is a server's newest work of kind that ran to an end, or nil.
+func (r *Runner) LastOutcome(ctx context.Context, serverID, kind string) (*Job, error) {
+	result, err := scan(r.DB.QueryRowContext(ctx, "SELECT "+columns+` FROM operations WHERE server_id=? AND kind=?
+      AND status IN ('succeeded','failed','interrupted') ORDER BY created_at DESC,id DESC LIMIT 1`, serverID, kind))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result.job()
+}
+
 type EnqueueOptions struct {
 	ServerID        string
 	ActorID         string
@@ -698,7 +711,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 	}()
 	fail := func(err error) {
 		message, _ := apperr.Public(err)
-		if docker.Unavailable(err) {
+		if docker.StatusCode(err) >= 500 {
+			message = "Docker reported an error, so this stopped. Check the server before trying again."
+		} else if docker.Unavailable(err) {
 			message = "Ludock couldn’t reach Docker, so this stopped. Check the server before trying again."
 		}
 		// Work stopped by shutdown is reconciled on the next start, not failed.

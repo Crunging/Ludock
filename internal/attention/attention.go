@@ -29,6 +29,8 @@ type Item struct {
 	// availability
 	State           string
 	OutageStartedAt int64
+	// CanStart: the server is stopped and the viewer may start it.
+	CanStart bool
 	// disk and memory; Path is empty for a viewer who can't read files.
 	Path    string
 	Percent float64
@@ -114,6 +116,8 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		if problem := problems[server.ID]; problem != nil {
 			item := base
 			item.ID, item.Kind, item.State, item.OutageStartedAt = "availability:"+server.ID, "availability", problem.State, problem.OutageStartedAt
+			item.CanStart = server.Status == identity.StatusActive && slices.Contains(permissions, authz.ServerStart) &&
+				(problem.State == "exited" || problem.State == "created")
 			result.Items = append(result.Items, item)
 		}
 		if server.Status == identity.StatusActive {

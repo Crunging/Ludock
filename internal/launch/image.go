@@ -14,7 +14,7 @@ import (
 )
 
 var errImageUnavailable = apperr.New("HELPER_IMAGE_UNAVAILABLE", 503,
-	"Ludock could not identify its runtime image. Check Docker connectivity and any LUDOCK_SELF_CONTAINER setting.")
+	"Ludock couldn’t find its own image in Docker, which it needs to reach the server’s files. Check that Docker is running; if Ludock’s container has a custom hostname, set LUDOCK_SELF_CONTAINER to its container name.")
 
 // Outside a container there is no runtime image to reuse; helpers then need
 // an explicitly configured, digest-pinned Ludock image.

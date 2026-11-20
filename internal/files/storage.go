@@ -35,12 +35,12 @@ var log = logging.New("files")
 var messages = map[string]string{
 	"INVALID_PATH":                "Invalid file path",
 	"INVALID_NAME":                "Invalid file or folder name",
-	"ROOT_NOT_FOUND":              "File root not found",
-	"ROOT_MUTATION":               "The configured root cannot be changed",
+	"ROOT_NOT_FOUND":              "That data folder isn’t available. Reload the page.",
+	"ROOT_MUTATION":               "A data folder itself can’t be renamed, moved, or deleted here",
 	"ROOT_DOWNLOAD":               "Choose a file or folder to download",
 	"UNSAFE_OR_CHANGED_FILE_PATH": "The path changed, is unsafe, or cannot be accessed",
 	"FILE_TARGET_CHANGED":         "The server changed while preparing file access. Refresh and try again.",
-	"FILE_ROOT_CHANGED":           "The file root changed. Refresh and try again.",
+	"FILE_ROOT_CHANGED":           "The data folder changed. Refresh and try again.",
 	"FILE_OPERATION_TIMEOUT":      "The file change took too long. Refresh and try again.",
 	"INVALID_FILE_VERSION":        "Reopen the file before saving it",
 	"INVALID_SELECTION":           "Choose fewer items, up to 500 in one folder",
@@ -295,7 +295,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 	})
 	if err != nil {
 		proof.Cleanup()
-		return nil, err
+		return nil, launch.HelperFailed(err)
 	}
 	access := &Access{service: s, container: id, blocked: blocked, mounts: nested, assertAccess: assertAccess, proof: proof}
 	if err := s.prepare(ctx, access, root, inspection); err != nil {
@@ -414,7 +414,7 @@ func (s *Service) RemoveLeftovers(ctx context.Context) error {
 
 func (s *Service) prepare(ctx context.Context, access *Access, root Root, inspection *docker.ContainerInspect) error {
 	if err := launch.Step(ctx, "starting a file helper", func(ctx context.Context) error { return s.Docker.Start(ctx, access.container) }); err != nil {
-		return err
+		return launch.HelperFailed(err)
 	}
 	if err := launch.AssertMountIdentities(ctx, s.Docker, access.container, access.proof.Identities); err != nil {
 		return err

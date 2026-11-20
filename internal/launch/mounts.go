@@ -20,7 +20,31 @@ import (
 )
 
 var ErrUnverifiedMount = apperr.New("UNVERIFIED_DATA_MOUNT", 409,
-	"A data mount could not be verified. Bind source paths must contain no symbolic links and must be accessible to the Docker host validator; named volumes must use the local driver without host remapping options.")
+	"Ludock couldn’t check one of the server’s data folders, so it stopped before reading or changing them. Each must be a real folder rather than a link to one, and a Docker volume must be a plain local one.")
+
+// ErrHelperFailed is Docker answering with an error while Ludock creates,
+// starts or reads one of its helpers.
+var ErrHelperFailed = apperr.New("DOCKER_HELPER_FAILED", 502,
+	"Docker reported an error when Ludock started its helper for the server’s files, so Ludock stopped before reading or changing them. Try again in a moment; if it keeps happening, check Docker.")
+
+// HelperFailed reports a Docker call made for a helper: a public error stays
+// as it is, a request Docker never answered stays a Docker error so callers
+// can wait it out, and any answer refusing it becomes ErrHelperFailed.
+func HelperFailed(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, public := apperr.As(err); public || errors.Is(err, context.Canceled) {
+		return err
+	}
+	if docker.Unavailable(err) && docker.StatusCode(err) < 500 {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrDockerTimeout
+	}
+	return ErrHelperFailed
+}
 
 // Proof keeps a validator alive. Its pinned descriptors prevent source
 // inode reuse until Cleanup.
@@ -67,6 +91,9 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 			return nil, ErrUnverifiedMount
 		}
 		info, err := client.InspectVolume(ctx, name)
+		if err != nil && !docker.IsNotFound(err) {
+			return nil, HelperFailed(err)
+		}
 		if err != nil || info.Driver != "local" || len(info.Options) > 0 {
 			return nil, ErrUnverifiedMount
 		}
@@ -105,13 +132,17 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 			PidsLimit: helperPids, Memory: 128 * 1024 * 1024, NanoCpus: helperCPUNano,
 		},
 	})
+	timedOut := creating.Err() != nil && ctx.Err() == nil
 	cancel()
 	if err != nil {
 		// Validators only read, so removal need not hold the caller.
 		removing, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		client.RemoveHelper(removing, name)
 		done()
-		return nil, ErrUnverifiedMount
+		if timedOut {
+			return nil, ErrDockerTimeout
+		}
+		return nil, HelperFailed(err)
 	}
 	cleanup := func() {
 		if operationID != "" {
@@ -123,10 +154,7 @@ func MountProof(ctx context.Context, client *docker.Client, images *Images, moun
 	identities, err := readProof(ctx, client, id, sources)
 	if err != nil {
 		cleanup()
-		if errors.Is(err, ErrDockerTimeout) {
-			return nil, err
-		}
-		return nil, ErrUnverifiedMount
+		return nil, HelperFailed(err)
 	}
 	return &Proof{Identities: identities, Cleanup: cleanup}, nil
 }
@@ -139,7 +167,7 @@ func readProof(ctx context.Context, client *docker.Client, id string, sources []
 	defer cancel()
 	logs, err := client.Logs(deadline, id, docker.LogsOptions{Follow: true, Stdout: true, Tail: 10})
 	if err != nil {
-		return nil, err
+		return nil, HelperFailed(err)
 	}
 	defer logs.Close()
 	stdout := docker.Stdout(logs)
@@ -173,11 +201,12 @@ func AssertMountIdentities(ctx context.Context, client *docker.Client, container
 	}
 	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if _, err := Exec(deadline, client, container, ExecOptions{Cmd: helper.Command("mount-identities", identities)}); err != nil {
-		return ErrUnverifiedMount
-	}
-	return nil
+	_, err := Exec(deadline, client, container, ExecOptions{Cmd: helper.Command("mount-identities", identities), Errors: identityErrors})
+	return HelperFailed(err)
 }
+
+// identityErrors keep a mismatch, the only nonzero exit, a mount refusal.
+var identityErrors = &ExecErrors{Timeout: ErrDockerTimeout, Failed: ErrHelperFailed, Unsafe: ErrUnverifiedMount, OutputLimit: ErrUnverifiedMount}
 
 // createLimit bounds a validator's create; tests shorten it.
 var createLimit = 2 * time.Minute

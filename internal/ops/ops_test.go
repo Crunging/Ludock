@@ -532,18 +532,22 @@ func TestUnexpectedFailureIsLogged(t *testing.T) {
 	}
 }
 
-// Work that fails because Docker stopped answering says so.
+// Work that fails because Docker stopped answering, or answered with its own
+// error, says which.
 func TestDockerFailureSaysSo(t *testing.T) {
 	r, servers := setup(t, 1)
-	r.Register("backup", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
-		return nil, &docker.APIError{Status: 500}
-	}})
-	job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "backup"})
-	if err != nil {
-		t.Fatal(err)
+	failures := map[string]error{"backup": docker.ErrRequestFailed, "restore": &docker.APIError{Status: 500}}
+	for kind, failure := range failures {
+		r.Register(kind, Handler{Run: func(context.Context, *Context) (map[string]any, error) { return nil, failure }})
 	}
 	r.Start(ctx, nil)
-	if failed := waitStatus(t, r, job.ID, Failed); !strings.HasPrefix(failed.Error, "Ludock couldn’t reach Docker") {
-		t.Fatal(failed.Error)
+	for kind, want := range map[string]string{"backup": "Ludock couldn’t reach Docker", "restore": "Docker reported an error"} {
+		job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failed := waitStatus(t, r, job.ID, Failed); !strings.HasPrefix(failed.Error, want) {
+			t.Fatal(kind, failed.Error)
+		}
 	}
 }

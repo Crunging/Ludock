@@ -760,7 +760,7 @@ func (s *Service) AssertSeparateDestination(ctx context.Context, observation ide
 	}
 	targets := append([]identity.Mount{{Type: "bind", Source: destination, Destination: destination, Writable: true}}, mounts...)
 	if len(mounts) == 0 {
-		return fail("BACKUP_MOUNT_UNVERIFIED", "The backup destination must be mounted into Ludock. Set LUDOCK_SELF_CONTAINER if its Docker hostname does not identify its container.")
+		return fail("BACKUP_MOUNT_UNVERIFIED", "Ludock couldn’t confirm the backup folder is mounted into its own container. If Ludock’s container has a custom hostname, set LUDOCK_SELF_CONTAINER to its container name.")
 	}
 	for _, source := range observation.Mounts {
 		if !source.Writable {
@@ -768,7 +768,7 @@ func (s *Service) AssertSeparateDestination(ctx context.Context, observation ide
 		}
 		for _, target := range targets {
 			if MountsOverlap(source, target) {
-				return fail("BACKUP_SOURCE_OVERLAP", "The backup destination overlaps game data. Mount a separate backup destination.")
+				return fail("BACKUP_SOURCE_OVERLAP", "The backup folder is inside the server’s game data, or holds it. Mount a separate folder for backups.")
 			}
 		}
 	}

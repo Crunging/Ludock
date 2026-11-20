@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, openServer, expectOperationSucceeded, signIn, createUser, shareServer, fake, restoreServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -391,5 +391,45 @@ test("removing a backup whose folder was lost", async ({ page, ownServer }) => {
     renameSync(lost, oldFolder);
     // Later journeys expect only their own files in that folder.
     for (const name of readdirSync(oldFolder)) rmSync(join(oldFolder, name), { force: true });
+  }
+});
+
+test("a backup Docker fails says so plainly, and the Backups tab shows it until one succeeds", async ({ page }) => {
+  await openServer(page, "valheim");
+  await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
+  try {
+    await page.getByRole("tab", { name: "Backups" }).click();
+    await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+    await fake("/fake/fault", { match: "^POST .*/containers/create", status: "500" });
+    try {
+      await page.getByRole("button", { name: "Create backup" }).click();
+      await page.getByRole("dialog", { name: "Back up valheim?" }).getByRole("button", { name: "Create backup" }).click();
+      const selected = page.locator("#selected-operation");
+      await expect(selected).toContainText("Failed", { timeout: 45_000 });
+      // Docker failed, not the server's folders.
+      await expect(selected).toContainText("Docker reported an error when Ludock started its helper for the server’s files");
+      await expect(selected).not.toContainText("data folders");
+    } finally {
+      await fake("/fake/fault", { clear: "1" });
+    }
+    await page.getByRole("link", { name: "Dismiss" }).click();
+    const failed = page.locator("#backup-last-failed");
+    await expect(failed).toContainText("The last backup failed");
+    await failed.getByRole("link", { name: "See what happened" }).click();
+    await expect(page).toHaveURL(/\?tab=activity&operation=/);
+    await expect(page.locator("#selected-operation")).toContainText("Docker reported an error");
+
+    // The server went back to running, and Valheim saves on its own stop.
+    await page.getByRole("tab", { name: "Backups" }).click();
+    await expect(page.locator("#create-backup")).toBeEnabled({ timeout: 45_000 });
+    await page.getByRole("button", { name: "Create backup" }).click();
+    await page.getByRole("dialog", { name: "Back up valheim?" }).getByRole("button", { name: "Create backup" }).click();
+    await expectOperationSucceeded(page);
+    await expect(page.locator("#selected-operation")).toContainText("The game saves its world when it stops.");
+    await expect(page.locator("#selected-operation")).not.toContainText("No save command");
+    await expect(failed).toHaveCount(0);
+  } finally {
+    await restoreServer(page, "valheim");
   }
 });

@@ -42,6 +42,11 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 	if b.Operation.SelectedID != "" {
 		s.selectOperation(r, &b.Operation)
 	}
+	if last, err := s.App.Runner.LastOutcome(r.Context(), view.ID, "backup"); err != nil {
+		log.Warn("Could not read a server's last backup attempt")
+	} else if last != nil && last.Status != ops.Succeeded {
+		b.LastFailed = last
+	}
 	if b.Admin && b.CanRead {
 		if id := r.URL.Query().Get("browse"); id != "" {
 			b.Browse = s.backupBrowser(r, view.ID, id, s.archiveAccess(r.Context(), request, view.ID))

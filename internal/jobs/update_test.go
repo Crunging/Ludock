@@ -465,7 +465,7 @@ func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	onNetwork("sidecar", nil)
-	if err := check(); err == nil || !strings.Contains(err.Error(), "shares this server's network") {
+	if err := check(); err == nil || !strings.Contains(err.Error(), "shares this server’s network") {
 		t.Fatal(err)
 	}
 	// The update panel renders without inspecting every container; the

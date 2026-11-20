@@ -128,8 +128,17 @@ test("an outage reaches an open server list when its grace period ends, and clea
     await expect(page.locator("#fleet")).toContainText("1 down");
     await expect(detail.locator(".detail-header__identity")).toContainText("Down", { timeout: 30_000 });
 
-    await dockerAction("valheim", "start");
+    // Starting it is what the owner came for: Start leads on the row, the
+    // page, and the attention item, which starts it.
+    const row = serverRow(page, "valheim");
+    await expect(row.getByRole("button", { name: "Start" })).toHaveClass(/secondary-btn--accent/);
+    await expect(row.getByRole("link", { name: "Logs" })).not.toHaveClass(/secondary-btn--accent/);
+    await detail.reload();
+    await expect(detail.locator(".detail-actions").getByRole("button", { name: "Start" })).toHaveClass(/primary-btn/);
+    await expect(detail.locator(".detail-actions").getByRole("link", { name: "Logs" })).not.toHaveClass(/primary-btn/);
+    await attention.getByRole("button", { name: "Start valheim" }).click();
     await expect(attention).not.toContainText("Server down", { timeout: 30_000 });
+    await expect(row.getByRole("button", { name: "Stop" })).toBeVisible();
 
     await detail.getByLabel("Monitor this server").uncheck();
     await expect(detail.locator("#availability-title + p")).toHaveText("Monitoring is off.");

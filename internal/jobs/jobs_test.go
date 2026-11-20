@@ -536,7 +536,7 @@ func TestRestoreSpacePerDisk(t *testing.T) {
 	// Each root fits in 9 MiB on its own, but not both and the reserve.
 	checks := spaceReports(f, func(int) (int, string) { return 9 << 20, "1" })
 	restored := f.run(t, "restore", map[string]any{"backupId": backupID, "confirmation": "mc"})
-	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "lacks space") || *checks != 2 {
+	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "doesn’t have room to unpack") || *checks != 2 {
 		t.Fatal(restored.Status, restored.Error, *checks)
 	}
 	if after, _ := f.jobs.Backups.List(ctx, f.serverID); len(after) != len(before) {
@@ -563,7 +563,7 @@ func TestRestoreSpaceCheckedBeforeStop(t *testing.T) {
 		return run(c, cmd, stdin, stdout, stderr)
 	}
 	restored := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc"})
-	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "lacks space") {
+	if restored.Status != ops.Failed || !strings.Contains(restored.Error, "doesn’t have room to unpack") {
 		t.Fatal(restored.Status, restored.Error)
 	}
 	if game := f.engine.Container(f.game); !game.State.Running {
@@ -631,7 +631,7 @@ func TestBackupOfReplacedServer(t *testing.T) {
 	}
 }
 
-// Docker stops answering right after a restart stopped the server. The
+// Docker fails every request right after a restart stopped the server. The
 // restart fails and the server stays stopped; Ludock keeps running.
 func TestRestartWhenDockerGoesAway(t *testing.T) {
 	f := setup(t)
@@ -643,7 +643,19 @@ func TestRestartWhenDockerGoesAway(t *testing.T) {
 	}
 	job := f.run(t, "restart", nil)
 	f.engine.ClearFaults()
-	if job.Status != ops.Failed || f.running() || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+	if job.Status != ops.Failed || f.running() || !strings.HasPrefix(job.Error, "Docker reported an error") {
+		t.Fatalf("%+v", job)
+	}
+}
+
+// Docker refuses to create a backup's helpers. The backup blames Docker, not
+// the server's data folders, and the server runs again.
+func TestBackupHelperCreateFails(t *testing.T) {
+	f := setup(t)
+	f.engine.AddFault(`^POST .*/containers/create`, 500, false, 0)
+	job := f.run(t, "backup", nil)
+	f.engine.ClearFaults()
+	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Docker reported an error when Ludock started its helper") || !f.running() {
 		t.Fatalf("%+v", job)
 	}
 }
@@ -675,7 +687,7 @@ func TestBackupWhenDockerGoesAway(t *testing.T) {
 		}
 		job := f.run(t, "backup", nil)
 		f.engine.ClearFaults()
-		if status == 500 && (job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker")) {
+		if status == 500 && (job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Docker reported an error")) {
 			t.Fatalf("%d: %+v", status, job)
 		}
 		if status == 404 && job.Status != ops.Succeeded {

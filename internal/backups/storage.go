@@ -452,11 +452,11 @@ func (s *Storage) AvailableBytes(directory string) (int64, error) {
 	defer dir.close()
 	var stat unix.Statfs_t
 	if unix.Faccessat(dir.fd, ".", unix.W_OK|unix.X_OK, 0) != nil || unix.Fstatfs(dir.fd, &stat) != nil {
-		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Available disk space could not be measured for the backup destination.")
+		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Ludock couldn’t check how much free space the backup folder has. Check that its disk is mounted, then try again.")
 	}
 	bytes := helper.FreeBytes(&stat)
 	if bytes > 1<<53-1 {
-		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Available disk space could not be measured for the backup destination.")
+		return 0, fail("BACKUP_DISK_UNAVAILABLE", "Ludock couldn’t check how much free space the backup folder has. Check that its disk is mounted, then try again.")
 	}
 	return bytes, nil
 }
