@@ -101,6 +101,8 @@ type Engine struct {
 	// as a slow daemon would; faults fail or stall chosen requests.
 	Delay  time.Duration
 	faults []*fault
+	// streams are the hijacked connections an outage cuts.
+	streams map[net.Conn]bool
 
 	listener net.Listener
 	server   *http.Server
@@ -154,14 +156,25 @@ func (e *Engine) faultLocked(request string) *fault {
 }
 
 // Outage stops answering on the socket for duration, as a daemon that
-// exits and is started again would: connections close, event streams end,
-// and new connections are refused until it is back. Containers are kept.
+// exits and is started again would: connections and streams close, helpers
+// started with AutoRemove are gone, and new connections are refused until it
+// is back. Other containers keep their state.
 func (e *Engine) Outage(duration time.Duration) error {
 	e.mu.Lock()
 	for _, events := range e.events {
 		close(events)
 	}
 	e.events = nil
+	// Without live restore, Docker stops every container as it exits; those
+	// created with AutoRemove are gone when it is back.
+	for conn := range e.streams {
+		conn.Close()
+	}
+	for id, c := range e.containers {
+		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
+			e.removeLocked(id)
+		}
+	}
 	server := e.server
 	e.mu.Unlock()
 	server.Close()
@@ -1165,7 +1178,18 @@ func (e *Engine) hijack(w http.ResponseWriter, r *http.Request, run func(net.Con
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	e.mu.Lock()
+	if e.streams == nil {
+		e.streams = map[net.Conn]bool{}
+	}
+	e.streams[conn] = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.streams, conn)
+		e.mu.Unlock()
+		conn.Close()
+	}()
 	buffered.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 	buffered.Flush()
 	run(conn, buffered.Reader)
