@@ -133,8 +133,6 @@ func (s *Service) SetupState(ctx context.Context) (SetupState, error) {
 }
 
 // LogSetupInstructions prints a generated setup code to the console once.
-// The code belongs on the local console, not in the structured logger whose
-// ring buffer administrators can read in the panel.
 func (s *Service) LogSetupInstructions(ctx context.Context, console func(string)) {
 	if required, err := s.SetupRequired(ctx); err != nil || !required {
 		return
