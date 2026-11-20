@@ -274,6 +274,16 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request, request *Re
 	render(w, r, status, views.ProxyForm(p))
 }
 
+// copyBeside turns the second copy off when its folder becomes the backup
+// folder, which is how backups are reached after the first folder is lost;
+// the choice sticks, so the folder isn't picked up again as a found one.
+func copyBeside(destination, copyTo string, chosen bool) (string, bool) {
+	if copyTo != "" && copyTo == destination {
+		return "", true
+	}
+	return copyTo, chosen
+}
+
 func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, request *Request) {
 	b := s.backupSettingsView(r)
 	b.Destination = strings.TrimSpace(r.PostFormValue("destination"))
@@ -286,6 +296,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 	if saved, _, err := s.App.Backups.SavedSettings(r.Context()); !chosen && err == nil && saved != nil {
 		b.CopyTo, copyChosen = saved.CopyTo, saved.CopyChosen
 	}
+	b.CopyTo, copyChosen = copyBeside(b.Destination, b.CopyTo, copyChosen)
 	invalid := apperr.New("INVALID_REQUEST", 400,
 		"Check the backup settings: choose a folder, a free-space reserve of zero or more, and a total limit above zero or none.")
 	maxGiB, maxErr := 0.0, error(nil)
