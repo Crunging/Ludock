@@ -332,3 +332,36 @@ func TestSnapshotEntryLimitSpansRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A snapshot is written as it streams. A real Valheim install, whose files
+// reach 740 MB, made the old buffer grow with every chunk after the first
+// header until Ludock ran out of memory.
+func TestCoalescerNeverGrows(t *testing.T) {
+	var written bytes.Buffer
+	largest := 0
+	out := newCoalescer(writerFunc(func(p []byte) (int, error) {
+		largest = max(largest, len(p))
+		return written.Write(p)
+	}))
+	var want bytes.Buffer
+	for index, size := range []int{512, 65536, 65536, 100, 512, 70000, 65536, 3, 65536} {
+		chunk := bytes.Repeat([]byte{byte(index)}, size)
+		want.Write(chunk)
+		if err := out.write(chunk); err != nil {
+			t.Fatal(err)
+		}
+		if cap(out.buffer) != 64*1024 {
+			t.Fatalf("buffer grew to %d", cap(out.buffer))
+		}
+	}
+	if err := out.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(written.Bytes(), want.Bytes()) || largest > 70000 {
+		t.Fatal("written out of order or in one piece", written.Len(), largest)
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(p []byte) (int, error) { return w(p) }

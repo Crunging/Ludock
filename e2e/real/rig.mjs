@@ -58,7 +58,7 @@ async function up() {
   }
   const others = started().filter((other) => other !== name);
   if (others.length) throw new Error(`${others.join(", ")} is up; run node real/rig.mjs remove ${others[0]} first.`);
-  for (const folder of [`${name}/data`, "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
+  mkdirSync(join(dir, name, "data"), { recursive: true });
   // down removes only a folder that up made.
   writeFileSync(join(dir, marker), "");
   // Every port is published on loopback only.
@@ -71,7 +71,10 @@ async function up() {
     environment:
       LUDOCK_SETUP_CODE: ${setupCode}
     volumes:
-      - ${join(dir, "backups-copy")}:/backups-copy
+      # A named volume, since the rig folder may be kept in memory.
+      - backups-copy:/backups-copy
+volumes:
+  backups-copy:
 `);
   const service = { restart: "unless-stopped", ...game.service,
     ports: game.service.ports.map((port) => `127.0.0.1:${port}`),
@@ -138,7 +141,7 @@ function down() {
   // A failed teardown stops here, before any game data is removed.
   for (const name of started()) docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
   docker(...ludock, "down", "--volumes", "--remove-orphans", "--timeout", "30");
-  clear([...Object.keys(games), "backups-copy", "bot", "ludock.override.yaml"]);
+  clear([...Object.keys(games), "bot", "ludock.override.yaml"]);
   rmSync(join(dir, marker));
   try {
     rmdirSync(dir);
