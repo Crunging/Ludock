@@ -47,8 +47,11 @@ test("changing a password or label in Docker leaves a server as it was in Ludock
 
     await openServer(adminPage, "Survival");
     await expect(adminPage.getByRole("heading", { name: "This server changed in Docker" })).toHaveCount(0);
+    // Needs attention shows nothing at all when nothing is wrong.
+    const loaded = adminPage.waitForResponse((response) => response.url().includes("/fragments/attention"));
     await adminPage.goto("/");
-    await expect(adminPage.locator(".needs-attention")).not.toContainText("Server changed");
+    await loaded;
+    await expect(adminPage.locator("#attention")).not.toContainText("Server changed");
   } finally {
     await recreate("minecraft", { env: ["DB_PASS=dev-db-secret", "RCON_PASSWORD"], label: ["ludock.console.password-env"] });
     await deleteUser(adminPage, "steady");
