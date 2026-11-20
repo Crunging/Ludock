@@ -77,7 +77,9 @@ starts its own stack with `freshStack()` from `setup.mjs`.
 Locally, point the journeys at an installed Chromium with
 `LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`
 once. `LUDOCK_E2E_LOGS=1` prints the servers' output and `LUDOCK_E2E_KEEP=1`
-keeps their temporary data.
+keeps their temporary data. That data goes in the system temporary folder,
+which needs more than 5 GiB free: backups keep that much in reserve and
+refuse to run otherwise. Point `TMPDIR` at a roomier disk if it is smaller.
 
 ### Screenshots
 
