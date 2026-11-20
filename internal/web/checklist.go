@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/schedules"
@@ -27,14 +28,16 @@ import (
 
 const checklistDismissedSetting = "checklist.dismissed"
 
-var checklistKeys = []string{views.ChecklistAlerts, views.ChecklistBackups, views.ChecklistAddress, views.ChecklistServers,
-	views.ChecklistTwoFactor}
+var checklistKeys = []string{views.ChecklistAlerts, views.ChecklistBackups, views.ChecklistRecovery, views.ChecklistAddress,
+	views.ChecklistServers, views.ChecklistTwoFactor}
 
 // checklistState is what decides which items show.
 type checklistState struct {
 	AlertsOn bool
 	// Unbacked names the servers a nightly backup would cover.
 	Unbacked, UnbackedIDs []string
+	// Unrecovered names the servers automatic restart could be turned on for.
+	Unrecovered, UnrecoveredIDs []string
 	// LocalHost is the loopback or private host players are shown, or "".
 	LocalHost string
 	// Unmanaged names containers that look like games Ludock doesn't manage.
@@ -55,6 +58,9 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 	}
 	if len(state.Unbacked) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs})
+	}
+	if len(state.Unrecovered) > 0 {
+		add(views.ChecklistItem{Key: views.ChecklistRecovery, Names: state.Unrecovered, IDs: state.UnrecoveredIDs})
 	}
 	if state.LocalHost != "" {
 		add(views.ChecklistItem{Key: views.ChecklistAddress, Host: state.LocalHost, Loopback: loopbackHost(state.LocalHost)})
@@ -168,6 +174,25 @@ func (s *Server) backupTargets(ctx context.Context, user *db.SessionUser, all []
 	return targets, taken, nil
 }
 
+// recoveryTargets lists the monitored servers, not paused for maintenance,
+// whose game can say it is answering and that don't restart automatically yet.
+func (s *Server) recoveryTargets(ctx context.Context, all []servers.View) ([]backupTarget, error) {
+	var targets []backupTarget
+	for _, view := range all {
+		if view.BindingStatus != "active" || !monitor.RecoveryOffered(view.Container) {
+			continue
+		}
+		availability, err := s.App.Monitor.Get(ctx, view.ID)
+		if err != nil {
+			return nil, err
+		}
+		if availability.Policy.Enabled && !availability.Policy.Maintenance && !availability.Policy.Recover {
+			targets = append(targets, backupTarget{view.ID, view.DisplayName})
+		}
+	}
+	return targets, nil
+}
+
 func (s *Server) checklistDismissed(ctx context.Context) []string {
 	var dismissed []string
 	if _, err := s.App.DB.Setting(ctx, checklistDismissedSetting, &dismissed); err != nil {
@@ -188,6 +213,12 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 			for _, target := range targets {
 				state.Unbacked = append(state.Unbacked, target.Name)
 				state.UnbackedIDs = append(state.UnbackedIDs, target.ID)
+			}
+		}
+		if targets, err := s.recoveryTargets(ctx, all); err == nil {
+			for _, target := range targets {
+				state.Unrecovered = append(state.Unrecovered, target.Name)
+				state.UnrecoveredIDs = append(state.UnrecoveredIDs, target.ID)
 			}
 		}
 		// Players see the page's host until an address is saved.
@@ -282,6 +313,48 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 		v.Error = "Some backups couldn’t be scheduled: " + publicMessage(failure)
 	}
 	w.Header().Set("HX-Trigger", "schedules-changed")
+	if err := s.recheckAdmin(ctx, request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	render(w, r, http.StatusOK, views.Checklist(v))
+}
+
+// enableRecovery turns on automatic restart for each server the
+// confirmation named that still has it off.
+func (s *Server) enableRecovery(w http.ResponseWriter, r *http.Request, request *Request) {
+	ctx := r.Context()
+	if err := s.recheckAdmin(ctx, request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	all, err := s.App.Servers.List(ctx, request.User())
+	var targets []backupTarget
+	if err == nil {
+		targets, err = s.recoveryTargets(ctx, all)
+	}
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	confirmed := r.PostForm["server"]
+	var enabled []string
+	for _, target := range targets {
+		if !slices.Contains(confirmed, target.ID) {
+			continue
+		}
+		if err := s.App.Monitor.SetRecovery(ctx, request.User().ID, request.Principal.TokenHash, target.ID, true); err != nil {
+			s.fail(w, r, request, authz.AdminMutationError(err))
+			return
+		}
+		s.audit(r, request, "server.recovery.enabled", target.ID, nil)
+		enabled = append(enabled, target.Name)
+	}
+	v := s.checklistView(r, request)
+	if len(enabled) > 0 {
+		v.Notice = "Automatic restart is on for " + views.NameList(enabled) + "."
+	}
+	w.Header().Set("HX-Trigger", "availability-changed")
 	if err := s.recheckAdmin(ctx, request); err != nil {
 		s.fail(w, r, request, err)
 		return

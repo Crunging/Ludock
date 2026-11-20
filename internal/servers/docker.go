@@ -790,11 +790,11 @@ func (o *Observer) Diagnostics(ctx context.Context) ([]Diagnostic, error) {
 		address, hasAddress := labels[games.LabelAddress]
 		switch {
 		case eligibility.Reason == games.ReasonInvalidEnableLabel:
-			diagnostic("INVALID_ENABLE_LABEL", "Container excluded: ludock.enable must be true or false (case-insensitive; surrounding spaces are allowed).")
+			diagnostic("INVALID_ENABLE_LABEL", "Not added: its ludock.enable label must be true or false.")
 		case invalidIdentity:
-			diagnostic("INVALID_COMPOSE_IDENTITY", "Container excluded: Compose project, service, and replica number must form a complete identity. Correct the owning manager's metadata before managing this container.")
+			diagnostic("INVALID_COMPOSE_IDENTITY", "Not added: its Compose labels name a project, service, or replica number but not all three. Fix them where the container is defined.")
 		case eligibility.Eligible && hasAddress && games.ParseAddress(address) == nil:
-			diagnostic("INVALID_ADDRESS_LABEL", "ludock.address is ignored: use a host name or IP address with an optional port, such as play.example.com:25565 or [2001:db8::1]:2456. The detected address is shown instead.")
+			diagnostic("INVALID_ADDRESS_LABEL", "Its ludock.address label is ignored: use a host name or IP address with an optional port, such as play.example.com:25565 or [2001:db8::1]:2456. The detected address is shown instead.")
 		}
 	}
 	return result, nil

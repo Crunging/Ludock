@@ -157,8 +157,8 @@
     verified = false;
     if (code !== undefined && ACCESS_DENIED.indexOf(code) >= 0) {
       accessDenied = true;
-      showStatus("Access unavailable", "attention");
-      showError("Connection access is unavailable. Reload details to check your access before reconnecting.");
+      showStatus("No access", "attention");
+      showError("You can no longer use this. Reload the page to check your access.");
       if (retryButton) retryButton.hidden = true;
       root.classList.add("console-terminal--blocked");
     } else if (retries < maxRetries) {
@@ -292,7 +292,7 @@
     });
   });
 
+  // Without a socket the page already says why.
   if (socketPath) connect();
-  else showStatus("Unavailable", "attention");
   updateControls();
 })();

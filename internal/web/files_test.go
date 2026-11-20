@@ -22,13 +22,13 @@ func TestFilesFollowGrants(t *testing.T) {
 		t.Fatal("hidden server named")
 	}
 	p.grant(viewer, authz.ServerView)
-	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); !strings.Contains(page, "You do not have file access to this server.") {
+	if page := p.do("GET", "/files/"+p.server, viewer, nil, nil).Body.String(); !strings.Contains(page, "You can’t open this server’s files.") {
 		t.Fatal(page)
 	}
 	operator := p.user("u-operator", "operator", db.RoleMember)
 	p.grant(operator, authz.ServerView, authz.FilesRead)
 	page := p.do("GET", "/files/"+p.server, operator, nil, nil).Body.String()
-	if !strings.Contains(page, "File access is not configured") || strings.Contains(page, "data-dropzone") {
+	if !strings.Contains(page, "No folders to show") || strings.Contains(page, "data-dropzone") {
 		t.Fatal(page)
 	}
 	// Changes the page never offers a reader are refused when forged.

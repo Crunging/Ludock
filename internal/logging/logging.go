@@ -1,15 +1,11 @@
-// Package logging writes Ludock's console log lines and keeps a redacted ring
-// buffer that administrators can read in the web panel.
+// Package logging writes Ludock's redacted console log lines.
 package logging
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +40,6 @@ func ParseLevel(configured string) (Level, string) {
 }
 
 const (
-	maxEntries      = 1000
 	maxMessage      = 16384
 	maxContextValue = 4096
 )
@@ -58,36 +53,18 @@ type Field struct {
 
 func F(key string, value any) Field { return Field{key, value} }
 
-type Entry struct {
-	ID        int64   `json:"id"`
-	Timestamp int64   `json:"timestamp"`
-	Level     string  `json:"level"`
-	Component string  `json:"component"`
-	Message   string  `json:"message"`
-	Context   []Field `json:"-"`
-}
-
 type sink struct {
-	mu    sync.Mutex
-	level Level
-	// entries is a ring of up to maxEntries; start is the oldest.
-	entries    []Entry
-	start      int
-	nextID     int64
-	generation string
-	stdout     io.Writer
-	stderr     io.Writer
-	now        func() time.Time
+	mu     sync.Mutex
+	level  Level
+	stdout io.Writer
+	stderr io.Writer
+	now    func() time.Time
 }
 
 var std = newSink()
 
 func newSink() *sink {
-	level := LevelInfo
-	var id [16]byte
-	_, _ = rand.Read(id[:])
-	return &sink{level: level, nextID: 1, generation: hex.EncodeToString(id[:]),
-		stdout: os.Stdout, stderr: os.Stderr, now: time.Now}
+	return &sink{level: LevelInfo, stdout: os.Stdout, stderr: os.Stderr, now: time.Now}
 }
 
 func SetLevel(level Level) {
@@ -126,7 +103,7 @@ func (l *Logger) Debug(message string, fields ...Field) {
 	std.write(LevelDebug, l.component, message, fields)
 }
 
-// Sanitize redacts and bounds a record the way the stored ring buffer does.
+// Sanitize redacts and bounds a record the way the console line does.
 func Sanitize(message string, fields []Field) (string, []Field) {
 	redacted := Redact(message)
 	if cut, truncated := truncate(redacted, maxMessage); truncated {
@@ -153,15 +130,6 @@ func (s *sink) write(level Level, component, message string, fields []Field) {
 	}
 	now := s.now()
 	sanitized, context := Sanitize(message, fields)
-	entry := Entry{ID: s.nextID, Timestamp: now.UnixMilli(), Level: level.String(),
-		Component: component, Message: sanitized, Context: context}
-	s.nextID++
-	if len(s.entries) < maxEntries {
-		s.entries = append(s.entries, entry)
-	} else {
-		s.entries[s.start] = entry
-		s.start = (s.start + 1) % maxEntries
-	}
 	line := fmt.Sprintf("%s %s [%s] %s", now.UTC().Format("2006-01-02T15:04:05.000Z"),
 		strings.ToUpper(level.String()), component, sanitized)
 	if len(context) > 0 {
@@ -192,35 +160,4 @@ func EncodeFields(fields []Field) []byte {
 	}
 	b.WriteByte('}')
 	return []byte(b.String())
-}
-
-// Latest returns the buffer's generation and its newest entry ID, or 0.
-func Latest() (string, int64) {
-	std.mu.Lock()
-	defer std.mu.Unlock()
-	return std.generation, std.nextID - 1
-}
-
-// List returns stored entries after an id. A different generation means the
-// process restarted, so the caller starts from the beginning.
-func List(after int64, limit int, generation string) (string, []Entry) {
-	std.mu.Lock()
-	defer std.mu.Unlock()
-	if generation != "" && generation != std.generation {
-		after = 0
-	}
-	// IDs increase from the oldest entry, so the newest limit after the
-	// cursor are a suffix of the ring.
-	count := len(std.entries)
-	at := func(index int) Entry { return std.entries[(std.start+index)%count] }
-	first := sort.Search(count, func(index int) bool { return at(index).ID > after })
-	first = max(first, count-limit)
-	var result []Entry
-	if first < count {
-		result = make([]Entry, 0, count-first)
-		for index := first; index < count; index++ {
-			result = append(result, at(index))
-		}
-	}
-	return std.generation, result
 }

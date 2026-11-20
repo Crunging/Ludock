@@ -65,7 +65,7 @@ type FileEntry struct {
 
 // FileFailure is the only error text the file helper prints. Paths and raw
 // filesystem errors can contain private host information.
-const FileFailure = "The file operation failed: the path changed, is unsafe, or cannot be accessed."
+const FileFailure = "The file change failed: the path changed, is unsafe, or can’t be reached."
 
 // BackupLimit bounds reading one data root for a backup, while the server is
 // stopped.

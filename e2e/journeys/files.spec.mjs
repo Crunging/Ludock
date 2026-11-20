@@ -283,9 +283,9 @@ test("a save or upload whose result is lost is reported as unconfirmed, not fail
     await expect(page.locator(".file-row__name", { hasText: "never.txt" })).toHaveCount(0);
 
     // Both are in the audit log, since either may have happened.
-    for (const action of ["server.file.edited", "server.file.uploaded"]) {
-      await page.goto("/audit?action=" + action);
-      await expect(page.locator(".audit-entry").first()).toContainText(action);
+    for (const [action, label] of [["server.file.edited", "Edited a file"], ["server.file.uploaded", "Uploaded a file"]]) {
+      await page.goto("/activity?show=everything&action=" + action);
+      await expect(page.locator(".audit-entry").first()).toContainText(label);
     }
   } finally {
     writeFileSync(properties, original);
@@ -431,8 +431,8 @@ test("uploading a world archive and unpacking it into a new folder", async ({ pa
       "Unpacked “plugins.tar.gz” into “plugins”. Left out links and special files: 1 item.");
     expect(readdirSync(join(data, "plugins")).sort()).toEqual(["config", "essentials.jar"]);
     await expect(names).toContainText(["plugins", "Skyblock", "Skyblock (2)"]);
-    await page.goto("/audit?action=server.file.unpacked");
-    await expect(page.locator(".audit-entry").first()).toContainText("server.file.unpacked");
+    await page.goto("/activity?show=everything&action=server.file.unpacked");
+    await expect(page.locator(".audit-entry").first()).toContainText("Unpacked an archive");
   } finally {
     for (const name of ["Skyblock", "Skyblock (2)", "plugins", "Skyblock.zip", "plugins.tar.gz"]) rmSync(join(data, name), { recursive: true, force: true });
   }

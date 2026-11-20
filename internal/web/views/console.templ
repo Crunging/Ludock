@@ -26,19 +26,19 @@ type ConsoleView struct {
 	CanStart      bool
 }
 
-var modeLabels = map[string]string{"logs": "Docker logs", "game": "Game console", "shell": "Container shell"}
+var modeLabels = map[string]string{"logs": "Logs", "game": "Console", "shell": "Shell"}
 
 func (c ConsoleView) statusText() string {
 	switch c.Mode {
 	case "logs":
-		return "Docker stdout and stderr"
+		return "What the server prints"
 	case "game":
 		if c.ConsoleName != "" {
 			return c.ConsoleName
 		}
 		return "Game console"
 	}
-	return "Administrator container shell"
+	return "Shell, for administrators"
 }
 
 func (c ConsoleView) allowed() bool {
@@ -52,7 +52,7 @@ func (c ConsoleView) allowed() bool {
 
 func (c ConsoleView) placeholder() string {
 	if c.Mode == "shell" {
-		return "Run a container shell command…"
+		return "Run a shell command…"
 	}
 	if c.Placeholder != "" {
 		return c.Placeholder
@@ -91,15 +91,20 @@ templ ConsolePage(page Page, c ConsoleView) {
 					if c.Mode == "logs" && c.allowed() {
 						<button class="console-pause" type="button" aria-pressed="false" data-console-pause>Pause</button>
 					}
-					<a class="console-retry" href={ templ.SafeURL("/console/" + c.ServerID + "?mode=" + c.Mode) }>Reload details</a>
+					<a class="console-retry" href={ templ.SafeURL("/console/" + c.ServerID + "?mode=" + c.Mode) }>Reload</a>
 					<button class="console-retry" type="button" data-console-retry hidden>Retry connection</button>
 					<div class="connection-status connection-status--disconnected" role="status" data-console-status>
 						@Pip("attention")
 						<span>
-							if c.Socket != "" {
-								Connecting…
-							} else {
-								Unavailable
+							switch {
+								case c.Socket != "":
+									Connecting…
+								case !c.BindingActive:
+									Can’t reach the server
+								case c.allowed() && !c.Running:
+									Server not running
+								default:
+									Not connected
 							}
 						</span>
 					</div>
@@ -114,24 +119,24 @@ templ ConsolePage(page Page, c ConsoleView) {
 						<a class="text-link" href={ templ.SafeURL("/servers/" + c.ServerID) }>Open server details</a>
 					</div>
 				case len(c.Modes) == 0:
-					<div class="console-warning" role="alert">You do not have console or log access to this server.</div>
+					<div class="console-warning" role="alert">You can’t use this server’s console or logs.</div>
 				case c.Mode == "logs":
 					<div class="console-warning">
-						Read-only Docker output: the latest 500 lines, with timestamps.<span data-console-paused-note hidden> Live display is paused.</span>
+						Read-only: the latest 500 lines the server printed, with timestamps.<span data-console-paused-note hidden> Live display is paused.</span>
 					</div>
 				default:
 					<div class="console-warning">
 						if !c.Running {
-							Server state: { c.State }. Commands require a running server.
+							Commands need a running server.
 						} else if c.Mode == "game" {
 							Enter commands exactly as { map[bool]string{true: c.ConsoleName, false: "the game console"}[c.ConsoleName != ""] } expects them.
 						} else {
-							Advanced access: commands run as a new process inside the container.
+							Each command runs as a new process inside the server’s container.
 						}
 						Commands are never resent automatically.
 						if !c.Running {
 							if guidance := StateGuidance(c.State); guidance != "" {
-								<p class="console-warning__guidance">{ guidance } Reload details after the state changes.</p>
+								<p class="console-warning__guidance">{ guidance } Reload once it’s running.</p>
 							}
 							<div class="console-warning__actions">
 								if containsMode(c.Modes, "logs") {

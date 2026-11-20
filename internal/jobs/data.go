@@ -110,7 +110,7 @@ func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, 
 	}
 	if info.State.Running || info.State.Status == "running" || info.State.Paused || info.State.Restarting ||
 		info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
-		return fail("EXTERNAL_SERVER_CHANGE", "The server was started or changed by another manager during the operation. Review its state before retrying.")
+		return fail("EXTERNAL_SERVER_CHANGE", "Something outside Ludock started or changed the server meanwhile. Check it before trying again.")
 	}
 	return nil
 }

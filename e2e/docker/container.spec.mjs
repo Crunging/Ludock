@@ -17,8 +17,8 @@ test("the image runs hardened and reports healthy", async ({ page }) => {
   expect(docker("inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", id)).toBe("true");
   expect(docker("exec", id, "ludock", "version")).not.toBe("");
 
-  await page.goto("/diagnostics");
-  await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
+  await page.goto("/settings/system");
+  await expect(page.locator(".metadata-list")).toContainText("DockerConnected");
   await page.goto("/");
   await expect(page.locator(".server-row", { hasText: "Test Game" })).toContainText("Running");
 });

@@ -135,7 +135,7 @@ func text(value any) (string, bool) {
 }
 
 var (
-	errRevoked         = apperr.New("ACCESS_REVOKED", 403, "The operation owner no longer has access")
+	errRevoked         = apperr.New("ACCESS_REVOKED", 403, "The person who asked for this can no longer use the server")
 	errScheduleRevoked = apperr.New("SCHEDULE_REVOKED", 403, "The schedule was deleted, disabled, or changed")
 )
 

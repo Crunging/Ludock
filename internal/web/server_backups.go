@@ -296,37 +296,32 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request, request 
 	copyChecked(w, archive, check)
 }
 
+// updatePanel shows what updating a server would do (administrators only).
 func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Request) {
 	id := r.PathValue("id")
-	admin := request.User().Role == db.RoleAdmin
-	capability := authz.ServerRestart
-	if admin {
-		capability = authz.ServerUpdate
-	}
+	capability := authz.ServerUpdate
 	d, err := s.detail(r, request, id, "update", false)
 	if err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
 	view := &d.Row.Server
-	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, Admin: admin, CanBackup: can(view, authz.BackupsCreate),
+	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
 		Recreate: r.URL.Query().Get("recreate") == "1"}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
-		result := s.App.Updates.Capability(r.Context(), resolved, admin, func() bool {
+		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {
 			if s.App.Locks.ServerBusy(id) {
 				return true
 			}
 			snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), id)
 			return err != nil || snapshot.Server.ActiveOperation != nil
 		})
-		if err = s.recheckCapability(r, request, id, capability, admin); err == nil {
+		if err = s.recheckCapability(r, request, id, capability, true); err == nil {
 			u.Capability = &result
-			if admin {
-				u.ChecksOff = !s.App.Checks.Enabled(r.Context())
-				u.Check = s.App.Checks.Status(r.Context(), id, resolved.Container.ID)
-			}
+			u.ChecksOff = !s.App.Checks.Enabled(r.Context())
+			u.Check = s.App.Checks.Status(r.Context(), id, resolved.Container.ID)
 		}
 	}
 	if err != nil {

@@ -109,6 +109,7 @@ templ SettingsPage(page Page, s SettingsView) {
 				<h1 class="page__title">Settings</h1>
 				<p class="page__subtitle">Server controls work without any setup. Changes here take effect when saved.</p>
 			</div>
+			@settingsTabs("/settings")
 			<nav class="settings-jump-links" aria-label="Settings sections">
 				<a class="text-link" href="#connection-settings-title">Server address</a>
 				<a class="text-link" href="#backup-settings-title">Backup storage</a>
@@ -131,7 +132,7 @@ templ SettingsPage(page Page, s SettingsView) {
 			</section>
 			<section class="settings-section settings-section--divided" aria-labelledby="notification-settings-title">
 				<h2 id="notification-settings-title" tabindex="-1">Notifications</h2>
-				<p class="section-lede">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, and restore and update results. Turn on as many destinations as you like; each can choose its alert types, and notices of newer server images are off until chosen. Enable availability monitoring separately on each server’s Overview for outage, disk, and memory alerts.</p>
+				<p class="section-lede">Receive outage, full disk, and memory alerts and their recoveries, backup or schedule failures, and restore and update results. Turn on as many destinations as you like; each can choose its alert types, and notices of newer server images are off until chosen. Every server is monitored unless you turn it off on its Overview.</p>
 				<div class="notification-destinations">
 					for _, n := range s.Notifications {
 						@NotificationDestination(n)
@@ -193,7 +194,7 @@ templ UploadLimitForm(u UploadLimitSettings) {
 templ LoggingForm(l LoggingSettings) {
 	<form class="stack-form" id="logging-form" hx-post="/settings/logging" hx-target="this" hx-swap="outerHTML">
 		<h3>Verbose logging</h3>
-		<p class="muted">Adds detail to <a href="/logs">Ludock logs</a> to help with a bug report. It turns itself off after 24 hours.</p>
+		<p class="muted">Adds detail to Ludock’s log to help with a bug report. It turns itself off after 24 hours. To read the log, run <code>docker compose logs ludock</code> in the folder with Ludock’s compose.yaml.</p>
 		if l.Fixed {
 			<p>Ludock logs at the <strong>{ l.Level }</strong> level.</p>
 			@fixedByDeployment("LUDOCK_LOG_LEVEL")
@@ -405,8 +406,10 @@ templ BackupSettingsForm(b BackupSettingsView) {
 		}
 		if b.Saved {
 			<div class="alert alert--success admin-settings-feedback" role="status">
-				<p>Backup settings saved.</p>
-				<a href="/">Choose a server and open Backups to create a backup.</a>
+				<div>
+					<p>Backup settings saved.</p>
+					<a class="text-link" href="/">Choose a server and open Backups to create a backup.</a>
+				</div>
 			</div>
 		}
 	</form>

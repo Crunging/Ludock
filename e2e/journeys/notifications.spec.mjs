@@ -272,7 +272,7 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
   test.setTimeout(240_000);
   const http = await receiver();
   const messages = () => http.requests.filter((r) => r.url === "/alerts").map((r) => r.body.message);
-  const newerImage = /^Survival: a newer version of its container image is available/;
+  const newerImage = /^Survival: a newer image is available/;
   try {
     await page.goto("/settings");
     let webhook = await openDestination(page, "webhook");
@@ -298,7 +298,7 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
     await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
     await dockerAction("enshrouded", "stop");
-    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded is unavailable.");
+    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded is down.");
     // Alerts are delivered in the order they were queued, so a newer-image
     // notice would have arrived first.
     expect(messages().filter((m) => newerImage.test(m))).toEqual([]);

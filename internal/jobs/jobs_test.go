@@ -223,7 +223,7 @@ func TestRevokedOwnerCannotRun(t *testing.T) {
 	f := setup(t)
 	f.jobs.DB.UpdateUserAccess(ctx, "admin", db.RoleAdmin, true)
 	job := f.run(t, "stop", nil)
-	if job.Status != ops.Failed || job.Error != "The operation owner no longer has access" || !f.running() {
+	if job.Status != ops.Failed || job.Error != "The person who asked for this can no longer use the server" || !f.running() {
 		t.Fatalf("%+v", job)
 	}
 }

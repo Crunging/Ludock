@@ -161,7 +161,7 @@ func SharingContent(v SharingView) templ.Component {
 			}
 		}
 		if v.Paused && len(v.Shares) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<p class=\"section-note\">Shared access is paused until you confirm the change in Docker above.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<p class=\"section-note\">Sharing is paused until you confirm the change above.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -728,7 +728,7 @@ func levelChoice(id, label string, level authz.Level, capabilities []authz.Capab
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "<p class=\"muted share-custom__note\">Creating backups stops a running server for the copy. Restoring, downloading, and deleting backups, updating, and the container shell stay with administrators.</p></fieldset>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "<p class=\"muted share-custom__note\">Creating backups stops a running server for the copy. Restoring, downloading, and deleting backups, updating, and the shell stay with administrators.</p></fieldset>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

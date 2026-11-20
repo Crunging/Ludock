@@ -237,10 +237,10 @@ func (s *Sessions) Logs(ctx context.Context, channel Channel, validate func(cont
 			channel.Send(kind, data)
 		}
 	}
-	send("system", "Following Docker logs")
+	send("system", "Following the server’s logs")
 	err := Follow(ctx, s.Runtime.Docker, containerID, FollowOptions{Tail: 500, Timestamps: true, Secrets: access.Context.Observation.Secrets,
 		Allowed: func() bool { return access.Allowed(authz.LogsRead) }, Send: send,
-		EndedMessage: "Log stream ended (container may have stopped)"})
+		EndedMessage: "The log ended (the server may have stopped)"})
 	if err != nil {
 		// Nothing else uses this stream; closing lets the browser reconnect.
 		channel.Close(CloseInternal, "Docker logs unavailable")
@@ -300,7 +300,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 	if mode == GameMode {
 		send("system", "Connected to "+adapter.Name)
 	} else {
-		send("system", "Administrator shell. Commands require the container's timeout utility and run for at most 60 seconds.")
+		send("system", "Administrator shell. Each command runs for at most 60 seconds and needs the server’s timeout utility.")
 	}
 
 	commands := make(chan string, maxPending)
@@ -330,7 +330,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 				} else if access.Allowed(capability) {
 					channel.Send(kind, data)
 				}
-			}, EndedMessage: "Log stream ended"})
+			}, EndedMessage: "The log ended"})
 	}
 	// A command the browser sent runs to the end even if the browser leaves,
 	// as when someone sends one and opens another page.
@@ -396,7 +396,7 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		if public, ok := apperr.As(err); ok {
 			send("error", public.Message)
 		} else if mode == GameMode {
-			send("error", "Game command failed or a conflicting operation is running")
+			send("error", "The game didn’t take the command, or other work on the server is running")
 		} else {
 			send("error", "Shell command failed. Ensure timeout is installed; commands are limited to 60 seconds.")
 		}

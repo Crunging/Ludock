@@ -71,12 +71,12 @@ func ActionLabel(action string) string {
 }
 
 var unavailableGuidance = map[string]string{
-	"owner_missing":         "Schedule owner no longer exists. Recreate this schedule with an authorized owner.",
+	"owner_missing":         "Its owner’s account was deleted. Make the schedule again from an account that can use this server.",
 	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
 	"owner_access_removed":  "Schedule owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
 	"action_access_removed": "Schedule owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
-	"binding_unavailable":   "Ludock can’t find this server’s container. The schedule runs again once the server is back in Docker.",
+	"binding_unavailable":   "Ludock can’t find this server in Docker. The schedule runs again once the server is back.",
 	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
 }
 
@@ -184,7 +184,7 @@ templ SchedulesTab(v SchedulesView) {
 		@Alert("success", v.Message)
 	}
 	if v.SelectedMissing {
-		<p role="status" class="section-note">This schedule is no longer available or you no longer have access.</p>
+		<p role="status" class="section-note">This schedule was deleted, or you can no longer see it.</p>
 	}
 	@ScheduleList(v)
 	if v.Form.EditID != "" || len(v.Form.Actions) > 0 {
@@ -213,7 +213,7 @@ templ ScheduleList(v SchedulesView) {
 					<tr>
 						<td colspan="6" class="muted">
 							if v.Error != "" {
-								Schedule history is unavailable.
+								Schedules can’t be read right now.
 							} else {
 								No schedules.
 							}
@@ -267,7 +267,7 @@ templ ScheduleList(v SchedulesView) {
 								case item.NextRunAt != 0:
 									{ ScheduleRun(item.NextRunAt, item.Timezone, v.Now) }
 								default:
-									Unavailable
+									Unknown
 							}
 							if item.NextRunUnavailableReason != "" {
 								<small class="table-detail">{ unavailableGuidance[item.NextRunUnavailableReason] }</small>
@@ -573,5 +573,5 @@ templ SchedulePreview(enabled bool, text string) {
 		}
 	</strong>
 	{ text }
-	<small class="table-detail">Assumes the server stays available and its owner keeps access.</small>
+	<small class="table-detail">If the server is still there and its owner can still use it.</small>
 }

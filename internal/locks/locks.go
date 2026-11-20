@@ -14,9 +14,9 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
-var ErrConflict = apperr.New("OPERATION_CONFLICT", 409, "A conflicting operation is already running")
+var ErrConflict = apperr.New("OPERATION_CONFLICT", 409, "Other work on this server is still running. Wait for it to finish.")
 
-var ErrRecovering = apperr.New("RECOVERY_PENDING", 409, "Ludock is recovering interrupted operations. Try again shortly.")
+var ErrRecovering = apperr.New("RECOVERY_PENDING", 409, "Ludock is finishing work its restart interrupted. Try again shortly.")
 
 // BackgroundConflict reports a conflict only with background work, such as
 // a countdown warning. Cancel asks those holders to stop; they keep their

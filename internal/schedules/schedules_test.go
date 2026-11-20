@@ -203,7 +203,7 @@ func TestScheduleAuthorityChanges(t *testing.T) {
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
 	f.s.Run(ctx, due)
 	schedule := f.first(t, admin)
-	if f.operations(t) != 0 || !strings.HasPrefix(schedule.LastResult, "Suspended: required access") ||
+	if f.operations(t) != 0 || !strings.HasPrefix(schedule.LastResult, "Suspended: the schedule owner can no longer") ||
 		schedule.NextRunUnavailableReason != ActionAccessRemoved {
 		t.Fatal(schedule)
 	}
@@ -266,7 +266,7 @@ func TestStaleEditsAndOwnership(t *testing.T) {
 	if _, err := f.s.Update(ctx, friend, f.serverID, schedule.ID, 2, backup); !apperr.Is(err, "FORBIDDEN") {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, 2, backup); err == nil || !strings.Contains(err.Error(), "required access") {
+	if _, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, 2, backup); err == nil || !strings.Contains(err.Error(), "can no longer") {
 		t.Fatal(err)
 	}
 }
@@ -535,7 +535,7 @@ func TestCommandSchedulesNeedConsoleAccess(t *testing.T) {
 	}
 	f.grant(t, authz.ServerView, authz.SchedulesManage)
 	f.s.Run(ctx, due)
-	if last := f.first(t, friend); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Suspended: required access for this scheduled action") {
+	if last := f.first(t, friend); f.operations(t) != 0 || !strings.HasPrefix(last.LastResult, "Suspended: the schedule owner can no longer do this action") {
 		t.Fatal(last.LastResult)
 	}
 }

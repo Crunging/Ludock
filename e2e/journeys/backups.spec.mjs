@@ -164,7 +164,8 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   await signIn(operator, "backupmaker", "backup maker password");
   await openServer(operator, "Survival");
   await operator.getByRole("tab", { name: "Backups" }).click();
-  await expect(operator.getByText("Archive access and restoration require an administrator.")).toBeVisible();
+  await expect(operator.locator("#backup-retention")).toBeVisible();
+  await expect(operator.locator("#backup-list")).toHaveCount(0);
   await expect(operator.getByRole("link", { name: "Browse" })).toHaveCount(0);
   const backupID = new URL(fileURL, page.url()).pathname.split("/")[4];
   await operator.goto(`${new URL(operator.url()).pathname}?tab=backups&browse=${backupID}`);
@@ -191,6 +192,19 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
     await expectOperationSucceeded(page);
     await page.getByRole("link", { name: "Dismiss" }).click();
   };
+  // Retention keeps the kept ones, the three newest of the rest, and the
+  // last of the rest from each earlier day (Ludock and this journey share the
+  // local time zone), so a run that crosses midnight keeps one more. Rows are
+  // newest first.
+  const listed = async () => (await rows.evaluateAll((trs) => trs.map((tr) => ({
+    at: tr.querySelector("time").getAttribute("datetime"), kept: tr.classList.contains("backup-row--kept") }))))
+    .map((row) => ({ ...row, day: new Date(row.at).toDateString() }));
+  const expectRetained = (keptCount) => expect.poll(async () => {
+    const all = await listed();
+    const unkept = all.filter((row) => !row.kept);
+    const lastOfDay = unkept.slice(3).every((row, index) => unkept[index + 2].day !== row.day);
+    return lastOfDay && all.filter((row) => row.kept).length === keptCount && unkept.length >= 3;
+  }).toBe(true);
   await backUp();
 
   await rows.first().getByRole("link", { name: "Keep…" }).click();
@@ -207,19 +221,23 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
 
   // Four newer backups leave the three newest and the kept one.
   for (let count = 0; count < 4; count++) await backUp();
-  await expect(rows).toHaveCount(4);
+  await expectRetained(1);
   await expect(kept).toHaveCount(1);
   await expect(rows.first()).not.toContainText("before 1.21 update");
 
-  // Released, it is the oldest, so the next backup removes it.
+  // Released, it is the oldest, so the next backup removes it, unless it
+  // is the last of an earlier day.
+  const before = await listed();
+  const released = before.find((row) => row.kept);
+  const lastOfItsDay = !before.some((row) => !row.kept && row.at > released.at && row.day === released.day);
   await kept.getByRole("button", { name: "Release" }).click();
   await expect(page.locator("#detail-status")).toContainText("Backup released.");
   await expect(kept).toHaveCount(0);
   await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(1);
   await expect(page.locator("#backup-usage")).not.toContainText("kept");
   await backUp();
-  await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(0);
-  await expect(rows).toHaveCount(3);
+  await expect(page.locator(`#backup-list a[href="${browse}"]`)).toHaveCount(lastOfItsDay ? 1 : 0);
+  await expectRetained(0);
 });
 
 // savesIn lists the saved copies of Ludock's own data in folder.

@@ -91,7 +91,7 @@ func TestRunsHandlersAndRecordsOutcomes(t *testing.T) {
 	}
 	waitStatus(t, r, b.ID, AlreadyCurrent)
 	failed := waitStatus(t, r, c.ID, Failed)
-	if failed.Error != "The operation failed. Check administrator diagnostics." {
+	if failed.Error != "Something went wrong. Ludock’s log has the details." {
 		t.Fatal("internal error text leaked:", failed.Error)
 	}
 	var audits int

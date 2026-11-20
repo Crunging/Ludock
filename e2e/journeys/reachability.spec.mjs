@@ -1,6 +1,6 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, serverRow, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, serverRow, openServer, restoreServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -43,7 +43,7 @@ test("a game that stops answering while its container runs is an outage, until i
     // period reports it.
     await expect(attention).toContainText("Game not answering", { timeout: 90_000 });
     await openServer(page, "valheim");
-    await expect(page.locator("#availability-title + p")).toHaveText("Availability problem detected.");
+    await expect(page.locator("#availability-title + p")).toHaveText("The server is down.");
     await expect(page.locator(".metadata-list")).toContainText("Running, but the game isn’t answering");
 
     await rm(silence());
@@ -53,10 +53,10 @@ test("a game that stops answering while its container runs is an outage, until i
 
     await openServer(page, "valheim");
     await page.getByLabel("Monitor this server").uncheck();
-    await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+    await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
   } finally {
     await rm(silence(), { force: true });
-    await dockerAction("valheim", "stop");
+    await restoreServer(page, "valheim");
   }
 });
 
@@ -76,7 +76,7 @@ test("counting players with the game's status query when it has no console", asy
     await page.goto("/");
     await expect(serverRow(page, "valheim").locator(".server-row__players")).toContainText("2/10");
   } finally {
-    await dockerAction("valheim", "stop");
+    await restoreServer(page, "valheim");
   }
   await openServer(page, "valheim");
   await expect(page.locator(".overview-game")).toContainText("Checked while the server is running");

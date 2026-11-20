@@ -41,7 +41,7 @@ var messages = map[string]string{
 	"UNSAFE_OR_CHANGED_FILE_PATH": "The path changed, is unsafe, or cannot be accessed",
 	"FILE_TARGET_CHANGED":         "The server changed while preparing file access. Refresh and try again.",
 	"FILE_ROOT_CHANGED":           "The file root changed. Refresh and try again.",
-	"FILE_OPERATION_TIMEOUT":      "The file operation timed out. Refresh and try again.",
+	"FILE_OPERATION_TIMEOUT":      "The file change took too long. Refresh and try again.",
 	"INVALID_FILE_VERSION":        "Reopen the file before saving it",
 	"INVALID_SELECTION":           "Choose fewer items, up to 500 in one folder",
 	"MOVE_INTO_ITSELF":            "A folder can’t be moved into itself",
@@ -52,7 +52,7 @@ var messages = map[string]string{
 func Error(code string, status int) *apperr.Error {
 	message, ok := messages[code]
 	if !ok {
-		message = "File operation failed"
+		message = "The file change failed"
 	}
 	return apperr.New(code, status, message)
 }

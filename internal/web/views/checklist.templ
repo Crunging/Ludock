@@ -3,11 +3,14 @@ package views
 import (
 	"strconv"
 	"strings"
+
+	"github.com/Crunging/Ludock/internal/monitor"
 )
 
 const (
 	ChecklistAlerts    = "alerts"
 	ChecklistBackups   = "backups"
+	ChecklistRecovery  = "recovery"
 	ChecklistAddress   = "address"
 	ChecklistServers   = "servers"
 	ChecklistTwoFactor = "two-factor"
@@ -17,7 +20,7 @@ const (
 type ChecklistItem struct {
 	Key string
 	// Names are the servers or containers the item is about; IDs are the
-	// servers a nightly backup is confirmed for.
+	// servers its one-click action is confirmed for.
 	Names, IDs []string
 	// Host is the address players are shown; Loopback when only this
 	// computer can use it.
@@ -30,8 +33,8 @@ type ChecklistView struct {
 	Notice, Error string
 }
 
-// nameList joins up to three names: "A, B, and 2 others".
-func nameList(names []string) string {
+// NameList joins up to three names: "A, B, and 2 others".
+func NameList(names []string) string {
 	shown := names
 	if len(names) > 3 {
 		shown = names[:2]
@@ -52,6 +55,7 @@ func checklistTitle(key string) string {
 	return map[string]string{
 		ChecklistAlerts:    "Get alerts",
 		ChecklistBackups:   "Back up your servers",
+		ChecklistRecovery:  "Restart servers that stop answering",
 		ChecklistAddress:   "Check the address players use",
 		ChecklistServers:   "Add the servers Ludock didn’t find",
 		ChecklistTwoFactor: "Protect your sign-in",
@@ -68,6 +72,19 @@ func backupConfirm(count int) templ.Attributes {
 		"data-confirm-detail": "Each backup stops its server for a few minutes, disconnecting anyone playing, then starts it again. " +
 			"Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
 		"data-confirm-action": "Back up every night",
+	}
+}
+
+func recoveryConfirm(count int) templ.Attributes {
+	question := "Restart these " + strconv.Itoa(count) + " servers if their game stops answering?"
+	if count == 1 {
+		question = "Restart this server if its game stops answering?"
+	}
+	return templ.Attributes{
+		"hx-confirm": question,
+		"data-confirm-detail": "When a running game stops answering for a few minutes, Ludock restarts it the way the Restart button does, at most " +
+			strconv.Itoa(monitor.RecoveryAttempts) + " times in 6 hours. Turn it off on each server’s Overview.",
+		"data-confirm-action": "Turn on automatic restart",
 	}
 }
 
@@ -108,9 +125,9 @@ templ Checklist(v ChecklistView) {
 templ checklistDetail(item ChecklistItem) {
 	switch item.Key {
 		case ChecklistAlerts:
-			Ludock already watches for crashes, games that stop answering, and full disks, but no notification is on, so no one hears about them.
+			Ludock already monitors your servers for crashes, games that stop answering, and full disks, but no notification is on, so no one hears about them.
 		case ChecklistBackups:
-			{ nameList(item.Names) }
+			{ NameList(item.Names) }
 			if len(item.Names) == 1 {
 				has no scheduled backup.
 			} else {
@@ -124,8 +141,15 @@ templ checklistDetail(item ChecklistItem) {
 				only works on your own network.
 			}
 			Friends elsewhere need your public address or domain.
+		case ChecklistRecovery:
+			{ NameList(item.Names) }
+			if len(item.Names) == 1 {
+				stays down if its game stops answering, until someone restarts it.
+			} else {
+				stay down if their game stops answering, until someone restarts them.
+			}
 		case ChecklistServers:
-			{ nameList(item.Names) }
+			{ NameList(item.Names) }
 			if len(item.Names) == 1 {
 				looks like a game server, but Ludock isn’t managing it.
 			} else {
@@ -148,6 +172,13 @@ templ checklistAction(item ChecklistItem) {
 				}
 			</form>
 			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-backups" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(len(item.Names))... }>Back up every night</button>
+		case ChecklistRecovery:
+			<form id="checklist-recovery" hidden>
+				for _, id := range item.IDs {
+					<input type="hidden" name="server" value={ id }/>
+				}
+			</form>
+			<button class="secondary-btn" type="button" hx-post="/checklist/recovery" hx-include="#checklist-recovery" hx-target="#checklist" data-busy-label="Turning on…" { recoveryConfirm(len(item.Names))... }>Restart automatically</button>
 		case ChecklistAddress:
 			<a class="secondary-btn" href="/settings#connection-settings-title">Set the address</a>
 		case ChecklistServers:

@@ -46,5 +46,5 @@ func Public(err error) (message, code string) {
 	if target, ok := As(err); ok {
 		return target.Message, target.Code
 	}
-	return "The operation failed. Check administrator diagnostics.", "OPERATION_FAILED"
+	return "Something went wrong. Ludock’s log has the details.", "OPERATION_FAILED"
 }

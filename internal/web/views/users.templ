@@ -204,7 +204,7 @@ templ userRow(u UsersView, user db.User) {
 					hx-target="#users"
 					hx-swap="outerHTML"
 					hx-confirm={ "Make " + user.Username + " an administrator?" }
-					data-confirm-detail="They can use every server, change its containers, and manage users and settings, including yours."
+					data-confirm-detail="They can use and update every server, and manage users and settings, including yours."
 					data-confirm-action="Make administrator"
 				>Make administrator</button>
 			}

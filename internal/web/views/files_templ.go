@@ -423,7 +423,7 @@ func FilesPage(page Page, f FilesView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else if f.Root.ID == "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<div class=\"empty-state\"><h2 class=\"empty-state__title\">File access is not configured</h2><p class=\"empty-state__description\">No approved mounts are available. An administrator can check the mount restrictions or ludock.files label.</p></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<div class=\"empty-state\"><h2 class=\"empty-state__title\">No folders to show</h2><p class=\"empty-state__description\">This server has no data folders Ludock may open. An administrator can choose them with the server’s ludock.files label.</p></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -561,7 +561,7 @@ func FilesPage(page Page, f FilesView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if f.Blocked && f.CanManage {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<p class=\"file-manager__note\">File changes are unavailable until an administrator reviews this server’s identity.</p>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<p class=\"file-manager__note\">File changes are paused until Ludock finds exactly one copy of this server in Docker.</p>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}

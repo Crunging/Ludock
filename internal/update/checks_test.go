@@ -177,7 +177,7 @@ func TestChecksRegistryErrorThenNotifyOnce(t *testing.T) {
 	if status == nil || status.State != CheckAvailable || status.Failed || status.CheckedAt != later {
 		t.Fatalf("the retry should find the newer image: %+v", status)
 	}
-	if len(f.sent) != 1 || !strings.HasPrefix(f.sent[0], "image-update:") || !strings.Contains(f.sent[0], "minecraft: a newer version") {
+	if len(f.sent) != 1 || !strings.HasPrefix(f.sent[0], "image-update:") || !strings.Contains(f.sent[0], "minecraft: a newer image is available") {
 		t.Fatal(f.sent)
 	}
 	if strings.Contains(f.sent[0], "itzg") || strings.Contains(f.sent[0], "registry-secret") {

@@ -25,7 +25,7 @@ func (c *Client) CreateHelper(ctx context.Context, options ContainerCreate) (str
 }
 
 var errHelperCleanup = apperr.New("HELPER_CLEANUP_FAILED", 409,
-	"A temporary data helper could not be removed. Check Docker and administrator diagnostics before retrying.")
+	"A temporary container Ludock started for this couldn’t be removed. Check Docker, then try again.")
 
 // sleep is replaced in tests.
 var sleep = func(ctx context.Context, d time.Duration) {

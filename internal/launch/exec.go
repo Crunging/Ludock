@@ -19,13 +19,13 @@ const MaxOutput = 4 * 1024 * 1024
 
 // Errors from helper commands. Messages are public.
 var (
-	ErrTimeout     = apperr.New("FILE_OPERATION_TIMEOUT", 409, "The file operation timed out. Refresh and try again.")
-	ErrFailed      = apperr.New("FILE_OPERATION_FAILED", 409, "File operation failed")
+	ErrTimeout     = apperr.New("FILE_OPERATION_TIMEOUT", 409, "The file change took too long. Refresh and try again.")
+	ErrFailed      = apperr.New("FILE_OPERATION_FAILED", 409, "The file change failed")
 	ErrUnsafe      = apperr.New("UNSAFE_OR_CHANGED_FILE_PATH", 409, "The path changed, is unsafe, or cannot be accessed")
 	ErrNameTaken   = apperr.New("FILE_NAME_TAKEN", 409, "A file or folder with that name already exists")
 	ErrFileChanged = apperr.New("FILE_CHANGED", 409, "The file changed since you opened it, so your edit was not saved. Copy your text, then reopen the file to see the new version.")
-	ErrOutputLimit = apperr.New("FILE_OUTPUT_LIMIT", 409, "File operation failed")
-	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "File operation failed")
+	ErrOutputLimit = apperr.New("FILE_OUTPUT_LIMIT", 409, "The file change failed")
+	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "The file change failed")
 )
 
 // archiveErrors are the public reasons an archive was not unpacked, by the

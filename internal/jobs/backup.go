@@ -186,7 +186,7 @@ func (j *Jobs) runBackup(ctx context.Context, job *ops.Context) (map[string]any,
 			return j.createStoppedBackup(ctx, server, job)
 		}()
 		if err != nil {
-			j.notify(notify.FailedWork, "backup-failed:"+job.Job.ID, "Backup failed for "+server.Container.DisplayName+". Review its operation details.")
+			j.notify(notify.FailedWork, "backup-failed:"+job.Job.ID, "Backup failed for "+server.Container.DisplayName+". Its Activity says why.")
 			return nil, err
 		}
 		return map[string]any{"backupId": backup.ID, "size": backup.Size, "checksum": backup.Checksum}, nil

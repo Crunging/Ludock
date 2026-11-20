@@ -502,7 +502,7 @@ func AddServers(v AddServersView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<section class=\"help-panel add-servers\" id=\"add-servers\" aria-labelledby=\"add-servers-title\"><h2 id=\"add-servers-title\">Add a server</h2><p>Ludock adds servers on <a href=\"/diagnostics\" class=\"text-link\">supported game images</a> by itself. Here are the other containers it can see. Adding one changes nothing in Docker, and only administrators see it until you <a href=\"/users\" class=\"text-link\">share it</a>.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<section class=\"help-panel add-servers\" id=\"add-servers\" aria-labelledby=\"add-servers-title\"><h2 id=\"add-servers-title\">Add a server</h2><p>Ludock adds servers made from <a href=\"/settings/system\" class=\"text-link\">supported game images</a> by itself. Here are the other containers it can see. Adding one changes nothing in Docker, and only administrators see it until you share it from its Sharing tab.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1251,12 +1251,12 @@ func ServerListFragment(list ServerList) templ.Component {
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
 		if list.DiscoveryUnavailable {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "<div class=\"server-connection\" role=\"status\"><div><p>Live server state is unavailable.</p><p class=\"muted\">Showing the last known state. Server controls resume after Ludock can check Docker again.</p></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "<div class=\"server-connection\" role=\"status\"><div><p>Ludock can’t reach Docker right now.</p><p class=\"muted\">Showing the last known state. Server controls come back once it can.</p></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if list.Admin {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<a class=\"secondary-btn\" href=\"/diagnostics\">Open diagnostics</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<a class=\"secondary-btn\" href=\"/settings/system\">Check the connection</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1349,7 +1349,7 @@ func ServerListFragment(list ServerList) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if list.Admin {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "<h2 class=\"empty-state__title\">No game servers found</h2><p class=\"empty-state__description\">Ludock looks for game containers on the Docker host it’s connected to.</p><a href=\"/diagnostics\" class=\"secondary-btn dashboard-empty-action\">Check the Docker connection</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "<h2 class=\"empty-state__title\">No game servers found</h2><p class=\"empty-state__description\">Ludock looks for game containers on the Docker host it’s connected to.</p><a href=\"/settings/system\" class=\"secondary-btn dashboard-empty-action\">Check the Docker connection</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1561,7 +1561,7 @@ func ServerCard(row ServerRow) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else if server.SharingPaused {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 112, "<p class=\"server-row__note\">Changed in Docker. Shared access is paused until you confirm.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 112, "<p class=\"server-row__note\">Changed in Docker. Sharing is paused until you confirm.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1580,7 +1580,7 @@ func ServerCard(row ServerRow) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "\">Image update available</a></p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "\">Update available</a></p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1988,7 +1988,7 @@ var scheduleReasons = map[string]string{
 	"owner_access_removed":  "The owner no longer has schedule access.",
 	"action_access_removed": "The owner no longer has access to this action.",
 	"sharing_paused":        "Waiting for an administrator to confirm the server’s change.",
-	"binding_unavailable":   "Ludock can’t find the server’s container.",
+	"binding_unavailable":   "Ludock can’t find the server in Docker.",
 	"unavailable":           "Review the schedule settings and server state.",
 }
 
@@ -2006,7 +2006,7 @@ func describeAttention(item attention.Item) attentionText {
 	case "schedule":
 		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
 	case "binding":
-		title := "Server container missing"
+		title := "Server missing in Docker"
 		if item.BindingStatus == "ambiguous" {
 			title = "More than one container for this server"
 		}
@@ -2018,9 +2018,9 @@ func describeAttention(item attention.Item) attentionText {
 	case "memory":
 		return attentionText{"Memory near its limit", path + "?tab=overview", "Check memory"}
 	}
-	title := "Server unavailable"
+	title := "Server down"
 	if item.State == "docker_unavailable" {
-		title = "Availability cannot be verified"
+		title = "Can’t check the server"
 	} else if item.State == monitor.NotAnswering {
 		title = "Game not answering"
 	}
@@ -2149,7 +2149,7 @@ func attentionDetail(item attention.Item) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case "binding":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 168, "<span class=\"muted\">Check the container in Docker or its owning manager, then refresh.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 168, "<span class=\"muted\">Check it with the tool that runs it, such as Compose or Portainer, then refresh.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2160,12 +2160,12 @@ func attentionDetail(item attention.Item) templ.Component {
 			}
 		default:
 			if item.State == "docker_unavailable" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 170, "<span class=\"muted\">Ludock cannot reach Docker.</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 170, "<span class=\"muted\">Ludock can’t reach Docker.</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 171, "<span class=\"muted\">Monitoring detected a problem since ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 171, "<span class=\"muted\">Down since ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -2297,12 +2297,12 @@ func NeedsAttention(view AttentionView) templ.Component {
 			}
 		}
 		if view.DiscoveryUnavailable {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 182, "<p class=\"needs-attention__warning\">Docker is unavailable. These items use saved state; current server availability cannot be verified. ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 182, "<p class=\"needs-attention__warning\">Ludock can’t reach Docker, so these come from the last known state. ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if view.Admin {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<a href=\"/diagnostics\" class=\"text-link\">Check diagnostics</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<a href=\"/settings/system\" class=\"text-link\">Check the connection</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -2318,7 +2318,7 @@ func NeedsAttention(view AttentionView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if view.DiscoveryUnavailable {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, "No attention items in the saved state you can access.")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, "Nothing in the last known state.")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

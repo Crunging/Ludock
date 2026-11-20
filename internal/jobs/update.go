@@ -298,7 +298,7 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
 				}
 			}
-			j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Review the operation and actual server state.")
+			j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": update failed. Its Activity says why; check the server before starting it.")
 		}
 		return result, err
 	})
@@ -360,7 +360,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	pulled := image.ID
 	imageChanged := pulled != plan.Spec.Image
 	if !imageChanged && !request.ForceRecreate {
-		j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": configured image is current.")
+		j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": already up to date.")
 		return map[string]any{"alreadyCurrent": true, "imageChanged": false, "recreated": false}, nil
 	}
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {

@@ -190,9 +190,6 @@ templ DetailLive(d ServerDetail) {
 				<p class="detail-header__identity">
 					@ServerState(server.State, server.Health, server.Exit)
 					<span class="detail-header__game">{ server.GameName }</span>
-					if server.Name != server.DisplayName {
-						<span title="Docker container name"><code>{ server.Name }</code></span>
-					}
 				</p>
 			</div>
 			if d.Row.ConsoleLabel != "" || d.Row.CanFiles || d.Row.CanStart || d.Row.CanStop || d.Row.CanRestart {
@@ -225,9 +222,9 @@ templ DetailLive(d ServerDetail) {
 		</header>
 		if d.DiscoveryUnavailable {
 			<div class="alert alert--error" role="alert">
-				Live server status could not be verified. Saved history and monitoring remain accessible; server controls are paused until live status can be verified.
+				Ludock can’t reach Docker right now, so this shows the last known state. Server controls come back once it can.
 				if d.Admin {
-					<a class="text-link" href="/diagnostics">Check Docker connectivity</a>
+					<a class="text-link" href="/settings/system">Check the connection</a>
 				}
 			</div>
 		}
@@ -277,10 +274,10 @@ var healthNotes = map[string]string{"starting": "Health check is starting", "hea
 
 func resourcesUnavailable(d ServerDetail) string {
 	if d.DiscoveryUnavailable {
-		return "Unavailable until Docker can be reached"
+		return "Shown once Ludock can reach Docker"
 	}
 	if d.Row.Server.State == "running" {
-		return "Not available right now"
+		return "Can’t be read right now"
 	}
 	return "Shown while the server is running"
 }
@@ -363,10 +360,11 @@ templ OverviewLive(d ServerDetail) {
 					}
 				</dd>
 			</div>
-			<div>
-				<dt>Ports</dt>
-				<dd>
-					if ports := publicPorts(server.Ports); len(ports) > 0 {
+			if d.Admin {
+				<div>
+					<dt>Ports</dt>
+					<dd>
+						if ports := publicPorts(server.Ports); len(ports) > 0 {
 						<ul class="overview-ports">
 							for _, port := range ports {
 								<li>
@@ -377,11 +375,12 @@ templ OverviewLive(d ServerDetail) {
 								</li>
 							}
 						</ul>
-					} else {
-						None published
-					}
-				</dd>
-			</div>
+						} else {
+							None published
+						}
+					</dd>
+				</div>
+			}
 			<div>
 				<dt>CPU</dt>
 				<dd>
@@ -420,7 +419,7 @@ templ OverviewLive(d ServerDetail) {
 									if folder.MeasuredAt != 0 {
 										<span class="overview-disks__figure">{ fmt.Sprintf("%.0f%% full", folder.Percent()) }</span>
 										<span class={ "overview-meter", templ.KV("overview-meter--alert", folder.AlertSince != 0) } aria-hidden="true"><span style={ diskShare(folder) }></span></span>
-										<span class="muted">{ FormatBytes(folder.AvailableBytes) } free of { FormatBytes(folder.TotalBytes) }, measured @Time(folder.MeasuredAt, "sentence", "")</span>
+										<span class="muted">{ FormatBytes(folder.AvailableBytes) } free of { FormatBytes(folder.TotalBytes) }, measured @Time(folder.MeasuredAt, "plain", "")</span>
 									}
 									if folder.Unknown {
 										<span class="muted">Couldn’t be measured just now</span>
@@ -464,18 +463,17 @@ templ OverviewLive(d ServerDetail) {
 					</dd>
 				</div>
 			}
-			<div>
-				<dt>Image</dt>
-				<dd>
-					<code>
+			if d.Admin {
+				<div>
+					<dt>In Docker</dt>
+					<dd>
+						<code>{ server.Name }</code>
 						if server.Image != "" {
-							{ server.Image }
-						} else {
-							Unknown
+							<span class="muted">Image <code>{ server.Image }</code></span>
 						}
-					</code>
-				</dd>
-			</div>
+					</dd>
+				</div>
+			}
 		</dl>
 		if d.Resources != nil {
 			@ResourceHistory(*d.Resources)
@@ -524,23 +522,23 @@ func describeAvailability(a *monitor.Availability, paused bool, now int64) avail
 	}
 	switch {
 	case !policy.Enabled:
-		result.Status = "Monitoring disabled."
+		result.Status = "Monitoring is off."
 	case policy.Maintenance:
-		result.Status = "Monitoring paused for maintenance."
+		result.Status = "Alerts are paused for maintenance."
 	case paused:
-		result.Status = "Monitoring paused while a server operation is active."
+		result.Status = "Monitoring is paused while other work on the server runs."
 	case state.IntentionallyStopped:
 		result.Status = "Stopped. Alerts resume once the server is running again."
 	case suppressed:
-		result.Status = "Waiting for monitoring to resume after a server action."
+		result.Status = "Paused briefly after a restart or stop."
 	case result.OutageSince != 0:
 		if now-result.OutageSince < int64(policy.GraceSeconds)*1000 {
-			result.Status = "Availability problem detected. Waiting for the failure grace period."
+			result.Status = "The server looks down. Waiting a moment before alerting, in case it comes back."
 		} else {
-			result.Status = "Availability problem detected."
+			result.Status = "The server is down."
 		}
 	case state.LastState == "":
-		result.Status = "Waiting for the first availability observation."
+		result.Status = "Checking it for the first time."
 	}
 	return result
 }
@@ -557,14 +555,14 @@ templ AvailabilityStatus(d ServerDetail) {
 					<dt>Outage since</dt>
 					<dd>@Time(described.OutageSince, "", "")</dd>
 				}
-				<dt>Last observed state</dt>
+				<dt>Last seen</dt>
 				<dd>
 					if a.State.LastState == monitor.NotAnswering {
 						Running, but the game isn’t answering
 					} else if a.State.LastState != "" {
 						{ Capitalize(a.State.LastState) }
 					} else {
-						Not observed yet
+						Not checked yet
 					}
 				</dd>
 				if described.Suppressed {
@@ -589,12 +587,12 @@ templ AvailabilityStatus(d ServerDetail) {
 		if described.OutageSince != 0 {
 			<p class="section-note">
 				if a.State.LastState == "docker_unavailable" {
-					Ludock cannot reach Docker to verify this server.
+					Ludock can’t reach Docker to check this server.
 					if d.Admin {
-						<a class="text-link" href="/diagnostics">Check Docker connectivity in Diagnostics</a>
+						<a class="text-link" href="/settings/system">Check the connection</a>
 					}
 				} else if a.State.LastState == monitor.NotAnswering {
-					The container is running, but the game stopped answering its status query. Check its logs and console; a restart may bring it back.
+					The server is running, but the game stopped answering. Check its logs and console; a restart may bring it back.
 				} else {
 					Check the server in the tool that runs it, such as Compose or Portainer. A running server can still be unhealthy or starting.
 				}
@@ -695,27 +693,27 @@ templ ActivityPanel(a ActivityView) {
 		@SelectedOperation(a)
 	}
 	<div class="section-heading">
-		<h2 id="recent-operations-title" tabindex="-1">Recent operations</h2>
+		<h2 id="recent-operations-title" tabindex="-1">Recent activity</h2>
 		<div class="inline-actions">
-			<a class="text-link" href={ templ.SafeURL("/operations?serverId=" + a.ServerID) }>Search operation history</a>
+			<a class="text-link" href={ templ.SafeURL("/activity?serverId=" + a.ServerID) }>Search all activity</a>
 			<button class="secondary-btn" type="button" hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-include=".activity-filters" hx-target="#activity-list" hx-swap="outerMorph" hx-sync="#activity-list:queue last" data-busy-label="Refreshing…">Refresh</button>
 		</div>
 	</div>
-	<form class="activity-filters stack-form" role="group" aria-label="Filter recent operations" method="get" action={ templ.SafeURL("/servers/" + a.ServerID) } hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-trigger="change" hx-target="#activity-list" hx-swap="outerMorph" hx-sync="#activity-list:queue last">
+	<form class="activity-filters stack-form" role="group" aria-label="Filter recent activity" method="get" action={ templ.SafeURL("/servers/" + a.ServerID) } hx-get={ "/fragments/servers/" + a.ServerID + "/activity" } hx-trigger="change" hx-target="#activity-list" hx-swap="outerMorph" hx-sync="#activity-list:queue last">
 		<input type="hidden" name="tab" value="activity"/>
 		<label>
-			<span>Status</span>
+			<span>Result</span>
 			<select name="status">
-				<option value="">All statuses</option>
+				<option value="">Any result</option>
 				for _, status := range operationStatuses {
 					<option value={ status } selected?={ a.Status == status }>{ OperationStatusLabels[status] }</option>
 				}
 			</select>
 		</label>
 		<label>
-			<span>Operation</span>
+			<span>What</span>
 			<select name="kind">
-				<option value="">All operations</option>
+				<option value="">Everything</option>
 				for _, kind := range a.Kinds {
 					<option value={ kind } selected?={ a.Kind == kind }>{ Capitalize(kind) }</option>
 				}
@@ -748,17 +746,17 @@ templ ActivityList(a ActivityView) {
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
 			</p>
 		}
-		<p class="section-note activity-filter-count" aria-live="polite">Showing { strconv.Itoa(len(a.Visible)) } of { strconv.Itoa(a.Total) } recent operations.</p>
+		<p class="section-note activity-filter-count" aria-live="polite">Showing { strconv.Itoa(len(a.Visible)) } of { strconv.Itoa(a.Total) }.</p>
 		if a.HiddenActive {
 			<p class="section-note activity-filter-notice">
-				An active operation is hidden by these filters. Server controls remain paused.
+				Work in progress is hidden by these filters. Server controls stay paused until it finishes.
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=activity") } { inPage()... }>Show active work</a>
 			</p>
 		}
-		@OperationList(a.Visible, map[bool]string{true: "No recent operations match these filters.", false: "No operations yet."}[a.Total > 0], false, nil)
+		@OperationList(a.Visible, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[a.Total > 0], false, nil)
 		if a.Admin && a.AlreadyCurrent {
 			<p class="section-note">
-				The image is already current. Some games update when they start.
+				Already up to date. Some games update when they start.
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=update&recreate=1") } { inPage()... }>Update anyway</a>
 			</p>
 		}
@@ -783,7 +781,7 @@ templ SelectedOperation(a ActivityView) {
 		}
 	>
 		<div class="section-heading">
-			<h2 id="scheduled-operation-title" tabindex="-1">Operation details</h2>
+			<h2 id="scheduled-operation-title" tabindex="-1">Details</h2>
 			// The Backups tab follows running work until it ends.
 			if a.Tab != "backups" || a.Selected == nil || !ActiveStatus(a.Selected.Status) {
 				<a class="secondary-btn" href={ detailURL(a.ServerID, "tab="+a.Tab) } { inPage()... }>Dismiss</a>
@@ -793,7 +791,7 @@ templ SelectedOperation(a ActivityView) {
 			<p role="alert">{ a.SelectedError }</p>
 		}
 		if operation := a.Selected; operation != nil {
-			<p><a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>Open in operation history</a></p>
+			<p><a class="text-link" href={ templ.SafeURL("/activity/" + operation.ID) }>Open on its own page</a></p>
 			<dl class="metadata-list">
 				<dt>Action</dt>
 				<dd>{ Capitalize(operation.Kind) }</dd>
@@ -806,7 +804,7 @@ templ SelectedOperation(a ActivityView) {
 					@Pip(OperationTones[operation.Status])
 					{ OperationStatusLabels[operation.Status] }
 				</dd>
-				<dt>Queued at</dt>
+				<dt>Asked for</dt>
 				<dd>@Time(operation.CreatedAt, "", "")</dd>
 				<dt>Last updated</dt>
 				<dd>@Time(operation.UpdatedAt, "", "")</dd>
@@ -846,15 +844,15 @@ func newBackup(operation *ops.Job) string {
 // actor column for the history page.
 templ OperationList(operations []history.Operation, empty string, showContext bool, serverNames map[string]string) {
 	<div class="table-scroll">
-		<table class="data-table" aria-label={ map[bool]string{true: "Operation history", false: "Recent operations"}[showContext] }>
+		<table class="data-table" aria-label={ map[bool]string{true: "Activity", false: "Recent activity"}[showContext] }>
 			<thead>
 				<tr>
-					<th>Operation</th>
+					<th>What</th>
 					if showContext {
-						<th>Server / actor</th>
+						<th>Server and who</th>
 					}
-					<th>Started</th>
-					<th>Progress / result</th>
+					<th>When</th>
+					<th>Result</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -864,7 +862,7 @@ templ OperationList(operations []history.Operation, empty string, showContext bo
 				for _, operation := range operations {
 					<tr>
 						<td>
-							<a class="text-link" href={ templ.SafeURL("/operations/" + operation.ID) }>{ Capitalize(operation.Kind) }</a>
+							<a class="text-link" href={ templ.SafeURL("/activity/" + operation.ID) }>{ Capitalize(operation.Kind) }</a>
 							if !showContext && operation.Actor != nil && operation.Actor.ID == ops.RecoveryActor {
 								<p class="muted">By Ludock, because the game stopped answering</p>
 							}
@@ -917,7 +915,7 @@ func ActorLabel(actor *history.Actor) string {
 	case actor.Name != "":
 		return actor.Name
 	case actor.ID != "":
-		return "User " + actor.ID + " (name unavailable)"
+		return "A deleted user"
 	}
 	return "Not recorded"
 }

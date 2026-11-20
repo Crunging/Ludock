@@ -232,9 +232,9 @@ func (h *Helpers) start(ctx context.Context, id, execID string) (*docker.Conn, e
 }
 
 var (
-	errTimeout       = fail("BACKUP_TIMEOUT", "A data operation timed out. Review the operation recovery state.")
-	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data root for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
-	errFailed        = fail("DATA_OPERATION_FAILED", "A data operation failed. The server remains stopped until its data is safe.")
+	errTimeout       = fail("BACKUP_TIMEOUT", "Copying the server’s data took too long and was stopped.")
+	errBackupTimeout = fail("BACKUP_TIMEOUT", "Reading a data folder for the backup took longer than 4 hours, so the backup was stopped. Exclude large folders with ludock.files, or back up through the tool that created the server.")
+	errFailed        = fail("DATA_OPERATION_FAILED", "Copying the server’s data failed. The server stays stopped until its data is safe.")
 )
 
 // Exec runs a short helper command (two-minute limit) and returns stdout.

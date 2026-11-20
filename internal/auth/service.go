@@ -627,7 +627,7 @@ func (s *Service) RevokeSession(ctx context.Context, principal *Principal, sessi
 }
 
 var (
-	errInsufficient = apperr.New("FORBIDDEN", 403, "Insufficient permissions")
+	errInsufficient = apperr.New("FORBIDDEN", 403, "You can’t do that")
 	errUserNotFound = apperr.New("USER_NOT_FOUND", 404, "User not found")
 	errLastAdmin    = apperr.New("LAST_ADMIN", 409, "At least one active admin is required")
 )
@@ -648,7 +648,7 @@ func adminMutationError(err error) error {
 	case errors.Is(err, db.ErrSessionGone):
 		return errAuthRequired
 	case errors.Is(err, db.ErrNotAdmin):
-		return apperr.New("FORBIDDEN", 403, "Administrator permission required")
+		return apperr.New("FORBIDDEN", 403, "Only an administrator can do that")
 	case errors.Is(err, db.ErrUserNotFound):
 		return errUserNotFound
 	case errors.Is(err, db.ErrLastAdmin):

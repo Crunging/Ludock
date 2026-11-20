@@ -85,13 +85,13 @@ func StateGuidance(state string) string {
 	}
 	switch state {
 	case "paused":
-		return "Paused in Docker. Resume it through Docker or its owning manager."
+		return "Paused in Docker. Resume it with the tool that runs it, such as Compose or Portainer."
 	case "restarting":
 		return "Restart in progress. Controls will be available when it finishes."
 	case "removing":
 		return "Removal in progress."
 	}
-	return "Container state: " + state + ". Check it in Docker or its owning manager before using server controls."
+	return "Docker reports it as " + state + ". Check it with the tool that runs it, such as Compose or Portainer, before using the controls."
 }
 
 // Capitalize upper-cases the first letter and spaces underscores.
@@ -105,17 +105,17 @@ func Capitalize(value string) string {
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
 	"stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
-	"sending_command": "Sending command", "pulling": "Pulling image", "creating": "Creating updated container", "replacing": "Replacing previous container"}
+	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
 
 // OperationLabel describes an operation's progress.
 func OperationLabel(status, phase string) string {
 	switch status {
 	case "already_current":
-		return "Configured image is current"
+		return "Already up to date"
 	case "skipped":
 		return "Skipped"
 	case "interrupted":
-		return "Interrupted — review required"
+		return "Interrupted, needs a look"
 	case "failed":
 		return "Failed"
 	case "succeeded":

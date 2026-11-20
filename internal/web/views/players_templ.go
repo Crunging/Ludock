@@ -152,7 +152,7 @@ func PlayersCell(p PlayersView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case p.Reading.Failed:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<span class=\"muted\" title=\"Ludock couldn’t read the server’s players\">Unavailable</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<span class=\"muted\" title=\"Ludock couldn’t read the server’s players\">Unknown</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -312,7 +312,7 @@ func PlayersFact(p PlayersView) templ.Component {
 		}
 		switch {
 		case !p.Listed:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"muted\">Not available. Ludock lists players for supported games whose console or status query can list them.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"muted\">Not available. Ludock lists players for supported games that can tell it who’s online.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -655,7 +655,7 @@ func GameFact(g GameView) templ.Component {
 		}
 		switch {
 		case g.Query == "":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<span>Not checked</span> <span class=\"muted\">Ludock asks supported games that answer a status query.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<span>Not checked</span> <span class=\"muted\">Ludock checks supported games that can answer.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

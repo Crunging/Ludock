@@ -11,6 +11,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -32,7 +33,7 @@ func checklistKeysOf(items []views.ChecklistItem) []string {
 // dismissed, in the order a newcomer needs them.
 func TestChecklistItemConditions(t *testing.T) {
 	t.Parallel()
-	fresh := checklistState{Unbacked: []string{"a"}, LocalHost: "127.0.0.1", Unmanaged: []string{"b"}}
+	fresh := checklistState{Unbacked: []string{"a"}, Unrecovered: []string{"a"}, LocalHost: "127.0.0.1", Unmanaged: []string{"b"}}
 	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, checklistKeys) {
 		t.Fatal(keys)
 	}
@@ -40,7 +41,7 @@ func TestChecklistItemConditions(t *testing.T) {
 	if items := checklistItems(done); len(items) != 0 {
 		t.Fatal(items)
 	}
-	fresh.Dismissed = []string{views.ChecklistAddress, views.ChecklistTwoFactor}
+	fresh.Dismissed = []string{views.ChecklistRecovery, views.ChecklistAddress, views.ChecklistTwoFactor}
 	if keys := checklistKeysOf(checklistItems(fresh)); !slices.Equal(keys, []string{views.ChecklistAlerts, views.ChecklistBackups, views.ChecklistServers}) {
 		t.Fatal(keys)
 	}
@@ -114,6 +115,7 @@ func TestBackupTimesStaggerAcrossDaylightSaving(t *testing.T) {
 
 // Requests the list never sends: a member's, one without the session's
 // CSRF token, an unknown item, and a missing time zone change nothing.
+// Automatic restart stays off.
 func TestChecklistRefusesForgedRequests(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
@@ -135,6 +137,8 @@ func TestChecklistRefusesForgedRequests(t *testing.T) {
 		{asMember, "/checklist/backups", url.Values{"timezone": {"UTC"}}, http.StatusForbidden},
 		{forged, "/checklist/backups", url.Values{"timezone": {"UTC"}}, http.StatusForbidden},
 		{asAdmin, "/checklist/backups", url.Values{"timezone": {"Mars/Olympus"}}, http.StatusBadRequest},
+		{asMember, "/checklist/recovery", url.Values{"server": {p.server}}, http.StatusForbidden},
+		{forged, "/checklist/recovery", url.Values{"server": {p.server}}, http.StatusForbidden},
 		{asMember, "/checklist/address/dismiss", url.Values{}, http.StatusForbidden},
 		{forged, "/checklist/address/dismiss", url.Values{}, http.StatusForbidden},
 		{asAdmin, "/checklist/everything/dismiss", url.Values{}, http.StatusNotFound},
@@ -149,6 +153,9 @@ func TestChecklistRefusesForgedRequests(t *testing.T) {
 	if list, err := p.app.Schedules.List(ctx, &p.admin.User, p.server); err != nil || len(list) != 0 {
 		t.Fatal(list, err)
 	}
+	if availability, err := p.app.Monitor.Get(ctx, p.server); err != nil || availability.Policy.Recover {
+		t.Fatal(availability, err)
+	}
 	if response := p.do("GET", "/fragments/checklist", member, nil, map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
 		t.Fatal(response.Code)
 	}
@@ -160,5 +167,28 @@ func TestChecklistRefusesForgedRequests(t *testing.T) {
 	}
 	if dismissed := p.web.checklistDismissed(ctx); !slices.Equal(dismissed, []string{views.ChecklistAddress}) {
 		t.Fatal(dismissed)
+	}
+}
+
+// Automatic restart is offered for a monitored server whose game answers,
+// but not while its alerts are paused for maintenance, when restarts can't run.
+func TestChecklistRecoverySkipsMaintenance(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	ctx := context.Background()
+	offered := func() bool {
+		body := p.do("GET", "/fragments/checklist", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+		return strings.Contains(body, "/checklist/recovery")
+	}
+	if !offered() {
+		t.Fatal("not offered for a monitored server")
+	}
+	policy := monitor.DefaultPolicy()
+	policy.Maintenance = true
+	if _, err := p.app.Monitor.Configure(ctx, p.admin.User.ID, p.admin.TokenHash, p.server, policy); err != nil {
+		t.Fatal(err)
+	}
+	if offered() {
+		t.Fatal("offered during maintenance")
 	}
 }

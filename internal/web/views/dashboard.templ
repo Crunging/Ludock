@@ -108,7 +108,7 @@ templ AddServers(v AddServersView) {
 	<section class="help-panel add-servers" id="add-servers" aria-labelledby="add-servers-title">
 		<h2 id="add-servers-title">Add a server</h2>
 		<p>
-			Ludock adds servers on <a href="/diagnostics" class="text-link">supported game images</a> by itself. Here are the other containers it can see. Adding one changes nothing in Docker, and only administrators see it until you <a href="/users" class="text-link">share it</a>.
+			Ludock adds servers made from <a href="/settings/system" class="text-link">supported game images</a> by itself. Here are the other containers it can see. Adding one changes nothing in Docker, and only administrators see it until you share it from its Sharing tab.
 		</p>
 		if v.Added != nil {
 			<div class="alert alert--success" role="status">
@@ -296,11 +296,11 @@ templ ServerListFragment(list ServerList) {
 	if list.DiscoveryUnavailable {
 		<div class="server-connection" role="status">
 			<div>
-				<p>Live server state is unavailable.</p>
-				<p class="muted">Showing the last known state. Server controls resume after Ludock can check Docker again.</p>
+				<p>Ludock can’t reach Docker right now.</p>
+				<p class="muted">Showing the last known state. Server controls come back once it can.</p>
 			</div>
 			if list.Admin {
-				<a class="secondary-btn" href="/diagnostics">Open diagnostics</a>
+				<a class="secondary-btn" href="/settings/system">Check the connection</a>
 			}
 		</div>
 	}
@@ -333,7 +333,7 @@ templ ServerListFragment(list ServerList) {
 			if list.Admin {
 				<h2 class="empty-state__title">No game servers found</h2>
 				<p class="empty-state__description">Ludock looks for game containers on the Docker host it’s connected to.</p>
-				<a href="/diagnostics" class="secondary-btn dashboard-empty-action">Check the Docker connection</a>
+				<a href="/settings/system" class="secondary-btn dashboard-empty-action">Check the Docker connection</a>
 			} else {
 				<h2 class="empty-state__title">No servers shared with you yet</h2>
 				<p class="empty-state__description">You’re signed in as { list.Username }. Ask an administrator to share the servers you need.</p>
@@ -366,10 +366,10 @@ templ ServerCard(row ServerRow) {
 			if note := BindingNote(string(server.BindingStatus)); note != "" {
 				<p class="server-row__warning">{ note }</p>
 			} else if server.SharingPaused {
-				<p class="server-row__note">Changed in Docker. Shared access is paused until you confirm.</p>
+				<p class="server-row__note">Changed in Docker. Sharing is paused until you confirm.</p>
 			}
 			if row.ImageUpdate {
-				<p class="server-row__update"><a class="text-link" href={ detailURL(server.ID, "tab=update") }>Image update available</a></p>
+				<p class="server-row__update"><a class="text-link" href={ detailURL(server.ID, "tab=update") }>Update available</a></p>
 			}
 		</div>
 		<div class="server-row__state">
@@ -475,7 +475,7 @@ var scheduleReasons = map[string]string{
 	"owner_access_removed":  "The owner no longer has schedule access.",
 	"action_access_removed": "The owner no longer has access to this action.",
 	"sharing_paused":        "Waiting for an administrator to confirm the server’s change.",
-	"binding_unavailable":   "Ludock can’t find the server’s container.",
+	"binding_unavailable":   "Ludock can’t find the server in Docker.",
 	"unavailable":           "Review the schedule settings and server state.",
 }
 
@@ -493,7 +493,7 @@ func describeAttention(item attention.Item) attentionText {
 	case "schedule":
 		return attentionText{Capitalize(item.Action) + " schedule suspended", path + "?tab=schedules&schedule=" + item.ScheduleID, "Review schedule"}
 	case "binding":
-		title := "Server container missing"
+		title := "Server missing in Docker"
 		if item.BindingStatus == "ambiguous" {
 			title = "More than one container for this server"
 		}
@@ -505,9 +505,9 @@ func describeAttention(item attention.Item) attentionText {
 	case "memory":
 		return attentionText{"Memory near its limit", path + "?tab=overview", "Check memory"}
 	}
-	title := "Server unavailable"
+	title := "Server down"
 	if item.State == "docker_unavailable" {
-		title = "Availability cannot be verified"
+		title = "Can’t check the server"
 	} else if item.State == monitor.NotAnswering {
 		title = "Game not answering"
 	}
@@ -532,14 +532,14 @@ templ attentionDetail(item attention.Item) {
 		case "memory":
 			<span class="muted">Over { WholePercent(item.Percent) } of its memory limit since @Time(item.Since, "", "")<span>.</span></span>
 		case "binding":
-			<span class="muted">Check the container in Docker or its owning manager, then refresh.</span>
+			<span class="muted">Check it with the tool that runs it, such as Compose or Portainer, then refresh.</span>
 		case "sharing":
 			<span class="muted">Its game or data folders changed. People you shared it with can’t use it until you confirm.</span>
 		default:
 			if item.State == "docker_unavailable" {
-				<span class="muted">Ludock cannot reach Docker.</span>
+				<span class="muted">Ludock can’t reach Docker.</span>
 			} else {
-				<span class="muted">Monitoring detected a problem since @Time(item.OutageStartedAt, "", "")<span>.</span></span>
+				<span class="muted">Down since @Time(item.OutageStartedAt, "", "")<span>.</span></span>
 			}
 	}
 }
@@ -561,16 +561,16 @@ templ NeedsAttention(view AttentionView) {
 		}
 		if view.DiscoveryUnavailable {
 			<p class="needs-attention__warning">
-				Docker is unavailable. These items use saved state; current server availability cannot be verified.
+				Ludock can’t reach Docker, so these come from the last known state.
 				if view.Admin {
-					<a href="/diagnostics" class="text-link">Check diagnostics</a>
+					<a href="/settings/system" class="text-link">Check the connection</a>
 				}
 			</p>
 		}
 		if len(view.Items) == 0 && view.Error == "" {
 			<p class="muted">
 				if view.DiscoveryUnavailable {
-					No attention items in the saved state you can access.
+					Nothing in the last known state.
 				} else {
 					Nothing right now.
 				}

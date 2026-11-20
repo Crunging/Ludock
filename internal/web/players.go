@@ -113,7 +113,7 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 		if _, public := apperr.As(err); public {
 			return "", err
 		}
-		return "", apperr.New("GAME_COMMAND_FAILED", 502, "The game didn’t take the command, or a conflicting operation is running")
+		return "", apperr.New("GAME_COMMAND_FAILED", 502, "The game didn’t take the command, or other work on the server is running")
 	}
 	// The game saying no such player is a failed action, not a sent one.
 	if adapter.Moderation.Outcome(action, reply.String()) == games.NoPlayer {

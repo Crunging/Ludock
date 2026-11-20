@@ -3,7 +3,6 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -47,31 +46,20 @@ func TestRedactsQuotedCredentials(t *testing.T) {
 	}
 }
 
-func TestConsoleAndBufferAreRedacted(t *testing.T) {
+func TestConsoleIsRedacted(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	SetOutput(&stdout, &stderr)
 	defer SetOutput(os.Stdout, os.Stderr)
 	New("test").Warn("ludock_session=development-secret; Path=/; HttpOnly",
 		F("detail", "theme=dark; ludock_session=context-secret"), F("apiKey", "unlabelled-key-secret"), F("count", 3))
-	_, entries := List(0, 1, "")
-	entry := entries[0]
 	line := stderr.String()
-	for _, output := range []string{line, entry.Message, string(EncodeFields(entry.Context))} {
-		if regexp.MustCompile(`development-secret|context-secret|unlabelled-key-secret`).MatchString(output) {
-			t.Fatalf("leaked: %s", output)
-		}
+	if regexp.MustCompile(`development-secret|context-secret|unlabelled-key-secret`).MatchString(line) {
+		t.Fatalf("leaked: %s", line)
 	}
-	if entry.Message != "ludock_session=[REDACTED]; Path=/; HttpOnly" ||
+	if !strings.Contains(line, "ludock_session=[REDACTED]; Path=/; HttpOnly") ||
 		!strings.Contains(line, `{"detail":"theme=dark; ludock_session=[REDACTED]","apiKey":"[REDACTED]","count":3}`) ||
 		!strings.Contains(line, " WARN [test] ") {
 		t.Fatalf("%q", line)
-	}
-	generation, _ := List(0, 1, "")
-	if _, again := List(entry.ID, 10, generation); len(again) != 0 {
-		t.Fatal("after cursor returned old entries")
-	}
-	if _, restarted := List(entry.ID, 10, "other-generation"); len(restarted) == 0 {
-		t.Fatal("new generation did not restart the cursor")
 	}
 }
 
@@ -89,32 +77,5 @@ func TestDebugIsFilteredByLevel(t *testing.T) {
 	}
 	if level, invalid := ParseLevel("verbose"); level != LevelInfo || invalid != "verbose" {
 		t.Fatal(level, invalid)
-	}
-}
-
-// Past its capacity the buffer keeps the newest entries in order, and
-// cursors and limits select from them.
-func TestListAfterBufferWraps(t *testing.T) {
-	SetOutput(io.Discard, io.Discard)
-	defer SetOutput(os.Stdout, os.Stderr)
-	logger := New("ring")
-	for range maxEntries + 500 {
-		logger.Info("entry")
-	}
-	_, entries := List(0, maxEntries, "")
-	if len(entries) != maxEntries {
-		t.Fatal(len(entries))
-	}
-	for index := 1; index < len(entries); index++ {
-		if entries[index].ID != entries[index-1].ID+1 {
-			t.Fatal("out of order at", index)
-		}
-	}
-	newest := entries[len(entries)-1].ID
-	if _, after := List(newest-3, maxEntries, ""); len(after) != 3 || after[0].ID != newest-2 {
-		t.Fatal(after)
-	}
-	if _, limited := List(0, 2, ""); len(limited) != 2 || limited[1].ID != newest {
-		t.Fatal(limited)
 	}
 }

@@ -41,7 +41,9 @@ type Query struct {
 	Action      string
 	Status      string
 	OperationID string // audit only
-	From, To    int64  // inclusive Unix ms; -1 when unset
+	// ActionKeys are audit actions whose displayed names match Action.
+	ActionKeys []string
+	From, To   int64 // inclusive Unix ms; -1 when unset
 }
 
 var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Skipped, ops.Failed, ops.Interrupted}
@@ -80,7 +82,7 @@ type cursor struct {
 }
 
 func scope(kind string, q Query) string {
-	encoded, _ := json.Marshal([]any{kind, q.ServerID, q.Actor, q.Action, q.Status, q.OperationID, q.From, q.To})
+	encoded, _ := json.Marshal([]any{kind, q.ServerID, q.Actor, q.Action, q.Status, q.OperationID, q.From, q.To, q.ActionKeys})
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
@@ -280,8 +282,13 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 		values = append(values, q.OperationID)
 	}
 	if q.Action != "" {
-		conditions = append(conditions, "instr(lower(a.action), lower(?)) > 0")
+		match := "instr(lower(a.action), lower(?)) > 0"
 		values = append(values, q.Action)
+		for _, key := range q.ActionKeys {
+			match += " OR a.action = ? OR a.action LIKE ? ESCAPE '\\'"
+			values = append(values, key, strings.NewReplacer("%", "\\%", "_", "\\_").Replace(key)+".%")
+		}
+		conditions = append(conditions, "("+match+")")
 	}
 	if q.Status != "" {
 		conditions = append(conditions, statusSQL+" = ?")

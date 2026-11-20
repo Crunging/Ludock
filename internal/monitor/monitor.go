@@ -488,9 +488,9 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// Raising an alert always changes notified, so it is sent only when
 		// that change was saved against the state read above.
 		if changed && pastGrace && r.notified == 0 && !recovering {
-			message := server.DisplayName + " is unavailable."
+			message := server.DisplayName + " is down."
 			if unavailable {
-				message = "Ludock cannot reach Docker to verify " + server.DisplayName + "."
+				message = "Ludock can’t reach Docker to check " + server.DisplayName + "."
 			} else if silent {
 				message = server.DisplayName + " is running, but the game stopped answering."
 			}

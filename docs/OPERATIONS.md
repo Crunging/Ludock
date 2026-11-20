@@ -38,8 +38,8 @@ Settings through a proxy at a private or local address and no proxy is trusted
 yet, that section opens by itself, names the proxy's address, and offers to
 trust it in one click; you can also enter IP addresses or CIDRs separated by commas, such as
 `172.18.0.2, 2001:db8::/64`. Ludock then reads each client's address from
-`X-Forwarded-For`, so sign-in limits apply per client and the audit log and
-session list show real addresses; without it, everyone behind the proxy shares
+`X-Forwarded-For`, so sign-in limits apply per client and the session list
+shows real addresses; without it, everyone behind the proxy shares
 one limit. A trusted address can claim to be any client, so trust only your
 proxies, never a subnet shared with untrusted containers. Ludock reads the
 chain right to left and stops at the first untrusted address. Host names and
@@ -64,6 +64,11 @@ isn't shown.
   minutes apart, skipping times other backup schedules use. Each backup stops
   its server for a few minutes. Change or remove them on each server's
   **Schedules** tab.
+- **Restart servers that stop answering:** some monitored servers whose game
+  answers a [status query](#availability-alerts) don't restart by themselves
+  when it stops answering. **Restart automatically** asks first, then turns on
+  **Restart it if the game stops answering** for each. Turn it off on each
+  server's Overview.
 - **Check the address players use:** no server address is saved, and the one
   in your browser's address bar, which players are shown, is a loopback or
   private address or a local name such as `nas.local`. Opens
@@ -97,7 +102,7 @@ order:
 
 1. **`ludock.enable` label:** `"true"` adds the container and `"false"` leaves
    it out, whatever the panel says. Any other value leaves it out and is
-   reported in **Diagnostics**.
+   reported in **Settings → System**.
 2. **Compose one-off containers** are left out unless labeled.
 3. **The panel:** a container added there is managed, and one removed there is
    left out.
@@ -143,7 +148,7 @@ labels:
 
 ### Supported games
 
-**Diagnostics → Supported games** shows the same list, defined in
+**Settings → System → Supported games** shows the same list, defined in
 [`internal/games/presets.go`](../internal/games/presets.go). The console port is
 where Ludock sends commands, not the port players use. The status query port is
 where Ludock asks the game whether it answers; when the image documents a
@@ -184,7 +189,9 @@ If yours answers one, set `ludock.query: a2s` and `ludock.query.port`.
 
 The server list shows each server's state, the address players connect to, and
 its latest backup. **Overview** adds uptime, CPU and memory use, disk space for
-its data folders, the next scheduled action, and availability monitoring.
+its data folders, the next scheduled action, and availability monitoring;
+administrators also see its published ports, and its container and image under
+**In Docker**.
 
 States follow Docker. A server with a health check shows **Starting** until it
 passes and **Unhealthy** while it fails. A stopped server shows **Crashed** after
@@ -220,12 +227,13 @@ needs `ludock.address`. Ports published only on loopback are never offered.
 
 When detection can't know the address, such as behind a port-forwarding router,
 a tunnel, or a Minecraft SRV record, set `ludock.address` to exactly what
-players type. The port is optional, and invalid values are ignored and reported in **Diagnostics**.
+players type. The port is optional, and invalid values are ignored and reported in **Settings → System**.
 
 ## Consoles
 
-A server's console shows its Docker logs, its game console, and, for
-administrators, a shell inside the container. Shortcut buttons send common
+A server's console has up to three views: **Logs**, what the server prints;
+**Console**, its game console; and, for administrators, **Shell**, which runs
+commands inside its container. Shortcut buttons send common
 commands; ones that need more input, such as a message, fill in the command
 line instead. Up and Down step through commands sent during the visit; nothing
 is stored.
@@ -303,7 +311,7 @@ name, and lifts bans. Whether the allowlist is on is the server's own
 | 7 Days to Die | `kick` | | | The entity ID `listplayers` lists |
 
 Each action is one console command with the same access, checks, and audit as
-a typed one; the audit log records who did what to which player. A kick or ban
+a typed one; **Activity** records who did what to which player. A kick or ban
 goes to a player in the latest list of who's online, by the name or ID that list
 gave. Ludock sends a name or ID only when it is wholly in the game's own form,
 so it can't carry spaces, quotes, line breaks, or a selector such as `@a`, and
@@ -826,9 +834,9 @@ streams they have open, and work they queued.
 | Full access | Also read and change its files, create backups, and set up their own schedules |
 
 Creating a backup stops a running server for the copy and starts it again.
-Restoring, downloading, or deleting backups, updates, the container shell,
-monitoring, settings, and adding or removing servers stay with
-administrators.
+Restoring, downloading, or deleting backups, updates, the shell, monitoring,
+settings, and adding or removing servers stay with administrators, and members
+aren't shown them.
 
 **Custom** sets exactly which of those actions someone has, for communities
 that need something in between. The server's Sharing tab shows such access as
@@ -897,9 +905,11 @@ before the change restore only onto the same data folders.
 
 ### History
 
-**Operations** lists past and current work, and administrators can follow each
-to its **Audit log** events. Audit entries record the outcome at that moment
-and can expire before their operation. **Needs attention** includes failures
+**Activity** lists past and current work on the servers you can use, and each
+server's **Activity** tab lists its own. Administrators can choose **Show →
+Everything** to add sign-ins, account changes, and settings changes, and follow
+a piece of work to **Everything recorded about it**. These entries record the
+outcome at that moment and can expire before the work they describe. **Needs attention** includes failures
 among each server's latest 100 operations. During a Docker outage, history
 stays readable and controls are disabled.
 
@@ -995,10 +1005,17 @@ docker compose up -d ludock
 
 ### Logs
 
-Administrators can use **Diagnostics**, **Audit log**, and **Ludock logs**, or
-run `docker compose logs --follow --tail 200 ludock`. For more detail, such as
-for a bug report, turn on **Verbose logging** in **Settings → Advanced**; it
-turns itself off after 24 hours.
+Ludock writes its log to its container's output. In the folder with its
+`compose.yaml`, run:
+
+```bash
+docker compose logs --follow --tail 200 ludock
+```
+
+For more detail, such as for a bug report, turn on **Verbose logging** in
+**Settings → Advanced**; it turns itself off after 24 hours. **Settings →
+System** shows whether Ludock reaches Docker and which containers it couldn't
+add.
 
 ### Recover an administrator account
 
