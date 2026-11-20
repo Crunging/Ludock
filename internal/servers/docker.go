@@ -188,7 +188,7 @@ func (o *Observer) listContainers(ctx context.Context) ([]docker.ContainerSummar
 		reference, ok := known[container.ID]
 		if !ok {
 			info, err := o.Docker.Inspect(ctx, container.ID)
-			if docker.IsNotFound(err) {
+			if status := docker.StatusCode(err); status == http.StatusNotFound || status == http.StatusForbidden {
 				continue
 			}
 			if err != nil {

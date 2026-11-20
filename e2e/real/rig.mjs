@@ -2,11 +2,11 @@
 // with a headless player. It runs only against a disposable Docker daemon and
 // never in CI. See docs/DEVELOPMENT.md.
 //
-//   node real/rig.mjs up        start Ludock and Minecraft Java (and Bedrock with --bedrock)
+//   node real/rig.mjs up        start Ludock and Minecraft Java
 //   node real/rig.mjs bot NAME  join the Java server as NAME and log what the player sees
 //   node real/rig.mjs down      remove every container, volume, and network the rig made
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { admin } from "../journeys/fixtures.mjs";
@@ -15,14 +15,12 @@ const root = resolve(import.meta.dirname, "../..");
 const dir = resolve(process.env.LUDOCK_RIG_DIR || join(tmpdir(), "ludock-real-rig"));
 const image = process.env.LUDOCK_TEST_IMAGE || "ludock:test";
 const javaImage = process.env.LUDOCK_RIG_JAVA_IMAGE || "itzg/minecraft-server:java21";
-const bedrockImage = process.env.LUDOCK_RIG_BEDROCK_IMAGE || "itzg/minecraft-bedrock-server:latest";
 // Mineflayer supports this release; the bot can't join a newer one.
 const version = process.env.LUDOCK_RIG_MINECRAFT_VERSION || "1.21.11";
 const setupCode = "real-rig-setup-code-0123456789abcdef0123";
 const projects = {
   ludock: ["compose", "--project-name", "ludocktest-ludock", "-f", join(root, "compose.yaml"), "-f", join(dir, "ludock.override.yaml")],
   java: ["compose", "--project-name", "ludocktest-minecraft", "--project-directory", join(dir, "java"), "-f", join(dir, "java", "compose.yaml")],
-  bedrock: ["compose", "--project-name", "ludocktest-bedrock", "--project-directory", join(dir, "bedrock"), "-f", join(dir, "bedrock", "compose.yaml")],
 };
 
 const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
@@ -46,8 +44,7 @@ async function up() {
   if (process.env.MINECRAFT_EULA !== "TRUE") {
     throw new Error("Set MINECRAFT_EULA=TRUE to accept the Minecraft EULA (https://aka.ms/MinecraftEULA) for the test servers.");
   }
-  const bedrock = process.argv.includes("--bedrock");
-  for (const folder of ["java/data", "bedrock/data", "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
+  for (const folder of ["java/data", "backups-copy"]) mkdirSync(join(dir, folder), { recursive: true });
   // Every port is published on loopback only.
   writeFileSync(join(dir, "ludock.override.yaml"), `services:
   ludock:
@@ -78,23 +75,7 @@ async function up() {
       - ./data:/data
     restart: unless-stopped
 `);
-  writeFileSync(join(dir, "bedrock", "compose.yaml"), `services:
-  bedrock:
-    image: ${bedrockImage}
-    environment:
-      EULA: "TRUE"
-      VIEW_DISTANCE: "4"
-    mem_limit: 1g
-    stdin_open: true
-    tty: true
-    ports:
-      - "127.0.0.1:19132:19132"
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-`);
   docker(...projects.java, "up", "-d");
-  if (bedrock) docker(...projects.bedrock, "up", "-d");
   docker(...projects.ludock, "up", "-d");
 
   await waitFor(async () => (await fetch("http://127.0.0.1:3000/api/v1/health")).ok, "Ludock", 90_000);
@@ -124,6 +105,7 @@ async function bot() {
 }
 
 function down() {
+  confirmDaemon();
   for (const project of Object.values(projects)) {
     try {
       docker(...project, "down", "--volumes", "--remove-orphans", "--timeout", "30");
@@ -131,14 +113,14 @@ function down() {
       // Not started.
     }
   }
-  // Helpers Ludock left behind, if it was stopped mid-work.
-  const helpers = docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal").split("\n").filter(Boolean);
-  if (helpers.length) docker("rm", "--force", "--volumes", ...helpers);
   // Game data written by the containers belongs to their users, so a
-  // container removes it.
-  if (existsSync(dir)) {
-    docker("run", "--rm", "--volume", `${dir}:/rig`, "alpine:3", "sh", "-c", "rm -rf /rig/* /rig/.[!.]*");
-    rmSync(dir, { recursive: true, force: true });
+  // container removes what the rig made, and nothing else in its folder.
+  const made = ["java", "backups-copy", "bot", "ludock.override.yaml"].filter((name) => existsSync(join(dir, name)));
+  if (made.length) docker("run", "--rm", "--volume", `${dir}:/rig`, "alpine:3", "rm", "-rf", ...made.map((name) => `/rig/${name}`));
+  try {
+    rmdirSync(dir);
+  } catch {
+    // Not empty: it holds files the rig didn't make.
   }
   console.log("Removed the rig. Images stay; remove them with docker image rm if you pulled them for it.");
 }
@@ -146,7 +128,7 @@ function down() {
 const commands = { up, bot, down };
 const command = commands[process.argv[2]];
 if (!command) {
-  console.error("usage: node real/rig.mjs up [--bedrock] | bot [NAME] | down");
+  console.error("usage: node real/rig.mjs up | bot [NAME] | down");
   process.exit(2);
 }
 await command();

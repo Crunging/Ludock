@@ -109,14 +109,14 @@ cd e2e && LUDOCK_DOCKER_E2E=disposable-daemon npx playwright test -c docker.conf
 real Minecraft Java server, as an owner would, for trying changes by hand. It
 never runs in CI. Use a disposable daemon: it publishes Ludock on
 `127.0.0.1:3000` and Minecraft on `127.0.0.1:25565`, and `down` removes the
-containers, volumes, and networks it started, its Compose projects named
-`ludocktest-…`, and any helpers Ludock left behind.
+containers, volumes, and networks of its Compose projects, named
+`ludocktest-…`, and the files it made.
 
 ```sh
 docker build -t ludock:test .
 cd e2e
 export LUDOCK_DOCKER_E2E=disposable-daemon
-MINECRAFT_EULA=TRUE node real/rig.mjs up   # add --bedrock for a Bedrock server too
+MINECRAFT_EULA=TRUE node real/rig.mjs up
 node real/rig.mjs bot Steve                # a headless player; Ctrl-C leaves
 node real/rig.mjs down
 ```
