@@ -207,7 +207,11 @@ func (h *Helpers) IsRunning(ctx context.Context, id string) (bool, error) {
 // archive streams one root as tar from the helper.
 func (h *Helpers) archive(ctx context.Context, id, root string, assertAccess func() error) (io.ReadCloser, func() error, error) {
 	request := helper.FileRequest{Operation: "backup", Root: root, Blocked: []string{}}
-	execID, err := h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
+	var execID string
+	err := launch.Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
+		execID, err = h.Docker.CreateExec(ctx, id, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
+		return err
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -529,8 +533,12 @@ func (h *Helpers) ExtractToStage(ctx context.Context, directory, id, helperID st
 	}()
 	for _, target := range targets {
 		request := helper.ExtractRequest{MaxBytes: maxBytes, ReserveBytes: &reserveBytes, Root: target.Path, Stage: stage}
-		execID, err := h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
-			AttachStdin: true, AttachStdout: true, AttachStderr: true})
+		var execID string
+		err := launch.Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
+			execID, err = h.Docker.CreateExec(ctx, helperID, docker.ExecCreate{Cmd: helper.Command("restore-extract", request),
+				AttachStdin: true, AttachStdout: true, AttachStderr: true})
+			return err
+		})
 		if err != nil {
 			return err
 		}
