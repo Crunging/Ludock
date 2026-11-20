@@ -206,7 +206,7 @@ func (a *App) Start(ctx context.Context) {
 				break
 			}
 			fields := logging.Cause(err, docker.StatusCode(err))
-			if docker.Unavailable(err) {
+			if docker.Unavailable(err) && docker.StatusCode(err) == 0 {
 				fields = append(fields, logging.F("docker", "unreachable"))
 			}
 			log.Error("Could not recover interrupted operations; retrying", fields...)
