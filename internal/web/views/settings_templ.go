@@ -233,7 +233,7 @@ func SettingsPage(page Page, s SettingsView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<section class=\"settings-group\" aria-labelledby=\"notification-deliveries-title\"><h3 id=\"notification-deliveries-title\" tabindex=\"-1\">Recent deliveries</h3><div id=\"notification-deliveries\" hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"load, notifications-changed from:document, every 30s\" hx-sync=\"this:replace\" hx-swap=\"innerHTML\"><p class=\"muted\" role=\"status\">Loading notification deliveries…</p></div></section></div></details></section></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<section class=\"settings-group\" aria-labelledby=\"notification-deliveries-title\"><h3 id=\"notification-deliveries-title\" tabindex=\"-1\">Recent deliveries</h3><div id=\"notification-deliveries\" hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"load, notifications-changed from:document, every 30s\" hx-sync=\"this:queue last\" hx-swap=\"innerHTML\"><p class=\"muted\" role=\"status\">Loading notification deliveries…</p></div></section></div></details></section></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3085,7 +3085,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.pending() {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, " hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"every 5s\" hx-sync=\"#notification-deliveries:replace\" hx-target=\"#notification-deliveries\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, " hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"every 5s\" hx-sync=\"#notification-deliveries:queue last\" hx-target=\"#notification-deliveries\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
