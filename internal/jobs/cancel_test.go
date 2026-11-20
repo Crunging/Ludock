@@ -5,11 +5,8 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
-	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/ops"
 )
-
-var admin = &db.SessionUser{ID: "admin", Username: "admin", Role: db.RoleAdmin}
 
 func waitFor(t *testing.T, runner *ops.Runner, id string, ready func(*ops.Job) bool) {
 	t.Helper()
@@ -30,6 +27,7 @@ func TestCancelRacesTheEndOfAWarning(t *testing.T) {
 	f := setup(t)
 	f.jobs.WarningLead = 100 * time.Millisecond
 	f.jobs.Poll = 5 * time.Millisecond
+	token := f.adminSession
 	outcomes := map[bool]int{}
 	for offset := -40 * time.Millisecond; offset <= 40*time.Millisecond; offset += 5 * time.Millisecond {
 		before := f.startedAt()
@@ -45,7 +43,7 @@ func TestCancelRacesTheEndOfAWarning(t *testing.T) {
 			return until != 0
 		})
 		time.Sleep(time.Until(time.UnixMilli(until).Add(offset)))
-		err = f.jobs.Cancel(ctx, admin, f.serverID, job.ID)
+		err = f.jobs.Cancel(ctx, f.admin, token, f.serverID, job.ID)
 		done := finished(t, f.runner, job.ID)
 		switch {
 		case err == nil && done.Status == ops.Cancelled && f.startedAt() == before && f.running():
@@ -65,10 +63,11 @@ func TestCancelRacesTheEndOfAWarning(t *testing.T) {
 // Ludock resumed after a restart can still be cancelled.
 func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 	f := setup(t)
+	token := f.adminSession
 	before := f.startedAt()
 	runner, id := f.interruptedWarning(t, ops.PhaseWarning, ops.Recovery{WarnUntil: time.Now().Add(time.Minute).UnixMilli(), WarnSent: true})
 	waitFor(t, runner, id, func(current *ops.Job) bool { return current.Status == ops.Running && current.Phase == ops.PhaseWarning })
-	if err := f.jobs.Cancel(ctx, admin, f.serverID, id); err != nil {
+	if err := f.jobs.Cancel(ctx, f.admin, token, f.serverID, id); err != nil {
 		t.Fatal(err)
 	}
 	if job := finished(t, runner, id); job.Status != ops.Cancelled || job.Result["cancelledBy"] != "admin" {
@@ -85,7 +84,7 @@ func TestCancelledStaysCancelledAcrossRestarts(t *testing.T) {
 	if job, _ := next.Get(ctx, id); job.Status != ops.Cancelled || f.startedAt() != before || !f.running() {
 		t.Fatalf("%+v", job)
 	}
-	if err := f.jobs.Cancel(ctx, admin, f.serverID, id); !apperr.Is(err, "OPERATION_ENDED") {
+	if err := f.jobs.Cancel(ctx, f.admin, token, f.serverID, id); !apperr.Is(err, "OPERATION_ENDED") {
 		t.Fatal(err)
 	}
 }

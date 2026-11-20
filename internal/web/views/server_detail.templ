@@ -463,7 +463,7 @@ templ OverviewLive(d ServerDetail) {
 							<span class="schedule-waiting">{ ActionLabel(waiting.Action) } waiting for players to leave, until</span>
 							@Time(waiting.WaitingUntil, "plain", "")
 							if d.WaitingCancel {
-								@CancelWaitButton(server.ID, waiting.ID)
+								@CancelWaitButton(server.ID, waiting.ID, waiting.LastSlot)
 							}
 						} else if next := d.NextSchedule; next != nil {
 							<span>{ ActionLabel(next.Action) }</span>
@@ -760,7 +760,7 @@ templ ActivityList(a ActivityView) {
 				.
 				<a class="text-link" href={ detailURL(a.ServerID, "tab=schedules&schedule="+waiting.ID) } { inPage()... }>View schedule</a>
 				if a.WaitingCancel {
-					@CancelWaitButton(a.ServerID, waiting.ID)
+					@CancelWaitButton(a.ServerID, waiting.ID, waiting.LastSlot)
 				}
 			</p>
 		}

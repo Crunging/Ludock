@@ -441,7 +441,7 @@ func TestCancelOrNextStep(t *testing.T) {
 		var cancelErr, stepErr error
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go func() { defer wg.Done(); _, cancelErr = r.Cancel(ctx, job.ID, "admin") }()
+		go func() { defer wg.Done(); _, cancelErr = r.Cancel(ctx, job.ID, "admin", nil) }()
 		go func() { defer wg.Done(); stepErr = running.Progress("stopping", nil, nil) }()
 		wg.Wait()
 		saved, _ := r.Get(ctx, job.ID)
@@ -470,7 +470,7 @@ func TestCancelRefusesWorkThatActed(t *testing.T) {
 		if _, err := r.DB.Exec("UPDATE operations SET status=?, phase=? WHERE id=?", state.status, state.phase, job.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.Cancel(ctx, job.ID, "admin"); !apperr.Is(err, state.code) {
+		if _, err := r.Cancel(ctx, job.ID, "admin", nil); !apperr.Is(err, state.code) {
 			t.Fatal(state, err)
 		}
 	}

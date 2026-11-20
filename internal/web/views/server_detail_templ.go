@@ -1661,7 +1661,7 @@ func OverviewLive(d ServerDetail) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if d.WaitingCancel {
-					templ_7745c5c3_Err = CancelWaitButton(server.ID, waiting.ID).Render(ctx, templ_7745c5c3_Buffer)
+					templ_7745c5c3_Err = CancelWaitButton(server.ID, waiting.ID, waiting.LastSlot).Render(ctx, templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -2749,7 +2749,7 @@ func ActivityList(a ActivityView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if a.WaitingCancel {
-				templ_7745c5c3_Err = CancelWaitButton(a.ServerID, waiting.ID).Render(ctx, templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = CancelWaitButton(a.ServerID, waiting.ID, waiting.LastSlot).Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

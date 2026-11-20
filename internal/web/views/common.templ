@@ -12,8 +12,12 @@ templ CancelButton(serverID, operationID, kind, target string) {
 
 // CancelWaitButton ends a scheduled run's wait for players to leave
 // without acting; the outcome shows in the page's status.
-templ CancelWaitButton(serverID, scheduleID string) {
-	<button type="button" class="secondary-btn cancel-btn" hx-post={ "/servers/" + serverID + "/schedules/" + scheduleID + "/cancel-wait" } hx-target="#detail-status" data-busy-label="Cancelling…">Cancel this run</button>
+// slot names the waiting run, so a stale button can't cancel a later one.
+templ CancelWaitButton(serverID, scheduleID, slot string) {
+	<form class="cancel-form" hx-post={ "/servers/" + serverID + "/schedules/" + scheduleID + "/cancel-wait" } hx-target="#detail-status">
+		<input type="hidden" name="slot" value={ slot }/>
+		<button type="submit" class="secondary-btn cancel-btn" data-busy-label="Cancelling…">Cancel this run</button>
+	</form>
 }
 
 // Partial sends its children to another part of the page along with a

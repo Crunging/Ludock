@@ -15,7 +15,7 @@ import (
 func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request, request *Request) {
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err == nil {
-		err = s.App.Jobs.Cancel(r.Context(), &current.User, r.PathValue("id"), r.PathValue("operation"))
+		err = s.App.Jobs.Cancel(r.Context(), &current.User, current.TokenHash, r.PathValue("id"), r.PathValue("operation"))
 	}
 	if err != nil {
 		w.Header().Set("HX-Trigger", "servers-changed")
@@ -29,14 +29,17 @@ func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request, request
 func (s *Server) cancelWait(w http.ResponseWriter, r *http.Request, request *Request) {
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err == nil {
-		err = s.App.Schedules.CancelWait(r.Context(), &current.User, r.PathValue("id"), r.PathValue("schedule"))
+		err = s.App.Schedules.CancelWait(r.Context(), &current.User, current.TokenHash, r.PathValue("id"), r.PathValue("schedule"),
+			r.PostFormValue("slot"))
 	}
+	// The schedules table refreshes on its own event.
 	if err != nil {
-		w.Header().Set("HX-Trigger", "servers-changed")
+		w.Header().Set("HX-Trigger", "servers-changed, schedules-changed")
 		s.fail(w, r, request, err)
 		return
 	}
-	cancelled(w, r, "Cancelled. The schedule’s next run is unchanged.")
+	w.Header().Set("HX-Trigger", "servers-changed, schedules-changed")
+	render(w, r, http.StatusOK, views.Alert("success", "Cancelled. The schedule’s next run is unchanged."))
 }
 
 func cancelled(w http.ResponseWriter, r *http.Request, message string) {

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -67,9 +68,10 @@ func (j *Jobs) assertCanCancel(ctx context.Context, user *db.SessionUser, job *o
 var errCannotCancel = apperr.New("FORBIDDEN", 403, "You can’t cancel this")
 
 // Cancel calls off an operation on serverID that is still waiting, on
-// behalf of user, whose access the caller has just rechecked. Players who
-// were warned hear that it's off.
-func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, serverID, id string) error {
+// behalf of user, whose access the caller has just rechecked; an
+// administrator's session and role are checked again in the write, by
+// tokenHash. Players who were warned hear that it's off.
+func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serverID, id string) error {
 	if _, err := j.Authz.Assert(ctx, user, serverID, authz.ServerView); err != nil {
 		return err
 	}
@@ -83,7 +85,11 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, serverID, id st
 	if err := j.assertCanCancel(ctx, user, job, true); err != nil {
 		return err
 	}
-	before, err := j.runner.Cancel(ctx, id, user.ID)
+	var within func(func(*sql.Tx) error) error
+	if user.Role == db.RoleAdmin {
+		within = func(fn func(*sql.Tx) error) error { return j.DB.AdminMutation(ctx, user.ID, tokenHash, db.Now(), fn) }
+	}
+	before, err := j.runner.Cancel(ctx, id, user.ID, within)
 	if err != nil {
 		return err
 	}
@@ -108,7 +114,7 @@ func (j *Jobs) sayCalledOff(ctx context.Context, user *db.SessionUser, job *ops.
 		_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.BindingRevision)
 		return err
 	}
-	if err := j.broadcast(ctx, server, schedules.CalledOffMessage(job.Kind), assertAccess, false); err != nil {
+	if err := j.broadcast(ctx, server, schedules.CalledOffMessage(job.Kind), nil, assertAccess, false); err != nil {
 		log.Debug("Could not tell players a warned operation was cancelled")
 	}
 }

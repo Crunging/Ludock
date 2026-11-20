@@ -320,7 +320,7 @@ templ ScheduleList(v SchedulesView) {
 										}
 									</small>
 									if v.CanCancelWait[item.ID] {
-										@CancelWaitButton(item.ServerID, item.ID)
+										@CancelWaitButton(item.ServerID, item.ID, item.LastSlot)
 									}
 								case item.CompletedAt != 0:
 									None

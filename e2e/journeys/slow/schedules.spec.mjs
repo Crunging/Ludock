@@ -104,6 +104,28 @@ test("a scheduled restart waits for players to leave", async ({ page }) => {
   await expect(row.locator("td").nth(2)).toHaveText("Completed");
 });
 
+// Cancelling a waiting run ends it in place, without acting: its row says
+// who cancelled it, and the server isn't waiting anymore.
+test("a waiting restart can be cancelled", async ({ page }) => {
+  test.setTimeout(150_000);
+  const console = await page.context().newPage();
+  await gameCommand(console, "fake-join Iris");
+  try {
+    const row = await addWaitingRestart(page, 30, "Skip this run");
+    await expectWaiting(page, row);
+    await row.getByRole("button", { name: "Cancel this run" }).click();
+    await expect(page.locator("#detail-status")).toHaveText("Cancelled. The schedule’s next run is unchanged.");
+    await expect(row.getByRole("button", { name: "Cancel this run" })).toHaveCount(0);
+    await expect(row.locator(".schedule-result")).toContainText("Cancelled by admin while it waited for players to leave");
+    await expect(row.locator(".schedule-next-run")).not.toContainText("When the server is empty");
+    await page.getByRole("tab", { name: "Activity" }).click();
+    await expect(page.locator("#activity-list")).toBeVisible();
+    await expect(page.locator(".activity-waiting")).toHaveCount(0);
+  } finally {
+    await gameCommand(console, "fake-leave Iris");
+  }
+});
+
 test("a waiting restart goes ahead anyway at the end of its wait", async ({ page }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();

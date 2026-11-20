@@ -70,13 +70,15 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		}
 		// Best effort: a warning that can't be sent doesn't stop the action.
 		// One that was gives players the full time from when they heard it.
-		if j.broadcast(ctx, server, schedules.WarningMessage(job.Job.Kind, WarningMinutes), assertAccess, locked) == nil {
+		// A warning cancelled before it goes out is never sent.
+		if j.broadcast(ctx, server, schedules.WarningMessage(job.Job.Kind, WarningMinutes), func() error { return job.Active(ctx) },
+			assertAccess, locked) == nil {
 			until = max(until, time.Now().Add(j.warningLead()).UnixMilli())
 			err := job.Progress(ops.PhaseWarning, func(r *ops.Recovery) { r.WarnSent, r.WarnUntil = true, until }, nil)
 			// Cancelled while the warning went out: the canceller didn't know
 			// it was sent, so the players hear it's off from here.
 			if errors.Is(err, ops.ErrCancelled) {
-				j.broadcast(ctx, server, schedules.CalledOffMessage(job.Job.Kind), func() error {
+				j.broadcast(ctx, server, schedules.CalledOffMessage(job.Job.Kind), nil, func() error {
 					_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.Job.BindingRevision)
 					return err
 				}, locked)
@@ -84,6 +86,8 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 			if err != nil {
 				return err
 			}
+		} else if err := job.Active(ctx); err != nil {
+			return err
 		} else if err := assertAccess(); err != nil {
 			return err
 		}
@@ -117,7 +121,9 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 // phaseWarned is a warned operation past its wait that hasn't acted yet.
 const phaseWarned = "warned"
 
-func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, message string, assertAccess func() error, locked bool) error {
+// broadcast sends message to players; ready, when set, runs once the
+// server's locks are held, right before sending.
+func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, message string, ready, assertAccess func() error, locked bool) error {
 	if !CanWarn(server.Container) || j.Console == nil {
 		return errNoWarning
 	}
@@ -127,6 +133,11 @@ func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, message s
 			return err
 		}
 		defer release()
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, j.warningLead()/2)
 	defer cancel()

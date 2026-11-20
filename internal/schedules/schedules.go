@@ -983,8 +983,13 @@ func (s *Service) commandReady(ctx context.Context, user *db.SessionUser, server
 func (s *Service) claimAnnouncement(ctx context.Context, r *row, slot string, lead int, now int64) bool {
 	claimed := false
 	if err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
-      SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, slot, lead, r.id, r.revision)
+		// A waiting run's countdown is claimed only while it still waits.
+		query, args := `INSERT OR IGNORE INTO schedule_announcements(schedule_id,slot,lead_minutes)
+      SELECT id,?,? FROM schedules WHERE id=? AND revision=?`, []any{slot, lead, r.id, r.revision}
+		if waiting(r) {
+			query, args = query+stillWaitingSQL+" AND last_slot=?", append(args, r.lastSlot.String)
+		}
+		result, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
@@ -1092,12 +1097,13 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 }
 
 func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64, lead int) error {
-	return s.say(ctx, r, data, time.UnixMilli(runAt).Add(-announceCutoff), WarningMessage(data.Action, lead))
+	return s.say(ctx, r, data, waiting(r), time.UnixMilli(runAt).Add(-announceCutoff), WarningMessage(data.Action, lead))
 }
 
 // say sends players message on the owner's authority, before deadline and
-// while the schedule is unchanged.
-func (s *Service) say(ctx context.Context, r *row, data Input, deadline time.Time, message string) error {
+// while the schedule is unchanged; stillWaiting also requires r's waiting
+// run to be waiting still, not cancelled or ended.
+func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool, deadline time.Time, message string) error {
 	if s.Console == nil {
 		return errors.New("no console")
 	}
@@ -1105,7 +1111,8 @@ func (s *Service) say(ctx context.Context, r *row, data Input, deadline time.Tim
 	defer cancel()
 	assertCurrent := func() (*db.SessionUser, *identity.Server, error) {
 		latest, err := s.get(ctx, s.DB, r.id, r.serverID)
-		if err != nil || latest == nil || latest.revision != r.revision || ctx.Err() != nil || time.Now().After(deadline) {
+		if err != nil || latest == nil || latest.revision != r.revision || ctx.Err() != nil || time.Now().After(deadline) ||
+			(stillWaiting && (!waiting(latest) || latest.lastSlot != r.lastSlot)) {
 			return nil, nil, errors.New("the announcement is no longer current")
 		}
 		user, binding, err := s.authority(ctx, s.DB, latest, data)

@@ -122,6 +122,18 @@ type Context struct {
 // Cancelled closes when someone cancels the job while it waits.
 func (c *Context) Cancelled() <-chan struct{} { return c.cancelled }
 
+// Active returns ErrCancelled once the job was cancelled.
+func (c *Context) Active(ctx context.Context) error {
+	var status string
+	if err := c.runner.DB.QueryRowContext(ctx, "SELECT status FROM operations WHERE id=?", c.Job.ID).Scan(&status); err != nil {
+		return err
+	}
+	if status != Running {
+		return ErrCancelled
+	}
+	return nil
+}
+
 // Progress atomically persists the phase, the recovery state after change
 // (when not nil), and an optional public result. The in-memory job changes only
 // once the write succeeds, so it matches what a restart would see.
@@ -904,9 +916,14 @@ func Waiting(job *Job) bool {
 // returns it as it was just before. The status write is conditional on
 // the job still waiting, so of a cancel and the job's next save, whichever
 // commits first wins; a running handler then stops at its next wait or save.
-func (r *Runner) Cancel(ctx context.Context, id, userID string) (*Job, error) {
+// within, when set, runs the write in a transaction that also rechecks the
+// requester, such as db.AdminMutation.
+func (r *Runner) Cancel(ctx context.Context, id, userID string, within func(func(*sql.Tx) error) error) (*Job, error) {
+	if within == nil {
+		within = func(fn func(*sql.Tx) error) error { return r.DB.Tx(ctx, fn) }
+	}
 	var before *Job
-	err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
+	err := within(func(tx *sql.Tx) error {
 		rw, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM operations WHERE id = ?", id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return apperr.New("NOT_FOUND", 404, "Not found")
@@ -918,7 +935,7 @@ func (r *Runner) Cancel(ctx context.Context, id, userID string) (*Job, error) {
 			return err
 		}
 		if !Waiting(before) {
-			if before.Status == Queued || before.Status == Running {
+			if before.Status == Running {
 				return errNotWaiting
 			}
 			return errEnded

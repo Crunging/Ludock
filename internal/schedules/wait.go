@@ -164,10 +164,12 @@ func (s *Service) CanCancelWait(ctx context.Context, actor *db.SessionUser, item
 	return item.WaitingUntil != 0
 }
 
-// CancelWait ends a run waiting for players to leave without acting. Only
-// a write that finds the run still waiting succeeds, as with the run's own
-// end, so exactly one of them wins. The schedule keeps its next run.
-func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, serverID, id string) error {
+// CancelWait ends the run of slot waiting for players to leave without
+// acting. Only a write that finds that run still waiting succeeds, as with
+// the run's own end, so exactly one of them wins. The schedule keeps its
+// next run. An administrator's session and role are checked again in the
+// write, by tokenHash.
+func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHash, serverID, id, slot string) error {
 	r, err := s.get(ctx, s.DB, id, serverID)
 	if err != nil {
 		return err
@@ -187,14 +189,18 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, serverI
 			return err
 		}
 	}
-	if !waiting(r) {
+	if !waiting(r) || r.lastSlot.String != slot {
 		return errWaitOver
 	}
+	within := func(fn func(*sql.Tx) error) error { return s.DB.Tx(ctx, fn) }
+	if actor.Role == db.RoleAdmin {
+		within = func(fn func(*sql.Tx) error) error { return s.DB.AdminMutation(ctx, actor.ID, tokenHash, db.Now(), fn) }
+	}
 	var warned bool
-	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	err = within(func(tx *sql.Tx) error {
 		now := db.Now()
 		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
-			"Cancelled by "+actor.Username+" while it waited for players to leave", now, r.id, r.revision, r.lastSlot.String)
+			"Cancelled by "+actor.Username+" while it waited for players to leave", now, r.id, r.revision, slot)
 		if err != nil {
 			return err
 		}
@@ -204,7 +210,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, serverI
 			return errWaitOver
 		}
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schedule_announcements WHERE schedule_id=? AND slot=?)",
-			r.id, r.lastSlot.String).Scan(&warned); err != nil {
+			r.id, slot).Scan(&warned); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.wait.cancelled", TargetType: "server",
@@ -218,7 +224,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, serverI
 	}
 	// Players counted down to the end of the wait hear that it's off.
 	if warned {
-		if err := s.say(context.WithoutCancel(ctx), r, data, time.Now().Add(15*time.Second), CalledOffMessage(data.Action)); err != nil {
+		if err := s.say(context.WithoutCancel(ctx), r, data, false, time.Now().Add(15*time.Second), CalledOffMessage(data.Action)); err != nil {
 			log.Debug("Could not tell players a scheduled run was cancelled", logging.F("scheduleId", id))
 		}
 	}

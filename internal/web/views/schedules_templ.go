@@ -558,7 +558,7 @@ func ScheduleList(v SchedulesView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if v.CanCancelWait[item.ID] {
-					templ_7745c5c3_Err = CancelWaitButton(item.ServerID, item.ID).Render(ctx, templ_7745c5c3_Buffer)
+					templ_7745c5c3_Err = CancelWaitButton(item.ServerID, item.ID, item.LastSlot).Render(ctx, templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}

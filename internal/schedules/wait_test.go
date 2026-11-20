@@ -538,7 +538,7 @@ func TestCancelWaitingRun(t *testing.T) {
 	if err != nil || !waiting(stale) {
 		t.Fatal(err, stale)
 	}
-	if err := f.s.CancelWait(ctx, admin, f.serverID, first.ID); err != nil {
+	if err := f.s.CancelWait(ctx, admin, adminSession, f.serverID, first.ID, first.LastSlot); err != nil {
 		t.Fatal(err)
 	}
 	players.now.Online = 0
@@ -547,7 +547,7 @@ func TestCancelWaitingRun(t *testing.T) {
 		!strings.HasPrefix(last.LastResult, "Cancelled by ") {
 		t.Fatal(last)
 	}
-	if err := f.s.CancelWait(ctx, admin, f.serverID, first.ID); !apperr.Is(err, "SCHEDULE_WAIT_OVER") {
+	if err := f.s.CancelWait(ctx, admin, adminSession, f.serverID, first.ID, first.LastSlot); !apperr.Is(err, "SCHEDULE_WAIT_OVER") {
 		t.Fatal(err)
 	}
 	players.now.Online = 1
