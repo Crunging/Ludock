@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
-func TestOperationHistoryFollowsGrants(t *testing.T) {
+func TestActivityFollowsSharing(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	job, err := p.app.Runner.Enqueue(context.Background(), nil, ops.EnqueueOptions{ServerID: p.server, ActorID: p.admin.User.ID,
@@ -20,35 +21,73 @@ func TestOperationHistoryFollowsGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	viewer := p.user("u-viewer", "viewer", db.RoleMember)
-	list := p.do("GET", "/operations", viewer, nil, nil).Body.String()
-	if strings.Contains(list, job.ID) || !strings.Contains(list, "No operations yet.") {
+	list := p.do("GET", "/activity", viewer, nil, nil).Body.String()
+	if strings.Contains(list, job.ID) || !strings.Contains(list, "Nothing has happened yet.") {
 		t.Fatal(list)
 	}
-	hidden := p.do("GET", "/operations/"+job.ID, viewer, nil, nil)
-	missing := p.do("GET", "/operations/00000000-0000-4000-8000-000000000000", viewer, nil, nil)
+	hidden := p.do("GET", "/activity/"+job.ID, viewer, nil, nil)
+	missing := p.do("GET", "/activity/00000000-0000-4000-8000-000000000000", viewer, nil, nil)
 	if hidden.Code != http.StatusNotFound || missing.Code != http.StatusNotFound || strings.Contains(hidden.Body.String(), "valheim") {
 		t.Fatal(hidden.Code, missing.Code)
 	}
 	p.grant(viewer, authz.ServerView)
-	detail := p.do("GET", "/operations/"+job.ID, viewer, nil, nil).Body.String()
-	if !strings.Contains(detail, "valheim") || !strings.Contains(detail, "admin") || strings.Contains(detail, "Related audit events") ||
+	detail := p.do("GET", "/activity/"+job.ID, viewer, nil, nil).Body.String()
+	if !strings.Contains(detail, "valheim") || !strings.Contains(detail, "admin") || strings.Contains(detail, "Everything recorded about it") ||
 		!strings.Contains(detail, `hx-trigger="every 2s"`) {
 		t.Fatal(detail)
 	}
-	list = p.do("GET", "/operations?serverId="+p.server+"&status=queued", viewer, nil, nil).Body.String()
-	if !strings.Contains(list, "/operations/"+job.ID) {
+	list = p.do("GET", "/activity?serverId="+p.server+"&status=queued", viewer, nil, nil).Body.String()
+	if !strings.Contains(list, "/activity/"+job.ID) {
 		t.Fatal(list)
 	}
-	if bad := p.do("GET", "/operations?from=9&to=1", viewer, nil, nil).Body.String(); !strings.Contains(bad, "From must be before or equal to To.") {
+	if bad := p.do("GET", "/activity?from=9&to=1", viewer, nil, nil).Body.String(); !strings.Contains(bad, "The start date must be before the end date.") {
 		t.Fatal(bad)
 	}
 }
 
-func TestAuditNeedsAnAdministrator(t *testing.T) {
+// Everything in Activity is the audit log, for administrators: a member who
+// asks for it by address sees only work on servers they can use.
+func TestActivityEverythingNeedsAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleMember)
-	if response := p.do("GET", "/audit", operator, nil, nil); response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/" {
-		t.Fatal(response.Code, response.Header())
+	member := p.do("GET", "/activity?show=everything", operator, nil, nil).Body.String()
+	if !strings.Contains(member, "Nothing has happened yet.") || strings.Contains(member, "Signed in") || strings.Contains(member, `name="show"`) {
+		t.Fatal(member)
+	}
+	admin := p.do("GET", "/activity?show=everything", p.admin, nil, nil).Body.String()
+	if !strings.Contains(admin, `name="show"`) || !strings.Contains(admin, "audit-list") {
+		t.Fatal(admin)
+	}
+}
+
+// Searching Everything finds an entry by the name the page shows, not only
+// by how it is recorded.
+func TestActivitySearchMatchesShownNames(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	if err := p.app.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: p.admin.User.ID, Action: "server.recovery.enabled",
+		TargetType: "server", TargetID: p.server}); err != nil {
+		t.Fatal(err)
+	}
+	for _, search := range []string{"automatic restart", "recovery"} {
+		body := p.do("GET", "/activity?show=everything&action="+url.QueryEscape(search), p.admin, nil, nil).Body.String()
+		if !strings.Contains(body, "Turned on automatic restart") {
+			t.Fatal(search, body)
+		}
+	}
+	if body := p.do("GET", "/activity?show=everything&action=signed+out", p.admin, nil, nil).Body.String(); strings.Contains(body, "Turned on automatic restart") {
+		t.Fatal(body)
+	}
+	// "Signed in" is not also "Sign-in failed", though one is recorded as
+	// the other with a suffix.
+	for _, action := range []string{"auth.login", "auth.login.failed"} {
+		if err := p.app.DB.WriteAudit(context.Background(), nil, db.AuditEntry{UserID: p.admin.User.ID, Action: action}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if body := p.do("GET", "/activity?show=everything&action=signed+in", p.admin, nil, nil).Body.String(); !strings.Contains(body, "Signed in") ||
+		strings.Contains(body, "Sign-in failed") {
+		t.Fatal(body)
 	}
 }

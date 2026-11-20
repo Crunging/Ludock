@@ -95,7 +95,7 @@ templ backupsTabBody(b BackupsView) {
 				<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
 				<p role="status">
 					@Pip("active")
-					Checking backup destination and data roots…
+					Checking the backup folder and the server’s data…
 				</p>
 			</div>
 		</section>
@@ -127,9 +127,7 @@ templ backupsTabBody(b BackupsView) {
 	if b.archives() {
 		@BackupList(b)
 	} else if b.Admin {
-		<p class="section-note">Archive access is unavailable for this server.</p>
-	} else {
-		<p class="section-note">You can create backups using the administrator’s policy. Archive access and restoration require an administrator.</p>
+		<p class="section-note">The list of backups can’t be shown right now.</p>
 	}
 	if b.archives() && b.CanRestore && b.Restore != nil {
 		@RestoreForm(b)
@@ -227,7 +225,7 @@ templ BackupList(b BackupsView) {
 						<tr>
 							<td colspan="4" class="muted">
 								if b.HistoryError != "" {
-									Backup history is unavailable.
+									The backup list can’t be read right now.
 								} else {
 									No backups yet.
 								}
@@ -360,7 +358,7 @@ templ RestoreForm(b BackupsView) {
 		}
 		<details class="disclosure">
 			<summary>More about restoring</summary>
-			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t roll back the container image or its settings.</p>
+			<p>Ludock checks the backup before replacing anything. The server returns to its previous running state only after the data is safe. Restoring game data doesn’t undo an update or change the server’s settings.</p>
 		</details>
 		<input type="hidden" name="backupId" value={ b.Restore.ID }/>
 		<label>
@@ -624,7 +622,7 @@ templ RestoreItemForm(b BackupBrowser, item backups.ArchiveEntry) {
 
 type UpdateView struct {
 	ServerID, ServerName string
-	Admin, CanBackup     bool
+	CanBackup            bool
 	Blocked, Active      bool
 	Recreate             bool
 	Capability           *update.Capability
@@ -663,23 +661,15 @@ templ UpdatePanel(u UpdateView) {
 					</p>
 				</div>
 			}
-			if !u.Admin {
-				if capability.UpdatesOnStart {
-					<p class="section-note">Pulling a newer image needs an administrator.</p>
-				} else {
-					<p class="section-note">This image isn’t known to update the game when it starts. Update it with the tool that runs it.</p>
-				}
+			<h3>Update the server’s image</h3>
+			if !capability.Available {
+				<p class="section-note">{ capability.UnavailableReason }</p>
+				<div class="inline-actions">
+					@reloadUpdate(u.ServerID, "Check again")
+				</div>
 			} else {
-				<h3>Update the server’s image</h3>
-				if !capability.Available {
-					<p class="section-note">{ capability.UnavailableReason }</p>
-					<div class="inline-actions">
-						@reloadUpdate(u.ServerID, "Check again")
-					</div>
-				} else {
-					@ImageCheck(u)
-					@UpdateForm(u)
-				}
+				@ImageCheck(u)
+				@UpdateForm(u)
 			}
 		}
 	</div>

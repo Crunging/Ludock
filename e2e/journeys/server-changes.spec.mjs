@@ -74,7 +74,7 @@ test("a new game pauses shared access until an administrator confirms it", async
     // Pages reuse discovery for two seconds; Docker's events refresh it.
     await expect(async () => {
       await adminPage.goto("/");
-      await expect(serverRow(adminPage, "enshrouded")).toContainText("Changed in Docker. Shared access is paused until you confirm.", { timeout: 1_000 });
+      await expect(serverRow(adminPage, "enshrouded")).toContainText("Changed in Docker. Sharing is paused until you confirm.", { timeout: 1_000 });
     }).toPass({ timeout: 15_000 });
     await expect(adminPage.locator(".needs-attention")).toContainText("Server changed");
     await openServer(adminPage, "enshrouded");

@@ -2,32 +2,33 @@ package views
 
 import (
 	"net/url"
+	"slices"
+	"strings"
 
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
+// ShowEverything is the Activity filter that lists the whole audit log.
+const ShowEverything = "everything"
+
 type HistoryServer struct{ ID, Name string }
 
-// HistoryView is a page of operation history or the audit log.
+// HistoryView is a page of Activity: work on servers, or for administrators
+// who choose Everything, the audit log.
 type HistoryView struct {
-	Audit   bool
-	Filters url.Values
+	Admin, Everything bool
+	Filters           url.Values
 	// Cursor is the current page's cursor; Next is the following page's.
 	Cursor, Next string
 	Servers      []HistoryServer
 	Names        map[string]string
-	NamesError   bool
+	// Users names accounts by ID, for Everything.
+	Users      map[string]string
+	NamesError bool
 	Error        string
 	Operations   []history.Operation
 	Entries      []history.AuditEntry
-}
-
-func (h HistoryView) path() string {
-	if h.Audit {
-		return "/audit"
-	}
-	return "/operations"
 }
 
 func (h HistoryView) filtered() bool {
@@ -50,9 +51,17 @@ func (h HistoryView) pageURL(cursor string) templ.SafeURL {
 		values.Set("cursor", cursor)
 	}
 	if len(values) == 0 {
-		return templ.SafeURL(h.path())
+		return "/activity"
 	}
-	return templ.SafeURL(h.path() + "?" + values.Encode())
+	return templ.SafeURL("/activity?" + values.Encode())
+}
+
+// clearURL keeps what is shown and drops the other filters.
+func (h HistoryView) clearURL() templ.SafeURL {
+	if h.Everything {
+		return templ.SafeURL("/activity?show=" + ShowEverything)
+	}
+	return "/activity"
 }
 
 func (h HistoryView) hasServer(id string) bool {
@@ -65,14 +74,23 @@ func (h HistoryView) hasServer(id string) bool {
 }
 
 templ historyFilters(h HistoryView) {
-	<form class="history-search stack-form" method="get" action={ templ.SafeURL(h.path()) } data-compact-query aria-label={ map[bool]string{true: "Search audit log", false: "Search operation history"}[h.Audit] }>
+	<form class="history-search stack-form" method="get" action="/activity" data-compact-query aria-label="Search activity">
 		<div class="history-filters">
+			if h.Admin {
+				<label>
+					<span>Show</span>
+					<select name="show">
+						<option value="">Server activity</option>
+						<option value={ ShowEverything } selected?={ h.Everything }>Everything</option>
+					</select>
+				</label>
+			}
 			<label>
 				<span>Server</span>
 				<select name="serverId">
 					<option value="">All servers</option>
 					if id := h.Filters.Get("serverId"); id != "" && !h.hasServer(id) {
-						<option value={ id } selected>{ id }</option>
+						<option value={ id } selected>A server Ludock no longer has</option>
 					}
 					for _, server := range h.Servers {
 						<option value={ server.ID } selected?={ h.Filters.Get("serverId") == server.ID }>{ server.Name }</option>
@@ -80,17 +98,17 @@ templ historyFilters(h HistoryView) {
 				</select>
 			</label>
 			<label>
-				<span>Actor</span>
-				<input type="search" name="actor" value={ h.Filters.Get("actor") } maxlength="200" placeholder="Name or actor ID"/>
+				<span>Who</span>
+				<input type="search" name="actor" value={ h.Filters.Get("actor") } maxlength="200" placeholder="Username"/>
 			</label>
 			<label>
-				<span>Action</span>
-				<input type="search" name="action" value={ h.Filters.Get("action") } maxlength="200" placeholder={ map[bool]string{true: "e.g. server.restart", false: "e.g. restart"}[h.Audit] }/>
+				<span>What</span>
+				<input type="search" name="action" value={ h.Filters.Get("action") } maxlength="200" placeholder={ map[bool]string{true: "e.g. restart or login", false: "e.g. restart"}[h.Everything] }/>
 			</label>
 			<label>
-				<span>Status</span>
+				<span>Result</span>
 				<select name="status">
-					<option value="">All statuses</option>
+					<option value="">Any result</option>
 					for _, status := range operationStatuses {
 						<option value={ status } selected?={ h.Filters.Get("status") == status }>{ OperationStatusLabels[status] }</option>
 					}
@@ -106,18 +124,20 @@ templ historyFilters(h HistoryView) {
 				<input type="datetime-local" data-ms-field="to" aria-describedby="history-filter-help"/>
 				<input type="hidden" name="to" value={ h.Filters.Get("to") }/>
 			</label>
-			if h.Audit {
-				<label>
-					<span>Operation ID</span>
-					<input name="operationId" value={ h.Filters.Get("operationId") } placeholder="Operation UUID" maxlength="36" pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"/>
-				</label>
+			if id := h.Filters.Get("operationId"); id != "" && h.Everything {
+				<input type="hidden" name="operationId" value={ id }/>
 			}
 		</div>
-		<p class="section-note" id="history-filter-help">Dates use your local time and include both endpoints. Actor and status filters match only recorded values.</p>
+		<p class="section-note" id="history-filter-help">
+			Dates use your local time and include both ends.
+			if h.Filters.Get("operationId") != "" && h.Everything {
+				Showing what was recorded about one piece of work.
+			}
+		</p>
 		<div class="inline-actions">
 			<button class="primary-btn" type="submit">Search</button>
 			if h.filtered() {
-				<a class="secondary-btn" href={ templ.SafeURL(h.path()) }>Clear filters</a>
+				<a class="secondary-btn" href={ h.clearURL() }>Clear filters</a>
 			} else {
 				<button class="secondary-btn" type="button" disabled>Clear filters</button>
 			}
@@ -126,7 +146,7 @@ templ historyFilters(h HistoryView) {
 }
 
 templ historyPagination(h HistoryView) {
-	<nav class="history-pagination" aria-label="History pages">
+	<nav class="history-pagination" aria-label="Activity pages">
 		if h.Cursor != "" {
 			<a class="secondary-btn" href={ h.pageURL("") }>Newer</a>
 		} else {
@@ -141,97 +161,210 @@ templ historyPagination(h HistoryView) {
 	</nav>
 }
 
-templ historyHeader(title, subtitle string, h HistoryView) {
-	<div class="page__header page__header--actions">
-		<div>
-			<h1 class="page__title">{ title }</h1>
-			<p class="page__subtitle">{ subtitle }</p>
-		</div>
-		<a class="secondary-btn" href={ h.pageURL(h.Cursor) }>Refresh</a>
-	</div>
-	@historyFilters(h)
-	if h.NamesError {
-		<p class="section-note">Server names are unavailable. Recorded server IDs still identify history.</p>
-	}
-	if h.Error != "" {
-		@Alert("error", h.Error)
-	}
-}
-
-templ OperationsPage(page Page, h HistoryView) {
+templ ActivityPage(page Page, h HistoryView) {
 	@Shell(page) {
 		<div class="page history-page">
-			@historyHeader("Operation history", "Search persisted work for servers you can access.", h)
-			if h.Error == "" {
-				@OperationList(h.Operations, map[bool]string{true: "No operations match these filters.", false: "No operations yet."}[h.filtered()], true, h.Names)
+			<div class="page__header page__header--actions">
+				<div>
+					<h1 class="page__title">Activity</h1>
+					<p class="page__subtitle">
+						if h.Everything {
+							Everything Ludock recorded, including sign-ins, account changes, and settings.
+						} else {
+							What happened on your servers, and who did it.
+						}
+					</p>
+				</div>
+				<a class="secondary-btn" href={ h.pageURL(h.Cursor) }>Refresh</a>
+			</div>
+			@historyFilters(h)
+			if h.NamesError {
+				<p class="section-note">Server names can’t be read right now.</p>
+			}
+			if h.Error != "" {
+				@Alert("error", h.Error)
+			}
+			if h.Everything {
+				@auditList(h)
+			} else if h.Error == "" {
+				@OperationList(h.Operations, map[bool]string{true: "Nothing matches these filters.", false: "Nothing has happened yet."}[h.filtered()], true, h.Names)
 			}
 			@historyPagination(h)
 		</div>
 	}
 }
 
+// auditActor names who did it: a visitor for sign-in attempts nobody was
+// signed in for, and Ludock for what it did by itself.
 func auditActor(entry history.AuditEntry) string {
-	if entry.Actor == nil && entry.Username != "" {
+	switch {
+	case entry.Actor == nil && entry.Username != "":
 		return entry.Username
+	case entry.Actor == nil && strings.HasPrefix(entry.Action, "auth."):
+		return "A visitor"
+	case entry.Actor == nil:
+		return "Ludock"
 	}
 	return ActorLabel(entry.Actor)
 }
 
-templ AuditPage(page Page, h HistoryView) {
-	@Shell(page) {
-		<div class="page history-page">
-			@historyHeader("Audit log", "Authentication, account, lifecycle, and shell activity.", h)
-			<div class="audit-list">
-				for _, entry := range h.Entries {
-					<article class="audit-entry">
-						<div>
-							<strong>{ entry.Action }</strong>
-							<span>{ auditActor(entry) }</span>
-							if entry.Status != "" {
-								<span>
-									@Pip(OperationTones[entry.Status])
-									{ OperationStatusLabels[entry.Status] }
-								</span>
-							}
-						</div>
-						<div>
-							if entry.TargetType == "server" && entry.TargetID != "" {
-								<a class="text-link" href={ templ.SafeURL("/operations?serverId=" + url.QueryEscape(entry.TargetID)) }>
-									if name := h.Names[entry.TargetID]; name != "" {
-										{ name }
-									} else {
-										server: { entry.TargetID }
-									}
-								</a>
-							} else if entry.TargetType != "" && entry.TargetID != "" {
-								<span>{ entry.TargetType }: { entry.TargetID }</span>
-							} else {
-								<span>—</span>
-							}
-							@Time(entry.CreatedAt, "", "")
-							if entry.OperationID != "" {
-								<div class="history-entry-links">
-									<a class="text-link" href={ templ.SafeURL("/operations/" + entry.OperationID) }>Operation details</a>
-								</div>
-							}
-						</div>
-					</article>
-				}
-				if h.Error == "" && len(h.Entries) == 0 {
-					<div class="empty-state">
-						<div class="empty-state__title">
-							if h.filtered() {
-								No audit activity matches these filters
-							} else {
-								No audit activity yet
-							}
-						</div>
-					</div>
-				}
-			</div>
-			@historyPagination(h)
-		</div>
+// auditLabels name recorded actions in plain words. Server work is recorded
+// as server.<kind>[.<result>] and named by its kind.
+var auditLabels = map[string]string{
+	"auth.login":                       "Signed in",
+	"auth.login.failed":                "Sign-in failed",
+	"auth.logout":                      "Signed out",
+	"auth.link.used":                   "Signed in with a sign-in link",
+	"auth.link.failed":                 "Sign-in link refused",
+	"auth.password.changed":            "Changed their password",
+	"auth.session.revoked":             "Signed out another session",
+	"auth.setup.completed":             "Set up Ludock",
+	"auth.two-factor.enabled":          "Turned on two-factor",
+	"auth.two-factor.disabled":         "Turned off two-factor",
+	"auth.login.code-failed":           "Wrong two-factor code",
+	"auth.password.change-failed":      "Password change refused",
+	"authorization.denied":             "Was refused",
+	"availability.configured":          "Changed monitoring",
+	"backup.deleted":                   "Deleted a backup",
+	"backup.downloaded":                "Downloaded a backup",
+	"backup.file_downloaded":           "Downloaded a file from a backup",
+	"backup.kept":                      "Kept a backup",
+	"backup.released":                  "Let a backup expire",
+	"checklist.dismissed":              "Dismissed a setup suggestion",
+	"notifications.configured":         "Changed notifications",
+	"notifications.retry_queued":       "Retried a notification",
+	"notifications.test_queued":        "Sent a test notification",
+	"schedule.created":                 "Added a schedule",
+	"schedule.updated":                 "Changed a schedule",
+	"schedule.deleted":                 "Deleted a schedule",
+	"schedule.paused":                  "Paused a schedule",
+	"schedule.resumed":                 "Resumed a schedule",
+	"server.added":                     "Added a server",
+	"server.removed":                   "Removed a server",
+	"server.change.confirmed":          "Confirmed a changed server",
+	"server.sharing.updated":           "Changed who can use a server",
+	"server.update.confirmed":          "Confirmed an update",
+	"server.recovery.enabled":          "Turned on automatic restart",
+	"server.shell.opened":              "Opened the shell",
+	"server.shell":                     "Ran a shell command",
+	"server.game-console.opened":       "Opened the console",
+	"server.game-command":              "Ran a console command",
+	"server.logs.opened":               "Opened the logs",
+	"server.file.deleted":              "Deleted a file",
+	"server.file.directory.created":    "Created a folder",
+	"server.file.downloaded":           "Downloaded a file",
+	"server.file.edited":               "Edited a file",
+	"server.file.moved":                "Moved a file",
+	"server.file.renamed":              "Renamed a file",
+	"server.file.unpacked":             "Unpacked an archive",
+	"server.file.uploaded":             "Uploaded a file",
+	"settings.backups.auto_enabled":    "Turned on backups",
+	"settings.backups.updated":         "Changed backup storage",
+	"settings.connection_updated":      "Changed the server address",
+	"settings.image_updates.updated":   "Changed image update checks",
+	"settings.trusted_proxies.updated": "Changed the trusted proxy",
+	"settings.upload_limit.updated":    "Changed the upload limit",
+	"settings.verbose_logging.updated": "Changed verbose logging",
+	"user.access.updated":              "Changed a user’s access",
+	"user.created":                     "Added a user",
+	"user.deleted":                     "Deleted a user",
+	"user.link.created":                "Made a sign-in link",
+	"user.link.revoked":                "Cancelled a sign-in link",
+	"user.password.recovered":          "Reset a password from the command line",
+	"user.password.reset":              "Reset a user’s password",
+	"user.two-factor.reset":            "Reset a user’s two-factor",
+}
+
+// AuditKeys are the recorded actions whose names contain text, so a search
+// finds what the page shows. Server work recorded with a result also matches.
+func AuditKeys(text string) []string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	var keys []string
+	if text == "" {
+		return nil
 	}
+	for key, label := range auditLabels {
+		if strings.Contains(strings.ToLower(label), text) {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// AuditLabel names a recorded action, or shows it as recorded when it is
+// new to this list.
+func AuditLabel(action string) string {
+	if label := auditLabels[action]; label != "" {
+		return label
+	}
+	if kind, ok := strings.CutPrefix(action, "server."); ok {
+		for _, status := range append([]string{"started"}, operationStatuses...) {
+			kind = strings.TrimSuffix(kind, "."+status)
+		}
+		if label := auditLabels["server."+kind]; label != "" {
+			return label
+		}
+		if !strings.Contains(kind, ".") {
+			return Capitalize(kind)
+		}
+	}
+	return Capitalize(strings.ReplaceAll(action, ".", " "))
+}
+
+templ auditList(h HistoryView) {
+	<div class="audit-list">
+		for _, entry := range h.Entries {
+			<article class="audit-entry">
+				<div>
+					<strong>{ AuditLabel(entry.Action) }</strong>
+					<span>{ auditActor(entry) }</span>
+					if entry.Status != "" {
+						<span>
+							@Pip(OperationTones[entry.Status])
+							{ OperationStatusLabels[entry.Status] }
+						</span>
+					}
+				</div>
+				<div>
+					if entry.TargetType == "server" && entry.TargetID != "" {
+						<a class="text-link" href={ templ.SafeURL("/activity?serverId=" + url.QueryEscape(entry.TargetID)) }>
+							if name := h.Names[entry.TargetID]; name != "" {
+								{ name }
+							} else {
+								A server Ludock no longer has
+							}
+						</a>
+					} else if entry.TargetType == "user" && entry.TargetID != "" {
+						if name := h.Users[entry.TargetID]; name != "" {
+							<span>{ name }</span>
+						} else {
+							<span>A deleted user</span>
+						}
+					} else {
+						<span>—</span>
+					}
+					@Time(entry.CreatedAt, "", "")
+					if entry.OperationID != "" {
+						<div class="history-entry-links">
+							<a class="text-link" href={ templ.SafeURL("/activity/" + entry.OperationID) }>Details</a>
+						</div>
+					}
+				</div>
+			</article>
+		}
+		if h.Error == "" && len(h.Entries) == 0 {
+			<div class="empty-state">
+				<div class="empty-state__title">
+					if h.filtered() {
+						Nothing matches these filters
+					} else {
+						Nothing recorded yet
+					}
+				</div>
+			</div>
+		}
+	</div>
 }
 
 type OperationDetailView struct {
@@ -247,16 +380,16 @@ templ OperationDetailPage(page Page, o OperationDetailView) {
 		<div class="page history-page">
 			<div class="page__header page__header--actions">
 				<div>
-					<h1 class="page__title">Operation details</h1>
-					<p class="page__subtitle">Progress and the recorded result of this operation.</p>
+					<h1 class="page__title">Activity details</h1>
+					<p class="page__subtitle">Progress and the recorded result.</p>
 				</div>
 				if o.Operation != nil {
-					<a class="secondary-btn" href={ templ.SafeURL("/operations/" + o.Operation.ID) }>Refresh</a>
+					<a class="secondary-btn" href={ templ.SafeURL("/activity/" + o.Operation.ID) }>Refresh</a>
 				}
 			</div>
 			if o.Error != "" {
 				@Alert("error", o.Error)
-				<p><a class="text-link" href="/operations">Operation history</a></p>
+				<p><a class="text-link" href="/activity">Activity</a></p>
 			} else {
 				@OperationSummary(o)
 			}
@@ -270,7 +403,7 @@ templ OperationSummary(o OperationDetailView) {
 	<div
 		id="operation-summary"
 		if ActiveStatus(operation.Status) {
-			hx-get={ "/fragments/operations/" + operation.ID }
+			hx-get={ "/fragments/activity/" + operation.ID }
 			hx-trigger="every 2s"
 			hx-swap="outerHTML"
 		}
@@ -297,11 +430,9 @@ templ OperationSummary(o OperationDetailView) {
 					}
 				</a>
 			</dd>
-			<dt>Actor</dt>
+			<dt>By</dt>
 			<dd>{ ActorLabel(o.Actor) }</dd>
-			<dt>Operation ID</dt>
-			<dd>{ operation.ID }</dd>
-			<dt>Queued at</dt>
+			<dt>Asked for</dt>
 			<dd>@Time(operation.CreatedAt, "", "")</dd>
 			<dt>Last updated</dt>
 			<dd>@Time(operation.UpdatedAt, "", "")</dd>
@@ -318,9 +449,9 @@ templ OperationSummary(o OperationDetailView) {
 			<p class="section-note">{ text }</p>
 		}
 		<div class="inline-actions operation-detail-actions history-entry-links">
-			<a class="text-link" href={ templ.SafeURL("/operations?serverId=" + url.QueryEscape(operation.ServerID)) }>Server operation history</a>
+			<a class="text-link" href={ templ.SafeURL("/activity?serverId=" + url.QueryEscape(operation.ServerID)) }>More from this server</a>
 			if o.Admin {
-				<a class="text-link" href={ templ.SafeURL("/audit?operationId=" + url.QueryEscape(operation.ID)) }>Related audit events</a>
+				<a class="text-link" href={ templ.SafeURL("/activity?show=" + ShowEverything + "&operationId=" + url.QueryEscape(operation.ID)) }>Everything recorded about it</a>
 			}
 		</div>
 	</div>

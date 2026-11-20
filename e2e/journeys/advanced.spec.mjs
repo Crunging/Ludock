@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect, asAdmin, admin, signIn } from "./fixtures.mjs";
 
 asAdmin();
@@ -11,28 +13,35 @@ async function openAdvanced(page) {
   return advanced;
 }
 
-test("turning verbose logging on and off from Settings", async ({ page }) => {
-  await page.goto("/logs");
-  await page.getByLabel("Search logs").fill("HTTP request completed");
-  await expect(page.locator(".application-log")).toHaveCount(0);
+// Ludock's own log, as docker compose logs would show it.
+function requestsLogged() {
+  return readFileSync(join(process.env.LUDOCK_E2E_DIR, "ludock.log"), "utf8").split("HTTP request completed").length - 1;
+}
 
+test("turning verbose logging on and off from Settings", async ({ page }) => {
   const advanced = await openAdvanced(page);
   const form = advanced.locator("#logging-form");
   await form.getByLabel("Log extra detail").check();
   await form.getByRole("button", { name: "Save logging" }).click();
   await expect(form.locator(".alert--success")).toHaveText("Verbose logging is on for the next 24 hours.");
+  await expect(form).toContainText("docker compose logs ludock");
+  // Requests are now logged in detail, without restarting Ludock.
+  const before = requestsLogged();
   await page.reload();
   await expect(page.locator("#logging-form")).toContainText("On until");
-
-  // Requests are now logged in detail, without restarting Ludock.
-  await page.goto("/logs");
-  await page.getByLabel("Search logs").fill("HTTP request completed");
-  await expect(page.locator(".application-log").first()).toBeVisible();
+  await expect.poll(requestsLogged).toBeGreaterThan(before);
 
   const again = await openAdvanced(page);
   await again.locator("#logging-form").getByLabel("Log extra detail").uncheck();
   await again.locator("#logging-form").getByRole("button", { name: "Save logging" }).click();
   await expect(again.locator("#logging-form .alert--success")).toHaveText("Verbose logging is off.");
+  // Lines from requests before the switch may still be on their way.
+  await page.waitForTimeout(500);
+  const after = requestsLogged();
+  await page.reload();
+  await expect(page.locator("#logging-form")).not.toContainText("On until");
+  await page.waitForTimeout(500);
+  expect(requestsLogged()).toBe(after);
 });
 
 test("trusting a reverse proxy that Ludock noticed", async ({ page, session }) => {

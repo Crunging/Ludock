@@ -267,7 +267,7 @@ type EnqueueOptions struct {
 	IdempotencyKey string
 }
 
-var errConflict = apperr.New("OPERATION_CONFLICT", 409, "An operation is already queued or running for this server")
+var errConflict = apperr.New("OPERATION_CONFLICT", 409, "Something else is already running on this server. Wait for it to finish.")
 
 // Enqueue saves an operation and wakes the runner. tx, when non-nil, makes
 // the insert part of the caller's transaction; the caller then calls Wake
@@ -409,7 +409,7 @@ func (r *Runner) notifyScheduledFailure(rw *row) {
 	if rw.kind == "backup" {
 		key = "backup-failed:" + rw.id
 	}
-	r.Notify(notify.FailedWork, key, "A scheduled Ludock action failed. Review its operation details.")
+	r.Notify(notify.FailedWork, key, "A scheduled Ludock action failed. Its Activity says why.")
 }
 
 // resourcesBusy returns a job to the queue until its resources are free.
@@ -782,7 +782,7 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := r.finish(ctx, job, Interrupted, result, "Ludock restarted during this operation. Review the server state before retrying."); err != nil {
+		if err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again."); err != nil {
 			return err
 		}
 	}

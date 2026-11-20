@@ -114,11 +114,11 @@ func (s *Server) filesView(r *http.Request, request *Request) views.FilesView {
 	view := snapshot.Server
 	f.ServerName, f.State, f.Health, f.Exit = view.DisplayName, view.State, view.Health, view.Exit
 	if snapshot.DiscoveryUnavailable {
-		f.Error = "Unable to reach Docker to load server files. Try again when the connection is restored."
+		f.Error = "Ludock can’t reach Docker to show the files. Try again once it can."
 		return f
 	}
 	if !can(view, authz.FilesRead) {
-		f.Error = "You do not have file access to this server."
+		f.Error = "You can’t open this server’s files."
 		return f
 	}
 	f.CanManage, f.Blocked = can(view, authz.FilesWrite), view.BindingStatus != "active"
@@ -198,7 +198,7 @@ func (s *Server) fileDialog(w http.ResponseWriter, r *http.Request, request *Req
 	query := r.URL.Query()
 	snapshot, err := s.App.Servers.Summary(r.Context(), request.User(), r.PathValue("id"))
 	if err == nil && !can(snapshot.Server, authz.FilesWrite) {
-		err = apperr.New("FORBIDDEN", 403, "Insufficient permissions")
+		err = apperr.New("FORBIDDEN", 403, "You can’t do that")
 	}
 	if err != nil {
 		s.fail(w, r, request, err)

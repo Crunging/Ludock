@@ -476,7 +476,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				err = errors.Join(err, rollbackErr)
 			}
 		}
-		j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Review its recovery state.")
+		j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Its Activity says why.")
 		return nil, publicFirst(err)
 	})
 }

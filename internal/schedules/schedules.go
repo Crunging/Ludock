@@ -47,10 +47,10 @@ const (
 var unavailableMessages = map[string]string{
 	OwnerMissing:        "Suspended: the schedule owner no longer exists",
 	OwnerDisabled:       "Suspended: the schedule owner's account is disabled",
-	OwnerAccessRemoved:  "Suspended: required access to manage schedules has been removed",
-	ActionAccessRemoved: "Suspended: required access for this scheduled action has been removed",
+	OwnerAccessRemoved:  "Suspended: the schedule owner can no longer set up schedules",
+	ActionAccessRemoved: "Suspended: the schedule owner can no longer do this action",
 	SharingPaused:       "Paused: the server's game or data folders changed, and an administrator needs to confirm it",
-	BindingUnavailable:  "Suspended: Ludock can't find this server's container",
+	BindingUnavailable:  "Suspended: Ludock can’t find this server in Docker",
 	Unavailable:         "Suspended: this schedule cannot currently run; review the server and schedule",
 }
 
@@ -821,7 +821,7 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	if err == nil || errors.Is(err, errScheduleChanged) || errors.Is(err, errAccessChanged) || errors.Is(err, errRetryLater) {
 		return
 	}
-	reason := "Skipped: server state or a conflicting operation prevented this run"
+	reason := "Skipped: the server wasn’t ready, or other work on it was running"
 	var unavailableErr *UnavailableError
 	var skip Skip
 	if !configurationValid {

@@ -650,7 +650,7 @@ func userRow(u UsersView, user db.User) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" data-confirm-detail=\"They can use every server, change its containers, and manage users and settings, including yours.\" data-confirm-action=\"Make administrator\">Make administrator</button>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" data-confirm-detail=\"They can use and update every server, and manage users and settings, including yours.\" data-confirm-action=\"Make administrator\">Make administrator</button>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

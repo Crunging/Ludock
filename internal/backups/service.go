@@ -349,7 +349,7 @@ func (s *Service) ForBackup(ctx context.Context) (Settings, error) {
 		}
 	}
 	if settings == nil {
-		return Settings{}, fail("BACKUPS_NOT_CONFIGURED", "An administrator must choose a backup folder in Settings before creating backups.")
+		return Settings{}, fail("BACKUPS_NOT_CONFIGURED", "Backups are off until a backup folder is chosen in Settings.")
 	}
 	return s.Storage.ValidateSettings(ctx, *settings)
 }
@@ -456,7 +456,7 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 		if !found {
 			code = "BACKUPS_NOT_CONFIGURED"
 		}
-		status.Issues = append(status.Issues, Issue{code, "An administrator must choose a valid backup folder in Settings before creating backups."})
+		status.Issues = append(status.Issues, Issue{code, "No usable backup folder is chosen in Settings."})
 		return status, nil
 	}
 	status.Destination, status.MaxBytes, status.ReserveBytes = settings.Destination, settings.MaxBytes, settings.ReserveBytes
@@ -494,13 +494,13 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	}
 	if _, err := s.Storage.ValidateSettings(ctx, *settings); err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DESTINATION",
-			"The backup destination is missing or inaccessible. Ask an administrator to check its mount and LUDOCK_BACKUP_ROOTS."}))
+			"The backup folder is missing or can’t be reached. Check its mount and LUDOCK_BACKUP_ROOTS."}))
 		return status, nil
 	}
 	available, err := s.Storage.AvailableBytes(settings.Destination)
 	if err != nil {
 		status.Issues = append(status.Issues, readinessIssue(err, Issue{"BACKUP_DISK_UNAVAILABLE",
-			"Available disk space could not be checked. Ask an administrator to check that the backup destination is accessible and writable."}))
+			"Free space on the backup disk couldn’t be checked. Check that the backup folder can be reached and written."}))
 	} else {
 		status.AvailableBytes = available
 		if available <= settings.ReserveBytes {
@@ -532,10 +532,10 @@ func (s *Service) Preflight(ctx context.Context, server *servers.Context) Prefli
 		}
 	}
 	_, err := PlanRoots(server, true)
-	check(err, Issue{"BACKUP_ROOT_UNAVAILABLE", "The selected data roots could not be verified. Ask an administrator to review the server's mounted data roots."})
+	check(err, Issue{"BACKUP_ROOT_UNAVAILABLE", "The server’s data folders couldn’t be checked. Review the folders mounted into it."})
 	if settings != nil {
 		check(s.AssertSeparateDestination(ctx, server.Observation, *settings), Issue{"BACKUP_MOUNT_UNVERIFIED",
-			"Ludock could not verify that its backup destination is separate from game data. Ask an administrator to check the backup mount."})
+			"Ludock couldn’t confirm that the backup folder is separate from game data. Check the backup mount."})
 	}
 	info, err := s.Docker.Inspect(ctx, server.Container.ID)
 	if err == nil {
@@ -667,7 +667,7 @@ func (s *Service) hostMounts(ctx context.Context, folder string) ([]identity.Mou
 // AssertDataOperationState refuses servers in transitional states.
 func AssertDataOperationState(state string) error {
 	if slices.Contains([]string{"paused", "restarting", "removing", "dead"}, state) {
-		return fail("SERVER_STATE", "Unpause or repair this server before a data operation.")
+		return fail("SERVER_STATE", "Unpause or repair this server first.")
 	}
 	return nil
 }

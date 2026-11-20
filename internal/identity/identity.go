@@ -330,7 +330,7 @@ func (s *Store) ResolveBinding(ctx context.Context, id string, expectedRevision 
 		return nil, bindingError("SERVER_NOT_FOUND", "Server not found", 404)
 	}
 	if server.Status != StatusActive || server.ContainerID == "" {
-		return nil, bindingError("SERVER_BINDING_UNAVAILABLE", "Ludock can't find this server's container right now", 409)
+		return nil, bindingError("SERVER_BINDING_UNAVAILABLE", "Ludock can’t find this server in Docker right now", 409)
 	}
 	if expectedRevision >= 0 && server.BindingRevision != expectedRevision {
 		return nil, bindingError("SERVER_BINDING_CHANGED", "The server changed in Docker; reload and try again", 409)

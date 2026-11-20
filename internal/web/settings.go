@@ -435,12 +435,12 @@ func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request, reque
 	render(w, r, http.StatusOK, views.Deliveries(d))
 }
 
-func (s *Server) diagnosticsPage(w http.ResponseWriter, r *http.Request, request *Request) {
+func (s *Server) systemPage(w http.ResponseWriter, r *http.Request, request *Request) {
 	diagnostics, err := s.App.Observer.Diagnostics(r.Context())
-	d := views.DiagnosticsView{DockerConnected: err == nil, Diagnostics: diagnostics}
+	d := views.SystemView{DockerConnected: err == nil, Diagnostics: diagnostics}
 	if err := s.recheckAdmin(r.Context(), request); err != nil {
 		s.fail(w, r, request, err)
 		return
 	}
-	render(w, r, http.StatusOK, views.DiagnosticsPage(s.page(r, request, "Diagnostics"), d))
+	render(w, r, http.StatusOK, views.SystemPage(s.page(r, request, "System"), d))
 }

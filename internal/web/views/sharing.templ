@@ -101,7 +101,7 @@ templ SharingContent(v SharingView) {
 			@linkResult(*v.Link)
 		}
 		if v.Paused && len(v.Shares) > 0 {
-			<p class="section-note">Shared access is paused until you confirm the change in Docker above.</p>
+			<p class="section-note">Sharing is paused until you confirm the change above.</p>
 		}
 		if len(v.Shares) == 0 {
 			<p class="section-note">Not shared with anyone yet.</p>
@@ -200,6 +200,6 @@ templ levelChoice(id, label string, level authz.Level, capabilities []authz.Capa
 				{ capability.Label }
 			</label>
 		}
-		<p class="muted share-custom__note">Creating backups stops a running server for the copy. Restoring, downloading, and deleting backups, updating, and the container shell stay with administrators.</p>
+		<p class="muted share-custom__note">Creating backups stops a running server for the copy. Restoring, downloading, and deleting backups, updating, and the shell stay with administrators.</p>
 	</fieldset>
 }

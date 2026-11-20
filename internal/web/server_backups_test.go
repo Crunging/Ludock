@@ -45,7 +45,7 @@ func TestCreateBackupNeedsTheGrant(t *testing.T) {
 	}
 	// Operators see the summary, never the archive list.
 	page := p.do("GET", "/servers/"+p.server+"?tab=backups", operator, nil, nil).Body.String()
-	if !strings.Contains(page, "Archive access and restoration require an administrator") || strings.Contains(page, "backup-list") {
+	if !strings.Contains(page, "Last backup: never") || strings.Contains(page, "backup-list") || strings.Contains(page, "administrator") {
 		t.Fatal(page)
 	}
 }
@@ -117,14 +117,17 @@ func TestUpdatesNeedAdminAndConfirmation(t *testing.T) {
 	if response := p.action("/servers/"+p.server+"/updates", p.admin, url.Values{"createBackup": {"false"}}); response.StatusCode != http.StatusBadRequest {
 		t.Fatal(response.StatusCode)
 	}
-	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", operator, nil, map[string]string{"HX-Request": "true"}).Body.String()
-	if !strings.Contains(panel, "Pulling a newer image needs an administrator") || strings.Contains(panel, "/updates") {
-		t.Fatal(panel)
+	// A member who can restart isn't offered the Update tab at all.
+	if body := p.do("GET", "/servers/"+p.server, operator, nil, nil).Body.String(); strings.Contains(body, "tab=update") {
+		t.Fatal(body)
+	}
+	if response := p.do("GET", "/fragments/servers/"+p.server+"/update", operator, nil, map[string]string{"HX-Request": "true"}); response.Code == http.StatusOK {
+		t.Fatal(response.Code)
 	}
 	// Docker removes a --rm container when it stops, so it can't be replaced:
 	// the form is not offered and a forged request is refused.
 	p.engine.Update(p.docker, func(c *fakedocker.Container) { c.HostConfig = map[string]any{"AutoRemove": true} })
-	panel = p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
+	panel := p.do("GET", "/fragments/servers/"+p.server+"/update", p.admin, nil, map[string]string{"HX-Request": "true"}).Body.String()
 	if !strings.Contains(panel, "removes this container when it stops") || !strings.Contains(panel, "Check again") || strings.Contains(panel, "/updates") {
 		t.Fatal(panel)
 	}

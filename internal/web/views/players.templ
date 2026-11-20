@@ -80,7 +80,7 @@ templ PlayersCell(p PlayersView) {
 			case p.Reading == nil:
 				<span class="muted">Checking…</span>
 			case p.Reading.Failed:
-				<span class="muted" title="Ludock couldn’t read the server’s players">Unavailable</span>
+				<span class="muted" title="Ludock couldn’t read the server’s players">Unknown</span>
 			default:
 				<span class={ "player-count", templ.KV("player-count--empty", p.Reading.Online == 0) }>
 					// One line, so the count and capacity read as "2/10".
@@ -106,7 +106,7 @@ templ PlayersFact(p PlayersView) {
 		<dd>
 			switch {
 				case !p.Listed:
-					<span class="muted">Not available. Ludock lists players for supported games whose console or status query can list them.</span>
+					<span class="muted">Not available. Ludock lists players for supported games that can tell it who’s online.</span>
 				case !p.Running:
 					<span class="muted">Shown while the server is running</span>
 				case p.Reading == nil:
@@ -173,7 +173,7 @@ templ GameFact(g GameView) {
 			switch {
 				case g.Query == "":
 					<span>Not checked</span>
-					<span class="muted">Ludock asks supported games that answer a status query.</span>
+					<span class="muted">Ludock checks supported games that can answer.</span>
 				case !g.Running:
 					<span class="muted">Checked while the server is running</span>
 				case g.State == players.Answering:

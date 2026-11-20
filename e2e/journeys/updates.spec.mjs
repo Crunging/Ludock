@@ -95,7 +95,7 @@ async function webhook(page) {
   await card.getByRole("button", { name: "Save Webhook" }).click();
   await expect(card.locator("form .alert--success")).toHaveText("Webhook settings saved.");
   return {
-    alerts: () => bodies.filter((body) => body.message.includes("newer version of its container image")),
+    alerts: () => bodies.filter((body) => body.message.includes(": a newer image is available.")),
     ludockAlerts: () => bodies.filter((body) => body.message.startsWith("A newer version of Ludock is available.")),
     close: async () => {
       await page.goto("/settings");
@@ -127,11 +127,11 @@ test("finding a newer image, being told once, and updating to it", async ({ page
     await expect(check).toContainText("Last checked");
 
     await page.goto("/");
-    await expect(serverRow(page, "Survival").getByRole("link", { name: "Image update available" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Image update available" })).toHaveCount(1);
+    await expect(serverRow(page, "Survival").getByRole("link", { name: "Update available" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(1);
 
     await expect.poll(() => hook.alerts().length, { timeout: 30_000 }).toBe(1);
-    expect(hook.alerts()[0].message).toMatch(/^Survival: a newer version of its container image is available\./);
+    expect(hook.alerts()[0].message).toMatch(/^Survival: a newer image is available\./);
     expect(JSON.stringify(hook.alerts()[0])).not.toContain("itzg");
     // Checking again finds the same version, which was already announced.
     await openServer(page, "Survival");
@@ -143,7 +143,7 @@ test("finding a newer image, being told once, and updating to it", async ({ page
     await updateSurvival(page);
     await page.goto("/");
     await expect(serverRow(page, "Survival")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Image update available" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
     await openServer(page, "Survival");
     await checkNow(page, "This server runs the newest image its tag points to.");
     await expect(page.locator("#image-check .alert")).toHaveCount(0);
@@ -180,7 +180,7 @@ test("turning image update checks off", async ({ page }) => {
   await save(false);
   await page.goto("/");
   await expect(serverRow(page, "Survival")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Image update available" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Update" }).click();
   await expect(page.locator("#image-check")).toContainText("Checks for newer images are off.");
@@ -188,7 +188,7 @@ test("turning image update checks off", async ({ page }) => {
 
   await save(true);
   await page.goto("/");
-  await expect(serverRow(page, "Survival").getByRole("link", { name: "Image update available" })).toBeVisible();
+  await expect(serverRow(page, "Survival").getByRole("link", { name: "Update available" })).toBeVisible();
 });
 
 // Ludock checks its own image as it checks a server's. Pinned by digest, as

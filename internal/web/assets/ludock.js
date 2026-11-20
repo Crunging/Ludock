@@ -269,7 +269,7 @@
       error.setAttribute("data-range-error", "");
       form.querySelector(".inline-actions").before(error);
     }
-    error.textContent = "From must be before or equal to To.";
+    error.textContent = "The start date must be before the end date.";
   }, true);
 
   // GET forms with data-compact-query leave empty fields out of the URL.
@@ -282,44 +282,6 @@
         setTimeout(function () { field.disabled = false; }, 0);
       }
     });
-  });
-
-  // Ludock logs: follow the newest entry, or keep the entry being read in
-  // place while the buffer refreshes.
-  var logAnchor = null;
-  // The elements a swap is about to change. A 304 changes none.
-  function swapTargets(detail) {
-    return detail.tasks.filter(function (task) {
-      return task.target && task.target.nodeType === 1 && task.swapSpec.style !== "none";
-    }).map(function (task) { return task.target; });
-  }
-  document.addEventListener("htmx:before:swap", function (event) {
-    var output = document.querySelector("[data-log-output]");
-    if (!output || !swapTargets(event.detail).some(function (target) { return target.id === "application-logs"; })) return;
-    logAnchor = null;
-    var view = output.getBoundingClientRect();
-    var rows = output.querySelectorAll("[data-log-id]");
-    for (var index = 0; index < rows.length; index++) {
-      var bounds = rows[index].getBoundingClientRect();
-      if (bounds.bottom > view.top && bounds.top < view.bottom) {
-        logAnchor = { id: rows[index].getAttribute("data-log-id"), offset: bounds.top - view.top };
-        break;
-      }
-    }
-  });
-  function followLogs() {
-    var output = document.querySelector("[data-log-output]");
-    var follow = document.querySelector("[data-log-follow]");
-    if (!output) return;
-    if (!follow || follow.checked) {
-      output.scrollTop = output.scrollHeight;
-      return;
-    }
-    var row = logAnchor && output.querySelector('[data-log-id="' + logAnchor.id + '"]');
-    if (row) output.scrollTop += row.getBoundingClientRect().top - output.getBoundingClientRect().top - logAnchor.offset;
-  }
-  document.addEventListener("change", function (event) {
-    if (event.target.matches && event.target.matches("[data-log-follow]")) followLogs();
   });
 
   // Custom access: any choice includes seeing the server, changing files
@@ -454,6 +416,12 @@
     var ctx = event.detail.ctx, last = ctx.region && shown[ctx.region];
     if (last && last.node === ctx.target) ctx.request.headers["If-None-Match"] = last.tag;
   });
+  // The elements a swap is about to change. A 304 changes none.
+  function swapTargets(detail) {
+    return detail.tasks.filter(function (task) {
+      return task.target && task.target.nodeType === 1 && task.swapSpec.style !== "none";
+    }).map(function (task) { return task.target; });
+  }
   document.addEventListener("htmx:before:swap", function (event) {
     if (!event.defaultPrevented) swapTargets(event.detail).forEach(forget);
   });
@@ -789,7 +757,6 @@
     confirmations(root);
     timezones(root);
     openDialogs(root);
-    if (root.id === "application-logs") followLogs();
   });
 
   onReady(function () {
@@ -798,6 +765,5 @@
     confirmations();
     timezones();
     msFields();
-    followLogs();
   });
 })();

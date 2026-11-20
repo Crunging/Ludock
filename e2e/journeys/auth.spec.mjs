@@ -1,7 +1,7 @@
 import { test, expect, admin, signIn } from "./fixtures.mjs";
 
 test("signing in, returning to the requested page, and signing out", async ({ page }) => {
-  await page.goto("/operations?status=failed");
+  await page.goto("/activity?status=failed");
   await expect(page).toHaveURL(/\/login\?next=/);
   await expect(page.getByRole("heading", { name: "Sign in to Ludock" })).toBeVisible();
 
@@ -12,8 +12,8 @@ test("signing in, returning to the requested page, and signing out", async ({ pa
 
   await page.getByLabel("Password", { exact: true }).fill(admin.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/operations\?status=failed$/);
-  await expect(page.getByRole("heading", { name: "Operation history" })).toBeVisible();
+  await expect(page).toHaveURL(/\/activity\?status=failed$/);
+  await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
 
   await page.getByRole("button", { name: "Sign out" }).first().click();
   await expect(page).toHaveURL(/\/login$/);

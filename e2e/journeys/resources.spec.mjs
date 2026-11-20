@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, fake, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, fake, openServer, restoreServer } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -103,8 +103,7 @@ test("a stopped server's disk space, a nearly full disk, an unknown measurement,
     await expectAttention(page, "Disk nearly full", false, 10_000);
   } finally {
     await disk(undefined);
-    await openServer(page, "valheim");
-    if (await page.getByLabel("Monitor this server").isChecked()) await toggle(page, "Monitor this server", false);
+    await restoreServer(page, "valheim");
   }
 });
 
@@ -137,8 +136,6 @@ test("memory that stays near its container's limit alerts, until it falls or the
     await expectAttention(page, "Memory near its limit", false, 10_000);
   } finally {
     await fake("/fake/stats", { container: "valheim", memory: GiB });
-    await openServer(page, "valheim");
-    if (await page.getByLabel("Monitor this server").isChecked()) await toggle(page, "Monitor this server", false);
-    await dockerAction("valheim", "stop");
+    await restoreServer(page, "valheim");
   }
 });

@@ -48,11 +48,8 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	if manageSchedules {
 		d.Tabs = append(d.Tabs, views.DetailTab{ID: "schedules", Label: "Schedules"})
 	}
-	if admin || can(view, authz.ServerRestart) {
-		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"})
-	}
 	if admin {
-		d.Tabs = append(d.Tabs, views.DetailTab{ID: "sharing", Label: "Sharing"})
+		d.Tabs = append(d.Tabs, views.DetailTab{ID: "update", Label: "Update"}, views.DetailTab{ID: "sharing", Label: "Sharing"})
 	}
 	d.Tab = "overview"
 	if slices.ContainsFunc(d.Tabs, func(item views.DetailTab) bool { return item.ID == tab }) {
@@ -255,7 +252,7 @@ func (s *Server) detailOperation(w http.ResponseWriter, r *http.Request, request
 func (s *Server) selectOperation(r *http.Request, a *views.ActivityView) {
 	job, err := s.App.Runner.Get(r.Context(), a.SelectedID)
 	if err != nil || job == nil || job.ServerID != a.ServerID {
-		a.SelectedError = "Operation not found"
+		a.SelectedError = "This activity doesn’t exist, or you can’t see it."
 		return
 	}
 	a.Selected = job

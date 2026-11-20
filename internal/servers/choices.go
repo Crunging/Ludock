@@ -419,7 +419,7 @@ func (s *Service) Remove(ctx context.Context, adminID, tokenHash, id string, aud
 			return err
 		}
 		if active > 0 {
-			return apperr.New("OPERATION_ACTIVE", 409, "Wait for the server’s current operation to finish, then remove it.")
+			return apperr.New("OPERATION_ACTIVE", 409, "Wait for the work in progress to finish, then remove it.")
 		}
 		return nil
 	})

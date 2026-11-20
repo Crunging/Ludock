@@ -12,7 +12,7 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   // Watched without anyone turning it on; the levels wait behind a disclosure.
   await expect(page.getByLabel("Monitor this server")).toBeChecked();
   // An earlier journey's restart can still hold alerts back for a moment.
-  await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Waiting for monitoring to resume after a server action)\.$/);
+  await expect(page.locator("#availability-title + p")).toHaveText(/^(No outage detected|Paused briefly after a restart or stop)\.$/);
   await expect(page.getByLabel("Wait before alerting (seconds)")).toBeHidden();
   await expect(page.getByRole("link", { name: "Notification settings" })).toHaveAttribute("href", "/settings#notification-settings-title");
 
@@ -30,7 +30,7 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
   await page.reload();
   await expect(page.getByLabel("Monitor this server")).not.toBeChecked();
-  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
   await page.getByLabel("Monitor this server").check();
   await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
 
@@ -39,8 +39,8 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   await expectOperationSucceeded(page);
   await expect(page.locator("#activity-list")).toContainText("Save command sent before stopping.");
 
-  await page.getByLabel("Status").selectOption("failed");
-  await expect(page.locator(".activity-filter-count")).toHaveText(/Showing 0 of \d+ recent operations\./);
+  await page.getByLabel("Result").selectOption("failed");
+  await expect(page.locator(".activity-filter-count")).toHaveText(/^Showing 0 of \d+\.$/);
   await expect(page).toHaveURL(/status=failed/);
 });
 
@@ -90,7 +90,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await page.evaluate(() => { window.stayedOnPage = true; });
   const activity = page.getByRole("tab", { name: "Activity" });
   await activity.click();
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await expect(page).toHaveURL(/\?tab=activity$/);
   await expect(activity).toHaveAttribute("aria-selected", "true");
   await expect(activity).toBeFocused();
@@ -109,7 +109,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   // Back and forward still land on the right tab.
   await page.goBack();
   await expect(page).toHaveURL(/\?tab=activity$/);
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await page.goForward();
   await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
 
@@ -135,7 +135,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   const activityAnswer = page.waitForResponse(/\?tab=activity$/);
   gates.activity();
   await activityAnswer;
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(schedules|activity)$/);
@@ -185,7 +185,7 @@ test("a tab opened while an action is sending stays open", async ({ page }) => {
   await page.getByRole("dialog", { name: "Back up Survival?" }).getByRole("button", { name: "Create backup" }).click();
   await sent;
   await page.getByRole("tab", { name: "Activity" }).click();
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   const answered = page.waitForResponse((response) => response.request().method() === "POST" && /\/backups$/.test(response.url()));
   release();
   await answered;
@@ -200,7 +200,7 @@ test("a tab opened while an action is sending stays open", async ({ page }) => {
 test("a filter answering after another tab opened leaves that tab alone", async ({ page }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Activity" }).click();
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   // htmx wires up a new view once it settles, a moment after showing it.
   await expect(page.locator("#detail-body")).not.toHaveClass(/htmx-added/);
   let release;
@@ -210,7 +210,7 @@ test("a filter answering after another tab opened leaves that tab alone", async 
     await route.continue();
   });
   const filtered = page.waitForRequest(/\/activity\?.*status=failed/);
-  await page.getByLabel("Status").selectOption("failed");
+  await page.getByLabel("Result").selectOption("failed");
   await filtered;
   await page.getByRole("tab", { name: "Backups" }).click();
   await expect(page.locator("#backup-readiness")).toBeVisible();
@@ -244,7 +244,7 @@ test("clicking a tab again while its page loads still opens it", async ({ page }
   gates.find((gate) => gate.tab === "backups").resolve();
   await backups;
   for (const gate of activities()) gate.resolve();
-  await expect(page.getByRole("heading", { name: "Recent operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
   await expect(page).toHaveURL(/\?tab=activity$/);
   await page.unroute(/\?tab=(activity|backups)$/);
@@ -299,7 +299,7 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
 
 // Nobody configured Enshrouded's monitoring. Stopped when Ludock found it, it
 // stays quiet; once it runs, a stop outside Ludock is an outage.
-test("a server nobody set up is watched", async ({ page }) => {
+test("a server nobody set up is monitored", async ({ page }) => {
   await openServer(page, "enshrouded");
   const status = page.locator("#availability-title + p");
   await expect(page.getByLabel("Monitor this server")).toBeChecked();
@@ -309,7 +309,7 @@ test("a server nobody set up is watched", async ({ page }) => {
     await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
     await dockerAction("enshrouded", "stop");
     // Another journey may have shortened its wait before alerting.
-    await expect(status).toHaveText(/^Availability problem detected\./, { timeout: 30_000 });
+    await expect(status).toHaveText(/^The server (looks|is) down\./, { timeout: 30_000 });
     await dockerAction("enshrouded", "start");
     await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
   } finally {

@@ -80,12 +80,12 @@ func ActionLabel(action string) string {
 }
 
 var unavailableGuidance = map[string]string{
-	"owner_missing":         "Schedule owner no longer exists. Recreate this schedule with an authorized owner.",
+	"owner_missing":         "Its owner’s account was deleted. Make the schedule again from an account that can use this server.",
 	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
 	"owner_access_removed":  "Schedule owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
 	"action_access_removed": "Schedule owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
-	"binding_unavailable":   "Ludock can’t find this server’s container. The schedule runs again once the server is back in Docker.",
+	"binding_unavailable":   "Ludock can’t find this server in Docker. The schedule runs again once the server is back.",
 	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
 }
 
@@ -214,7 +214,7 @@ func SchedulesTab(v SchedulesView) templ.Component {
 			}
 		}
 		if v.SelectedMissing {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p role=\"status\" class=\"section-note\">This schedule is no longer available or you no longer have access.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p role=\"status\" class=\"section-note\">This schedule was deleted, or you can no longer see it.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -279,7 +279,7 @@ func ScheduleList(v SchedulesView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if v.Error != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "Schedule history is unavailable.")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "Schedules can’t be read right now.")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -504,7 +504,7 @@ func ScheduleList(v SchedulesView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			default:
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "Unavailable ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "Unknown ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1666,7 +1666,7 @@ func SchedulePreview(enabled bool, text string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 181, " <small class=\"table-detail\">Assumes the server stays available and its owner keeps access.</small>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 181, " <small class=\"table-detail\">If the server is still there and its owner can still use it.</small>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

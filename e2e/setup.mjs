@@ -2,7 +2,7 @@
 // data for every worker, completes first-administrator setup, and saves the
 // administrator's signed-in state.
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { port } from "./playwright.config.mjs";
@@ -24,12 +24,16 @@ async function waitFor(check, what, timeout = 30_000) {
   }
 }
 
-function start(command, args, env, log) {
+// start runs a child process; file, if given, keeps its output for journeys
+// that read Ludock's log.
+function start(command, args, env, log, file) {
   const child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   const lines = [];
+  const saved = file && createWriteStream(file);
   for (const stream of [child.stdout, child.stderr]) {
     stream.on("data", (chunk) => {
       lines.push(chunk.toString());
+      saved?.write(chunk);
       if (process.env.LUDOCK_E2E_LOGS) process.stdout.write(`[${log}] ${chunk}`);
     });
   }
@@ -60,7 +64,7 @@ async function startStack(bin, dir, port) {
     LUDOCK_SELF_CONTAINER: "ludock-dev",
     LUDOCK_BACKUP_ROOTS: backups,
     LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
-  }, "ludock");
+  }, "ludock", join(dir, "ludock.log"));
   await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check");
 
   const form = (values) => ({ method: "POST", redirect: "manual", body: new URLSearchParams(values),

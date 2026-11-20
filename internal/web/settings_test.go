@@ -15,7 +15,7 @@ func TestSettingsNeedAnAdministrator(t *testing.T) {
 	t.Parallel()
 	p := newPages(t)
 	operator := p.user("u-operator", "operator", db.RoleMember)
-	for _, target := range []string{"/settings", "/diagnostics"} {
+	for _, target := range []string{"/settings", "/settings/system"} {
 		if response := p.do("GET", target, operator, nil, nil); response.Code != http.StatusSeeOther {
 			t.Fatal(target, response.Code)
 		}

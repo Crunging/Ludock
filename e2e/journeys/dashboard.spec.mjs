@@ -141,13 +141,13 @@ test("on a phone, the menu holds the navigation and servers stay compact", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   const menu = page.getByRole("button", { name: "Menu" });
-  const diagnostics = page.getByRole("link", { name: "Diagnostics" });
-  await expect(diagnostics).toBeHidden();
+  const settings = page.getByRole("link", { name: "Settings" });
+  await expect(settings).toBeHidden();
   await menu.click();
   await expect(menu).toHaveAttribute("aria-expanded", "true");
-  await expect(diagnostics).toBeInViewport();
+  await expect(settings).toBeInViewport();
   await page.keyboard.press("Escape");
-  await expect(diagnostics).toBeHidden();
+  await expect(settings).toBeHidden();
   await expect(menu).toBeFocused();
 
   // A server's name, state, address, last backup, and actions fit in a
@@ -157,8 +157,8 @@ test("on a phone, the menu holds the navigation and servers stay compact", async
   }
 
   await menu.click();
-  await diagnostics.click();
-  await expect(page).toHaveURL(/\/diagnostics$/);
+  await settings.click();
+  await expect(page).toHaveURL(/\/settings$/);
 });
 
 test("copying a server's address", async ({ page, context }) => {
@@ -234,16 +234,16 @@ test("an outage reaches an open server list when its grace period ends, and clea
 
   await page.goto("/");
   const attention = page.locator("#attention");
-  await expect(attention).not.toContainText("Server unavailable");
+  await expect(attention).not.toContainText("Server down");
   await dockerAction("valheim", "stop");
   await expect(serverRow(page, "valheim")).toContainText("Stopped");
-  await expect(attention).toContainText("Server unavailable", { timeout: 60_000 });
+  await expect(attention).toContainText("Server down", { timeout: 60_000 });
 
   await dockerAction("valheim", "start");
-  await expect(attention).not.toContainText("Server unavailable", { timeout: 30_000 });
+  await expect(attention).not.toContainText("Server down", { timeout: 30_000 });
 
   await dockerAction("valheim", "stop");
   await openServer(page, "valheim");
   await page.getByLabel("Monitor this server").uncheck();
-  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring disabled.");
+  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
 });

@@ -21,7 +21,7 @@ func (s *Server) consolePage(w http.ResponseWriter, r *http.Request, request *Re
 		Running: view.State == "running", BindingActive: view.BindingStatus == "active" && !snapshot.DiscoveryUnavailable,
 		CanStart: can(view, authz.ServerStart) && views.LifecycleAction(view.State) == "start"}
 	if snapshot.DiscoveryUnavailable {
-		c.Unavailable = "Ludock can’t reach this server’s container right now."
+		c.Unavailable = "Ludock can’t reach this server right now."
 	} else {
 		c.Unavailable = views.BindingNote(string(view.BindingStatus))
 	}

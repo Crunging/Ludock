@@ -131,7 +131,7 @@ func (s *Service) CurrentActor(ctx context.Context, actor *db.SessionUser) (*db.
 	return &db.SessionUser{ID: user.ID, Username: user.Username, Role: user.Role}, nil
 }
 
-var errNotAdmin = apperr.New("FORBIDDEN", 403, "Administrator permission required")
+var errNotAdmin = apperr.New("FORBIDDEN", 403, "Only an administrator can do that")
 
 // AdminMutationError turns a db.AdminMutation rejection into a public error.
 func AdminMutationError(err error) error {
@@ -318,7 +318,7 @@ func (s *Service) Has(ctx context.Context, actor *db.SessionUser, serverID strin
 // an unassigned server alike, without disclosing another user's resources.
 var ErrServerNotFound = apperr.New("SERVER_NOT_FOUND", 404, "Server not found")
 
-var errInsufficient = apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
+var errInsufficient = apperr.New("FORBIDDEN", 403, "You can’t do that on this server")
 
 // Assert requires a capability and returns the server.
 func (s *Service) Assert(ctx context.Context, actor *db.SessionUser, serverID string, capability Capability) (*identity.Server, error) {

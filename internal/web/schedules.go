@@ -117,7 +117,7 @@ func (s *Server) schedulesView(r *http.Request, request *Request, d *views.Serve
 func (s *Server) scheduleList(w http.ResponseWriter, r *http.Request, request *Request) {
 	d, err := s.detail(r, request, r.PathValue("id"), "schedules", false)
 	if err == nil && d.Tab != "schedules" {
-		err = apperr.New("FORBIDDEN", 403, "Insufficient permissions")
+		err = apperr.New("FORBIDDEN", 403, "You can’t do that")
 	}
 	if err != nil {
 		s.fail(w, r, request, err)

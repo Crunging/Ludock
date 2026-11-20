@@ -114,15 +114,12 @@ templ Shell(page Page) {
 						<nav class="harbor__nav" aria-label="Primary navigation">
 							<div class="harbor__group">
 								@navLink(page, "/", "Servers")
-								@navLink(page, "/operations", "Operations")
+								@navLink(page, "/activity", "Activity")
 							</div>
 							if page.Admin {
 								<div class="harbor__group" role="group" aria-label="Administration">
 									@navLink(page, "/users", "Users")
 									@navLink(page, "/settings", "Settings")
-									@navLink(page, "/diagnostics", "Diagnostics")
-									@navLink(page, "/audit", "Audit log")
-									@navLink(page, "/logs", "Ludock logs")
 								</div>
 							}
 						</nav>

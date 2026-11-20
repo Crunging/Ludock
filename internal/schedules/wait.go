@@ -23,7 +23,7 @@ var (
 	// Unlike players staying online, an unknown count may mean a broken
 	// console, so it notifies.
 	errWaitUnknown = apperr.New("SCHEDULE_PLAYERS_UNKNOWN", 409, "Skipped: Ludock couldn't tell whether players were online by the end of the wait")
-	errWaitBusy    = apperr.New("OPERATION_CONFLICT", 409, "Another operation held the server until the wait ended")
+	errWaitBusy    = apperr.New("OPERATION_CONFLICT", 409, "Other work kept the server busy until the wait ended")
 )
 
 const SkipPlayersOnline Skip = "Skipped: players were still online when the wait ended"

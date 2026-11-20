@@ -18,9 +18,9 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await page.getByLabel("Game command").press("ArrowUp");
   await expect(page.getByLabel("Game command")).toHaveValue("list");
 
-  await page.getByRole("link", { name: "Docker Logs" }).click();
+  await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Logs", exact: true }).click();
   await expect(status).toHaveText("Connected");
-  await expect(output).toContainText("Following Docker logs");
+  await expect(output).toContainText("Following the server’s logs");
   await expect(output).toContainText("Starting minecraft server version 1.21");
   // Credentials in the container's environment never reach the browser,
   // whatever the variable is called.
@@ -30,7 +30,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await page.getByRole("button", { name: "Pause" }).click();
   await expect(page.getByText("Live display is paused.")).toBeVisible();
 
-  await page.getByRole("link", { name: "Container Shell" }).click();
+  await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Shell", exact: true }).click();
   await expect(output).toContainText("Administrator shell.");
   await page.getByLabel("Shell command").fill("echo hello");
   await page.getByRole("button", { name: "Send" }).click();
@@ -40,10 +40,10 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
 test("a stopped server offers no command connection", async ({ page }) => {
   await page.goto("/");
   await serverRow(page, "valheim").getByRole("link", { name: "Console" }).click();
-  await page.getByRole("link", { name: "Container Shell" }).click();
-  await expect(page.locator(".console-warning")).toContainText("Commands require a running server.");
+  await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Shell", exact: true }).click();
+  await expect(page.locator(".console-warning")).toContainText("Commands need a running server.");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await expect(page.locator("[data-console-status]")).toHaveText("Unavailable");
+  await expect(page.locator("[data-console-status]")).toHaveText("Server not running");
 });
 
 test("a command sent just before leaving the page still runs", async ({ page }) => {

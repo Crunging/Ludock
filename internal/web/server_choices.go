@@ -19,7 +19,7 @@ func (s *Server) addServersView(r *http.Request, request *Request) (views.AddSer
 		return v, err
 	}
 	if err != nil {
-		v.Error = "Ludock can’t list containers right now. Check the Docker connection in Diagnostics."
+		v.Error = "Ludock can’t list containers right now. Check the connection in Settings → System."
 		if _, public := apperr.As(err); public {
 			v.Error = publicMessage(err)
 		}

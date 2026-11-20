@@ -200,7 +200,7 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	players.now.Online = 0
 	f.s.Run(ctx, due+minute)
 	if last := f.first(t, friend); f.operations(t) != 0 || last.WaitingUntil != 0 ||
-		!strings.HasPrefix(last.LastResult, "Suspended: required access for this scheduled action") {
+		!strings.HasPrefix(last.LastResult, "Suspended: the schedule owner can no longer do this action") {
 		t.Fatal(last)
 	}
 
@@ -387,7 +387,7 @@ func TestWaitStoppedServerBusyToTheEnd(t *testing.T) {
 	f.s.Run(ctx, due)
 	f.s.Run(ctx, due+10*minute)
 	f.s.Run(ctx, due+15*minute-15_000)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
+	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: the server wasn’t ready, or other work on it was running" {
 		t.Fatal(last.LastResult)
 	}
 }
@@ -411,7 +411,7 @@ func TestWaitRunningServerBusyToTheEnd(t *testing.T) {
 		t.Fatal(last.LastResult)
 	}
 	f.s.Run(ctx, due+10*minute)
-	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: server state or a conflicting operation prevented this run" {
+	if last := f.first(t, admin); f.operations(t) != 1 || last.LastResult != "Skipped: the server wasn’t ready, or other work on it was running" {
 		t.Fatal(last.LastResult)
 	}
 }

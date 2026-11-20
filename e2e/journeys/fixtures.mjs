@@ -80,6 +80,25 @@ export async function openServer(page, name) {
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
 }
 
+/**
+ * Leaves a server as other files expect it: stopped through Ludock, so
+ * monitoring stays quiet, with monitoring on at its default levels.
+ */
+export async function restoreServer(page, name) {
+  await openServer(page, name);
+  const stop = page.locator(".detail-actions").getByRole("button", { name: "Stop" });
+  if (await stop.count()) {
+    await stop.click();
+    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
+    await expectOperationSucceeded(page);
+  }
+  const id = page.url().match(/\/servers\/([^/?]+)/)[1];
+  const csrf = await page.locator('meta[name="csrf-token"]').getAttribute("content");
+  const response = await page.request.post(`/servers/${id}/availability`, { headers: { "HX-Request": "true" }, form: { _csrf: csrf,
+    enabled: "true", graceSeconds: "120", diskAlert: "true", diskPercent: "90", memoryAlert: "true", memoryPercent: "90", memoryMinutes: "5" } });
+  expect(response.ok()).toBe(true);
+}
+
 /** Waits for the operation the server's page follows to finish. */
 export async function expectOperationSucceeded(page) {
   await expect(page).toHaveURL(/[?&]operation=/);

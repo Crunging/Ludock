@@ -4,89 +4,62 @@ asAdmin();
 // Each journey here passes on its own, so they spread across workers.
 test.describe.configure({ mode: "parallel" });
 
-test("searching operation history and the audit log", async ({ page, session }) => {
+test("searching Activity, with sign-ins under Everything", async ({ page, session }) => {
   await openServer(page, "Survival");
   await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
   await expectOperationSucceeded(page);
 
-  await page.goto("/operations");
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Activity" }).click();
+  await expect(page).toHaveURL(/\/activity$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   const rows = page.locator(".data-table tbody tr");
   await expect(rows.first()).toContainText("Survival");
-  await page.getByLabel("Status").selectOption("succeeded");
+  await page.getByLabel("Result").selectOption("succeeded");
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page).toHaveURL(/\/operations\?status=succeeded$/);
+  await expect(page).toHaveURL(/\/activity\?status=succeeded$/);
 
   await page.getByLabel("From", { exact: true }).fill("2030-01-01T00:00");
   await page.getByLabel("To", { exact: true }).fill("2020-01-01T00:00");
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.locator("[data-range-error]")).toHaveText("From must be before or equal to To.");
+  await expect(page.locator("[data-range-error]")).toHaveText("The start date must be before the end date.");
 
-  await page.goto("/operations");
+  await page.goto("/activity");
   await rows.first().getByRole("link").first().click();
-  await expect(page.getByRole("heading", { name: "Operation details" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity details" })).toBeVisible();
   await expect(page.locator(".operation-detail-summary")).toContainText("Succeeded");
-  await page.getByRole("link", { name: "Related audit events" }).click();
-  await expect(page.locator(".audit-entry").first()).toContainText(".succeeded");
+  await page.getByRole("link", { name: "Everything recorded about it" }).click();
+  await expect(page.getByLabel("Show")).toHaveValue("everything");
+  await expect(page.locator(".audit-entry").first()).toContainText("Restart");
+  await expect(page.locator(".audit-entry").first()).toContainText("Succeeded");
 
-  // A sign-in on another device, for the audit log to find.
+  // A sign-in on another device shows only under Everything.
   const other = await session({ storageState: { cookies: [], origins: [] } });
   await signIn(other, admin.username, admin.password);
   await expect(other.getByRole("heading", { name: "Servers", exact: true })).toBeVisible();
-  await page.goto("/audit?action=auth.login");
-  await expect(page.locator(".audit-entry").first()).toContainText("auth.login");
+  await page.goto("/activity");
+  await expect(page.getByText("Signed in")).toHaveCount(0);
+  await page.getByLabel("Show").selectOption("everything");
+  await page.getByLabel("What").fill("login");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.locator(".audit-entry").first()).toContainText("Signed in");
+  await expect(page.locator(".audit-entry").first()).toContainText(admin.username);
+
+  // The addresses Ludock no longer uses are gone.
+  for (const old of ["/operations", "/audit", "/logs", "/diagnostics"]) {
+    expect((await page.request.get(old)).status(), old).toBe(404);
+  }
 });
 
-test("reading Ludock's logs and diagnostics", async ({ page }) => {
-  await page.goto("/logs");
-  await expect(page.locator(".application-log").first()).toBeVisible();
-  await page.getByLabel("Search logs").fill("Ludock listening");
-  await expect(page.locator(".application-log")).toHaveCount(1);
-  await expect(page).toHaveURL(/q=Ludock\+listening/);
-
-  // The log list stops polling while the tab is hidden and resumes once
-  // it is shown again.
-  let polls = 0;
-  page.on("request", (request) => { if (request.url().includes("/fragments/logs")) polls++; });
-  const setHidden = (hidden) => page.evaluate((value) => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, hidden);
-  await setHidden(true);
-  await page.waitForTimeout(4500);
-  expect(polls).toBe(0);
-  await setHidden(false);
-  await expect.poll(() => polls, { timeout: 5000 }).toBeGreaterThan(0);
-
-  // A poll that answers late, for the filter before it, leaves a newer filter in place.
-  await page.getByLabel("Search logs").fill("");
-  await expect(page.locator(".application-log").nth(1)).toBeVisible();
-  let release;
-  const held = new Promise((resolve) => { release = resolve; });
-  let holding = false;
-  await page.route(/\/fragments\/logs\?.*since=/, async (route) => {
-    if (holding) return route.continue();
-    holding = true;
-    await held;
-    // Without the buffer state it names, the poll is answered in full.
-    const address = new URL(route.request().url());
-    address.searchParams.delete("since");
-    await route.continue({ url: address.toString() });
-  });
-  await expect.poll(() => holding).toBe(true);
-  const late = page.waitForResponse((response) => /\/fragments\/logs\?/.test(response.url()) && !response.url().includes("since=") &&
-    response.request().headers()["hx-source"] === "div#application-logs");
-  await page.getByLabel("Search logs").fill("Ludock listening");
-  await page.waitForTimeout(600);
-  release();
-  await late;
-  await expect(page.locator(".application-log")).toHaveCount(1);
-  await page.waitForTimeout(300);
-  await expect(page.locator(".application-log")).toHaveCount(1);
-  await page.unroute(/\/fragments\/logs\?.*since=/);
-
-  await page.goto("/diagnostics");
-  await expect(page.locator(".metadata-list")).toContainText("Docker EngineConnected");
+test("checking the Docker connection under Settings", async ({ page }) => {
+  const menu = page.getByRole("navigation", { name: "Primary navigation" });
+  await page.goto("/");
+  await expect(menu.getByRole("link")).toHaveText(["Servers", "Activity", "Users", "Settings"]);
+  await menu.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("navigation", { name: "Settings pages" }).getByRole("tab", { name: "System" }).click();
+  await expect(page).toHaveURL(/\/settings\/system$/);
+  await expect(menu.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "location");
+  await expect(page.locator(".metadata-list")).toContainText("DockerConnected");
   await expect(page.getByRole("cell", { name: "Minecraft", exact: true })).toBeVisible();
 });
 

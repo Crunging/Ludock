@@ -164,7 +164,7 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
   await expect(players).toContainText("Ludock reads them over Minecraft RCON.");
   await page.goto("/");
-  await expect(survival).toContainText("Unavailable");
+  await expect(survival).toContainText("Unknown");
 
   await openServer(page, "valheim");
   await expect(page.locator(".overview-players")).toContainText("Shown while the server is running");

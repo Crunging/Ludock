@@ -560,7 +560,7 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool
 // updateMessage names the server but not its image: the reference can name
 // a private registry or repository, and notifications leave the host.
 func updateMessage(container servers.Container) string {
-	message := container.DisplayName + ": a newer version of its container image is available. An administrator can update it from the server's Update tab in Ludock."
+	message := container.DisplayName + ": a newer image is available. An administrator can update it from the server’s Update tab in Ludock."
 	if integration := games.ImageIntegration(container.Image); integration != nil && integration.UpdatesOnStart {
 		message += " This is the image itself, such as its startup scripts and system packages; the game already updates on every restart."
 	}

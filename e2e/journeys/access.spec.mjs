@@ -40,6 +40,14 @@ test("sharing a server with someone new by invite link, and what they can see", 
   await pal.getByRole("link", { name: "Survival", exact: true }).click();
   await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity"]);
   await expect(pal.locator(".detail-actions")).toHaveCount(0);
+  // Their menu and the server's page hold only what they can use: no
+  // Docker details, and nothing that says to ask an administrator.
+  await expect(pal.getByRole("navigation", { name: "Primary navigation" }).getByRole("link")).toHaveText(["Servers", "Activity"]);
+  const facts = pal.locator(".overview-facts dt");
+  await expect(facts.first()).toBeVisible();
+  for (const docker of ["Ports", "In Docker", "Image"]) await expect(facts.filter({ hasText: docker })).toHaveCount(0);
+  await expect(pal.locator(".detail-header code")).toHaveCount(0);
+  await expect(pal.getByText("administrator", { exact: false })).toHaveCount(0);
 
   // Requests the page doesn't offer are refused.
   const id = pal.url().match(/\/servers\/([^/?]+)/)[1];
@@ -69,7 +77,7 @@ test("changing someone's access and stopping sharing from the server's page", as
   await row.getByRole("button", { name: "Save" }).click();
   await expect(sharing.locator(".alert--success")).toHaveText("Changed pal’s access to “Can run it”.");
   await pal.reload();
-  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity", "Update"]);
+  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity"]);
   await expect(pal.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Console" })).toBeVisible();
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Files" })).toHaveCount(0);
@@ -83,7 +91,7 @@ test("changing someone's access and stopping sharing from the server's page", as
   await row.getByRole("button", { name: "Save" }).click();
   await expect(sharing.locator(".alert--success")).toHaveText("Changed pal’s access to “Full access”.");
   await pal.reload();
-  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity", "Backups", "Schedules", "Update"]);
+  await expect(pal.getByRole("tab")).toHaveText(["Overview", "Activity", "Backups", "Schedules"]);
   await expect(pal.locator(".detail-actions").getByRole("link", { name: "Files" })).toBeVisible();
 
   // The users page lists what each person can use.

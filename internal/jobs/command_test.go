@@ -121,7 +121,7 @@ func TestScheduledCommandRefusedWithoutConsoleAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := f.scheduleCommand(t, serverID, operator.ID, "say hello")
-	if job.Status != ops.Failed || job.Error != "Insufficient server permissions" || len(received()) != 0 {
+	if job.Status != ops.Failed || job.Error != "You can’t do that on this server" || len(received()) != 0 {
 		t.Fatalf("%+v %v", job, received())
 	}
 }

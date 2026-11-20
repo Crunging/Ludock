@@ -40,8 +40,8 @@ test("a new install lists what's left to set up, and does it in a click", async 
     const page = await adminPage(session);
     await page.goto("/");
     const checklist = page.getByRole("region", { name: "Finish setting up" });
-    await expect(checklist.locator("li strong")).toHaveText(["Get alerts", "Back up your servers", "Check the address players use",
-      "Add the servers Ludock didn’t find", "Protect your sign-in"]);
+    await expect(checklist.locator("li strong")).toHaveText(["Get alerts", "Back up your servers", "Restart servers that stop answering",
+      "Check the address players use", "Add the servers Ludock didn’t find", "Protect your sign-in"]);
     await expect(item(page, "Back up your servers")).toContainText("Survival and valheim have no scheduled backups.");
     await expect(item(page, "Check the address players use")).toContainText("Players are shown 127.0.0.1, which only works on this computer.");
     await expect(item(page, "Add the servers Ludock didn’t find")).toContainText("satisfactory looks like a game server");
@@ -59,8 +59,8 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await webhook.getByRole("button", { name: "Save Webhook" }).click();
     await expect(webhook.locator("form .alert--success")).toHaveText("Webhook settings saved.");
     await page.goto("/");
-    await expect(checklist.locator("li strong")).toHaveText(["Back up your servers", "Check the address players use",
-      "Add the servers Ludock didn’t find", "Protect your sign-in"]);
+    await expect(checklist.locator("li strong")).toHaveText(["Back up your servers", "Restart servers that stop answering",
+      "Check the address players use", "Add the servers Ludock didn’t find", "Protect your sign-in"]);
 
     // Backups: one click, after saying what it does, schedules a staggered
     // nightly backup for each server that can be backed up.
@@ -78,6 +78,22 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await expect(schedule).toContainText("Backup");
     await expect(schedule).toContainText("04:00, every day");
     await expect(schedule).toContainText("Europe/Berlin");
+
+    // Automatic restart: one click, after saying what it does, turns it on
+    // for each monitored server whose game can answer.
+    await page.goto("/");
+    const restarts = item(page, "Restart servers that stop answering");
+    await expect(restarts).toContainText("enshrouded, Survival, and valheim stay down if their game stops answering");
+    await restarts.getByRole("button", { name: "Restart automatically" }).click();
+    const confirm = page.getByRole("dialog", { name: /^Restart these \d servers if their game stops answering\?$/ });
+    await expect(confirm).toContainText("Ludock restarts it the way the Restart button does, at most 3 times in 6 hours.");
+    await confirm.getByRole("button", { name: "Turn on automatic restart" }).click();
+    await expect(checklist.locator(".alert--success")).toHaveText("Automatic restart is on for enshrouded, Survival, and valheim.");
+    await expect(restarts).toHaveCount(0);
+    await page.getByRole("link", { name: "Survival", exact: true }).click();
+    await expect(page.getByLabel("Restart it if the game stops answering")).toBeChecked();
+    await page.goto("/activity?show=everything&action=recovery");
+    await expect(page.locator(".audit-entry").first()).toContainText("Turned on automatic restart");
 
     // The address: dismissed once, it stays dismissed.
     await page.goto("/");

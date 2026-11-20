@@ -10,9 +10,9 @@ asAdmin();
 test("the shell runs commands and logs follow the container", async ({ page }) => {
   await openServer(page, "Test Game");
   await page.locator(".detail-actions").getByRole("link", { name: "Console" }).click();
-  await page.getByRole("link", { name: "Docker Logs" }).click();
+  await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Logs", exact: true }).click();
   await expect(page.locator(".xterm-rows")).toContainText("tick ");
-  await page.getByRole("link", { name: "Container Shell" }).click();
+  await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Shell", exact: true }).click();
   await expect(page.locator("[data-console-status]")).toHaveText("Connected");
   await page.getByLabel("Shell command").fill("cat /data/server.properties");
   await page.getByRole("button", { name: "Send" }).click();

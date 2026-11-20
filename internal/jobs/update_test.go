@@ -128,7 +128,7 @@ func TestUpdateRecoveryUndoesUncheckedReplacement(t *testing.T) {
 				swap.Stage = swapStarting
 			}
 		})
-		if job.Status != ops.Interrupted || job.Error != "Ludock restarted during this operation. Review the server state before retrying." {
+		if job.Status != ops.Interrupted || job.Error != "Ludock restarted while this ran. Check the server before trying again." {
 			t.Fatalf("%+v", job)
 		}
 		original := f.containerNamed("mc")
@@ -439,7 +439,7 @@ func TestUpdateCheckSkipsConsoleHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(f.engine.Requests)
-	if capability := f.jobs.Updates.Capability(ctx, server, true, func() bool { return false }); !capability.Available {
+	if capability := f.jobs.Updates.Capability(ctx, server, func() bool { return false }); !capability.Available {
 		t.Fatal(capability.UnavailableReason)
 	}
 	for _, request := range f.engine.Requests[before:] {

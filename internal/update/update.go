@@ -224,7 +224,7 @@ type Capability struct {
 }
 
 // Capability reports update availability. busy reports active work.
-func (s *Service) Capability(ctx context.Context, server *servers.Context, admin bool, busy func() bool) Capability {
+func (s *Service) Capability(ctx context.Context, server *servers.Context, busy func() bool) Capability {
 	capability := Capability{ActionLabel: "Update server", Image: server.Container.Image}
 	if server.Container.GameType == "unknown" {
 		capability.ActionLabel = "Update image"
@@ -236,15 +236,12 @@ func (s *Service) Capability(ctx context.Context, server *servers.Context, admin
 		if public, ok := apperr.As(err); ok {
 			capability.UnavailableReason = public.Message
 		} else {
-			capability.UnavailableReason = "Ludock could not read this server's container from Docker. Check the Docker connection and try again."
+			capability.UnavailableReason = "Ludock couldn’t read this server from Docker. Check the connection in Settings → System and try again."
 		}
 		return capability
 	}
-	if !admin {
-		return fail(apperr.New("FORBIDDEN", 403, "Administrator permission is required to pull a newer image and recreate the server."))
-	}
 	if busy() {
-		return fail(apperr.New("OPERATION_CONFLICT", 409, "Wait for the active operation to finish before updating"))
+		return fail(apperr.New("OPERATION_CONFLICT", 409, "Wait for the work in progress to finish before updating"))
 	}
 	// The panel skips the dependents scan, which inspects every container on
 	// the host each time it renders; queueing and running the update check
