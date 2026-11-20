@@ -22,7 +22,8 @@ func (d *DB) PruneOperations(ctx context.Context) error {
         AND NOT EXISTS (SELECT 1 FROM schedules s WHERE s.last_operation_id = o.id)
         AND NOT EXISTS (SELECT 1 FROM settings WHERE key >= 'monitor.recovery:' AND key < 'monitor.recovery;'
           AND json_valid(value_json) AND json_extract(value_json, '$.operationId') = o.id)
-        AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE `+AuditOperationID("a.")+` = o.id))`,
+        -- The unary + drops o.id's affinity, so the audit expression index is searched, not scanned.
+        AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE `+AuditOperationID("a.")+` = +o.id))`,
 		operationsKeptPerServer, Now()-operationKeepFor.Milliseconds())
 	return err
 }

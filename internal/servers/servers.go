@@ -13,6 +13,7 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/games"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
@@ -70,7 +71,19 @@ func (s *Service) RefreshNow(ctx context.Context) (map[string]Container, error) 
 	return s.refresh(ctx, true)
 }
 
+// refresh retries, under docker.RideOut, a discovery Docker cut short; the
+// shared discovery itself never waits, so pages sharing it don't either.
 func (s *Service) refresh(ctx context.Context, forced bool) (map[string]Container, error) {
+	var since time.Time
+	for {
+		result, err := s.refreshOnce(ctx, forced)
+		if err == nil || !docker.Unavailable(err) || !s.Observer.Docker.WaitForDocker(ctx, err, &since) {
+			return result, err
+		}
+	}
+}
+
+func (s *Service) refreshOnce(ctx context.Context, forced bool) (map[string]Container, error) {
 	s.mu.Lock()
 	// A forced caller needs a discovery numbered after every one started
 	// before the call.
@@ -115,7 +128,7 @@ func (s *Service) discover(ctx context.Context, current *refresh) {
 		close(current.done)
 	}()
 	// The shared discovery must not be cancelled by the first caller leaving.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout)
+	ctx, cancel := context.WithTimeout(docker.Promptly(context.WithoutCancel(ctx)), discoveryTimeout)
 	defer cancel()
 	observed, err := s.Observer.List(ctx)
 	if err == nil {

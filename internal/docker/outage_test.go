@@ -1,6 +1,8 @@
 package docker_test
 
 import (
+	"fmt"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,5 +59,27 @@ func TestCutRequestMayHaveBeenSent(t *testing.T) {
 	}
 	if err := client.Stop(ctx, id, nil); !docker.Unavailable(err) || docker.NotSent(err) {
 		t.Fatal(err)
+	}
+}
+
+// Docker goes away after sending an inspect's headers but not all of its
+// body. That counts as Docker being unavailable, so under RideOut the read
+// is made again.
+func TestCutReadIsRetried(t *testing.T) {
+	var cuts atomic.Int32
+	socket := fakeSocket(t, func(conn net.Conn) {
+		body := `{"Id":"abc","State":{"Running":true}}`
+		if cuts.Add(1) <= 2 {
+			respond(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n"+body[:10])
+			return
+		}
+		respond(conn, fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body))
+	})
+	client := docker.New(socket)
+	if _, err := client.Inspect(ctx, "abc"); !docker.Unavailable(err) {
+		t.Fatal("cut read:", err)
+	}
+	if info, err := client.Inspect(docker.RideOut(ctx, nil), "abc"); err != nil || !info.State.Running {
+		t.Fatal("cut read under RideOut:", err)
 	}
 }

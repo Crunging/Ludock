@@ -145,11 +145,12 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 		return backup, nil
 	}
 	var backup *backups.Backup
+	var since time.Time
 	for attempt := 1; ; attempt++ {
 		backup, err = copyOnce()
 		// A 5xx answer means Docker is there but failing, which copying again
 		// won't fix.
-		if err == nil || recorded || attempt == 3 || !docker.Unavailable(err) || docker.StatusCode(err) >= 500 || !j.Docker.WaitForDocker(ctx, err) {
+		if err == nil || recorded || attempt == 3 || !docker.Unavailable(err) || docker.StatusCode(err) >= 500 || !j.Docker.WaitForDocker(ctx, err, &since) {
 			break
 		}
 		// Docker went away mid-copy. Copy again only once every helper that

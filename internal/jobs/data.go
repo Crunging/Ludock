@@ -61,7 +61,11 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 			return err
 		}
 	}
+	// dispatching is set once the checks before a stop request pass. A check
+	// made again means the request before it never reached Docker.
+	dispatching := false
 	err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Stop, func(observation identity.Observation, info *docker.ContainerInspect) error {
+		dispatching = false
 		if err := backups.AssertDataOperationState(info.State.Status); err != nil {
 			return err
 		}
@@ -84,9 +88,13 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		}, nil); err != nil {
 			return err
 		}
-		return j.Monitor.Suppress(ctx, server.Logical.ID)
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+			return err
+		}
+		dispatching = true
+		return nil
 	})
-	if docker.NotSent(err) && stopPending(job) {
+	if err != nil && (!dispatching || docker.NotSent(err)) && stopPending(job) {
 		// No stop reached Docker, so there is no shutdown to wait out.
 		if err := job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StopStarted = false }, nil); err != nil {
 			return err

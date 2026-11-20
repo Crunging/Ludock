@@ -209,9 +209,11 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 // read bounds a complete GET including its body so stalled discovery can be
 // retried, and retries it under RideOut.
 func (c *Client) read(ctx context.Context, path string, decode func(io.Reader) error) error {
-	wait := outage{client: c}
+	wait := c.newOutage()
 	for {
-		err := c.readOnce(ctx, path, decode)
+		attempt, cancel := wait.attempt(ctx)
+		err := c.readOnce(attempt, path, decode)
+		cancel()
 		if err == nil || !wait.retry(ctx, err) {
 			return err
 		}
@@ -227,7 +229,11 @@ func (c *Client) readOnce(ctx context.Context, path string, decode func(io.Reade
 		err = decode(response.Body)
 		if err != nil && ctx.Err() == nil {
 			var api *APIError
-			if !errors.As(err, &api) {
+			var network *net.OpError
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &network) {
+				// The connection ended before the body did.
+				err = ErrIncompleteStream
+			} else if !errors.As(err, &api) {
 				err = errors.New("docker returned invalid JSON")
 			}
 		}
@@ -697,7 +703,7 @@ func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, er
 func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string) error {
 	// Pulling again only fetches what is still missing. Registry errors,
 	// which Docker reports as 5xx or in the body, are not retried.
-	wait := outage{client: c}
+	wait := c.newOutage()
 	for {
 		err := c.pull(ctx, image, registryAuth, platform)
 		cut := errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrIncompleteStream)

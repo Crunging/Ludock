@@ -741,9 +741,10 @@ var ErrUnchanged = errors.New("container already in the requested state")
 // lost counts as done if Docker then shows the state it asked for.
 func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
+	var since time.Time
 	for {
 		before, err := o.changeState(ctx, id, action, assertAccess)
-		if before == nil || !docker.Unavailable(err) || !o.Docker.WaitForDocker(ctx, err) {
+		if before == nil || !docker.Unavailable(err) || !o.Docker.WaitForDocker(ctx, err, &since) {
 			return err
 		}
 		if docker.NotSent(err) {
@@ -753,8 +754,10 @@ func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Actio
 		if inspectErr != nil {
 			return err
 		}
+		// A stopped run that started after the check is another manager's.
 		running := after.State.Running || after.State.Restarting
-		if (action == Stop && !running) || (action == Start && running && after.State.StartedAt != before.State.StartedAt) {
+		sameRun := after.State.StartedAt == before.State.StartedAt
+		if (action == Stop && !running && sameRun) || (action == Start && running && !sameRun) {
 			return nil
 		}
 		return err

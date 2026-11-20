@@ -48,16 +48,23 @@ func TestWorkRidesOutDockerRestart(t *testing.T) {
 // moment the server is inspected right before its stop, which follows the
 // save step, so the stop request never reaches Docker.
 func (f *fixture) refuseBeforeStop(duration time.Duration) {
+	f.refuseAfter(duration, "/containers/"+f.game+"/json", "'save_skipped','waiting_for_save'", "%")
+}
+
+// refuseAfter makes Docker refuse connections for duration from the first GET
+// whose path ends in suffix once the running operation reached one of phases.
+// like further matches the operation's saved recovery state.
+func (f *fixture) refuseAfter(duration time.Duration, suffix, phases, like string) {
 	var mu sync.Mutex
 	refused := false
 	f.engine.Hang = func(request string) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		if refused || !strings.HasPrefix(request, "GET ") || !strings.HasSuffix(request, "/containers/"+f.game+"/json") {
+		if refused || !strings.HasPrefix(request, "GET ") || !strings.HasSuffix(request, suffix) {
 			return false
 		}
 		var saved int
-		f.jobs.DB.QueryRow("SELECT COUNT(*) FROM operations WHERE status='running' AND phase IN ('save_skipped','waiting_for_save')").Scan(&saved)
+		f.jobs.DB.QueryRow("SELECT COUNT(*) FROM operations WHERE status='running' AND phase IN ("+phases+") AND recovery_json LIKE ?", like).Scan(&saved)
 		if saved > 0 {
 			refused = true
 			f.engine.Refuse(duration)
@@ -122,5 +129,21 @@ func TestBackupCopyRidesOutDockerRestart(t *testing.T) {
 	}
 	if backups, err := f.jobs.Backups.List(ctx, f.serverID); err != nil || len(backups) != 1 {
 		t.Fatal(backups, err)
+	}
+}
+
+// Docker goes away just before an update starts the new container, after
+// checking that the original is still stopped. The start is checked and sent
+// again once Docker answers, and the update finishes.
+func TestUpdateReplacementStartWaitsForDocker(t *testing.T) {
+	f := setup(t)
+	// The last read before the start looks for other writers.
+	f.refuseAfter(2*time.Second, "/containers/json", "'creating'", `%"replacement":%`)
+	job := f.run(t, "update", skipBackup)
+	if job.Status != ops.Succeeded || job.Result["waitedForDocker"] != true {
+		t.Fatalf("%+v", job)
+	}
+	if server := f.containerNamed("mc"); server == nil || server.ID == f.game || !server.State.Running {
+		t.Fatalf("%+v", server)
 	}
 }

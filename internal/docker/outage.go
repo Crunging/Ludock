@@ -53,43 +53,57 @@ func (c *Client) outageLimit() time.Duration {
 // failure.
 type outage struct {
 	client *Client
-	since  time.Time
+	since  *time.Time
+}
+
+func (c *Client) newOutage() outage { return outage{client: c, since: new(time.Time)} }
+
+// attempt bounds an attempt made while waiting by what is left of the wait.
+func (o outage) attempt(ctx context.Context) (context.Context, context.CancelFunc) {
+	if o.since.IsZero() {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, o.since.Add(o.client.outageLimit()))
 }
 
 // retry waits a moment before another attempt and reports whether to make
 // one: err found Docker unavailable, ctx rides out outages, and the limit
 // hasn't passed.
-func (o *outage) retry(ctx context.Context, err error) bool {
+func (o outage) retry(ctx context.Context, err error) bool {
 	waited, ok := ctx.Value(rideOutKey{}).(func())
 	if !ok || !Unavailable(err) || ctx.Err() != nil {
 		return false
 	}
 	if o.since.IsZero() {
-		o.since = time.Now()
+		*o.since = time.Now()
 	}
-	remaining := o.client.outageLimit() - time.Since(o.since)
-	if remaining <= 0 {
+	remaining := o.client.outageLimit() - time.Since(*o.since)
+	if remaining <= time.Second/10 {
 		return false
 	}
 	waited()
-	sleep(ctx, min(time.Second, remaining))
+	sleep(ctx, min(time.Second, remaining/2))
 	return ctx.Err() == nil
 }
 
 // WaitForDocker waits, under RideOut, for Docker to answer again after err
 // showed it unavailable. True means it answers: the caller redoes a step
 // whose request never reached Docker (NotSent) from its last check, or reads
-// what became of one that may have.
-func (c *Client) WaitForDocker(ctx context.Context, err error) bool {
+// what became of one that may have. since holds when the caller's wait
+// began, zero before its first failure; the wait ends OutageLimit after it.
+func (c *Client) WaitForDocker(ctx context.Context, err error, since *time.Time) bool {
 	if _, ok := ctx.Value(rideOutKey{}).(func()); !ok {
 		return false
 	}
-	wait := outage{client: c}
+	wait := outage{client: c, since: since}
 	for {
 		if !wait.retry(ctx, err) {
 			return false
 		}
-		if err = c.Ping(Promptly(ctx)); err == nil {
+		attempt, cancel := wait.attempt(Promptly(ctx))
+		err = c.Ping(attempt)
+		cancel()
+		if err == nil {
 			return true
 		}
 	}
