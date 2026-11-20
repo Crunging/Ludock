@@ -161,9 +161,10 @@ type Service struct {
 	// again holds a Check that arrived during that server's reading, which
 	// may have started before the change; it runs once the reading ends.
 	again map[string]identity.Server
-	// waiters are told when the next fresh reading of their server, one
-	// that starts after they ask, ends.
-	waiters map[string][]chan struct{}
+	// waiters closes when the next fresh reading of its server, one that
+	// starts after it was made, ends; every caller waiting meanwhile shares
+	// it.
+	waiters map[string]chan struct{}
 	slots   chan struct{}
 	work    sync.WaitGroup
 	stopped bool
@@ -282,12 +283,15 @@ func (s *Service) CheckAndWait(ctx context.Context, serverID string, limit time.
 	if err != nil {
 		return
 	}
-	done := make(chan struct{})
 	s.mu.Lock()
 	if s.waiters == nil {
-		s.waiters = map[string][]chan struct{}{}
+		s.waiters = map[string]chan struct{}{}
 	}
-	s.waiters[serverID] = append(s.waiters[serverID], done)
+	done := s.waiters[serverID]
+	if done == nil {
+		done = make(chan struct{})
+		s.waiters[serverID] = done
+	}
 	s.mu.Unlock()
 	s.start(context.WithoutCancel(ctx), *server, true, true, nil)
 	timer := time.NewTimer(limit)
@@ -303,6 +307,10 @@ func (s *Service) CheckAndWait(ctx context.Context, serverID string, limit time.
 func (s *Service) Stop() {
 	s.mu.Lock()
 	s.stopped = true
+	for id, waiter := range s.waiters {
+		close(waiter)
+		delete(s.waiters, id)
+	}
 	s.mu.Unlock()
 	s.work.Wait()
 }
@@ -322,9 +330,9 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 	}
 	s.reading[server.ID] = true
 	ask := Ask{Players: players, Previous: s.readings[server.ID], Fresh: fresh}
-	var waiters []chan struct{}
+	var waiter chan struct{}
 	if players && fresh {
-		waiters = s.waiters[server.ID]
+		waiter = s.waiters[server.ID]
 		delete(s.waiters, server.ID)
 	}
 	s.work.Add(1)
@@ -339,7 +347,7 @@ func (s *Service) start(ctx context.Context, server identity.Server, players, fr
 			next, again := s.again[server.ID]
 			delete(s.again, server.ID)
 			s.mu.Unlock()
-			for _, waiter := range waiters {
+			if waiter != nil {
 				close(waiter)
 			}
 			if again {

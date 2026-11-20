@@ -457,12 +457,33 @@ func TestCheckAndWaitWaitsForANewReading(t *testing.T) {
 		players.CheckAndWait(ctx, server, time.Minute)
 		returned <- reads()
 	}()
+	release := func() {
+		t.Helper()
+		select {
+		case source.release <- struct{}{}:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no reading to release")
+		}
+	}
+	// The running reading ends; the one asked for starts and holds the
+	// caller until it ends too.
 	time.Sleep(50 * time.Millisecond)
-	// Each release ends one reading: the running one, then the one asked for.
-	source.release <- struct{}{}
-	source.release <- struct{}{}
-	if got := <-returned; got != 2 {
-		t.Fatal("returned after", got, "readings")
+	release()
+	for deadline := time.Now().Add(5 * time.Second); reads() != 2; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the reading asked for never started")
+		}
+	}
+	select {
+	case got := <-returned:
+		t.Fatal("returned while the reading asked for ran, after", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting after the reading ended")
 	}
 	start := time.Now()
 	players.CheckAndWait(ctx, server, 100*time.Millisecond)
