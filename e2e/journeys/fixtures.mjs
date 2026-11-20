@@ -133,10 +133,13 @@ export function dockerAction(container, action) {
   });
 }
 
-/** Calls one of the fake daemon's journey controls, such as /fake/disk. */
-export function fake(path, query = {}) {
+/**
+ * Calls one of the fake daemon's journey controls, such as /fake/disk, on
+ * the worker's stack or the one whose folder is dir.
+ */
+export function fake(path, query = {}, dir = process.env.LUDOCK_E2E_DIR) {
   return new Promise((resolve, reject) => {
-    const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
+    const call = request({ socketPath: join(dir, "docker", "docker.sock"), method: "POST",
       path: path + "?" + new URLSearchParams(query) }, (response) => {
       response.resume();
       response.on("end", resolve);

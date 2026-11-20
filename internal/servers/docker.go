@@ -77,6 +77,9 @@ type Container struct {
 	// Source is why Ludock manages it: SourceImage, SourceLabel, or
 	// SourcePanel.
 	Source string
+	// ControlsHost: its owner's label added a container that can control
+	// the host.
+	ControlsHost bool
 }
 
 type Observed struct {
@@ -324,7 +327,7 @@ func observe(info *docker.ContainerInspect, choices map[string]identity.Choice) 
 	if err != nil {
 		return nil, nil, err
 	}
-	container.Source = source
+	container.Source, container.ControlsHost = source, inspectCandidate(info).controlsHost()
 	return &Observed{Container: *container, Observation: toObservation(info, container)}, info, nil
 }
 

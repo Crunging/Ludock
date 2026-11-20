@@ -141,6 +141,19 @@ type AddServersView struct {
 
 type AddedServer struct{ ID, Name string }
 
+// split separates the containers that can be added from the games left out
+// because they can control the host.
+func (v AddServersView) split() (addable, controlsHost []servers.Unmanaged) {
+	for _, container := range v.Containers {
+		if container.ControlsHost {
+			controlsHost = append(controlsHost, container)
+		} else {
+			addable = append(addable, container)
+		}
+	}
+	return addable, controlsHost
+}
+
 // GameChoice is one game an administrator can pick for a container.
 type GameChoice struct{ Type, Name string }
 
@@ -166,9 +179,10 @@ templ AddServers(v AddServersView) {
 		if v.Error != "" {
 			@Alert("error", v.Error)
 		}
-		if len(v.Containers) > 0 {
+		{{ addable, controlsHost := v.split() }}
+		if len(addable) > 0 {
 			<ul class="add-servers__list" aria-label="Containers you can add">
-				for _, container := range v.Containers {
+				for _, container := range addable {
 					<li class="add-servers__item">
 						<div class="add-servers__identity">
 							<strong class="add-servers__name">{ container.Name }</strong>
@@ -200,8 +214,28 @@ templ AddServers(v AddServersView) {
 		} else if v.Error == "" {
 			<p class="muted">No other containers to add.</p>
 		}
+		if len(controlsHost) > 0 {
+			<div class="add-servers__host" id="add-servers-host">
+				<h3>Not added because they can control the host</h3>
+				<p class="muted">
+					These look like game servers, but each one is privileged or can reach Docker or the host’s system folders. Whoever uses its console or files could take over this whole machine, so Ludock doesn’t add it by itself and can’t add it from here.
+					If it really is a game server, add the label <code>ludock.enable: "true"</code> where it is defined and recreate it. Better still, remove the access it doesn’t need.
+				</p>
+				<ul class="add-servers__list" aria-label="Containers that can control the host">
+					for _, container := range controlsHost {
+						<li class="add-servers__item">
+							<div class="add-servers__identity">
+								<strong class="add-servers__name">{ container.Name }</strong>
+								<code class="add-servers__image">{ container.Image }</code>
+								<span class="muted">{ ServerStatus(container.State, "", nil).Label } · Can control the host</span>
+							</div>
+						</li>
+					}
+				</ul>
+			</div>
+		}
 		<p class="muted add-servers__note">
-			Ludock itself, containers that can control Docker or the host, Compose one-off containers, and containers labeled <code>ludock.enable: "false"</code> aren’t listed. Containers can also be added with a <code>ludock.enable: "true"</code> label where they are defined.
+			Ludock itself, other tools that can control Docker or the host, Compose one-off containers, and containers labeled <code>ludock.enable: "false"</code> aren’t listed. Containers can also be added with a <code>ludock.enable: "true"</code> label where they are defined.
 		</p>
 	</section>
 }

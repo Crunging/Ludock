@@ -12,6 +12,8 @@ import (
 type SharingView struct {
 	ServerID, ServerName string
 	Paused               bool
+	// ControlsHost: the container can control the host.
+	ControlsHost bool
 	Shares               []authz.Share
 	// People are enabled members it isn't shared with yet.
 	People        []db.User
@@ -85,6 +87,11 @@ func (v SharingView) draftLevel() authz.Level {
 templ SharingTab(v SharingView) {
 	<h2>Sharing</h2>
 	<p class="section-lede">Choose who else can use this server. Administrators can always use every server; nobody else sees it until you share it.</p>
+	if v.ControlsHost {
+		<div class="alert alert--warning" role="note" id="sharing-host-warning">
+			This container can control the host: it is privileged or can reach Docker or the host’s system folders. Anyone who can use its console or change its files could take over this whole machine. Share it only as <strong>Can see it</strong>, or with people you would trust with the host.
+		</div>
+	}
 	@SharingContent(v)
 }
 

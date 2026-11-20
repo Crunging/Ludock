@@ -169,6 +169,7 @@ func (s *Server) serverDetail(w http.ResponseWriter, r *http.Request, request *R
 			d.Recreate = r.URL.Query().Get("recreate") == "1"
 		case "sharing":
 			d.Sharing, err = s.sharingView(r, request, d.Row.Server.ID)
+			d.Sharing.ControlsHost = d.Row.Server.ControlsHost
 		case "overview":
 			if err = s.overview(r, request, d); err == nil {
 				d.Resources, err = s.App.Resources.History(r.Context(), request.User(), d.Row.Server.ID,

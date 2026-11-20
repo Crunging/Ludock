@@ -29,8 +29,15 @@ builds and aren't supported.
   never the Shell, updates, or backup downloads.
 - **Discovered containers:** containers on supported game images are added by
   themselves unless labeled `ludock.enable: "false"`. Recognizing an image
-  doesn't prove where it came from. Containers that could control the host are
-  never offered in the panel.
+  doesn't prove where it came from. Containers that could control the host
+  (privileged, or given a container engine socket, the host's root, or its
+  system folders) are never added by themselves or from the panel, only with
+  their owner's `ludock.enable: "true"` label.
+- **Sharing a server hands over its console and files.** Members never get the
+  Shell, but game console commands and changed files can run code inside the
+  container. For a container that can control the host, which its Sharing tab
+  warns about, that means the host: share it only as **Can see it**, or with
+  people you would trust with the host.
 - **The backup folders** hold game backups, which can include configuration
   secrets, and Ludock's own data (`ludock-data-*.tar`): password hashes,
   two-factor secrets, sessions, notification tokens, and the key that protects

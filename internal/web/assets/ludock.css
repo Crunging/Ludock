@@ -611,6 +611,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .add-servers__form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .add-servers__form select { max-width: 100%; }
 .help-panel .add-servers__note, .help-panel .alert { margin-top: 12px; }
+.add-servers__host { margin-top: 20px; }
 .remove-server { margin-top: 24px; max-width: var(--measure); }
 
 /* ---------- Copy address, menus, dialogs ---------- */

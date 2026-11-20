@@ -1,8 +1,10 @@
-import { test, expect, signIn, createUser, serverRow, openServer, shareServer } from "./fixtures.mjs";
+import { test, expect, signIn, createUser, serverRow, openServer, shareServer, fake } from "./fixtures.mjs";
+import { freshStack } from "../setup.mjs";
 
 // The fake daemon runs "satisfactory" on an image Ludock doesn't recognize,
-// "valheim-old" labeled ludock.enable: "false", and "portainer" with the
-// Docker socket, beside the four servers it finds by itself.
+// "valheim-old" labeled ludock.enable: "false", and "portainer" and
+// "factorio" with the Docker socket, beside the four servers it finds by
+// itself.
 
 async function openAddServers(page) {
   await page.goto("/");
@@ -45,6 +47,24 @@ test("adding a server Ludock doesn't recognize, from the server list", async ({ 
   await expect(page.getByRole("heading", { level: 1, name: "satisfactory" })).toBeVisible();
   await expect(page.locator(".detail-header__game")).toHaveText("Satisfactory");
   await expect(page.getByRole("button", { name: "Remove from Ludock" })).toBeVisible();
+});
+
+test("a game that can control the host isn't added, and says how to add it", async ({ session }) => {
+  const page = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
+  const panel = await openAddServers(page);
+  // Factorio's image is recognized, but it mounts the Docker socket.
+  await expect(serverRow(page, "factorio")).toHaveCount(0);
+  await expect(candidate(panel.getByRole("list", { name: "Containers you can add" }), "factorio")).toHaveCount(0);
+  const skipped = panel.locator("#add-servers-host");
+  await expect(skipped.getByRole("heading", { name: "Not added because they can control the host" })).toBeVisible();
+  await expect(skipped).toContainText("Whoever uses its console or files could take over this whole machine");
+  await expect(skipped).toContainText('add the label ludock.enable: "true" where it is defined');
+  const factorio = candidate(skipped, "factorio");
+  await expect(factorio).toContainText("factoriotools/factorio:stable");
+  await expect(factorio).toContainText("Can control the host");
+  await expect(factorio.getByRole("button")).toHaveCount(0);
+  // A tool that controls Docker isn't a game and isn't explained.
+  await expect(candidate(skipped, "portainer")).toHaveCount(0);
 });
 
 test("a container its owner labeled ludock.enable: \"false\" can't be added", async ({ session }) => {
@@ -135,4 +155,32 @@ test("removing servers and adding them back keeps their sharing", async ({ sessi
   await page.locator(".user-row", { hasText: "friend1" }).getByRole("button", { name: "Delete" }).click();
   await page.getByRole("dialog", { name: "Delete friend1?" }).getByRole("button", { name: "Delete user" }).click();
   await expect(page.locator("#users .alert--success")).toHaveText("Deleted friend1.");
+});
+
+test.describe("a game its owner labeled in although it can control the host", () => {
+  // Labeling factorio in adds a server, so this runs on an install of its own.
+  let stack;
+  test.beforeAll(async ({}, info) => {
+    stack = await freshStack(info.parallelIndex);
+  });
+  test.afterAll(async () => {
+    await stack?.stop();
+  });
+
+  test("is managed, and its Sharing tab warns what sharing hands over", async ({ session }) => {
+    const page = await session({ baseURL: stack.env.LUDOCK_E2E_URL, storageState: stack.env.LUDOCK_E2E_ADMIN_STATE });
+    await fake("/fake/recreate", { container: "factorio", label: "ludock.enable=true" }, stack.env.LUDOCK_E2E_DIR);
+    await page.goto("/");
+    await expect(serverRow(page, "factorio")).toContainText("Factorio");
+    await openServer(page, "factorio");
+    await page.getByRole("tab", { name: "Sharing" }).click();
+    const warning = page.locator("#sharing-host-warning");
+    await expect(warning).toContainText("This container can control the host");
+    await expect(warning).toContainText("Share it only as Can see it, or with people you would trust with the host.");
+    // An ordinary server carries no warning.
+    await openServer(page, "Survival");
+    await page.getByRole("tab", { name: "Sharing" }).click();
+    await expect(page.locator("#sharing")).toBeVisible();
+    await expect(page.locator("#sharing-host-warning")).toHaveCount(0);
+  });
 });

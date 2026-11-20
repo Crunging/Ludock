@@ -128,32 +128,41 @@ func (c candidate) unaddable() string {
 
 // withChoice is the container's labels with an administrator's choice
 // applied beneath the owner's own: any ludock.enable label decides alone,
-// and a container the panel can't add is never added by it. panel reports
-// a container the choice added.
+// a container that controls the host is left out without one, and a
+// container the panel can't add is never added by it. panel reports a
+// container the choice added.
 func (c candidate) withChoice(choices map[string]identity.Choice) (labels map[string]string, panel bool) {
-	if len(choices) == 0 {
+	if _, owner := c.labels[games.LabelEnable]; owner {
 		return c.labels, false
+	}
+	if c.controlsHost() {
+		return c.excluded(), false
 	}
 	choice, found := choices[c.external()]
-	if !found {
+	if !found || (choice.Managed && c.unaddable() != "") {
 		return c.labels, false
 	}
-	if _, owner := c.labels[games.LabelEnable]; owner || (choice.Managed && c.unaddable() != "") {
-		return c.labels, false
+	if !choice.Managed {
+		return c.excluded(), false
 	}
 	labels = maps.Clone(c.labels)
 	if labels == nil {
 		labels = map[string]string{}
-	}
-	if !choice.Managed {
-		labels[games.LabelEnable] = "false"
-		return labels, false
 	}
 	labels[games.LabelEnable] = "true"
 	if choice.Game != "" && strings.TrimSpace(labels[games.LabelGame]) == "" {
 		labels[games.LabelGame] = choice.Game
 	}
 	return labels, true
+}
+
+func (c candidate) excluded() map[string]string {
+	labels := maps.Clone(c.labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[games.LabelEnable] = "false"
+	return labels
 }
 
 // applyChoice returns a copy of info whose labels include the choice, which
@@ -202,10 +211,13 @@ type Unmanaged struct {
 	External string
 	// Chosen: an administrator already decided about it, such as removing it.
 	Chosen bool
+	// ControlsHost: a game that can control the host, which only its owner's
+	// label can add. It is listed to explain why it isn't a server.
+	ControlsHost bool
 }
 
 // Unmanaged lists the containers an administrator can add, likely games
-// first.
+// first, and the games left out because they can control the host.
 func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 	containers, err := o.Docker.ListContainers(ctx, true, nil)
 	if err != nil {
@@ -215,13 +227,25 @@ func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 	if err != nil {
 		return nil, err
 	}
+	o.mu.Lock()
+	inspected := o.inspections
+	o.mu.Unlock()
 	var ids []string
 	for _, container := range containers {
 		c := summaryCandidate(container)
 		labels, _ := c.withChoice(choices)
-		if c.unaddable() == "" && !games.Evaluate(c.image, labels).Eligible {
-			ids = append(ids, container.ID)
+		reason := c.unaddable()
+		if reason != "" && reason != "host" {
+			continue
 		}
+		// A summary has no privileged flag. Discovery caches only the
+		// containers it manages, so any other is inspected to find out.
+		if games.Evaluate(c.image, labels).Eligible {
+			if _, managed := inspected[container.ID]; managed || isReplacement(container.Names) {
+				continue
+			}
+		}
+		ids = append(ids, container.ID)
 	}
 	results := make([]*Unmanaged, len(ids))
 	var failure error
@@ -282,7 +306,7 @@ func (o *Observer) Addable(ctx context.Context, id string) (*Unmanaged, error) {
 		return nil, err
 	}
 	entry, err := o.addable(ctx, id, choices)
-	if docker.IsNotFound(err) {
+	if docker.IsNotFound(err) || (err == nil && entry.ControlsHost) {
 		return nil, errNotAddable
 	}
 	return entry, err
@@ -295,7 +319,8 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 	}
 	c := inspectCandidate(info)
 	labels, _ := c.withChoice(choices)
-	if c.unaddable() != "" || games.Evaluate(c.image, labels).Eligible {
+	reason := c.unaddable()
+	if (reason != "" && reason != "host") || games.Evaluate(c.image, labels).Eligible {
 		return nil, errNotAddable
 	}
 	container, err := toContainer(info)
@@ -327,6 +352,14 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 		entry.Game = choice.Game
 	}
 	entry.Chosen = chosen
+	// Tools such as Portainer can control the host too; only games, or a
+	// container once added in the panel, need explaining.
+	if reason == "host" {
+		if entry.Game == "unknown" && !chosen {
+			return nil, errNotAddable
+		}
+		entry.ControlsHost = true
+	}
 	return entry, nil
 }
 
