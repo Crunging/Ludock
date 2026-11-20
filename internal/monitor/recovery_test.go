@@ -49,11 +49,12 @@ func recoveryJobs(t *testing.T, s *Service, serverID string) []string {
 	return ids
 }
 
-// finish ends a restart as its operation would, which also resets the
-// outage it acted on. It ends as soon as it was queued, in the tests' time.
+// finish ends a restart as its operation would, five seconds after it was
+// queued in the tests' time, which also resets the outage it acted on.
 func finish(t *testing.T, s *Service, id, status string) {
 	t.Helper()
-	if _, err := s.DB.Exec("UPDATE operations SET status=?,updated_at=0 WHERE id=?", status, id); err != nil {
+	if _, err := s.DB.Exec(`UPDATE operations SET status=?,updated_at=(SELECT json_extract(value_json,'$.restartedAt')+5000 FROM settings
+    WHERE json_extract(value_json,'$.operationId')=?) WHERE id=?`, status, id, id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Exec("UPDATE availability SET outage_started_at=NULL,notified=0"); err != nil {
@@ -93,7 +94,7 @@ func TestRecoveryRestartsAHungGameAndReportsItsAnswer(t *testing.T) {
 	*game = GameAnswering
 	s.Check(ctx, run("running", 65_000), 120_000)
 	state, _ := s.Recovery(ctx, serverID)
-	if state.Last != RecoveryAnswered || state.Pending || state.RestartedAt != 62_000 {
+	if state.Last != RecoveryAnswered || state.Pending || state.RestartedAt != 67_000 {
 		t.Fatalf("%+v", state)
 	}
 	if len(events.events) != 2 || events.events[1] != "Minecraft is answering again after Ludock restarted it." {
@@ -208,7 +209,8 @@ func TestRecoveryAttemptWindowSurvivesARestart(t *testing.T) {
 		t.Fatalf("%+v", state)
 	}
 	// Once the oldest restart leaves the window, the next hang is restarted.
-	later := 1000 + RecoveryWindow.Milliseconds()
+	// The window counts from each restart's end, five seconds after it was queued.
+	later := 10_000 + RecoveryWindow.Milliseconds()
 	*game = GameAnswering
 	s.Check(ctx, run("running", later-1000), later)
 	if jobs := hang(t, s, serverID, game, later+1000, later-1000); len(jobs) != RecoveryAttempts+1 {
@@ -388,7 +390,7 @@ func TestRecoveryFollowsOnlyItsOwnRun(t *testing.T) {
 	finish(t, s, jobs[0], ops.Succeeded)
 	*game = GameWaiting
 	wait := RecoveryWait(Policy{GraceSeconds: 60})
-	s.Check(ctx, run("running", 65_000), 62_000+wait+1000)
+	s.Check(ctx, run("running", 65_000), 67_000+wait+1000)
 	// Someone else restarts it, and it answers.
 	*game = GameAnswering
 	s.Check(ctx, run("running", 62_000+2*wait), 62_000+3*wait)
@@ -419,5 +421,28 @@ func TestRecoveryPausesFromARestartTurnedOffMidway(t *testing.T) {
 	}
 	if jobs := hang(t, s, serverID, game, ended+wait, ended); len(jobs) != 2 {
 		t.Fatal(jobs)
+	}
+}
+
+// A server stopped after its restart ends the wait quietly, and a run someone
+// else starts later, seen stopped or not, is never judged as Ludock's.
+func TestRecoveryLeavesARunSomeoneElseStarted(t *testing.T) {
+	for _, seenStopped := range []bool{true, false} {
+		s, events, serverID, game := recovering(t, nil)
+		jobs := hang(t, s, serverID, game, 1000, 500)
+		finish(t, s, jobs[0], ops.Succeeded)
+		wait := RecoveryWait(Policy{GraceSeconds: 60})
+		if seenStopped {
+			s.Check(ctx, run("exited", 70_000), 75_000)
+		}
+		// Someone starts a new run, which never answers.
+		*game = GameWaiting
+		for at := int64(80_000); at < 62_000+3*wait; at += 30_000 {
+			s.Check(ctx, run("running", 78_000), at)
+		}
+		state, _ := s.Recovery(ctx, serverID)
+		if state.Pending || state.Last != RecoveryRestarted || len(events.events) != 1 {
+			t.Fatalf("seen stopped %v: %+v %v", seenStopped, state, events.events)
+		}
 	}
 }

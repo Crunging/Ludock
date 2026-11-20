@@ -269,6 +269,9 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 		// The game's time to answer, and the pause, run from the restart's end.
 		finished = max(finished, state.RestartedAt)
 		newRun := running && container.StateSince > state.RestartedAt
+		// Ludock's run started while its restart ran; a later one is someone
+		// else's.
+		othersRun := running && container.StateSince > finished
 		answered := running && (game == GameAnswering || (game == GameNotAnswering && newRun))
 		waited := now-finished >= RecoveryWait(policy)
 		settled := true
@@ -284,8 +287,8 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 			if n := len(next.Attempts); n > 0 && next.Attempts[n-1] == state.RestartedAt {
 				next.Attempts = next.Attempts[:n-1]
 			}
-		case state.Last == RecoveryNotAnswered && (!running || container.StateSince != state.WatchRun):
-			// The run it followed ended; what happens next is someone else's.
+		case !running || othersRun || (state.Last == RecoveryNotAnswered && container.StateSince != state.WatchRun):
+			// The run Ludock started ended; what happens next is someone else's.
 		case answered:
 			next.Last = RecoveryAnswered
 			message = server.DisplayName + " is answering again after Ludock restarted it."
