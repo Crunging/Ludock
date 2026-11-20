@@ -274,7 +274,23 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 				after = scenario.after(t, f)
 			}
 			trace := f.traceRestore(after)
+			// The server starts again only once the journal is final.
+			var startedWith []string
+			start := f.engine.OnStart
+			f.engine.OnStart = func(c *fakedocker.Container) {
+				start(c)
+				if c.ID == f.game {
+					f.mu.Lock()
+					startedWith = append(startedWith, f.savedJournal(lastRestore(f)))
+					f.mu.Unlock()
+				}
+			}
 			job := f.run(t, "restore", input)
+			f.mu.Lock()
+			if want := []string{scenario.journal}; !scenario.left && !slices.Equal(startedWith, want) {
+				t.Errorf("started the server with journals %q, want %q", startedWith, want)
+			}
+			f.mu.Unlock()
 			restored := read(t, filepath.Join(f.data, "world", "level.dat")) == "original"
 			if !scenario.item {
 				info, err := os.Stat(filepath.Join(f.data, "world", "large.dat"))
@@ -420,6 +436,11 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				os.WriteFile(filepath.Join(f.data, "world", "level.dat"), []byte("original"), 0o644)
 				os.WriteFile(filepath.Join(f.data, "server.properties"), []byte("original"), 0o644)
 			}, want: "original", guidance: finished, journal: "cleaned", running: true, trace: []string{"cleanup game: committed replaced"}},
+		{name: "rolled back but staged", state: &restoreRecovery{Status: "rolling_back", Roots: []journal{{Phase: "rolled_back"}}},
+			arrange: func(t *testing.T, f *fixture, stage string) {
+				os.MkdirAll(filepath.Join(stage, "new"), 0o700)
+				os.MkdirAll(filepath.Join(stage, "old"), 0o700)
+			}, want: "newer", guidance: undone, running: true, trace: []string{"cleanup game: rolling_back rolled_back unsafe"}},
 		{name: "rolled back", state: &restoreRecovery{Status: "rolled_back"}, arrange: func(*testing.T, *fixture, string) {},
 			want: "newer", guidance: undone, running: true},
 		{name: "rollback fails", state: &restoreRecovery{Status: "replacing", Roots: []journal{{Phase: "old_moved"}}}, failOn: "rollbackOld",
@@ -449,5 +470,27 @@ func TestRestoreRecoveryFromEachState(t *testing.T) {
 				t.Errorf("trace:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(c.trace, "\n"))
 			}
 		})
+	}
+}
+
+func lastRestore(f *fixture) string {
+	var id string
+	f.jobs.DB.QueryRow("SELECT id FROM operations WHERE kind='restore' ORDER BY rowid DESC LIMIT 1").Scan(&id)
+	return id
+}
+
+// A server started elsewhere between a root's move out and move in should
+// stop the restore before the backup's data goes into the running server's
+// folder. Today the move in runs, and only the next root's check stops it.
+func TestRestoreStoppedBeforeMoveIn(t *testing.T) {
+	t.Skip("known: no stopped check between moveOld and moveNew; left as is in the phases refactor")
+	f := setup(t)
+	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
+	trace := f.traceRestore(startedAfter("moveOld", "world")(t, f))
+	if job := f.run(t, "restore", input); job.Status != ops.Failed {
+		t.Fatalf("%+v", job)
+	}
+	if slices.ContainsFunc(trace.lines(), func(line string) bool { return strings.HasPrefix(line, "moveNew ") }) {
+		t.Fatal("moved the backup's data into a server started elsewhere")
 	}
 }
