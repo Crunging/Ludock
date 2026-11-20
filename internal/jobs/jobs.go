@@ -130,7 +130,10 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	}, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
 		return map[string]any{"action": "command"}, nil
 	}})
-	runner.Register("restore", ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register("restore", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		result, err := j.runRestore(ctx, job)
+		return warnedResult(job, result, err)
+	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume
 		}
