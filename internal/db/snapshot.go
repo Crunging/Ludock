@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Crunging/Ludock/internal/apperr"
 )
 
@@ -54,6 +56,9 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 	defer os.RemoveAll(work)
 	copied := filepath.Join(work, "copy.db")
 	if _, err := d.ExecContext(ctx, "VACUUM INTO ?", copied); err != nil {
+		return nil, err
+	}
+	if err := settleOperations(ctx, copied); err != nil {
 		return nil, err
 	}
 	database, err := os.Open(copied)
@@ -107,6 +112,26 @@ func (d *DB) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	return &Snapshot{File: archive, Size: counter.n, Checksum: hex.EncodeToString(digest.Sum(nil))}, nil
+}
+
+// settleOperations ends the copy's queued and running operations: restored
+// later, they would stop servers long after they were asked for, or recover
+// work whose result the copy never saw, such as an archive recorded since.
+// The copy also leaves WAL mode, so the database is one file.
+func settleOperations(ctx context.Context, path string) error {
+	conn, err := sql.Open("sqlite", fileURI(path, nil))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetMaxOpenConns(1)
+	if _, err := conn.ExecContext(ctx, "PRAGMA journal_mode = DELETE"); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `UPDATE operations SET status='interrupted', updated_at=?,
+    error='Ludock’s data was saved while this was waiting or running, and it wasn’t run again after the data was restored.'
+    WHERE status IN ('queued','running')`, Now())
+	return err
 }
 
 type countingWriter struct{ n int64 }
@@ -178,15 +203,37 @@ func RestoreSnapshot(archivePath, dbPath string) (savedAt time.Time, err error) 
 	if err := checkRestored(filepath.Join(work, base), key); err != nil {
 		return savedAt, err
 	}
-	// The key goes first: a database without its key never starts, so an
-	// interruption between the two leaves nothing that looks restored.
-	if err := os.Rename(filepath.Join(work, keyFolder), filepath.Join(folder, keyFolder)); err != nil {
+	// The database goes first: without its key it never starts, so an
+	// interruption between the two can't pass for a new installation.
+	if err := placeRestored(work, folder, base); err != nil {
 		return savedAt, err
 	}
-	if err := os.Rename(filepath.Join(work, base), filepath.Join(folder, base)); err != nil {
+	if err := placeRestored(work, folder, keyFolder); err != nil {
+		os.Remove(filepath.Join(folder, base))
 		return savedAt, err
 	}
 	return savedAt, syncPath(folder)
+}
+
+// placeRestored moves name from work into folder, never replacing anything
+// created there since the restore checked.
+func placeRestored(work, folder, name string) error {
+	source, target := filepath.Join(work, name), filepath.Join(folder, name)
+	err := unix.Renameat2(unix.AT_FDCWD, source, unix.AT_FDCWD, target, unix.RENAME_NOREPLACE)
+	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
+		// Some filesystems lack RENAME_NOREPLACE.
+		if _, statErr := os.Lstat(target); !errors.Is(statErr, os.ErrNotExist) {
+			return errRestoreInUse
+		}
+		err = os.Rename(source, target)
+	}
+	if errors.Is(err, unix.EEXIST) || errors.Is(err, unix.ENOTEMPTY) {
+		return errRestoreInUse
+	}
+	if err != nil {
+		return err
+	}
+	return syncPath(folder)
 }
 
 // extractSnapshot writes the archive's database and key into work and

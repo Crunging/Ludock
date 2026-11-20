@@ -11,6 +11,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Crunging/Ludock/internal/docker"
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/servers"
 )
 
 // dataFiles lists the saves in folder, oldest first.
@@ -32,7 +36,11 @@ func dataFiles(t *testing.T, folder string) []string {
 // forceDue makes the next save, or its copy, due now.
 func (f *copyFixture) forceDue(t *testing.T, key string) {
 	t.Helper()
-	track, err := f.s.dataTrack(ctx, key)
+	folder := f.main
+	if key == dataCopyKey {
+		folder = f.copies
+	}
+	track, err := f.s.dataTrack(ctx, key, folder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +97,7 @@ func TestSaveDataWritesOwnerOnlyArchive(t *testing.T) {
 	if err := f.s.SaveData(ctx); err != nil || len(dataFiles(t, f.main)) != 1 {
 		t.Fatal("saved again at once", err)
 	}
-	track, _ := f.s.dataTrack(ctx, dataSaveKey)
+	track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
 	track.At -= dataSoonest.Milliseconds()
 	f.s.DB.SetSetting(ctx, nil, dataSaveKey, track)
 	if due, err := f.s.dataDue(ctx, track, f.main, time.Now()); err != nil || !due {
@@ -158,7 +166,7 @@ func TestSaveDataInterrupted(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	f.s.copies.leave(f.main)
-	if track, _ := f.s.dataTrack(ctx, dataSaveKey); track.Failures != 0 || track.At != 0 {
+	if track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main); track.Failures != 0 || track.At != 0 {
 		t.Fatal("shutdown recorded as a save or a failure", track)
 	}
 	for _, name := range dataFiles(t, f.main) {
@@ -191,7 +199,7 @@ func TestSaveDataFailingFolder(t *testing.T) {
 		if err := f.s.SaveData(ctx); err != nil {
 			t.Fatal(err)
 		}
-		track, _ := f.s.dataTrack(ctx, dataSaveKey)
+		track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
 		if track.Failures != attempt || track.NextAt <= time.Now().UnixMilli() || !strings.Contains(track.Problem, "missing") {
 			t.Fatal(attempt, track)
 		}
@@ -199,7 +207,7 @@ func TestSaveDataFailingFolder(t *testing.T) {
 		if err := f.s.SaveData(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if again, _ := f.s.dataTrack(ctx, dataSaveKey); again.Failures != attempt {
+		if again, _ := f.s.dataTrack(ctx, dataSaveKey, f.main); again.Failures != attempt {
 			t.Fatal("retried before its backoff", again)
 		}
 		track.NextAt = 0
@@ -220,7 +228,7 @@ func TestSaveDataFailingFolder(t *testing.T) {
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if track, _ := f.s.dataTrack(ctx, dataSaveKey); track.Failures != 0 || track.Alerted || len(dataFiles(t, f.main)) != 1 {
+	if track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main); track.Failures != 0 || track.Alerted || len(dataFiles(t, f.main)) != 1 {
 		t.Fatal("after the folder came back", track)
 	}
 }
@@ -232,7 +240,7 @@ func TestSaveDataKeepsTheReserve(t *testing.T) {
 	if err := f.s.SaveData(ctx); err != nil {
 		t.Fatal(err)
 	}
-	track, _ := f.s.dataTrack(ctx, dataSaveKey)
+	track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
 	if track.Failures != 1 || !strings.Contains(track.Problem, "reserve") || len(dataFiles(t, f.main)) != 0 {
 		t.Fatal(track, dataFiles(t, f.main))
 	}
@@ -269,7 +277,7 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 	if string(original) != string(copied) {
 		t.Fatal("the copy differs from the save")
 	}
-	if track, _ := f.s.dataTrack(ctx, dataCopyKey); track.Name != newest || track.Folder != f.copies {
+	if track, _ := f.s.dataTrack(ctx, dataCopyKey, f.copies); track.Name != newest || track.Folder != f.copies {
 		t.Fatal("copy track", track)
 	}
 
@@ -287,10 +295,75 @@ func TestCopyDataFollowsSaves(t *testing.T) {
 	if after := dataFiles(t, f.copies); !slices.Equal(after, copies) {
 		t.Fatal("losing the backup folder removed copies", after)
 	}
-	if track, _ := f.s.dataTrack(ctx, dataCopyKey); track.Failures != 1 || track.Problem != errCopySource.Message {
+	if track, _ := f.s.dataTrack(ctx, dataCopyKey, f.copies); track.Failures != 1 || track.Problem != errCopySource.Message {
 		t.Fatal(track)
 	}
 	if status := f.s.Status(ctx); !strings.Contains(status.DataProblem, "second copy") {
 		t.Fatal("status", status.DataProblem)
+	}
+}
+
+// A backup folder that a game server mounts would let its file helpers read
+// the save, so nothing is written there.
+func TestSaveDataRefusesGameData(t *testing.T) {
+	f := newCopyFixture(t)
+	f.engine.AddContainer(fakedocker.GameOptions{ID: "mc", Name: "mc", Image: "itzg/minecraft-server", Running: true,
+		Mounts: []docker.MountPoint{{Type: "bind", Source: f.main, Destination: "/data", RW: true}}})
+	f.s.Observer = &servers.Observer{Docker: f.s.Docker}
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
+	if track.Failures != 1 || !strings.Contains(track.Problem, "overlaps game data") || len(dataFiles(t, f.main)) != 0 {
+		t.Fatal(track, dataFiles(t, f.main))
+	}
+}
+
+// A save damaged in the backup folder after it was verified isn't copied,
+// and the second folder keeps the copies it has.
+func TestCopyDataChecksTheSnapshot(t *testing.T) {
+	f := newCopyFixture(t)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.CopyData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := dataFiles(t, f.copies)
+	time.Sleep(1100 * time.Millisecond)
+	f.forceDue(t, dataSaveKey)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := f.s.dataTrack(ctx, dataSaveKey, f.main)
+	os.WriteFile(filepath.Join(f.main, saved.Name), []byte("damaged"), 0o600)
+	if err := f.s.CopyData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if track, _ := f.s.dataTrack(ctx, dataCopyKey, f.copies); track.Failures != 1 || track.Problem != errCopySource.Message {
+		t.Fatal(track)
+	}
+	if after := dataFiles(t, f.copies); !slices.Equal(after, first) {
+		t.Fatal("second folder after a damaged save", after)
+	}
+}
+
+// Failures in one backup folder don't delay the first save in the folder
+// chosen instead.
+func TestSaveDataNewFolderSavesAtOnce(t *testing.T) {
+	f := newCopyFixture(t)
+	os.Remove(f.main)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.s.DB.Exec(`UPDATE settings SET value_json=json_set(value_json,'$.destination',?,'$.copyTo','') WHERE key='backups'`, f.other)
+	if err := f.s.SaveData(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(dataFiles(t, f.other)) != 1 {
+		t.Fatal("the new folder waited for the old one's retry")
+	}
+	if status := f.s.Status(ctx); status.DataSavedAt == 0 || status.DataProblem != "" {
+		t.Fatal("status", status.DataSavedAt, status.DataProblem)
 	}
 }

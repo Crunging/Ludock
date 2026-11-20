@@ -369,18 +369,26 @@ func (s *Service) assertCopyFolder(ctx context.Context, folder, main string) err
 			}
 		}
 	}
+	err = s.separateFromGames(ctx, folder, fail("BACKUP_MOUNT_UNVERIFIED",
+		"Ludock could not check that the second folder is separate from game data. Check its Docker connection and try again."))
+	if apperr.Is(err, "BACKUP_SOURCE_OVERLAP") {
+		return fail("BACKUP_SOURCE_OVERLAP", "The second folder overlaps game data. Mount a separate folder.")
+	}
+	return err
+}
+
+// separateFromGames checks folder against every game server's data;
+// unlisted is the error when the servers can't be listed.
+func (s *Service) separateFromGames(ctx context.Context, folder string, unlisted error) error {
 	if s.Observer == nil {
 		return nil
 	}
 	observed, err := s.Observer.List(ctx)
 	if err != nil {
-		return fail("BACKUP_MOUNT_UNVERIFIED", "Ludock could not check that the second folder is separate from game data. Check its Docker connection and try again.")
+		return unlisted
 	}
 	for _, entry := range observed {
 		if err := s.AssertSeparateDestination(ctx, entry.Observation, Settings{Destination: folder}); err != nil {
-			if apperr.Is(err, "BACKUP_SOURCE_OVERLAP") {
-				return fail("BACKUP_SOURCE_OVERLAP", "The second folder overlaps game data. Mount a separate folder.")
-			}
 			return err
 		}
 	}

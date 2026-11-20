@@ -147,12 +147,23 @@ func TestSnapshotArchiveLayout(t *testing.T) {
 }
 
 // A restore puts the data back into an empty folder, where Ludock opens it
-// with its own key. It refuses a folder that already has data, an archive
+// with its own key and no saved work left to run. It refuses a folder that already has data, an archive
 // with anything else in it, and a key from another installation.
 func TestRestoreSnapshot(t *testing.T) {
 	d, _ := openTemp(t)
 	if err := d.SetSetting(context.Background(), nil, "restore-check", "kept"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT OR IGNORE INTO docker_hosts(id,name,created_at) VALUES('host','host',1);
+    INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+    VALUES('server','host','mc','Minecraft','minecraft','active',1,'',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"queued", "running", "succeeded"} {
+		if _, err := d.Exec(`INSERT INTO operations(id,server_id,actor_id,kind,status,phase,input_json,binding_revision,created_at,updated_at)
+      VALUES(?,'server','actor','restart',?,'queued','{}',1,1,1)`, status, status); err != nil {
+			t.Fatal(err)
+		}
 	}
 	archive := saveSnapshot(t, d)
 
@@ -167,6 +178,12 @@ func TestRestoreSnapshot(t *testing.T) {
 	var value string
 	if _, err := restored.Setting(context.Background(), "restore-check", &value); err != nil || value != "kept" {
 		t.Fatal("restored data lost a setting", value, err)
+	}
+	// Work waiting or running when the data was saved isn't run again.
+	var statuses string
+	restored.QueryRow("SELECT group_concat(id||'='||status, ' ') FROM (SELECT id,status FROM operations ORDER BY id)").Scan(&statuses)
+	if statuses != "queued=interrupted running=interrupted succeeded=succeeded" {
+		t.Fatal("restored operations", statuses)
 	}
 	restored.Close()
 	if _, err := RestoreSnapshot(archive, target); !apperr.Is(err, "RESTORE_DATA_EXISTS") {

@@ -2,9 +2,7 @@ package backups
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -39,18 +37,26 @@ const (
 	dataCopyKey    = "data-save-copy"
 )
 
-var dataName = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
+var (
+	dataName = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar$`)
+	// dataPartial is a partial file CopyFile left writing a save.
+	dataPartial = regexp.MustCompile(`^ludock-data-\d{8}-\d{6}\.tar\.[0-9a-f]{8}\.partial$`)
+)
 
 const dataStamp = "20060102-150405"
 
 func dataFileName(at time.Time) string { return "ludock-data-" + at.UTC().Format(dataStamp) + ".tar" }
 
 // dataTrack is the state of saving into one folder: the last save that
-// succeeded, and the failures since.
+// succeeded, with the snapshot's own size and checksum, and the failures
+// since in FailedIn.
 type dataTrack struct {
 	At           int64  `json:"at"`
 	Name         string `json:"name"`
 	Folder       string `json:"folder"`
+	Size         int64  `json:"size"`
+	Checksum     string `json:"checksum"`
+	FailedIn     string `json:"failedIn,omitempty"`
 	Failures     int    `json:"failures,omitempty"`
 	FailingSince int64  `json:"failingSince,omitempty"`
 	Problem      string `json:"problem,omitempty"`
@@ -58,9 +64,14 @@ type dataTrack struct {
 	Alerted      bool   `json:"alerted,omitempty"`
 }
 
-func (s *Service) dataTrack(ctx context.Context, key string) (dataTrack, error) {
+// dataTrack reads a track for folder: failures in another folder don't
+// hold back or alert for this one.
+func (s *Service) dataTrack(ctx context.Context, key, folder string) (dataTrack, error) {
 	var track dataTrack
 	_, err := s.DB.Setting(ctx, key, &track)
+	if track.FailedIn != folder {
+		track.FailedIn, track.Failures, track.FailingSince, track.Problem, track.NextAt, track.Alerted = "", 0, 0, "", 0, false
+	}
 	return track, err
 }
 
@@ -76,7 +87,11 @@ func dataProblem(err error) string {
 		return "The backup folder is down to its free-space reserve."
 	case apperr.Is(err, "BACKUP_COPY_STALLED"):
 		return "The backup folder stopped responding."
-	case apperr.Is(err, "BACKUP_COPY_FOLDER"), apperr.Is(err, "BACKUP_DESTINATION"), apperr.Is(err, "BACKUP_MOUNT_UNVERIFIED"):
+	case apperr.Is(err, "BACKUP_SOURCE_OVERLAP"):
+		return "The backup folder overlaps game data, where game servers could read it."
+	case apperr.Is(err, "BACKUP_MOUNT_UNVERIFIED"):
+		return "Ludock couldn’t check that the backup folder is a mount separate from game data."
+	case apperr.Is(err, "BACKUP_COPY_FOLDER"), apperr.Is(err, "BACKUP_DESTINATION"):
 		return "The backup folder is missing, not mounted, or not writable."
 	}
 	return "The copy couldn’t be written to the backup folder."
@@ -110,8 +125,9 @@ func (s *Service) changedSince(ctx context.Context, at int64) (bool, error) {
 	var changed bool
 	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM backups WHERE state='complete' AND (created_at>? OR kept_at>?))
     OR EXISTS(SELECT 1 FROM audit_log WHERE created_at>? AND (action LIKE 'user.%' OR action LIKE 'settings.%' OR action LIKE 'schedule.%'
-      OR action LIKE 'server.sharing.%' OR action LIKE 'availability.%' OR action LIKE 'auth.password.%'
-      OR action IN ('notifications.configured','backup.released','backup.deleted','auth.setup.completed')))`, at, at, at).Scan(&changed)
+      OR action LIKE 'server.sharing.%' OR action LIKE 'availability.%'
+      OR action IN ('notifications.configured','backup.released','backup.deleted','auth.setup.completed','auth.password.changed',
+        'auth.two-factor.enabled','auth.two-factor.disabled')))`, at, at, at).Scan(&changed)
 	return changed, err
 }
 
@@ -123,7 +139,7 @@ func (s *Service) SaveData(ctx context.Context) error {
 	if err != nil || settings == nil {
 		return err
 	}
-	track, err := s.dataTrack(ctx, dataSaveKey)
+	track, err := s.dataTrack(ctx, dataSaveKey, settings.Destination)
 	if err != nil {
 		return err
 	}
@@ -131,8 +147,8 @@ func (s *Service) SaveData(ctx context.Context) error {
 	if due, err := s.dataDue(ctx, track, settings.Destination, now); err != nil || !due {
 		return err
 	}
-	name := dataFileName(now)
-	err = s.writeData(ctx, *settings, name)
+	done := dataTrack{At: now.UnixMilli(), Name: dataFileName(now), Folder: settings.Destination}
+	err = s.writeData(ctx, *settings, &done)
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -140,7 +156,7 @@ func (s *Service) SaveData(ctx context.Context) error {
 	if err != nil {
 		problem = dataProblem(err)
 	}
-	if err := s.finishData(ctx, dataSaveKey, track, settings.Destination, name, now, problem); err != nil {
+	if err := s.finishData(ctx, dataSaveKey, track, done, problem); err != nil {
 		return err
 	}
 	if problem == "" && settings.CopyTo != "" {
@@ -149,20 +165,28 @@ func (s *Service) SaveData(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) writeData(ctx context.Context, settings Settings, name string) error {
-	if _, err := s.Storage.validateFolder(ctx, settings.Destination); err != nil {
-		return err
-	}
+// writeData snapshots the data and publishes it as done.Name, setting
+// done's size and checksum. The folder is checked like a game backup's,
+// and kept apart from game data, whose file helpers could read it.
+func (s *Service) writeData(ctx context.Context, settings Settings, done *dataTrack) error {
 	snapshot, err := s.DB.Snapshot(ctx)
 	if err != nil {
 		return errDataSnapshot
 	}
 	defer snapshot.Close()
+	done.Size, done.Checksum = snapshot.Size, snapshot.Checksum
 	if testHook != nil {
 		testHook("saving")
 	}
 	return s.isolate(ctx, settings.Destination, func(ctx context.Context, progress func()) error {
-		return s.Storage.publishData(ctx, snapshot, settings.Destination, name, snapshot.Size, snapshot.Checksum, settings.ReserveBytes, progress)
+		if _, err := s.Storage.validateFolder(ctx, settings.Destination); err != nil {
+			return err
+		}
+		if err := s.separateFromGames(ctx, settings.Destination, fail("BACKUP_MOUNT_UNVERIFIED", "")); err != nil {
+			return err
+		}
+		progress()
+		return s.Storage.publishData(ctx, snapshot, settings.Destination, done.Name, snapshot.Size, snapshot.Checksum, settings.ReserveBytes, progress)
 	})
 }
 
@@ -174,19 +198,16 @@ func (s *Service) CopyData(ctx context.Context) error {
 	if err != nil || settings == nil || settings.CopyTo == "" {
 		return err
 	}
-	saved, err := s.dataTrack(ctx, dataSaveKey)
-	if err != nil || saved.Name == "" || saved.Folder != settings.Destination {
+	saved, err := s.dataTrack(ctx, dataSaveKey, settings.Destination)
+	if err != nil || saved.Name == "" || saved.Folder != settings.Destination || saved.Checksum == "" {
 		return err
 	}
-	track, err := s.dataTrack(ctx, dataCopyKey)
+	track, err := s.dataTrack(ctx, dataCopyKey, settings.CopyTo)
 	if err != nil {
 		return err
 	}
-	if track.Folder != settings.CopyTo {
-		track = dataTrack{Folder: settings.CopyTo}
-	}
 	now := time.Now()
-	if track.Name == saved.Name || now.UnixMilli() < track.NextAt {
+	if track.Folder == settings.CopyTo && track.Name == saved.Name || now.UnixMilli() < track.NextAt {
 		return nil
 	}
 	err = s.isolate(ctx, settings.CopyTo, func(ctx context.Context, progress func()) error {
@@ -200,20 +221,13 @@ func (s *Service) CopyData(ctx context.Context) error {
 			return err
 		}
 		progress()
+		// CopyFile checks the save against the snapshot it was made from.
 		source, err := s.Storage.openNamed(saved.Folder, saved.Name)
 		if err != nil {
 			return errCopySource
 		}
 		defer source.Close()
-		digest := sha256.New()
-		size, err := io.Copy(digestWriter{context.WithValue(ctx, progressKey{}, progress), digest}, source)
-		if err != nil {
-			return errCopySource
-		}
-		if _, err := source.Seek(0, io.SeekStart); err != nil {
-			return errCopySource
-		}
-		return s.Storage.publishData(ctx, source, settings.CopyTo, saved.Name, size, hex.EncodeToString(digest.Sum(nil)), settings.ReserveBytes, progress)
+		return s.Storage.publishData(ctx, source, settings.CopyTo, saved.Name, saved.Size, saved.Checksum, settings.ReserveBytes, progress)
 	})
 	if ctx.Err() != nil {
 		return nil
@@ -222,22 +236,25 @@ func (s *Service) CopyData(ctx context.Context) error {
 	if err != nil {
 		problem = copyProblem(err)
 	}
-	return s.finishData(ctx, dataCopyKey, track, settings.CopyTo, saved.Name, now, problem)
+	return s.finishData(ctx, dataCopyKey, track,
+		dataTrack{At: now.UnixMilli(), Name: saved.Name, Folder: settings.CopyTo, Size: saved.Size, Checksum: saved.Checksum}, problem)
 }
 
-// finishData records an attempt's result. The failure that reaches
-// copyAttemptsBeforeAlert queues one alert, in the same transaction, for
-// the run of failures.
-func (s *Service) finishData(ctx context.Context, key string, track dataTrack, folder, name string, now time.Time, problem string) error {
+// finishData records an attempt's result: done when it succeeded, or a
+// failure in done.Folder on track. The failure that reaches
+// copyAttemptsBeforeAlert queues one alert, in the same transaction, for the
+// run of failures.
+func (s *Service) finishData(ctx context.Context, key string, track, done dataTrack, problem string) error {
 	if problem == "" {
-		return s.DB.SetSetting(ctx, nil, key, dataTrack{At: now.UnixMilli(), Name: name, Folder: folder})
+		return s.DB.SetSetting(ctx, nil, key, done)
 	}
 	if track.Failures == 0 {
-		track.FailingSince = now.UnixMilli()
+		track.FailingSince = done.At
 	}
+	track.FailedIn = done.Folder
 	track.Failures++
 	track.Problem = problem
-	track.NextAt = now.Add(copyRetry[min(track.Failures, len(copyRetry))-1]).UnixMilli()
+	track.NextAt = time.UnixMilli(done.At).Add(copyRetry[min(track.Failures, len(copyRetry))-1]).UnixMilli()
 	alert := track.Failures >= copyAttemptsBeforeAlert && !track.Alerted && s.DataFailed != nil
 	track.Alerted = track.Alerted || alert
 	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
@@ -263,21 +280,24 @@ func (s *Service) finishData(ctx context.Context, key string, track dataTrack, f
 // dataStatus is when Ludock's own data was last saved, 0 if never, and why
 // saving it or its second copy is failing.
 func (s *Service) dataStatus(ctx context.Context, settings Settings) (savedAt int64, problem string) {
-	saved, err := s.dataTrack(ctx, dataSaveKey)
+	saved, err := s.dataTrack(ctx, dataSaveKey, settings.Destination)
 	if err != nil {
 		return 0, "Ludock couldn’t read when its own data was last saved."
 	}
+	if saved.Folder == settings.Destination {
+		savedAt = saved.At
+	}
 	if saved.Failures > 0 {
-		return saved.At, "Ludock couldn’t save its own data: " + saved.Problem + " It tries again shortly."
+		return savedAt, "Ludock couldn’t save its own data: " + saved.Problem + " It tries again shortly."
 	}
 	if settings.CopyTo == "" {
-		return saved.At, ""
+		return savedAt, ""
 	}
-	copied, err := s.dataTrack(ctx, dataCopyKey)
-	if err == nil && copied.Failures > 0 && copied.Folder == settings.CopyTo {
-		return saved.At, "The second copy of Ludock’s own data couldn’t be made: " + copied.Problem + " Ludock keeps trying."
+	copied, err := s.dataTrack(ctx, dataCopyKey, settings.CopyTo)
+	if err == nil && copied.Failures > 0 {
+		return savedAt, "The second copy of Ludock’s own data couldn’t be made: " + copied.Problem + " Ludock keeps trying."
 	}
-	return saved.At, ""
+	return savedAt, ""
 }
 
 // publishData writes a save into directory through CopyFile, then removes
@@ -297,7 +317,8 @@ func (s *Storage) publishData(ctx context.Context, source io.Reader, directory, 
 	}
 	keep := dataKeeps(names, time.Local)
 	for _, saved := range names {
-		if !keep[saved] && saved != name {
+		// Only saves older than the one just verified make way for it.
+		if !keep[saved] && saved < name {
 			s.removeFile(directory, saved, nil)
 		}
 	}
@@ -329,7 +350,7 @@ func (s *Storage) removeDataLeftovers(directory string) error {
 	}
 	defer dir.close()
 	for _, name := range names {
-		if strings.HasPrefix(name, "ludock-data-") && strings.HasSuffix(name, ".partial") {
+		if dataPartial.MatchString(name) {
 			if err := unix.Unlinkat(dir.fd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 				return err
 			}
