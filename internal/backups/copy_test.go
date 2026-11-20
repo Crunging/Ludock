@@ -538,11 +538,7 @@ func TestStuckSecondFolderIsAbandoned(t *testing.T) {
 			t.Fatal(what, "waited on a stuck write")
 		}
 	}
-	stuck := func() bool {
-		f.s.copies.mu.Lock()
-		defer f.s.copies.mu.Unlock()
-		return f.s.copies.stuck[f.copies]
-	}
+	stuck := func() bool { return f.s.Storage.folders.busyIn(f.copies, laneWork) > 0 }
 
 	within("copying", func() error { return f.s.CopyDue(ctx) })
 	if state, attempts, _, problem := f.row(t, backup.ID); state != "pending" || attempts != 1 || problem != errCopyStalled.Message {
@@ -824,10 +820,7 @@ func TestStalledBackupFolderIsGivenUp(t *testing.T) {
 	}
 	close(stall)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		f.s.copies.mu.Lock()
-		hung := f.s.copies.hung[f.main]
-		f.s.copies.mu.Unlock()
-		if hung == 0 {
+		if f.s.Storage.folders.busyIn(f.main, laneLook) == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -859,10 +852,7 @@ func TestStalledRemovalIsGivenUp(t *testing.T) {
 	}
 	close(release)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		f.s.copies.mu.Lock()
-		hung := f.s.copies.hung[f.main]
-		f.s.copies.mu.Unlock()
-		if hung == 0 {
+		if f.s.Storage.folders.busyIn(f.main, laneLook) == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -917,11 +907,17 @@ func TestStalledArchiveReadIsGivenUp(t *testing.T) {
 	if waited := time.Since(started); waited > 5*time.Second {
 		t.Fatal("a stuck read held its reader", waited)
 	}
+	if f.s.Storage.folders.busyIn(f.main, laneArchive) != 1 {
+		t.Fatal("the folder guard doesn't record the stuck read")
+	}
 	close(release)
 	select {
 	case <-archive.exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stuck read never let go of the file")
+	}
+	if f.s.Storage.folders.busyIn(f.main, laneArchive) != 0 {
+		t.Fatal("the stuck read stayed recorded after it returned")
 	}
 	whole, err := f.s.Storage.Open(f.main, backup.ID)
 	if err != nil {
@@ -932,4 +928,14 @@ func TestStalledArchiveReadIsGivenUp(t *testing.T) {
 	if n, err := io.Copy(io.Discard, struct{ io.Reader }{whole}); err != nil || n != info.Size() || n == 0 {
 		t.Fatal(n, err)
 	}
+}
+
+// busyIn reports the claims and abandoned calls in a folder's lane.
+func (g *folderGuard) busyIn(folder string, l lane) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if counts := g.busy[folder]; counts != nil {
+		return counts[l]
+	}
+	return 0
 }

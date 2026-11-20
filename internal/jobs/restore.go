@@ -103,7 +103,7 @@ func persistJournal(job *ops.Context, index int, phase string) error {
 	return saveRestore(job, *state, "restore_"+phase)
 }
 
-func stageName(job *ops.Context) string { return ".ludock-restore-" + job.Job.ID }
+func stageName(job *ops.Context) string { return helper.StageName(job.Job.ID) }
 
 // removalLimit bounds a restore step that deletes a whole data root's old or
 // failed copy.

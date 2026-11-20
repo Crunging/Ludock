@@ -29,7 +29,23 @@ type RestoreRequest struct {
 // RestoreFailure is the only error text the restore helper prints.
 const RestoreFailure = "Restore data changed, is unsafe, or cannot be accessed. Keep the server stopped and review recovery."
 
-var stagePattern = regexp.MustCompile(`^\.ludock-restore-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+// StagePrefix starts the name of a restore's stage folder, which sits in the
+// root it restores; no restored path may start with it.
+const StagePrefix = ".ludock-restore-"
+
+// StageName names the stage folder of the restore with that operation ID.
+func StageName(id string) string { return StagePrefix + id }
+
+func validStage(name string) bool {
+	id, ok := strings.CutPrefix(name, StagePrefix)
+	return ok && ValidID(id)
+}
+
+var idPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// ValidID reports whether id is a lowercase RFC 4122 UUID, as Ludock gives
+// operations and backups.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
 
 type restoreHelper struct {
 	request RestoreRequest
@@ -95,7 +111,7 @@ func (h *restoreHelper) moveContents(source, destination fd, omitted string) err
 		if name == omitted {
 			continue
 		}
-		if strings.HasPrefix(name, ".ludock-restore-") {
+		if strings.HasPrefix(name, StagePrefix) {
 			return errUnsafe
 		}
 		sourceInfo, err := lstatAt(source, name)
@@ -198,7 +214,7 @@ func (h *restoreHelper) pinStage(root fd, optional bool) (fd, error) {
 }
 
 func (h *restoreHelper) run() (any, error) {
-	if !stagePattern.MatchString(h.request.Stage) {
+	if !validStage(h.request.Stage) {
 		return nil, errUnsafe
 	}
 	root, err := h.pinRoot()
@@ -322,7 +338,7 @@ func (h *restoreHelper) run() (any, error) {
 			if name == h.request.Stage {
 				continue
 			}
-			if strings.HasPrefix(name, ".ludock-restore-") {
+			if strings.HasPrefix(name, StagePrefix) {
 				return nil, errUnsafe
 			}
 			if err := h.removeEntry(root, name, 0); err != nil {
@@ -418,7 +434,7 @@ func itemParts(item string) ([]string, error) {
 		return nil, errUnsafe
 	}
 	for _, part := range parts {
-		if strings.HasPrefix(part, ".ludock-restore-") {
+		if strings.HasPrefix(part, StagePrefix) {
 			return nil, errUnsafe
 		}
 	}
@@ -620,27 +636,47 @@ func RunRestore(argument string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-type RestoreRecord struct {
-	Name  string   `json:"name"`
-	Type  string   `json:"type"`
-	Size  *float64 `json:"size"`
-	UID   *float64 `json:"uid"`
-	GID   *float64 `json:"gid"`
-	Mode  *float64 `json:"mode"`
+// ExtractRequest is restore-extract's argument. Its fields, and
+// ExtractRecord's, stay in key order: the encoding is the one a map gave.
+type ExtractRequest struct {
+	MaxBytes     int64  `json:"maxBytes"`
+	ReserveBytes *int64 `json:"reserveBytes"`
+	Root         string `json:"root"`
+	Stage        string `json:"stage"`
+}
+
+// ExtractRecord is the line before each entry restore-extract reads. The
+// extractor refuses one with a missing or null number, except mtime.
+type ExtractRecord struct {
+	GID   *int64   `json:"gid"`
+	Mode  *int64   `json:"mode"`
 	Mtime *float64 `json:"mtime"`
+	Name  string   `json:"name"`
+	Size  *int64   `json:"size"`
+	Type  string   `json:"type"`
+	UID   *int64   `json:"uid"`
+}
+
+// checked returns the record's numbers when it is a file or directory with
+// all of them in range.
+func (r *ExtractRecord) checked() (size, uid, gid, mode int64, ok bool) {
+	size, okSize := inRange(r.Size, 0, 1<<53-1)
+	uid, okUID := inRange(r.UID, 0, 4294967294)
+	gid, okGID := inRange(r.GID, 0, 4294967294)
+	mode, okMode := inRange(r.Mode, -(1<<53 - 1), 1<<53-1)
+	ok = (r.Type == "file" || r.Type == "directory") && okSize && okUID && okGID && okMode
+	return size, uid, gid, mode, ok
+}
+
+func inRange(value *int64, low, high int64) (int64, bool) {
+	if value == nil || *value < low || *value > high {
+		return 0, false
+	}
+	return *value, true
 }
 
 // ExtractFailure is the only error text the extractor prints.
 const ExtractFailure = "Restore extraction failed: the archive or destination changed or is unsafe."
-
-var extractStage = regexp.MustCompile(`^\.ludock-restore-[0-9a-f-]{36}$`)
-
-func safeInteger(value *float64, low, high float64) (int64, bool) {
-	if value == nil || *value != math.Trunc(*value) || *value < low || *value > high || math.Abs(*value) > 1<<53-1 {
-		return 0, false
-	}
-	return int64(*value), true
-}
 
 func recordParts(name string) ([]string, error) {
 	if strings.Contains(name, "\x00") || strings.Contains(name, "\\") || len(name) > 4096 {
@@ -784,16 +820,11 @@ func extractExit(err error) (int, string) {
 }
 
 func (x *extractor) run(argument string, stdin io.Reader) error {
-	var request struct {
-		Root         string   `json:"root"`
-		Stage        string   `json:"stage"`
-		MaxBytes     float64  `json:"maxBytes"`
-		ReserveBytes *float64 `json:"reserveBytes"`
-	}
-	if json.Unmarshal([]byte(argument), &request) != nil || !strings.HasPrefix(request.Root, "/") || !extractStage.MatchString(request.Stage) {
+	var request ExtractRequest
+	if json.Unmarshal([]byte(argument), &request) != nil || !strings.HasPrefix(request.Root, "/") || !validStage(request.Stage) {
 		return errUnsafe
 	}
-	reserve, ok := safeInteger(request.ReserveBytes, 0, 1<<53-1)
+	reserve, ok := inRange(request.ReserveBytes, 0, 1<<53-1)
 	if !ok {
 		return errUnsafe
 	}
@@ -836,20 +867,19 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 		if err != nil {
 			return err
 		}
-		var record RestoreRecord
+		var record ExtractRecord
 		if json.Unmarshal(bytes.TrimSuffix(line, []byte("\n")), &record) != nil {
 			return errUnsafe
 		}
 		count++
-		size, okSize := safeInteger(record.Size, 0, 1<<53-1)
-		uid, okUID := safeInteger(record.UID, 0, 4294967294)
-		gid, okGID := safeInteger(record.GID, 0, 4294967294)
-		mode, okMode := safeInteger(record.Mode, -(1<<53 - 1), 1<<53-1)
-		if count > 100000 || (record.Type != "file" && record.Type != "directory") || !okSize || !okUID || !okGID || !okMode {
+		size, uid, gid, mode, ok := record.checked()
+		if count > 100000 || !ok {
 			return errUnsafe
 		}
+		// Kept in float64: past 2^53 its rounding refuses streams an exact
+		// sum would take.
 		total += float64(size)
-		if total > request.MaxBytes {
+		if total > float64(request.MaxBytes) {
 			return errUnsafe
 		}
 		names, err := recordParts(record.Name)
@@ -860,7 +890,7 @@ func (x *extractor) run(argument string, stdin io.Reader) error {
 			return err
 		}
 		for _, name := range names {
-			if strings.HasPrefix(name, ".ludock-restore-") {
+			if strings.HasPrefix(name, StagePrefix) {
 				return errUnsafe
 			}
 		}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/tarstream"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
@@ -82,7 +83,7 @@ func ValidateEntry(header *tarstream.Header, roots []Root) error {
 	if header.Type != "file" && header.Type != "directory" {
 		return fail("UNSAFE_ARCHIVE", "Backups support regular files and directories. Remove symbolic links, hard links, and special files from the selected data roots before retrying.")
 	}
-	if slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, ".ludock-restore-") }) {
+	if slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, helper.StagePrefix) }) {
 		return fail("RESTORE_RECOVERY_REQUIRED", "A previous restore has staging data in this root. Complete its recovery before making a backup.")
 	}
 	if header.Size < 0 || header.Size > 1<<53-1 {
