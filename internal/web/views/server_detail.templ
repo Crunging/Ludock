@@ -638,6 +638,7 @@ templ AvailabilityForm(serverID string, policy monitor.Policy, recoveryOffered b
 			</label>
 			<p class="muted check-help">Until you turn this off. The server and its schedules keep running.</p>
 			if recoveryOffered {
+				<input type="hidden" name="recoverOffered" value="true"/>
 				<label class="check-label">
 					<input type="checkbox" name="recover" value="true" checked?={ policy.Recover }/>
 					Restart it if the game stops answering

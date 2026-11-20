@@ -176,3 +176,41 @@ func TestLiveHeaderAnnouncesFinishedWork(t *testing.T) {
 		t.Fatal("work still running:", trigger)
 	}
 }
+
+// The recovery switch isn't on the form while Ludock can't tell whether the
+// game supports it, such as when Docker is unreachable: saving another
+// monitoring option then leaves recovery as it was. The switch being on the
+// form and unticked turns it off.
+func TestSavingMonitoringKeepsRecoveryNotOffered(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	save := func(extra url.Values) {
+		t.Helper()
+		form := url.Values{"_csrf": {CSRFToken(p.admin.Token)}, "enabled": {"true"}, "graceSeconds": {"300"}, "diskPercent": {"90"},
+			"memoryPercent": {"90"}, "memoryMinutes": {"5"}}
+		for key, value := range extra {
+			form[key] = value
+		}
+		response := p.do("POST", "/servers/"+p.server+"/availability", p.admin, strings.NewReader(form.Encode()),
+			map[string]string{"HX-Request": "true"})
+		if response.Code != http.StatusOK {
+			t.Fatal(response.Code, response.Body.String())
+		}
+	}
+	recover := func() bool {
+		saved, _ := p.app.Monitor.Get(context.Background(), p.server)
+		return saved.Policy.Recover
+	}
+	save(url.Values{"recoverOffered": {"true"}, "recover": {"true"}})
+	if !recover() {
+		t.Fatal("recovery was not switched on")
+	}
+	save(url.Values{"maintenance": {"true"}})
+	if !recover() {
+		t.Fatal("a form without the switch turned recovery off")
+	}
+	save(url.Values{"recoverOffered": {"true"}})
+	if recover() {
+		t.Fatal("unticking the switch left recovery on")
+	}
+}

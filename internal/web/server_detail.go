@@ -297,6 +297,17 @@ func (s *Server) configureAvailability(w http.ResponseWriter, r *http.Request, r
 	values := map[string]any{"enabled": r.PostFormValue("enabled") == "true", "maintenance": r.PostFormValue("maintenance") == "true",
 		"diskAlert": r.PostFormValue("diskAlert") == "true", "memoryAlert": r.PostFormValue("memoryAlert") == "true",
 		"recover": r.PostFormValue("recover") == "true"}
+	// The switch is left off the form while Ludock can't tell whether the
+	// game supports recovery, such as during a Docker outage; that is not
+	// the administrator turning it off.
+	if r.PostFormValue("recoverOffered") != "true" {
+		saved, err := s.App.Monitor.Get(r.Context(), id)
+		if err != nil {
+			s.fail(w, r, request, err)
+			return
+		}
+		values["recover"] = saved.Policy.Recover
+	}
 	for _, name := range []string{"graceSeconds", "diskPercent", "memoryPercent", "memoryMinutes"} {
 		value, err := strconv.ParseFloat(r.PostFormValue(name), 64)
 		if err != nil {
