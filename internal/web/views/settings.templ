@@ -155,7 +155,7 @@ templ SettingsPage(page Page, s SettingsView) {
 						@ProxyForm(s.Advanced.Proxies)
 						<section class="settings-group" aria-labelledby="notification-deliveries-title">
 							<h3 id="notification-deliveries-title" tabindex="-1">Recent deliveries</h3>
-							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-sync="this:drop" hx-swap="innerHTML">
+							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-sync="this:replace" hx-swap="innerHTML">
 								<p class="muted" role="status">Loading notification deliveries…</p>
 							</div>
 						</section>
@@ -918,7 +918,7 @@ templ Deliveries(d DeliveriesView) {
 		if d.pending() {
 			hx-get="/fragments/settings/deliveries"
 			hx-trigger="every 5s"
-			hx-sync="#notification-deliveries:drop"
+			hx-sync="#notification-deliveries:replace"
 			hx-target="#notification-deliveries"
 		}
 	>

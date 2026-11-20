@@ -590,7 +590,9 @@ func (s *Service) Deliver(ctx context.Context) error {
 		s.active, s.activeTo = id, d
 		s.mu.Unlock()
 		claimedAt := db.Now()
-		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
+		// The previous failure is cleared until this attempt's outcome, so a
+		// retry in flight doesn't count against its destination's health.
+		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?, failure_code=NULL
       WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
 			claimedAt, claimedAt+backoff, id, r.attempts, r.retries, r.lastAttempt)
 		claimed := int64(0)
@@ -620,8 +622,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 			cancelSend(nil)
 		}
 		release := func() {
-			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
-        WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, id, claimedAt); err != nil {
+			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?, failure_code=?
+        WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, r.failure, id, claimedAt); err != nil {
 				log.Warn("Could not release a notification delivery; it will be retried after its delay")
 			}
 			finishSend()

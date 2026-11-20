@@ -130,3 +130,36 @@ func TestCleanupKeepsNewestDelivery(t *testing.T) {
 		t.Fatal("forgot the destination delivered")
 	}
 }
+
+// Retrying an old failure after the destination recovered doesn't mark it
+// failing again while the retry is being sent.
+func TestRetryInFlightKeepsHealth(t *testing.T) {
+	var sending chan struct{}
+	release := make(chan struct{})
+	s := setup(t, func(*http.Request) (*http.Response, error) {
+		if sending != nil {
+			close(sending)
+			<-release
+		}
+		return respond(204, "")
+	})
+	s.Notify(ServerProblems, "new", "valheim: the server is back up.")
+	s.Deliver(ctx)
+	s.DB.Exec(`INSERT INTO notification_deliveries (id,event_key,destination,message,next_attempt_at,created_at,state,attempts,
+		retry_attempts,last_attempt_at,failure_code) VALUES ('old','old','discord','valheim: the server is down.',0,1,'failed',5,5,2,'network')`)
+	if _, err := s.Retry(ctx, "admin", adminSession, "old"); err != nil {
+		t.Fatal(err)
+	}
+	sending = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- s.Deliver(ctx) }()
+	<-sending
+	p, err := s.Problems(ctx)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || len(p) != 0 {
+		t.Fatalf("failing while a retry was sent: %+v %v", p, err)
+	}
+}
