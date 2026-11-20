@@ -32,9 +32,8 @@ everyday controls.
 
 ## Quick start
 
-You need Docker with [Compose 2.24.0 or later](https://docs.docker.com/reference/compose-file/services/#required).
-Ludock's image supports Linux on AMD64 and ARM64; some game images support fewer
-platforms.
+You need Docker with Compose. Ludock's image supports Linux on AMD64 and ARM64;
+some game images support fewer platforms.
 
 1. Save [`compose.yaml`](./compose.yaml) on the host that runs your game
    servers, then start Ludock:
@@ -61,9 +60,8 @@ containers and their data stay where they are. Backup storage in the example's
 recent and older backups without any setup. Backups stop the server while
 they copy.
 
-Most settings live in the browser. For deployment options, copy
-[`.env.example`](./.env.example) to `.env`, uncomment what you need, and run
-`docker compose up -d --force-recreate ludock`.
+There's nothing else to configure: everything you can change is in
+**Settings** in the browser.
 
 ## Security
 

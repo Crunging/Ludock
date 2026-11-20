@@ -17,6 +17,7 @@ import (
 	"github.com/Crunging/Ludock/internal/helper"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/launch"
+	"golang.org/x/sys/unix"
 )
 
 var ctx = context.Background()
@@ -343,5 +344,36 @@ func TestLeftoverHelpersAreRemovedAtStartup(t *testing.T) {
 	}
 	if f.engine.Container(f.game) == nil {
 		t.Fatal("removed the game")
+	}
+}
+
+// With no upload size limit, a file that would leave the disk less than its
+// spare space is refused before anything is written, and the helper removed.
+func TestUploadNeedsFreeSpace(t *testing.T) {
+	f := setup(t)
+	var stat unix.Statfs_t
+	if err := unix.Statfs(f.data, &stat); err != nil {
+		t.Fatal(err)
+	}
+	space := helper.Space(&stat)
+	// Within the free space, but not with the spare kept; the margin covers
+	// other writers freeing space meanwhile.
+	size := space.Available - UploadSpare(space.Total) + 256<<20
+	err := f.service.Upload(ctx, f.target, f.root, "", "huge.bin", size, strings.NewReader("x"), nil)
+	if public, ok := apperr.As(err); !ok || public.Code != "NOT_ENOUGH_SPACE" || public.Status != 507 {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "huge.bin")); !os.IsNotExist(err) {
+		t.Fatal("file written", err)
+	}
+	f.helpersLeft(t)
+	if err := f.service.Upload(ctx, f.target, f.root, "", "small.txt", 5, strings.NewReader("small"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := UploadSpare(10 << 30); got != 512<<20 {
+		t.Fatal("a small disk keeps a twentieth", got)
+	}
+	if got := UploadSpare(1 << 40); got != 1<<30 {
+		t.Fatal("a large disk keeps 1 GiB", got)
 	}
 }

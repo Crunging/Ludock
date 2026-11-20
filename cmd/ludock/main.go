@@ -69,8 +69,10 @@ func serve() int {
 	if !ok {
 		return 2
 	}
-	level, _ := logging.ParseLevel(cfg.LogLevel)
-	logging.SetLevel(level)
+	if cfg.LogLevel != "" {
+		level, _ := logging.ParseLevel(cfg.LogLevel)
+		logging.SetLevel(level)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -104,7 +106,7 @@ func serve() int {
 		IdleTimeout:       120 * time.Second,
 	}
 	log.Info("Ludock listening", logging.F("address", "http://localhost:"+strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)),
-		logging.F("logLevel", level.String()), logging.F("version", version))
+		logging.F("logLevel", logging.CurrentLevel().String()), logging.F("version", version))
 	accounts.LogSetupInstructions(ctx, func(text string) { os.Stdout.WriteString(text) })
 
 	services.Start(ctx)

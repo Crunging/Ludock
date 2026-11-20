@@ -32,5 +32,8 @@ trusted Docker host, and use an HTTPS reverse proxy for remote access.
   with them, with the access chosen on each server's Sharing tab.
 - Approve narrow backup folders, and keep registry and webhook credentials out
   of game file folders.
+- Behind a reverse proxy, trust only the proxy's own address in
+  **Settings → Advanced**: a trusted address can claim to be any visitor.
 
-See [Deployment](./docs/OPERATIONS.md#deployment) for proxy and network settings.
+See [Remote access](./docs/OPERATIONS.md#remote-access) for proxy and network
+settings.

@@ -84,7 +84,7 @@ func TestUploadChecks(t *testing.T) {
 	if code := upload(map[string]string{"Content-Type": "text/plain", "X-CSRF-Token": csrf}, "hi"); code != http.StatusUnsupportedMediaType {
 		t.Fatal("type", code)
 	}
-	p.app.Config.MaxUploadBytes = 3
+	p.app.Advanced.Env.MaxUploadBytes = 3
 	if code := upload(map[string]string{"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf}, "four"); code != http.StatusRequestEntityTooLarge {
 		t.Fatal("size", code)
 	}

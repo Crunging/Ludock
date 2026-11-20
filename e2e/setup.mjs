@@ -59,8 +59,6 @@ async function startStack(bin, dir, port) {
     LUDOCK_SELF_CONTAINER: "ludock-dev",
     LUDOCK_BACKUP_ROOTS: backups,
     LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
-    LUDOCK_MAX_UPLOAD_SIZE: "5 MiB",
-    LUDOCK_LOG_LEVEL: "info",
   }, "ludock");
   await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check");
 

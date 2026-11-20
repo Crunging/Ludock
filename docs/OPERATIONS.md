@@ -7,15 +7,15 @@ How to deploy and run Ludock. For a first install, start with the
 
 Run one Ludock per Docker host with [`compose.yaml`](../compose.yaml). It keeps
 its own data in `/data` and game backups in `/backups`, in separate volumes;
-keep both private.
+keep both private. It needs no other configuration: everyday options are in
+**Settings**, and the upload size limit, verbose logging, and reverse proxy are
+under **Settings → Advanced**. Options for unusual setups are environment
+variables, listed in [Advanced deployment](#advanced-deployment).
 
 - **Docker:** Ludock uses the mounted Unix socket and needs Engine API 1.44 or
   later. Remote Docker connections aren't supported. For
   [rootless Docker](https://docs.docker.com/engine/security/rootless/tips/),
   mount its socket at `/var/run/docker.sock`.
-- **Settings:** optional deployment settings are in
-  [`.env.example`](../.env.example). Copy it to `.env`, uncomment what you need,
-  and run `docker compose up -d --force-recreate ludock`.
 - **Existing data:** Ludock refuses to start on an unrelated database or an
   unsupported schema, and leaves it unchanged.
 - **First administrator:** until one exists, the setup page asks for the
@@ -33,14 +33,18 @@ protocol, support WebSocket upgrades and server-sent events without buffering,
 and overwrite any client-supplied `X-Forwarded-Host`, `X-Forwarded-Proto`,
 `X-Forwarded-Port`, and `X-Forwarded-For` headers.
 
-Set `LUDOCK_TRUSTED_PROXIES` to the proxies' IP addresses or CIDRs, separated by
-commas (for example `172.18.0.2,2001:db8::2`). Ludock then reads each client's
-address from `X-Forwarded-For`, so sign-in limits apply per client and the audit
-log records real addresses; without it, everyone behind the proxy shares one
-limit. Trust only proxy addresses, never a subnet shared with untrusted
-containers. Ludock reads the chain right to left and stops at the first
-untrusted address. Host names and addresses with ports aren't accepted, and an
-invalid value prevents startup.
+Then trust the proxy in **Settings → Advanced → Reverse proxy**. When you open
+Settings through a proxy at a private or local address and no proxy is trusted
+yet, that section opens by itself, names the proxy's address, and offers to
+trust it in one click; you can also enter IP addresses or CIDRs separated by commas, such as
+`172.18.0.2, 2001:db8::/64`. Ludock then reads each client's address from
+`X-Forwarded-For`, so sign-in limits apply per client and the audit log and
+session list show real addresses; without it, everyone behind the proxy shares
+one limit. A trusted address can claim to be any client, so trust only your
+proxies, never a subnet shared with untrusted containers. Ludock reads the
+chain right to left and stops at the first untrusted address. Host names and
+addresses with ports are refused when you save. Changing the list never signs
+anyone out; `LUDOCK_TRUSTED_PROXIES` sets it from outside the panel instead.
 
 ## Adding servers
 
@@ -338,7 +342,7 @@ are download-only, since a browser can't keep them.
 
 | Limit | Value |
 | --- | --- |
-| Upload size | 2 GiB; set `LUDOCK_MAX_UPLOAD_SIZE`, such as `500 MB` or `1.5 GiB` |
+| Upload size | No limit, but an upload must leave 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB); set a limit in **Settings → Advanced** |
 | Text preview and editing | 512 KiB; larger or binary files are downloaded instead |
 | Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size (plus 1 MiB); 30 minutes |
 | Selection | 500 entries of one folder |
@@ -403,8 +407,8 @@ services:
       - /srv/ludock-backups:/backups
 ```
 
-If a custom container host name stops Ludock from verifying the mount, set
-`LUDOCK_SELF_CONTAINER`.
+Ludock finds its own container to verify the mount. If it says it can't, set
+`LUDOCK_SELF_CONTAINER` (see [Advanced deployment](#advanced-deployment)).
 
 ### Second copy
 
@@ -551,9 +555,8 @@ you to type the server's name. Ludock confirms before it starts.
   own tool.
 - Files changed inside the container but outside its mounts and volumes are
   lost, as with any recreation.
-- For private registries, set `LUDOCK_DOCKER_CONFIG` to a read-only folder,
-  outside game file folders, holding a Docker `config.json` with inline `auths`
-  entries, as `docker login` writes them without a credential helper.
+- For private registries, set `LUDOCK_DOCKER_CONFIG` (see
+  [Advanced deployment](#advanced-deployment)).
 
 Not supported: images pinned by digest or ID, containers Docker removes when
 they stop (`--rm`), Swarm services, and containers whose network, process, or
@@ -860,8 +863,9 @@ docker compose start ludock
 ### Logs
 
 Administrators can use **Diagnostics**, **Audit log**, and **Ludock logs**, or
-run `docker compose logs --follow --tail 200 ludock`. Set
-`LUDOCK_LOG_LEVEL=debug` temporarily for more detail.
+run `docker compose logs --follow --tail 200 ludock`. For more detail, such as
+for a bug report, turn on **Verbose logging** in **Settings → Advanced**; it
+turns itself off after 24 hours.
 
 ### Recover an administrator account
 
@@ -876,6 +880,38 @@ docker compose start ludock
 
 Replace `admin` with the existing username. This also turns off the account's
 two-factor sign-in and signs it out everywhere; it doesn't create accounts.
+
+## Advanced deployment
+
+Most installations never need these. Set one under `environment:` in Ludock's
+Compose file and run `docker compose up -d` to apply it:
+
+```yaml
+services:
+  ludock:
+    environment:
+      LUDOCK_SENSITIVE_PATHS: /srv/private
+```
+
+Ludock refuses to start when a value is invalid and names the variable. The
+first three also appear in **Settings → Advanced**; a value set here wins, and
+the panel shows the setting as fixed by the deployment.
+
+| Variable | Default | For |
+| --- | --- | --- |
+| `LUDOCK_MAX_UPLOAD_SIZE` | No limit | The largest uploaded file, such as `500 MB` or `4 GiB` |
+| `LUDOCK_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug`, kept until removed |
+| `LUDOCK_TRUSTED_PROXIES` | None | Reverse proxies, as IP addresses or CIDRs separated by commas |
+| `LUDOCK_BACKUP_ROOTS` | `/backups` and `/backups-copy` when mounted | Only for other layouts: approved backup folders, separated by `:`; empty turns backups off |
+| `LUDOCK_SELF_CONTAINER` | Detected | Ludock's own container name or ID, if Ludock says it can't find it |
+| `LUDOCK_SETUP_CODE` | Printed at start | Your own first-administrator setup code, 32 to 128 characters; remove it after setup |
+| `LUDOCK_DOCKER_CONFIG` | None | A read-only folder, outside game file folders, with a Docker `config.json` whose inline `auths` entries reach private registries |
+| `LUDOCK_SENSITIVE_PATHS` | None | More container or host paths to block in file access, separated by `:` |
+| `LUDOCK_HELPER_IMAGE` | Ludock's own image | Another image for file and backup helpers, pinned by digest |
+| `LUDOCK_DOCKER_SOCKET` | `/var/run/docker.sock` | The Docker socket's path inside Ludock, if you mount it elsewhere |
+| `LUDOCK_LISTEN` | `:3000` | The address inside the container; change the published port in `compose.yaml` instead |
+| `LUDOCK_DATA_DIR` | `/data` | The folder for Ludock's database and its identity key |
+| `LUDOCK_RECOVERY_PASSWORD` | None | Only for [recovering an administrator account](#recover-an-administrator-account) |
 
 ## Health check
 

@@ -1,15 +1,18 @@
 package web
 
 import (
+	"errors"
 	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/Crunging/Ludock/internal/advanced"
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -50,6 +53,8 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *R
 		Connection:   views.ConnectionSettings{Host: s.App.Servers.ConnectionHost(r.Context()), PageHost: pageHost(r)},
 		Backups:      s.backupSettingsView(r),
 		ImageUpdates: views.ImageUpdateSettings{Enabled: s.App.Checks.Enabled(r.Context())},
+		Advanced: views.AdvancedSettings{Upload: s.uploadLimitView(r), Logging: s.loggingView(r),
+			Proxies: s.proxyView(r)},
 	}
 	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
 		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration})
@@ -113,6 +118,130 @@ func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	render(w, r, status, views.ImageUpdateSettingsForm(u))
+}
+
+func (s *Server) uploadLimitView(r *http.Request) views.UploadLimitSettings {
+	limit, fixed := s.App.Advanced.UploadLimit(r.Context())
+	u := views.UploadLimitSettings{Fixed: fixed}
+	if limit > 0 {
+		u.Limit = exactSize(limit)
+	}
+	return u
+}
+
+// exactSize is a size the upload limit field saves back unchanged: rounded
+// binary text only when it is exact, else whole decimal units or bytes.
+func exactSize(bytes int64) string {
+	text := datasize.Format(bytes)
+	if parsed, ok := datasize.Parse(text); ok && parsed == bytes {
+		return text
+	}
+	for _, unit := range []struct {
+		name string
+		size int64
+	}{{"TB", 1e12}, {"GB", 1e9}, {"MB", 1e6}, {"KB", 1e3}} {
+		if bytes%unit.size == 0 {
+			return strconv.FormatInt(bytes/unit.size, 10) + " " + unit.name
+		}
+	}
+	return strconv.FormatInt(bytes, 10) + " B"
+}
+
+func (s *Server) saveUploadLimit(w http.ResponseWriter, r *http.Request, request *Request) {
+	raw := strings.TrimSpace(r.PostFormValue("limit"))
+	var limit int64
+	var err error
+	if raw != "" {
+		// The same sizes LUDOCK_MAX_UPLOAD_SIZE accepts.
+		var ok bool
+		if limit, ok = datasize.Parse(raw); !ok || limit <= 0 {
+			err = apperr.New("INVALID_UPLOAD_LIMIT", 400, "Enter a size such as 500 MB, 4 GiB, or 1.5 GiB, or leave it empty for no limit.")
+		}
+	}
+	if err == nil {
+		err = authz.AdminMutationError(s.App.Advanced.SetUploadLimit(r.Context(), request.User().ID, request.Principal.TokenHash,
+			limit, s.auditEntry(request)))
+	}
+	status, ok := s.settingStatus(w, r, request, err)
+	if !ok {
+		return
+	}
+	u := s.uploadLimitView(r)
+	if err != nil {
+		u.Limit, u.Error = raw, publicMessage(err)
+	} else if limit == 0 {
+		u.Notice = "Upload limit removed."
+	} else {
+		u.Notice = "Upload limit saved."
+	}
+	render(w, r, status, views.UploadLimitForm(u))
+}
+
+func (s *Server) loggingView(r *http.Request) views.LoggingSettings {
+	current := s.App.Advanced.Logging(r.Context())
+	return views.LoggingSettings{Verbose: current.VerboseUntil > 0, Until: current.VerboseUntil, Level: current.Level, Fixed: current.Fixed}
+}
+
+func (s *Server) saveLogging(w http.ResponseWriter, r *http.Request, request *Request) {
+	verbose := r.PostFormValue("verbose") == "true"
+	err := authz.AdminMutationError(s.App.Advanced.SetVerbose(r.Context(), request.User().ID, request.Principal.TokenHash,
+		verbose, s.auditEntry(request)))
+	status, ok := s.settingStatus(w, r, request, err)
+	if !ok {
+		return
+	}
+	l := s.loggingView(r)
+	if err != nil {
+		l.Error = publicMessage(err)
+	} else if verbose {
+		l.Notice = "Verbose logging is on for the next 24 hours."
+	} else {
+		l.Notice = "Verbose logging is off."
+	}
+	render(w, r, status, views.LoggingForm(l))
+}
+
+func (s *Server) proxyView(r *http.Request) views.ProxySettings {
+	current := s.App.Advanced.Proxies(r.Context())
+	p := views.ProxySettings{Trusted: current.Trusted, Fixed: current.Fixed}
+	if !current.Fixed {
+		p.Forwarded, _ = s.App.ClientIP.UntrustedProxy(r)
+	}
+	return p
+}
+
+func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request, request *Request) {
+	value, trust := r.PostFormValue("trusted"), r.PostFormValue("trust")
+	var err error
+	if trust != "" {
+		// One click trusts only the proxy this request itself came through,
+		// and only while none is trusted.
+		if peer, ok := s.App.ClientIP.UntrustedProxy(r); !ok || peer != trust {
+			err = advanced.ErrProxiesChanged
+		}
+		value = trust
+	}
+	if err == nil {
+		err = authz.AdminMutationError(s.App.Advanced.SetProxies(r.Context(), request.User().ID, request.Principal.TokenHash, value,
+			trust != "", s.auditEntry(request)))
+	}
+	status, ok := s.settingStatus(w, r, request, err)
+	if !ok {
+		return
+	}
+	p := s.proxyView(r)
+	if err != nil {
+		p.Error = publicMessage(err)
+		// Only a typed list that didn't parse is shown back for correcting.
+		if errors.Is(err, advanced.ErrInvalidProxies) && trust == "" {
+			p.Trusted = value
+		}
+	} else if p.Trusted == "" {
+		p.Notice = "No proxy is trusted. Each visitor’s address is the one that connects to Ludock."
+	} else {
+		p.Notice = "Proxy trusted. New requests through it use each visitor’s own address."
+	}
+	render(w, r, status, views.ProxyForm(p))
 }
 
 func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, request *Request) {

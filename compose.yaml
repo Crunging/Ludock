@@ -1,8 +1,11 @@
+# Ludock: save this file on the Docker host that runs your game servers, then
+# run `docker compose up -d` and open http://<docker-host>:3000.
 services:
   ludock:
     image: ghcr.io/crunging/ludock:latest
     ports:
       - "3000:3000"
+    # Ludock runs with a read-only file system and no extra privileges.
     read_only: true
     cap_drop:
       - ALL
@@ -13,21 +16,24 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
     volumes:
-      # A missing socket must fail instead of creating an empty host directory.
+      # Docker's socket, so Ludock can see and control your game servers.
+      # Starting fails if it's missing, instead of creating an empty folder.
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
         read_only: true
         bind:
           create_host_path: false
+      # Ludock's own data.
       - ludock-data:/data
+      # Game server backups.
       - ludock-backups:/backups
-      # To keep backups on another disk, replace the backup volume above with
-      # a host-directory mount (create the directory first), for example:
+      # To keep backups on another disk, replace the line above with a folder
+      # on that disk (create it first), for example:
       # - /srv/ludock-backups:/backups
-    env_file:
-      - path: .env
-        required: false
+      # To keep a second copy of each backup, such as on another disk, add a
+      # folder mounted at /backups-copy (create it first), for example:
+      # - /mnt/usb/ludock-backups:/backups-copy
     restart: unless-stopped
 
 volumes:

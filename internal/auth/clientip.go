@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 var (
@@ -47,21 +48,24 @@ func parseIP(value string) (ipAddress, bool) {
 	return ipAddress{address, addr, 128}, true
 }
 
-// ClientIP resolves the client address of a request. Only a configured proxy
+// ClientIP resolves the client address of a request. Only a trusted proxy
 // may supply the next hop; walking right to left stops before
 // client-controlled prefixes in an appended forwarding chain.
-type ClientIP struct{ trusted []netip.Prefix }
+type ClientIP struct {
+	trusted atomic.Pointer[[]netip.Prefix]
+}
 
-// ErrTrustedProxies rejects invalid LUDOCK_TRUSTED_PROXIES entries instead of
+// ErrTrustedProxies rejects invalid trusted proxy entries instead of
 // broadening proxy access.
 var ErrTrustedProxies = errors.New("LUDOCK_TRUSTED_PROXIES must contain comma-separated IP addresses or CIDRs")
 
-// NewClientIP parses LUDOCK_TRUSTED_PROXIES.
-func NewClientIP(configured string) (*ClientIP, error) {
-	resolver := &ClientIP{}
+// ParseTrustedProxies reads comma-separated IP addresses and CIDRs, the
+// format of LUDOCK_TRUSTED_PROXIES and the panel's setting.
+func ParseTrustedProxies(configured string) ([]netip.Prefix, error) {
 	if strings.TrimSpace(configured) == "" {
-		return resolver, nil
+		return nil, nil
 	}
+	var prefixes []netip.Prefix
 	for _, entry := range strings.Split(configured, ",") {
 		parts := strings.Split(strings.TrimSpace(entry), "/")
 		ip, ok := parseIP(parts[0])
@@ -82,13 +86,57 @@ func NewClientIP(configured string) (*ClientIP, error) {
 		if err != nil {
 			return nil, ErrTrustedProxies
 		}
-		resolver.trusted = append(resolver.trusted, prefix)
+		prefixes = append(prefixes, prefix)
 	}
+	return prefixes, nil
+}
+
+// NewClientIP trusts the proxies in configured.
+func NewClientIP(configured string) (*ClientIP, error) {
+	prefixes, err := ParseTrustedProxies(configured)
+	if err != nil {
+		return nil, err
+	}
+	resolver := &ClientIP{}
+	resolver.Trust(prefixes)
 	return resolver, nil
 }
 
+// Trust replaces the trusted proxies; requests already resolved keep their
+// address.
+func (c *ClientIP) Trust(prefixes []netip.Prefix) { c.trusted.Store(&prefixes) }
+
+// UntrustedProxy is the request's peer when it looks like a reverse proxy
+// nobody trusts yet: a private or loopback address that sent
+// X-Forwarded-For while no proxy is trusted.
+func (c *ClientIP) UntrustedProxy(r *http.Request) (string, bool) {
+	if r.Header.Get("X-Forwarded-For") == "" || len(c.prefixes()) > 0 {
+		return "", false
+	}
+	peer, ok := parseIP(peerHost(r))
+	if addr := peer.value.Unmap(); !ok || !(addr.IsPrivate() || addr.IsLoopback()) {
+		return "", false
+	}
+	return peer.address, true
+}
+
+func peerHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (c *ClientIP) prefixes() []netip.Prefix {
+	if prefixes := c.trusted.Load(); prefixes != nil {
+		return *prefixes
+	}
+	return nil
+}
+
 func (c *ClientIP) isTrusted(ip ipAddress) bool {
-	for _, prefix := range c.trusted {
+	for _, prefix := range c.prefixes() {
 		if prefix.Contains(ip.value) {
 			return true
 		}
@@ -126,9 +174,5 @@ func (c *ClientIP) Resolve(forwardedFor, peerAddress string) string {
 }
 
 func (c *ClientIP) Request(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return c.Resolve(r.Header.Get("X-Forwarded-For"), host)
+	return c.Resolve(r.Header.Get("X-Forwarded-For"), peerHost(r))
 }
