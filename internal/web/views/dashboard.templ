@@ -685,7 +685,7 @@ templ needsAttention(view AttentionView) {
 							<strong>{ info.Title }</strong>
 							@attentionDetail(item)
 						</div>
-						if item.CanStart {
+						if item.CanStart && !view.DiscoveryUnavailable {
 							<div class="needs-attention__actions">
 								<button class="secondary-btn secondary-btn--accent" type="button" hx-post={ "/servers/" + item.ServerID + "/start" } hx-target="#action-error" data-busy-label="Working…" aria-label={ "Start " + item.ServerName }>Start</button>
 								<a href={ templ.SafeURL(info.Link) } class="text-link" aria-label={ "Details: " + item.ServerName + " — " + info.Title }>Details</a>

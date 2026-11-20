@@ -2579,7 +2579,7 @@ func needsAttention(view AttentionView) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				if item.CanStart {
+				if item.CanStart && !view.DiscoveryUnavailable {
 					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 201, "<div class=\"needs-attention__actions\"><button class=\"secondary-btn secondary-btn--accent\" type=\"button\" hx-post=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err

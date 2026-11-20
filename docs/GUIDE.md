@@ -452,8 +452,8 @@ for maintenance** on the server's **Overview**.
 | Memory near its limit | A container with a memory limit stays at 90% of it for 5 minutes |
 
 Each alert is sent once, with another when it recovers. A server that stopped
-by itself shows in **Needs attention** with **Start**, which is also the first
-button on a stopped server's row and page. Stops and work started
+by itself shows in **Needs attention** with **Start**, which is also the
+highlighted button on a stopped server's row and page. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
 found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Disks are measured about
