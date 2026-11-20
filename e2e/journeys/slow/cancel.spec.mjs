@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, gameCommand, openServer, createUser, shareServer, signIn } from "../fixtures.mjs";
+import { test, expect, asAdmin, gameCommand, openServer, createUser, shareServer, signIn, expectOperationSucceeded } from "../fixtures.mjs";
 
 asAdmin();
 test.describe.configure({ mode: "parallel" });
@@ -83,4 +83,59 @@ test.describe("cancelling a warned restart", () => {
     await expect(runner.locator(".detail-operation-notice")).toHaveCount(0);
     await expect(page.locator("#selected-operation")).toContainText("Cancelled by cancel-runner before it changed anything.");
   });
+});
+
+// A backup or restore stops the server like a restart, so with someone
+// online it offers the same warning, on by default, and can be cancelled
+// during the minute like one.
+test("a backup and a restore warn the players online first", async ({ page }) => {
+  test.setTimeout(120_000);
+  const console = await page.context().newPage();
+  await gameCommand(console, "fake-join Ada");
+  try {
+    await openServer(page, "Survival");
+    await expect(page.locator(".overview-players").getByRole("list", { name: "Online players" }).locator(".player-name"))
+      .toHaveText(["Ada"], { timeout: 30_000 });
+    await page.getByRole("tab", { name: "Backups" }).click();
+    await expect(page.locator("#create-backup")).toBeEnabled();
+    await page.getByRole("button", { name: "Create backup" }).click();
+    const backup = page.getByRole("dialog", { name: "Back up Survival?" });
+    await expect(backup).toContainText("Connected players will be disconnected.");
+    await expect(backup.getByLabel("Warn players and wait 1 minute")).toBeChecked();
+    await backup.getByRole("button", { name: "Create backup" }).click();
+    const details = page.locator("#selected-operation");
+    await expect(details).toContainText("Giving players 1 minute");
+    await details.getByRole("button", { name: "Cancel backup" }).click();
+    await expect(page.locator("#detail-status")).toHaveText("Cancelled. Nothing was changed.");
+    await expect(page.locator(".detail-header__identity")).toContainText("Running");
+
+    // Without the warning, the backup goes ahead at once.
+    await page.getByRole("link", { name: "Dismiss" }).click();
+    await expect(page.locator("#create-backup")).toBeEnabled();
+    await page.getByRole("button", { name: "Create backup" }).click();
+    await backup.getByLabel("Warn players and wait 1 minute").uncheck();
+    await backup.getByRole("button", { name: "Create backup" }).click();
+    await expectOperationSucceeded(page);
+
+    // Once the server is back up, it reads who is online again.
+    await openServer(page, "Survival");
+    await expect(page.locator(".overview-players").getByRole("list", { name: "Online players" }).locator(".player-name"))
+      .toHaveText(["Ada"], { timeout: 30_000 });
+    await page.getByRole("tab", { name: "Backups" }).click();
+    await page.locator("#backup-list tbody tr").first().getByRole("link", { name: "Restore…" }).click();
+    const restore = page.locator("form.danger-panel");
+    await expect(restore.getByLabel("Warn players and wait 1 minute")).toBeChecked();
+    await restore.getByLabel(/Type Survival to confirm/).fill("Survival");
+    await restore.getByRole("button", { name: "Restore game data" }).click();
+    await expect(details).toContainText("Giving players 1 minute");
+    await details.getByRole("button", { name: "Cancel restore" }).click();
+    await expect(page.locator("#detail-status")).toHaveText("Cancelled. Nothing was changed.");
+
+    await gameCommand(console, "fake-said");
+    await expect(console.locator(".xterm-rows")).toContainText("Server restart for a backup in 1 minute. | Server restart for a backup cancelled.");
+    await expect(console.locator(".xterm-rows")).toContainText(
+      "Server restart to restore a backup in 1 minute. | Server restart to restore a backup cancelled.");
+  } finally {
+    await gameCommand(console, "fake-leave Ada");
+  }
 });

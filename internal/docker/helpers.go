@@ -2,11 +2,13 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/logging"
 )
 
 // CreateHelper creates a helper container from Ludock's own image. Helpers
@@ -71,10 +73,27 @@ func (c *Client) RemoveHelper(ctx context.Context, id string) error {
 
 // RemoveOperationHelper retries until the helper is gone. Persisted data
 // jobs cannot release their locks or restart a game while an unreachable
-// helper may still be writing. It ignores ctx cancellation on purpose.
+// helper may still be writing. It ignores ctx cancellation on purpose; an
+// attempt Docker doesn't answer is retried like a failed one.
 func (c *Client) RemoveOperationHelper(id string) {
 	ctx := context.WithoutCancel(context.Background())
-	for c.RemoveHelper(ctx, id) != nil {
+	for {
+		attempt, cancel := context.WithTimeout(ctx, removeAttemptLimit)
+		err := c.RemoveHelper(attempt, id)
+		timedOut := errors.Is(attempt.Err(), context.DeadlineExceeded)
+		cancel()
+		if err == nil {
+			return
+		}
+		if timedOut {
+			log.Warn("Docker didn't answer in time", logging.F("step", "removing a helper that may still be writing; retrying"))
+		}
 		sleep(ctx, time.Second)
 	}
 }
+
+// removeAttemptLimit bounds one attempt of RemoveOperationHelper; tests
+// shorten it.
+var removeAttemptLimit = time.Minute
+
+var log = logging.New("docker")

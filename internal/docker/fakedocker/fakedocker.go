@@ -91,6 +91,9 @@ type Engine struct {
 	// HangCreates makes the next N container creates make the container and
 	// never answer, as a daemon whose response is lost can.
 	HangCreates int
+	// Hang, when it returns true for a request's "METHOD path", makes the
+	// request do nothing and never answer, as a stalled daemon can.
+	Hang func(request string) bool
 	// Requests records "METHOD path" for each request.
 	Requests []string
 	// Creates records each container create body.
@@ -477,8 +480,13 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	e.mu.Lock()
 	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
-	failure, delay, injected := e.Fail, e.Delay, e.faultLocked(r.Method+" "+r.URL.Path)
+	failure, delay, injected, hang := e.Fail, e.Delay, e.faultLocked(r.Method+" "+r.URL.Path), e.Hang
 	e.mu.Unlock()
+	if hang != nil && hang(r.Method+" "+r.URL.Path) {
+		io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		return
+	}
 	if delay > 0 {
 		select {
 		case <-time.After(delay):

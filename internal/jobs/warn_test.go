@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Crunging/Ludock/internal/docker/fakedocker"
 	"github.com/Crunging/Ludock/internal/ops"
 )
 
@@ -148,5 +150,37 @@ func TestCalledOffKeepsRunnerErrors(t *testing.T) {
 	err := calledOff(job, errRevoked)
 	if err.Error() != "The person who asked for this can no longer use the server. Players were told the server would restart, but it didn’t." {
 		t.Fatal(err)
+	}
+}
+
+// A warned restore checks for room with a helper before it stops the
+// server. By then it is past its wait, so an interruption is recovered,
+// which removes that helper, instead of resumed, which wouldn't.
+func TestWarnedRestoreIsRecoveredOncePastItsWait(t *testing.T) {
+	f := setup(t)
+	f.jobs.WarningLead = 50 * time.Millisecond
+	backup := f.run(t, "backup", nil)
+	var mu sync.Mutex
+	var phases []string
+	started := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		started(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" {
+			var phase string
+			f.jobs.DB.QueryRow("SELECT phase FROM operations WHERE kind='restore'").Scan(&phase)
+			mu.Lock()
+			phases = append(phases, phase)
+			mu.Unlock()
+		}
+	}
+	restore := f.run(t, "restore", map[string]any{"backupId": backup.Result["backupId"], "confirmation": "mc", WarnInput: true})
+	mu.Lock()
+	defer mu.Unlock()
+	if restore.Status != ops.Succeeded || len(phases) == 0 {
+		t.Fatalf("%+v", restore)
+	}
+	if job := (&ops.Context{Job: &ops.Job{Kind: "restore", Phase: phases[0], Input: restore.Input,
+		Recovery: ops.Recovery{WarnUntil: restore.Recovery.WarnUntil}}}); resumable(job) {
+		t.Fatalf("the first helper started in phase %q, which a restart of Ludock resumes", phases[0])
 	}
 }

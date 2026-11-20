@@ -114,14 +114,20 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			return j.recoverLifecycle(ctx, job)
 		},
 	})
-	runner.Register("backup", ops.Handler{Run: j.runBackup, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register("backup", ops.Handler{Run: j.warnedFirst(authz.BackupsCreate, j.runBackup), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if resumable(job) {
+			return nil, ops.ErrResume
+		}
 		return nil, j.recoverBackup(ctx, job, true)
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
 	runner.Register("command", ops.Handler{Run: j.runCommand, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
 		return map[string]any{"action": "command"}, nil
 	}})
-	runner.Register("restore", ops.Handler{Run: j.runRestore, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register("restore", ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if resumable(job) {
+			return nil, ops.ErrResume
+		}
 		return j.recoverRestore(ctx, job)
 	}})
 	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {

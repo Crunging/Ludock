@@ -100,8 +100,12 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	execID, err := client.CreateExec(ctx, container, docker.ExecCreate{Cmd: options.Cmd, AttachStdout: true,
-		AttachStderr: true, AttachStdin: options.Input != nil})
+	var execID string
+	err := Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
+		execID, err = client.CreateExec(ctx, container, docker.ExecCreate{Cmd: options.Cmd, AttachStdout: true,
+			AttachStderr: true, AttachStdin: options.Input != nil})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

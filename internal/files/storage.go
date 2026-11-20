@@ -162,7 +162,9 @@ func (a *Access) Cleanup(retry bool) error {
 			a.service.Docker.RemoveOperationHelper(a.container)
 			return
 		}
-		a.cleanupErr = a.service.Docker.RemoveHelper(context.Background(), a.container)
+		a.cleanupErr = launch.Step(context.Background(), "removing a file helper", func(ctx context.Context) error {
+			return a.service.Docker.RemoveHelper(ctx, a.container)
+		})
 	})
 	return a.cleanupErr
 }
@@ -406,7 +408,7 @@ func (s *Service) RemoveLeftovers(ctx context.Context) error {
 }
 
 func (s *Service) prepare(ctx context.Context, access *Access, root Root, inspection *docker.ContainerInspect) error {
-	if err := s.Docker.Start(ctx, access.container); err != nil {
+	if err := launch.Step(ctx, "starting a file helper", func(ctx context.Context) error { return s.Docker.Start(ctx, access.container) }); err != nil {
 		return err
 	}
 	if err := launch.AssertMountIdentities(ctx, s.Docker, access.container, access.proof.Identities); err != nil {
@@ -699,7 +701,11 @@ func (s *Service) OpenDownload(ctx context.Context, target Target, rootID, relat
 // openDownload starts a download request; a folder's name gains .tar.
 func (s *Service) openDownload(ctx context.Context, access *Access, request helper.FileRequest, name string, assertAccess func() error, target Target) (*Download, error) {
 	request.Blocked = access.blocked
-	execID, err := s.Docker.CreateExec(ctx, access.container, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
+	var execID string
+	err := launch.Step(ctx, "creating a download command", func(ctx context.Context) (err error) {
+		execID, err = s.Docker.CreateExec(ctx, access.container, docker.ExecCreate{Cmd: helper.Command("file", request), AttachStdout: true, AttachStderr: true})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

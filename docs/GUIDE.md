@@ -272,18 +272,18 @@ shut down (more for slow savers such as ARK, Palworld, Valheim, 7 Days to Die,
 and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer.
 
-When someone may be online and the game can message its players, the Restart
-and Stop dialogs and the **Update** tab offer **Warn players and wait 1
-minute**, ticked when players are online. Ludock tells players in the game,
+When someone may be online and the game can message its players, the Restart,
+Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
+**Warn players and wait 1 minute**, ticked when players are online. Ludock tells players in the game,
 waits the minute (shown in **Activity**), then goes ahead; an update warns once
 the new image is downloaded. If Ludock restarts during the minute, it finishes
 the wait afterwards; if it was down for more than five minutes past the time
 players were given, it leaves the server alone and says so in **Activity**.
 
 Until the minute is up, the server's page, its row on the server list, and its
-**Activity** row show **Cancel restart** (or stop, or update) to anyone who
-may start it. Cancelling changes nothing on the server and tells the players
-in the game that it's off. Work queued behind other work on the same server
+**Activity** row show **Cancel restart** (or stop, backup, restore, or
+update) to anyone who may start it. Cancelling changes nothing on the server
+and tells the players in the game that it's off. Work queued behind other work on the same server
 can be cancelled the same way while it waits. Cancel is there only while
 Ludock waits: once it saves, stops, downloads, or replaces anything, the work
 finishes. If the cancel and the end of the wait happen at once, the page says
@@ -481,4 +481,7 @@ each piece of work with its latest result, with filters
 for server, person, action, result, and dates. Each server's **Activity** tab
 lists its own. Administrators can choose **Show → Everything** to add sign-ins,
 account changes, and settings changes. **Needs attention** on the server list
-shows recent failures.
+shows recent failures until the same kind of work succeeds on that server,
+such as a good backup after a failed one. An interrupted restore, a
+force-stop, and a failure that asks for an administrator stay listed.
+**Activity** keeps everything.

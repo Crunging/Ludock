@@ -100,7 +100,7 @@ func (i *Input) Considerate(canWarn, canWait bool) {
 // words of the restart warning.
 func WarningMessage(action string, minutes int) string {
 	what := map[string]string{"stop": "Server shutting down", "backup": "Server restart for a backup",
-		"update": "Server restart for an update"}[action]
+		"update": "Server restart for an update", "restore": "Server restart to restore a backup"}[action]
 	if what == "" {
 		what = "Server restart"
 	}
@@ -114,7 +114,7 @@ func WarningMessage(action string, minutes int) string {
 // CalledOffMessage tells players a warned action won't happen.
 func CalledOffMessage(action string) string {
 	what := map[string]string{"stop": "Server shutdown", "backup": "Server restart for a backup",
-		"update": "Server restart for an update"}[action]
+		"update": "Server restart for an update", "restore": "Server restart to restore a backup"}[action]
 	if what == "" {
 		what = "Server restart"
 	}

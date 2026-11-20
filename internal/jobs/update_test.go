@@ -408,6 +408,41 @@ func TestUpdateKeepsVolumeOfDestinationOnlyBind(t *testing.T) {
 	}
 }
 
+// An image that declares a volume, as itzg/minecraft-server does for /data,
+// gives its container an unnamed one. The replacement can keep it only by
+// naming it, which Docker's rm -v then leaves alone, so the update says so;
+// a later update, which finds it named, says nothing.
+func TestUpdateNotesItNamedAnUnnamedVolume(t *testing.T) {
+	f := setup(t)
+	f.engine.AddImage("itzg/minecraft-server")
+	f.engine.SetImageConfig("sha256:"+strings.Repeat("2", 64), map[string]any{"Volumes": map[string]any{"/data": map[string]any{}}})
+	original, err := f.jobs.Docker.Create(ctx, "state", "", map[string]any{"Image": "itzg/minecraft-server",
+		"Labels": map[string]string{"ludock.enable": "true"}, "HostConfig": map[string]any{"NetworkMode": "bridge"}})
+	if err != nil || f.jobs.Docker.Start(ctx, original) != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.jobs.Servers.RefreshNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	views, _ := f.jobs.Servers.List(ctx, f.admin)
+	for _, view := range views {
+		if view.Name == "state" {
+			f.serverID = view.ID
+		}
+	}
+	request := map[string]any{"request": map[string]any{"skipBackupConfirmation": "state", "forceRecreate": true}}
+	job := f.run(t, "update", request)
+	if job.Status != ops.Succeeded || job.Result["guidance"] != unnamedVolumeGuidance {
+		t.Fatalf("%+v", job)
+	}
+	if current := f.containerNamed("state"); current == nil || current.ID == original {
+		t.Fatalf("not replaced: %+v", current)
+	}
+	if job := f.run(t, "update", request); job.Status != ops.Succeeded || job.Result["guidance"] != nil {
+		t.Fatalf("%+v", job)
+	}
+}
+
 // A console helper on the server's network, such as a player reading's,
 // holds the server lock until it is removed, so it doesn't block an update;
 // any other container on that network does.

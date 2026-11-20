@@ -186,6 +186,12 @@ container:
   make to the definition still apply the next time you run your own tool.
 - Files changed inside the container outside its volumes and mounts are lost,
   as with any recreation.
+- Docker can give the new container an unnamed volume of the old one only by
+  its name, and then counts it as named: `docker compose down -v` and
+  `docker rm -v` leave it behind, and **Activity** says so after the update.
+  For a new server, naming the volume in the Compose file avoids this. An
+  existing server's data stays in its unnamed volume, so copy it into a named
+  one before switching, or the server starts with an empty one.
 - **Advanced → Update even if the image is already current** recreates the
   container anyway, such as to pick up a game update that installs on startup.
 
