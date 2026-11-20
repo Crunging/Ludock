@@ -166,28 +166,29 @@ func (c candidate) excluded() map[string]string {
 	return labels
 }
 
-// ownLabels is info, with a host-controlling container's ludock.enable left
-// out when its image sets that label. Docker merges an image's labels into
-// its containers', and only the owner's own label can add such a container.
-// It fails closed when the image can't be read.
+// ownLabels is info, without a host-controlling container's ludock.enable
+// when its image may have set it. Docker merges an image's labels into its
+// containers', and only the owner's own label can add such a container: one
+// that differs from the image's. It fails closed when the image can't be
+// read.
 func (o *Observer) ownLabels(ctx context.Context, info *docker.ContainerInspect) *docker.ContainerInspect {
-	if enable, ok := games.ParseBool(info.Config.Labels[games.LabelEnable], true); !ok || !enable ||
-		!inspectCandidate(info).controlsHost() {
+	value := info.Config.Labels[games.LabelEnable]
+	if enable, ok := games.ParseBool(value, true); !ok || !enable || !inspectCandidate(info).controlsHost() {
 		return info
 	}
 	image, err := o.Docker.InspectImageConfig(ctx, info.Image)
 	if err == nil {
 		var labels map[string]string
 		if raw := image.Config["Labels"]; len(raw) == 0 || json.Unmarshal(raw, &labels) == nil {
-			if _, set := labels[games.LabelEnable]; !set {
+			if inherited, set := labels[games.LabelEnable]; !set || inherited != value {
 				return info
 			}
 		}
 	}
-	excluded := *info
-	excluded.Config.Labels = maps.Clone(info.Config.Labels)
-	excluded.Config.Labels[games.LabelEnable] = "false"
-	return &excluded
+	stripped := *info
+	stripped.Config.Labels = maps.Clone(info.Config.Labels)
+	delete(stripped.Config.Labels, games.LabelEnable)
+	return &stripped
 }
 
 // applyChoice returns a copy of info whose labels include the choice, which
@@ -260,7 +261,10 @@ func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 		c := summaryCandidate(container)
 		labels, _ := c.withChoice(choices)
 		reason := c.unaddable()
-		if reason != "" && reason != "host" {
+		// A label that adds a container Ludock doesn't manage may be its
+		// image's, on a container that controls the host.
+		labeledIn, _ := games.ParseBool(c.labels[games.LabelEnable], reason == "label")
+		if reason != "" && reason != "host" && !labeledIn {
 			continue
 		}
 		// A summary has no privileged flag. Discovery caches only the
@@ -343,7 +347,7 @@ func (o *Observer) addable(ctx context.Context, id string, choices map[string]id
 	if err != nil {
 		return nil, err
 	}
-	c := inspectCandidate(info)
+	c := inspectCandidate(o.ownLabels(ctx, info))
 	labels, _ := c.withChoice(choices)
 	reason := c.unaddable()
 	if (reason != "" && reason != "host") || games.Evaluate(c.image, labels).Eligible {

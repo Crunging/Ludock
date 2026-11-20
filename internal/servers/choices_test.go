@@ -180,8 +180,19 @@ func TestHostControlNeedsOwnerLabel(t *testing.T) {
 	info, _ := s.Observer.Docker.Inspect(ctx, id)
 	engine.SetImageConfig(info.Image, map[string]any{"Labels": map[string]string{"ludock.enable": "true"}})
 	engine.RemoveContainer(id)
-	engine.AddContainer(options)
+	id = engine.AddContainer(options)
 	if current, err := s.RefreshNow(ctx); err != nil || len(current) != 0 {
+		t.Fatal(current, err)
+	}
+	// It is still explained, since nobody chose to leave it out.
+	if list, err := s.Observer.Unmanaged(ctx); err != nil || len(list) != 1 || list[0].ID != id || !list[0].ControlsHost {
+		t.Fatal(list, err)
+	}
+	// A label that differs from the image's is its owner's.
+	engine.SetImageConfig(info.Image, map[string]any{"Labels": map[string]string{"ludock.enable": "false"}})
+	engine.RemoveContainer(id)
+	id = engine.AddContainer(options)
+	if current, err := s.RefreshNow(ctx); err != nil || current[id].Source != SourceLabel {
 		t.Fatal(current, err)
 	}
 }
