@@ -186,9 +186,14 @@ func (s *Storage) endRead(id string) {
 	}
 }
 
+// readStall is how long one read of an archive may take. It is apart from
+// copyStall so that tests shortening a copy's patience don't also fail
+// ordinary reads on a slow machine.
+var readStall = 2 * time.Minute
+
 // Archive is an open backup archive; retention leaves it alone until it
 // is closed. A read blocked in the kernel can't be interrupted, so reads run
-// on a goroutine of their own and one that doesn't return within copyStall,
+// on a goroutine of their own and one that doesn't return within readStall,
 // as on a network share that stopped responding, fails with errFolderStalled
 // and stays in the folder guard's record until it returns.
 // Read and Close are for one goroutine.
@@ -245,7 +250,7 @@ func (a *Archive) Read(p []byte) (int, error) {
 	}
 	read := &pending{folder: a.folder, lane: laneArchive}
 	a.requests <- archiveRequest{min(len(p), 1<<20), read}
-	timer := time.NewTimer(copyStall)
+	timer := time.NewTimer(readStall)
 	defer timer.Stop()
 	select {
 	case result := <-a.results:
