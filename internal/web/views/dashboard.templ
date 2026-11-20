@@ -571,6 +571,8 @@ type attentionText struct{ Title, Link, Action string }
 func describeAttention(item attention.Item) attentionText {
 	path := "/servers/" + item.ServerID
 	switch item.Kind {
+	case "notifications":
+		return attentionText{"Alerts aren’t reaching " + item.Destination.Label(), DestinationURL(item.Destination), "Check " + item.Destination.Label()}
 	case "operation":
 		title := Capitalize(item.OperationKind) + " " + item.Status
 		if item.ForceStopped {
@@ -601,8 +603,18 @@ func describeAttention(item attention.Item) attentionText {
 	return attentionText{title, path + "?tab=overview", "Check availability"}
 }
 
+// attentionSubject is what an item is about: its server, or notifications.
+func attentionSubject(item attention.Item) string {
+	if item.Kind == "notifications" {
+		return "Notifications"
+	}
+	return item.ServerName
+}
+
 templ attentionDetail(item attention.Item) {
 	switch item.Kind {
+		case "notifications":
+			<span class="muted">Failing since @Time(item.Since, "", "")<span>.</span> { item.Reason }</span>
 		case "operation":
 			@Time(item.UpdatedAt, "", "muted")
 		case "schedule":
@@ -669,11 +681,11 @@ templ needsAttention(view AttentionView) {
 					{{ info := describeAttention(item) }}
 					<li>
 						<div class="needs-attention__description">
-							<span class="needs-attention__server">{ item.ServerName }</span>
+							<span class="needs-attention__server">{ attentionSubject(item) }</span>
 							<strong>{ info.Title }</strong>
 							@attentionDetail(item)
 						</div>
-						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + item.ServerName + " — " + info.Title }>{ info.Action }</a>
+						<a href={ templ.SafeURL(info.Link) } class="text-link needs-attention__action" aria-label={ info.Action + ": " + attentionSubject(item) + " — " + info.Title }>{ info.Action }</a>
 					</li>
 				}
 			</ul>

@@ -94,6 +94,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /settings/notifications/{destination}", s.admin(s.saveNotifications))
 	m.HandleFunc("GET /fragments/settings/deliveries", s.admin(s.deliveries))
 	m.HandleFunc("POST /settings/notifications/{destination}/test", s.admin(s.testNotification))
+	m.HandleFunc("GET /fragments/settings/notifications/{destination}/tests/{id}", s.admin(s.testResult))
 	m.HandleFunc("POST /settings/notifications/deliveries/{id}/retry", s.admin(s.retryNotification))
 	m.HandleFunc("GET /settings/system", s.admin(s.systemPage))
 	m.HandleFunc("POST /servers/{id}/start", s.authed(s.startServer))

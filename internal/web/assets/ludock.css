@@ -1163,6 +1163,8 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .notification-destination__body .muted { font-size: 14px; }
 .notification-destination__test { display: grid; gap: 4px; padding-top: 16px; border-top: 1px solid var(--line); }
 .notification-destination__test .alert { margin-bottom: 0; }
+.notification-destination__health:empty { display: none; }
+.notification-destination__health .alert { margin: 0; }
 .notification-alerts { margin: 0; }
 .notification-alerts__choice { margin-left: 6px; font-weight: 400; color: var(--ink-3); font-size: 14px; }
 .notification-alerts__options { display: grid; gap: 10px; }
@@ -1172,6 +1174,7 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .notification-deliveries { display: grid; gap: 14px; margin-top: 28px; }
 .notification-deliveries__help { font-size: 14px; max-width: var(--measure); }
 .notification-delivery-status { display: inline-flex; align-items: center; }
+.notification-delivery-message { display: block; overflow-wrap: anywhere; }
 .notification-delivery-failure { margin-top: 4px; color: var(--halt-text); font-size: 14px; }
 .system-help { margin-top: 20px; max-width: 820px; }
 

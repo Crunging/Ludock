@@ -176,7 +176,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	scheduleService.Players = schedules.ServerPlayers{Servers: serverService, Players: a.Players}
 	jobService.Players = a.Players
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
-		Refresh: func(ctx context.Context) error {
+		Notify: notifications, Refresh: func(ctx context.Context) error {
 			_, err := serverService.Refresh(ctx)
 			return err
 		}}

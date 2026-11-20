@@ -333,19 +333,18 @@ func TestDeliveryAndProviderDetailsStayOut(t *testing.T) {
 		statuses = statuses[1:]
 		return respond(status, `{"message":"token secret-token_value"}`)
 	})
-	test, err := s.QueueTest(ctx, "admin", adminSession, Discord)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s.Notify(ServerProblems, "event-1", "Survival: the server is down.")
 	s.Deliver(ctx)
 	deliveries, _ := s.Deliveries(ctx)
-	if deliveries[0].LastFailure != "Delivery to Discord was rate limited. Wait before trying again." || deliveries[0].State != "queued" {
+	if deliveries[0].LastFailure != "Delivery to Discord was rate limited. Wait before trying again." || deliveries[0].State != "queued" ||
+		deliveries[0].Message != "Survival: the server is down." {
 		t.Fatalf("%+v", deliveries[0])
 	}
+	event := deliveries[0].ID
 	s.DB.Exec("UPDATE notification_deliveries SET next_attempt_at=0")
 	s.Deliver(ctx)
 	deliveries, _ = s.Deliveries(ctx)
-	if deliveries[0].ID != test.ID || deliveries[0].State != "delivered" || deliveries[0].DeliveredAt == 0 {
+	if deliveries[0].ID != event || deliveries[0].State != "delivered" || deliveries[0].DeliveredAt == 0 {
 		t.Fatalf("%+v", deliveries[0])
 	}
 	// Disabled notifications neither queue nor send.

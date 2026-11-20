@@ -12,6 +12,7 @@ import (
 	"github.com/Crunging/Ludock/internal/auth"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/schedtime"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
@@ -190,5 +191,42 @@ func TestChecklistRecoverySkipsMaintenance(t *testing.T) {
 	}
 	if offered() {
 		t.Fatal("offered during maintenance")
+	}
+}
+
+// "Get alerts" is done once a destination is on, unless everything sent to
+// it has failed; then the item names it and why. A destination that worked
+// before and fails now is left to Needs attention.
+func TestChecklistAlertsWorking(t *testing.T) {
+	t.Parallel()
+	on := func(d notify.Destination) notify.Configuration {
+		return notify.Configuration{Destination: d, Enabled: true, Configured: true}
+	}
+	refused := notify.Health{Failed: true, Failing: true, Reason: "Unable to reach ntfy."}
+	for _, c := range []struct {
+		name           string
+		configurations []notify.Configuration
+		healths        map[notify.Destination]notify.Health
+		on             bool
+		unproven       notify.Destination
+	}{
+		{"none on", []notify.Configuration{{Destination: notify.Ntfy, Configured: true}}, nil, false, ""},
+		{"on, nothing sent yet", []notify.Configuration{on(notify.Ntfy)}, nil, true, ""},
+		{"only failures", []notify.Configuration{on(notify.Ntfy)}, map[notify.Destination]notify.Health{notify.Ntfy: refused}, false, notify.Ntfy},
+		{"one failed retry", []notify.Configuration{on(notify.Ntfy)},
+			map[notify.Destination]notify.Health{notify.Ntfy: {Failed: true, Reason: "Unable to reach ntfy."}}, false, notify.Ntfy},
+		{"worked before", []notify.Configuration{on(notify.Ntfy)},
+			map[notify.Destination]notify.Health{notify.Ntfy: {Failed: true, Failing: true, Delivered: true}}, true, ""},
+		{"another works", []notify.Configuration{on(notify.Ntfy), on(notify.Email)},
+			map[notify.Destination]notify.Health{notify.Ntfy: refused, notify.Email: {Delivered: true}}, true, ""},
+	} {
+		working, unproven, reason := alertsWorking(c.configurations, c.healths)
+		if working != c.on || unproven != c.unproven || (unproven != "" && reason != "Unable to reach ntfy.") {
+			t.Errorf("%s: %v %q %q", c.name, working, unproven, reason)
+		}
+	}
+	items := checklistItems(checklistState{TwoFactor: true, Unproven: notify.Ntfy, UnprovenReason: "Unable to reach ntfy."})
+	if len(items) != 1 || items[0].Key != views.ChecklistAlerts || items[0].Destination != notify.Ntfy {
+		t.Fatal(items)
 	}
 }

@@ -14,7 +14,9 @@ After the first administrator is created, the server list shows a **Finish
 setting up** list with only what's still undone. Each item does its job in one
 click, and goes away once done.
 
-- **Get alerts** opens the notification settings.
+- **Get alerts** opens the notification settings. It stays until a
+  destination is on and not only failing; if everything sent so far has
+  failed, it says why and opens that destination.
 - **Back up your servers** offers **Back up every night**: after you confirm,
   each server with data folders and no repeating schedule that backs it up (a
   backup, or a restart with **Back up first**; paused ones count) gets a daily
@@ -97,13 +99,19 @@ or end it, use the same tab: pick a new level and choose **Save**, or choose
 2. Open a destination (Discord, ntfy, Gotify, Telegram, Email, or Webhook)
    and fill in its fields. A new destination is on once saved; untick
    **Send alerts to …** to keep it off.
-3. Choose its **Save** button, then **Send test notification**.
+3. Choose its **Save** button, then **Send test notification**. The result
+   shows beside the button: **Delivered**, or why it didn't arrive and what
+   to check.
 
 Every server is monitored from the moment Ludock finds it, so alerts start as
 soon as a destination is on. Each destination's **Alert types** choose what it
 gets; all but **Newer images available** are on by default. Saved tokens,
 topics, passwords, and webhook URLs are never shown again; leave a field blank
 to keep it. What triggers each alert is in [Monitoring](#monitoring).
+
+If alerts stop arriving, the destination reads **Failing** with the reason, and
+**Needs attention** on the server list tells administrators, with a link to
+fix it. Both clear once a delivery gets through.
 
 ### Back up a server, or every night
 
@@ -463,8 +471,18 @@ Each destination's **Alert types**:
   version. Off by default.
 
 Alerts read "<server>: <what happened>." and name servers and container paths,
-never images or host paths. Each delivery is tried up to five times;
-**Recent deliveries** lists the latest 50 by alert type and offers **Retry** on
+never images or host paths. Each alert is tried up to five times, over about
+15 minutes; a test is tried once.
+
+A destination that is on reads **Failing** when its alerts aren't getting
+through: an alert has failed three times in a row (about three minutes after
+it was raised), or a test failed, with nothing delivered since. It says since
+when and why, and **Needs attention** shows it to administrators. It reads
+**On** again once any delivery to it succeeds, and the warning goes once it's
+turned off.
+
+**Settings → Advanced → Recent deliveries** lists the latest 50, each with the
+alert as it was sent, its type, and when it was queued, and offers **Retry** on
 failed ones. Turning a destination off holds its deliveries until it's on
 again.
 

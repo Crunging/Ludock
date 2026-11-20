@@ -1,7 +1,7 @@
 import { createServer, request } from "node:http";
 import { createServer as createTCPServer } from "node:net";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, openServer } from "../fixtures.mjs";
+import { test, expect, asAdmin, createUser, dockerAction, expectOperationSucceeded, openServer, signIn } from "../fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -77,13 +77,10 @@ async function openDeliveries(page) {
   if (!(await advanced.evaluate((details) => details.open))) await advanced.locator(":scope > summary").click();
 }
 
-async function sendTest(page, card, label) {
-  await openDeliveries(page);
+/** Sends a test and waits for its result beside the button. */
+async function sendTest(card, label) {
   await card.getByRole("button", { name: "Send test notification" }).click();
-  await expect(card.locator(".notification-destination__test .alert--success")).toContainText("Test notification queued.");
-  const row = page.locator(".notification-deliveries-table tbody tr", { hasText: "Test notification" })
-    .filter({ has: page.getByRole("cell", { name: label, exact: true }) }).first();
-  await expect(row).toContainText("Delivered", { timeout: 30_000 });
+  await expect(card.locator(".notification-test-result")).toHaveText(`Delivered. The test message should be in ${label} now.`, { timeout: 30_000 });
 }
 
 async function turnOff(page, name, label) {
@@ -113,7 +110,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await save(ntfy, "ntfy");
     await expect(ntfy.locator(":scope > summary")).toContainText("On");
     await expect(ntfy.getByLabel("Replace topic")).toHaveValue("");
-    await sendTest(page, ntfy, "ntfy");
+    await sendTest(ntfy, "ntfy");
     const published = http.requests.find((request) => request.url === "/ntfy");
     expect(published.headers.authorization).toBe("Bearer tk_e2esecret");
     expect(published.body).toEqual({ topic: "e2e-secret-topic", title: "Ludock", message: "Ludock test notification: ntfy delivery is working." });
@@ -123,7 +120,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await gotify.getByLabel("Application token").fill("Ae2esecret");
     await gotify.getByLabel("Send alerts to Gotify").check();
     await save(gotify, "Gotify");
-    await sendTest(page, gotify, "Gotify");
+    await sendTest(gotify, "Gotify");
     const pushed = http.requests.find((request) => request.url === "/gotify/message");
     expect(pushed.headers["x-gotify-key"]).toBe("Ae2esecret");
     expect(pushed.body.message).toBe("Ludock test notification: Gotify delivery is working.");
@@ -137,7 +134,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await email.getByLabel("Send alerts by email").check();
     await save(email, "Email");
     await expect(email.getByLabel("To", { exact: true })).toHaveValue("<admin@example.com>, <ops@example.com>");
-    await sendTest(page, email, "Email");
+    await sendTest(email, "Email");
     expect(mail.messages).toHaveLength(1);
     expect(mail.messages[0]).toContain("Subject: Ludock: Ludock test notification: Email delivery is working.");
     expect(mail.messages[0]).toContain("To: <admin@example.com>, <ops@example.com>");
@@ -147,7 +144,7 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await webhook.getByLabel("Authorization header (optional)").fill("Bearer e2e-secret-header");
     await webhook.getByLabel("Send alerts to the webhook").check();
     await save(webhook, "Webhook");
-    await sendTest(page, webhook, "Webhook");
+    await sendTest(webhook, "Webhook");
     const hook = http.requests.find((request) => request.url.startsWith("/hook"));
     expect(hook.headers.authorization).toBe("Bearer e2e-secret-header");
     expect(hook.body).toMatchObject({ source: "ludock", kind: "test", message: "Ludock test notification: Webhook delivery is working." });
@@ -176,31 +173,83 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
   }
 });
 
-test("retrying a failed webhook delivery", async ({ page }) => {
+// A destination whose alerts don't arrive says so on its card and in Needs
+// attention, for administrators only, until a delivery gets through.
+test("a failing webhook is called out until a delivery gets through", async ({ page, session }) => {
+  test.setTimeout(120_000);
   const http = await receiver();
   http.statuses["/status/503"] = 503;
+  const unavailable = "Delivery to the webhook failed because it is temporarily unavailable. Try again later.";
   try {
     await page.goto("/settings");
-    const webhook = await openDestination(page, "webhook");
+    let webhook = await openDestination(page, "webhook");
     await webhook.locator("input[name=url]").fill(http.url + "/status/503");
     await webhook.getByLabel("Send alerts to the webhook").check();
     await save(webhook, "Webhook");
+    await expect(webhook.locator(":scope > summary")).toContainText("On");
+
+    // The test's result shows beside its button, and the card turns failing.
     await webhook.getByRole("button", { name: "Send test notification" }).click();
+    await expect(webhook.locator(".notification-test-result")).toHaveText(`The test didn’t arrive. ${unavailable}`, { timeout: 30_000 });
+    await expect(webhook.locator(":scope > summary")).toContainText("Failing");
+    await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook. Failing since");
+    await expect(webhook.locator(".notification-destination__health")).toContainText(unavailable);
 
+    await page.goto("/");
+    const attention = page.getByRole("region", { name: "Needs attention" });
+    await expect(attention).toContainText("Alerts aren’t reaching Webhook");
+    await expect(attention).toContainText(unavailable);
+    expect(await page.content()).not.toContain(http.url);
+
+    // Members never see notification settings, so they aren't told.
+    await createUser(page, "alerted-member", "alerted member password");
+    // A fresh profile, not the administrator this file signs in as.
+    const member = await session({ storageState: { cookies: [], origins: [] } });
+    await signIn(member, "alerted-member", "alerted member password");
+    await expect(member.getByRole("heading", { level: 1, name: "Servers" })).toBeVisible();
+    const fragment = await member.request.get("/fragments/attention");
+    expect(fragment.ok()).toBe(true);
+    expect(await fragment.text()).not.toContain("Alerts aren");
+
+    // The link opens the destination's card.
+    await page.goto("/");
+    await page.getByRole("link", { name: "Check Webhook: Notifications — Alerts aren’t reaching Webhook" }).click();
+    webhook = page.locator("#notification-webhook-card");
+    await expect(webhook).toHaveAttribute("open", "");
+    await expect(webhook.locator(".notification-destination__health")).toContainText("Alerts aren’t reaching Webhook.");
+
+    // Recent deliveries reads each one back as sent.
     await openDeliveries(page);
-    const row = page.locator(".notification-deliveries-table tbody tr", { hasText: "Test notification" })
-      .filter({ has: page.getByRole("cell", { name: "Webhook", exact: true }) }).first();
-    await expect(row).toContainText("Pending retry", { timeout: 30_000 });
-    await expect(row).toContainText("Delivery to the webhook failed because it is temporarily unavailable.");
+    const row = page.locator(".notification-deliveries-table tbody tr", { hasText: "Ludock test notification: Webhook delivery is working." }).first();
+    await expect(row).toContainText("Test notification · Queued");
+    await expect(row).toContainText("Failed");
+    await expect(row).toContainText(unavailable);
 
+    // A retry that gets through puts it back to On and clears the alert.
     http.statuses["/status/503"] = 204;
     await row.getByRole("button", { name: "Retry Webhook notification" }).click();
     await expect(page.locator("#notification-deliveries .alert--success")).toContainText("Notification queued for retry.");
     await expect(row).toContainText("Delivered", { timeout: 30_000 });
     expect(http.requests.filter((request) => request.url === "/status/503")).toHaveLength(2);
+    await page.reload();
+    await expect(page.locator("#notification-webhook-card > summary")).toContainText("On");
+    await expect(page.locator("#notification-webhook-card .notification-destination__health")).toBeEmpty();
+    await page.goto("/");
+    await expect(page.locator("#attention")).not.toContainText("Alerts aren’t reaching");
 
-    await turnOff(page, "webhook", "Webhook");
+    // It fails again on a test, and a test that gets through clears it on the spot.
+    http.statuses["/status/503"] = 503;
+    await page.goto("/settings");
+    webhook = await openDestination(page, "webhook");
+    await webhook.getByRole("button", { name: "Send test notification" }).click();
+    await expect(webhook.locator(":scope > summary")).toContainText("Failing", { timeout: 30_000 });
+    http.statuses["/status/503"] = 204;
+    await sendTest(webhook, "Webhook");
+    await expect(webhook.locator(":scope > summary")).toContainText("On");
+    await expect(webhook.locator(".notification-destination__health")).toBeEmpty();
   } finally {
+    await page.goto("/settings");
+    await turnOff(page, "webhook", "Webhook");
     http.close();
   }
 });
@@ -315,9 +364,11 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
     await dockerAction("enshrouded", "stop");
     await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded: the server is down.");
-    // Recent deliveries names each alert by its type.
+    // Recent deliveries shows each alert as sent, with its type.
     await page.goto("/settings");
-    await expect(page.locator(".notification-deliveries-table tbody tr").first()).toContainText("Server problems");
+    const alertRow = page.locator(".notification-deliveries-table tbody tr").first();
+    await expect(alertRow).toContainText("enshrouded: the server is down.");
+    await expect(alertRow).toContainText("Server problems · Queued");
     await expect(page.locator(".notification-deliveries-table")).not.toContainText("Server notification");
     // Alerts are delivered in the order they were queued, so a newer-image
     // notice would have arrived first.
@@ -338,7 +389,7 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     // A test still reaches it, whatever types are chosen.
     await page.goto("/settings");
     webhook = await openDestination(page, "webhook");
-    await sendTest(page, webhook, "Webhook");
+    await sendTest(webhook, "Webhook");
 
     // Saving with no alert type is refused.
     await openAlertTypes(webhook);

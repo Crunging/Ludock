@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/schedules"
 )
 
@@ -31,6 +32,10 @@ type ChecklistItem struct {
 	// Warn and Wait count the servers whose backups can warn players and
 	// wait for them to leave.
 	Warn, Wait int
+	// Destination is a destination that is on but has never delivered, and
+	// Reason why.
+	Destination notify.Destination
+	Reason      string
 }
 
 type ChecklistView struct {
@@ -141,7 +146,11 @@ templ Checklist(v ChecklistView) {
 templ checklistDetail(item ChecklistItem) {
 	switch item.Key {
 		case ChecklistAlerts:
-			Ludock already monitors your servers for crashes, games that stop answering, and full disks, but no notification is on, so no one hears about them.
+			if item.Destination != "" {
+				Alerts to { item.Destination.Label() } are on, but none has arrived yet. { item.Reason }
+			} else {
+				Ludock already monitors your servers for crashes, games that stop answering, and full disks, but no notification is on, so no one hears about them.
+			}
 		case ChecklistBackups:
 			{ NameList(item.Names) }
 			if len(item.Names) == 1 {
@@ -182,7 +191,11 @@ templ checklistDetail(item ChecklistItem) {
 templ checklistAction(item ChecklistItem) {
 	switch item.Key {
 		case ChecklistAlerts:
-			<a class="secondary-btn" href="/settings#notification-settings-title">Set up notifications</a>
+			if item.Destination != "" {
+				<a class="secondary-btn" href={ templ.SafeURL(DestinationURL(item.Destination)) }>{ "Fix " + item.Destination.Label() }</a>
+			} else {
+				<a class="secondary-btn" href="/settings#notification-settings-title">Set up notifications</a>
+			}
 		case ChecklistBackups:
 			<form id="checklist-backups" hidden>
 				<input type="hidden" name="timezone" data-default-local-timezone/>

@@ -81,10 +81,13 @@ func failureMessage(d Destination, code string) (string, bool) {
 }
 
 type Delivery struct {
-	ID            string
-	Destination   Destination
-	Kind          string // event or test
-	Alert         Alert  // an event's type
+	ID          string
+	Destination Destination
+	Kind        string // event or test
+	Alert       Alert  // an event's type
+	// Message is the line as sent. Alerts are built from server names and
+	// fixed wording, so it holds nothing the destination didn't get.
+	Message       string
 	State         string // queued, delivered, failed
 	Attempts      int
 	CreatedAt     int64
@@ -242,7 +245,7 @@ func (s *Service) public(r *row, all settings) Delivery {
 	s.mu.Unlock()
 	d := Destination(r.destination)
 	ready := d.ready(all[d])
-	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
+	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, Message: r.message, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
 		LastAttemptAt: r.lastAttempt.Int64, DeliveredAt: r.delivered.Int64, Paused: r.state == "queued" && !ready}
 	if name, _, ok := strings.Cut(r.key, ":"); ok && r.kind == "event" {
 		delivery.Alert, _ = ParseAlert(name)
@@ -265,6 +268,19 @@ func (s *Service) row(ctx context.Context, id string) (*row, error) {
 		return nil, apperr.New("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found")
 	}
 	return r, err
+}
+
+// Test reads a test delivery to d.
+func (s *Service) Test(ctx context.Context, d Destination, id string) (*Delivery, error) {
+	r, err := s.row(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if r.kind != "test" || r.destination != string(d) {
+		return nil, apperr.New("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found")
+	}
+	delivery := s.public(r, s.settings(ctx))
+	return &delivery, nil
 }
 
 // Deliveries lists the 50 newest deliveries.
@@ -626,7 +642,9 @@ func (s *Service) Deliver(ctx context.Context) error {
 			state, delivered = "delivered", finished
 		} else {
 			failureCode = failure
-			if retries >= 5 {
+			// A test answers whether the destination works now; retrying it
+			// later would send a surprise test.
+			if retries >= 5 || r.kind == "test" {
 				state = "failed"
 			}
 		}
@@ -645,7 +663,10 @@ func (s *Service) Deliver(ctx context.Context) error {
 		}
 		finishSend()
 	}
-	_, err = s.DB.ExecContext(ctx, "DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?",
+	// Each destination's newest delivery stays, so Health knows it once worked.
+	_, err = s.DB.ExecContext(ctx, `DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?
+    AND id NOT IN (SELECT (SELECT id FROM notification_deliveries x WHERE x.destination=d.destination AND x.state='delivered'
+      ORDER BY x.delivered_at DESC, x.rowid DESC LIMIT 1) FROM (SELECT DISTINCT destination FROM notification_deliveries) d)`,
 		db.Now()-30*86400_000)
 	return err
 }
