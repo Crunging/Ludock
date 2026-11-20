@@ -302,9 +302,10 @@ and Don't Starve Together), or the container's own `stop_grace_period` if it
 is longer. Terraria's images never pass Docker's stop signal on to the game,
 so Ludock also types its `exit` command, which saves and quits.
 
-These dialogs, a restore, and the **Update** tab say how many players are
-online when Ludock knows, such as "2 players are online and will be
-disconnected.", including for games it can count but not message. When the
+The Stop and Restart dialogs say how many players are online when Ludock
+knows, such as "2 players are online and will be disconnected.", including
+for games it can count but not message. **Create backup**, a restore, and the
+**Update** tab say that connected players will be disconnected. When the
 server is running and the game can message its players, the Restart,
 Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
 **Warn players and wait 1 minute**, ticked. Ludock checks who is online when

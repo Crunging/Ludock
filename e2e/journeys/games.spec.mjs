@@ -44,7 +44,8 @@ test("taking Valheim down says who is on, though the game can't be warned", asyn
     await page.getByRole("tab", { name: "Backups" }).click();
     await page.locator("#create-backup:not([disabled])").click();
     const backup = page.getByRole("dialog", { name: "Back up valheim?" });
-    await expect(backup).toContainText("The server stops for the whole copy, then returns to how it was. " + online);
+    // The Backups tab doesn't follow the player count, so it gives no number.
+    await expect(backup).toContainText("The server stops for the whole copy, then returns to how it was. Connected players will be disconnected.");
     await expect(backup.getByRole("checkbox")).toHaveCount(0);
     await backup.getByRole("button", { name: "Cancel" }).click();
   } finally {

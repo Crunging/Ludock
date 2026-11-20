@@ -538,6 +538,16 @@ func OnlineNote(online int) string {
 	return ""
 }
 
+// DisconnectNote says taking a running server down disconnects whoever is
+// on, without a number: for tabs that don't follow the player count, where
+// one would go stale.
+func DisconnectNote(running bool) string {
+	if running {
+		return "Connected players will be disconnected."
+	}
+	return ""
+}
+
 // LifecycleConfirm asks in the page's confirmation dialog before a stop or
 // restart. It can offer to warn players first, and a restart to take a
 // backup first.
