@@ -702,7 +702,9 @@ dialog[open] { animation: rise 0.16s ease-out; }
 /* Cancel sits under a row's result, or after a line's text. */
 .cancel-btn { justify-self: start; }
 td > .cancel-btn { display: block; margin-top: 6px; }
-.activity-waiting .cancel-btn, dd > .cancel-btn { margin-left: 8px; }
+.cancel-form { display: inline; }
+td > .cancel-form { display: block; margin-top: 6px; }
+.activity-waiting .cancel-form, dd > .cancel-form { margin-left: 8px; }
 #detail-status:not(:empty) { margin-bottom: 16px; }
 #detail-status > .alert { margin: 0; }
 

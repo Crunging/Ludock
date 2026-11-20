@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/history"
 	"github.com/Crunging/Ludock/internal/ops"
@@ -15,7 +16,7 @@ import (
 func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request, request *Request) {
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err == nil {
-		err = s.App.Jobs.Cancel(r.Context(), &current.User, current.TokenHash, r.PathValue("id"), r.PathValue("operation"))
+		err = authz.AdminMutationError(s.App.Jobs.Cancel(r.Context(), &current.User, current.TokenHash, r.PathValue("id"), r.PathValue("operation")))
 	}
 	if err != nil {
 		w.Header().Set("HX-Trigger", "servers-changed")
@@ -29,8 +30,8 @@ func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request, request
 func (s *Server) cancelWait(w http.ResponseWriter, r *http.Request, request *Request) {
 	current, err := s.App.Auth.Recheck(r.Context(), request.Principal)
 	if err == nil {
-		err = s.App.Schedules.CancelWait(r.Context(), &current.User, current.TokenHash, r.PathValue("id"), r.PathValue("schedule"),
-			r.PostFormValue("slot"))
+		err = authz.AdminMutationError(s.App.Schedules.CancelWait(r.Context(), &current.User, current.TokenHash, r.PathValue("id"),
+			r.PathValue("schedule"), r.PostFormValue("slot")))
 	}
 	// The schedules table refreshes on its own event.
 	if err != nil {

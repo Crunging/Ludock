@@ -754,7 +754,7 @@ templ ActivityList(a ActivityView) {
 			@Alert("error", a.Error)
 		}
 		if waiting := a.Waiting; waiting != nil {
-			<p class="section-note activity-waiting" role="status">
+			<div class="section-note activity-waiting" role="status">
 				A scheduled { waiting.Action } is waiting for players to leave, until
 				@Time(waiting.WaitingUntil, "plain", "")
 				.
@@ -762,7 +762,7 @@ templ ActivityList(a ActivityView) {
 				if a.WaitingCancel {
 					@CancelWaitButton(a.ServerID, waiting.ID, waiting.LastSlot)
 				}
-			</p>
+			</div>
 		}
 		<p class="section-note activity-filter-count" aria-live="polite">Showing { strconv.Itoa(len(a.Visible)) } of { strconv.Itoa(a.Total) }.</p>
 		if a.HiddenActive {
