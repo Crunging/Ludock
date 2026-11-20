@@ -205,6 +205,31 @@ func (e *Engine) Outage(duration time.Duration) error {
 	return nil
 }
 
+// Refuse stops accepting connections for duration, as a daemon going down
+// does just before it closes the ones it has: a request already being
+// answered finishes, but its connection is not kept. It returns at once.
+func (e *Engine) Refuse(duration time.Duration) {
+	e.mu.Lock()
+	listener, server := e.listener, e.server
+	e.mu.Unlock()
+	server.SetKeepAlivesEnabled(false)
+	listener.Close()
+	os.Remove(e.Socket)
+	go func() {
+		time.Sleep(duration)
+		listener, err := net.Listen("unix", e.Socket)
+		if err != nil {
+			return
+		}
+		e.mu.Lock()
+		e.listener = listener
+		e.server = &http.Server{Handler: http.HandlerFunc(e.serve)}
+		server := e.server
+		e.mu.Unlock()
+		server.Serve(listener)
+	}()
+}
+
 type exec struct {
 	id        string
 	container string
