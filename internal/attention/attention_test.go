@@ -56,3 +56,33 @@ func TestAServerRevokedWhileListingIsLeftOut(t *testing.T) {
 		t.Fatalf("showed a revoked server's items: %+v", result.Items)
 	}
 }
+
+// An interrupted backup whose result has no forceStopped field, such as one
+// that only recorded its save, is listed like any other.
+func TestAttentionListsAResultWithoutForceStopped(t *testing.T) {
+	d := dbtest.Open(t)
+	admin := &db.SessionUser{ID: "11111111-1111-4111-8111-111111111111", Username: "owner", Role: db.RoleAdmin}
+	if err := d.CreateUser(ctx, db.UserRecord{User: db.User{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: 1},
+		PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	store := &identity.Store{DB: d}
+	list, err := store.Reconcile(ctx, []identity.Observation{{ContainerID: "mc", Name: "mc", DisplayName: "Minecraft", GameType: "minecraft"}}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO operations (id,server_id,actor_id,kind,status,phase,input_json,recovery_json,result_json,binding_revision,created_at,updated_at)
+    VALUES ('00000000-0000-4000-8000-000000000001',?,?,'backup','interrupted','interrupted','{}','{}','{"action":"backup","saveStatus":"sent"}',1,1,1)`,
+		list[0].ID, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	authorization := &authz.Service{DB: d, Servers: store}
+	s := &Service{DB: d, Authz: authorization, Identity: store, Monitor: &monitor.Service{DB: d, Store: store}}
+	result, err := s.List(ctx, admin, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Kind != "operation" || result.Items[0].ForceStopped {
+		t.Fatalf("%+v", result.Items)
+	}
+}
