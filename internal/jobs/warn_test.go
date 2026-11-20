@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 // interruptedWarning saves a restart that warned players and was waiting
 // when Ludock stopped, with recovery as it was saved then, and starts a new
 // runner as Ludock's next start would.
-func (f *fixture) interruptedWarning(t *testing.T, recovery ops.Recovery) (*ops.Runner, string) {
+func (f *fixture) interruptedWarning(t *testing.T, phase string, recovery ops.Recovery) (*ops.Runner, string) {
 	t.Helper()
 	f.runner.Stop()
 	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
@@ -21,7 +22,7 @@ func (f *fixture) interruptedWarning(t *testing.T, recovery ops.Recovery) (*ops.
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(recovery)
-	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running', phase='warning', recovery_json=? WHERE id=?", string(encoded), job.ID); err != nil {
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running', phase=?, recovery_json=? WHERE id=?", phase, string(encoded), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	next := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
@@ -51,7 +52,7 @@ func TestWarnedRestartResumesAfterLudockRestarts(t *testing.T) {
 	f := setup(t)
 	before := f.startedAt()
 	until := time.Now().Add(300 * time.Millisecond).UnixMilli()
-	runner, id := f.interruptedWarning(t, ops.Recovery{WarnUntil: until, WarnSent: true})
+	runner, id := f.interruptedWarning(t, "warning", ops.Recovery{WarnUntil: until, WarnSent: true})
 	job := finished(t, runner, id)
 	if job.Status != ops.Succeeded || f.startedAt() == before || !f.running() {
 		t.Fatalf("%+v", job)
@@ -67,7 +68,7 @@ func TestWarnedRestartResumesAfterLudockRestarts(t *testing.T) {
 func TestWarnedRestartTooLateOrStartedIsNotResumed(t *testing.T) {
 	f := setup(t)
 	before := f.startedAt()
-	runner, id := f.interruptedWarning(t, ops.Recovery{WarnUntil: time.Now().Add(-10 * time.Minute).UnixMilli(), WarnSent: true})
+	runner, id := f.interruptedWarning(t, "warning", ops.Recovery{WarnUntil: time.Now().Add(-10 * time.Minute).UnixMilli(), WarnSent: true})
 	job := finished(t, runner, id)
 	if job.Status != ops.Failed || job.Error != "Ludock wasn’t running when the server was due to restart, so it didn’t. Players had been told it would." ||
 		f.startedAt() != before {
@@ -76,7 +77,7 @@ func TestWarnedRestartTooLateOrStartedIsNotResumed(t *testing.T) {
 
 	f = setup(t)
 	before = f.startedAt()
-	runner, id = f.interruptedWarning(t, ops.Recovery{WarnUntil: time.Now().UnixMilli(), WarnSent: true, StopStarted: true, StopSettled: true})
+	runner, id = f.interruptedWarning(t, "verifying_stop", ops.Recovery{WarnUntil: time.Now().UnixMilli(), WarnSent: true, StopStarted: true, StopSettled: true})
 	if job := finished(t, runner, id); job.Status != ops.Interrupted || f.startedAt() != before {
 		t.Fatalf("%+v", job)
 	}
@@ -91,5 +92,20 @@ func TestWarnedRestartWaitsForTheTimeGiven(t *testing.T) {
 	job := f.run(t, "restart", map[string]any{WarnInput: true})
 	if job.Status != ops.Succeeded || job.Recovery.WarnUntil == 0 || time.Since(started) < 200*time.Millisecond {
 		t.Fatalf("%+v", job)
+	}
+}
+
+// A failure after players were warned says so, except one the runner acts
+// on, such as resources being busy, which keeps its chain so the job is
+// queued again instead of failing.
+func TestCalledOffKeepsRunnerErrors(t *testing.T) {
+	job := &ops.Context{Job: &ops.Job{Kind: "restart", Recovery: ops.Recovery{WarnSent: true}}}
+	internal := errors.New("resources busy")
+	if err := calledOff(job, internal); err != internal {
+		t.Fatal(err)
+	}
+	err := calledOff(job, errRevoked)
+	if err.Error() != "The person who asked for this can no longer use the server. Players were told the server would restart, but it didn’t." {
+		t.Fatal(err)
 	}
 }

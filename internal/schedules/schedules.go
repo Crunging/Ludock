@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -420,8 +421,17 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, serverID stri
 				LastResult: r.lastResult.String, NextRunUnavailableReason: Unavailable}
 		}
 		view.OwnerName = ownerName(r.ownerID)
-		if view.Command != "" && r.ownerID != current.ID && !commands {
-			view.Command, view.CommandHidden = "", true
+		if !commands {
+			if view.Command != "" && r.ownerID != current.ID {
+				view.Command, view.CommandHidden = "", true
+			}
+			// A command's reply is console output.
+			if operation := view.LastOperation; operation != nil && operation.Result["reply"] != nil {
+				stripped := *operation
+				stripped.Result = maps.Clone(operation.Result)
+				delete(stripped.Result, "reply")
+				view.LastOperation = &stripped
+			}
 		}
 		result = append(result, *view)
 	}

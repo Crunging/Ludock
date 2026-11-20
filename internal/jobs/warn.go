@@ -53,8 +53,13 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		return err
 	}
 	assertAccess := func() error {
-		_, err := j.resolve(ctx, job, capability, true)
-		return err
+		if _, err := j.resolve(ctx, job, capability, true); err != nil {
+			return err
+		}
+		if job.Job.Input["createBackup"] == true {
+			return j.assertCapability(ctx, job, authz.BackupsCreate)
+		}
+		return nil
 	}
 	until := job.Job.Recovery.WarnUntil
 	if until == 0 {
@@ -63,16 +68,19 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 			return err
 		}
 		// Best effort: a warning that can't be sent doesn't stop the action.
+		// One that was gives players the full time from when they heard it.
 		if j.broadcast(ctx, server, job.Job.Kind, assertAccess, locked) == nil {
-			if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnSent = true }, nil); err != nil {
+			until = max(until, time.Now().Add(j.warningLead()).UnixMilli())
+			if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnSent, r.WarnUntil = true, until }, nil); err != nil {
 				return err
 			}
 		} else if err := assertAccess(); err != nil {
 			return err
 		}
-	} else if time.Now().UnixMilli() > until+schedtime.OneTimeGraceMs {
-		return apperr.New("WARNED_ACTION_MISSED", 409, "Ludock wasn’t running when the server was due to "+verbs[job.Job.Kind]+
-			", so it didn’t. Players had been told it would.")
+	} else if err := warnedTooLate(job); err != nil {
+		return err
+	} else if err := job.Progress("warning", nil, nil); err != nil {
+		return err
 	}
 	for {
 		remaining := time.Until(time.UnixMilli(until))
@@ -110,26 +118,36 @@ func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, kind stri
 		State: server.Container.State}, adapter, command, console.Discard, assertAccess)
 }
 
-var errNoWarning = apperr.New("WARNING_UNAVAILABLE", 409, "This server's game can't message its players")
-
-// resumable: a warned operation interrupted before it acted on the server,
-// so it can wait out its warning and act after a restart of Ludock.
-func resumable(job *ops.Context) bool {
-	r := job.Job.Recovery
-	return warnRequested(job) && r.WarnUntil != 0 && !r.StopStarted && r.InitialRunning == nil && !r.StartRequested &&
-		r.BackupID == "" && r.DataHelperID == "" && len(r.Swap) == 0 && len(r.Restore) == 0
+// warnedTooLate refuses to act more than a few minutes after the time
+// players were given, as after Ludock was down.
+func warnedTooLate(job *ops.Context) error {
+	if until := job.Job.Recovery.WarnUntil; until != 0 && time.Now().UnixMilli() > until+schedtime.OneTimeGraceMs {
+		return apperr.New("WARNED_ACTION_MISSED", 409, "Ludock wasn’t running when the server was due to "+verbs[job.Job.Kind]+
+			", so it didn’t. Players had been told it would.")
+	}
+	return nil
 }
 
-// calledOff says so when players were warned of something that then
-// didn't happen.
+var errNoWarning = apperr.New("WARNING_UNAVAILABLE", 409, "This server's game can't message its players")
+
+// resumable: a warned operation interrupted while it waited, before any
+// later step was saved, so it can wait out its warning and act after a
+// restart of Ludock.
+func resumable(job *ops.Context) bool {
+	return warnRequested(job) && job.Job.Recovery.WarnUntil != 0 && job.Job.Phase == "warning"
+}
+
+// calledOff tells whoever reads the failure that players had been warned.
+// Other errors keep their chain, which the runner may act on.
 func calledOff(job *ops.Context, err error) error {
 	r := job.Job.Recovery
-	if err == nil || !r.WarnSent || r.StopStarted || r.InitialRunning != nil || len(r.Swap) != 0 || apperr.Is(err, "WARNED_ACTION_MISSED") {
+	public, ok := apperr.As(err)
+	if !ok || !r.WarnSent || public.Code == "WARNED_ACTION_MISSED" {
 		return err
 	}
 	suffix := " Players were told the server would " + verbs[job.Job.Kind] + ", but it didn’t."
-	if public, ok := apperr.As(err); ok {
-		return apperr.New(public.Code, public.Status, strings.TrimSuffix(public.Message, ".")+"."+suffix)
+	if r.StopStarted || r.InitialRunning != nil || len(r.Swap) != 0 {
+		suffix = " Players had been told the server would " + verbs[job.Job.Kind] + "."
 	}
-	return apperr.New("WARNED_ACTION_FAILED", 409, "Something went wrong."+suffix+" Check the server, then try again.")
+	return apperr.New(public.Code, public.Status, strings.TrimSuffix(public.Message, ".")+"."+suffix)
 }

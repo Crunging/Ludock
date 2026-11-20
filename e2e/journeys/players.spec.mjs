@@ -235,7 +235,7 @@ test("restarting with players online warns them first", async ({ page }) => {
     await expect(dialog.getByLabel("Warn players and wait 1 minute")).toBeChecked();
     await expect(dialog.getByLabel("Take a backup first")).not.toBeChecked();
     await dialog.getByRole("button", { name: "Restart server" }).click();
-    await expect(page.locator("#selected-operation")).toContainText("Players warned, waiting 1 minute");
+    await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
     await command(console, "fake-said");
     await expect(console.locator(".xterm-rows")).toContainText("Server restart in 1 minute.");
     await expect(page.locator("#selected-operation")).toContainText("Succeeded", { timeout: 90_000 });

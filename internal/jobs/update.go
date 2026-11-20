@@ -332,6 +332,9 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if err := j.assertCapability(ctx, job, capability); err != nil {
 		return nil, err
 	}
+	if err := warnedTooLate(job); err != nil {
+		return nil, err
+	}
 	if err := job.Progress("pulling", func(r *ops.Recovery) { r.ContainerID = server.Container.ID }, nil); err != nil {
 		return nil, err
 	}

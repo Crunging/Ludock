@@ -72,8 +72,10 @@ func (j *Jobs) Register(runner *ops.Runner) {
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
 			Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-				if err := j.warnFirst(ctx, job, capabilityFor(action), false); err != nil {
-					return nil, calledOff(job, err)
+				if action == servers.Stop {
+					if err := j.warnFirst(ctx, job, capabilityFor(action), false); err != nil {
+						return nil, calledOff(job, err)
+					}
 				}
 				result, err := j.runLifecycle(ctx, job, action)
 				return result, calledOff(job, err)
