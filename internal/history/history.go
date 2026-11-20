@@ -250,10 +250,9 @@ type AuditEntry struct {
 	CreatedAt   int64
 }
 
-const (
-	auditOperationIDSQL  = "CASE WHEN json_valid(a.details_json) THEN CASE WHEN json_type(a.details_json, '$.operationId') = 'text' THEN json_extract(a.details_json, '$.operationId') END END"
-	auditDetailsActorSQL = "CASE WHEN json_valid(a.details_json) THEN CASE WHEN json_type(a.details_json, '$.actorId') = 'text' THEN json_extract(a.details_json, '$.actorId') END END"
-)
+var auditOperationIDSQL = db.AuditOperationID("a.")
+
+const auditDetailsActorSQL = "CASE WHEN json_valid(a.details_json) THEN CASE WHEN json_type(a.details_json, '$.actorId') = 'text' THEN json_extract(a.details_json, '$.actorId') END END"
 
 func auditStatusSQL() string {
 	var cases []string

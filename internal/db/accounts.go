@@ -526,17 +526,28 @@ func (d *DB) FinishAudit(ctx context.Context, id int64, entry AuditEntry) error 
 	return d.WriteAudit(ctx, nil, entry)
 }
 
+// AuditOperationID is the operation an audit entry belongs to, as SQL over
+// audit_log's columns under qualifier ("" or an alias with its dot). SQLite
+// uses audit_log_operation_history_idx only for exactly this expression.
+func AuditOperationID(qualifier string) string {
+	column := qualifier + "details_json"
+	return "CASE WHEN json_valid(" + column + ") THEN CASE WHEN json_type(" + column + ", '$.operationId') = 'text' THEN json_extract(" +
+		column + ", '$.operationId') END END"
+}
+
+// The index is named because the planner otherwise prefers the server's
+// history index and reads every entry of that server.
+var finishOperationAuditSQL = `UPDATE audit_log INDEXED BY audit_log_operation_history_idx SET action=?, details_json=?
+    WHERE ` + AuditOperationID("") + ` = ? AND action=? AND target_type='server' AND target_id=?`
+
 // FinishOperationAudit turns an operation's queued entry into its outcome
-// inside the transaction that records the outcome. The lookup matches
-// audit_log_operation_history_idx.
+// inside the transaction that records the outcome.
 func (d *DB) FinishOperationAudit(ctx context.Context, q execer, operationID, queued string, entry AuditEntry) error {
 	details, err := json.Marshal(entry.Details)
 	if err != nil {
 		return err
 	}
-	result, err := q.ExecContext(ctx, `UPDATE audit_log SET action=?, details_json=?
-    WHERE CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END = ?
-    AND action=? AND target_type='server' AND target_id=?`, entry.Action, string(details), operationID, queued, entry.TargetID)
+	result, err := q.ExecContext(ctx, finishOperationAuditSQL, entry.Action, string(details), operationID, queued, entry.TargetID)
 	if err != nil {
 		return err
 	}

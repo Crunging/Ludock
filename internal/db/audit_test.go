@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,40 @@ func TestFinishAuditKeepsOneEntryPerWork(t *testing.T) {
 	}
 	if got := actions(); len(got) != 2 || got[0] != "server.game-command.succeeded" || got[1] != "server.backup.succeeded" {
 		t.Fatal(got)
+	}
+}
+
+// SQLite uses an expression index only for a query that repeats its
+// expression exactly. Finishing an operation's entry and listing an
+// operation's entries under an alias, as Activity does, both find them
+// through audit_log_operation_history_idx instead of scanning the log.
+func TestAuditOperationLookupsUseTheirIndex(t *testing.T) {
+	d, _ := openTemp(t)
+	ctx := context.Background()
+	for _, query := range []string{
+		finishOperationAuditSQL,
+		"SELECT a.id FROM audit_log a WHERE " + AuditOperationID("a.") + " = ? ORDER BY a.created_at DESC, a.id DESC",
+	} {
+		args := make([]any, strings.Count(query, "?"))
+		for index := range args {
+			args[index] = "x"
+		}
+		rows, err := d.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, detail)
+		}
+		rows.Close()
+		if joined := strings.Join(plan, "; "); !strings.Contains(joined, "INDEX audit_log_operation_history_idx") {
+			t.Fatalf("%s\nplan: %s", query, joined)
+		}
 	}
 }
