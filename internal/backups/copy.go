@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -340,7 +339,7 @@ func (w digestWriter) Write(p []byte) (int, error) {
 	return w.digest.Write(p)
 }
 
-// progressKey carries isolate's progress callback to I/O that has no other
+// progressKey carries the folder guard's progress callback to I/O that has no other
 // way to report it.
 type progressKey struct{}
 
@@ -417,40 +416,12 @@ func (s *Service) ValidateCopyFolder(ctx context.Context, settings Settings) err
 	return s.assertCopyFolder(ctx, settings.CopyTo, settings.Destination)
 }
 
-// copies is the copier's in-memory state: the backup being copied, folders
-// whose abandoned I/O hasn't returned, and a request to look for due copies
-// now.
+// copies is the copier's in-memory state: the backup being copied and a
+// request to look for due copies now.
 type copies struct {
 	mu      sync.Mutex
 	current string
-	stuck   map[string]bool
-	// measuring holds folders whose free-space reading hasn't returned.
-	measuring map[string]bool
-	// hung counts each folder's looks (reach) that were given up on and
-	// haven't returned.
-	hung map[string]int
-	wake chan struct{}
-}
-
-// measure claims a folder's free-space reading; false while an earlier one
-// is still waiting on the folder, so readings of a stuck share don't pile up.
-func (c *copies) measure(folder string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.measuring[folder] {
-		return false
-	}
-	if c.measuring == nil {
-		c.measuring = map[string]bool{}
-	}
-	c.measuring[folder] = true
-	return true
-}
-
-func (c *copies) measured(folder string) {
-	c.mu.Lock()
-	delete(c.measuring, folder)
-	c.mu.Unlock()
+	wake    chan struct{}
 }
 
 func (c *copies) channel() chan struct{} {
@@ -468,63 +439,13 @@ func (c *copies) set(id string) {
 	c.mu.Unlock()
 }
 
-// enter claims a folder for I/O; false while earlier I/O there is stuck.
-func (c *copies) enter(folder string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.stuck[folder] {
-		return false
-	}
-	if c.stuck == nil {
-		c.stuck = map[string]bool{}
-	}
-	c.stuck[folder] = true
-	return true
-}
-
-func (c *copies) leave(folder string) {
-	c.mu.Lock()
-	delete(c.stuck, folder)
-	c.mu.Unlock()
-}
-
-// isolate runs fn, file I/O in folder, on a goroutine of its own. It gives
-// fn up when ctx ends (returning ctx's error) or when fn makes no progress
-// for copyStall (errCopyStalled), and cancels fn's context either way. A
-// call blocked in the kernel can't see that, so until fn returns the folder
-// stays claimed and later calls fail at once with errCopyStalled.
+// isolate runs fn, file work in folder, through the folder guard. It gives
+// fn up when ctx ends or when fn makes no progress for copyStall
+// (errCopyStalled). The folder stays claimed until fn returns, so later
+// calls there fail at once with errCopyStalled.
 func (s *Service) isolate(ctx context.Context, folder string, fn func(ctx context.Context, progress func()) error) error {
-	if !s.copies.enter(folder) {
-		return errCopyStalled
-	}
-	work, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-	done := make(chan error, 1)
-	progress := func() { last.Store(time.Now().UnixNano()) }
-	work = context.WithValue(work, progressKey{}, progress)
-	go func() {
-		err := fn(work, progress)
-		// Released before the result is reported, so the caller's next
-		// call in this folder doesn't find it still claimed.
-		s.copies.leave(folder)
-		done <- err
-	}()
-	ticker := time.NewTicker(copyStall / 4)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if time.Since(time.Unix(0, last.Load())) > copyStall {
-				return errCopyStalled
-			}
-		}
-	}
+	return s.Storage.folders.run(ctx, folder, guardOptions{lane: laneWork, claim: true, limit: copyStall, check: copyStall / 4,
+		stalled: errCopyStalled}, func(c *folderCall) error { return fn(c.ctx, c.progress) })
 }
 
 // Copying reports whether a backup's second copy is being made.
@@ -774,62 +695,18 @@ func (s *Service) finishCopyRemovals(ctx context.Context) error {
 	return nil
 }
 
-// reach runs fn, a look into folder, on a goroutine of its own. It gives fn
-// up with stalled after limit without progress. A look blocked in the kernel
-// can't be cancelled, so until it returns, later looks into that folder fail
-// at once instead of piling up on it.
+// reach runs fn, a look into folder, through the folder guard. It gives fn
+// up with stalled after limit without progress. A look can't be cancelled,
+// so until one given up on returns, later looks into that folder fail at
+// once instead of piling up on it.
 func (s *Service) reach(folder string, stalled error, limit time.Duration, fn func(progress func()) error) error {
-	c := &s.copies
-	c.mu.Lock()
-	if c.hung[folder] > 0 {
-		c.mu.Unlock()
-		return stalled
-	}
-	c.mu.Unlock()
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-	done := make(chan error, 1)
-	// Both guarded by c.mu: whichever side comes second settles the count.
-	finished, abandoned := false, false
-	go func() {
-		if testHook != nil {
-			testHook("reaching")
-		}
-		err := fn(func() { last.Store(time.Now().UnixNano()) })
-		c.mu.Lock()
-		finished = true
-		if abandoned {
-			if c.hung[folder]--; c.hung[folder] <= 0 {
-				delete(c.hung, folder)
-			}
-		}
-		c.mu.Unlock()
-		done <- err
-	}()
-	ticker := time.NewTicker(min(limit/4, time.Second))
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-done:
-			return err
-		case <-ticker.C:
-		}
-		if time.Since(time.Unix(0, last.Load())) <= limit {
-			continue
-		}
-		c.mu.Lock()
-		if finished {
-			c.mu.Unlock()
-			return <-done
-		}
-		abandoned = true
-		if c.hung == nil {
-			c.hung = map[string]int{}
-		}
-		c.hung[folder]++
-		c.mu.Unlock()
-		return stalled
-	}
+	return s.Storage.folders.run(context.Background(), folder, lookOptions(stalled, limit), func(c *folderCall) error {
+		return fn(c.progress)
+	})
+}
+
+func lookOptions(stalled error, limit time.Duration) guardOptions {
+	return guardOptions{lane: laneLook, limit: limit, check: min(limit/4, time.Second), stalled: stalled, hook: "reaching"}
 }
 
 // look reports whether a backup's archive is in folder, within measureWait.

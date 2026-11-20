@@ -162,10 +162,9 @@ func TestSaveDataInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The stopped attempt's I/O ends on its own goroutine.
-	for !f.s.copies.enter(f.main) {
+	for f.s.Storage.folders.busyIn(f.main, laneWork) > 0 {
 		time.Sleep(time.Millisecond)
 	}
-	f.s.copies.leave(f.main)
 	if track, _ := f.s.dataTrack(ctx, dataSaveKey, f.main); track.Failures != 0 || track.At != 0 {
 		t.Fatal("shutdown recorded as a save or a failure", track)
 	}

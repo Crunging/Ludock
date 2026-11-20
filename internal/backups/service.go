@@ -252,25 +252,14 @@ func (s *Service) remove(ctx context.Context, backup *Backup, assertAccess func(
 		// given up on must not mark the backup once this has returned and
 		// its locks are released; one already marked is an interrupted
 		// removal, finished by Delete or Prune.
-		var gate sync.Mutex
-		givenUp := false
-		guarded := check
-		if check != nil {
-			guarded = func() error {
-				gate.Lock()
-				defer gate.Unlock()
-				if givenUp {
-					return errFolderStalled
+		if err := s.Storage.folders.run(context.Background(), backup.destination, lookOptions(errFolderStalled, copyStall),
+			func(c *folderCall) error {
+				guarded := check
+				if check != nil {
+					guarded = func() error { return c.unlessGivenUp(check, errFolderStalled) }
 				}
-				return check()
-			}
-		}
-		if err := s.reach(backup.destination, errFolderStalled, copyStall, func(func()) error {
-			return s.Storage.Remove(backup.destination, backup.ID, guarded)
-		}); err != nil {
-			gate.Lock()
-			givenUp = true
-			gate.Unlock()
+				return s.Storage.Remove(backup.destination, backup.ID, guarded)
+			}); err != nil {
 			return err
 		}
 		// Remove checks only when the archive exists.
@@ -415,6 +404,9 @@ const (
 	foundCopyWait  = 30 * time.Second
 )
 
+// errMeasuring refuses a check while an earlier one waits on the folder.
+var errMeasuring = errors.New("copy folder still being checked")
+
 // startCopies copies every backup to the found copy folder, unless an
 // administrator chose a second folder or none. Mounting it says the owner
 // wants the copy.
@@ -427,19 +419,10 @@ func (s *Service) startCopies(ctx context.Context, saved Settings) error {
 	settings.CopyTo = found
 	// A share that stops responding mustn't hold up the storage work after
 	// this, and each folder has one check waiting on it at most.
-	if !s.copies.measure(found) {
+	err := s.Storage.folders.run(context.Background(), found, guardOptions{lane: laneMeasure, claim: true, limit: foundCopyWait,
+		stalled: errCopyStalled, busy: errMeasuring}, func(*folderCall) error { return s.ValidateCopyFolder(ctx, settings) })
+	if errors.Is(err, errMeasuring) {
 		return nil
-	}
-	checked := make(chan error, 1)
-	go func() {
-		defer s.copies.measured(found)
-		checked <- s.ValidateCopyFolder(ctx, settings)
-	}()
-	var err error
-	select {
-	case err = <-checked:
-	case <-time.After(foundCopyWait):
-		err = errCopyStalled
 	}
 	if err != nil {
 		s.copyRetryAt = time.Now().Add(foundCopyRetry)
@@ -608,29 +591,19 @@ func (s *Service) inspect(ctx context.Context) (StorageStatus, *Settings) {
 	if status.CopyTo = settings.CopyTo; status.CopyTo != "" {
 		// A share that stops responding mustn't hold up the page, and each
 		// folder has one reading waiting on it at most.
-		if !s.copies.measure(settings.CopyTo) {
-			status.CopyIssue = errCopyStalled.Message
-		} else {
-			measured := make(chan int64, 1)
-			go func() {
-				defer s.copies.measured(settings.CopyTo)
-				if testHook != nil {
-					testHook("measuring")
-				}
-				available, err := s.Storage.AvailableBytes(settings.CopyTo)
-				if err != nil {
-					available = -1
-				}
-				measured <- available
-			}()
-			select {
-			case available := <-measured:
-				if status.CopyAvailableBytes = available; available < 0 {
-					status.CopyIssue = errCopyMissing.Message
-				}
-			case <-time.After(measureWait):
-				status.CopyIssue = errCopyStalled.Message
+		var available int64
+		err := s.Storage.folders.run(context.Background(), settings.CopyTo, guardOptions{lane: laneMeasure, claim: true,
+			limit: measureWait, stalled: errCopyStalled, hook: "measuring"}, func(*folderCall) error {
+			var err error
+			if available, err = s.Storage.AvailableBytes(settings.CopyTo); err != nil {
+				available = -1
 			}
+			return nil
+		})
+		if err != nil {
+			status.CopyIssue = errCopyStalled.Message
+		} else if status.CopyAvailableBytes = available; available < 0 {
+			status.CopyIssue = errCopyMissing.Message
 		}
 	}
 	if _, err := Remaining(*settings, status.ArchiveBytes, kept); err != nil {

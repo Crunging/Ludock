@@ -138,6 +138,8 @@ type Storage struct {
 	usageMu sync.Mutex
 	readers map[string]int
 	claimed map[string]bool
+
+	folders folderGuard
 }
 
 // claimIdle reserves an archive no one is reading for removal; release
@@ -190,17 +192,25 @@ func (s *Storage) endRead(id string) {
 // Archive is an open backup archive; retention leaves it alone until it
 // is closed. A read blocked in the kernel can't be interrupted, so reads run
 // on a goroutine of their own and one that doesn't return within copyStall,
-// as on a network share that stopped responding, fails with errFolderStalled.
+// as on a network share that stopped responding, fails with errFolderStalled
+// and stays in the folder guard's record until it returns.
 // Read and Close are for one goroutine.
 type Archive struct {
 	file     *os.File
 	once     sync.Once
 	done     func()
-	requests chan int
+	guard    *folderGuard
+	folder   string
+	requests chan archiveRequest
 	results  chan archiveRead
 	exited   chan struct{}
 	buffer   []byte
 	stalled  bool
+}
+
+type archiveRequest struct {
+	size int
+	read *pending
 }
 
 type archiveRead struct {
@@ -211,16 +221,18 @@ type archiveRead struct {
 // readArchive is a seam for a read that never returns.
 var readArchive = func(file *os.File, p []byte) (int, error) { return file.Read(p) }
 
-func newArchive(file *os.File, done func()) *Archive {
-	a := &Archive{file: file, done: done, requests: make(chan int), results: make(chan archiveRead, 1), exited: make(chan struct{})}
+func newArchive(file *os.File, done func(), guard *folderGuard, folder string) *Archive {
+	a := &Archive{file: file, done: done, guard: guard, folder: folder, requests: make(chan archiveRequest),
+		results: make(chan archiveRead, 1), exited: make(chan struct{})}
 	go func() {
 		defer close(a.exited)
 		defer file.Close()
-		for size := range a.requests {
-			if len(a.buffer) < size {
-				a.buffer = make([]byte, size)
+		for request := range a.requests {
+			if len(a.buffer) < request.size {
+				a.buffer = make([]byte, request.size)
 			}
-			n, err := readArchive(file, a.buffer[:size])
+			n, err := readArchive(file, a.buffer[:request.size])
+			guard.finish(request.read)
 			a.results <- archiveRead{n, err}
 		}
 	}()
@@ -234,13 +246,15 @@ func (a *Archive) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	a.requests <- min(len(p), 1<<20)
+	read := &pending{folder: a.folder, lane: laneArchive}
+	a.requests <- archiveRequest{min(len(p), 1<<20), read}
 	timer := time.NewTimer(copyStall)
 	defer timer.Stop()
 	select {
 	case result := <-a.results:
 		return copy(p, a.buffer[:result.n]), result.err
 	case <-timer.C:
+		a.guard.abandon(read)
 		a.stalled = true
 		return 0, errFolderStalled
 	}
@@ -490,7 +504,7 @@ func (s *Storage) Open(directory, id string) (*Archive, error) {
 		}
 		return nil, err
 	}
-	return newArchive(file, func() { s.endRead(id) }), nil
+	return newArchive(file, func() { s.endRead(id) }, &s.folders, directory), nil
 }
 
 func (s *Storage) openFile(directory, id string) (*os.File, error) {
