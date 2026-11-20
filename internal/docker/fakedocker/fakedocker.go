@@ -157,7 +157,7 @@ func (e *Engine) faultLocked(request string) *fault {
 
 // Outage stops answering on the socket for duration, as a daemon that
 // exits and is started again would: connections and streams close, helpers
-// started with AutoRemove are gone, and new connections are refused until it
+// started with AutoRemove and every exec are gone, and new connections are refused until it
 // is back. Other containers keep their state.
 func (e *Engine) Outage(duration time.Duration) error {
 	e.mu.Lock()
@@ -170,6 +170,8 @@ func (e *Engine) Outage(duration time.Duration) error {
 	for conn := range e.streams {
 		conn.Close()
 	}
+	// A restarted daemon knows none of its earlier execs.
+	e.execs = map[string]*exec{}
 	for id, c := range e.containers {
 		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
 			e.removeLocked(id)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -271,5 +272,21 @@ func TestRemoveHelperStopsWriter(t *testing.T) {
 	}
 	if _, err := client.CreateHelper(ctx, docker.ContainerCreate{Image: "unpinned:latest"}); !docker.IsNotFound(err) {
 		t.Fatal(err)
+	}
+}
+
+// Failures that are Docker's, however deeply wrapped, are told apart from
+// requests Docker refused.
+func TestUnavailable(t *testing.T) {
+	wrap := func(err error) error { return fmt.Errorf("reading the archive: %w", err) }
+	for _, err := range []error{docker.ErrRequestFailed, docker.ErrReadTimeout, wrap(docker.ErrIncompleteStream), wrap(&docker.APIError{Status: 503})} {
+		if !docker.Unavailable(err) {
+			t.Error("not unavailable:", err)
+		}
+	}
+	for _, err := range []error{nil, errors.New("broken archive"), &docker.APIError{Status: 404}, &docker.APIError{Status: 409}} {
+		if docker.Unavailable(err) {
+			t.Error("unavailable:", err)
+		}
 	}
 }

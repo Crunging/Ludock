@@ -47,9 +47,11 @@ func StatusCode(err error) int {
 func IsNotFound(err error) bool { return StatusCode(err) == http.StatusNotFound }
 
 // Unavailable reports whether err means the daemon couldn't be reached, didn't
-// answer in time, or failed on its side, rather than refusing the request.
+// answer in time, cut a stream short, or failed on its side, rather than
+// refusing the request.
 func Unavailable(err error) bool {
-	return errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrReadTimeout) || StatusCode(err) >= 500
+	return errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrReadTimeout) || errors.Is(err, ErrIncompleteStream) ||
+		StatusCode(err) >= 500
 }
 
 // StreamOpenError reports a failed hijacked stream. A failed opening may

@@ -548,13 +548,13 @@ func publicFirst(err error) error {
 func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
 	// What recovery leaves the data as, for Activity: a committed restore is
 	// finished, one that began replacing is undone.
-	outcome := "Nothing was restored: the server’s files are as they were."
+	outcome := "Nothing was restored: the server’s data is as it was."
 	if state, _ := restoreState(job); state != nil {
 		switch state.Status {
 		case "committed", "cleaned":
-			outcome = "The restore had finished: the server’s files are the backup’s."
+			outcome = "The restore had finished: what it restored is in place."
 		case "replacing", "rolling_back", "rolled_back":
-			outcome = "The restore was undone: the server’s files are as they were."
+			outcome = "The restore was undone: the server’s data is as it was."
 		}
 	}
 	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
