@@ -48,7 +48,7 @@ type Query struct {
 	From, To   int64 // inclusive Unix ms; -1 when unset
 }
 
-var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Skipped, ops.Failed, ops.Interrupted}
+var Statuses = []string{ops.Queued, ops.Running, ops.Succeeded, ops.AlreadyCurrent, ops.Skipped, ops.Failed, ops.Interrupted, ops.Cancelled}
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
@@ -136,9 +136,11 @@ func nextCursor(scopeKey string, createdAt int64, id any) string {
 type Operation struct {
 	ID, ServerID, Kind, Status, Phase string
 	Actor                             *Actor
-	CreatedAt, UpdatedAt              int64
-	Error                             string
-	Result                            map[string]any
+	// CancelledBy is who cancelled it, for cancelled work.
+	CancelledBy          *Actor
+	CreatedAt, UpdatedAt int64
+	Error                string
+	Result               map[string]any
 }
 
 type Service struct {
@@ -197,8 +199,9 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	}
 	values = append(values, q.Limit+1)
 	rows, err := s.DB.QueryContext(ctx, `SELECT o.id, o.server_id, o.actor_id, u.username,
-    o.kind, o.status, o.phase, o.created_at, o.updated_at, o.error, o.result_json
+    o.kind, o.status, o.phase, o.created_at, o.updated_at, o.error, o.result_json, c.username
     FROM operations o LEFT JOIN users u ON u.id = o.actor_id
+    LEFT JOIN users c ON o.status = 'cancelled' AND json_valid(o.result_json) AND c.id = json_extract(o.result_json, '$.cancelledBy')
     WHERE `+strings.Join(conditions, " AND ")+` ORDER BY o.created_at DESC, o.id DESC LIMIT ?`, values...)
 	if err != nil {
 		return nil, "", err
@@ -208,15 +211,19 @@ func (s *Service) Operations(ctx context.Context, actor *db.SessionUser, q Query
 	for rows.Next() {
 		var operation Operation
 		var actorID string
-		var username, errorText, resultJSON sql.NullString
+		var username, errorText, resultJSON, canceller sql.NullString
 		if err := rows.Scan(&operation.ID, &operation.ServerID, &actorID, &username, &operation.Kind, &operation.Status,
-			&operation.Phase, &operation.CreatedAt, &operation.UpdatedAt, &errorText, &resultJSON); err != nil {
+			&operation.Phase, &operation.CreatedAt, &operation.UpdatedAt, &errorText, &resultJSON, &canceller); err != nil {
 			return nil, "", err
 		}
 		operation.Actor = PublicActor(actorID, username.String)
 		operation.Error = errorText.String
 		if resultJSON.Valid {
 			json.Unmarshal([]byte(resultJSON.String), &operation.Result)
+		}
+		if operation.Status == ops.Cancelled {
+			by, _ := operation.Result["cancelledBy"].(string)
+			operation.CancelledBy = PublicActor(by, canceller.String)
 		}
 		result = append(result, operation)
 	}

@@ -18,8 +18,10 @@ type SchedulesView struct {
 	Selected        string
 	SelectedMissing bool
 	Editing         string
-	// CanResume lists schedules the viewer may resume with their settings.
-	CanResume map[string]bool
+	// CanResume lists schedules the viewer may resume with their settings;
+	// CanCancelWait, those whose waiting run the viewer may cancel.
+	CanResume     map[string]bool
+	CanCancelWait map[string]bool
 	Blocked   bool
 	// ShowReplies shows command replies, which are console output.
 	ShowReplies bool
@@ -317,6 +319,9 @@ templ ScheduleList(v SchedulesView) {
 											skipping
 										}
 									</small>
+									if v.CanCancelWait[item.ID] {
+										@CancelWaitButton(item.ServerID, item.ID)
+									}
 								case item.CompletedAt != 0:
 									None
 								case !item.Enabled:

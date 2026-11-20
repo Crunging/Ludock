@@ -9,6 +9,9 @@ import (
 
 	"github.com/Crunging/Ludock/internal/datasize"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/history"
+	"github.com/Crunging/Ludock/internal/jobs"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 )
 
@@ -104,7 +107,7 @@ func Capitalize(value string) string {
 }
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
-	"warning": "Giving players 1 minute", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
+	"warning": "Giving players 1 minute", "warned": "Going ahead", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
 	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
 
 // OperationLabel describes an operation's progress.
@@ -120,6 +123,8 @@ func OperationLabel(status, phase string) string {
 		return "Failed"
 	case "succeeded":
 		return "Completed"
+	case "cancelled":
+		return "Cancelled"
 	}
 	if label, ok := phaseLabels[phase]; ok {
 		return label
@@ -138,10 +143,42 @@ func OperationPath(serverID, kind, operationID string) string {
 }
 
 var OperationStatusLabels = map[string]string{"queued": "Queued", "running": "Running", "succeeded": "Succeeded",
-	"already_current": "Already current", "skipped": "Skipped", "failed": "Failed", "interrupted": "Interrupted"}
+	"already_current": "Already current", "skipped": "Skipped", "failed": "Failed", "interrupted": "Interrupted",
+	"cancelled": "Cancelled"}
 
 var OperationTones = map[string]string{"queued": "active", "running": "active", "succeeded": "ok", "already_current": "ok",
-	"skipped": "idle", "failed": "failed", "interrupted": "attention"}
+	"skipped": "idle", "failed": "failed", "interrupted": "attention", "cancelled": "idle"}
+
+// CancelledNote says who cancelled work, which never acted.
+func CancelledNote(by *history.Actor) string {
+	name := "someone"
+	if by != nil && by.Name != "" {
+		name = by.Name
+	} else if by != nil && by.ID != "" {
+		name = "a deleted user"
+	}
+	return "Cancelled by " + name + " before it changed anything."
+}
+
+// CanCancelActive reports whether the viewer of server may cancel the work
+// it is waiting on.
+func CanCancelActive(server servers.View) bool {
+	operation := server.ActiveOperation
+	if operation == nil {
+		return false
+	}
+	job := &ops.Job{Kind: operation.Kind, Status: operation.Status, Phase: operation.Phase, Input: operation.Input}
+	capabilities := jobs.StartCapabilities(job)
+	if !ops.Waiting(job) || len(capabilities) == 0 {
+		return false
+	}
+	for _, capability := range capabilities {
+		if !server.Can(capability) {
+			return false
+		}
+	}
+	return true
+}
 
 // CommandReply is the redacted, bounded reply a scheduled command kept. It is
 // console output, for viewers with console access only.

@@ -50,6 +50,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}", s.authed(s.saveSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/toggle", s.authed(s.toggleSchedule))
 	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/delete", s.authed(s.deleteSchedule))
+	m.HandleFunc("POST /servers/{id}/schedules/{schedule}/cancel-wait", s.authed(s.cancelWait))
+	m.HandleFunc("POST /servers/{id}/operations/{operation}/cancel", s.authed(s.cancelOperation))
 	m.HandleFunc("POST /servers/{id}/players/{action}", s.authed(s.playerAction))
 	m.HandleFunc("GET /fragments/servers/{id}/player-lists", s.authed(s.playerListsFragment))
 	m.HandleFunc("GET /console/{id}", s.authed(s.consolePage))

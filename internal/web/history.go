@@ -111,6 +111,8 @@ func (s *Server) operationDetail(r *http.Request, request *Request) views.Operat
 		name = user.Username
 	}
 	o.Actor = history.PublicActor(job.ActorID, name)
+	o.CancelledBy = s.canceller(r, job)
+	o.CanCancel = s.App.Jobs.CanCancel(r.Context(), request.User(), job)
 	if server, err := s.App.Identity.Get(r.Context(), job.ServerID); err == nil && server != nil {
 		o.ServerName = server.DisplayName
 	}

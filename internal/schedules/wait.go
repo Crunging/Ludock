@@ -2,9 +2,13 @@ package schedules
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/schedtime"
 )
 
@@ -145,4 +149,78 @@ func (s *Service) checkPlayers(ctx context.Context, serverID string, since, now 
 	}
 	settled := func(at int64) bool { return at >= since && now-at >= readingSettleMs }
 	return asks[0], settled(asks[0]) || settled(asks[1])
+}
+
+var errWaitOver = apperr.New("SCHEDULE_WAIT_OVER", 409, "The wait already ended, so there’s nothing to cancel. The schedule shows what happened.")
+
+// CanCancelWait reports whether actor may cancel a schedule's waiting run:
+// whoever may start its action on the server, and administrators.
+func (s *Service) CanCancelWait(ctx context.Context, actor *db.SessionUser, item *Schedule) bool {
+	for _, capability := range append([]authz.Capability{authz.ServerView}, item.Capabilities()...) {
+		if ok, err := s.Authz.Has(ctx, actor, item.ServerID, capability); err != nil || !ok {
+			return false
+		}
+	}
+	return item.WaitingUntil != 0
+}
+
+// CancelWait ends a run waiting for players to leave without acting. Only
+// a write that finds the run still waiting succeeds, as with the run's own
+// end, so exactly one of them wins. The schedule keeps its next run.
+func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, serverID, id string) error {
+	r, err := s.get(ctx, s.DB, id, serverID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Authz.Assert(ctx, actor, serverID, authz.ServerView); err != nil {
+		return err
+	}
+	if r == nil {
+		return errNotFound
+	}
+	data, err := ParseSaved(r.input)
+	if err != nil {
+		return err
+	}
+	for _, capability := range data.Capabilities() {
+		if _, err := s.Authz.Assert(ctx, actor, serverID, capability); err != nil {
+			return err
+		}
+	}
+	if !waiting(r) {
+		return errWaitOver
+	}
+	var warned bool
+	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		now := db.Now()
+		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
+			"Cancelled by "+actor.Username+" while it waited for players to leave", now, r.id, r.revision, r.lastSlot.String)
+		if err != nil {
+			return err
+		}
+		if changed, err := result.RowsAffected(); err != nil {
+			return err
+		} else if changed == 0 {
+			return errWaitOver
+		}
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schedule_announcements WHERE schedule_id=? AND slot=?)",
+			r.id, r.lastSlot.String).Scan(&warned); err != nil {
+			return err
+		}
+		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.wait.cancelled", TargetType: "server",
+			TargetID: serverID, Details: map[string]any{"scheduleId": id, "action": data.Action}})
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
+		log.Warn("Audit retention cleanup failed after cancelling a schedule run; it will be retried")
+	}
+	// Players counted down to the end of the wait hear that it's off.
+	if warned {
+		if err := s.say(context.WithoutCancel(ctx), r, data, time.Now().Add(15*time.Second), CalledOffMessage(data.Action)); err != nil {
+			log.Debug("Could not tell players a scheduled run was cancelled", logging.F("scheduleId", id))
+		}
+	}
+	return nil
 }

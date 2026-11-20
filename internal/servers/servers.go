@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path"
 	"slices"
 	"strings"
@@ -178,6 +179,7 @@ type Connection struct {
 // ActiveOperation is persisted work that owns a server's controls.
 type ActiveOperation struct {
 	ID, Kind, Status, Phase string
+	Input                   map[string]any
 }
 
 type BackupSummary struct {
@@ -219,7 +221,7 @@ type details struct {
 func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, serverID string) (*details, error) {
 	d := &details{admin: actor != nil && actor.Role == db.RoleAdmin, operations: map[string]*ActiveOperation{},
 		backups: map[string]*BackupSummary{}}
-	query, args := `SELECT server_id,id,kind,status,phase FROM operations WHERE status IN ('queued','running')`, []any{}
+	query, args := `SELECT server_id,id,kind,status,phase,input_json FROM operations WHERE status IN ('queued','running')`, []any{}
 	if serverID != "" {
 		query, args = query+" AND server_id=?", append(args, serverID)
 	}
@@ -229,11 +231,12 @@ func (s *Service) readDetails(ctx context.Context, actor *db.SessionUser, server
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var server string
+		var server, input string
 		var operation ActiveOperation
-		if err := rows.Scan(&server, &operation.ID, &operation.Kind, &operation.Status, &operation.Phase); err != nil {
+		if err := rows.Scan(&server, &operation.ID, &operation.Kind, &operation.Status, &operation.Phase, &input); err != nil {
 			return nil, err
 		}
+		json.Unmarshal([]byte(input), &operation.Input)
 		if d.operations[server] == nil {
 			d.operations[server] = &operation
 		}

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -69,9 +70,18 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		}
 		// Best effort: a warning that can't be sent doesn't stop the action.
 		// One that was gives players the full time from when they heard it.
-		if j.broadcast(ctx, server, job.Job.Kind, assertAccess, locked) == nil {
+		if j.broadcast(ctx, server, schedules.WarningMessage(job.Job.Kind, WarningMinutes), assertAccess, locked) == nil {
 			until = max(until, time.Now().Add(j.warningLead()).UnixMilli())
-			if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnSent, r.WarnUntil = true, until }, nil); err != nil {
+			err := job.Progress(ops.PhaseWarning, func(r *ops.Recovery) { r.WarnSent, r.WarnUntil = true, until }, nil)
+			// Cancelled while the warning went out: the canceller didn't know
+			// it was sent, so the players hear it's off from here.
+			if errors.Is(err, ops.ErrCancelled) {
+				j.broadcast(ctx, server, schedules.CalledOffMessage(job.Job.Kind), func() error {
+					_, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, server.Observation, job.Job.BindingRevision)
+					return err
+				}, locked)
+			}
+			if err != nil {
 				return err
 			}
 		} else if err := assertAccess(); err != nil {
@@ -79,16 +89,22 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 		}
 	} else if err := warnedTooLate(job); err != nil {
 		return err
-	} else if err := job.Progress("warning", nil, nil); err != nil {
+	} else if err := job.Progress(ops.PhaseWarning, nil, nil); err != nil {
 		return err
 	}
 	for {
 		remaining := time.Until(time.UnixMilli(until))
 		if remaining <= 0 {
-			return assertAccess()
+			if err := assertAccess(); err != nil {
+				return err
+			}
+			// The end of the wait: from here the operation can't be cancelled.
+			return job.Progress(phaseWarned, nil, nil)
 		}
 		select {
 		case <-time.After(min(j.poll(), remaining)):
+		case <-job.Cancelled():
+			return ops.ErrCancelled
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -98,7 +114,10 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 	}
 }
 
-func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, kind string, assertAccess func() error, locked bool) error {
+// phaseWarned is a warned operation past its wait that hasn't acted yet.
+const phaseWarned = "warned"
+
+func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, message string, assertAccess func() error, locked bool) error {
 	if !CanWarn(server.Container) || j.Console == nil {
 		return errNoWarning
 	}
@@ -113,7 +132,7 @@ func (j *Jobs) broadcast(ctx context.Context, server *servers.Context, kind stri
 	defer cancel()
 	adapter := games.ResolveAdapter(server.Container.GameType, server.Container.Labels)
 	template := games.BroadcastTemplate(server.Container.GameType, server.Container.Labels)
-	command := strings.ReplaceAll(template, "{message}", schedules.WarningMessage(kind, WarningMinutes))
+	command := strings.ReplaceAll(template, "{message}", message)
 	return j.Console.GameCommand(ctx, console.Target{ContainerID: server.Container.ID, Labels: server.Container.Labels,
 		State: server.Container.State}, adapter, command, console.Discard, assertAccess)
 }
@@ -142,7 +161,7 @@ func resumable(job *ops.Context) bool {
 	if job.Job.Kind == "update" {
 		return r.InitialRunning == nil && !r.StopStarted && len(r.Swap) == 0
 	}
-	return job.Job.Phase == "warning"
+	return job.Job.Phase == ops.PhaseWarning || job.Job.Phase == phaseWarned
 }
 
 // calledOff tells whoever reads the failure that players had been warned.

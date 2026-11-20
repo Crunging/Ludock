@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -292,7 +293,8 @@ func (j *Jobs) runUpdate(ctx context.Context, job *ops.Context) (map[string]any,
 		}
 		defer func() { j.noteAvailability(j.Monitor.Suppress(context.WithoutCancel(ctx), server.Logical.ID)) }()
 		result, err = j.update(ctx, job, server, request, capability, plan)
-		if err != nil {
+		// Cancelled while it warned players: nothing was stopped or changed.
+		if err != nil && !errors.Is(err, ops.ErrCancelled) {
 			if undoErr := j.undoUpdate(context.WithoutCancel(ctx), server, job); undoErr != nil {
 				if err := job.Progress("recovery_required", nil, nil); err != nil {
 					log.Warn("Could not save that an update needs recovery; the failed operation still reports it")
