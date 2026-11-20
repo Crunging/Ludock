@@ -107,11 +107,15 @@ To back up on a schedule, use **Back up every night** in
 **Back up first** ticked.
 
 Backups need nothing set up: the example `compose.yaml` mounts a `backups`
-volume, and Ludock turns storage on there by itself. **Settings → Backup
-storage** shows where backups go and how much space they use. Each server
+volume, and Ludock turns storage on there by itself. **Settings → Backups**
+shows where backups go and how much space they use. Each server
 keeps the 3 newest backups plus the last of each of the 7 most recent days,
 4 weeks, and 6 months that have one; Ludock removes the rest after each new
-backup. To keep one for good, choose **Keep…** on it.
+backup. To keep one for good, choose **Keep…** from its menu.
+
+A server whose data isn't in a writable volume or bind mount can't be backed
+up; its **Backups** tab says so. Give its data a volume where you define the
+server and recreate it, and Ludock finds the folder by itself.
 
 Each backup is a plain tar archive of the server's data folders, so it can be
 restored without Ludock. To keep backups on another disk, or a second copy
@@ -125,12 +129,12 @@ Restoring needs an administrator.
   server's name, and choose **Restore game data**. Ludock checks the archive,
   stops the server, takes a safety backup of the current data, swaps the
   backup in, and returns the server to how it was.
-- **One file or folder:** choose **Browse** on a backup, find the item, choose
-  **Restore…** from its menu, and type the server's name. Ludock replaces only
-  that item. No safety backup is taken, so back up first if you might want the
-  current copy.
+- **One file or folder:** choose **Browse files** from a backup's menu, find
+  the item, and choose **Restore…** from its menu. Leave **Back up first**
+  ticked to keep a backup of the current data, then confirm. Ludock replaces
+  only that item, and puts the current copy back if anything fails.
 
-**Browse** also downloads single files from a backup without changing
+**Browse files** also downloads single files from a backup without changing
 anything. Ludock restores a backup only onto the same game and the same data
 folders it was taken from: the same container paths on the same volumes or host
 folders. Otherwise it can still be browsed and downloaded, or
@@ -300,8 +304,9 @@ sockets. To limit access to some folders, set
 - **Downtime:** a backup stops the server for the whole copy, then returns it
   to its previous state. Live backups aren't supported.
 - **Readiness:** the **Backups** tab checks the destination, free space, and
-  whether another container writes the same data, without stopping anything.
-  Every backup checks again before it starts.
+  whether another container writes the same data, without stopping anything,
+  and says what's wrong only when something is. Every backup checks again
+  before it starts.
 - **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
   that runs out of room fails and says why. After each successful backup, if
   the next one might not fit, Ludock removes the server's oldest backups, never
