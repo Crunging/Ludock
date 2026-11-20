@@ -32,7 +32,11 @@ var checklistKeys = []string{views.ChecklistAlerts, views.ChecklistBackups, view
 
 // checklistState is what decides which items show.
 type checklistState struct {
-	AlertsOn bool
+	// AlertsOn: a destination is on and hasn't only failed. Otherwise
+	// Unproven is one that is on but has never delivered, and Reason why.
+	AlertsOn       bool
+	Unproven       notify.Destination
+	UnprovenReason string
 	// Unbacked names the servers a nightly backup would cover; of those,
 	// UnbackedWarn can warn players and UnbackedWait can wait for them.
 	// NoData are the IDs of servers it leaves out for having no data folders.
@@ -48,6 +52,26 @@ type checklistState struct {
 	Dismissed []string
 }
 
+// alertsWorking reports whether a destination is on and hasn't only
+// failed; if none is, it names one that is on but has never delivered.
+func alertsWorking(configurations []notify.Configuration, healths map[notify.Destination]notify.Health) (bool, notify.Destination, string) {
+	var unproven notify.Destination
+	reason := ""
+	for _, c := range configurations {
+		if !c.Ready() {
+			continue
+		}
+		h := healths[c.Destination]
+		if !h.Failed || h.Delivered {
+			return true, "", ""
+		}
+		if unproven == "" {
+			unproven, reason = c.Destination, h.Reason
+		}
+	}
+	return false, unproven, reason
+}
+
 func checklistItems(state checklistState) []views.ChecklistItem {
 	var items []views.ChecklistItem
 	add := func(item views.ChecklistItem) {
@@ -56,7 +80,7 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 		}
 	}
 	if !state.AlertsOn {
-		add(views.ChecklistItem{Key: views.ChecklistAlerts})
+		add(views.ChecklistItem{Key: views.ChecklistAlerts, Destination: state.Unproven, Reason: state.UnprovenReason})
 	}
 	if len(state.Unbacked) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs,
@@ -215,8 +239,12 @@ func (s *Server) checklistDismissed(ctx context.Context) []string {
 func (s *Server) checklistView(r *http.Request, request *Request) views.ChecklistView {
 	ctx := r.Context()
 	user := request.User()
-	state := checklistState{TwoFactor: true, Dismissed: s.checklistDismissed(ctx),
-		AlertsOn: slices.ContainsFunc(s.App.Notify.Configurations(ctx), func(c notify.Configuration) bool { return c.Enabled })}
+	state := checklistState{TwoFactor: true, Dismissed: s.checklistDismissed(ctx)}
+	if healths, err := s.App.Notify.Health(ctx); err == nil {
+		state.AlertsOn, state.Unproven, state.UnprovenReason = alertsWorking(s.App.Notify.Configurations(ctx), healths)
+	} else {
+		state.AlertsOn = true
+	}
 	if all, err := s.App.Servers.List(ctx, user); err == nil {
 		if targets, _, err := s.backupTargets(ctx, user, all); err == nil {
 			for _, target := range targets {

@@ -149,6 +149,20 @@ func TestChangedReachesOnlyViewers(t *testing.T) {
 	}
 }
 
+// A change that belongs to no server, such as alerts no longer being
+// delivered, refreshes administrators' pages and nobody else's.
+func TestNotifyAdminsReachesOnlyAdministrators(t *testing.T) {
+	f := setup(t)
+	owner, allowed, denied := f.client(f.admin), f.client(f.friend), f.client(f.stranger)
+	f.hub.NotifyAdmins(ctx)
+	if events := owner.events(); len(events) != 1 || events[0].Action != "refresh" || events[0].ServerID != "" {
+		t.Fatal(events)
+	}
+	if len(allowed.events()) != 0 || len(denied.events()) != 0 {
+		t.Fatal(allowed.events(), denied.events())
+	}
+}
+
 func TestIgnoresExecAndUnknownContainers(t *testing.T) {
 	if _, ok := stateChange(dockerEvent{Action: "exec_create: secret-password"}); ok {
 		t.Fatal("exec event accepted")

@@ -59,10 +59,26 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request, request *R
 			Proxies: s.proxyView(r)},
 		Ludock: s.App.Checks.SelfStatus(r.Context()),
 	}
+	healths := s.notificationHealth(r.Context())
 	for _, configuration := range s.App.Notify.Configurations(r.Context()) {
-		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration})
+		view.Notifications = append(view.Notifications, views.NotificationDestinationView{Configuration: configuration,
+			Health: healths[configuration.Destination], Open: r.URL.Query().Get("destination") == string(configuration.Destination)})
 	}
 	render(w, r, http.StatusOK, views.SettingsPage(s.page(r, request, "Settings"), view))
+}
+
+// notificationHealth reads every destination's health; an unreadable one
+// shows as unknown rather than failing the page.
+func (s *Server) notificationHealth(ctx context.Context) map[notify.Destination]notify.Health {
+	healths, err := s.App.Notify.Health(ctx)
+	if err != nil {
+		log.Warn("Could not read notification delivery health")
+	}
+	return healths
+}
+
+func (s *Server) destinationView(ctx context.Context, d notify.Destination) views.NotificationDestinationView {
+	return views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(ctx, d), Health: s.notificationHealth(ctx)[d]}
 }
 
 // settingStatus is the status for a settings form result; false means the
@@ -368,7 +384,8 @@ func (s *Server) saveNotifications(w http.ResponseWriter, r *http.Request, reque
 	if !ok {
 		return
 	}
-	n := views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(r.Context(), d), Open: true}
+	n := s.destinationView(r.Context(), d)
+	n.Open = true
 	if err != nil {
 		// The visible fields keep what was entered; secrets are never echoed.
 		saved := n.Saved
@@ -395,6 +412,10 @@ func (s *Server) deliveriesView(r *http.Request) views.DeliveriesView {
 		d.Error = publicMessage(err)
 	}
 	d.Deliveries = deliveries
+	healths := s.notificationHealth(r.Context())
+	for _, c := range s.App.Notify.Configurations(r.Context()) {
+		d.Destinations = append(d.Destinations, views.NotificationDestinationView{Configuration: c, Health: healths[c.Destination]})
+	}
 	return d
 }
 
@@ -413,15 +434,31 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request, reques
 		s.fail(w, r, request, err)
 		return
 	}
-	n := views.NotificationDestinationView{Configuration: s.App.Notify.Configuration(r.Context(), d)}
+	n := s.destinationView(r.Context(), d)
 	if err != nil {
 		n.TestError = publicMessage(err)
 	} else {
 		s.audit(r, request, "notifications.test_queued", "", map[string]any{"deliveryId": delivery.ID, "destination": string(d)})
-		n.TestNotice = "Test notification queued. Its delivery status appears in Recent deliveries."
+		n.Test = delivery
 		w.Header().Set("HX-Trigger", "notifications-changed")
 	}
-	render(w, r, http.StatusOK, views.NotificationTest(n))
+	render(w, r, http.StatusOK, views.NotificationTestSent(n))
+}
+
+// testResult follows a test sent from a destination's card.
+func (s *Server) testResult(w http.ResponseWriter, r *http.Request, request *Request) {
+	d, ok := s.destination(w, r, request)
+	if !ok {
+		return
+	}
+	test, err := s.App.Notify.Test(r.Context(), d, r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	n := s.destinationView(r.Context(), d)
+	n.Test = test
+	render(w, r, http.StatusOK, views.NotificationTestUpdate(n))
 }
 
 // retryNotification retries a delivery, then shows the list.

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/notify"
@@ -94,12 +95,15 @@ func (b BackupSettingsView) copyRoots() []string {
 // NotificationDestinationView is one destination's card.
 type NotificationDestinationView struct {
 	notify.Configuration
+	Health notify.Health
+	// Test is the test just sent, while its result shows by the button.
+	Test *notify.Delivery
 	Open bool
 	// NoAlerts shows a save rejected for choosing no alert type as it was sent.
 	NoAlerts bool
 	// Error and Notice report a save; the Test ones report a test send.
-	Error, Notice         string
-	TestError, TestNotice string
+	Error, Notice string
+	TestError     string
 }
 
 // advancedOpen opens Advanced when something there needs the administrator.
@@ -151,7 +155,7 @@ templ SettingsPage(page Page, s SettingsView) {
 						@ProxyForm(s.Advanced.Proxies)
 						<section class="settings-group" aria-labelledby="notification-deliveries-title">
 							<h3 id="notification-deliveries-title" tabindex="-1">Recent deliveries</h3>
-							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-sync="this:drop" hx-swap="innerHTML">
+							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-sync="this:queue last" hx-swap="innerHTML">
 								<p class="muted" role="status">Loading notification deliveries…</p>
 							</div>
 						</section>
@@ -521,8 +525,17 @@ func destinationSummary(d notify.Destination) string {
 	}[d]
 }
 
+// DestinationURL opens a destination's card on the Settings page.
+func DestinationURL(d notify.Destination) string {
+	return "/settings?destination=" + string(d) + "#" + destinationID(d, "card")
+}
+
+func (n NotificationDestinationView) failing() bool { return n.Ready() && n.Health.Failing }
+
 func destinationState(n NotificationDestinationView) (string, string) {
 	switch {
+	case n.failing():
+		return "Failing", "failed"
 	case n.Ready():
 		return "On", "ok"
 	case n.Configured:
@@ -554,13 +567,10 @@ templ NotificationDestination(n NotificationDestinationView) {
 		<summary>
 			<span class="notification-destination__name">{ n.Destination.Label() }</span>
 			<span class="notification-destination__summary">{ destinationSummary(n.Destination) }</span>
-			{{ state, tone := destinationState(n) }}
-			<span class="notification-destination__state">
-				@Pip(tone)
-				{ state }
-			</span>
+			@destinationStateLabel(n)
 		</summary>
 		<div class="notification-destination__body">
+			@destinationHealth(n)
 			<form class="stack-form" hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML">
 				@destinationFields(n)
 				<label class="check-label">
@@ -582,6 +592,26 @@ templ NotificationDestination(n NotificationDestinationView) {
 			@NotificationTest(n)
 		</div>
 	</details>
+}
+
+templ destinationStateLabel(n NotificationDestinationView) {
+	{{ state, tone := destinationState(n) }}
+	<span class="notification-destination__state" id={ destinationID(n.Destination, "state") }>
+		@Pip(tone)
+		{ state }
+	</span>
+}
+
+// destinationHealth says when alerts to a destination that is on aren't
+// getting through.
+templ destinationHealth(n NotificationDestinationView) {
+	<div class="notification-destination__health" id={ destinationID(n.Destination, "health") }>
+		if n.failing() {
+			<div class="alert alert--error" role="alert">
+				Alerts aren’t reaching { n.Destination.Label() }. Failing since @Time(n.Health.Since, "", "")<span>:</span> { n.Health.Reason } Fix the settings below, then send a test.
+			</div>
+		}
+	</div>
 }
 
 func alertDescription(a notify.Alert) string {
@@ -637,10 +667,10 @@ templ alertTypes(n NotificationDestinationView) {
 templ NotificationTest(n NotificationDestinationView) {
 	<div class="notification-destination__test" id={ destinationID(n.Destination, "test") }>
 		<div class="inline-actions">
-			<button type="button" class="secondary-btn" disabled?={ !n.Ready() } aria-describedby={ destinationID(n.Destination, "test-help") } hx-post={ "/settings/notifications/" + string(n.Destination) + "/test" } hx-target={ "#" + destinationID(n.Destination, "test") } hx-swap="outerHTML" data-busy-label="Queuing test…">Send test notification</button>
+			<button type="button" class="secondary-btn" disabled?={ !n.Ready() } aria-describedby={ destinationID(n.Destination, "test-help") } hx-post={ "/settings/notifications/" + string(n.Destination) + "/test" } hx-target={ "#" + destinationID(n.Destination, "test") } hx-swap="outerHTML" data-busy-label="Sending…">Send test notification</button>
 			<p class="muted" id={ destinationID(n.Destination, "test-help") }>
 				if n.Ready() {
-					Sends a test with the saved settings. Its result appears in Recent deliveries.
+					Sends a test with the saved settings. Its result shows here.
 				} else {
 					Save the settings with this destination turned on to send a test.
 				}
@@ -649,10 +679,72 @@ templ NotificationTest(n NotificationDestinationView) {
 		if n.TestError != "" {
 			@Alert("error", n.TestError)
 		}
-		if n.TestNotice != "" {
-			@Alert("success", n.TestNotice)
+		if n.Test != nil {
+			@NotificationTestResult(n)
 		}
 	</div>
+}
+
+// testWait is how long a test may wait to be sent before the result stops
+// waiting for it.
+const testWait = 60_000
+
+func testSending(t *notify.Delivery) bool {
+	return t.State == "queued" && t.Attempts == 0 && !t.Paused && time.Now().UnixMilli()-t.CreatedAt < testWait
+}
+
+// NotificationTestResult follows a test until it is delivered or fails.
+templ NotificationTestResult(n NotificationDestinationView) {
+	{{ label := n.Destination.Label() }}
+	<div
+		class="notification-test-result"
+		id={ destinationID(n.Destination, "test-result") }
+		aria-live="polite"
+		if testSending(n.Test) {
+			hx-get={ "/fragments/settings/notifications/" + string(n.Destination) + "/tests/" + n.Test.ID }
+			hx-trigger="every 2s"
+			hx-swap="outerHTML"
+		}
+	>
+		switch {
+			case n.Test.State == "delivered":
+				@Alert("success", "Delivered. The test message should be in "+label+" now.")
+			case n.Test.State == "failed" || n.Test.LastFailure != "":
+				@Alert("error", "The test didn’t arrive. "+n.Test.LastFailure)
+			case n.Test.Paused:
+				@Alert("info", label+" was turned off before the test was sent.")
+			case testSending(n.Test):
+				<p class="muted" role="status">{ "Sending the test to " + label + "…" }</p>
+			default:
+				@Alert("info", "The test is still waiting to be sent. Recent deliveries, under Advanced, shows when it goes.")
+		}
+	</div>
+}
+
+// NotificationTestSent is a test's button and result; a test can settle
+// before the response, so the destination's state comes too.
+templ NotificationTestSent(n NotificationDestinationView) {
+	@NotificationTest(n)
+	@destinationHealthUpdate(n)
+}
+
+// NotificationTestUpdate is a test's result and, once it is settled, the
+// destination's state it may have changed.
+templ NotificationTestUpdate(n NotificationDestinationView) {
+	@NotificationTestResult(n)
+	if !testSending(n.Test) {
+		@destinationHealthUpdate(n)
+	}
+}
+
+// destinationHealthUpdate refreshes a card's state and failure warning.
+templ destinationHealthUpdate(n NotificationDestinationView) {
+	@Partial("#"+destinationID(n.Destination, "state"), "outerHTML") {
+		@destinationStateLabel(n)
+	}
+	@Partial("#"+destinationID(n.Destination, "health"), "outerHTML") {
+		@destinationHealth(n)
+	}
 }
 
 // secretField is a write-only input: a saved value is never sent back.
@@ -769,7 +861,9 @@ templ destinationFields(n NotificationDestinationView) {
 }
 
 type DeliveriesView struct {
-	Deliveries    []notify.Delivery
+	Deliveries []notify.Delivery
+	// Destinations refresh the cards above, which a delivery may change.
+	Destinations  []NotificationDestinationView
 	Error, Notice string
 }
 
@@ -780,6 +874,16 @@ func (d DeliveriesView) pending() bool {
 		}
 	}
 	return false
+}
+
+func deliveryType(delivery notify.Delivery) string {
+	switch {
+	case delivery.Kind == "test":
+		return "Test notification"
+	case delivery.Alert != 0:
+		return delivery.Alert.Label()
+	}
+	return "Alert"
 }
 
 func deliveryStatus(delivery notify.Delivery) string {
@@ -814,7 +918,7 @@ templ Deliveries(d DeliveriesView) {
 		if d.pending() {
 			hx-get="/fragments/settings/deliveries"
 			hx-trigger="every 5s"
-			hx-sync="#notification-deliveries:drop"
+			hx-sync="#notification-deliveries:queue last"
 			hx-target="#notification-deliveries"
 		}
 	>
@@ -835,14 +939,8 @@ templ Deliveries(d DeliveriesView) {
 					for _, delivery := range d.Deliveries {
 						<tr role="row">
 							<td role="cell">
-								if delivery.Kind == "test" {
-									Test notification
-								} else if delivery.Alert != 0 {
-									{ delivery.Alert.Label() }
-								} else {
-									Alert
-								}
-								<span class="table-detail">Queued @Time(delivery.CreatedAt, "", "")</span>
+								<span class="notification-delivery-message">{ delivery.Message }</span>
+								<span class="table-detail">{ deliveryType(delivery) + " · Queued " }@Time(delivery.CreatedAt, "", "")</span>
 							</td>
 							<td role="cell">{ delivery.Destination.Label() }</td>
 							<td role="cell">
@@ -859,9 +957,9 @@ templ Deliveries(d DeliveriesView) {
 								if delivery.NextAttemptAt != 0 && !delivery.Paused {
 									<span class="table-detail">
 										if delivery.Attempts > 0 {
-											Next retry
+											{ "Next retry " }
 										} else {
-											Next attempt
+											{ "Next attempt " }
 										}
 										@Time(delivery.NextAttemptAt, "", "")
 									</span>
@@ -881,4 +979,7 @@ templ Deliveries(d DeliveriesView) {
 			</table>
 		</div>
 	</div>
+	for _, n := range d.Destinations {
+		@destinationHealthUpdate(n)
+	}
 }

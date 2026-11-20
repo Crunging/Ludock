@@ -75,9 +75,12 @@ type App struct {
 	copying    sync.Mutex
 	saving     sync.Mutex
 	delivering sync.Mutex
-	polling    sync.Mutex
-	checking   sync.Mutex
-	measuring  sync.Mutex
+	// alertsFailing is the failing destinations as last seen by a delivery
+	// pass, guarded by delivering.
+	alertsFailing string
+	polling       sync.Mutex
+	checking      sync.Mutex
+	measuring     sync.Mutex
 	// deliverAgain and pollAgain ask the running pass for another.
 	deliverAgain atomic.Bool
 	pollAgain    atomic.Bool
@@ -176,7 +179,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	scheduleService.Players = schedules.ServerPlayers{Servers: serverService, Players: a.Players}
 	jobService.Players = a.Players
 	a.Attention = &attention.Service{DB: database, Authz: authorization, Identity: store, Monitor: monitoring, Schedules: scheduleService,
-		Refresh: func(ctx context.Context) error {
+		Notify: notifications, Refresh: func(ctx context.Context) error {
 			_, err := serverService.Refresh(ctx)
 			return err
 		}}
@@ -354,6 +357,7 @@ func (a *App) deliver(ctx context.Context) {
 				if err := a.Notify.Deliver(ctx); err != nil {
 					log.Warn("Notification delivery is temporarily unavailable")
 				}
+				a.noteAlertHealth(ctx)
 			}
 			a.delivering.Unlock()
 			// A call between the last pass and the unlock found the lock held.
@@ -362,6 +366,25 @@ func (a *App) deliver(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// noteAlertHealth refreshes administrators' open pages when a destination
+// starts or stops failing, which no server event announces. Only the
+// delivering goroutine calls it.
+func (a *App) noteAlertHealth(ctx context.Context) {
+	problems, err := a.Notify.Problems(ctx)
+	if err != nil {
+		return
+	}
+	// The reason is shown, so a new one refreshes too.
+	failing := ""
+	for _, problem := range problems {
+		failing += string(problem.Destination) + ": " + problem.Reason + "\n"
+	}
+	if failing != a.alertsFailing {
+		a.alertsFailing = failing
+		go a.Events.NotifyAdmins(context.Background())
+	}
 }
 
 // checkImages looks for newer server images beside the tick, once at a time,

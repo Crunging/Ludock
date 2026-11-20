@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -81,10 +82,13 @@ func failureMessage(d Destination, code string) (string, bool) {
 }
 
 type Delivery struct {
-	ID            string
-	Destination   Destination
-	Kind          string // event or test
-	Alert         Alert  // an event's type
+	ID          string
+	Destination Destination
+	Kind        string // event or test
+	Alert       Alert  // an event's type
+	// Message is the line as sent. Alerts are built from server names and
+	// fixed wording, so it holds nothing the destination didn't get.
+	Message       string
 	State         string // queued, delivered, failed
 	Attempts      int
 	CreatedAt     int64
@@ -116,6 +120,21 @@ type Service struct {
 	quit    chan struct{}
 	stopped bool
 	wake    chan struct{}
+	// lastStamp is the latest time given to a delivery attempt.
+	lastStamp atomic.Int64
+}
+
+// stamp is the current time, moved past any stamp before it, so attempts
+// that start and end within one millisecond keep their order: a
+// destination's health depends on which outcome came last.
+func (s *Service) stamp() int64 {
+	for {
+		last := s.lastStamp.Load()
+		next := max(db.Now(), last+1)
+		if s.lastStamp.CompareAndSwap(last, next) {
+			return next
+		}
+	}
 }
 
 // retryDelay is the first wait before queueing an event again; tests
@@ -242,7 +261,7 @@ func (s *Service) public(r *row, all settings) Delivery {
 	s.mu.Unlock()
 	d := Destination(r.destination)
 	ready := d.ready(all[d])
-	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
+	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, Message: r.message, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
 		LastAttemptAt: r.lastAttempt.Int64, DeliveredAt: r.delivered.Int64, Paused: r.state == "queued" && !ready}
 	if name, _, ok := strings.Cut(r.key, ":"); ok && r.kind == "event" {
 		delivery.Alert, _ = ParseAlert(name)
@@ -265,6 +284,19 @@ func (s *Service) row(ctx context.Context, id string) (*row, error) {
 		return nil, apperr.New("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found")
 	}
 	return r, err
+}
+
+// Test reads a test delivery to d.
+func (s *Service) Test(ctx context.Context, d Destination, id string) (*Delivery, error) {
+	r, err := s.row(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if r.kind != "test" || r.destination != string(d) {
+		return nil, apperr.New("NOTIFICATION_NOT_FOUND", 404, "Notification delivery not found")
+	}
+	delivery := s.public(r, s.settings(ctx))
+	return &delivery, nil
 }
 
 // Deliveries lists the 50 newest deliveries.
@@ -467,15 +499,16 @@ func (s *Service) Retry(ctx context.Context, adminID, tokenHash, id string) (*De
 		return nil, errNotRetryable
 	}
 	// Only the row as read is retried: a send claimed or finished since then
-	// changes last_attempt_at or the counters, and must not be queued again.
+	// changes next_attempt_at, last_attempt_at, or the counters, and must not be
+	// queued again.
 	changed := int64(0)
 	err = s.DB.AdminMutation(ctx, adminID, tokenHash, db.Now(), func(tx *sql.Tx) error {
 		if err := assertReadyIn(ctx, tx, d); err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE notification_deliveries SET state='queued',retry_attempts=0,next_attempt_at=?
-      WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt)
+      WHERE id=? AND state=? AND attempts=? AND retry_attempts=? AND last_attempt_at IS ? AND next_attempt_at=?`,
+			db.Now(), id, r.state, r.attempts, r.retries, r.lastAttempt, r.next)
 		if err == nil {
 			changed, err = result.RowsAffected()
 		}
@@ -569,14 +602,17 @@ func (s *Service) Deliver(ctx context.Context) error {
 		backoff := min(int64(3600_000), int64(30_000)<<min(retries, 20))
 		// Mark active first so Retry refuses the row, and claim only the row as
 		// read so a retry that already reset it wins. If the result cannot be
-		// saved, the message is sent again after the backoff.
+		// saved, the message is sent again after the backoff. The claim moves
+		// only next_attempt_at: last_attempt_at dates the last outcome, which
+		// Health compares with the last delivery.
 		s.mu.Lock()
 		s.active, s.activeTo = id, d
 		s.mu.Unlock()
-		claimedAt := db.Now()
-		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
-      WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ?`,
-			claimedAt, claimedAt+backoff, id, r.attempts, r.retries, r.lastAttempt)
+		claimedAt := s.stamp()
+		claim := claimedAt + backoff
+		result, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET next_attempt_at=?
+      WHERE id=? AND state='queued' AND attempts=? AND retry_attempts=? AND last_attempt_at IS ? AND next_attempt_at=?`,
+			claim, id, r.attempts, r.retries, r.lastAttempt, r.next)
 		claimed := int64(0)
 		if err == nil {
 			claimed, err = result.RowsAffected()
@@ -604,8 +640,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 			cancelSend(nil)
 		}
 		release := func() {
-			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET last_attempt_at=?, next_attempt_at=?
-        WHERE id=? AND last_attempt_at=?`, r.lastAttempt, r.next, id, claimedAt); err != nil {
+			if _, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries SET next_attempt_at=?
+        WHERE id=? AND next_attempt_at=? AND attempts=?`, r.next, id, claim, r.attempts); err != nil {
 				log.Warn("Could not release a notification delivery; it will be retried after its delay")
 			}
 			finishSend()
@@ -619,21 +655,23 @@ func (s *Service) Deliver(ctx context.Context) error {
 			release()
 			continue
 		}
-		finished := db.Now()
+		finished := s.stamp()
 		state := "queued"
 		var delivered, failureCode any
 		if failure == "" {
 			state, delivered = "delivered", finished
 		} else {
 			failureCode = failure
-			if retries >= 5 {
+			// A test answers whether the destination works now; retrying it
+			// later would send a surprise test.
+			if retries >= 5 || r.kind == "test" {
 				state = "failed"
 			}
 		}
 		for try := 1; ; try++ {
 			_, err := s.DB.ExecContext(ctx, `UPDATE notification_deliveries
-      SET attempts=?,retry_attempts=?,state=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`,
-				attempts, retries, state, finished+backoff, delivered, failureCode, id)
+      SET attempts=?,retry_attempts=?,state=?,last_attempt_at=?,next_attempt_at=?,delivered_at=?,failure_code=? WHERE id=?`,
+				attempts, retries, state, claimedAt, finished+backoff, delivered, failureCode, id)
 			if err == nil {
 				break
 			}
@@ -645,7 +683,10 @@ func (s *Service) Deliver(ctx context.Context) error {
 		}
 		finishSend()
 	}
-	_, err = s.DB.ExecContext(ctx, "DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?",
+	// Each destination's newest delivery stays, so Health knows it once worked.
+	_, err = s.DB.ExecContext(ctx, `DELETE FROM notification_deliveries WHERE state='delivered' AND COALESCE(delivered_at,created_at)<?
+    AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY destination ORDER BY delivered_at DESC, rowid DESC) n
+      FROM notification_deliveries WHERE state='delivered') WHERE n=1)`,
 		db.Now()-30*86400_000)
 	return err
 }

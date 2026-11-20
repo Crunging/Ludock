@@ -1,6 +1,6 @@
 // Package attention lists what needs a viewer's attention: unavailable
-// bindings, outages, disk and memory alerts, suspended schedules, and recent
-// failed work.
+// bindings, outages, disk and memory alerts, suspended schedules, recent
+// failed work, and, for administrators, alerts that aren't being delivered.
 package attention
 
 import (
@@ -14,13 +14,14 @@ import (
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
 
 type Item struct {
 	ID         string
-	Kind       string // binding, sharing, availability, disk, memory, schedule, operation
+	Kind       string // binding, sharing, availability, disk, memory, schedule, operation, notifications
 	ServerID   string
 	ServerName string
 	// binding
@@ -42,6 +43,8 @@ type Item struct {
 	Status        string
 	UpdatedAt     int64
 	ForceStopped  bool
+	// notifications, with Since and Reason
+	Destination notify.Destination
 }
 
 type Result struct {
@@ -57,11 +60,13 @@ type Service struct {
 	Identity  *identity.Store
 	Monitor   *monitor.Service
 	Schedules *schedules.Service
+	// Notify, when set, raises destinations that are failing.
+	Notify *notify.Service
 	// Refresh reconciles discovery first.
 	Refresh func(ctx context.Context) error
 }
 
-var priority = map[string]int{"binding": 0, "sharing": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
+var priority = map[string]int{"notifications": 0, "binding": 0, "sharing": 0, "availability": 1, "disk": 2, "memory": 2, "schedule": 3, "operation": 4}
 
 // List reads current authority after discovery: a stale principal never
 // exposes a revoked server's saved history.
@@ -178,6 +183,16 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 			return nil, err
 		}
 		hasVisible = true
+	}
+	if s.Notify != nil && current != nil && current.Role == db.RoleAdmin {
+		problems, err := s.Notify.Problems(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, problem := range problems {
+			result.Items = append(result.Items, Item{ID: "notifications:" + string(problem.Destination), Kind: "notifications",
+				Destination: problem.Destination, Since: problem.Since, Reason: problem.Reason})
+		}
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool {
 		left, right := result.Items[i], result.Items[j]
