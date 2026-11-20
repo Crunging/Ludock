@@ -46,7 +46,7 @@ type Backup struct {
 	// attempt failed.
 	CopyState, CopyError string
 	// FolderAway is set by ArchiveFolder and Locate when the folder the
-	// backup was saved in can't be opened.
+	// backup was saved in can't be opened or isn't responding.
 	FolderAway bool
 
 	// FromCopy is set by ArchiveFolder when the archive is read from the

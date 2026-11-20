@@ -786,8 +786,8 @@ func TestStalledBackupFolderIsGivenUp(t *testing.T) {
 	if err := f.s.Locate(listed); !errors.Is(err, errFolderStalled) {
 		t.Fatal(err)
 	}
-	if _, err := f.s.ArchiveFolder(&listed[0]); !errors.Is(err, errFolderStalled) {
-		t.Fatal(err)
+	if _, err := f.s.ArchiveFolder(&listed[0]); !errors.Is(err, errFolderStalled) || !listed[0].FolderAway {
+		t.Fatal("a stuck folder isn't offered for removal", err)
 	}
 	if _, err := f.s.Delete(ctx, f.serverID, backup.ID, false, nil); !errors.Is(err, errFolderStalled) {
 		t.Fatal(err)

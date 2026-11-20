@@ -845,15 +845,15 @@ func (s *Service) look(folder, id string, stalled error) (bool, error) {
 
 // ArchiveFolder is where a backup's archive is read from: its own folder,
 // or a second copy when the archive is missing there, preferring the one in
-// the chosen folder. It sets FromCopy and FolderAway, and fails when a
-// folder it must look into isn't responding.
+// the chosen folder. It sets FromCopy and FolderAway (also when that folder
+// isn't responding), and fails when a folder it must look into isn't.
 func (s *Service) ArchiveFolder(backup *Backup) (string, error) {
 	backup.FromCopy = false
 	found, err := s.look(backup.destination, backup.ID, errFolderStalled)
+	backup.FolderAway = err != nil
 	if errors.Is(err, errFolderStalled) {
 		return "", err
 	}
-	backup.FolderAway = err != nil
 	if found {
 		return backup.destination, nil
 	}
@@ -893,7 +893,7 @@ func (s *Service) Locate(list []Backup) error {
 			err := s.reach(backup.destination, errFolderStalled, measureWait, func(func()) error {
 				return s.Storage.reachable(backup.destination)
 			})
-			backup.FolderAway = errors.Is(err, errFolderAway)
+			backup.FolderAway = err != nil
 			if errors.Is(err, errFolderStalled) && stalled == nil {
 				stalled = err
 			}
