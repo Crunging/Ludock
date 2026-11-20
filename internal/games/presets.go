@@ -22,12 +22,18 @@ type ConsolePreset struct {
 	Adapter AdapterID
 	// BroadcastTemplate is a fixed command; only generated, non-user text
 	// replaces {message}.
-	BroadcastTemplate     string
+	BroadcastTemplate string
+	// StopCommand shuts the game down and saves, for a stdin console whose
+	// game never gets Docker's stop signal.
+	StopCommand           string
 	Name                  string
 	Placeholder           string
 	Commands              []QuickCommand // nil uses the adapter's
 	DefaultPort           int
 	PasswordEnvCandidates []string
+	// PasswordFile is a file in the container whose first line is the
+	// console password.
+	PasswordFile string
 	// Players lists who is online through this preset's adapter, and
 	// Moderation acts on them.
 	Players    *PlayerQuery
@@ -54,6 +60,9 @@ type Integration struct {
 	// Query asks the game itself whether it answers, from its documented
 	// default port.
 	Query *StatusQuery
+	// ServerFiles are folders where the images keep the game's own download,
+	// left out of files and backups unless ludock.files names them.
+	ServerFiles []string
 }
 
 // Integrations lists the supported games. Repository suffixes omit
@@ -63,7 +72,10 @@ var Integrations = []Integration{
 		UpdatesOnStart: true, Console: &ConsolePreset{Adapter: MinecraftRCON, BroadcastTemplate: "say {message}", Moderation: minecraftModeration},
 		Query: &StatusQuery{Protocol: gamequery.MinecraftPing, Port: 25565, PortEnv: []string{"SERVER_PORT"}}},
 	{GameType: "factorio", Name: "Factorio", GamePort: &Port{34197, "udp"}, Repositories: []string{"factoriotools/factorio"},
+		// The image generates the password and passes it on the command line.
+		// Text that isn't a command is chat from <server>.
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Factorio RCON", DefaultPort: 27015,
+			PasswordFile: "/factorio/config/rconpw", BroadcastTemplate: "{message}",
 			Placeholder: "/players, /server-save, /config get",
 			Commands:    []QuickCommand{{"List players", "/players online"}, {"Save world", "/server-save"}},
 			Players:     &PlayerQuery{Command: "/players online", Parse: ParseFactorioPlayers}, Moderation: factorioModeration}},
@@ -116,13 +128,16 @@ var Integrations = []Integration{
 			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}, Moderation: sevenDaysModeration}},
 	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
+		ServerFiles: []string{"/opt/valheim"},
 		// Valheim answers on its game port plus one, and only when public.
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 2457}},
 	{GameType: "terraria", Name: "Terraria", GamePort: &Port{7777, "tcp"},
 		Repositories: []string{"hexlo/terraria-server-docker", "beardedio/terraria", "ryshe/terraria"},
+		// Every listed image runs the server where SIGTERM never reaches it:
+		// under a shell that doesn't forward it, or as PID 1 without a handler.
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Terraria console", BroadcastTemplate: "say {message}",
-			Placeholder: "playing, save, say Hello",
-			Commands:    []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}}}},
+			StopCommand: "exit", Placeholder: "playing, save, say Hello",
+			Commands: []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}}}},
 	// From Bedrock 1.26.50 the default NetherNet transport connects over TCP
 	// first, then plays on UDP ports the image leaves unset.
 	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},

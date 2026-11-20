@@ -44,7 +44,7 @@ What each game gets beyond start, stop, files, and backups:
 | Game | Who's online | Kick and ban | Warnings to players | Restart updates the game |
 | --- | --- | --- | --- | --- |
 | Minecraft | Names | Kick, ban, allowlist | ✓ | ✓ |
-| Factorio | Names | Kick, ban | | |
+| Factorio | Names | Kick, ban | ✓ | |
 | Palworld | Names | Kick, ban | | ✓ |
 | ARK: Survival Evolved | Names | Kick, ban | ✓ | |
 | ARK: Survival Ascended | Names | Kick, ban | ✓ | |
@@ -65,6 +65,59 @@ image's own settings pin a version or skip updates.
 Project Zomboid and Conan Exiles get no kick or ban buttons: Zomboid's names
 can hold spaces its commands need quoted, and Conan's kick takes a row number
 that can change. 7 Days to Die bans need a length, so they stay in the console.
+
+### Checked on real servers
+
+These games were run on their real images, under Compose, with Ludock beside
+them. No player joined, since that needs an account or the game; who's online
+was read on an empty server, and kick and ban were sent for players who
+weren't there. The others follow their images' documentation and haven't been
+run yet.
+
+- **Terraria** (`hexlo/terraria-server-docker`): its console needs
+  `stdin_open: true`, with or without `tty`; replies show in the console's
+  output. Ludock saves with `save` before a stop and then types `exit`, since
+  the images never pass Docker's stop signal on to the game. `say` warns
+  players. Files and backups take the worlds folder Ludock finds mounted.
+  Terraria can't tell Ludock who's online or whether it answers, so it gets no
+  player list, kick or ban buttons, or automatic restart; the console has
+  `kick` and `ban`. `ryshe/terraria` and `beardedio/terraria` were only
+  inspected: both also keep the game from Docker's stop signal.
+- **Factorio** (`factoriotools/factorio`): the console works by itself with the
+  password the image generates. Who's online, kick, and ban answer as
+  expected; warnings appear in chat from `<server>`; `/server-save` saves, and the game saves
+  again when it stops. Factorio has no status check: a hung server shows
+  **Unhealthy** from the image's own health check, and automatic restart isn't
+  offered.
+- **Valheim** (`lloesche/valheim-server`): no console. The game saves its world
+  when it stops. Files and backups take `/config`, not the server the image
+  downloads into `/opt/valheim`. The count and the status check need
+  `SERVER_PUBLIC` on, its default, which lists the server publicly; with it
+  off, the page says the game hasn't answered and automatic restart can't
+  act. With it on, Ludock restarted a hung server by itself once automatic
+  restart was turned on.
+- **Vintage Story** (`zsuatem/vintagestory`): its console needs
+  `stdin_open: true`. `/autosavenow` saves before a stop, `/announce` warns
+  players, and the game saves again when it stops. It gets no player list or
+  status check. `devidian/vintagestory` wasn't run.
+- **Minecraft: Bedrock Edition** (`itzg/minecraft-bedrock-server`): its console
+  needs `stdin_open: true`. The image saves the world when Docker stops it.
+  From 1.26.50 the server takes players on TCP 19132 only, so publish
+  `19132:19132/tcp` for its address to show. The server takes the `say`
+  warnings, but joining to see them needs a Microsoft account, so that wasn't
+  checked. `list` and `kick` work in the console only.
+- **Palworld** (`thijsvanloef/palworld-server-docker`): its console needs
+  `RCON_ENABLED=true` and `ADMIN_PASSWORD`. Who's online, kick, and ban answer
+  as expected; kick and ban send `steam_<ID>`, the only form Palworld 1.0
+  takes. `Save` saves before a
+  stop. Palworld's own `Broadcast` sends only a message's first word, so
+  Ludock doesn't warn its players. It didn't answer a status check. Its saves
+  live inside the server the image downloads to `/palworld`, so each backup
+  copies about 3.5 GB; `ludock.files: "/palworld/Pal/Saved"` backs up only
+  the saves.
+- **Project Zomboid** (`renegademaster/zomboid-dedicated-server`) couldn't be
+  checked: the image doesn't start the current game, Build 42, which refuses
+  the empty arguments it passes.
 
 ## Labels
 

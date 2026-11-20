@@ -389,17 +389,9 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	}()
 	hash := sha256.New()
 	var size, checked int64
-	// buffer coalesces small writes; chunk carries file bodies for every entry.
-	buffer, chunk := make([]byte, 0, 64*1024), make([]byte, 64*1024)
+	// out coalesces small writes; chunk carries file bodies for every entry.
+	out, chunk := newCoalescer(file), make([]byte, 64*1024)
 	stillAllowed := launch.Periodic(assertAccess)
-	flush := func() error {
-		if len(buffer) == 0 {
-			return nil
-		}
-		_, err := file.Write(buffer)
-		buffer = buffer[:0]
-		return err
-	}
 	write := func(chunk []byte) error {
 		if stillAllowed != nil {
 			if err := stillAllowed(); err != nil {
@@ -420,15 +412,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 			}
 		}
 		hash.Write(chunk)
-		if len(buffer) == 0 && len(chunk) >= cap(buffer) {
-			_, err := file.Write(chunk)
-			return err
-		}
-		buffer = append(buffer, chunk...)
-		if len(buffer) >= cap(buffer) {
-			return flush()
-		}
-		return nil
+		return out.write(chunk)
 	}
 	header, _ := tarstream.EncodeHeader(tarstream.Header{Name: "snapshot/", Type: "directory", Mode: 0o755})
 	if err := write(header); err != nil {
@@ -526,7 +510,7 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 	if err := write(tarstream.End()); err != nil {
 		return 0, "", err
 	}
-	if err := flush(); err != nil {
+	if err := out.flush(); err != nil {
 		return 0, "", err
 	}
 	if _, err := budget(dir, settings.ReserveBytes, 0); err != nil {
@@ -549,6 +533,40 @@ func (h *Helpers) WriteSnapshot(ctx context.Context, context *servers.Context, d
 		return 0, "", err
 	}
 	return size, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// coalescer joins small writes into ones of up to its buffer's size, which
+// never grows: an archive is written as it streams, never held in memory.
+type coalescer struct {
+	file   io.Writer
+	buffer []byte
+}
+
+func newCoalescer(file io.Writer) *coalescer {
+	return &coalescer{file: file, buffer: make([]byte, 0, 64*1024)}
+}
+
+func (c *coalescer) write(chunk []byte) error {
+	if len(c.buffer)+len(chunk) > cap(c.buffer) {
+		if err := c.flush(); err != nil {
+			return err
+		}
+	}
+	if len(chunk) >= cap(c.buffer) {
+		_, err := c.file.Write(chunk)
+		return err
+	}
+	c.buffer = append(c.buffer, chunk...)
+	return nil
+}
+
+func (c *coalescer) flush() error {
+	if len(c.buffer) == 0 {
+		return nil
+	}
+	_, err := c.file.Write(c.buffer)
+	c.buffer = c.buffer[:0]
+	return err
 }
 
 var errStagingCapacity = fail("RESTORE_CAPACITY", "A data root lacks space for restore staging and the configured reserve.")

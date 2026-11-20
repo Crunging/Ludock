@@ -47,6 +47,10 @@ type Container struct {
 	// Files are served by /archive: regular files by absolute path, and
 	// symbolic links whose value starts with "->", such as "-> /etc".
 	Files map[string]string
+	// IgnoresStop is a game that never gets the stop signal, as under a
+	// shell entrypoint: a stop waits its whole timeout and kills it, unless
+	// the game exits on its own first (Exit).
+	IgnoresStop bool
 }
 
 type ExecHandler func(container *Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int
@@ -74,6 +78,9 @@ type Engine struct {
 	// the logs a helper process would print; OnStop when one stops.
 	OnStart func(c *Container)
 	OnStop  func(c *Container)
+	// AddGame adds a fake game server for POST /fake/game, or reports false
+	// for a game it doesn't know.
+	AddGame func(game, name string) bool
 	// Attach runs a container's process on an attached stream, under no
 	// lock; nil collects stdin in Container.Stdin.
 	Attach     func(c *Container, stdin *bufio.Reader, stdout func([]byte))
@@ -251,6 +258,8 @@ type GameOptions struct {
 	Running         bool
 	Mounts          []docker.MountPoint
 	Ports           map[string][]docker.PortBinding
+	// OpenStdin is stdin_open: true.
+	OpenStdin bool
 }
 
 func (e *Engine) AddContainer(options GameOptions) string {
@@ -271,7 +280,7 @@ func (e *Engine) AddContainer(options GameOptions) string {
 	}
 	container := &Container{ContainerInspect: docker.ContainerInspect{
 		ID: id, Image: "sha256:" + strings.Repeat("0", 64), Name: "/" + options.Name, Created: now,
-		Config: docker.ContainerConfig{Image: options.Image, Labels: labels, Env: options.Env},
+		Config: docker.ContainerConfig{Image: options.Image, Labels: labels, Env: options.Env, OpenStdin: options.OpenStdin},
 		State: docker.ContainerState{Status: status, Running: options.Running, StartedAt: now,
 			FinishedAt: "0001-01-01T00:00:00Z"},
 		Mounts: options.Mounts, NetworkSettings: docker.NetworkSettings{Ports: options.Ports},
@@ -306,6 +315,40 @@ func (e *Engine) RemoveContainer(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.removeLocked(id)
+}
+
+// Exit ends a running container's process with code, as a game that quits
+// on its own command.
+func (e *Engine) Exit(id string, code int) {
+	e.mu.Lock()
+	c := e.containers[id]
+	if c == nil || !c.State.Running {
+		e.mu.Unlock()
+		return
+	}
+	hook := e.exitLocked(c, code)
+	e.mu.Unlock()
+	if hook != nil {
+		hook(c)
+	}
+}
+
+// exitLocked returns OnStop, to run once the lock is released.
+func (e *Engine) exitLocked(c *Container, code int) func(*Container) {
+	c.State.Status, c.State.Running, c.State.ExitCode = "exited", false, code
+	c.State.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	// Docker releases a stopped container's addresses.
+	for name, endpoint := range c.Networks {
+		endpoint.IPAddress, endpoint.MacAddress = "", ""
+		c.Networks[name] = endpoint
+	}
+	e.emitLocked("stop", c.ID)
+	e.emitLocked("die", c.ID)
+	// Docker removes an AutoRemove container once it stops.
+	if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
+		e.removeLocked(c.ID)
+	}
+	return e.OnStop
 }
 
 func (e *Engine) removeLocked(id string) {
@@ -445,6 +488,25 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		// bind mount at DESTINATION to another host folder.
 		query := r.URL.Query()
 		e.Recreate(query.Get("container"), query)
+		w.WriteHeader(204)
+		return
+	case "/fake/game":
+		// Adds a fake game server like a real image's: POST
+		// /fake/game?game=GAME&name=NAME. POST /fake/remove?container=NAME
+		// removes it.
+		query := r.URL.Query()
+		if e.AddGame == nil || !e.AddGame(query.Get("game"), query.Get("name")) {
+			fail(w, 404)
+			return
+		}
+		w.WriteHeader(204)
+		return
+	case "/fake/remove":
+		e.mu.Lock()
+		if c := e.find(r.URL.Query().Get("container")); c != nil {
+			e.removeLocked(c.ID)
+		}
+		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
 	case "/fake/stats":
@@ -1051,22 +1113,36 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 			w.WriteHeader(304)
 			return
 		}
-		c.State.Status, c.State.Running, c.State.FinishedAt, c.State.ExitCode = "exited", false, now, 0
-		// Docker releases a stopped container's addresses.
-		for name, endpoint := range c.Networks {
-			endpoint.IPAddress, endpoint.MacAddress = "", ""
-			c.Networks[name] = endpoint
+		if !c.IgnoresStop {
+			hook := e.exitLocked(c, 0)
+			e.mu.Unlock()
+			if hook != nil {
+				hook(c)
+			}
+			w.WriteHeader(204)
+			return
 		}
-		e.emitLocked("stop", id)
-		e.emitLocked("die", id)
-		// Docker removes an AutoRemove container once it stops.
-		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
-			e.removeLocked(id)
-		}
-		hook := e.OnStop
 		e.mu.Unlock()
-		if hook != nil {
-			hook(c)
+		seconds, err := strconv.Atoi(r.URL.Query().Get("t"))
+		if err != nil {
+			seconds = 10
+		}
+		for deadline := time.Now().Add(time.Duration(seconds) * time.Second); ; {
+			e.mu.Lock()
+			if !c.State.Running {
+				e.mu.Unlock()
+				break
+			}
+			if time.Now().After(deadline) {
+				hook := e.exitLocked(c, 137)
+				e.mu.Unlock()
+				if hook != nil {
+					hook(c)
+				}
+				break
+			}
+			e.mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
 		}
 		w.WriteHeader(204)
 	case action == "/restart" && r.Method == "POST":

@@ -270,7 +270,8 @@ waits five seconds before stopping, including for a backup, restore, or
 update. Docker then gives the game 120 seconds to
 shut down (more for slow savers such as ARK, Palworld, Valheim, 7 Days to Die,
 and Don't Starve Together), or the container's own `stop_grace_period` if it
-is longer.
+is longer. Terraria's images never pass Docker's stop signal on to the game,
+so Ludock also types its `exit` command, which saves and quits.
 
 When someone may be online and the game can message its players, the Restart,
 Stop, and **Create backup** dialogs, a restore, and the **Update** tab offer
@@ -309,8 +310,8 @@ the button says **Logs**.
 
 Network consoles (RCON, WebRCON, Telnet) need the console turned on in the
 game. Ludock finds its password in the variables images usually use, such as
-`RCON_PASSWORD`, `ADMIN_PASSWORD`, or `TELNET_PASSWORD`, and for Minecraft also
-the one the image generates. If yours uses another name, set
+`RCON_PASSWORD`, `ADMIN_PASSWORD`, or `TELNET_PASSWORD`, and for Minecraft and
+Factorio also the one the image generates. If yours uses another name, set
 [`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and Vintage Story read commands
 from the server's input, which needs `stdin_open: true` on the container (and
 `StdinOnce` off, outside Compose) and an image that passes input to the game;
@@ -320,7 +321,8 @@ container's network, so the console port needn't be published.
 ### Files
 
 **Files** opens the server's data folders: the writable volumes and bind mounts
-Ludock considers safe. It shows container paths, never host paths.
+Ludock considers safe, except where an image keeps the server it downloads,
+such as Valheim's `/opt/valheim`. It shows container paths, never host paths.
 
 - Upload by dropping files on the page or with **Choose files**. Each upload
   replaces the destination only once it is complete.

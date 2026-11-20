@@ -100,6 +100,29 @@ func TestSourceRCON(t *testing.T) {
 	}
 }
 
+// Palworld 1.0.5 answers every command with ID 0, captured from
+// thijsvanloef/palworld-server-docker; Ludock waited out every reply.
+// A packet of another type with ID 0 is still not the reply.
+func TestSourceRCONReplyWithIDZero(t *testing.T) {
+	host, port := listen(t, func(conn net.Conn) {
+		id, _, _, err := readPacket(conn)
+		if err != nil {
+			return
+		}
+		packet, _ := EncodeRCON(id, 2, "")
+		conn.Write(packet)
+		readPacket(conn)
+		other, _ := EncodeRCON(0, 1, "chat")
+		reply, _ := EncodeRCON(0, 0, "name,playeruid,steamid\n")
+		conn.Write(append(other, reply...))
+		io.Copy(io.Discard, conn)
+	})
+	response, err := SourceRCON(ctx, host, port, "secret", "ShowPlayers", Control{})
+	if err != nil || response != "name,playeruid,steamid\n" {
+		t.Fatalf("%q %v", response, err)
+	}
+}
+
 func TestTelnet(t *testing.T) {
 	host, port := listen(t, func(conn net.Conn) {
 		reader := bufio.NewReader(conn)

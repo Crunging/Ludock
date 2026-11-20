@@ -16,7 +16,7 @@ func TestCommandByID(t *testing.T) {
 	parsed, _ := games.ParsePalworldPlayers("name,playeruid,steamid\nAda,1,76561198000000000\nZed,2,76561198000000001\n" +
 		"Zed,3,76561198000000002\nEve,4,76561198000000003 \n")
 	reading := &Reading{Players: parsed, CheckedAt: time.Now().UnixMilli()}
-	if command, err := Command(moderation, reading, games.Ban, "Ada", Key("76561198000000000")); err != nil || command != "BanPlayer 76561198000000000" {
+	if command, err := Command(moderation, reading, games.Ban, "Ada", Key("76561198000000000")); err != nil || command != "BanPlayer steam_76561198000000000" {
 		t.Fatal(command, err)
 	}
 	for _, c := range []struct {

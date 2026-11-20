@@ -280,7 +280,7 @@ func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Ad
 		}
 	}
 	if name == "" && adapter.PasswordFile != "" {
-		return r.passwordFile(ctx, target.ContainerID, adapter.PasswordFile)
+		return r.passwordFile(ctx, target.ContainerID, adapter.PasswordFile, adapter.PasswordKey)
 	}
 	if name == "" {
 		return "", notConfigured("Set " + games.LabelConsolePasswordEnv + " to the name of the container environment variable that holds its console password")
@@ -291,9 +291,9 @@ func (r *Runtime) password(ctx context.Context, target Target, adapter *games.Ad
 	return env[name], nil
 }
 
-// passwordFile reads a "password=<value>" line from a small file in the
-// container.
-func (r *Runtime) passwordFile(ctx context.Context, containerID, file string) (string, error) {
+// passwordFile reads the password from a small file in the container: the
+// rest of the line that starts with key, or the first line without one.
+func (r *Runtime) passwordFile(ctx context.Context, containerID, file, key string) (string, error) {
 	unavailable := errors.New("Ludock could not read the console password from " + file +
 		". Check that the game's console is on, or set " + games.LabelConsolePasswordEnv)
 	data, err := r.Docker.ReadFile(ctx, containerID, file, 4096)
@@ -301,8 +301,11 @@ func (r *Runtime) passwordFile(ctx context.Context, containerID, file string) (s
 		return "", unavailable
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		if password, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "password="); ok && password != "" {
+		if password, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), key); ok && password != "" {
 			return password, nil
+		}
+		if key == "" {
+			break
 		}
 	}
 	return "", unavailable
