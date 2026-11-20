@@ -28,9 +28,18 @@ var (
 	ErrUpload      = apperr.New("FILE_UPLOAD_FAILED", 400, "The file change failed")
 )
 
-// archiveErrors are the public reasons an archive was not unpacked, by the
-// helper's exit code.
-var archiveErrors = map[int]*apperr.Error{
+// ExecErrors are the public errors a helper command fails with.
+type ExecErrors struct {
+	// Failed is a broken stream; Unsafe a command that failed or whose end
+	// Docker didn't confirm.
+	Timeout, Failed, Unsafe, OutputLimit *apperr.Error
+	// Exits are the public errors of exit codes that report a refusal.
+	Exits map[int]*apperr.Error
+}
+
+var fileErrors = &ExecErrors{Timeout: ErrTimeout, Failed: ErrFailed, Unsafe: ErrUnsafe, OutputLimit: ErrOutputLimit, Exits: map[int]*apperr.Error{
+	helper.FileNameTaken:     ErrNameTaken,
+	helper.FileChanged:       ErrFileChanged,
 	helper.FileArchiveUnsafe: apperr.New("ARCHIVE_UNSAFE", 422, "The archive wasn’t unpacked: it has entries with unsafe names, such as paths that lead outside its folder."),
 	helper.FileArchiveLimit: apperr.New("ARCHIVE_TOO_LARGE", 413, "The archive wasn’t unpacked: it unpacks to more than "+
 		datasize.Format(helper.Unpack.Bytes)+" or 100 times its own size, or has too many entries or nested folders."),
@@ -38,6 +47,20 @@ var archiveErrors = map[int]*apperr.Error{
 	helper.FileNotArchive:  apperr.New("NOT_AN_ARCHIVE", 415, "This file isn’t a zip, tar, or tar.gz archive, or it is damaged."),
 	// A 5xx status reports the result as unconfirmed.
 	helper.FilePartial: apperr.New("FILE_PARTIAL", 500, "Only part of the selection was changed"),
+}}
+
+// exit is the error of a command Docker reports as ended with info.
+func (e *ExecErrors) exit(info *docker.ExecInspect) error {
+	if info == nil || info.Running || info.ExitCode == nil {
+		return e.Unsafe
+	}
+	if refusal := e.Exits[*info.ExitCode]; refusal != nil {
+		return refusal
+	}
+	if *info.ExitCode != 0 {
+		return e.Unsafe
+	}
+	return nil
 }
 
 type ExecOptions struct {
@@ -49,10 +72,23 @@ type ExecOptions struct {
 	Trailer []byte
 	// AssertAccess runs before the exec, after it is created, and between
 	// input chunks; with Limit, also every second while the command runs.
+	// A settling command checks it only after the create.
 	AssertAccess func() error
 	// Limit replaces the one-minute bound of a command without input.
 	Limit time.Duration
+	// Errors replaces the file errors.
+	Errors *ExecErrors
+	// Settle makes the command outlast the caller's context and its stream,
+	// for a next step that writes the same data: Exec returns only once
+	// Docker confirms it ended or no longer knows it, or Limit passed and the
+	// helper is stopped. It takes no Input, its create has no StepLimit, and
+	// its Limit is used as given.
+	Settle bool
+	// Poll is how often a settling command is inspected; zero means 250ms.
+	Poll time.Duration
 }
+
+var errOutputLimit = errors.New("helper output exceeded its limit")
 
 // limitedBuffer does not embed bytes.Buffer, whose ReadFrom would bypass
 // the limit inside io.Copy.
@@ -60,7 +96,7 @@ type limitedBuffer struct{ buffer bytes.Buffer }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if b.buffer.Len()+len(p) > MaxOutput {
-		return 0, ErrOutputLimit
+		return 0, errOutputLimit
 	}
 	return b.buffer.Write(p)
 }
@@ -85,27 +121,38 @@ func Periodic(check func() error) func() error {
 }
 
 // Exec runs a helper command in a helper container and returns its stdout.
-// ctx cancellation stops the command: commands without input are cut off
-// immediately, uploads get five seconds to remove their staging file.
+// Unless it settles, ctx cancellation stops the command: commands without
+// input are cut off immediately, uploads get five seconds to remove their
+// staging file.
 func Exec(ctx context.Context, client *docker.Client, container string, options ExecOptions) ([]byte, error) {
+	errs := options.Errors
+	if errs == nil {
+		errs = fileErrors
+	}
 	check := func() error {
 		if options.AssertAccess != nil {
 			return options.AssertAccess()
 		}
 		return nil
 	}
-	if err := check(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	var execID string
-	err := Step(ctx, "creating a helper command", func(ctx context.Context) (err error) {
+	create := func(ctx context.Context) (err error) {
 		execID, err = client.CreateExec(ctx, container, docker.ExecCreate{Cmd: options.Cmd, AttachStdout: true,
 			AttachStderr: true, AttachStdin: options.Input != nil})
 		return err
-	})
+	}
+	var err error
+	if options.Settle {
+		err = create(ctx)
+	} else {
+		if err := check(); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		err = Step(ctx, "creating a helper command", create)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -115,20 +162,28 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	limit := time.Minute
 	if options.Input != nil {
 		limit = 30 * time.Minute
-	} else if options.Limit > 0 {
+	} else if options.Limit > 0 || options.Settle {
 		limit = options.Limit
 	}
+	parent := ctx
+	if options.Settle {
+		parent = context.WithoutCancel(ctx)
+	}
 	// Docker can accept the connection and never answer it.
-	deadline, cancelDeadline := context.WithTimeout(ctx, limit)
+	deadline, cancelDeadline := context.WithTimeoutCause(parent, limit, errs.Timeout)
 	defer cancelDeadline()
-	conn, err := client.StartExec(deadline, execID)
+	var conn *docker.Conn
+	if options.Settle {
+		conn, err = Start(deadline, client, container, execID, options.Poll)
+	} else {
+		conn, err = client.StartExec(deadline, execID)
+		if err != nil && ctx.Err() != nil {
+			err = ctx.Err()
+		} else if err != nil && deadline.Err() != nil {
+			err = errs.Timeout
+		}
+	}
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if deadline.Err() != nil {
-			return nil, ErrTimeout
-		}
 		return nil, err
 	}
 	defer conn.Close()
@@ -155,7 +210,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		if ctx.Err() != nil {
 			fail(ctx.Err())
 		} else {
-			fail(ErrTimeout)
+			fail(errs.Timeout)
 		}
 		if options.Input != nil {
 			// Omit the trailer and send EOF; keep stdout while the helper
@@ -167,7 +222,7 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 		}
 	})
 	defer stop()
-	if options.Input == nil && options.Limit > 0 {
+	if options.Input == nil && options.Limit > 0 && !options.Settle {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		finished := make(chan struct{})
@@ -239,35 +294,97 @@ func Exec(ctx context.Context, client *docker.Client, container string, options 
 	}
 	var stdout limitedBuffer
 	demuxErr := docker.Demux(conn, &stdout, nil)
-	// The helper only succeeds after the whole input and its trailer, so an
-	// input still being read has already failed; don't wait for it.
-	if !sent.Load() {
-		fail(ErrUpload)
-	}
-	if err := current(); err != nil {
-		return nil, err
+	var info *docker.ExecInspect
+	if options.Settle {
+		conn.Close()
+		info = WaitForExit(client, container, execID, options.Poll, func() bool { return deadline.Err() != nil })
+	} else {
+		// The helper only succeeds after the whole input and its trailer, so an
+		// input still being read has already failed; don't wait for it.
+		if !sent.Load() {
+			fail(ErrUpload)
+		}
+		if err := current(); err != nil {
+			return nil, err
+		}
 	}
 	if demuxErr != nil {
-		if errors.Is(demuxErr, ErrOutputLimit) {
-			return nil, ErrOutputLimit
+		if errors.Is(demuxErr, errOutputLimit) {
+			return nil, errs.OutputLimit
 		}
-		return nil, ErrFailed
+		if options.Settle && deadline.Err() != nil {
+			return nil, errs.Timeout
+		}
+		return nil, errs.Failed
 	}
-	info, err := client.InspectExec(context.WithoutCancel(ctx), execID)
-	if err != nil {
+	if !options.Settle {
+		if info, err = client.InspectExec(context.WithoutCancel(ctx), execID); err != nil {
+			return nil, err
+		}
+	}
+	if err := errs.exit(info); err != nil {
 		return nil, err
 	}
-	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileNameTaken {
-		return nil, ErrNameTaken
-	}
-	if !info.Running && info.ExitCode != nil && *info.ExitCode == helper.FileChanged {
-		return nil, ErrFileChanged
-	}
-	if !info.Running && info.ExitCode != nil && archiveErrors[*info.ExitCode] != nil {
-		return nil, archiveErrors[*info.ExitCode]
-	}
-	if info.Running || info.ExitCode == nil || *info.ExitCode != 0 {
-		return nil, ErrUnsafe
-	}
 	return stdout.buffer.Bytes(), nil
+}
+
+// Start starts an exec in a helper. A start that may have reached Docker
+// can leave the command running, so a failed one first waits for it to end,
+// stopping the helper once ctx is done, whose cause it then returns.
+func Start(ctx context.Context, client *docker.Client, container, execID string, poll time.Duration) (*docker.Conn, error) {
+	conn, err := client.StartExec(ctx, execID)
+	if err != nil {
+		var open *docker.StreamOpenError
+		if errors.As(err, &open) && open.RequestStarted {
+			WaitForExit(client, container, execID, poll, func() bool { return ctx.Err() != nil })
+		}
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
+		return nil, err
+	}
+	return conn, nil
+}
+
+// WaitForExit waits for an exec to finish and returns its record, or nil
+// once Docker no longer knows it or, after expired, the helper is stopped.
+// Losing the stream does not end the process, so the next step must not
+// write concurrently with it; stopping keeps a hang from holding the
+// operation.
+func WaitForExit(client *docker.Client, container, execID string, poll time.Duration, expired func() bool) *docker.ExecInspect {
+	if poll == 0 {
+		poll = 250 * time.Millisecond
+	}
+	for {
+		result, err := client.InspectExec(context.Background(), execID)
+		if err == nil && !result.Running && result.ExitCode != nil {
+			return result
+		}
+		if docker.IsNotFound(err) {
+			return nil
+		}
+		if expired() && stopHelper(client, container) {
+			return nil
+		}
+		time.Sleep(poll)
+	}
+}
+
+// stopHelper stops a helper. Docker cannot signal an exec; stopping the
+// helper ends its PID namespace, so nothing can still run inside it.
+func stopHelper(client *docker.Client, container string) bool {
+	ctx := context.Background()
+	zero := 0
+	if err := client.Stop(ctx, container, &zero); err != nil {
+		if status := docker.StatusCode(err); status == 404 {
+			return true
+		} else if status != 304 {
+			return false
+		}
+	}
+	info, err := client.Inspect(ctx, container)
+	if docker.IsNotFound(err) {
+		return true
+	}
+	return err == nil && !info.State.Running
 }
