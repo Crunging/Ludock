@@ -96,33 +96,54 @@ func (j *Jobs) Cancel(ctx context.Context, user *db.SessionUser, tokenHash, serv
 	// A warning sent and saved before the cancel is answered here; one still
 	// going out is answered by the operation itself.
 	if before.Recovery.WarnSent || j.countedDown(ctx, before) {
-		j.sayCalledOff(context.WithoutCancel(ctx), user, before)
+		j.sayCalledOff(context.WithoutCancel(ctx), before)
 	}
 	return nil
 }
 
-// countedDown reports whether players heard a schedule's countdown to the
-// run that queued job; schedules record their warnings by run, not on the
-// operation.
+// countedDown spends the countdown a schedule sent for the run that queued
+// job, reporting whether there was one; schedules record their warnings by
+// run, not on the operation. Whichever call-off spends it tells players.
 func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) bool {
 	scheduleID, scheduled := job.Input["scheduleId"].(string)
 	if !scheduled {
 		return false
 	}
-	var warned bool
-	if err := j.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schedules s JOIN schedule_announcements a ON a.schedule_id=s.id AND a.slot=s.last_slot
-    WHERE s.id=? AND s.last_operation_id=?)`, scheduleID, job.ID).Scan(&warned); err != nil {
-		return false
+	counted, err := schedules.CallOffQueued(ctx, j.DB, scheduleID, job.ID)
+	return err == nil && counted
+}
+
+// registrar registers handlers whose scheduled operations are refused, when
+// their turn comes, if their schedule changed or its owner lost access,
+// before they act; players counted down to the run hear it's off.
+type registrar struct {
+	runner *ops.Runner
+	jobs   *Jobs
+}
+
+func (r registrar) Register(kind string, handler ops.Handler) {
+	run := handler.Run
+	handler.Run = func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled {
+			if _, err := r.jobs.Actor(ctx, job); err != nil {
+				if _, public := apperr.As(err); public && r.jobs.countedDown(ctx, job.Job) {
+					r.jobs.sayCalledOff(ctx, job.Job)
+				}
+				return nil, err
+			}
+		}
+		return run(ctx, job)
 	}
-	return warned
+	r.runner.Register(kind, handler)
 }
 
 // sayCalledOff tells players a warned operation is off, best effort, on the
-// binding it warned on.
-func (j *Jobs) sayCalledOff(ctx context.Context, user *db.SessionUser, job *ops.Job) {
+// binding it warned on. Like the warning, it runs on Ludock's own authority:
+// the operation's owner may be the one who lost access.
+func (j *Jobs) sayCalledOff(ctx context.Context, job *ops.Job) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	server, err := j.Servers.ResolveAuthorized(ctx, user, job.ServerID, authz.ServerView, job.BindingRevision)
+	server, err := j.Servers.ResolveChecked(ctx, job.ServerID, job.BindingRevision, func(context.Context) error { return nil })
 	if err != nil || server.Container.State != "running" {
 		return
 	}

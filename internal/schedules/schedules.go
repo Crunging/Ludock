@@ -104,6 +104,8 @@ type Service struct {
 	// latest first.
 	checked  map[string][2]int64
 	warnings sync.WaitGroup
+	// calledOff, set by tests, observes call-offs instead of sending them.
+	calledOff func(serverID, action string)
 }
 
 type row struct {
@@ -553,7 +555,8 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 	if err != nil {
 		return err
 	}
-	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	action, counted := "", false
+	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// A grant or role revoked after the check above stops the deletion.
 		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
 			return err
@@ -565,12 +568,27 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 		if r == nil || (current.Role != db.RoleAdmin && r.ownerID != current.ID) {
 			return errNotFound
 		}
+		// The claims go with the schedule, so they are spent first.
+		if data, err := ParseSaved(r.input); err == nil {
+			slot, _, _, err := countdown(ctx, tx, r, data, db.Now())
+			if err != nil {
+				return err
+			}
+			if counted, err = callOff(ctx, tx, id, slot); err != nil {
+				return err
+			}
+			action = data.Action
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM schedules WHERE id=?", id); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.deleted", TargetType: "server",
 			TargetID: serverID, Details: map[string]string{"scheduleId": id}})
 	})
+	if err == nil && counted {
+		s.sayCalledOff(serverID, action)
+	}
+	return err
 }
 
 func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, id string, expected int64, update *Input, enabled *bool) (*Schedule, error) {
@@ -642,7 +660,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		}
 	}
 	var result *row
-	changed := false
+	changed, counted, action := false, false, ""
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		r, err := s.get(ctx, tx, id, serverID)
 		if err != nil {
@@ -671,6 +689,26 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			return nil
 		}
 		changed = true
+		// Every change ends a wait and refuses a queued operation. Otherwise
+		// a countdown stands only if its run still happens as announced.
+		now := db.Now()
+		slot, runAt, queued, err := countdown(ctx, tx, r, previous, now)
+		if err != nil {
+			return err
+		}
+		if slot != "" {
+			nextSlot, nextRunAt, _, err := countdown(ctx, tx, r, data, now)
+			if err != nil {
+				return err
+			}
+			if queued || waiting(r) || !data.Enabled || data.Announcements == nil || data.Action != previous.Action ||
+				nextSlot != slot || nextRunAt != runAt {
+				if counted, err = callOff(ctx, tx, id, slot); err != nil {
+					return err
+				}
+				action = previous.Action
+			}
+		}
 		encoded, _ := json.Marshal(data)
 		// Keep the binding baseline, consumed slot, and history. Every change
 		// invalidates work queued from an earlier configuration.
@@ -701,6 +739,9 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 	})
 	if err != nil {
 		return nil, err
+	}
+	if counted {
+		s.sayCalledOff(serverID, action)
 	}
 	if changed {
 		if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
@@ -771,13 +812,14 @@ func (s *Service) Run(ctx context.Context, now int64) {
 }
 
 func (s *Service) runOne(ctx context.Context, r *row, now int64) {
-	slot := ""
+	slot, action := "", ""
 	configurationValid := false
 	err := func() error {
 		data, err := ParseSaved(r.input)
 		if err != nil {
 			return err
 		}
+		action = data.Action
 		if waiting(r) {
 			slot, configurationValid = r.lastSlot.String, true
 			return s.wait(ctx, r, data, now)
@@ -888,6 +930,13 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	}
 	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
 		return
+	}
+	// A run that won't happen calls off its countdown, unless its time
+	// passed long ago while Ludock was down.
+	if configurationValid && !apperr.Is(err, "SCHEDULE_MISSED") {
+		if counted, err := callOff(ctx, s.DB, r.id, slot); err == nil && counted {
+			s.sayCalledOff(r.serverID, action)
+		}
 	}
 	// A command is expected to skip while its server is stopped or busy.
 	if skip != "" {
@@ -1043,23 +1092,7 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 		}
 		// A schedule that waits for an empty server warns only when it goes
 		// ahead anyway, so its warnings count down to the end of the wait.
-		var runAt int64
-		var slot string
-		if waiting(r) {
-			if data.WaitForEmpty == nil {
-				continue
-			}
-			runAt, slot = waitEnds(r, data), r.lastSlot.String
-		} else {
-			next, ok := schedtime.NextRun(data.Clock(), now, r.lastSlot.String)
-			if !ok {
-				continue
-			}
-			runAt, slot = next, schedtime.Slot(data.Clock(), next)
-			if data.WaitForEmpty != nil {
-				runAt += int64(data.WaitForEmpty.Minutes) * 60_000
-			}
-		}
+		slot, runAt := announcedRun(r, data, now)
 		lead := 0
 		for _, minutes := range data.Announcements.LeadMinutes {
 			if now >= runAt-int64(minutes)*60_000 && now < runAt-int64(minutes-1)*60_000 {

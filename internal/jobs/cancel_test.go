@@ -7,6 +7,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 func waitFor(t *testing.T, runner *ops.Runner, id string, ready func(*ops.Job) bool) {
@@ -129,5 +130,42 @@ func TestCancelFindsAScheduledRunsCountdown(t *testing.T) {
 		if err := f.jobs.Cancel(ctx, f.admin, f.adminSession, f.serverID, job.ID); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A scheduled restart whose owner lost access while it waited in the queue
+// is refused when its turn comes, before it acts, and spends its run's
+// countdown, which is what tells players it's off.
+func TestRefusedScheduledRunCallsOffCountdown(t *testing.T) {
+	f := setup(t)
+	f.runner.Stop()
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+		BindingRevision: server.BindingRevision, Input: map[string]any{"scheduleId": "schedule", "scheduleRevision": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.startedAt()
+	for _, statement := range []string{
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
+      VALUES('schedule','` + f.serverID + `','admin','{}',1,'2026-01-01T05:00',1,'` + job.ID + `')`,
+		"INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES('schedule','2026-01-01T05:00',1)",
+		"UPDATE users SET disabled=1 WHERE id='admin'",
+	} {
+		if _, err := f.jobs.DB.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+	f.jobs.Register(next)
+	if err := next.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(next.Stop)
+	if done := finished(t, next, job.ID); done.Status != ops.Failed || f.startedAt() != before {
+		t.Fatalf("%+v", done)
+	}
+	if again, _ := schedules.CallOffQueued(ctx, f.jobs.DB, "schedule", job.ID); again {
+		t.Fatal("the refusal left the countdown for another call-off")
 	}
 }

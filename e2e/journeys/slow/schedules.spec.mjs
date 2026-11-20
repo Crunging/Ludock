@@ -126,6 +126,48 @@ test("a waiting restart can be cancelled", async ({ page }) => {
   }
 });
 
+// An owner who hears a scheduled shutdown's warning in the game and pauses
+// the schedule calls it off: the players hear it's off.
+test("pausing a schedule after its warning tells the players", async ({ page }) => {
+  test.setTimeout(300_000);
+  await openServer(page, "Survival");
+  await page.getByRole("tab", { name: "Schedules" }).click();
+  const form = page.locator("#schedule-form");
+  await form.getByLabel("Action").selectOption("stop");
+  await moreOptions(form);
+  await form.getByLabel("Wait until no one is online").uncheck();
+  // Three minutes ahead leaves the scheduler time to send the one-minute
+  // warning after the form is saved.
+  const runAt = new Date(Date.now() + 3 * 60_000);
+  const time = runAt.toISOString().slice(11, 16);
+  await form.getByLabel("Time zone").fill("UTC");
+  await form.getByLabel("Once").check();
+  await form.getByLabel("Date").fill(runAt.toISOString().slice(0, 10));
+  await form.getByLabel("Time", { exact: true }).fill(time);
+  await form.getByLabel("Warning lead times (minutes)").fill("1");
+  await form.getByRole("button", { name: "Add schedule" }).click();
+  await expect(page).toHaveURL(/saved=created/);
+  const row = page.locator("#schedule-list tbody tr", { hasText: time }).filter({ hasText: "Warnings: 1 min before" }).last();
+  const console = await page.context().newPage();
+  try {
+    await expect(async () => {
+      await gameCommand(console, "fake-said");
+      await expect(console.locator(".xterm-rows")).toContainText("Server shutting down in 1 minute.", { timeout: 2000 });
+    }).toPass({ timeout: 200_000, intervals: [5000] });
+    await row.getByRole("button", { name: "Pause" }).click();
+    await expect(page.locator("#detail-status")).toHaveText("Schedule paused.");
+    await expect(async () => {
+      await gameCommand(console, "fake-said");
+      await expect(console.locator(".xterm-rows")).toContainText("Server shutting down in 1 minute. | Server shutdown cancelled.",
+        { timeout: 2000 });
+    }).toPass({ timeout: 30_000, intervals: [2000] });
+  } finally {
+    await row.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("dialog", { name: "Delete this schedule?" }).getByRole("button", { name: "Delete schedule" }).click();
+    await expect(row).toHaveCount(0);
+  }
+});
+
 test("a waiting restart goes ahead anyway at the end of its wait", async ({ page }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();

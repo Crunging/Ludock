@@ -233,6 +233,12 @@ planned. A scheduled run that is queued or warning players can be cancelled
 from **Activity** too; a cancelled run doesn't count as a failure or send an
 alert.
 
+Once players have been warned, a run that won't happen as announced is called
+off in the game, once: they hear "Server restart cancelled." (or the like)
+when you cancel the run, pause or delete its schedule, or change its time or
+action, and when it is skipped or its owner lost access. An edit that leaves
+the warned run as it was says nothing.
+
 ## How things work
 
 ### Servers and their state
