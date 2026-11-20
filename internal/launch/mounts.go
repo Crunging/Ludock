@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"path"
 	"regexp"
 	"strconv"
@@ -170,6 +171,9 @@ func readProof(ctx context.Context, client *docker.Client, id string, sources []
 	if docker.IsNotFound(err) {
 		return nil, ErrUnverifiedMount
 	}
+	if err != nil && deadline.Err() != nil && ctx.Err() == nil {
+		return nil, ErrDockerTimeout
+	}
 	if err != nil {
 		return nil, HelperFailed(err)
 	}
@@ -181,11 +185,13 @@ func readProof(ctx context.Context, client *docker.Client, id string, sources []
 	if err != nil && deadline.Err() != nil && ctx.Err() == nil {
 		return nil, ErrDockerTimeout
 	}
-	if err != nil && docker.Unavailable(err) {
-		return nil, err
+	// A validator always prints a line, so an end without one means it died;
+	// any other read error is Docker's.
+	if errors.Is(err, io.EOF) {
+		return nil, ErrUnverifiedMount
 	}
 	if err != nil {
-		return nil, ErrUnverifiedMount
+		return nil, HelperFailed(err)
 	}
 	var result struct {
 		Identities map[string]helper.MountIdentity `json:"identities"`
