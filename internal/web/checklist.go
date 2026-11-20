@@ -282,6 +282,10 @@ func (s *Server) scheduleNightlyBackups(w http.ResponseWriter, r *http.Request, 
 		v.Error = "Some backups couldn’t be scheduled: " + publicMessage(failure)
 	}
 	w.Header().Set("HX-Trigger", "schedules-changed")
+	if err := s.recheckAdmin(ctx, request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
 	render(w, r, http.StatusOK, views.Checklist(v))
 }
 
@@ -317,5 +321,10 @@ func (s *Server) dismissChecklistItem(w http.ResponseWriter, r *http.Request, re
 		s.fail(w, r, request, authz.AdminMutationError(err))
 		return
 	}
-	render(w, r, http.StatusOK, views.Checklist(s.checklistView(r, request)))
+	v := s.checklistView(r, request)
+	if err := s.recheckAdmin(r.Context(), request); err != nil {
+		s.fail(w, r, request, err)
+		return
+	}
+	render(w, r, http.StatusOK, views.Checklist(v))
 }
