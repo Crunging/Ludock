@@ -229,7 +229,7 @@ func SettingsPage(page Page, s SettingsView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<section class=\"settings-group\" aria-labelledby=\"notification-deliveries-title\"><h3 id=\"notification-deliveries-title\" tabindex=\"-1\">Recent deliveries</h3><div id=\"notification-deliveries\" hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"load, notifications-changed from:document, every 30s\" hx-swap=\"innerHTML\"><p class=\"muted\" role=\"status\">Loading notification deliveries…</p></div></section></div></details></section></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<section class=\"settings-group\" aria-labelledby=\"notification-deliveries-title\"><h3 id=\"notification-deliveries-title\" tabindex=\"-1\">Recent deliveries</h3><div id=\"notification-deliveries\" hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"load, notifications-changed from:document, every 30s\" hx-sync=\"this:drop\" hx-swap=\"innerHTML\"><p class=\"muted\" role=\"status\">Loading notification deliveries…</p></div></section></div></details></section></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1325,7 +1325,7 @@ func BackupStorage(status backups.StorageStatus) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "<section class=\"backup-storage\" aria-label=\"Backup storage\" id=\"backup-storage\" hx-get=\"/fragments/settings/backup-storage\" hx-trigger=\"every 60s\" hx-swap=\"outerHTML\"><dl class=\"backup-storage__values\"><div class=\"backup-storage__folder\"><dt>Saved in</dt><dd><code>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "<section class=\"backup-storage\" aria-label=\"Backup storage\" id=\"backup-storage\" hx-get=\"/fragments/settings/backup-storage\" hx-trigger=\"every 60s\" hx-swap=\"outerMorph\"><dl class=\"backup-storage__values\"><div class=\"backup-storage__folder\"><dt>Saved in</dt><dd><code>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2681,7 +2681,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.pending() {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, " hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"every 5s\" hx-target=\"#notification-deliveries\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, " hx-get=\"/fragments/settings/deliveries\" hx-trigger=\"every 5s\" hx-sync=\"#notification-deliveries:drop\" hx-target=\"#notification-deliveries\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2726,7 +2726,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 				var templ_7745c5c3_Var101 string
 				templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.JoinStringErrs(delivery.Alert.Label())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 840, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 841, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var101))
 				if templ_7745c5c3_Err != nil {
@@ -2757,7 +2757,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			var templ_7745c5c3_Var102 string
 			templ_7745c5c3_Var102, templ_7745c5c3_Err = templ.JoinStringErrs(delivery.Destination.Label())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 846, Col: 53}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 847, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var102))
 			if templ_7745c5c3_Err != nil {
@@ -2818,7 +2818,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			var templ_7745c5c3_Var105 string
 			templ_7745c5c3_Var105, templ_7745c5c3_Err = templ.JoinStringErrs(deliveryStatus(delivery))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 850, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 851, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var105))
 			if templ_7745c5c3_Err != nil {
@@ -2831,7 +2831,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			var templ_7745c5c3_Var106 string
 			templ_7745c5c3_Var106, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(delivery.Attempts))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 852, Col: 68}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 853, Col: 68}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var106))
 			if templ_7745c5c3_Err != nil {
@@ -2844,7 +2844,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 			var templ_7745c5c3_Var107 string
 			templ_7745c5c3_Var107, templ_7745c5c3_Err = templ.JoinStringErrs(map[bool]string{true: "attempt", false: "attempts"}[delivery.Attempts == 1])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 852, Col: 148}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 853, Col: 148}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var107))
 			if templ_7745c5c3_Err != nil {
@@ -2914,7 +2914,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 				var templ_7745c5c3_Var108 string
 				templ_7745c5c3_Var108, templ_7745c5c3_Err = templ.JoinStringErrs(delivery.LastFailure)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 869, Col: 72}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 870, Col: 72}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var108))
 				if templ_7745c5c3_Err != nil {
@@ -2937,7 +2937,7 @@ func Deliveries(d DeliveriesView) templ.Component {
 				var templ_7745c5c3_Var109 string
 				templ_7745c5c3_Var109, templ_7745c5c3_Err = templruntime.NewAttributeExpression("Retry " + delivery.Destination.Label() + " notification").Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 874, Col: 123}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 875, Col: 123}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var109)
 				if templ_7745c5c3_Err != nil {
@@ -2950,13 +2950,13 @@ func Deliveries(d DeliveriesView) templ.Component {
 				var templ_7745c5c3_Var110 string
 				templ_7745c5c3_Var110, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/settings/notifications/deliveries/" + delivery.ID + "/retry").Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 874, Col: 246}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `settings.templ`, Line: 875, Col: 246}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var110)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "\" hx-target=\"#notification-deliveries\" data-busy-label=\"Queuing…\">Retry</button>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "\" hx-target=\"#notification-deliveries\" hx-sync=\"#notification-deliveries:replace\" data-busy-label=\"Queuing…\">Retry</button>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

@@ -166,9 +166,9 @@ test("browsing a backup, downloading one file, and restoring it alone", async ({
   expect(readFileSync(level, "utf8")).toBe("yesterday's world");
   expect(readFileSync(notes, "utf8")).toBe("today's notes");
   await expect(page.locator(".detail-header")).toContainText("Running");
-  // The backup it took first is in the list.
+  // The backup it took first is the newest; retention may have removed an
+  // older one.
   await page.getByRole("link", { name: "Dismiss" }).click();
-  await expect(page.locator("#backup-list tbody tr")).toHaveCount(backupCount + 1);
   await expect(page.locator("#backup-list tbody tr").first()).toContainText("Taken before a restore");
 
   // Someone who may create backups but isn't an administrator is offered

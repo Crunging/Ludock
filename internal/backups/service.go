@@ -352,8 +352,12 @@ func (s *Service) enable(ctx context.Context) error {
 	})
 }
 
-// foundCopyRetry spaces out checks of a found copy folder that failed one.
-const foundCopyRetry = time.Minute
+// foundCopyRetry spaces out checks of a found copy folder that failed one,
+// and foundCopyWait bounds one check, which also asks Docker.
+const (
+	foundCopyRetry = time.Minute
+	foundCopyWait  = 30 * time.Second
+)
 
 // startCopies copies every backup to the found copy folder, unless an
 // administrator chose a second folder or none. Mounting it says the owner
@@ -365,12 +369,28 @@ func (s *Service) startCopies(ctx context.Context, saved Settings) error {
 	}
 	settings := saved
 	settings.CopyTo = found
-	if err := s.ValidateCopyFolder(ctx, settings); err != nil {
+	// A share that stops responding mustn't hold up the storage work after
+	// this, and each folder has one check waiting on it at most.
+	if !s.copies.measure(found) {
+		return nil
+	}
+	checked := make(chan error, 1)
+	go func() {
+		defer s.copies.measured(found)
+		checked <- s.ValidateCopyFolder(ctx, settings)
+	}()
+	var err error
+	select {
+	case err = <-checked:
+	case <-time.After(foundCopyWait):
+		err = errCopyStalled
+	}
+	if err != nil {
 		s.copyRetryAt = time.Now().Add(foundCopyRetry)
 		return nil
 	}
 	started := false
-	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// A choice saved while the folder was checked wins.
 		var raw string
 		var current Settings

@@ -151,7 +151,7 @@ templ SettingsPage(page Page, s SettingsView) {
 						@ProxyForm(s.Advanced.Proxies)
 						<section class="settings-group" aria-labelledby="notification-deliveries-title">
 							<h3 id="notification-deliveries-title" tabindex="-1">Recent deliveries</h3>
-							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-swap="innerHTML">
+							<div id="notification-deliveries" hx-get="/fragments/settings/deliveries" hx-trigger="load, notifications-changed from:document, every 30s" hx-sync="this:drop" hx-swap="innerHTML">
 								<p class="muted" role="status">Loading notification deliveries…</p>
 							</div>
 						</section>
@@ -443,7 +443,7 @@ templ BackupSettingsSaved(b BackupSettingsView) {
 
 // BackupStorage follows backups and copies made while the page is open.
 templ BackupStorage(status backups.StorageStatus) {
-	<section class="backup-storage" aria-label="Backup storage" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="every 60s" hx-swap="outerHTML">
+	<section class="backup-storage" aria-label="Backup storage" id="backup-storage" hx-get="/fragments/settings/backup-storage" hx-trigger="every 60s" hx-swap="outerMorph">
 		<dl class="backup-storage__values">
 			<div class="backup-storage__folder"><dt>Saved in</dt><dd><code>{ status.Destination }</code></dd></div>
 			<div><dt>Backups use</dt><dd>{ FormatBytes(status.ArchiveBytes) }</dd></div>
@@ -814,6 +814,7 @@ templ Deliveries(d DeliveriesView) {
 		if d.pending() {
 			hx-get="/fragments/settings/deliveries"
 			hx-trigger="every 5s"
+			hx-sync="#notification-deliveries:drop"
 			hx-target="#notification-deliveries"
 		}
 	>
@@ -871,7 +872,7 @@ templ Deliveries(d DeliveriesView) {
 							</td>
 							<td role="cell">
 								if delivery.Retryable {
-									<button type="button" class="secondary-btn" aria-label={ "Retry " + delivery.Destination.Label() + " notification" } aria-describedby="notification-deliveries-help" hx-post={ "/settings/notifications/deliveries/" + delivery.ID + "/retry" } hx-target="#notification-deliveries" data-busy-label="Queuing…">Retry</button>
+									<button type="button" class="secondary-btn" aria-label={ "Retry " + delivery.Destination.Label() + " notification" } aria-describedby="notification-deliveries-help" hx-post={ "/settings/notifications/deliveries/" + delivery.ID + "/retry" } hx-target="#notification-deliveries" hx-sync="#notification-deliveries:replace" data-busy-label="Queuing…">Retry</button>
 								}
 							</td>
 						</tr>
