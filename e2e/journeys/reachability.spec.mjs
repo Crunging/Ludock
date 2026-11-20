@@ -16,7 +16,7 @@ test("a game that stops answering while its container runs is an outage, until i
     const game = page.locator(".overview-game");
     // Readings run every 30 seconds.
     await expect(game).toContainText("Answering", { timeout: 35_000 });
-    await expect(game).toContainText("Over its Steam server query");
+    await expect(game).toContainText("Over its status query");
     // On by default, unless a journey before this one turned it off.
     await page.getByLabel("Monitor this server").check();
     await page.getByText("Alert levels").click();
@@ -34,7 +34,7 @@ test("a game that stops answering while its container runs is an outage, until i
     await writeFile(silence(), "");
     // The container still runs; only the game went quiet.
     await expect(game).toContainText("Not answering", { timeout: 35_000 });
-    await expect(game).toContainText("the game stopped answering its Steam server query");
+    await expect(game).toContainText("the game stopped answering its status query");
     await expect(page.locator(".overview-facts")).toContainText("Running");
 
     await page.goto("/");
@@ -69,7 +69,7 @@ test("counting players with the game's status query when it has no console", asy
     await openServer(page, "valheim");
     const players = page.locator(".overview-players");
     await expect(players).toContainText(/2\s*of 10 online/, { timeout: 35_000 });
-    await expect(players).toContainText("Counted by the game’s Steam server query");
+    await expect(players).toContainText("Counted by the game’s status query");
     await expect(players.locator(".player-slot--taken")).toHaveCount(2);
     await expect(page.locator(".overview-game")).toContainText("Answering");
 

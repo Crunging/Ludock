@@ -102,9 +102,20 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await page.reload();
     await expect(checklist.locator("li strong")).toHaveText(["Add the servers Ludock didn’t find", "Protect your sign-in"]);
 
-    // Adding the missing server clears its item.
+    // Adding the missing server clears its item. On a phone the list of
+    // containers sits below the fold, and the regions above it load after the
+    // page; the link still brings it into view. Scroll anchoring is off, as
+    // in Safari, so Chromium can't hide the problem.
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+      const style = document.createElement("style");
+      style.textContent = "* { overflow-anchor: none !important; }";
+      document.head.append(style);
+    }));
     await item(page, "Add the servers Ludock didn’t find").getByRole("link", { name: "Review containers" }).click();
     const add = page.locator("#add-servers");
+    await expect(add.getByRole("button", { name: "Add satisfactory" })).toBeVisible();
+    await expect(page.locator("#missing-server > summary")).toBeInViewport();
     await add.getByRole("button", { name: "Add satisfactory" }).click();
     await expect(add.locator(".alert--success")).toContainText("Added satisfactory.");
     await expect(checklist.locator("li strong")).toHaveText(["Protect your sign-in"]);

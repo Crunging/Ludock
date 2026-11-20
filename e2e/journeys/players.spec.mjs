@@ -30,6 +30,11 @@ test("kicking a player and seeing them leave", async ({ page }) => {
   await expect(page.locator("#detail-status")).toHaveText("Mara was kicked.");
   await expect(onlineNames(page)).toHaveCount(0);
   await expect(page.locator(".overview-players")).toContainText(/0\s*of 10 online/);
+
+  // Activity says what was done, once.
+  await page.goto("/activity?show=everything&action=kicked");
+  await expect(page.locator(".audit-entry").filter({ hasText: "Kicked Mara" })).toHaveCount(1);
+  await expect(page.locator(".audit-entry").filter({ hasText: "Kicked Mara" })).toContainText("Succeeded");
 });
 
 test("banning a player, then lifting the ban", async ({ page }) => {
@@ -63,6 +68,12 @@ test("banning a player, then lifting the ban", async ({ page }) => {
   await openServer(page, "Survival");
   await expect(onlineNames(page)).toHaveText(["Theo"], { timeout: 15_000 });
   await command(console, "fake-leave Theo");
+
+  // Searching Activity for one player action finds only that action.
+  await page.goto("/activity?show=everything&action=banned");
+  await expect(page.locator(".audit-entry strong").getByText("Banned Theo", { exact: true })).toHaveCount(1);
+  await page.goto("/activity?show=everything&action=kicked");
+  await expect(page.locator(".audit-entry").filter({ hasText: "Theo" })).toHaveCount(0);
 });
 
 test("adding a player to the allowlist, then removing them", async ({ page }) => {
@@ -150,7 +161,7 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   await command(console, "fake-join Mara");
   await command(console, "fake-outage 20");
   await openServer(page, "Survival");
-  await expect(players).toContainText("Counted by the game’s Server List Ping", { timeout: 15_000 });
+  await expect(players).toContainText("Counted by the game’s status query", { timeout: 15_000 });
   await expect(players).toContainText(/1\s*of 10 online/);
   await expect(players.getByRole("list", { name: "Online players" })).toHaveCount(0);
   await command(console, "fake-leave Mara");
@@ -162,7 +173,7 @@ test("seeing who is online, as players join and leave", async ({ page }) => {
   // events start a moment later; its next refresh, within 10 seconds,
   // shows the reading.
   await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
-  await expect(players).toContainText("Ludock reads them over Minecraft RCON.");
+  await expect(players).toContainText("Ludock reads them over the game console.");
   await page.goto("/");
   await expect(survival).toContainText("Unknown");
 
@@ -203,7 +214,7 @@ test("seeing who is online on a Palworld server", async ({ page }) => {
     await command(console, "fake-outage 20", "palworld");
     await openServer(page, "palworld");
     await expect(players).toContainText("Couldn’t read players", { timeout: 15_000 });
-    await expect(players).toContainText("Ludock reads them over Palworld RCON.");
+    await expect(players).toContainText("Ludock reads them over the game console.");
   } finally {
     await dockerAction("palworld", "stop");
   }

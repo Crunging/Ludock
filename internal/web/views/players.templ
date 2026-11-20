@@ -15,8 +15,8 @@ type PlayersView struct {
 	Listed bool
 	// Running: the server is running and its live state is known.
 	Running bool
-	// Console is the name of the console players are read over, and Query
-	// the status query that counts them; either may be "".
+	// Console names the console players are read over, and Query the
+	// status query that counts them; either may be "".
 	Console string
 	Query   string
 	// Reading is nil until the first one after the server started.
@@ -114,9 +114,9 @@ templ PlayersFact(p PlayersView) {
 				case p.Reading.Failed:
 					<span>Couldn’t read players</span>
 					if p.Console != "" {
-						<span class="muted">Ludock reads them over { p.Console }. Check that it’s on and the console works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+						<span class="muted">Ludock reads them over the game console. Check that it’s on and works. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
 					} else {
-						<span class="muted">Ludock counts them with the game’s { p.Query }, which hasn’t said how many are online. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
+						<span class="muted">Ludock counts them with the game’s status query, which hasn’t said how many are online. Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
 					}
 				default:
 					<span class="overview-figure">{ strconv.Itoa(p.Reading.Online) }</span>
@@ -147,7 +147,7 @@ templ PlayersFact(p PlayersView) {
 						<span class="muted">and { strconv.Itoa(more) } more</span>
 					}
 					if p.Reading.Via == players.ViaQuery {
-						<span class="overview-players__checked muted">Counted by the game’s { p.Query } @Time(p.Reading.CheckedAt, "plain", "")</span>
+						<span class="overview-players__checked muted">Counted by the game’s status query @Time(p.Reading.CheckedAt, "plain", "")</span>
 					} else {
 						<span class="overview-players__checked muted">Checked @Time(p.Reading.CheckedAt, "plain", "")</span>
 					}
@@ -179,17 +179,17 @@ templ GameFact(g GameView) {
 				case g.State == players.Answering:
 					@Pip("ok")
 					<span>Answering</span>
-					<span class="muted">Over its { g.Query }, @Time(g.AnsweredAt, "plain", "")</span>
+					<span class="muted">Over its status query, @Time(g.AnsweredAt, "plain", "")</span>
 				case g.State == players.NotAnswering:
 					@Pip("failed")
 					<span>Not answering</span>
-					<span class="muted">The container is running, but the game stopped answering its { g.Query }. It last answered @Time(g.AnsweredAt, "plain", "")</span>
+					<span class="muted">The container is running, but the game stopped answering its status query. It last answered @Time(g.AnsweredAt, "plain", "")</span>
 				case g.State == players.Unknown:
 					<span>Not checked recently</span>
-					<span class="muted">It last answered its { g.Query } @Time(g.AnsweredAt, "plain", "")</span>
+					<span class="muted">It last answered its status query @Time(g.AnsweredAt, "plain", "")</span>
 				default:
 					<span>Not answered yet</span>
-					<span class="muted">Ludock asks over its { g.Query }. A game that’s still starting, or whose query port is wrong or off, doesn’t answer.</span>
+					<span class="muted">Ludock asks over its status query. A game that’s still starting, or whose query port is wrong or off, doesn’t answer.</span>
 			}
 		</dd>
 	</div>

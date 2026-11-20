@@ -96,7 +96,8 @@ async function webhook(page) {
   await expect(card.locator("form .alert--success")).toHaveText("Webhook settings saved.");
   return {
     alerts: () => bodies.filter((body) => body.message.includes(": a newer image is available.")),
-    ludockAlerts: () => bodies.filter((body) => body.message.startsWith("A newer version of Ludock is available.")),
+    all: () => bodies,
+    ludockAlerts: () => bodies.filter((body) => body.message.startsWith("Ludock: a newer version is available.")),
     close: async () => {
       await page.goto("/settings");
       if (!(await card.evaluate((details) => details.open))) await card.locator(":scope > summary").click();
@@ -147,6 +148,9 @@ test("finding a newer image, being told once, and updating to it", async ({ page
     await openServer(page, "Survival");
     await checkNow(page, "This server runs the newest image its tag points to.");
     await expect(page.locator("#image-check .alert")).toHaveCount(0);
+    // An update started in the panel shows its result there; only a failure
+    // would be pushed.
+    expect(hook.all().filter((body) => body.message.includes("update completed"))).toEqual([]);
   } finally {
     await hook.close();
   }

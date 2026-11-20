@@ -94,7 +94,7 @@ func TestOneOutageAfterGraceAndOneRecovery(t *testing.T) {
 	s.Check(ctx, state("running", "starting"), 100_000)
 	s.Check(ctx, state("running", ""), 110_000)
 	s.Check(ctx, state("running", ""), 120_000)
-	if len(events.events) != 2 || events.events[0] != "Minecraft is down." || events.events[1] != "Minecraft recovered." {
+	if len(events.events) != 2 || events.events[0] != "Minecraft: the server is down." || events.events[1] != "Minecraft: the server is back up." {
 		t.Fatal(events.events)
 	}
 }
@@ -128,7 +128,7 @@ func TestDockerOutage(t *testing.T) {
 	s, events, server := setup(t)
 	s.Check(ctx, nil, 1000)
 	s.Check(ctx, nil, 70_000)
-	if len(events.events) != 1 || events.events[0] != "Ludock can’t reach Docker to check Minecraft." {
+	if len(events.events) != 1 || events.events[0] != "Minecraft: Ludock can’t reach Docker to check it." {
 		t.Fatal(events.events)
 	}
 	availability, _ := s.Get(ctx, server.ID)
@@ -166,7 +166,7 @@ func TestNoAlertWithoutSavedState(t *testing.T) {
 	s.DB.Exec("DROP TRIGGER fail_availability")
 	s.Check(ctx, state("exited", ""), 62_000)
 	s.Check(ctx, state("exited", ""), 63_000)
-	if len(events.events) != 1 || events.events[0] != "Minecraft is down." {
+	if len(events.events) != 1 || events.events[0] != "Minecraft: the server is down." {
 		t.Fatal(events.events)
 	}
 }
@@ -252,8 +252,8 @@ func TestSilentGameOutage(t *testing.T) {
 	}
 	game = GameAnswering
 	s.Check(ctx, state("running", "healthy"), 80_000)
-	if len(events.events) != 2 || events.events[0] != "Minecraft is running, but the game stopped answering." ||
-		events.events[1] != "Minecraft recovered." {
+	if len(events.events) != 2 || events.events[0] != "Minecraft: running, but the game stopped answering." ||
+		events.events[1] != "Minecraft: the server is back up." {
 		t.Fatal(events.events)
 	}
 }
@@ -277,8 +277,8 @@ func TestSilentOutageSurvivesDockerOutage(t *testing.T) {
 	}
 	game = GameAnswering
 	s.Check(ctx, state("running", "healthy"), 90_000)
-	if len(events.events) != 2 || events.events[0] != "Minecraft is running, but the game stopped answering." ||
-		events.events[1] != "Minecraft recovered." {
+	if len(events.events) != 2 || events.events[0] != "Minecraft: running, but the game stopped answering." ||
+		events.events[1] != "Minecraft: the server is back up." {
 		t.Fatal(events.events)
 	}
 }
@@ -323,13 +323,13 @@ func TestNewServersAreWatched(t *testing.T) {
 	s.Check(ctx, both("running", "exited"), 1000)
 	s.Check(ctx, both("exited", "exited"), 2000)
 	s.Check(ctx, both("exited", "exited"), 200_000)
-	if len(events.events) != 1 || events.events[0] != "Alpha is down." {
+	if len(events.events) != 1 || events.events[0] != "Alpha: the server is down." {
 		t.Fatal(events.events)
 	}
 	s.Check(ctx, both("exited", "running"), 300_000)
 	s.Check(ctx, both("exited", "exited"), 301_000)
 	s.Check(ctx, both("exited", "exited"), 500_000)
-	if len(events.events) != 2 || events.events[1] != "Beta is down." {
+	if len(events.events) != 2 || events.events[1] != "Beta: the server is down." {
 		t.Fatal(events.events)
 	}
 

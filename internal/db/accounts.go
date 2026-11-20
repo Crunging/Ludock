@@ -503,6 +503,50 @@ type execer interface {
 // unauthenticated callers, so the log keeps a rolling window. Pass a
 // transaction to make the entry part of the owning mutation.
 func (d *DB) WriteAudit(ctx context.Context, q execer, entry AuditEntry) error {
+	_, err := d.writeAudit(ctx, q, entry)
+	return err
+}
+
+// WriteAuditStart records work before it runs. FinishAudit later turns the
+// entry into the work's outcome, so Activity lists each piece of work once.
+func (d *DB) WriteAuditStart(ctx context.Context, entry AuditEntry) (int64, error) {
+	return d.writeAudit(ctx, nil, entry)
+}
+
+// FinishAudit sets a started entry's action to the work's outcome, keeping
+// when it started. An entry already pruned is written again.
+func (d *DB) FinishAudit(ctx context.Context, id int64, entry AuditEntry) error {
+	result, err := d.ExecContext(ctx, "UPDATE audit_log SET action=? WHERE id=?", entry.Action, id)
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed == 1 {
+		return err
+	}
+	return d.WriteAudit(ctx, nil, entry)
+}
+
+// FinishOperationAudit turns an operation's queued entry into its outcome
+// inside the transaction that records the outcome. The lookup matches
+// audit_log_operation_history_idx.
+func (d *DB) FinishOperationAudit(ctx context.Context, q execer, operationID, queued string, entry AuditEntry) error {
+	details, err := json.Marshal(entry.Details)
+	if err != nil {
+		return err
+	}
+	result, err := q.ExecContext(ctx, `UPDATE audit_log SET action=?, details_json=?
+    WHERE CASE WHEN json_valid(details_json) THEN CASE WHEN json_type(details_json, '$.operationId') = 'text' THEN json_extract(details_json, '$.operationId') END END = ?
+    AND action=? AND target_type='server' AND target_id=?`, entry.Action, string(details), operationID, queued, entry.TargetID)
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed > 0 {
+		return err
+	}
+	return d.WriteAudit(ctx, q, entry)
+}
+
+func (d *DB) writeAudit(ctx context.Context, q execer, entry AuditEntry) (int64, error) {
 	if q == nil {
 		q = d.DB
 	}
@@ -510,25 +554,30 @@ func (d *DB) WriteAudit(ctx context.Context, q execer, entry AuditEntry) error {
 	if entry.Details != nil {
 		encoded, err := json.Marshal(entry.Details)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		details = string(encoded)
 	}
 	userID := entry.UserID
-	if _, err := q.ExecContext(ctx, `INSERT INTO audit_log
+	result, err := q.ExecContext(ctx, `INSERT INTO audit_log
     (user_id, action, target_type, target_id, details_json, ip_address, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		nullable(userID), entry.Action, nullable(entry.TargetType), nullable(entry.TargetID), details,
-		nullable(entry.IPAddress), Now()); err != nil {
-		return err
+		nullable(entry.IPAddress), Now())
+	if err != nil {
+		return 0, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
 	}
 	auditMu.Lock()
 	auditWritesSincePrune++
 	auditMu.Unlock()
 	if _, ok := q.(*sql.DB); ok {
-		return d.PruneAuditIfNeeded(ctx)
+		return id, d.PruneAuditIfNeeded(ctx)
 	}
-	return nil
+	return id, nil
 }
 
 // PruneAuditIfNeeded flushes deferred maintenance after the owning mutation

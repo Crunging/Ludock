@@ -113,7 +113,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 			name = display
 		}
 		_, err := notifications.QueueIn(ctx, tx, notify.FailedWork, "backup-copy-failed:"+backupID,
-			"The second copy of a backup of "+name+" couldn’t be made: "+problem+" Ludock keeps trying; its Backups tab shows which backup.")
+			name+": the second copy of a backup couldn’t be made. "+problem+" Ludock keeps trying; its Backups tab shows which backup.")
 		return err
 	}
 	backupService.DataFailed = func(ctx context.Context, tx *sql.Tx, key, message string) error {

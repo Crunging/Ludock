@@ -563,6 +563,24 @@
   // the browser paints or an observer sees it.
   document.addEventListener("htmx:before:settle", function () { formatTimes(); });
 
+  // A link to part of a page lands there even when regions above it load
+  // afterwards and push it down, which browsers without scroll anchoring,
+  // such as Safari, leave alone. It stops once the person scrolls or types.
+  (function () {
+    var target = null;
+    try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (error) {}
+    if (!target) return;
+    var follow = true;
+    function stop() { follow = false; }
+    ["wheel", "touchstart", "keydown", "mousedown"].forEach(function (name) {
+      window.addEventListener(name, stop, { once: true, passive: true });
+    });
+    setTimeout(stop, 10000);
+    document.addEventListener("htmx:after:settle", function () {
+      if (follow && target.isConnected) target.scrollIntoView({ block: "start" });
+    });
+  })();
+
   // Resource charts: a crosshair follows the pointer, or the arrow keys on a
   // focused chart, and reads out the nearest sample in every chart of the
   // section, so CPU and memory show the same minute.

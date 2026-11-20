@@ -80,8 +80,7 @@ templ loginPage(form LoginForm) {
 					<label class="login-card__label" for="bootstrap-code">Setup code</label>
 					<input id="bootstrap-code" name="bootstrapCode" class="login-card__input" type="password" data-password autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" aria-describedby="bootstrap-code-hint" required autofocus/>
 					<p class="login-card__hint" id="bootstrap-code-hint">
-						Use the most recent one-time code from <code>docker compose logs ludock</code> on the Docker host.
-						If you set <code>LUDOCK_SETUP_CODE</code> in Ludock’s Compose file, enter that value instead; it is not printed.
+						Ludock prints a new one each time it starts: run <code>docker compose logs ludock</code> on the Docker host and use the last one. A code you set yourself in Ludock’s Compose file isn’t printed; enter that instead.
 					</p>
 				}
 				<label class="login-card__label" for="username">Username</label>

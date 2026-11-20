@@ -16,6 +16,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/resources"
 	"github.com/Crunging/Ludock/internal/schedules"
+	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
 )
 
@@ -36,7 +37,7 @@ func (s *Server) detail(r *http.Request, request *Request, id, tab string, withS
 	admin := request.User().Role == db.RoleAdmin
 	d := &views.ServerDetail{Row: s.serverRow(r, request, *view, false, snapshot.DiscoveryUnavailable), Stats: snapshot.Stats,
 		DiscoveryUnavailable: snapshot.DiscoveryUnavailable, Admin: admin, Now: db.Now()}
-	d.Row.ShowPlayers = true
+	d.Row.ShowPlayers, d.Row.Down = true, s.downServers(ctx, []servers.View{*view})[view.ID]
 	if can(view, authz.ConsoleExecute) && view.BindingStatus == "active" {
 		d.Row.Players.ServerID, d.Row.Players.Moderation = view.ID, moderation(view.Container)
 	}

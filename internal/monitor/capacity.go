@@ -446,13 +446,13 @@ func (s *Service) CheckMemory(ctx context.Context, limits map[string]int64, curr
 			// Like a disk alert, one that ends with its binding sends no recovery.
 			if previous.Notified && previous.Revision == next.Revision {
 				s.notify(notify.ServerProblems, "memory-recovery:"+server.ID+":"+strconv.FormatInt(previous.AlertSince, 10),
-					server.DisplayName+"’s memory use is no longer near its limit.")
+					server.DisplayName+": memory use is no longer near its limit.")
 			}
 			s.changed(server.ID)
 		}
 		if next.AlertSince != 0 && !next.Notified {
 			s.notify(notify.ServerProblems, "memory:"+server.ID+":"+strconv.FormatInt(next.AlertSince, 10),
-				fmt.Sprintf("%s has used over %d%% of its memory limit for %d minutes.", server.DisplayName, policy.MemoryPercent, policy.MemoryMinutes))
+				fmt.Sprintf("%s: over %d%% of its memory limit for %d minutes.", server.DisplayName, policy.MemoryPercent, policy.MemoryMinutes))
 			next.Notified = true
 			if _, _, err := s.saveState(ctx, policy, memoryKey(server.ID), saved, next); err != nil {
 				log.Warn("Could not save a server's memory alert; it may be sent again")

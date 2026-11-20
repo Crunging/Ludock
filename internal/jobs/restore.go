@@ -291,9 +291,9 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 		}
 		roots = row.Roots[index : index+1]
 	}
-	what := "Restore"
+	what := "restore"
 	if item != "" {
-		what = "Restore of one item"
+		what = "restore of one item"
 	}
 	settings, err := j.Backups.ForBackup(ctx)
 	if err != nil {
@@ -452,7 +452,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {
 				return nil, err
 			}
-			j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
+			j.notifyDone(job, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" completed.")
 			return restored, nil
 		}()
 		if err == nil {
@@ -463,11 +463,11 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 		// remains, which blocks every later backup until it is removed.
 		if restored != nil && state != nil && state.Status == "committed" {
 			if cleanErr := j.cleanupAfterFailure(context.WithoutCancel(ctx), server, job, &data); cleanErr == nil {
-				j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+".")
+				j.notifyDone(job, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" completed.")
 				return restored, nil
 			}
-			j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" completed for "+server.Container.DisplayName+
-				", but its staging folder could not be removed. Review the operation before backing up.")
+			j.notify(notify.Results, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+
+				" completed, but its staging folder could not be removed. Review the operation before backing up.")
 			return nil, fail("RESTORE_STAGING_LEFT", "The backup was restored, but Ludock could not remove the folder "+stageName(job)+
 				" from the server's data, which holds the replaced data. Delete that folder, then back up the server.")
 		}
@@ -476,7 +476,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				err = errors.Join(err, rollbackErr)
 			}
 		}
-		j.notify(notify.Results, "restore-result:"+job.Job.ID, what+" failed for "+server.Container.DisplayName+". Its Activity says why.")
+		j.notify(notify.Results, "restore-result:"+job.Job.ID, server.Container.DisplayName+": "+what+" failed. Its Activity says why.")
 		return nil, publicFirst(err)
 	})
 }

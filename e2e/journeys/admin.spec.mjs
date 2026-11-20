@@ -30,7 +30,9 @@ test("searching Activity, with sign-ins under Everything", async ({ page, sessio
   await expect(page.locator(".operation-detail-summary")).toContainText("Succeeded");
   await page.getByRole("link", { name: "Everything recorded about it" }).click();
   await expect(page.getByLabel("Show")).toHaveValue("everything");
-  await expect(page.locator(".audit-entry").first()).toContainText("Restart");
+  // One entry for the restart, with its outcome.
+  await expect(page.locator(".audit-entry")).toHaveCount(1);
+  await expect(page.locator(".audit-entry").first()).toContainText("Restarted the server");
   await expect(page.locator(".audit-entry").first()).toContainText("Succeeded");
 
   // A sign-in on another device shows only under Everything.

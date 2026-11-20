@@ -238,12 +238,16 @@ test("an outage reaches an open server list when its grace period ends, and clea
   await dockerAction("valheim", "stop");
   await expect(serverRow(page, "valheim")).toContainText("Stopped");
   await expect(attention).toContainText("Server down", { timeout: 60_000 });
+  // The list and its summary call it down, as the alert does.
+  await expect(serverRow(page, "valheim").locator(".server-row__state")).toContainText("Down");
+  await expect(page.locator("#fleet")).toContainText("1 down");
 
   await dockerAction("valheim", "start");
   await expect(attention).not.toContainText("Server down", { timeout: 30_000 });
 
   await dockerAction("valheim", "stop");
   await openServer(page, "valheim");
+  await expect(page.locator(".detail-header__identity")).toContainText("Down", { timeout: 60_000 });
   await page.getByLabel("Monitor this server").uncheck();
   await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
 });
