@@ -607,7 +607,10 @@ templ AvailabilityStatus(d ServerDetail) {
 templ RecoveryStatus(r monitor.Recovery) {
 	switch r.Last {
 		case monitor.RecoveryRestarted:
-			Restarted it @Time(r.RestartedAt, "plain", "") because the game stopped answering. Waiting for it to answer.
+			Restarted it @Time(r.RestartedAt, "plain", "") because the game stopped answering.
+			if r.Pending {
+				{ " Waiting for it to answer." }
+			}
 		case monitor.RecoveryAnswered:
 			Restarted it @Time(r.RestartedAt, "plain", "") because the game stopped answering. It answered again.
 		case monitor.RecoveryNotAnswered:
