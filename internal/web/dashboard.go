@@ -307,6 +307,20 @@ func (s *Server) warnOffer(view *servers.View) string {
 	return views.WarnOff
 }
 
+// updateWarnOffer is warnOffer for an update, which stops the server only
+// after downloading the new image: someone can join meanwhile, so the
+// warning stays on offer, unticked, while nobody is online.
+func (s *Server) updateWarnOffer(view *servers.View) string {
+	return updateOffer(s.warnOffer(view), view.State == "running" && jobs.CanWarn(view.Container))
+}
+
+func updateOffer(offer string, canWarn bool) string {
+	if offer == "" && canWarn {
+		return views.WarnOff
+	}
+	return offer
+}
+
 // warnPlayers decides a request to warn players first: a server found empty
 // since the page was shown goes down at once.
 func (s *Server) warnPlayers(server *servers.Context) bool {

@@ -309,7 +309,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		Recreate: r.URL.Query().Get("recreate") == "1", Warn: s.warnOffer(view)}
+		Recreate: r.URL.Query().Get("recreate") == "1", Warn: s.updateWarnOffer(view)}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {
@@ -419,7 +419,9 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 		updateRequest["skipBackupConfirmation"] = skip
 	}
 	input := map[string]any{"request": updateRequest}
-	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+	// Unlike a restart, an update asked to warn keeps that through an empty
+	// server: it stops later, after the download.
+	if r.PostFormValue(jobs.WarnInput) == "true" && resolved.Container.State == "running" && jobs.CanWarn(resolved.Container) {
 		input[jobs.WarnInput] = true
 	}
 	s.enqueue(w, r, request, resolved, &current.User, "update", input)

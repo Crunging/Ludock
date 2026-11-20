@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/web/views"
 )
 
 func (p *pages) action(target string, principal *auth.Principal, values url.Values) *http.Response {
@@ -151,5 +152,20 @@ func TestBackupsTabFollowsRunningWork(t *testing.T) {
 	if !strings.Contains(body, `id="selected-operation"`) || !strings.Contains(body, `hx-trigger="every 2s"`) ||
 		strings.Contains(body, ">Dismiss</a>") {
 		t.Fatal(body)
+	}
+}
+
+// An update stops the server only after its download, so the warning stays
+// on offer, unticked, for a running server nobody is on; a server that can't
+// message players, or isn't running, is offered nothing.
+func TestUpdateKeepsWarningOnOffer(t *testing.T) {
+	for _, c := range []struct {
+		offer   string
+		canWarn bool
+		want    string
+	}{{"", true, views.WarnOff}, {"", false, ""}, {views.WarnOn, true, views.WarnOn}, {views.WarnOff, true, views.WarnOff}} {
+		if got := updateOffer(c.offer, c.canWarn); got != c.want {
+			t.Errorf("%q, %v: %q", c.offer, c.canWarn, got)
+		}
 	}
 }
