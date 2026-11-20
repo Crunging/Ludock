@@ -273,8 +273,11 @@ func (f *fixture) withConsole(t *testing.T, labels map[string]string) func(text 
 	var received []string
 	port, err := fakedocker.ServeRCON("rcon-secret", func(command string) string {
 		mu.Lock()
-		defer mu.Unlock()
 		received = append(received, command)
+		mu.Unlock()
+		if f.onCommand != nil {
+			f.onCommand(command)
+		}
 		return ""
 	})
 	if err != nil {
@@ -362,6 +365,51 @@ func TestCallOffGoesOnlyToTheWarnedBinding(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A run called off while its warning is on its way to players spends a
+// claim nobody is recorded as having heard, so it says nothing. The warning
+// then finds its claim gone and tells them itself, once.
+func TestWarningCalledOffWhileItGoesOutIsTakenBack(t *testing.T) {
+	f := setup(t)
+	said := f.withConsole(t, nil)
+	f.onCommand = func(command string) {
+		if strings.Contains(command, "Server restart in 5 minutes.") {
+			if binding, err := callOff(ctx, f.s.DB, f.scheduleID(t), f.slot(t)); err != nil || binding != 0 {
+				t.Error("the call-off saw a warning recorded before it arrived", binding, err)
+			}
+		}
+	}
+	runAt := time.Now().Add(6 * time.Minute).Truncate(time.Minute)
+	input := base
+	input.Action, input.Timezone, input.Time = "restart", "UTC", runAt.UTC().Format("15:04")
+	input.Announcements = &Announcements{LeadMinutes: []int{5}}
+	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Announce(ctx, runAt.UnixMilli()-5*minute)
+	f.s.Wait()
+	if warned, off := said("Server restart in 5 minutes."), said("Server restart cancelled."); warned != 1 || off != 1 || f.claims(t) != 0 {
+		t.Fatalf("warned %d times, called off %d times", warned, off)
+	}
+}
+
+func (f *fixture) scheduleID(t *testing.T) string {
+	t.Helper()
+	var id string
+	if err := f.s.DB.QueryRow("SELECT schedule_id FROM schedule_announcements").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func (f *fixture) slot(t *testing.T) string {
+	t.Helper()
+	var slot string
+	if err := f.s.DB.QueryRow("SELECT slot FROM schedule_announcements").Scan(&slot); err != nil {
+		t.Fatal(err)
+	}
+	return slot
 }
 
 // A countdown nobody heard is never called off: the warning was claimed but

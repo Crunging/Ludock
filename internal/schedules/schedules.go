@@ -1138,9 +1138,18 @@ func (s *Service) announce(ctx context.Context, r *row, data Input, slot string,
 	if err != nil || binding == 0 {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, "UPDATE schedule_announcements SET heard_binding=? WHERE schedule_id=? AND slot=? AND lead_minutes=?",
+	recorded, err := s.DB.ExecContext(ctx, "UPDATE schedule_announcements SET heard_binding=? WHERE schedule_id=? AND slot=? AND lead_minutes=?",
 		binding, r.id, slot, lead)
-	return err
+	if err != nil {
+		return err
+	}
+	// The run was called off while the warning went out: its claim was
+	// spent unheard, so nobody told the players. This is the only side that
+	// knows they heard it.
+	if rows, err := recorded.RowsAffected(); err == nil && rows == 0 {
+		s.sayCalledOff(r.serverID, data.Action, binding)
+	}
+	return nil
 }
 
 // say sends players message on the owner's authority, before deadline and

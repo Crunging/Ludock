@@ -42,6 +42,8 @@ type fixture struct {
 	s        *Service
 	serverID string
 	obs      identity.Observation
+	// onCommand, if set, runs as withConsole's game receives a command.
+	onCommand func(command string)
 }
 
 func setup(t *testing.T) *fixture {
