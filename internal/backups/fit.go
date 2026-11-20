@@ -35,8 +35,8 @@ func CompareFit(backup *Backup, fingerprint, gameType string, roots []Root) Fit 
 	}
 	// Unrecognized images are all "unknown", which can't show the game is
 	// the same.
-	if backup.GameType == "" || backup.GameType == "unknown" || gameType == "unknown" {
-		return Fit{Refusal: "Ludock can’t tell which game this backup holds, so it restores only onto the data folders it was taken from."}
+	if backup.GameType == "" || strings.EqualFold(backup.GameType, "unknown") || strings.EqualFold(gameType, "unknown") {
+		return Fit{Refusal: "Ludock can’t tell whether this backup and the server are the same game, so it restores only onto the data folders it was taken from."}
 	}
 	if !strings.EqualFold(backup.GameType, gameType) {
 		return Fit{Refusal: "This backup holds " + games.DisplayName(backup.GameType) + " data, but the server now runs " +

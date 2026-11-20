@@ -37,11 +37,11 @@ func TestCompareFit(t *testing.T) {
 	if fit := CompareFit(unknown, "taken", "minecraft", []Root{data}); fit != (Fit{}) {
 		t.Errorf("same binding without a recorded game: %+v", fit)
 	}
-	if fit := CompareFit(unknown, "now", "minecraft", []Root{data}); fit.Moved || !strings.Contains(fit.Refusal, "can’t tell which game") {
+	if fit := CompareFit(unknown, "now", "minecraft", []Root{data}); fit.Moved || !strings.Contains(fit.Refusal, "can’t tell whether this backup and the server are the same game") {
 		t.Errorf("moved without a recorded game: %+v", fit)
 	}
 	// Every unrecognized image is "unknown", so that proves no game the same.
-	unknown.GameType = "unknown"
+	unknown.GameType = "Unknown"
 	if fit := CompareFit(unknown, "now", "unknown", []Root{data}); fit.Moved || fit.Refusal == "" {
 		t.Errorf("moved between unrecognized games: %+v", fit)
 	}
