@@ -1,45 +1,40 @@
 # Security policy
 
-## Supported releases
-
-Security fixes go into the latest published release. Nightly images are
-development builds and aren't supported.
-
 ## Reporting a vulnerability
 
 Please don't open a public issue for a suspected vulnerability. Use
 [GitHub's private vulnerability reporting](https://github.com/Crunging/Ludock/security/advisories/new)
-and include:
+and include the affected version or commit, steps to reproduce, what you
+expected and what happened, and any known impact.
 
-- The affected version or commit
-- Steps to reproduce
-- What you expected and what happened
-- Any known impact or suggested mitigation
+Security fixes go into the latest release. Nightly images are development
+builds and aren't supported.
 
 ## Deploying safely
 
-Access to the Docker socket gives control of the whole host. Run Ludock only on a
-trusted Docker host, and use an HTTPS reverse proxy for remote access.
-
-- Supported game images are added automatically unless labeled
-  `ludock.enable: "false"`. Recognizing an image doesn't prove where it came
-  from.
-- Ask administrators to turn on two-factor sign-in in **Account**; an
-  administrator account controls the Docker socket.
-- Send invite and password reset links privately: anyone who opens one before
-  the user does can set the password. They work once and expire after a day.
-- Administrators see every managed server. Members see only the servers shared
-  with them, with the access chosen on each server's Sharing tab.
-- Approve narrow backup folders, and keep registry and webhook credentials out
-  of game file folders.
-- Ludock saves its own data, including password hashes, two-factor secrets,
-  sessions, notification tokens, and the identity key that protects them, as
-  `ludock-data-*.tar` files in the backup folder and the second folder.
-  Anyone who can read either folder can read Ludock's data: keep them as
-  private as Ludock's data volume. The panel never lists or offers these
-  files.
-- Behind a reverse proxy, trust only the proxy's own address in
-  **Settings → Advanced**: a trusted address can claim to be any visitor.
-
-See [Remote access](./docs/OPERATIONS.md#remote-access) for proxy and network
-settings.
+- **The Docker socket is control of the host.** Anyone who controls Ludock can
+  control every container and the host itself, even with the socket mounted
+  read-only. Run one Ludock per trusted Docker host, on a trusted network.
+- **Remote access:** reach Ludock from elsewhere only through an HTTPS reverse
+  proxy, and trust only that proxy's own address in **Settings → Advanced →
+  Reverse proxy**: a trusted address can claim to be any visitor. See
+  [Remote access](./docs/REFERENCE.md#remote-access).
+- **Sign-in:** passwords need at least 15 characters, and repeated failures are
+  limited per address. Ask administrators to turn on two-factor sign-in in
+  **Account**.
+- **Invite and reset links** set a password for whoever opens them first. Send
+  them privately; they work once and expire after 24 hours.
+- **Access:** administrators use every server. Members see only the servers
+  shared with them, at the access chosen on each server's **Sharing** tab, and
+  never the Shell, updates, or backup downloads.
+- **Discovered containers:** containers on supported game images are added by
+  themselves unless labeled `ludock.enable: "false"`. Recognizing an image
+  doesn't prove where it came from. Containers that could control the host are
+  never offered in the panel.
+- **The backup folders** hold game backups, which can include configuration
+  secrets, and Ludock's own data (`ludock-data-*.tar`): password hashes,
+  two-factor secrets, sessions, notification tokens, and the key that protects
+  them. Anyone who can read the backup folder or the second copy can read
+  these, so keep them as private as Ludock's data volume.
+- **File access:** approve narrow folders with `ludock.files` where you can, and
+  keep registry and webhook credentials out of game folders.

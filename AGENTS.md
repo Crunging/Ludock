@@ -32,8 +32,9 @@ everyday pages. Hold every change to that:
   restarts one, such as backups or automatic recovery, is offered in one
   click, not turned on silently.
 
-The README is the pitch and quick start, and `docs/OPERATIONS.md` is the
-reference: everyday tasks come first there, advanced options after.
+The README is the pitch and quick start. `docs/GUIDE.md` is for owners:
+everyday tasks first, then how things behave. `docs/REFERENCE.md` holds what
+people look up and the advanced options.
 
 ## Code
 
@@ -103,8 +104,10 @@ published tags.
 ## Safety rules
 
 - **Discovery is not permission.** Only grants make a server visible to
-  non-admins, within their role's ceiling. Check capabilities again while long
-  work runs (`startAction`, console `Access.Allowed`, `Jobs.Actor`).
+  non-admins, within their role's ceiling, and a change to its game or data
+  folders pauses them until an administrator confirms it. Check capabilities
+  again while long work runs (`startAction`, console `Access.Allowed`,
+  `Jobs.Actor`).
 - **Logical IDs are not Docker IDs.** URL IDs never reach Docker. Right before a
   mutation, confirm the binding with `Servers.ResolveAuthorized` or
   `Identity.AssertObservedBinding`.
