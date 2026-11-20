@@ -50,8 +50,9 @@ func IsNotFound(err error) bool { return StatusCode(err) == http.StatusNotFound 
 // answer in time, cut a stream short, or failed on its side, rather than
 // refusing the request.
 func Unavailable(err error) bool {
+	var open *StreamOpenError
 	return errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrReadTimeout) || errors.Is(err, ErrIncompleteStream) ||
-		StatusCode(err) >= 500
+		errors.As(err, &open) || StatusCode(err) >= 500
 }
 
 // StreamOpenError reports a failed hijacked stream. A failed opening may

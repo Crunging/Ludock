@@ -279,7 +279,8 @@ func TestRemoveHelperStopsWriter(t *testing.T) {
 // requests Docker refused.
 func TestUnavailable(t *testing.T) {
 	wrap := func(err error) error { return fmt.Errorf("reading the archive: %w", err) }
-	for _, err := range []error{docker.ErrRequestFailed, docker.ErrReadTimeout, wrap(docker.ErrIncompleteStream), wrap(&docker.APIError{Status: 503})} {
+	for _, err := range []error{docker.ErrRequestFailed, docker.ErrReadTimeout, wrap(docker.ErrIncompleteStream), wrap(&docker.APIError{Status: 503}),
+		wrap(&docker.StreamOpenError{})} {
 		if !docker.Unavailable(err) {
 			t.Error("not unavailable:", err)
 		}
