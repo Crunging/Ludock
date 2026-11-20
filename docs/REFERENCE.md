@@ -101,7 +101,7 @@ their images' documentation and haven't been run yet.
 
 - **Minecraft** (`itzg/minecraft-server`, vanilla 1.21.11): with zero, one,
   and two players online, Ludock opened RCON, which the game logs, only when
-  a page opened or someone joined; the status query's player sample vouched
+  a page opened or someone joined; the status check's player sample vouched
   for the list the rest of the time.
 - **Terraria** (`hexlo/terraria-server-docker`, 1.4.5.8): its console needs
   `stdin_open: true`, with or without `tty`. Ludock saves with `save` before a
