@@ -16,8 +16,9 @@ click, and goes away once done.
 
 - **Get alerts** opens the notification settings.
 - **Back up your servers** offers **Back up every night**: after you confirm,
-  each server with data folders and no recurring backup schedule (paused ones
-  count) gets a daily one between 04:00 and 06:00 in your browser's time zone,
+  each server with data folders and no repeating schedule that backs it up (a
+  backup, or a restart with **Back up first**; paused ones count) gets a daily
+  one between 04:00 and 06:00 in your browser's time zone,
   a few minutes apart. It appears once backup storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
   servers whose game Ludock can check (see
@@ -45,9 +46,9 @@ visible only to administrators until you share it.
 
 To take a server out, open it and choose **Remove from Ludock** at the bottom of
 its **Overview**. The container keeps running. Its sharing, schedules, and
-backups come back if you add it again. A server added with a
-`ludock.enable: "true"` label leaves only when you change the label to
-`"false"` or remove it.
+backups come back if you add it again. A server labeled
+`ludock.enable: "true"` leaves only when you change the label to `"false"` and
+recreate the container.
 
 Ludock never offers itself, its helpers, Compose one-off containers, or
 containers that could control the host (privileged ones, or ones given a Docker
@@ -58,8 +59,8 @@ socket or the host's root). Add those only with a
 
 1. Open the server and choose **Sharing**.
 2. Under **Share with someone**, pick them under **Person** if they already
-   have an account. Otherwise choose **Someone new…** there (the list appears
-   only once other members exist) and type a username for them.
+   have an account. For someone new, choose **Someone new…** there if the list
+   appears, and type a username for them under **Their username**.
 3. Choose their **Access** and choose **Share**.
 
 For someone new, Ludock makes the account and shows a one-time invite link.
@@ -247,8 +248,9 @@ game. Ludock finds its password in the variables images usually use, such as
 `RCON_PASSWORD`, `ADMIN_PASSWORD`, or `TELNET_PASSWORD`, and for Minecraft also
 the one the image generates. If yours uses another name, set
 [`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and Vintage Story read commands
-from the server's input, which needs `stdin_open: true` on the container and
-an image that passes input to the game; their replies appear only in **Logs**. Ludock reaches consoles from inside the
+from the server's input, which needs `stdin_open: true` on the container (and
+`StdinOnce` off, outside Compose) and an image that passes input to the game;
+their replies appear only in **Logs**. Ludock reaches consoles from inside the
 container's network, so the console port needn't be published.
 
 ### Files
@@ -277,16 +279,17 @@ sockets. To limit access to some folders, set
 - **Readiness:** the **Backups** tab checks the destination, free space, and
   whether another container writes the same data, without stopping anything.
   Every backup checks again before it starts.
-- **Space:** Ludock keeps 5 GiB free on the backup disk by default. A new
-  archive needs room before old ones are removed, so if it might not fit,
-  Ludock first removes the server's oldest backups, never the 3 newest or kept
-  ones; if there still isn't room, the backup fails and says why.
+- **Space:** Ludock keeps 5 GiB free on the backup disk by default. A backup
+  that runs out of room fails and says why. After each successful backup, if
+  the next one might not fit, Ludock removes the server's oldest backups, never
+  the 3 newest or kept ones.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.
-- **Contents:** each data folder must be its own directory mount, without
-  mounts nested inside or overlapping another; single-file mounts, links, and
-  special files are refused. Use `ludock.files` to pick folders that qualify.
+- **Contents:** each data folder must be inside a writable directory mount,
+  with no other mount nested inside it and no overlap with another data
+  folder; single-file mounts, links, and special files are refused. Use
+  `ludock.files` to pick folders that qualify.
   Permissions, owners, and modification times are kept; ACLs, extended
   attributes, and sparse files aren't.
 - **Safety backups** taken before a restore or update follow the same
@@ -307,11 +310,11 @@ again.
 
 - A schedule runs with its owner's current access. Members with **Full
   access** manage their own; administrators manage all of them.
-- Missed times don't run late: a repeating schedule runs up to 15 minutes
-  late, such as after Ludock restarts, and otherwise skips that time. A
-  one-time schedule more than five minutes late is recorded as missed. A
-  daylight-saving hour that doesn't exist is skipped, and a repeated one runs
-  once.
+- If Ludock can't run a schedule on time, such as while it's restarting, a
+  repeating schedule still runs within 15 minutes and otherwise skips that
+  time; a one-time schedule runs within five minutes and otherwise is recorded
+  as missed. A daylight-saving hour that doesn't exist is skipped, and a
+  repeated one runs once.
 - **Back up first** needs the server running when the schedule runs. If the
   backup fails, the server stays stopped.
 - **Wait until no one is online** works on servers whose players Ludock can
@@ -326,8 +329,8 @@ again.
 
 ### Players
 
-While someone has Ludock open, it asks the game's console who is online about
-every 30 seconds; otherwise only monitored games with a status check are asked,
+While someone has the server list or a server's page open, Ludock asks the
+game's console who is online about every 30 seconds; otherwise only monitored games with a status check are asked,
 about every 2 minutes. Games with a working status check but no player list,
 or no console password, still show how many are online. A count Ludock can't read shows as
 unavailable, never as empty. Readings stay in memory.

@@ -357,11 +357,14 @@ of the folder's container path. Most servers have one folder, such as `/data`:
 ```bash
 id=root-$(printf %s /data | sha256sum | cut -c1-12)
 tar -tf backup.tar | head          # shows snapshot/$id/...
-mkdir restored && tar -xpf backup.tar -C restored --strip-components=2 "snapshot/$id"
+sudo mkdir restored
+sudo tar -xpf backup.tar --numeric-owner -C restored --strip-components=2 "snapshot/$id"
 ```
 
-Stop the game, then replace the contents of the server's data folder with
-`restored/`, as root so owners and permissions stay as they were.
+Run these as root so owners stay as they were. Stop the game, then replace the
+contents of its data folder with those of `restored/`, still as root and
+keeping owners and permissions, such as with `sudo cp -a restored/. <folder>/`
+after emptying the folder.
 
 ### Recover an administrator account
 
