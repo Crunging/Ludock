@@ -110,6 +110,8 @@ func TestPreviewCapAndBinaryDetection(t *testing.T) {
 	if preview, _ := ReadPreview(strings.NewReader("\xff\xfe")); preview.Kind != PreviewBinary {
 		t.Fatal("invalid UTF-8 shown as text")
 	}
+	// A preview read to its end leaves its helper idle for the next request.
+	f.service.Close()
 	f.helpersLeft(t)
 }
 
