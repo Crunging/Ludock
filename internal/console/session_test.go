@@ -168,7 +168,8 @@ func TestConsoleAccess(t *testing.T) {
 	close(input)
 	f.sessions.Console(ctx, channel, f.validate(f.friend), f.serverID, GameMode, input, "")
 	text := channel.text()
-	if !strings.Contains(text, "system:Connected to Minecraft RCON") || !strings.Contains(text, "stdout:There are 0 players (password [redacted]") || strings.Contains(text, "hunter2") ||
+	// The reply has no trailing newline, so Ludock ends its line.
+	if !strings.Contains(text, "system:Connected to the game console") || !strings.Contains(text, "stdout:There are 0 players (password [redacted])\nstdout:\r\n") || strings.Contains(text, "hunter2") ||
 		!strings.Contains(text, "error:Invalid message format") {
 		t.Fatal(text)
 	}
@@ -177,9 +178,16 @@ func TestConsoleAccess(t *testing.T) {
 	if shell.closed != ClosePolicy || !strings.Contains(shell.text(), "unavailable or access was denied") {
 		t.Fatal(shell.text())
 	}
-	var audits int
-	f.sessions.DB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action LIKE 'server.game-command.%'").Scan(&audits)
-	if audits != 2 {
+	// The command's started entry became its outcome.
+	var audits []string
+	rows, _ := f.sessions.DB.Query("SELECT action FROM audit_log WHERE action LIKE 'server.game-command.%'")
+	for rows.Next() {
+		var action string
+		rows.Scan(&action)
+		audits = append(audits, action)
+	}
+	rows.Close()
+	if len(audits) != 1 || audits[0] != "server.game-command.succeeded" {
 		t.Fatal(audits)
 	}
 }

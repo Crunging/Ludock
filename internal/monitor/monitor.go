@@ -441,7 +441,7 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 				continue
 			}
 			if changed && r.notified == 1 {
-				s.notify(notify.ServerProblems, "recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+" recovered.")
+				s.notify(notify.ServerProblems, "recovery:"+server.ID+":"+strconv.FormatInt(r.outage.Int64, 10), server.DisplayName+": the server is back up.")
 			}
 			// Pages show an outage once its grace ends, even before its alert.
 			if changed && r.outage.Valid {
@@ -488,11 +488,11 @@ func (s *Service) Check(ctx context.Context, current map[string]servers.Containe
 		// Raising an alert always changes notified, so it is sent only when
 		// that change was saved against the state read above.
 		if changed && pastGrace && r.notified == 0 && !recovering {
-			message := server.DisplayName + " is down."
+			message := server.DisplayName + ": the server is down."
 			if unavailable {
-				message = "Ludock can’t reach Docker to check " + server.DisplayName + "."
+				message = server.DisplayName + ": Ludock can’t reach Docker to check it."
 			} else if silent {
-				message = server.DisplayName + " is running, but the game stopped answering."
+				message = server.DisplayName + ": running, but the game stopped answering."
 			}
 			s.notify(notify.ServerProblems, "outage:"+server.ID+":"+strconv.FormatInt(started, 10), message)
 			s.changed(server.ID)

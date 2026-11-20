@@ -45,11 +45,12 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 		all, _ = s.App.Servers.ListSaved(ctx, request.User())
 	}
 	list.Total = len(all)
+	down := s.downServers(ctx, all)
 	search := strings.ToLower(strings.TrimSpace(list.Search))
 	states := map[string]bool{}
 	for index := range all {
 		view := &all[index]
-		status := views.ServerStatus(view.State, view.Health, view.Exit)
+		status := views.ServerRow{Server: *view, Down: down[view.ID]}.Status()
 		list.Fleet = append(list.Fleet, views.FleetBlock{Name: view.DisplayName, Label: status.Label, Tone: status.Tone})
 		states[view.State] = true
 		if backupSummary(request.User(), view) {
@@ -76,7 +77,7 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 			continue
 		}
 		row := s.serverRow(r, request, view, list.ShowBackup, list.DiscoveryUnavailable)
-		row.ShowPlayers = list.ShowPlayers
+		row.ShowPlayers, row.Down = list.ShowPlayers, down[view.ID]
 		if check := s.App.Checks.Status(ctx, view.ID, view.Container.ID); checks && !list.DiscoveryUnavailable && check != nil {
 			row.ImageUpdate = check.State == update.CheckAvailable
 		}
@@ -85,10 +86,27 @@ func (s *Server) serverList(r *http.Request, request *Request) views.ServerList 
 	return list
 }
 
+// downServers are the servers that stopped without anyone stopping them and
+// whose outage alert is due, so pages call them down as the alert does.
+func (s *Server) downServers(ctx context.Context, list []servers.View) map[string]bool {
+	problems, err := s.App.Monitor.Problems(ctx, db.Now())
+	if err != nil {
+		log.Warn("Could not read server outages")
+		return nil
+	}
+	down := map[string]bool{}
+	for _, view := range list {
+		// The saved state must still be the one the outage recorded.
+		if problem := problems[view.ID]; problem != nil && problem.State == view.State && views.LifecycleAction(view.State) == "start" {
+			down[view.ID] = true
+		}
+	}
+	return down
+}
+
 func (s *Server) serverRow(r *http.Request, request *Request, view servers.View, showBackup, stale bool) views.ServerRow {
 	action := views.LifecycleAction(view.State)
 	active := view.BindingStatus == "active"
-	consoleAvailable := (can(&view, authz.ConsoleExecute) && view.Console != nil) || can(&view, authz.ConsoleShell)
 	row := views.ServerRow{Server: view, Address: views.ConnectAddress(view.Connection, r.Host), ShowBackup: showBackup,
 		Disabled: stale || view.ActiveOperation != nil || !active,
 		CanStart: action == "start" && can(&view, authz.ServerStart), CanStop: action == "stop" && can(&view, authz.ServerStop),
@@ -111,10 +129,14 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 		row.Game.Query = view.Query.Name()
 		row.Game.State, row.Game.AnsweredAt = s.App.Players.Game(view.ID, view.Container)
 	}
-	if consoleAvailable {
+	// The button is named for the page it opens first.
+	switch {
+	case can(&view, authz.ConsoleExecute) && view.Console != nil:
 		row.ConsoleLabel = "Console"
-	} else if can(&view, authz.LogsRead) {
+	case can(&view, authz.LogsRead):
 		row.ConsoleLabel = "Logs"
+	case can(&view, authz.ConsoleShell):
+		row.ConsoleLabel = "Shell"
 	}
 	return row
 }

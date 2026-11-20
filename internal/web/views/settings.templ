@@ -531,7 +531,9 @@ templ NotificationDestination(n NotificationDestinationView) {
 			<form class="stack-form" hx-post={ "/settings/notifications/" + string(n.Destination) } hx-target="closest .notification-destination" hx-swap="outerHTML">
 				@destinationFields(n)
 				<label class="check-label">
-					<input type="checkbox" name="enabled" value="true" checked?={ n.Enabled }/>
+					// A destination never saved is on once saved. A rejected save
+					// shows the choice as sent.
+					<input type="checkbox" name="enabled" value="true" checked?={ n.Enabled || (!n.Stored && n.Error == "") }/>
 					{ enableLabel(n.Destination) }
 				</label>
 				@alertTypes(n)
@@ -807,8 +809,10 @@ templ Deliveries(d DeliveriesView) {
 							<td role="cell">
 								if delivery.Kind == "test" {
 									Test notification
+								} else if delivery.Alert != 0 {
+									{ delivery.Alert.Label() }
 								} else {
-									Server notification
+									Alert
 								}
 								<span class="table-detail">Queued @Time(delivery.CreatedAt, "", "")</span>
 							</td>

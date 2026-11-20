@@ -30,7 +30,7 @@ func (s *Server) consolePage(w http.ResponseWriter, r *http.Request, request *Re
 	}
 	if can(view, authz.ConsoleExecute) && view.Console != nil {
 		c.Modes = append(c.Modes, "game")
-		c.ConsoleName, c.Placeholder, c.Quick = view.Console.Name, view.Console.CommandPlaceholder, view.Console.Commands
+		c.Placeholder, c.Quick = view.Console.CommandPlaceholder, view.Console.Commands
 	}
 	if can(view, authz.ConsoleShell) {
 		c.Modes = append(c.Modes, "shell")

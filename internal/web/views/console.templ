@@ -20,7 +20,6 @@ type ConsoleView struct {
 	BindingActive bool
 	// Unavailable says why the console can't connect while !BindingActive.
 	Unavailable string
-	ConsoleName   string
 	Placeholder   string
 	Quick         []games.QuickCommand
 	CanStart      bool
@@ -33,9 +32,6 @@ func (c ConsoleView) statusText() string {
 	case "logs":
 		return "What the server prints"
 	case "game":
-		if c.ConsoleName != "" {
-			return c.ConsoleName
-		}
 		return "Game console"
 	}
 	return "Shell, for administrators"
@@ -129,7 +125,7 @@ templ ConsolePage(page Page, c ConsoleView) {
 						if !c.Running {
 							Commands need a running server.
 						} else if c.Mode == "game" {
-							Enter commands exactly as { map[bool]string{true: c.ConsoleName, false: "the game console"}[c.ConsoleName != ""] } expects them.
+							Enter commands exactly as the game expects them.
 						} else {
 							Each command runs as a new process inside the server’s container.
 						}

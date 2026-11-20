@@ -14,7 +14,7 @@ import (
 func TestRecoveryStatusWaitsOnlyWhilePending(t *testing.T) {
 	render := func(r monitor.Recovery) string {
 		var out strings.Builder
-		if err := RecoveryStatus(r).Render(context.Background(), &out); err != nil {
+		if err := RecoveryStatus(r, true).Render(context.Background(), &out); err != nil {
 			t.Fatal(err)
 		}
 		return out.String()
@@ -26,5 +26,19 @@ func TestRecoveryStatusWaitsOnlyWhilePending(t *testing.T) {
 	restarted.Pending = true
 	if text := render(restarted); !strings.Contains(text, "Waiting for it to answer.") {
 		t.Fatal(text)
+	}
+}
+
+// A server that exited isn't told automatic restart wasn't needed: it acts
+// only on a running game, and the owner's restart policy handles exits.
+func TestRecoveryStatusExitedServer(t *testing.T) {
+	for _, r := range []monitor.Recovery{{}, {Last: monitor.RecoveryRestarted, RestartedAt: 1_000, Pending: true}} {
+		var out strings.Builder
+		if err := RecoveryStatus(r, false).Render(context.Background(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if text := out.String(); strings.Contains(text, "Not needed") || strings.Contains(text, "Waiting") || !strings.Contains(text, "restart policy") {
+			t.Fatal(text)
+		}
 	}
 }

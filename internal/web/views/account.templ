@@ -94,13 +94,7 @@ templ AccountSessions(view AccountView) {
 							Unknown address
 						}
 					</strong>
-					<span>
-						if session.UserAgent != "" {
-							{ session.UserAgent }
-						} else {
-							Unknown browser
-						}
-					</span>
+					<span title={ session.UserAgent }>{ BrowserName(session.UserAgent) }</span>
 					<span>Last active @Time(session.LastSeenAt, "", "")</span>
 				</div>
 				<button class="secondary-btn secondary-btn--danger" type="button" hx-post={ "/account/sessions/" + session.ID + "/revoke" } hx-target="#sessions" data-busy-label="Working…">

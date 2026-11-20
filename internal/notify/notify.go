@@ -45,20 +45,22 @@ type Configuration struct {
 	Destination Destination
 	Enabled     bool
 	Configured  bool
-	Config      Config
-	Saved       map[string]bool
+	// Stored: the destination has been saved before.
+	Stored bool
+	Config Config
+	Saved  map[string]bool
 }
 
 func (c Configuration) Ready() bool { return c.Enabled && c.Configured }
 
-func public(d Destination, c Config) Configuration {
+func public(d Destination, c Config, stored bool) Configuration {
 	configured := d.configured(c)
 	saved := map[string]bool{}
 	for name, field := range d.secrets(&c) {
 		saved[name] = *field != ""
 		*field = ""
 	}
-	return Configuration{Destination: d, Enabled: c.Enabled, Configured: configured, Config: c, Saved: saved}
+	return Configuration{Destination: d, Enabled: c.Enabled, Configured: configured, Stored: stored, Config: c, Saved: saved}
 }
 
 var failureMessages = map[string]string{
@@ -83,6 +85,7 @@ type Delivery struct {
 	ID            string
 	Destination   Destination
 	Kind          string // event or test
+	Alert         Alert  // an event's type
 	State         string // queued, delivered, failed
 	Attempts      int
 	CreatedAt     int64
@@ -163,13 +166,15 @@ func (s *Service) Configurations(ctx context.Context) []Configuration {
 	all := s.settings(ctx)
 	result := make([]Configuration, len(Destinations))
 	for i, d := range Destinations {
-		result[i] = public(d, all[d])
+		config, stored := all[d]
+		result[i] = public(d, config, stored)
 	}
 	return result
 }
 
 func (s *Service) Configuration(ctx context.Context, d Destination) Configuration {
-	return public(d, s.settings(ctx)[d])
+	config, stored := s.settings(ctx)[d]
+	return public(d, config, stored)
 }
 
 // Configure saves one destination's settings. Empty secret fields keep the
@@ -218,18 +223,18 @@ func (s *Service) Configure(ctx context.Context, adminID, tokenHash string, d De
 var errSettingsChanged = errors.New("notification settings changed")
 
 type row struct {
-	id, destination, message, kind, state string
-	attempts, retries                     int
-	createdAt, next                       int64
-	lastAttempt, delivered                sql.NullInt64
-	failure                               sql.NullString
+	id, key, destination, message, kind, state string
+	attempts, retries                          int
+	createdAt, next                            int64
+	lastAttempt, delivered                     sql.NullInt64
+	failure                                    sql.NullString
 }
 
-const columns = "id,destination,message,kind,state,attempts,retry_attempts,created_at,next_attempt_at,last_attempt_at,delivered_at,failure_code"
+const columns = "id,event_key,destination,message,kind,state,attempts,retry_attempts,created_at,next_attempt_at,last_attempt_at,delivered_at,failure_code"
 
 func scan(s interface{ Scan(...any) error }) (*row, error) {
 	var r row
-	return &r, s.Scan(&r.id, &r.destination, &r.message, &r.kind, &r.state, &r.attempts, &r.retries, &r.createdAt, &r.next,
+	return &r, s.Scan(&r.id, &r.key, &r.destination, &r.message, &r.kind, &r.state, &r.attempts, &r.retries, &r.createdAt, &r.next,
 		&r.lastAttempt, &r.delivered, &r.failure)
 }
 
@@ -241,6 +246,9 @@ func (s *Service) public(r *row, all settings) Delivery {
 	ready := d.ready(all[d])
 	delivery := Delivery{ID: r.id, Destination: d, Kind: r.kind, State: r.state, Attempts: r.attempts, CreatedAt: r.createdAt,
 		LastAttemptAt: r.lastAttempt.Int64, DeliveredAt: r.delivered.Int64, Paused: r.state == "queued" && !ready}
+	if name, _, ok := strings.Cut(r.key, ":"); ok && r.kind == "event" {
+		delivery.Alert, _ = ParseAlert(name)
+	}
 	if r.state == "queued" {
 		delivery.NextAttemptAt = r.next
 	}
@@ -367,7 +375,8 @@ func (s *Service) QueueIn(ctx context.Context, tx *sql.Tx, alert Alert, key, mes
 		if !all[d].Alerts.Includes(alert) {
 			continue
 		}
-		if _, err := enqueue(ctx, tx, key, d, message, "event"); err != nil {
+		// The key carries the alert type, which Recent deliveries shows.
+		if _, err := enqueue(ctx, tx, alert.Name()+":"+key, d, message, "event"); err != nil {
 			return false, err
 		}
 		queued = true

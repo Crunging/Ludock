@@ -240,6 +240,14 @@ var auditLabels = map[string]string{
 	"schedule.paused":                  "Paused a schedule",
 	"schedule.resumed":                 "Resumed a schedule",
 	"server.added":                     "Added a server",
+	"server.start":                     "Started the server",
+	"server.stop":                      "Stopped the server",
+	"server.restart":                   "Restarted the server",
+	"server.backup":                    "Backed up the server",
+	"server.restore":                   "Restored a backup",
+	"server.update":                    "Updated the server",
+	"server.command":                   "Sent a command",
+	"server.player-action":             "Acted on a player",
 	"server.removed":                   "Removed a server",
 	"server.change.confirmed":          "Confirmed a changed server",
 	"server.sharing.updated":           "Changed who can use a server",
@@ -258,7 +266,7 @@ var auditLabels = map[string]string{
 	"server.file.renamed":              "Renamed a file",
 	"server.file.unpacked":             "Unpacked an archive",
 	"server.file.uploaded":             "Uploaded a file",
-	"settings.backups.auto_enabled":    "Turned on backups",
+	"settings.backups.auto_enabled":    "Found a folder for backups",
 	"settings.backups.updated":         "Changed backup storage",
 	"settings.connection_updated":      "Changed the server address",
 	"settings.image_updates.updated":   "Changed image update checks",
@@ -288,6 +296,11 @@ func AuditKeys(text string) []string {
 			keys = append(keys, key)
 		}
 	}
+	for action, label := range playerActionLabels {
+		if strings.Contains(strings.ToLower(label), text) {
+			keys = append(keys, "server.player-action#"+action)
+		}
+	}
 	slices.Sort(keys)
 	return keys
 }
@@ -312,17 +325,51 @@ func AuditLabel(action string) string {
 	return Capitalize(strings.ReplaceAll(action, ".", " "))
 }
 
+var playerActionLabels = map[string]string{"kick": "Kicked", "ban": "Banned", "unban": "Unbanned",
+	"allow": "Added to the allowlist:", "disallow": "Removed from the allowlist:"}
+
+// entryLabel names an entry, saying what was done to which player.
+func entryLabel(entry history.AuditEntry) string {
+	details, _ := entry.Details.(map[string]any)
+	if strings.HasPrefix(entry.Action, "server.player-action.") && details != nil {
+		action, _ := details["action"].(string)
+		player, _ := details["player"].(string)
+		if label := playerActionLabels[action]; label != "" && player != "" {
+			return label + " " + player
+		}
+	}
+	return AuditLabel(entry.Action)
+}
+
+// addedContainer is the container an added server came from; the entry is
+// written before the server has an ID.
+func addedContainer(entry history.AuditEntry) string {
+	details, _ := entry.Details.(map[string]any)
+	if entry.Action != "server.added" || details == nil {
+		return ""
+	}
+	name, _ := details["container"].(string)
+	return name
+}
+
 templ auditList(h HistoryView) {
 	<div class="audit-list">
 		for _, entry := range h.Entries {
 			<article class="audit-entry">
 				<div>
-					<strong>{ AuditLabel(entry.Action) }</strong>
+					<strong>{ entryLabel(entry) }</strong>
 					<span>{ auditActor(entry) }</span>
 					if entry.Status != "" {
 						<span>
 							@Pip(OperationTones[entry.Status])
 							{ OperationStatusLabels[entry.Status] }
+						</span>
+					} else if strings.HasSuffix(entry.Action, ".started") {
+						// Work whose outcome was never recorded: still running, or
+						// cut off by a restart.
+						<span>
+							@Pip("active")
+							No result yet
 						</span>
 					}
 				</div>
@@ -341,6 +388,8 @@ templ auditList(h HistoryView) {
 						} else {
 							<span>A deleted user</span>
 						}
+					} else if name := addedContainer(entry); name != "" {
+						<span>{ name }</span>
 					} else {
 						<span>—</span>
 					}

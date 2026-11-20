@@ -234,3 +234,37 @@ func portList(ports []servers.Port) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// browsers and systems are checked in order: Edge and Opera also name
+// Chrome, Chrome names Safari, and Android names Linux.
+var browsers = [][2]string{{"Edg", "Edge"}, {"OPR/", "Opera"}, {"SamsungBrowser/", "Samsung Internet"},
+	{"Firefox/", "Firefox"}, {"FxiOS/", "Firefox"}, {"CriOS/", "Chrome"}, {"Chrome/", "Chrome"}, {"Safari/", "Safari"}}
+var systems = [][2]string{{"iPhone", "iPhone"}, {"iPad", "iPad"}, {"Android", "Android"}, {"CrOS", "ChromeOS"},
+	{"Windows", "Windows"}, {"Macintosh", "macOS"}, {"Linux", "Linux"}}
+
+// BrowserName names a session's browser from its user agent, such as
+// "Firefox on Windows".
+func BrowserName(userAgent string) string {
+	browser, system := "", ""
+	for _, candidate := range browsers {
+		if strings.Contains(userAgent, candidate[0]) {
+			browser = candidate[1]
+			break
+		}
+	}
+	for _, candidate := range systems {
+		if strings.Contains(userAgent, candidate[0]) {
+			system = candidate[1]
+			break
+		}
+	}
+	switch {
+	case browser != "" && system != "":
+		return browser + " on " + system
+	case browser != "":
+		return browser
+	case system != "":
+		return "A browser on " + system
+	}
+	return "Unknown browser"
+}

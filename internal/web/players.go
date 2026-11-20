@@ -10,7 +10,9 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/console"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/players"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/web/views"
@@ -89,13 +91,14 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	// Like a typed command, it is sent only once its audit entry is saved.
 	entry := s.auditEntry(request)
 	entry.Action, entry.TargetType, entry.TargetID, entry.Details = "server.player-action.started", "server", act.Logical.ID, details
-	if err := s.App.DB.WriteAudit(act.Ctx, nil, entry); err != nil {
+	started, err := s.App.DB.WriteAuditStart(act.Ctx, entry)
+	if err != nil {
 		return "", apperr.New("AUDIT_UNAVAILABLE", 503, "Ludock could not record this action, so it was not sent. Try again.")
 	}
 	target := console.Target{ContainerID: act.Logical.ContainerID, Labels: act.Container.Labels, State: act.Container.State}
 	if accounts := adapter.Moderation.Accounts; accounts != nil && games.Online(action) {
 		if err := s.confirmAccount(act, target, adapter, accounts, command, reading); err != nil {
-			s.audit(r, request, "server.player-action.failed", act.Logical.ID, map[string]any{"action": string(action), "player": name})
+			s.finishAudit(entry, started, "server.player-action.failed")
 			return "", err
 		}
 	}
@@ -107,9 +110,8 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 		}
 	})
 	err = s.App.Console.GameCommand(act.Ctx, target, adapter, command, console.Output{Stdout: out.Push, Complete: out.End}, act.Assert)
-	outcome := map[string]any{"action": string(action), "player": name}
 	if err != nil {
-		s.audit(r, request, "server.player-action.failed", act.Logical.ID, outcome)
+		s.finishAudit(entry, started, "server.player-action.failed")
 		if _, public := apperr.As(err); public {
 			return "", err
 		}
@@ -117,9 +119,9 @@ func (s *Server) sendPlayerAction(r *http.Request, request *Request, act *server
 	}
 	// The game saying no such player is a failed action, not a sent one.
 	if adapter.Moderation.Outcome(action, reply.String()) == games.NoPlayer {
-		s.audit(r, request, "server.player-action.failed", act.Logical.ID, outcome)
+		s.finishAudit(entry, started, "server.player-action.failed")
 	} else {
-		s.audit(r, request, "server.player-action.succeeded", act.Logical.ID, outcome)
+		s.finishAudit(entry, started, "server.player-action.succeeded")
 	}
 	return reply.String(), nil
 }
@@ -232,4 +234,13 @@ func playerResult(moderation *games.Moderation, action games.PlayerAction, name,
 		alert.Reply = reply
 	}
 	return alert
+}
+
+// finishAudit sets a started entry to its outcome. The action already ran, so
+// a lost entry is logged.
+func (s *Server) finishAudit(entry db.AuditEntry, started int64, action string) {
+	entry.Action = action
+	if err := s.App.DB.FinishAudit(context.Background(), started, entry); err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", action))
+	}
 }

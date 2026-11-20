@@ -551,7 +551,7 @@ func (c *Checks) apply(ctx context.Context, o observation, now int64, quiet bool
 	if announce && c.Notify != nil {
 		message := updateMessage(o.container)
 		if o.serverID == selfID {
-			message = "A newer version of Ludock is available. Update it with the tool that started it, such as docker compose pull and docker compose up -d in the folder with its compose.yaml."
+			message = "Ludock: a newer version is available. Update it with the tool that started it, such as docker compose pull and docker compose up -d in the folder with its compose.yaml."
 		}
 		c.Notify(notify.NewerImages, "image-update:"+o.serverID+":"+digest, message)
 	}

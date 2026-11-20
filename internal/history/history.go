@@ -42,6 +42,8 @@ type Query struct {
 	Status      string
 	OperationID string // audit only
 	// ActionKeys are audit actions whose displayed names match Action.
+	// "<action>#<kind>" matches only entries whose details name that kind,
+	// such as one player action.
 	ActionKeys []string
 	From, To   int64 // inclusive Unix ms; -1 when unset
 }
@@ -285,6 +287,11 @@ func (s *Service) Audit(ctx context.Context, q Query) ([]AuditEntry, string, err
 		match := "instr(lower(a.action), lower(?)) > 0"
 		values = append(values, q.Action)
 		for _, key := range q.ActionKeys {
+			if action, kind, ok := strings.Cut(key, "#"); ok {
+				match += " OR (a.action LIKE ? ESCAPE '\\' AND json_valid(a.details_json) AND json_extract(a.details_json, '$.action') = ?)"
+				values = append(values, strings.NewReplacer("%", "\\%", "_", "\\_").Replace(action)+".%", kind)
+				continue
+			}
 			match += " OR a.action = ?"
 			values = append(values, key)
 			// Only server work is recorded with its result as a suffix.

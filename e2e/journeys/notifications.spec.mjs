@@ -98,7 +98,8 @@ test("sending test alerts to ntfy, Gotify, email, and a webhook", async ({ page 
     await ntfy.getByLabel("Server URL").fill(http.url + "/ntfy");
     await ntfy.getByLabel("Topic").fill("e2e-secret-topic");
     await ntfy.getByLabel("Access token (optional)").fill("tk_e2esecret");
-    await ntfy.getByLabel("Send alerts to ntfy").check();
+    // A destination set up for the first time is on once saved.
+    await expect(ntfy.getByLabel("Send alerts to ntfy")).toBeChecked();
     await save(ntfy, "ntfy");
     await expect(ntfy.locator(":scope > summary")).toContainText("On");
     await expect(ntfy.getByLabel("Replace topic")).toHaveValue("");
@@ -198,7 +199,8 @@ test("saving Discord and Telegram settings without showing secrets again", async
   const webhook = "https://discord.com/api/webhooks/123/e2e-secret-token";
   await page.goto("/settings");
   const discord = await openDestination(page, "discord");
-  await expect(discord.getByLabel("Send alerts to Discord")).not.toBeChecked();
+  await expect(discord.getByLabel("Send alerts to Discord")).toBeChecked();
+  await discord.getByLabel("Send alerts to Discord").uncheck();
   await discord.getByLabel("Webhook URL").fill("https://example.com/not-discord");
   await discord.getByRole("button", { name: "Save Discord" }).click();
   await expect(discord.locator(".alert--error")).toHaveText("Use a Discord HTTPS webhook URL");
@@ -223,6 +225,9 @@ test("saving Discord and Telegram settings without showing secrets again", async
 
   await page.reload();
   await expect((await openDestination(page, "discord")).getByLabel("Replace webhook URL")).toHaveValue("");
+  // Switching it off was a choice, and it sticks.
+  await expect((await openDestination(page, "discord")).getByLabel("Send alerts to Discord")).not.toBeChecked();
+  await expect(page.locator("#notification-discord-card > summary")).toContainText("Off");
   await expect((await openDestination(page, "telegram")).getByLabel("Chat ID")).toHaveValue("-100123");
   const content = await page.content();
   expect(content).not.toContain("e2e-secret-token");
@@ -298,7 +303,11 @@ test("choosing which types of alert reach a webhook", async ({ page }) => {
     await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
     await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
     await dockerAction("enshrouded", "stop");
-    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded is down.");
+    await expect.poll(messages, { timeout: 90_000 }).toContain("enshrouded: the server is down.");
+    // Recent deliveries names each alert by its type.
+    await page.goto("/settings");
+    await expect(page.locator(".notification-deliveries-table tbody tr").first()).toContainText("Server problems");
+    await expect(page.locator(".notification-deliveries-table")).not.toContainText("Server notification");
     // Alerts are delivered in the order they were queued, so a newer-image
     // notice would have arrived first.
     expect(messages().filter((m) => newerImage.test(m))).toEqual([]);

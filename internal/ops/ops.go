@@ -362,7 +362,7 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 			status, status, resultJSON, errorValue, db.Now(), job.ID); err != nil {
 			return err
 		}
-		return r.DB.WriteAudit(ctx, tx, entry)
+		return r.DB.FinishOperationAudit(ctx, tx, job.ID, "server."+job.Kind+".queued", entry)
 	}); err != nil {
 		return err
 	}
@@ -409,7 +409,12 @@ func (r *Runner) notifyScheduledFailure(rw *row) {
 	if rw.kind == "backup" {
 		key = "backup-failed:" + rw.id
 	}
-	r.Notify(notify.FailedWork, key, "A scheduled Ludock action failed. Its Activity says why.")
+	name := "A server"
+	var display string
+	if r.DB.QueryRowContext(context.Background(), "SELECT display_name FROM logical_servers WHERE id=?", rw.serverID).Scan(&display) == nil {
+		name = display
+	}
+	r.Notify(notify.FailedWork, key, name+": a scheduled "+rw.kind+" failed. Its Activity says why.")
 }
 
 // resourcesBusy returns a job to the queue until its resources are free.

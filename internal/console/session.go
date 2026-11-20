@@ -212,6 +212,14 @@ func (s *Sessions) audit(user *db.SessionUser, action, serverID string, details 
 	return err
 }
 
+// finish sets a command's started entry to its outcome.
+func (s *Sessions) finish(user *db.SessionUser, started int64, action, serverID string) {
+	if err := s.DB.FinishAudit(context.Background(), started, db.AuditEntry{UserID: user.ID, Action: action,
+		TargetType: "server", TargetID: serverID}); err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", action))
+	}
+}
+
 // unrecorded ends a connection whose opening could not be audited.
 func unrecorded(channel Channel) {
 	channel.Send("error", "Ludock could not record this connection, so it was not opened. Try again.")
@@ -298,7 +306,7 @@ func (s *Sessions) Console(ctx context.Context, channel Channel, validate func(c
 		return
 	}
 	if mode == GameMode {
-		send("system", "Connected to "+adapter.Name)
+		send("system", "Connected to the game console")
 	} else {
 		send("system", "Administrator shell. Each command runs for at most 60 seconds and needs the server’s timeout utility.")
 	}
@@ -427,9 +435,30 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		failed(nil)
 		return false
 	}
-	stdout := NewRedactor(secrets, func(value string) { send("stdout", value) })
-	stderr := NewRedactor(secrets, func(value string) { send("stderr", value) })
-	output := Output{Stdout: stdout.Push, Stderr: stderr.Push, Complete: func() { stdout.End(); stderr.End() },
+	// A reply ends its line, so the next prompt starts on its own: RCON
+	// replies have no trailing newline.
+	var lineMu sync.Mutex
+	midLine := false
+	emit := func(kind string) func(string) {
+		return func(value string) {
+			lineMu.Lock()
+			midLine = !strings.HasSuffix(value, "\n")
+			lineMu.Unlock()
+			send(kind, value)
+		}
+	}
+	stdout := NewRedactor(secrets, emit("stdout"))
+	stderr := NewRedactor(secrets, emit("stderr"))
+	output := Output{Stdout: stdout.Push, Stderr: stderr.Push, Complete: func() {
+		stdout.End()
+		stderr.End()
+		lineMu.Lock()
+		defer lineMu.Unlock()
+		if midLine {
+			midLine = false
+			send("stdout", "\r\n")
+		}
+	},
 		System: func(value string) {
 			redactor := NewRedactor(secrets, func(safe string) { send("system", safe) })
 			redactor.Push(value)
@@ -437,8 +466,11 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		}}
 	user := access.User()
 	// A command runs only once its audit entry is saved.
-	if err := s.audit(user, prefix+".started", access.ServerID, map[string]any{"containerId": current.Logical.ContainerID,
-		"bindingRevision": current.Logical.BindingRevision}, ip); err != nil {
+	started, err := s.DB.WriteAuditStart(context.Background(), db.AuditEntry{UserID: user.ID, Action: prefix + ".started",
+		TargetType: "server", TargetID: access.ServerID, IPAddress: ip,
+		Details: map[string]any{"containerId": current.Logical.ContainerID, "bindingRevision": current.Logical.BindingRevision}})
+	if err != nil {
+		log.Error("Could not write an audit entry", logging.F("action", prefix+".started"))
 		send("error", "Ludock could not record this command, so it was not sent. Try again.")
 		return false
 	}
@@ -449,11 +481,11 @@ func (s *Sessions) execute(ctx context.Context, access *Access, mode Mode, raw s
 		err = s.Runtime.Shell(ctx, current.Logical.ContainerID, command, output, assertAccess)
 	}
 	if err != nil {
-		s.audit(user, prefix+".failed", access.ServerID, nil, "")
+		s.finish(user, started, prefix+".failed", access.ServerID)
 		failed(err)
 		return false
 	}
-	s.audit(user, prefix+".succeeded", access.ServerID, nil, "")
+	s.finish(user, started, prefix+".succeeded", access.ServerID)
 	return true
 }
 

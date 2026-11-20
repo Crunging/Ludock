@@ -83,8 +83,9 @@ or end it, use the same tab: pick a new level and choose **Save**, or choose
 ### Get alerts
 
 1. Open **Settings** and scroll to **Notifications**.
-2. Open a destination (Discord, ntfy, Gotify, Telegram, Email, or Webhook),
-   fill in its fields, and tick **Send alerts to …**.
+2. Open a destination (Discord, ntfy, Gotify, Telegram, Email, or Webhook)
+   and fill in its fields. A new destination is on once saved; untick
+   **Send alerts to …** to keep it off.
 3. Choose its **Save** button, then **Send test notification**.
 
 Every server is monitored from the moment Ludock finds it, so alerts start as
@@ -166,7 +167,9 @@ minutes by default), Ludock restarts it the way **Restart** does and sends an
 alert. It leaves alone a server that is stopped, still starting, hasn't
 answered since it last started, or is paused for maintenance. If the game
 doesn't answer again within five times the wait (at most 30 minutes), or after
-3 restarts in 6 hours, Ludock says so and leaves it for that outage.
+3 restarts in 6 hours, Ludock says so and leaves it for that outage. A server
+whose container exits is left to the restart policy set in the tool that runs
+it, such as Compose.
 
 ### Manage players
 
@@ -203,7 +206,8 @@ States follow Docker. A server with a health check shows **Starting** until it
 passes and **Unhealthy** while it fails. A stopped server shows **Crashed**
 after an error exit, **Out of memory** when the kernel killed it, and
 **Force-stopped** when Docker killed it for not shutting down in time, so
-recent progress may be lost.
+recent progress may be lost. A server that stopped without anyone stopping it
+shows **Down** once its alert is due, as the alert says.
 
 The address players use is the host from **Settings → Server address** (or the
 one in your browser until you set it) with the port the container publishes
@@ -235,7 +239,8 @@ with who started it.
 
 ### Consoles
 
-**Console** on a server opens up to three views:
+**Console** on a server opens up to three views. For a game without a console
+the button says **Logs**.
 
 - **Logs**: what the server prints.
 - **Console**: the game's own console, with shortcut buttons for common
@@ -370,14 +375,16 @@ Each destination's **Alert types**:
 - **Failed backups and schedules:** a backup, scheduled action, second copy,
   or save of Ludock's own data fails, or a server is left stopped after a
   failed backup.
-- **Restores and updates:** a restore or update finishes or fails.
+- **Restores and updates:** a restore or update fails. One that succeeds shows
+  its result in the panel, where it was started.
 - **Newer images available:** a newer image is published for a server, once per
   version. Off by default.
 
-Alerts name servers and container paths, never images or host paths. Each
-delivery is tried up to five times; **Recent deliveries** lists the latest 50
-and offers **Retry** on failed ones. Turning a destination off holds its
-deliveries until it's on again.
+Alerts read "<server>: <what happened>." and name servers and container paths,
+never images or host paths. Each delivery is tried up to five times;
+**Recent deliveries** lists the latest 50 by alert type and offers **Retry** on
+failed ones. Turning a destination off holds its deliveries until it's on
+again.
 
 ### Accounts and sign-in
 
@@ -402,7 +409,8 @@ while.
 
 ### Activity
 
-**Activity** lists work on the servers you can use, newest first, with filters
+**Activity** lists work on the servers you can use, newest first, one row for
+each piece of work with its latest result, with filters
 for server, person, action, result, and dates. Each server's **Activity** tab
 lists its own. Administrators can choose **Show → Everything** to add sign-ins,
 account changes, and settings changes. **Needs attention** on the server list

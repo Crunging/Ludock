@@ -206,7 +206,7 @@ func TestMemoryAlert(t *testing.T) {
 	limits[server.ID] = 1000
 	s.CheckMemory(ctx, limits, state("running", ""), minute)
 	s.CheckMemory(ctx, limits, state("running", ""), minute)
-	if !slices.Equal(events.events, []string{"Minecraft has used over 90% of its memory limit for 2 minutes."}) {
+	if !slices.Equal(events.events, []string{"Minecraft: over 90% of its memory limit for 2 minutes."}) {
 		t.Fatal(events.events)
 	}
 	s.CheckMemory(ctx, map[string]int64{}, nil, minute+60_000)
@@ -214,7 +214,7 @@ func TestMemoryAlert(t *testing.T) {
 		t.Fatal("a Docker outage cleared the alert", problems)
 	}
 	s.CheckMemory(ctx, map[string]int64{}, state("exited", ""), minute+60_000)
-	if len(events.events) != 2 || events.events[1] != "Minecraft’s memory use is no longer near its limit." {
+	if len(events.events) != 2 || events.events[1] != "Minecraft: memory use is no longer near its limit." {
 		t.Fatal(events.events)
 	}
 }

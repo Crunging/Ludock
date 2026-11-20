@@ -9,7 +9,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   const output = page.locator(".xterm-rows");
   await expect(status).toHaveText("Connected");
   await expect(status.locator(".marker")).toHaveClass(/marker--ok/);
-  await expect(output).toContainText("Connected to Minecraft RCON");
+  await expect(output).toContainText("Connected to the game console");
 
   await page.getByLabel("Game command").fill("list");
   await page.getByRole("button", { name: "Send" }).click();
@@ -17,6 +17,10 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
   await expect(page.locator("[data-console-feedback]")).toHaveText("Command sent. Check the output for its result.");
   await page.getByLabel("Game command").press("ArrowUp");
   await expect(page.getByLabel("Game command")).toHaveValue("list");
+  // A reply without a trailing newline still ends its line, so the next
+  // command starts on its own.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(output.locator(":scope > div").filter({ hasText: /^> list\s*$/ })).toHaveCount(2);
 
   await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Logs", exact: true }).click();
   await expect(status).toHaveText("Connected");
@@ -39,7 +43,7 @@ test("sending game commands, reading logs, and using the shell", async ({ page }
 
 test("a stopped server offers no command connection", async ({ page }) => {
   await page.goto("/");
-  await serverRow(page, "valheim").getByRole("link", { name: "Console" }).click();
+  await serverRow(page, "valheim").getByRole("link", { name: "Logs" }).click();
   await page.getByRole("navigation", { name: "Console mode" }).getByRole("link", { name: "Shell", exact: true }).click();
   await expect(page.locator(".console-warning")).toContainText("Commands need a running server.");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();

@@ -22,13 +22,25 @@ type ServerRow struct {
 	CanRestart     bool
 	CanBackup      bool
 	CanFiles       bool
-	ConsoleLabel   string // "", "Console", or "Logs"
+	ConsoleLabel   string // "", "Console", "Logs", or "Shell"
 	BackupSummary  bool
 	ShowPlayers    bool
 	Players        PlayersView
 	Game           GameView
 	// ImageUpdate: a newer image is available (shown to administrators).
 	ImageUpdate bool
+	// Down: the server stopped without anyone stopping it, and its outage
+	// alert is due.
+	Down bool
+}
+
+// Status is the row's state, naming a server its alert calls down the same way.
+func (r ServerRow) Status() Status {
+	status := ServerStatus(r.Server.State, r.Server.Health, r.Server.Exit)
+	if r.Down && status.Tone != "failed" {
+		return Status{"Down", "failed"}
+	}
+	return status
 }
 
 // FleetBlock is one server in the strip of state blocks under the title.
@@ -62,7 +74,10 @@ templ StateMark(tone string) {
 }
 
 templ ServerState(state, health string, exit *servers.Exit) {
-	{{ status := ServerStatus(state, health, exit) }}
+	@StatusLabel(ServerStatus(state, health, exit))
+}
+
+templ StatusLabel(status Status) {
 	<span class={ "server-state", "server-state--" + status.Tone }>
 		@Pip(status.Tone)
 		{ status.Label }
@@ -347,7 +362,7 @@ func rowClass(row ServerRow) string {
 	if LifecycleAction(row.Server.State) == "start" {
 		class += " server-row--stopped"
 	}
-	if ServerStatus(row.Server.State, row.Server.Health, row.Server.Exit).Tone == "failed" {
+	if row.Status().Tone == "failed" {
 		class += " server-row--failed"
 	}
 	return class
@@ -356,7 +371,7 @@ func rowClass(row ServerRow) string {
 templ ServerCard(row ServerRow) {
 	{{ server := row.Server }}
 	<article class={ rowClass(row) } aria-labelledby={ "server-" + server.ID }>
-		@StateMark(ServerStatus(server.State, server.Health, server.Exit).Tone)
+		@StateMark(row.Status().Tone)
 		<div class="server-row__identity">
 			<a class="server-row__name" id={ "server-" + server.ID } href={ templ.SafeURL("/servers/" + server.ID) }>{ server.DisplayName }</a>
 			<span class="server-row__game">{ server.GameName }</span>
@@ -373,7 +388,7 @@ templ ServerCard(row ServerRow) {
 			}
 		</div>
 		<div class="server-row__state">
-			@ServerState(server.State, server.Health, server.Exit)
+			@StatusLabel(row.Status())
 			if operation := server.ActiveOperation; operation != nil {
 				<span role="status">
 					<a class="text-link" href={ templ.SafeURL(OperationPath(server.ID, operation.Kind, operation.ID)) }>{ Capitalize(operation.Kind) }: { OperationLabel(operation.Status, operation.Phase) }</a>

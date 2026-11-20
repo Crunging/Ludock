@@ -197,7 +197,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 			return false
 		}
 		s.notify(notify.ServerProblems, "recovery-gave-up:"+server.ID+":"+strconv.FormatInt(state.SilentSince, 10), server.DisplayName+
-			" stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look.")
+			": the game stopped answering again. Ludock already tried restarting it 3 times in 6 hours, so it won’t restart it again for now; it needs a look.")
 		s.changed(server.ID)
 		return true
 	}
@@ -234,7 +234,7 @@ func (s *Service) recover(ctx context.Context, server identity.Server, container
 		return false
 	}
 	s.Runner.Wake()
-	s.notify(notify.ServerProblems, "recovery:"+job.ID, server.DisplayName+" stopped answering, so Ludock is restarting it.")
+	s.notify(notify.ServerProblems, "recovery:"+job.ID, server.DisplayName+": the game stopped answering, so Ludock is restarting it.")
 	s.changed(server.ID)
 	return true
 }
@@ -280,7 +280,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 			settled = false
 		case status == ops.Failed || (status == ops.Interrupted && !newRun):
 			next.Last = RecoveryFailed
-			message = "Ludock couldn’t restart " + server.DisplayName + " after its game stopped answering. Its Activity says why."
+			message = server.DisplayName + ": Ludock couldn’t restart it after the game stopped answering. Its Activity says why."
 		case status == ops.Skipped:
 			// It never acted, so it doesn't count as an attempt.
 			next.Last = RecoverySkipped
@@ -291,7 +291,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 			// The run Ludock started ended; what happens next is someone else's.
 		case answered:
 			next.Last = RecoveryAnswered
-			message = server.DisplayName + " is answering again after Ludock restarted it."
+			message = server.DisplayName + ": the game is answering again after Ludock restarted it."
 		case running && state.Last == RecoveryNotAnswered:
 			settled = false
 		case !waited || (running && game == GameUnknown):
@@ -300,7 +300,7 @@ func (s *Service) trackRecovery(ctx context.Context, server identity.Server, con
 			settled = false
 		case running && game == GameWaiting:
 			next.Last, next.LastAt, next.WatchRun = RecoveryNotAnswered, now, container.StateSince
-			message = server.DisplayName + " still isn’t answering after Ludock restarted it. Ludock won’t restart it again until the game answers; it needs a look."
+			message = server.DisplayName + ": the game still isn’t answering after Ludock restarted it. Ludock won’t restart it again until the game answers; it needs a look."
 			settled = false
 		}
 		// A server that stopped, or lost its status query, ends the wait quietly;

@@ -360,7 +360,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	pulled := image.ID
 	imageChanged := pulled != plan.Spec.Image
 	if !imageChanged && !request.ForceRecreate {
-		j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": already up to date.")
+		j.notifyDone(job, "operation:"+job.Job.ID, server.Container.DisplayName+": already up to date.")
 		return map[string]any{"alreadyCurrent": true, "imageChanged": false, "recreated": false}, nil
 	}
 	if _, err := j.resolve(ctx, job, capability, true); err != nil {
@@ -427,7 +427,7 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if request.ForceRecreate {
 		action = "recreation"
 	}
-	j.notify(notify.Results, "operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
+	j.notifyDone(job, "operation:"+job.Job.ID, server.Container.DisplayName+": "+action+" completed.")
 	return map[string]any{"imageChanged": imageChanged, "recreated": true, "forced": request.ForceRecreate,
 		"running": initiallyRunning, "verification": verification}, nil
 }

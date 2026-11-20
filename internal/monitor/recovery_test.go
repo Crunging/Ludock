@@ -79,7 +79,7 @@ func TestRecoveryRestartsAHungGameAndReportsItsAnswer(t *testing.T) {
 	if jobs := hang(t, s, serverID, game, 1000, 500); len(jobs) != 1 {
 		t.Fatal(jobs)
 	}
-	if len(events.events) != 1 || events.events[0] != "Minecraft stopped answering, so Ludock is restarting it." {
+	if len(events.events) != 1 || events.events[0] != "Minecraft: the game stopped answering, so Ludock is restarting it." {
 		t.Fatal(events.events)
 	}
 	// The queued restart holds the server; nothing more is queued.
@@ -97,7 +97,7 @@ func TestRecoveryRestartsAHungGameAndReportsItsAnswer(t *testing.T) {
 	if state.Last != RecoveryAnswered || state.Pending || state.RestartedAt != 67_000 {
 		t.Fatalf("%+v", state)
 	}
-	if len(events.events) != 2 || events.events[1] != "Minecraft is answering again after Ludock restarted it." {
+	if len(events.events) != 2 || events.events[1] != "Minecraft: the game is answering again after Ludock restarted it." {
 		t.Fatal(events.events)
 	}
 }
@@ -307,7 +307,7 @@ func TestRecoveryReportsAFailedRestart(t *testing.T) {
 			if state, _ := s.Recovery(ctx, serverID); state.Last != want || (len(state.Attempts) == 0) != (status == ops.Skipped) {
 				t.Fatalf("%+v", state)
 			}
-			if failed := len(events.events) == 2 && strings.HasPrefix(events.events[1], "Ludock couldn’t restart Minecraft"); failed != (status == ops.Failed) {
+			if failed := len(events.events) == 2 && strings.HasPrefix(events.events[1], "Minecraft: Ludock couldn’t restart it"); failed != (status == ops.Failed) {
 				t.Fatal(events.events)
 			}
 		})

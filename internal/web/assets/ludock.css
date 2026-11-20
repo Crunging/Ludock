@@ -417,8 +417,9 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 
 /* ---------- State markers ----------
    State is a small block shape plus the label next to it, never color
-   alone: running a lit green block, stopped an unlit outline, busy a pulsing
-   block, attention a triangle, and failed a cross. */
+   alone: running a lit green block, stopped an unlit grey one, busy a
+   pulsing block, attention a triangle, and failed a cross. An outline would
+   read as an unchecked checkbox. */
 
 .marker {
   display: inline-block; flex: none; width: 16px; height: 16px; border-radius: 4px; --stroke: 1.7px;
@@ -426,8 +427,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 }
 .marker--sm { width: 10px; height: 10px; margin-right: 7px; vertical-align: 0; border-radius: 2.5px; --stroke: 1.2px; }
 .marker--ok { background: var(--go); }
-.marker--idle { box-shadow: inset 0 0 0 2px var(--edge); }
-.marker--sm.marker--idle { box-shadow: inset 0 0 0 1.5px var(--edge); }
+.marker--idle { background: color-mix(in srgb, var(--edge) 55%, transparent); }
 .marker--active { background: var(--busy); animation: marker-pulse 1.6s ease-in-out infinite; }
 .marker--attention { width: 18px; background: var(--caution-mark); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .marker--sm.marker--attention { width: 12px; height: 11px; }
@@ -683,7 +683,6 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .server-detail .back-link { margin-bottom: 16px; }
 .detail-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px 18px; padding-bottom: 24px; }
 .detail-header > .marker { width: 24px; height: 24px; border-radius: 6px; align-self: start; margin-top: 8px; --stroke: 2.4px; }
-.detail-header > .marker--idle { box-shadow: inset 0 0 0 3px var(--edge); }
 .detail-header > .marker--attention { width: 27px; }
 .detail-header__title { min-width: 0; }
 .detail-header__title .page__title { font-size: 38px; }
@@ -1250,7 +1249,8 @@ dialog[open] { animation: rise 0.16s ease-out; }
   .detail-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .detail-header__title .page__title { font-size: 28px; }
   .detail-header > .marker { width: 20px; height: 20px; margin-top: 7px; }
-  .section-tabs { padding-right: 32px; mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+  /* Every tab stays in sight; a row that scrolls hides the ones past it. */
+  .section-tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 6px; }
   .file-list__header { display: none; }
   .file-row { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 14px; }
   .file-row:first-of-type { border-top: 0; }
