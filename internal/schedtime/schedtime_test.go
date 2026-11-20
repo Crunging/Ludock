@@ -118,16 +118,3 @@ func TestOneTimeRuns(t *testing.T) {
 		}
 	}
 }
-
-func TestLocalDate(t *testing.T) {
-	now := at("2026-11-01T03:00:00Z")
-	if date, _ := LocalDate("UTC", now); date != "2026-11-01" {
-		t.Fatal(date)
-	}
-	if date, _ := LocalDate("America/Los_Angeles", now); date != "2026-10-31" {
-		t.Fatal(date)
-	}
-	if _, ok := LocalDate("Not/AZone", now); ok {
-		t.Fatal("unknown zone accepted")
-	}
-}

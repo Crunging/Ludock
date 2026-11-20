@@ -44,32 +44,6 @@ func RequestOrigin(r *http.Request) (string, bool) {
 	return origin.protocol + "//" + origin.host, true
 }
 
-// OriginDiagnostic describes origin metadata without credentials, for debug
-// logs about rejected requests.
-func OriginDiagnostic(r *http.Request) map[string]string {
-	origin, ok := parseOrigin(r)
-	missing := func(value, fallback string) string {
-		if value == "" {
-			return fallback
-		}
-		return value
-	}
-	originHost, originProtocol := "missing-or-invalid", "missing-or-invalid"
-	if ok {
-		originHost, originProtocol = origin.host, origin.protocol
-	}
-	return map[string]string{
-		"originHost":        originHost,
-		"originProtocol":    originProtocol,
-		"host":              missing(r.Host, "missing"),
-		"forwardedHost":     missing(r.Header.Get("X-Forwarded-Host"), "missing"),
-		"forwardedProtocol": missing(r.Header.Get("X-Forwarded-Proto"), "missing"),
-		"fetchSite":         missing(r.Header.Get("Sec-Fetch-Site"), "missing"),
-		"resolvedHosts":     missing(strings.Join(externalHosts(r), ","), "none"),
-		"resolvedProtocols": missing(strings.Join(externalProtocols(r), ","), "none"),
-	}
-}
-
 func externalProtocols(r *http.Request) []string {
 	if r.TLS != nil {
 		return []string{"https:"}

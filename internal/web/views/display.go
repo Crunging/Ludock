@@ -247,17 +247,6 @@ func ISO(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 // replaces it with local formatting.
 func UTCText(ms int64) string { return time.UnixMilli(ms).UTC().Format("Jan 2, 2006, 15:04 UTC") }
 
-// Since describes when a state began.
-func Since(state string, since int64) (string, bool) {
-	if since == 0 {
-		return "", false
-	}
-	if state == "running" {
-		return "started", true
-	}
-	return "", true
-}
-
 func FormatBytes(bytes int64) string { return datasize.Format(bytes) }
 
 // GameChoices are the games an administrator can pick for a server, by

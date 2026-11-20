@@ -476,7 +476,6 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 }
 .login-card__submit:hover { background: var(--brand-hover); color: var(--brand-ink); }
 .login-card__account-help { margin-top: 10px; color: var(--ink-3); font-size: 14px; }
-.login-card__commands { padding: 12px; border-radius: var(--radius); background: var(--block-2); font-size: 14px; }
 
 /* ---------- Dashboard ---------- */
 
@@ -1171,10 +1170,6 @@ td > .cancel-form { display: block; margin-top: 6px; }
 .notification-alerts__option input { margin-top: 3px; }
 .notification-alerts__option .muted { display: block; }
 .notification-deliveries { display: grid; gap: 14px; margin-top: 28px; }
-.notification-deliveries__test { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.notification-deliveries__test p { font-size: 14px; }
-.notification-deliveries__heading { margin: 8px 0 0; }
-.notification-deliveries__heading h3 { font-family: var(--display); font-size: 19px; font-weight: 600; }
 .notification-deliveries__help { font-size: 14px; max-width: var(--measure); }
 .notification-delivery-status { display: inline-flex; align-items: center; }
 .notification-delivery-failure { margin-top: 4px; color: var(--halt-text); font-size: 14px; }

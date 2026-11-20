@@ -21,8 +21,7 @@ func Length(value string) int {
 
 // A Collator keeps iteration buffers, so each comparison takes its own.
 var (
-	collator     = collators()
-	foldCollator = collators(collate.IgnoreCase, collate.IgnoreDiacritics)
+	collator = collators()
 	// naturalCollator sorts "map2" before "map10".
 	naturalCollator = collators(collate.IgnoreCase, collate.IgnoreDiacritics, collate.Numeric)
 )
@@ -39,9 +38,6 @@ func compare(pool *sync.Pool, left, right string) int {
 
 // Compare orders names for display with the root collation.
 func Compare(left, right string) int { return compare(collator, left, right) }
-
-// CompareFold orders names for display, ignoring case and accents.
-func CompareFold(left, right string) int { return compare(foldCollator, left, right) }
 
 // CompareNatural orders file names: case and accents ignored, digit runs
 // compared as numbers.

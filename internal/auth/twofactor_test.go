@@ -375,7 +375,7 @@ func TestDisablingEndsChallenges(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, disabled := range []bool{true, false} {
-		if _, err := s.UpdateAccess(ctx, other, adminID, db.RoleAdmin, disabled, Client{}); err != nil {
+		if _, err := s.ChangeAccess(ctx, other, adminID, db.RoleAdmin, new(disabled), Client{}); err != nil {
 			t.Fatal(err)
 		}
 	}

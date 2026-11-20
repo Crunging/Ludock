@@ -109,7 +109,7 @@ func TestLinkEndsWhenAccountIsDisabled(t *testing.T) {
 	addUser(t, s, targetID, "target", db.RoleMember, original)
 	link, _ := s.CreateLink(ctx, admin, targetID, Client{})
 	for _, disabled := range []bool{true, false} {
-		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleMember, disabled, Client{}); err != nil {
+		if _, err := s.ChangeAccess(ctx, admin, targetID, db.RoleMember, new(disabled), Client{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -119,7 +119,7 @@ func TestLinkEndsWhenAccountIsDisabled(t *testing.T) {
 	link, _ = s.CreateLink(ctx, admin, targetID, Client{})
 	s.Hasher.(*fastHasher).beforeHash = func() {
 		s.Hasher.(*fastHasher).beforeHash = nil
-		if _, err := s.UpdateAccess(ctx, admin, targetID, db.RoleMember, true, Client{}); err != nil {
+		if _, err := s.ChangeAccess(ctx, admin, targetID, db.RoleMember, new(true), Client{}); err != nil {
 			t.Error(err)
 		}
 	}
@@ -243,7 +243,7 @@ func TestInvitedAdminIsNotAnotherAdmin(t *testing.T) {
 	if _, _, err := s.InviteUser(ctx, admin, "next-admin", db.RoleAdmin, Client{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateAccess(ctx, admin, adminID, db.RoleMember, false, Client{}); !apperr.Is(err, "LAST_ADMIN") {
+	if _, err := s.ChangeAccess(ctx, admin, adminID, db.RoleMember, new(false), Client{}); !apperr.Is(err, "LAST_ADMIN") {
 		t.Fatal(err)
 	}
 }

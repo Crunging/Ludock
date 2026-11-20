@@ -59,8 +59,6 @@ type Engine struct {
 	images     map[string]string
 	// imageConfigs are the container defaults of each image ID.
 	imageConfigs map[string]map[string]any
-	// pulls are the image IDs pulling a reference yields.
-	pulls map[string]string
 	// registry is the image ID each published tag points to; registryFail
 	// is the status its registry lookups fail with.
 	registry     map[string]string
@@ -121,7 +119,7 @@ func Start(dir string) (*Engine, error) {
 		return nil, err
 	}
 	engine := &Engine{containers: map[string]*Container{}, volumes: map[string]docker.VolumeInspect{},
-		images: map[string]string{}, imageConfigs: map[string]map[string]any{}, pulls: map[string]string{},
+		images: map[string]string{}, imageConfigs: map[string]map[string]any{},
 		registry: map[string]string{}, registryFail: map[string]int{}, disks: map[string]string{}, execs: map[string]*exec{}, APIVersion: "1.47", listener: listener, Socket: socket}
 	engine.server = &http.Server{Handler: http.HandlerFunc(engine.serve)}
 	go engine.server.Serve(listener)
@@ -374,9 +372,6 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		pulled, ok := e.registry[reference]
 		if !ok {
-			pulled, ok = e.pulls[reference]
-		}
-		if !ok {
 			pulled = "sha256:" + strings.Repeat("1", 64)
 		}
 		e.images[reference] = pulled
@@ -564,13 +559,6 @@ func (e *Engine) repoDigestsLocked(id string) []string {
 	}
 	sort.Strings(digests)
 	return slices.Compact(digests)
-}
-
-// SetPull makes pulling reference yield the image ID id.
-func (e *Engine) SetPull(reference, id string) {
-	e.mu.Lock()
-	e.pulls[reference] = id
-	e.mu.Unlock()
 }
 
 func (e *Engine) list(w http.ResponseWriter, r *http.Request) {

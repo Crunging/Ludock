@@ -727,10 +727,6 @@ func (s *Service) createUser(ctx context.Context, principal *Principal, username
 	return &record.User, nil
 }
 
-func (s *Service) UpdateAccess(ctx context.Context, principal *Principal, id string, role db.Role, disabled bool, client Client) (*db.User, error) {
-	return s.ChangeAccess(ctx, principal, id, role, &disabled, client)
-}
-
 // ChangeAccess changes an account's role, its disabled flag, or both; an
 // empty role or nil disabled keeps the current value, read in the same
 // transaction, so a stale page changes only what it names.
