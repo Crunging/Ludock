@@ -31,8 +31,9 @@ You need Docker with Compose, on Linux (AMD64 or ARM64).
 
 3. Open `http://<your-host>:3000`, enter the code, and create your account.
 
-4. Follow the short **Finish setting up** list on the first page. It turns on
-   alerts, nightly backups, and automatic restarts in a click each.
+4. Follow the short **Finish setting up** list on the first page. It takes
+   you to where alerts are sent, and turns on nightly backups and automatic
+   restarts in a click each.
 
 ![The Finish setting up list above the server list](./docs/screenshots/setup.png)
 
