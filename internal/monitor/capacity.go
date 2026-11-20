@@ -72,6 +72,16 @@ type DiskState struct {
 	Revision int64 `json:"revision,omitempty"`
 }
 
+// measuredSince reports whether every folder was measured at or after since.
+func (d DiskState) measuredSince(since int64) bool {
+	for _, folder := range d.Folders {
+		if folder.Unknown || folder.MeasuredAt < since {
+			return false
+		}
+	}
+	return len(d.Folders) > 0 && since != 0
+}
+
 func (d DiskState) alerting() bool {
 	for _, folder := range d.Folders {
 		if folder.AlertSince != 0 {
@@ -332,10 +342,11 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			continue
 		}
 		// A stopped game writes nothing to its disk, so while nobody watches,
-		// one measurement since it stopped stands until it starts again.
-		// An alerting disk is still measured, so its recovery is heard.
+		// one measurement of every folder since it stopped stands until it
+		// starts again. An alerting disk is still measured, so its recovery
+		// is heard.
 		if container := current[server.ContainerID]; !watched && !previous.alerting() && container.State != "running" &&
-			previous.CheckedAt != 0 && container.StateSince != 0 && previous.CheckedAt >= container.StateSince {
+			previous.measuredSince(container.StateSince) {
 			continue
 		}
 		spaces, err := s.MeasureDisk(ctx, server)

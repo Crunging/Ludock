@@ -149,8 +149,11 @@ type Access struct {
 	cleanupOnce  sync.Once
 	cleanupErr   error
 	proof        *launch.Proof
-	// signature is the game container the helper's mounts were proven for.
+	// signature is the game container the helper's mounts were proven for,
+	// and startedAt its run: a restart may follow a host folder's
+	// replacement, which a running helper's bind mount would not see.
 	signature string
+	startedAt string
 }
 
 // Cleanup removes the helper and its validator. retry keeps trying until
@@ -299,7 +302,7 @@ func (s *Service) Acquire(ctx context.Context, target Target, root Root, readOnl
 		access.Cleanup(false)
 		return nil, err
 	}
-	access.signature = signature(inspection)
+	access.signature, access.startedAt = signature(inspection), inspection.State.StartedAt
 	return access, nil
 }
 
@@ -330,7 +333,7 @@ func (s *Service) acquireLister(ctx context.Context, target Target, root Root, a
 func (s *Service) reusable(ctx context.Context, target Target, root Root, access *Access) bool {
 	inspection, err := s.Docker.Inspect(ctx, target.ContainerID)
 	if err != nil || inspection.ID != target.ContainerID || strings.TrimPrefix(inspection.Name, "/") != target.Name ||
-		!s.managed(ctx, inspection) || signature(inspection) != access.signature {
+		!s.managed(ctx, inspection) || signature(inspection) != access.signature || inspection.State.StartedAt != access.startedAt {
 		return false
 	}
 	fresh := Roots(target.GameType, inspection.Config.Labels, identity.DockerMounts(inspection.Mounts))

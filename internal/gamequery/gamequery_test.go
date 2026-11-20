@@ -139,6 +139,8 @@ func TestMinecraftSampleLists(t *testing.T) {
 		{"empty name", status(1, entry("", "4566e69f-c907-48ee-8d71-d7ba5aa00d20")), nil},
 		{"control character", status(1, entry(`Ma\nra`, "4566e69f-c907-48ee-8d71-d7ba5aa00d20")), nil},
 		{"no sample", minecraftStatus(`{"players":{"max":20,"online":1}}`), nil},
+		{"sample in another shape", minecraftStatus(`{"players":{"max":20,"online":1,"sample":[{"name":"Mara","id":5}]}}`), nil},
+		{"sample not a list", minecraftStatus(`{"players":{"max":20,"online":1,"sample":"Mara"}}`), nil},
 	}
 	for _, c := range cases {
 		got, ok := ParseMinecraftStatus(c.payload)

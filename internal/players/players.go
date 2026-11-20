@@ -139,6 +139,10 @@ type Ask struct {
 	// Previous is the server's latest reading, from any container run, or
 	// nil.
 	Previous *Reading
+	// Fresh asks the console even when the query names the same players,
+	// as after a command that may have changed them, whose effect the
+	// game's status can show a few seconds late.
+	Fresh bool
 }
 
 type Service struct {
@@ -233,7 +237,7 @@ func (s *Service) Poll(ctx context.Context, watched bool) {
 			!(watched && reading.partial) {
 			continue
 		}
-		s.start(ctx, server, watched, &wait)
+		s.start(ctx, server, watched, false, &wait)
 	}
 	s.mu.Lock()
 	for id := range s.readings {
@@ -252,7 +256,7 @@ func (s *Service) Check(ctx context.Context, serverID string) {
 	if err != nil {
 		return
 	}
-	s.start(ctx, *server, true, nil)
+	s.start(ctx, *server, true, true, nil)
 }
 
 // Stop waits for readings to finish; none start after it.
@@ -263,7 +267,7 @@ func (s *Service) Stop() {
 	s.work.Wait()
 }
 
-func (s *Service) start(ctx context.Context, server identity.Server, players bool, wait *sync.WaitGroup) {
+func (s *Service) start(ctx context.Context, server identity.Server, players, fresh bool, wait *sync.WaitGroup) {
 	s.mu.Lock()
 	if s.reading == nil {
 		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]identity.Server{},
@@ -277,7 +281,7 @@ func (s *Service) start(ctx context.Context, server identity.Server, players boo
 		return
 	}
 	s.reading[server.ID] = true
-	ask := Ask{Players: players, Previous: s.readings[server.ID]}
+	ask := Ask{Players: players, Previous: s.readings[server.ID], Fresh: fresh}
 	s.work.Add(1)
 	if wait != nil {
 		wait.Add(1)
@@ -291,7 +295,7 @@ func (s *Service) start(ctx context.Context, server identity.Server, players boo
 			delete(s.again, server.ID)
 			s.mu.Unlock()
 			if again {
-				s.start(ctx, next, true, nil)
+				s.start(ctx, next, true, true, nil)
 			}
 			if wait != nil {
 				wait.Done()

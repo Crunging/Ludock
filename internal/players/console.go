@@ -67,7 +67,7 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) 
 	// A game that answered its query last time is asked it before the
 	// command; one that didn't would hold the command up for the query's
 	// whole timeout.
-	if previous != nil && previous.listed != nil && (probe.Adapter == nil || previous.Answer == Answered) {
+	if !ask.Fresh && previous != nil && previous.listed != nil && (probe.Adapter == nil || previous.Answer == Answered) {
 		probe.Known = previous.listed
 	}
 	reading := &Reading{ContainerID: container.ID, StartedAt: container.StateSince, Failed: true,
@@ -95,7 +95,8 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) 
 		// the strict parsers check; the names are what is kept, so they are
 		// redacted instead.
 		if players, ok := probe.Adapter.Players.Parse(result.Response); ok {
-			listed := slices.Clone(players.Names)
+			// Never nil, so an empty list is still a known one.
+			listed := append([]string{}, players.Names...)
 			reading.listed = &listed
 			secrets := append(slices.Clone(observed.Observation.Secrets), result.Secrets...)
 			for index, name := range players.Names {

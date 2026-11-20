@@ -380,7 +380,8 @@ func TestProbeUsesOneHelper(t *testing.T) {
 
 // A query whose player sample names the players the console listed last
 // stands in for the console's list, through a helper and through a console
-// set to connect directly; a different sample still sends the command.
+// set to connect directly; a different sample still sends the command, as
+// does a query too slow to answer within its head start.
 func TestProbeSkipsTheListTheQueryVouchesFor(t *testing.T) {
 	engine, runtime, id := setup(t)
 	image := "ghcr.io/crunging/ludock@sha256:abababababababababababababababababababababababababababababababab"
@@ -420,6 +421,16 @@ func TestProbeSkipsTheListTheQueryVouchesFor(t *testing.T) {
 				t.Fatalf("%v, known %v: %+v %v, %d commands", labels, known, result, err, sent)
 			}
 		}
+	}
+	slow, _ := fakedocker.ServeMinecraftPlayers(func() ([]string, int, int, bool) {
+		time.Sleep(2 * time.Second)
+		return []string{"Mara"}, 1, 5, true
+	})
+	known := []string{"Mara"}
+	probe := Probe{Adapter: adapter, Command: "list", Query: &games.StatusQuery{Protocol: gamequery.MinecraftPing, Port: slow}, Known: &known}
+	result, err := runtime.Probe(ctx, Target{ContainerID: id, Labels: map[string]string{}, State: "running"}, probe, nil)
+	if err != nil || result.Unchanged || !strings.Contains(result.Response, "Mara") || result.Status == nil || !result.Status.Answered {
+		t.Fatalf("slow query: %+v %v", result, err)
 	}
 }
 

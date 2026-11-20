@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,6 +48,11 @@ func (s *Server) playerAction(w http.ResponseWriter, r *http.Request, request *R
 		panel = s.playerLists(act)
 	}
 	act.Done()
+	// The list the account check compared may be one the status query
+	// vouched for in an older order, so the next attempt gets a new one.
+	if errors.Is(err, errUnconfirmed) {
+		s.App.Players.Check(context.WithoutCancel(r.Context()), id)
+	}
 	if err != nil {
 		if public, ok := apperr.As(err); ok && panel != nil && public.Status != http.StatusUnauthorized {
 			panel.Alert = views.PlayerAlert{Kind: "error", Message: public.Message}

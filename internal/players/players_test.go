@@ -300,10 +300,11 @@ func TestMonitoredReadsSlowWhenUnwatched(t *testing.T) {
 }
 
 // A Minecraft server's console writes two lines to the game's log for every
-// connection. Once the console has listed the players, a status query whose
-// player sample names the same ones stands in for the command; a change, a
-// sample that doesn't name everyone, or a reading taken while nobody
-// watches never uses the console's list in place of the current one.
+// connection. Once the console has listed the players, a status query that
+// says nobody is online, or whose player sample names the same ones, stands
+// in for the command; a change, a sample that doesn't name everyone, a
+// check after a command, or a reading taken while nobody watches never uses
+// the console's list in place of the current one.
 func TestStatusQueryStandsInForTheList(t *testing.T) {
 	ctx := context.Background()
 	engine, err := fakedocker.Start(t.TempDir())
@@ -317,7 +318,7 @@ func TestStatusQueryStandsInForTheList(t *testing.T) {
 		helper.RunNetworkConsole(stdin, writerFunc(stdout))
 	}
 	var mu sync.Mutex
-	online, sampled, commands := []string{"Mara"}, true, 0
+	online, sampled, commands := []string{}, true, 0
 	rcon, _ := fakedocker.ServeRCON("secret", func(string) string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -360,25 +361,31 @@ func TestStatusQueryStandsInForTheList(t *testing.T) {
 			t.Fatalf("%s: %d commands, %+v", step, got, reading)
 		}
 	}
-	expect("first list", read(Ask{Players: true}), 1, ViaConsole, "Mara")
-	expect("same players", read(Ask{Players: true}), 1, ViaConsole, "Mara")
+	expect("first list", read(Ask{Players: true}), 1, ViaConsole)
+	expect("still nobody", read(Ask{Players: true}), 1, ViaConsole)
+	mu.Lock()
+	online = []string{"Mara"}
+	mu.Unlock()
+	expect("someone joined", read(Ask{Players: true}), 2, ViaConsole, "Mara")
+	expect("same players", read(Ask{Players: true}), 2, ViaConsole, "Mara")
+	expect("after a command", read(Ask{Players: true, Fresh: true}), 3, ViaConsole, "Mara")
 	mu.Lock()
 	online = []string{"Mara", "Theo"}
 	mu.Unlock()
-	expect("someone joined", read(Ask{Players: true}), 2, ViaConsole, "Mara", "Theo")
-	expect("unwatched, same players", read(Ask{}), 2, ViaConsole, "Mara", "Theo")
+	expect("another joined", read(Ask{Players: true}), 4, ViaConsole, "Mara", "Theo")
+	expect("unwatched, same players", read(Ask{}), 4, ViaConsole, "Mara", "Theo")
 	mu.Lock()
 	sampled = false
 	mu.Unlock()
-	expect("sample hidden", read(Ask{Players: true}), 3, ViaConsole, "Mara", "Theo")
+	expect("sample hidden", read(Ask{Players: true}), 5, ViaConsole, "Mara", "Theo")
 	mu.Lock()
 	online, sampled = []string{"Mara"}, true
 	mu.Unlock()
 	if reading := read(Ask{}); !reading.partial || reading.Online != 1 {
 		t.Fatalf("unwatched, someone left: %+v", reading)
 	}
-	expect("unwatched, someone left", previous, 3, ViaQuery)
-	expect("watched after a count", read(Ask{Players: true}), 4, ViaConsole, "Mara")
+	expect("unwatched, someone left", previous, 5, ViaQuery)
+	expect("watched after a count", read(Ask{Players: true}), 6, ViaConsole, "Mara")
 }
 
 type writerFunc func([]byte)

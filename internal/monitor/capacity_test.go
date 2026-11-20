@@ -335,9 +335,26 @@ func TestStoppedDiskMeasuredOnceUnwatched(t *testing.T) {
 	if measured != 2 {
 		t.Fatal("a watched page got a stale measurement:", measured)
 	}
-	started := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 2*DiskIdleInterval + 5000}}
-	s.CheckDisk(ctx, started, 3*DiskIdleInterval+4000, false)
-	if measured != 3 {
+	// A failed measurement since the stop doesn't stand in for one.
+	failing := true
+	s.MeasureDisk = func(context.Context, identity.Server) ([]DiskSpace, error) {
+		measured++
+		if failing {
+			failing = false
+			return []DiskSpace{{Path: "/data", Failed: true}}, nil
+		}
+		return space(50), nil
+	}
+	restopped := map[string]servers.Container{"mc": {ID: "mc", State: "exited", StateSince: 2*DiskIdleInterval + 4500}}
+	s.CheckDisk(ctx, restopped, 3*DiskIdleInterval+4000, false)
+	s.CheckDisk(ctx, restopped, 4*DiskIdleInterval+4000, false)
+	s.CheckDisk(ctx, restopped, 5*DiskIdleInterval+4000, false)
+	if measured != 4 {
+		t.Fatal("measurements after a failed one:", measured)
+	}
+	started := map[string]servers.Container{"mc": {ID: "mc", State: "running", StateSince: 5*DiskIdleInterval + 5000}}
+	s.CheckDisk(ctx, started, 6*DiskIdleInterval+4000, false)
+	if measured != 5 {
 		t.Fatal("a started server wasn't measured:", measured)
 	}
 }

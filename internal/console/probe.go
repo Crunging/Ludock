@@ -87,6 +87,8 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 		}
 	}
 	direct := console && host != ""
+	// A console reply the helper did get is kept over the query's word.
+	answered := false
 	// A direct console waits for the query when the query may make the
 	// command unnecessary.
 	if direct && request.Known == nil {
@@ -106,14 +108,15 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 			case reply.Response == nil:
 				result.ResponseErr = errors.New("game console command failed")
 			default:
-				result.Response = *reply.Response
+				result.Response, answered = *reply.Response, true
 			}
 		}
 		if err == nil && reply.Status != nil {
 			result.Status = bounded(reply.Status)
 		}
 	}
-	result.Unchanged = request.Known != nil && result.Status != nil && result.Status.Answered && result.Status.Lists(*request.Known)
+	result.Unchanged = request.Known != nil && result.Status != nil && result.Status.Answered && result.Status.Lists(*request.Known) &&
+		!answered
 	if result.Unchanged && request.Transport != "" {
 		result.Response, result.ResponseErr = "", nil
 	}

@@ -232,4 +232,16 @@ func TestPlayerActionNeedsMatchingAccounts(t *testing.T) {
 	if sent := slices.DeleteFunc(g.commands(), func(command string) bool { return strings.HasPrefix(command, "list") }); len(sent) != 0 {
 		t.Fatal(sent)
 	}
+	// A refusal reads the list again, since the one compared may be an
+	// earlier order the status query vouched for, and the next try uses it.
+	lists := func() int {
+		return len(slices.DeleteFunc(g.commands(), func(command string) bool { return command != "list" }))
+	}
+	before := lists()
+	g.act(g.admin, "ban", "Ada")
+	for deadline := time.Now().Add(30 * time.Second); lists() == before; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a refused action left the list as it was")
+		}
+	}
 }

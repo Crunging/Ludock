@@ -264,7 +264,7 @@ func TestListReusesHelperUntilTargetChanges(t *testing.T) {
 // Browsing a folder, previewing its files, and downloading one share one
 // read-only helper and one mount proof. A download cut off partway may
 // still be running in its helper, so that helper is removed, as is one
-// whose request was refused.
+// from the game's previous run and one whose request was refused.
 func TestBrowsingSharesOneHelper(t *testing.T) {
 	f := setup(t)
 	creates := func() int {
@@ -309,6 +309,15 @@ func TestBrowsingSharesOneHelper(t *testing.T) {
 	}
 	if creates() != 4 {
 		t.Fatal("reused the helper of a download that was cut off")
+	}
+	// A restart may follow a host folder's replacement, which the running
+	// helper's bind mount wouldn't see.
+	f.engine.Update(f.game, func(game *fakedocker.Container) { game.State.StartedAt = "2026-01-02T03:04:05Z" })
+	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", nil); err != nil {
+		t.Fatal(err)
+	}
+	if creates() != 6 {
+		t.Fatal("reused a helper from the game's previous run")
 	}
 	denied := apperr.New("FORBIDDEN", 403, "Insufficient server permissions")
 	if _, err := f.service.Preview(ctx, f.target, f.root, "server.properties", func() error { return denied }); !apperr.Is(err, "FORBIDDEN") {

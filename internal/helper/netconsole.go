@@ -26,9 +26,9 @@ type NetworkConsoleRequest struct {
 	// Transport is empty.
 	Query *StatusRequest `json:"query,omitempty"`
 	// Known is the player list the command last returned. With it the query
-	// runs first, and the command is skipped when the game's status lists
-	// exactly these players, since every console connection can write to
-	// the game's log.
+	// starts first, and the command is skipped when the game's status,
+	// answered within a second, lists exactly these players, since every
+	// console connection can write to the game's log.
 	Known *[]string `json:"known,omitempty"`
 }
 
@@ -44,7 +44,10 @@ type StatusResult struct {
 	gamequery.Status
 }
 
-const combinedCommandTimeout = 7 * time.Second
+const (
+	combinedCommandTimeout = 7 * time.Second
+	queryHeadStart         = time.Second
+)
 
 // RunNetworkConsole runs inside the game's network namespace. The backend
 // authorizes each network write over the private attached stdin channel.
@@ -114,13 +117,20 @@ func RunNetworkConsole(stdin io.Reader, stdout io.Writer) int {
 				status = &StatusResult{Answered: err == nil, Status: reply}
 			}
 		}
-		if request.Known != nil {
-			query()
-		} else {
-			go query()
+		go query()
+	}
+	unchanged := false
+	if request.Known != nil && request.Query != nil {
+		// The query gets a head start; a slow one still leaves the command
+		// most of its time.
+		done := make(chan struct{})
+		go func() { queried.Wait(); close(done) }()
+		select {
+		case <-done:
+			unchanged = status != nil && status.Answered && status.Lists(*request.Known)
+		case <-time.After(queryHeadStart):
 		}
 	}
-	unchanged := request.Known != nil && status != nil && status.Answered && status.Lists(*request.Known)
 	var response *string
 	if console && !unchanged {
 		// WebRCON sends its credential during the handshake.
