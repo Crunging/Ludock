@@ -46,6 +46,13 @@ func StatusCode(err error) int {
 
 func IsNotFound(err error) bool { return StatusCode(err) == http.StatusNotFound }
 
+// Unavailable reports whether err means the daemon couldn't be reached, didn't
+// answer in time, or failed on its side, rather than refusing the request.
+func Unavailable(err error) bool {
+	var network *net.OpError
+	return errors.Is(err, ErrReadTimeout) || StatusCode(err) >= 500 || errors.As(err, &network)
+}
+
 // StreamOpenError reports a failed hijacked stream. A failed opening may
 // already have dispatched a mutation; only RequestStarted == false proves
 // that no request bytes reached the socket.

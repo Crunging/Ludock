@@ -679,6 +679,9 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 	}()
 	fail := func(err error) {
 		message, _ := apperr.Public(err)
+		if docker.Unavailable(err) {
+			message = "Ludock couldn’t reach Docker, so this stopped. Check the server before trying again."
+		}
 		if _, public := apperr.As(err); !public {
 			log.Error("Operation failed unexpectedly", append([]logging.Field{logging.F("operation", rw.id), logging.F("kind", rw.kind)},
 				logging.Cause(err, docker.StatusCode(err))...)...)

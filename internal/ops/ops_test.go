@@ -488,7 +488,7 @@ func TestCancelRefusesWorkThatActed(t *testing.T) {
 func TestUnexpectedFailureIsLogged(t *testing.T) {
 	r, servers := setup(t, 1)
 	r.Register("backup", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
-		return nil, fmt.Errorf("open /srv/secret/world: %w", &docker.APIError{Status: 500})
+		return nil, fmt.Errorf("open /srv/secret/world: %w", &docker.APIError{Status: 409})
 	}})
 	var stdout, stderr bytes.Buffer
 	logging.SetOutput(&stdout, &stderr)
@@ -503,7 +503,23 @@ func TestUnexpectedFailureIsLogged(t *testing.T) {
 	failed := waitStatus(t, r, job.ID, Failed)
 	logged := stdout.String() + stderr.String()
 	if !strings.Contains(failed.Error, "log has the details") || !strings.Contains(logged, "*docker.APIError") ||
-		!strings.Contains(logged, `"dockerStatus":500`) || !strings.Contains(logged, job.ID) || strings.Contains(logged, "/srv/secret") {
+		!strings.Contains(logged, `"dockerStatus":409`) || !strings.Contains(logged, job.ID) || strings.Contains(logged, "/srv/secret") {
 		t.Fatal(failed.Error, logged)
+	}
+}
+
+// Work that fails because Docker stopped answering says so.
+func TestDockerFailureSaysSo(t *testing.T) {
+	r, servers := setup(t, 1)
+	r.Register("backup", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+		return nil, &docker.APIError{Status: 500}
+	}})
+	job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Start(ctx, nil)
+	if failed := waitStatus(t, r, job.ID, Failed); !strings.HasPrefix(failed.Error, "Ludock couldn’t reach Docker") {
+		t.Fatal(failed.Error)
 	}
 }

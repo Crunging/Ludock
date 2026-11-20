@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, serverRow, expectOffline } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow, expectOffline, fake } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -105,4 +105,17 @@ test("a refresh queued behind another is checked against what that one showed", 
   await expect.poll(() => queuedTag).toBe('"other"');
   await expect(page.locator(".server-row")).toHaveCount(4);
   await page.unroute(/\/fragments\/servers(\?|$)/);
+});
+
+test("an action Docker fails to carry out says Ludock can't reach it", async ({ page }) => {
+  await page.goto("/");
+  const valheim = serverRow(page, "valheim");
+  await fake("/fake/fault", { match: "^POST .*/containers/[^/]+/start$", status: "500", count: "1" });
+  try {
+    await valheim.getByRole("button", { name: "Start" }).click();
+    await expect(page.getByText("Ludock can’t reach Docker right now. Try again once it can.")).toBeVisible();
+  } finally {
+    await fake("/fake/fault", { clear: "1" });
+  }
+  await expect(valheim).toContainText("Stopped");
 });
