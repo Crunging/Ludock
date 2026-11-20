@@ -22,7 +22,8 @@ You need Docker with Compose, on Linux (AMD64 or ARM64).
    docker compose up -d
    ```
 
-2. Get the setup code from its log. Restarting Ludock prints a new one.
+2. Get the setup code from its log. Until setup is done, restarting Ludock
+   prints a new one.
 
    ```bash
    docker compose logs ludock
@@ -41,8 +42,7 @@ server list.
 
 ## What it does
 
-- **Start, stop, and restart**, saving the world first and warning players
-  with a countdown.
+- **Start, stop, and restart**, saving the world first on games that can.
 - **Consoles and logs** in the browser, and a list of who is online, with kick,
   ban, and the Minecraft allowlist.
 - **Files:** upload, edit, unpack, and download a server's data.
@@ -50,7 +50,7 @@ server list.
   and an optional second copy on another disk. Restore a whole backup or one
   file.
 - **Schedules** for restarts, backups, and console commands, which can wait
-  until no one is online.
+  until no one is online and warn players with a countdown.
 - **Alerts** to Discord, ntfy, Gotify, Telegram, email, or a webhook when a
   server goes down, its game stops answering, or a disk fills up, and an
   automatic restart when a game hangs.

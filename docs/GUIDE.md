@@ -1,8 +1,7 @@
 # Guide
 
-How to do things in Ludock, then how its parts behave. For installing, see the
-[README](../README.md#quick-start); for labels, limits, and rare setups, see the
-[reference](REFERENCE.md).
+Installing is in the [README](../README.md#quick-start); labels, limits, and
+rare setups are in the [reference](REFERENCE.md).
 
 Ludock has four pages: **Servers**, **Activity**, **Users**, and **Settings**.
 Members see only Servers and Activity.
@@ -17,8 +16,9 @@ click, and goes away once done.
 
 - **Get alerts** opens the notification settings.
 - **Back up your servers** offers **Back up every night**: after you confirm,
-  each server without a backup schedule gets a daily one between 04:00 and
-  06:00 in your browser's time zone, a few minutes apart.
+  each server with data folders and no recurring backup schedule (paused ones
+  count) gets a daily one between 04:00 and 06:00 in your browser's time zone,
+  a few minutes apart. It appears once backup storage is on.
 - **Restart servers that stop answering** offers **Restart automatically** for
   servers whose game Ludock can check (see
   [Restart a game that hangs](#restart-a-game-that-hangs)).
@@ -45,7 +45,9 @@ visible only to administrators until you share it.
 
 To take a server out, open it and choose **Remove from Ludock** at the bottom of
 its **Overview**. The container keeps running. Its sharing, schedules, and
-backups come back if you add it again.
+backups come back if you add it again. A server added with a
+`ludock.enable: "true"` label leaves only when you change the label to
+`"false"` or remove it.
 
 Ludock never offers itself, its helpers, Compose one-off containers, or
 containers that could control the host (privileged ones, or ones given a Docker
@@ -55,8 +57,9 @@ socket or the host's root). Add those only with a
 ### Share a server with a friend
 
 1. Open the server and choose **Sharing**.
-2. Type their username under **Share with someone**. If they already have an
-   account, pick them from the list instead.
+2. Under **Share with someone**, pick them under **Person** if they already
+   have an account. Otherwise choose **Someone new…** there (the list appears
+   only once other members exist) and type a username for them.
 3. Choose their **Access** and choose **Share**.
 
 For someone new, Ludock makes the account and shows a one-time invite link.
@@ -124,8 +127,10 @@ Restoring needs an administrator.
   current copy.
 
 **Browse** also downloads single files from a backup without changing
-anything. A backup taken before the server's data folders changed can be
-browsed but not restored.
+anything. Ludock restores a backup only onto the same game and the same data
+folders it was taken from: the same container paths on the same volumes or host
+folders. Otherwise it can still be browsed and downloaded, or
+[restored by hand](REFERENCE.md#restore-a-backup-without-ludock).
 
 ### Update a server
 
@@ -137,7 +142,9 @@ To move to a newer image:
 
 1. Open the server's **Update** tab. It says when a newer image is available;
    **Check now** asks the registry right away.
-2. Leave **Back up first** ticked and choose **Update server**.
+2. Leave **Back up first** ticked and choose **Update server** (**Update
+   image** for a game Ludock doesn't know). To skip the backup, untick it and
+   type the server's name.
 
 Ludock pulls the image and replaces the container with one that keeps the same
 settings, ports, networks, and volumes. If the new one fails to start cleanly,
@@ -155,10 +162,10 @@ A game can freeze while its container keeps running. For servers with a
 
 When the game stops answering for the **Wait before alerting** time (two
 minutes by default), Ludock restarts it the way **Restart** does and sends an
-alert. It leaves alone a server that is stopped, still starting, or hasn't
-answered since it last started. If the game doesn't answer again within five
-times the wait, or after 3 restarts in 6 hours, Ludock says so and stops
-trying.
+alert. It leaves alone a server that is stopped, still starting, hasn't
+answered since it last started, or is paused for maintenance. If the game
+doesn't answer again within five times the wait (at most 30 minutes), or after
+3 restarts in 6 hours, Ludock says so and leaves it for that outage.
 
 ### Manage players
 
@@ -233,15 +240,15 @@ with who started it.
 - **Console**: the game's own console, with shortcut buttons for common
   commands. Up and Down repeat commands from this visit.
 - **Shell**: commands run inside the container, for administrators. Each gets
-  60 seconds.
+  60 seconds, and the image needs `/bin/sh` and `timeout`.
 
 Network consoles (RCON, WebRCON, Telnet) need the console turned on in the
 game. Ludock finds its password in the variables images usually use, such as
 `RCON_PASSWORD`, `ADMIN_PASSWORD`, or `TELNET_PASSWORD`, and for Minecraft also
 the one the image generates. If yours uses another name, set
 [`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and Vintage Story read commands
-from the server's input, which needs `stdin_open: true` on the container, and
-their replies appear only in **Logs**. Ludock reaches consoles from inside the
+from the server's input, which needs `stdin_open: true` on the container and
+an image that passes input to the game; their replies appear only in **Logs**. Ludock reaches consoles from inside the
 container's network, so the console port needn't be published.
 
 ### Files
@@ -270,16 +277,18 @@ sockets. To limit access to some folders, set
 - **Readiness:** the **Backups** tab checks the destination, free space, and
   whether another container writes the same data, without stopping anything.
   Every backup checks again before it starts.
-- **Space:** Ludock keeps 5 GiB free on the backup disk by default. If the next
-  backup might not fit, it removes the server's oldest backups first, never the
-  3 newest or kept ones; if there still isn't room, the backup fails and says
-  why.
+- **Space:** Ludock keeps 5 GiB free on the backup disk by default. A new
+  archive needs room before old ones are removed, so if it might not fit,
+  Ludock first removes the server's oldest backups, never the 3 newest or kept
+  ones; if there still isn't room, the backup fails and says why.
 - **Cancelled backups:** a forced stop, a start from another tool, a replaced
   container, or another running container writing the same data cancels the
   copy.
-- **Contents:** permissions, owners, and modification times are kept; ACLs,
-  extended attributes, and sparse files aren't. Links and special files are
-  refused.
+- **Contents:** each data folder must be its own directory mount, without
+  mounts nested inside or overlapping another; single-file mounts, links, and
+  special files are refused. Use `ludock.files` to pick folders that qualify.
+  Permissions, owners, and modification times are kept; ACLs, extended
+  attributes, and sparse files aren't.
 - **Safety backups** taken before a restore or update follow the same
   retention rule and are labeled in the list.
 - **Records:** Ludock lists only archives it made, from records in
@@ -298,9 +307,11 @@ again.
 
 - A schedule runs with its owner's current access. Members with **Full
   access** manage their own; administrators manage all of them.
-- Missed times don't run late: if Ludock is down at that time and back more
-  than five minutes late, the run is recorded as missed. A daylight-saving
-  hour that doesn't exist is skipped, and a repeated one runs once.
+- Missed times don't run late: a repeating schedule runs up to 15 minutes
+  late, such as after Ludock restarts, and otherwise skips that time. A
+  one-time schedule more than five minutes late is recorded as missed. A
+  daylight-saving hour that doesn't exist is skipped, and a repeated one runs
+  once.
 - **Back up first** needs the server running when the schedule runs. If the
   backup fails, the server stays stopped.
 - **Wait until no one is online** works on servers whose players Ludock can
@@ -315,14 +326,16 @@ again.
 
 ### Players
 
-Ludock asks the game's console who is online about every 30 seconds while the
-server runs. Games with a status check but no player list, or no console
-password, still show how many are online. A count Ludock can't read shows as
+While someone has Ludock open, it asks the game's console who is online about
+every 30 seconds; otherwise only monitored games with a status check are asked,
+about every 2 minutes. Games with a working status check but no player list,
+or no console password, still show how many are online. A count Ludock can't read shows as
 unavailable, never as empty. Readings stay in memory.
 
-A kick or ban names a player exactly as the game's latest list did, and Ludock
-refuses names with spaces, quotes, or selectors such as `@a`. On Minecraft it
-also checks the name against the player's account first, so a nickname or a
+A kick or ban targets the player by the name or ID the game's latest list
+gave, and only when it is wholly in the game's own form, so it can't carry
+quotes, line breaks, or a selector such as `@a`. On Minecraft Ludock also
+checks the name against the player's account first, so a nickname or a
 plugin's list never targets someone else; on such servers, use the console.
 
 ### Monitoring

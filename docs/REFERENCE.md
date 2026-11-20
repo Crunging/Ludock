@@ -99,7 +99,8 @@ services:
 
 A `ludock.game` label alone doesn't add an unsupported image; add the
 container in the panel or with `ludock.enable`. Invalid label values are
-ignored and listed under **Container label problems** in **Settings → System**.
+ignored. **Settings → System → Container label problems** lists an invalid
+`ludock.enable` or `ludock.address` and incomplete Compose labels.
 Variables whose names look like credentials, such as `RCON_PASSWORD`,
 `DB_PASS`, or `API_KEY`, and passwords inside URLs are hidden already.
 
@@ -132,7 +133,7 @@ needs `ludock.address`.
 | --- | --- |
 | Upload | No size limit by default, but an upload must leave 1 GiB free on the server's disk (a twentieth of a disk under 20 GiB); set a limit in **Settings → Advanced** |
 | Text preview and editing | 512 KiB; larger or binary files download instead |
-| Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size; 30 minutes |
+| Unpacking an archive | 20 GiB, 100,000 entries, 64 nested folders, and 100 times the archive's size plus 1 MiB; 30 minutes |
 | Selection | 500 entries of one folder |
 | Folder listing | 10,000 entries |
 | Upload or download | 30 minutes, or 60 seconds without data for an upload |
@@ -158,8 +159,9 @@ Ludock has no other HTTP API.
 
 ## Updates
 
-**Update server** pulls the tag the container was created from and, if the
-image changed, replaces the container:
+**Update server** (**Update image** for a game Ludock doesn't know) pulls the
+tag the container was created from and, if the image changed, replaces the
+container:
 
 - It stops the server, takes a backup if chosen, and creates the new container
   beside the stopped one with the same environment, command, ports, networks,
@@ -167,28 +169,29 @@ image changed, replaces the container:
   unnamed ones. Settings that only repeated the old image's defaults come from
   the new image.
 - A running server's new container must become healthy, or keep running for 10
-  seconds if the image has no health check. Only then does Ludock remove the
+  seconds if the image has no health check; one whose health check is still
+  starting after 3 minutes is accepted. Only then does Ludock remove the
   original and give the new one its name. Until then neither restarts on its
   own, so Docker can't run both. A stopped server stays stopped.
-- If the new container stops, restarts, or turns unhealthy, Ludock removes it
-  and restores the original, stopped. Check **Activity**, restore the backup if
-  needed, then start the server.
+- If the new container stops, restarts, or turns unhealthy before then, Ludock
+  removes it and restores the original, stopped. Check **Activity**, restore
+  the backup if needed, then start the server.
 - Ludock never edits Compose files. Compose recognizes the new container as its
-  own, so a later `docker compose up` doesn't recreate it, and changes you make
-  to the definition still apply the next time you run your own tool.
+  own, so a later `docker compose up` usually leaves it alone, and changes you
+  make to the definition still apply the next time you run your own tool.
 - Files changed inside the container outside its volumes and mounts are lost,
   as with any recreation.
 - **Advanced → Update even if the image is already current** recreates the
   container anyway, such as to pick up a game update that installs on startup.
 
 Not supported: images pinned by digest or ID, containers Docker removes when
-they stop (`--rm`), Swarm services, and containers sharing another container's
-network, process, or IPC namespace. Update those with the tool that made them.
+they stop (`--rm`), Swarm services, and servers whose network, process, or IPC
+namespace another container joins. Update those with the tool that made them.
 
 **Newer image checks:** about every six hours Ludock asks each image tag's
 registry, through Docker and without pulling, whether the tag points to a newer
-image. Administrators then see **Image update available** on the server list
-and the **Update** tab. A registry that can't be reached isn't an alert; the
+image. Administrators then see **Update available** on the server list and
+**A newer image is available.** on the **Update** tab. A registry that can't be reached isn't an alert; the
 tab says the last check failed. Images built or loaded locally can't be
 compared. Docker Hub counts each check against its pull rate limit. Turn the
 checks off in **Settings → Image updates**.
@@ -210,7 +213,10 @@ sets them up again by itself.
 ### Backups on another disk
 
 Replace the `backups` volume in `compose.yaml` with a folder on that disk,
-created first, writable, and separate from game data:
+created first, writable, and separate from game data. If you already have
+backups, stop Ludock and copy the old volume's files into the new folder
+first, including the `ludock-data-*.tar` saves; Ludock can't use archives left
+behind.
 
 ```yaml
 services:
@@ -306,8 +312,8 @@ those are the game backups.
 
 ### Restore Ludock's data
 
-`restore-data` restores into a data folder that has no database yet. If the
-data volume was lost, list the saves and restore the newest:
+`restore-data` restores into a data folder that has no database yet. Stop
+Ludock, list the saves, and restore the newest:
 
 ```bash
 docker compose stop ludock
@@ -316,13 +322,15 @@ docker compose run --rm ludock restore-data /backups/ludock-data-20261120-031500
 docker compose start ludock
 ```
 
-It checks that the file is complete and that its key matches the database
-before putting anything in place. To replace data that still exists, move it
-aside first:
+If the data volume still has a database you want to replace, move it and its
+key (`ludock.db*`) aside after stopping Ludock and before `restore-data`:
 
 ```bash
 docker compose run --rm --entrypoint sh ludock -c 'mkdir /data/replaced && mv /data/ludock.db* /data/replaced/'
 ```
+
+`restore-data` checks that the file is complete and that its key matches the
+database before putting anything in place.
 
 If the whole host was lost, set up Docker and Ludock's `compose.yaml` on the
 new host, mount the second folder (or a copy of its files) at `/backups`, and
@@ -334,16 +342,34 @@ runs as.
 Afterwards, game backups are listed again and read from the backup folder as
 before. Archives made after the save aren't listed, and records of archives
 removed since show them as missing. Game servers recreated with the same
-Compose project and service are recognized with their sharing and schedules;
-if their data folders moved, Ludock asks to confirm them. If you mounted the
+Compose project and service are recognized with their sharing and schedules.
+If a server's data folders now live on a different volume or host folder,
+Ludock asks to confirm them, and its older backups can no longer be restored
+from the panel; [restore them by hand](#restore-a-backup-without-ludock). If you mounted the
 second folder as the backup folder, choose a new second folder in **Settings**.
+
+### Restore a backup without Ludock
+
+A game backup is a plain tar. Each data folder is stored under
+`snapshot/root-<id>/`, where `<id>` is the first 12 hex digits of the SHA-256
+of the folder's container path. Most servers have one folder, such as `/data`:
+
+```bash
+id=root-$(printf %s /data | sha256sum | cut -c1-12)
+tar -tf backup.tar | head          # shows snapshot/$id/...
+mkdir restored && tar -xpf backup.tar -C restored --strip-components=2 "snapshot/$id"
+```
+
+Stop the game, then replace the contents of the server's data folder with
+`restored/`, as root so owners and permissions stay as they were.
 
 ### Recover an administrator account
 
-For a forgotten password with no other administrator, set the new password in
-`LUDOCK_RECOVERY_PASSWORD` without saving it in your shell history, then:
+For a forgotten password with no other administrator, in the folder with
+Ludock's `compose.yaml`:
 
 ```bash
+read -rsp 'New password: ' LUDOCK_RECOVERY_PASSWORD && export LUDOCK_RECOVERY_PASSWORD
 docker compose stop ludock
 docker compose run --rm -e LUDOCK_RECOVERY_PASSWORD ludock recover admin
 unset LUDOCK_RECOVERY_PASSWORD
@@ -364,15 +390,17 @@ its database in `/data` and backups in `/backups`, in separate volumes.
   mount its socket at `/var/run/docker.sock`.
 - **Setup code:** until the first administrator exists, the setup page asks for
   the one-time code Ludock prints to its log at startup. A new code is printed
-  at each restart until setup is done, and failed attempts are limited per
-  address.
+  at each restart until setup is done. A code set with `LUDOCK_SETUP_CODE`
+  isn't printed and stays the same. Failed attempts are limited per address.
 - **Existing data:** Ludock refuses to start on an unrelated database or an
   unsupported schema, and leaves it unchanged.
 
 ### Remote access
 
 The Docker socket gives control of the whole host, so expose Ludock beyond a
-trusted network only through an HTTPS reverse proxy. The proxy must keep the
+trusted network only through an HTTPS reverse proxy, and keep port 3000 itself
+reachable only from the proxy or your own network: the example `compose.yaml`
+publishes it on every interface. The proxy must keep the
 public host name, forward the original protocol, pass WebSocket upgrades and
 server-sent events without buffering, and overwrite any client-supplied
 `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Port`, and
