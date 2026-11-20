@@ -92,7 +92,8 @@ func SensitiveSystemPath(value string) bool {
 }
 
 // Roots lists up to eight browsable data roots. ludock.files may name them;
-// otherwise every safe writable mount is a root. The deepest actual mount
+// otherwise every safe writable mount is a root, except the game's own
+// server files. The deepest actual mount
 // owns each path, so a label cannot bypass a read-only or sensitive nested
 // mount by naming its parent.
 func Roots(gameType string, labels map[string]string, mounts []identity.Mount) []Root {
@@ -102,8 +103,12 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 			candidates = append(candidates, strings.TrimSpace(value))
 		}
 	} else {
+		var serverFiles []string
+		if integration := games.Lookup(gameType); integration != nil {
+			serverFiles = integration.ServerFiles
+		}
 		for _, mount := range mounts {
-			if SafeWritableDataMount(mount) {
+			if SafeWritableDataMount(mount) && !slices.Contains(serverFiles, normalizedMountPath(mount.Destination)) {
 				candidates = append(candidates, mount.Destination)
 			}
 		}

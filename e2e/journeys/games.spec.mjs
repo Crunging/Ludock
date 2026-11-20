@@ -11,10 +11,24 @@ test("a server on a supported game image appears by itself, with its game and ad
   await expect(row.locator(".server-row__address")).toContainText(":15637");
 });
 
+test("Valheim's files and backups leave out the server its image downloads", async ({ page }) => {
+  // lloesche/valheim-server's README also mounts the 4 GB server download at
+  // /opt/valheim, which every backup copied.
+  await openServer(page, "valheim");
+  const disks = page.locator(".overview-disks > li");
+  await expect(disks).toHaveCount(1);
+  await expect(disks).toContainText("/data/valheim");
+});
+
 /** Adds one of the fake daemon's real-image games for a journey, and takes it away after. */
 async function withGame(page, game, run) {
   await fake("/fake/game", { game, name: game });
   try {
+    // Ludock finds it from Docker's events, shortly after.
+    await expect(async () => {
+      await page.goto("/");
+      await expect(serverRow(page, game)).toBeVisible({ timeout: 1000 });
+    }).toPass();
     await run();
   } finally {
     await openServer(page, game);

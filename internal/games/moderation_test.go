@@ -134,8 +134,23 @@ func TestMinecraftOutcome(t *testing.T) {
 			t.Errorf("%v: %v", reply, got)
 		}
 	}
-	if got := moderationOf(t, "factorio").Outcome(Kick, "Kicked Ada"); got != OutcomeUnknown {
-		t.Error(got)
+}
+
+// Factorio 2.1's replies, captured from factoriotools/factorio. A kick that
+// went through was never seen, so it stays unknown.
+func TestFactorioOutcome(t *testing.T) {
+	moderation := moderationOf(t, "factorio")
+	for reply, want := range map[[2]string]Outcome{
+		{"kick", "Player Nobody doesn't exist.\n"}: NoPlayer,
+		{"ban", "Added Nobody to the banlist.\n"}:  Done,
+		{"ban", "Nobody is already banned.\n"}:     Unchanged,
+		{"kick", "Kicked Ada"}:                     OutcomeUnknown,
+		{"kick", "Added Ada to the banlist.\n"}:    OutcomeUnknown,
+		{"ban", "Player Ada doesn't exist.\n"}:     OutcomeUnknown,
+	} {
+		if got := moderation.Outcome(PlayerAction(reply[0]), reply[1]); got != want {
+			t.Errorf("%v: %v", reply, got)
+		}
 	}
 }
 

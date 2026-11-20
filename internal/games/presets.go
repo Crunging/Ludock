@@ -60,6 +60,9 @@ type Integration struct {
 	// Query asks the game itself whether it answers, from its documented
 	// default port.
 	Query *StatusQuery
+	// ServerFiles are folders where the images keep the game's own download,
+	// left out of files and backups unless ludock.files names them.
+	ServerFiles []string
 }
 
 // Integrations lists the supported games. Repository suffixes omit
@@ -125,6 +128,7 @@ var Integrations = []Integration{
 			Players:  &PlayerQuery{Command: "listplayers", Parse: Parse7DaysPlayers}, Moderation: sevenDaysModeration}},
 	{GameType: "valheim", StopTimeoutSeconds: 180, Name: "Valheim", GamePort: &Port{2456, "udp"},
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
+		ServerFiles: []string{"/opt/valheim"},
 		// Valheim answers on its game port plus one, and only when public.
 		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 2457}},
 	{GameType: "terraria", Name: "Terraria", GamePort: &Port{7777, "tcp"},

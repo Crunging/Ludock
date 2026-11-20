@@ -520,9 +520,12 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	if err != nil {
 		panic(err)
 	}
+	// Like the image's README, the server it downloads is mounted too.
+	valheimServer := gameData(dir, "valheim-server", map[string]string{"valheim_server.x86_64": "server"})
 	valheimContainer := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
 		Labels: map[string]string{"ludock.query.port": fmt.Sprint(valheimQuery)},
-		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true}},
+		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true},
+			{Type: "bind", Source: valheimServer, Destination: "/opt/valheim", RW: true}},
 		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
 	valheimID.Store(valheimContainer)
 	// 1 GiB of a 2 GiB limit; journeys change the use with POST /fake/stats.

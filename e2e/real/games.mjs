@@ -55,4 +55,15 @@ export const games = {
       stop_grace_period: "2m",
     },
   },
+  "vintage-story": {
+    data: "/vintagestory/data",
+    ready: /Dedicated Server now running/,
+    service: {
+      image: "zsuatem/vintagestory:latest",
+      stdin_open: true,
+      tty: true,
+      mem_limit: "2g",
+      ports: ["42420:42420/tcp"],
+    },
+  },
 };

@@ -64,3 +64,23 @@ func TestRootIDsFollowPaths(t *testing.T) {
 		t.Fatal(relabeled)
 	}
 }
+
+// lloesche/valheim-server's README mounts the server it downloads at
+// /opt/valheim beside the worlds in /config: 4 GB that every backup copied.
+// Files and backups take only /config unless a label names the download.
+func TestRootsLeaveOutServerFiles(t *testing.T) {
+	mounts := []identity.Mount{
+		{Type: "bind", Source: "/srv/valheim/config", Destination: "/config", Writable: true},
+		{Type: "volume", Source: "server", Destination: "/opt/valheim/", Writable: true},
+	}
+	if got := Roots("valheim", map[string]string{}, mounts); !reflect.DeepEqual(got, []Root{{RootID("/config"), "Valheim config", "/config"}}) {
+		t.Fatal(got)
+	}
+	if got := Roots("custom", map[string]string{}, mounts); len(got) != 2 {
+		t.Fatal(got)
+	}
+	labels := map[string]string{"ludock.files": "/config,/opt/valheim"}
+	if got := Roots("valheim", labels, mounts); len(got) != 2 || got[1].Path != "/opt/valheim" {
+		t.Fatal(got)
+	}
+}

@@ -69,6 +69,28 @@ func TestConsoleAdapters(t *testing.T) {
 	}
 }
 
+// Only Terraria's own stdin console types its shutdown command; a label that
+// turns the console off or names another one stops it.
+func TestStopCommand(t *testing.T) {
+	for _, test := range []struct {
+		game   string
+		labels map[string]string
+		want   string
+	}{
+		{"terraria", nil, "exit"},
+		{"terraria", map[string]string{LabelConsole: "stdin-console"}, "exit"},
+		{"terraria", map[string]string{LabelConsole: "disabled"}, ""},
+		{"terraria", map[string]string{LabelConsole: "source-rcon"}, ""},
+		{"minecraft", nil, ""},
+		{"vintage-story", nil, ""},
+		{"unknown", nil, ""},
+	} {
+		if got := StopCommand(test.game, test.labels); got != test.want {
+			t.Errorf("%s %v: %q", test.game, test.labels, got)
+		}
+	}
+}
+
 func TestComposeIdentity(t *testing.T) {
 	complete := map[string]string{"com.docker.compose.project": "games", "com.docker.compose.service": "mc", "com.docker.compose.container-number": "1"}
 	if InvalidComposeIdentity(complete) {
