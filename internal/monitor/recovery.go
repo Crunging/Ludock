@@ -55,8 +55,11 @@ type Recovery struct {
 }
 
 // RecoveryOffered reports whether a container's game can be recovered: only
-// a status query tells a hung game from a slow one.
-func RecoveryOffered(container servers.Container) bool { return container.Query != nil }
+// a status query, or the image's health check in its place, tells a hung
+// game from a slow one.
+func RecoveryOffered(container servers.Container) bool {
+	return container.Query != nil || container.HealthAnswers
+}
 
 // RecoveryWait is how long after a recovery restart the game has to answer
 // again, and the least time between restarts: five times the alert wait, so

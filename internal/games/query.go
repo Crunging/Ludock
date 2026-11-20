@@ -23,6 +23,29 @@ type StatusQuery struct {
 	// PortEnv names environment variables the image documents for that
 	// port; the first one set wins over Port.
 	PortEnv []string
+	// OffEnv is a variable whose OffValues, in any case, keep the game from
+	// answering, and OffReason says so in plain words.
+	OffEnv    string
+	OffValues []string
+	OffReason string
+}
+
+// Off is why the container's environment keeps the game from answering the
+// query, or "".
+func (q *StatusQuery) Off(env map[string]string) string {
+	value := strings.TrimSpace(env[q.OffEnv])
+	for _, off := range q.OffValues {
+		if q.OffEnv != "" && strings.EqualFold(value, off) {
+			return q.OffReason
+		}
+	}
+	return ""
+}
+
+// QueryDisabled reports whether a label turns the status check off.
+func QueryDisabled(labels map[string]string) bool {
+	configured := strings.ToLower(strings.TrimSpace(labels[LabelQuery]))
+	return configured == "disabled" || configured == "none"
 }
 
 var queryNames = map[gamequery.Protocol]string{gamequery.MinecraftPing: "Server List Ping", gamequery.ValveA2S: "Steam server query"}
@@ -34,10 +57,10 @@ func (q *StatusQuery) Name() string { return queryNames[q.Protocol] }
 // or nil when there is none or a label turns it off or is invalid. A label
 // naming a protocol enables it for any game, which then needs a port.
 func ResolveQuery(gameType string, labels map[string]string) *StatusQuery {
-	configured := strings.ToLower(strings.TrimSpace(labels[LabelQuery]))
-	if configured == "disabled" || configured == "none" {
+	if QueryDisabled(labels) {
 		return nil
 	}
+	configured := strings.ToLower(strings.TrimSpace(labels[LabelQuery]))
 	var query StatusQuery
 	if integration := Lookup(gameType); integration != nil && integration.Query != nil {
 		query = *integration.Query

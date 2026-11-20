@@ -152,6 +152,48 @@ func TestStdinConsole(t *testing.T) {
 	}
 }
 
+// Terraria prints its reply to playing to its own output, among other log
+// lines. A reading types the command and reads the reply from the log that
+// follows it, never an older reply already in the log; a game that never
+// replies gives no reading.
+func TestStdinListReadsTheReplyFromTheLog(t *testing.T) {
+	engine, runtime, id := setup(t)
+	runtime.replyLimit = 300 * time.Millisecond
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Config.OpenStdin = true
+		c.Logs = []string{": Old (172.18.0.9:40000)", "1 player connected."}
+	})
+	replies := true
+	engine.Attach = func(c *fakedocker.Container, stdin *bufio.Reader, _ func([]byte)) {
+		line, _ := stdin.ReadString('\n')
+		if !replies || line != "playing\n" {
+			return
+		}
+		engine.Update(c.ID, func(c *fakedocker.Container) {
+			c.Logs = append(c.Logs, "<Zed> hello", ": playing", "Ada (172.18.0.1:51234)")
+		})
+		time.Sleep(50 * time.Millisecond)
+		engine.Update(c.ID, func(c *fakedocker.Container) {
+			c.Logs = append(c.Logs, "Zed (172.18.0.2:51235)", "2 players connected.")
+		})
+	}
+	adapter := games.ResolveAdapter("terraria", nil)
+	probe := Probe{Adapter: adapter, Command: adapter.Players.Command}
+	result, err := runtime.Probe(ctx, Target{ContainerID: id, State: "running"}, probe, nil)
+	if err != nil || result.ResponseErr != nil {
+		t.Fatal(err, result.ResponseErr)
+	}
+	players, ok := adapter.Players.Parse(result.Response)
+	if !ok || players.Online != 2 || strings.Join(players.Names, ",") != "Ada,Zed" {
+		t.Fatalf("%q: %+v", result.Response, players)
+	}
+	replies = false
+	result, err = runtime.Probe(ctx, Target{ContainerID: id, State: "running"}, probe, nil)
+	if err != nil || result.ResponseErr == nil {
+		t.Fatal(err, result)
+	}
+}
+
 func TestNetworkTargetResolution(t *testing.T) {
 	engine, runtime, id := setup(t)
 	engine.Update(id, func(c *fakedocker.Container) { c.Config.Env = []string{"RCON_PASSWORD=secret", "RCON_PORT=27015"} })

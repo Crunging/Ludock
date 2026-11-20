@@ -18,6 +18,13 @@ type ContainerSummary struct {
 
 type HealthState struct {
 	Status string `json:"Status"`
+	// Log is Docker's latest few check results, oldest first.
+	Log []HealthResult `json:"Log,omitempty"`
+}
+
+type HealthResult struct {
+	End      string `json:"End"`
+	ExitCode int    `json:"ExitCode"`
 }
 
 type ContainerState struct {

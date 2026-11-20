@@ -116,10 +116,12 @@ type Target struct {
 type Runtime struct {
 	Docker *docker.Client
 	Images *launch.Images
-	// pollInterval, startLimit, and createLimit are shortened in tests.
+	// pollInterval, startLimit, createLimit, and replyLimit are shortened in
+	// tests.
 	pollInterval time.Duration
 	startLimit   time.Duration
 	createLimit  time.Duration
+	replyLimit   time.Duration
 }
 
 var (
@@ -183,6 +185,18 @@ func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapt
 	if err != nil {
 		return "", err
 	}
+	transport := adapter.Transport
+	if announce := adapter.Announce; announce != nil && announce.On(env) {
+		if message, ok := strings.CutPrefix(command, announce.Prefix); ok {
+			var variable string
+			if port, variable = announce.PortFor(env); port == 0 {
+				return "", notConfigured(variable + " isn’t a port (1-65535)")
+			}
+			// The REST API listens in the game's own network, whatever host
+			// the console's label names.
+			transport, command, host = announce.Transport, message, ""
+		}
+	}
 	if assertAccess != nil {
 		if err := assertAccess(); err != nil {
 			return "", err
@@ -193,10 +207,10 @@ func (r *Runtime) query(ctx context.Context, target Target, adapter *games.Adapt
 	}
 	var response string
 	if host != "" {
-		response, err = netconsole.Execute(ctx, string(adapter.Transport), host, port, password, command, netconsole.Control{AssertAccess: assertAccess})
+		response, err = netconsole.Execute(ctx, string(transport), host, port, password, command, netconsole.Control{AssertAccess: assertAccess})
 	} else {
 		var reply helperReply
-		reply, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(adapter.Transport),
+		reply, err = r.networkHelper(ctx, target.ContainerID, helper.NetworkConsoleRequest{Transport: string(transport),
 			Port: port, Password: password, Command: command}, assertAccess)
 		if err == nil && reply.Response == nil {
 			err = errors.New("game console command failed")
@@ -617,6 +631,77 @@ func (r *Runtime) stdin(ctx context.Context, containerID, command string, out Ou
 	}
 	out.system("Command sent to the server process")
 	return nil
+}
+
+const (
+	stdinReplyTimeout = 5 * time.Second
+	maxStdinReply     = 256 * 1024
+)
+
+var errNoReply = errors.New("the game printed no reply to the command")
+
+// stdinReply types command into the game's standard input and returns what
+// the game logged after it, once complete says that holds the reply. The log
+// is followed before the command is sent, so the reply can't be missed; other
+// lines the game logs meanwhile come with it.
+func (r *Runtime) stdinReply(ctx context.Context, containerID, command string, complete func(string) bool,
+	assertAccess func() error) (string, error) {
+	limit := stdinReplyTimeout
+	if r.replyLimit > 0 {
+		limit = r.replyLimit
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	stream, err := r.Docker.Logs(ctx, containerID, docker.LogsOptions{Follow: true, Stdout: true, Stderr: true, Tail: 0})
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	var text strings.Builder
+	decoder := NewLogDecoder(func(_, value string) { text.WriteString(value) })
+	chunks := make(chan []byte)
+	go func() {
+		defer close(chunks)
+		for {
+			buffer := make([]byte, 32*1024)
+			n, err := stream.Read(buffer)
+			if n > 0 {
+				select {
+				case chunks <- buffer[:n]:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if err := r.stdin(ctx, containerID, command, Discard, assertAccess); err != nil {
+		return "", err
+	}
+	for {
+		select {
+		case chunk, open := <-chunks:
+			if !open {
+				return "", errNoReply
+			}
+			decoder.Push(chunk)
+			if text.Len() > maxStdinReply {
+				return "", errLimited
+			}
+			if complete(text.String()) {
+				if assertAccess != nil {
+					if err := assertAccess(); err != nil {
+						return "", err
+					}
+				}
+				return text.String(), nil
+			}
+		case <-ctx.Done():
+			return "", errNoReply
+		}
+	}
 }
 
 // networkHelper runs a network console command inside the game's network

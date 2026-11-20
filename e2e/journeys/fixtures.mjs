@@ -163,6 +163,30 @@ export function fake(path, query = {}, dir = process.env.LUDOCK_E2E_DIR) {
 }
 
 /**
+ * Adds one of the fake daemon's real-image games for a journey, and takes it
+ * away after. Its name is its own: the fake daemon's own factorio, which
+ * Ludock leaves out, would otherwise share it.
+ */
+export async function withGame(page, game, run) {
+  const name = `${game}-${randomBytes(3).toString("hex")}`;
+  await fake("/fake/game", { game, name });
+  try {
+    // Ludock finds it from Docker's events, shortly after.
+    await expect(async () => {
+      await page.goto("/");
+      await expect(serverRow(page, name)).toBeVisible({ timeout: 1000 });
+    }).toPass();
+    await run(name);
+  } finally {
+    await openServer(page, name);
+    await page.getByRole("button", { name: "Remove from Ludock" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Remove server" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await fake("/fake/remove", { container: name });
+  }
+}
+
+/**
  * Adds a running Minecraft server like Survival to the fake daemon and waits
  * for Ludock to find it. Returns its name in Ludock, its container's name,
  * its image, which no other server uses, its Ludock ID and data folder, and

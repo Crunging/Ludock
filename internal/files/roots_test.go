@@ -84,3 +84,22 @@ func TestRootsLeaveOutServerFiles(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// thijsvanloef/palworld-server-docker mounts one folder at /palworld, where
+// it downloads the 3.5 GB server and the game keeps its world in Pal/Saved.
+// Files and backups take only the saves unless a label names the mount.
+func TestRootsTakeSavesInsideServerFiles(t *testing.T) {
+	mounts := []identity.Mount{{Type: "volume", Source: "palworld", Destination: "/palworld", Writable: true}}
+	want := []Root{{RootID("/palworld/Pal/Saved"), "Palworld saves", "/palworld/Pal/Saved"}}
+	if got := Roots("palworld", map[string]string{}, mounts); !reflect.DeepEqual(got, want) {
+		t.Fatal(got)
+	}
+	if got := Roots("palworld", map[string]string{"ludock.files": "/palworld"}, mounts); len(got) != 1 || got[0].Path != "/palworld" {
+		t.Fatal(got)
+	}
+	// A save folder mounted on its own is that mount, as for any game.
+	saved := []identity.Mount{{Type: "bind", Source: "/srv/pal/saved", Destination: "/palworld/Pal/Saved", Writable: true}}
+	if got := Roots("palworld", map[string]string{}, saved); !reflect.DeepEqual(got, want) {
+		t.Fatal(got)
+	}
+}

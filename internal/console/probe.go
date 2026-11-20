@@ -77,6 +77,11 @@ func (r *Runtime) Probe(ctx context.Context, target Target, probe Probe, assertA
 			request = helper.NetworkConsoleRequest{Transport: string(probe.Adapter.Transport), Port: port, Password: password,
 				Command: probe.Adapter.Command(probe.Command)}
 		}
+	} else if probe.Adapter != nil && probe.Adapter.Players != nil && probe.Command == probe.Adapter.Players.Command {
+		// A game on standard input prints its reply to its own output.
+		parse := probe.Adapter.Players.Parse
+		result.Response, result.ResponseErr = r.stdinReply(ctx, target.ContainerID, probe.Adapter.Command(probe.Command),
+			func(text string) bool { _, ok := parse(text); return ok }, assertAccess)
 	} else if probe.Adapter != nil {
 		result.ResponseErr = errors.New("this game console does not return responses")
 	}

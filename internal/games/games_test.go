@@ -1,6 +1,7 @@
 package games
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -263,7 +264,8 @@ func TestParse7DaysPlayers(t *testing.T) {
 func TestResolveAdapterPlayers(t *testing.T) {
 	for game, command := range map[string]string{"minecraft": "list", "factorio": "/players online", "palworld": "ShowPlayers",
 		"ark-survival-evolved": "ListPlayers", "ark-survival-ascended": "ListPlayers", "project-zomboid": "players",
-		"conan-exiles": "ListPlayers", "7-days-to-die": "listplayers"} {
+		"conan-exiles": "ListPlayers", "7-days-to-die": "listplayers", "terraria": "playing", "minecraft-bedrock": "list",
+		"vintage-story": "/list clients"} {
 		if adapter := ResolveAdapter(game, nil); adapter == nil || adapter.Players == nil || adapter.Players.Command != command {
 			t.Errorf("%s: %+v", game, adapter)
 		}
@@ -271,7 +273,7 @@ func TestResolveAdapterPlayers(t *testing.T) {
 	if adapter := ResolveAdapter("palworld", map[string]string{LabelConsole: "source-rcon"}); adapter.Players == nil {
 		t.Error("the game's own adapter lost its player list")
 	}
-	for game, labels := range map[string]map[string]string{"terraria": nil, "cs2": nil, "v-rising": nil, "rust": nil,
+	for game, labels := range map[string]map[string]string{"cs2": nil, "v-rising": nil, "rust": nil,
 		"palworld": {LabelConsole: "telnet-console"}, "unknown": {LabelConsole: "source-rcon"}} {
 		if adapter := ResolveAdapter(game, labels); adapter != nil && adapter.Players != nil {
 			t.Errorf("%s %v lists players", game, labels)
@@ -395,11 +397,12 @@ func TestNewGameIntegrations(t *testing.T) {
 }
 
 // Bedrock and Vintage Story read commands from the process's input, with
-// their own broadcast syntax; the others have no console Ludock speaks.
+// their own broadcast syntax and a list read from their output; the others
+// have no console Ludock speaks.
 func TestNewGameConsoles(t *testing.T) {
 	for game, broadcast := range map[string]string{"minecraft-bedrock": "say {message}", "vintage-story": "/announce {message}"} {
 		adapter := ResolveAdapter(game, nil)
-		if adapter == nil || adapter.Transport != TransportContainerStdin || adapter.Players != nil ||
+		if adapter == nil || adapter.Transport != TransportContainerStdin || adapter.Players == nil ||
 			BroadcastTemplate(game, nil) != broadcast {
 			t.Errorf("%s: %+v", game, adapter)
 		}
@@ -413,6 +416,96 @@ func TestNewGameConsoles(t *testing.T) {
 	for _, game := range []string{"satisfactory", "enshrouded", "dont-starve-together", "core-keeper"} {
 		if adapter := ResolveAdapter(game, nil); adapter != nil {
 			t.Errorf("%s: %+v", game, adapter)
+		}
+	}
+}
+
+// Terraria 1.4.5.8 on hexlo/terraria-server-docker, with tty, prints its
+// replies to playing among other lines, behind its prompt and terminal
+// codes. These are its replies with two real players, one, and none; the
+// rows give each player's address, which is never kept.
+func TestParseTerrariaPlaying(t *testing.T) {
+	two := "\x1b]0;Terraria Server: rig\x07: \x1b[6nServer started\r\n172.18.0.1:47558 is connecting...\r\nZed_2 has joined.\r\n" +
+		"playing\r\nAda (172.18.0.1:47554)\r\nZed_2 (172.18.0.1:47558)\r\n2 players connected.\r\n"
+	one := ": \x1b[6nZed_2 has left.\r\nkick Nobody\r\n: \x1b[6nplaying\r\nAda (172.18.0.1:47554)\r\n1 player connected.\r\n"
+	none := "ban Nobody\r\n: \x1b[6nplaying\r\nNo players connected.\r\n"
+	cases := []struct {
+		output string
+		names  []string
+	}{{two, []string{"Ada", "Zed_2"}}, {one, []string{"Ada"}}, {none, nil}}
+	for _, c := range cases {
+		got, ok := ParseTerrariaPlaying(c.output)
+		if !ok || got.Online != len(c.names) || !slices.Equal(got.Names, c.names) || !slices.Equal(got.IDs, c.names) {
+			t.Errorf("%q: %+v %v", c.output, got, ok)
+		}
+	}
+	for _, output := range []string{
+		// The count hasn't arrived, or its line hasn't ended.
+		"playing\r\nAda (172.18.0.1:47554)\r\n", "playing\r\nNo players connected.",
+		// Rows missing above the count, or something else in their place.
+		"playing\r\n2 players connected.\r\n", "playing\r\n<Ada> hi\r\nZed (172.18.0.1:1)\r\n2 players connected.\r\n",
+		// A player's chat can't pass for the reply.
+		"<Ada> No players connected.\r\n", "",
+	} {
+		if got, ok := ParseTerrariaPlaying(output); ok {
+			t.Errorf("%q: %+v", output, got)
+		}
+	}
+}
+
+// Vintage Story 1.21 on zsuatem/vintagestory, with tty, answers /list clients
+// in its log: the empty reply is real; the row follows the server's own
+// format for a connected client, "{4} [{0}] {1} {2} ({3}ms) ({5}s inactive)",
+// since a player needs a game account.
+func TestParseVintageStoryClients(t *testing.T) {
+	empty := "\x1b[39;49m/list clients\r\n20.11.2026 19:04:32 [Server Notification] Handling Console Command /list clients\r\n" +
+		"\x1b[39;49m20.11.2026 19:04:32 [Server Notification] List of online Players\r\n\r\n"
+	if got, ok := ParseVintageStoryClients(empty); !ok || got.Online != 0 {
+		t.Errorf("empty: %+v %v", got, ok)
+	}
+	two := "\x1b[39;49m20.11.2026 19:04:32 [Server Notification] List of online Players\r\n" +
+		" [3] Ada 172.18.0.1:51234 (12ms) (0s inactive)\r\n [4] Zed_2 172.18.0.1:51236 (9ms) (31s inactive)\r\n\r\n"
+	if got, ok := ParseVintageStoryClients(two); !ok || !slices.Equal(got.Names, []string{"Ada", "Zed_2"}) || !slices.Equal(got.IDs, got.Names) {
+		t.Errorf("two: %+v %v", got, ok)
+	}
+	for _, output := range []string{
+		// The blank line that ends the reply hasn't arrived.
+		"20.11.2026 19:04:32 [Server Notification] List of online Players\r\n [3] Ada 172.18.0.1:51234 (12ms) (0s inactive)\r\n",
+		// Another line in place of a row, and chat that repeats the header.
+		"20.11.2026 19:04:32 [Server Notification] List of online Players\r\n20.11.2026 19:04:33 [Server Event] Ada joined\r\n\r\n",
+		"20.11.2026 19:04:32 [Server Chat] Ada: List of online Players\r\n\r\n", "",
+	} {
+		if got, ok := ParseVintageStoryClients(output); ok {
+			t.Errorf("%q: %+v", output, got)
+		}
+	}
+}
+
+// Bedrock 1.26.66 on itzg/minecraft-bedrock-server answers list in its log:
+// a count line with its time and level, then the names line, which is blank
+// with nobody online. The empty reply is real; the names follow the game's
+// commands.players.list.names, since joining needs a Microsoft account.
+func TestParseBedrockList(t *testing.T) {
+	cases := map[string][]string{
+		"list\r\n[2026-11-20 19:11:52:477 INFO] There are 0/10 players online:\r\n\r\n":              nil,
+		"list\r\n[2026-11-20 19:11:52:477 INFO] There are 2/10 players online:\r\nSteve42, Alex\r\n": {"Steve42", "Alex"},
+		// A log line the server writes meanwhile is no name.
+		"[2026-11-20 19:11:52:477 INFO] There are 1/10 players online:\r\n[2026-11-20 19:11:52:480 INFO] Running AutoCompaction...\r\nSteve42\r\n": {"Steve42"},
+	}
+	for output, names := range cases {
+		got, ok := ParseBedrockList(output)
+		if !ok || got.Online != len(names) || got.Max != 10 || !slices.Equal(got.Names, names) {
+			t.Errorf("%q: %+v %v", output, got, ok)
+		}
+	}
+	for _, output := range []string{
+		// The names haven't arrived whole, or don't add up to the count.
+		"[2026-11-20 19:11:52:477 INFO] There are 2/10 players online:\r\nSteve42, Al",
+		"[2026-11-20 19:11:52:477 INFO] There are 2/10 players online:\r\nSteve42\r\n",
+		"[2026-11-20 19:11:54:895 ERROR] No targets matched selector\r\n", "",
+	} {
+		if got, ok := ParseBedrockList(output); ok {
+			t.Errorf("%q: %+v", output, got)
 		}
 	}
 }

@@ -884,16 +884,16 @@ func TestStalledRemovalIsGivenUp(t *testing.T) {
 }
 
 // A folder that answers a look and then freezes while its archive is read
-// fails the read after copyStall instead of holding it forever, as for a
+// fails the read after readStall instead of holding it forever, as for a
 // restore that already stopped the server, a browse, or a download; an
 // archive that keeps answering reads to its end.
 func TestStalledArchiveReadIsGivenUp(t *testing.T) {
 	f := newCopyFixture(t)
 	backup := f.add(t, "world data", 300_000)
 	defer func(stall time.Duration, read func(*os.File, []byte) (int, error)) {
-		copyStall, readArchive = stall, read
-	}(copyStall, readArchive)
-	copyStall = 50 * time.Millisecond
+		readStall, readArchive = stall, read
+	}(readStall, readArchive)
+	readStall = 50 * time.Millisecond
 	release := make(chan struct{})
 	var reads atomic.Int32
 	readArchive = func(file *os.File, p []byte) (int, error) {

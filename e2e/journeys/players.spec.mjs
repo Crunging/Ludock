@@ -201,6 +201,18 @@ test("seeing who is online on a Palworld server", async ({ page }) => {
     await expect(page.locator("#detail-status")).toContainText("Asked the game to kick Ada <b>.");
     await expect(page.locator("#detail-status")).toContainText("The game replied: Kicked: Ada <b>");
     await expect(onlineNames(page)).toHaveText(["Zed"]);
+
+    // RCON's Broadcast sends only the first word, so warnings go over
+    // Palworld's REST API.
+    await page.locator(".detail-actions").getByRole("button", { name: "Stop", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Warn players and wait 1 minute")).toBeChecked();
+    await dialog.getByRole("button", { name: "Stop server" }).click();
+    await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
+    await page.getByRole("button", { name: "Cancel stop" }).first().click();
+    await expect(page.locator("#selected-operation")).toContainText("Cancelled");
+    await command(console, "fake-said", "palworld");
+    await expect(console.locator(".xterm-rows")).toContainText("Said: Server shutting down in 1 minute. | Server shutdown cancelled.");
     await command(console, "fake-leave Zed", "palworld");
 
     await command(console, "fake-outage 20", "palworld");

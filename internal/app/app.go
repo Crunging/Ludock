@@ -156,7 +156,9 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		case players.NotChecked:
 			return monitor.GameNotChecked
 		case players.Waiting:
-			if a.Players.Get(serverID, container) != nil {
+			// Docker has already run a health check, while a status query
+			// may not have been asked since Ludock started.
+			if container.HealthAnswers || a.Players.Get(serverID, container) != nil {
 				return monitor.GameWaiting
 			}
 		case players.Answering:

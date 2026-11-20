@@ -127,9 +127,13 @@ func (s *Server) serverRow(r *http.Request, request *Request, view servers.View,
 	if row.CanStop || row.CanRestart {
 		row.Warn = warnOffer(view.Container)
 	}
-	row.Game = views.GameView{Running: row.Players.Running}
-	if view.Query != nil {
+	row.Game = views.GameView{Running: row.Players.Running, Off: view.QueryOff}
+	switch {
+	case view.Query != nil:
 		row.Game.Query = view.Query.Name()
+		row.Game.State, row.Game.AnsweredAt = s.App.Players.Game(view.ID, view.Container)
+	case view.HealthAnswers:
+		row.Game.Query, row.Game.Health = "health check", true
 		row.Game.State, row.Game.AnsweredAt = s.App.Players.Game(view.ID, view.Container)
 	}
 	// The button is named for the page it opens first.

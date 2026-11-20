@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"maps"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -261,11 +263,32 @@ func (g *fakeGame) publishLists() {
 		"/data/server.properties": "motd=A Minecraft Server\nwhite-list=" + strconv.FormatBool(g.allowlistOn) + "\n"})
 }
 
-// palworldRCON serves a Palworld RCON console and returns its port. Each
-// player keeps the Steam ID they first joined with.
-func palworldRCON(password string) string {
+// palworldGame serves a Palworld RCON console and REST API and returns their
+// ports. Each player keeps the Steam ID they first joined with. Like
+// Palworld, RCON's Broadcast sends only the first word, and the REST API's
+// announce the whole message; fake-said lists both.
+func palworldGame(password string) (string, string) {
 	// Like Palworld 1.0, it answers with ID 0 and takes IDs only as steam_<ID>.
 	game := &fakeGame{zeroIDs: true}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, given, ok := r.BasicAuth()
+		var body struct{ Message string }
+		switch {
+		case !ok || user != "admin" || given != password:
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method != http.MethodPost || r.URL.Path != "/v1/api/announce" || json.NewDecoder(r.Body).Decode(&body) != nil:
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			game.mu.Lock()
+			game.said = append(game.said, body.Message)
+			game.mu.Unlock()
+			w.Write([]byte("OK"))
+		}
+	}))
 	steamID := func(name string) string {
 		index := slices.Index(game.seen, name)
 		if index < 0 {
@@ -280,6 +303,11 @@ func palworldRCON(password string) string {
 		}
 		return list
 	}, func(verb, id string) (string, bool) {
+		if verb == "Broadcast" {
+			word, _, _ := strings.Cut(id, " ")
+			game.said = append(game.said, word)
+			return "Broadcasted: " + word, true
+		}
 		if verb != "KickPlayer" && verb != "BanPlayer" {
 			return "", false
 		}
@@ -294,7 +322,7 @@ func palworldRCON(password string) string {
 			}
 		}
 		return map[string]string{"KickPlayer": "Failed to Kick: ", "BanPlayer": "Failed to Ban: "}[verb] + id, true
-	})
+	}), fmt.Sprint(listener.Addr().(*net.TCPAddr).Port)
 }
 
 // gameData makes a fake game's data folder under dir.
@@ -310,7 +338,8 @@ func gameData(dir, name string, files map[string]string) string {
 // terrariaGame adds a running Terraria server like hexlo/terraria-server-docker's,
 // and returns its ID and its console, which writes the real server's replies
 // to its log. Like the real image, it never gets Docker's stop signal and
-// quits only on exit.
+// quits only on exit. fake-join NAME and fake-leave NAME change who is
+// online, as players connecting would.
 func terrariaGame(engine *fakedocker.Engine, dir, name string) (string, func(string)) {
 	data := gameData(dir, name, map[string]string{"world.wld": "terraria world"})
 	id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "hexlo/terraria-server-docker:latest", Running: true,
@@ -318,17 +347,55 @@ func terrariaGame(engine *fakedocker.Engine, dir, name string) (string, func(str
 		Ports: map[string][]docker.PortBinding{"7777/tcp": {{HostIP: "0.0.0.0", HostPort: "7777"}}}})
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.IgnoresStop = true
-		c.Logs = []string{"Terraria Server v1.4.5.8", "", "Listening on port 7777", "Type 'help' for a list of commands.", "", ": Server started"}
+		c.Logs = []string{"Terraria Server v1.4.5.8", "", "Listening on port 7777", "Type 'help' for a list of commands.", "",
+			"\x1b]0;Terraria Server: " + name + "\x07: \x1b[6nServer started"}
 	})
+	var mu sync.Mutex
+	var online []string
+	address := func(player string) string { return fmt.Sprintf("172.18.0.1:%d", 40000+len(player)) }
 	return id, func(line string) {
-		reply := map[string][]string{"playing": {"No players connected."},
-			"save":    {"Saving world data: 100%", "Validating world save: 100%", ": Backing up world file"},
-			"exit":    {"Saving before exit...", "Saving world data: 100%", "Validating world save: 100%", "Backing up world file"},
-			"version": {"Terraria Server v1.4.5.8"}}[line]
-		if message, ok := strings.CutPrefix(line, "say "); ok {
-			reply = []string{"<Server> " + message}
+		mu.Lock()
+		defer mu.Unlock()
+		verb, player, _ := strings.Cut(line, " ")
+		// The real server's replies, behind its prompt and cursor query.
+		var reply []string
+		switch {
+		case verb == "playing":
+			for _, player := range online {
+				reply = append(reply, player+" ("+address(player)+")")
+			}
+			reply = append(reply, map[int]string{0: "No players connected.", 1: "1 player connected."}[len(online)])
+			if len(online) > 1 {
+				reply[len(reply)-1] = fmt.Sprintf("%d players connected.", len(online))
+			}
+		case (verb == "kick" || verb == "ban") && slices.Contains(online, player):
+			reason := map[string]string{"kick": "Kicked from server.", "ban": "Banned from server."}[verb]
+			reply = []string{address(player) + " was booted: " + reason}
+			// Like the real server, it lists the player until they have left.
+			time.AfterFunc(time.Second, func() {
+				mu.Lock()
+				defer mu.Unlock()
+				online = slices.DeleteFunc(online, func(listed string) bool { return listed == player })
+				engine.Update(id, func(c *fakedocker.Container) { c.Logs = append(c.Logs, ": \x1b[6n"+player+" has left.") })
+			})
+		case verb == "fake-join" && !slices.Contains(online, player):
+			online = append(online, player)
+			reply = []string{address(player) + " is connecting...", player + " has joined."}
+		case verb == "fake-leave":
+			online = slices.DeleteFunc(online, func(listed string) bool { return listed == player })
+			reply = []string{player + " has left."}
+		case verb == "say":
+			reply = []string{"<Server> " + player}
+		case line == "save":
+			reply = []string{"Saving world data: 100%", "Validating world save: 100%", "Backing up world file"}
+		case line == "exit":
+			reply = []string{"Saving before exit...", "Saving world data: 100%", "Validating world save: 100%", "Backing up world file"}
+		case line == "version":
+			reply = []string{"Terraria Server v1.4.5.8"}
 		}
-		engine.Update(id, func(c *fakedocker.Container) { c.Logs = append(c.Logs, append([]string{line}, reply...)...) })
+		engine.Update(id, func(c *fakedocker.Container) {
+			c.Logs = append(c.Logs, append([]string{": \x1b[6n" + line}, reply...)...)
+		})
 		if line == "exit" {
 			engine.Exit(id, 0)
 		}
@@ -382,6 +449,10 @@ func factorioGame(engine *fakedocker.Engine, dir, name string) {
 			"34197/udp": {{HostIP: "0.0.0.0", HostPort: "34197"}}}})
 	engine.Update(id, func(c *fakedocker.Container) {
 		c.Files = map[string]string{"/factorio/config/rconpw": "dev-factorio-secret\n"}
+		// Like the real image's, its health check asks the game over RCON.
+		c.ExtraConfig = map[string]any{"Healthcheck": map[string]any{"Test": []any{"CMD-SHELL", "rcon-health"}}}
+		c.State.Health = &docker.HealthState{Status: "healthy",
+			Log: []docker.HealthResult{{End: time.Now().UTC().Format(time.RFC3339Nano)}}}
 	})
 }
 
@@ -576,8 +647,11 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.Update(valheimContainer, func(c *fakedocker.Container) {
 		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 1<<30, 2*(1<<30), 2*(1<<30)
 	})
+	// The image turns the REST API on in its own environment.
+	palworldRCON, palworldREST := palworldGame("dev-palworld-secret")
 	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: false,
-		Env:   []string{"RCON_ENABLED=true", "RCON_PORT=" + palworldRCON("dev-palworld-secret"), "ADMIN_PASSWORD=dev-palworld-secret"},
+		Env: []string{"RCON_ENABLED=true", "RCON_PORT=" + palworldRCON, "ADMIN_PASSWORD=dev-palworld-secret",
+			"REST_API_ENABLED=true", "REST_API_PORT=" + palworldREST},
 		Ports: map[string][]docker.PortBinding{"8211/udp": {{HostIP: "0.0.0.0", HostPort: "8211"}}}})
 	engine.AddContainer(fakedocker.GameOptions{Name: "enshrouded", Image: "sknnr/enshrouded-dedicated-server:latest",
 		Ports: map[string][]docker.PortBinding{"15636/udp": {{HostIP: "0.0.0.0", HostPort: "15636"}},

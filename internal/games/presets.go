@@ -38,6 +38,7 @@ type ConsolePreset struct {
 	// Moderation acts on them.
 	Players    *PlayerQuery
 	Moderation *Moderation
+	Announce   *Announce
 }
 
 type Port struct {
@@ -66,6 +67,9 @@ type Integration struct {
 	// SavesOnStop: the game saves its world when Docker stops it, so a stop
 	// without a save command loses nothing.
 	SavesOnStop bool
+	// Saves are folders inside ServerFiles where the game keeps its worlds,
+	// offered in place of a server-files mount that holds them.
+	Saves []string
 }
 
 // Integrations lists the supported games. Repository suffixes omit
@@ -85,7 +89,16 @@ var Integrations = []Integration{
 	{GameType: "palworld", Name: "Palworld", GamePort: &Port{8211, "udp"},
 		Repositories:       []string{"thijsvanloef/palworld-server-docker", "jammsen/palworld-dedicated-server"},
 		StopTimeoutSeconds: 180, UpdatesOnStart: true,
+		// Both images download the server into /palworld and keep the world
+		// inside it.
+		ServerFiles: []string{"/palworld"}, Saves: []string{"/palworld/Pal/Saved"},
+		// RCON's Broadcast sends only the first word, so it goes over the REST
+		// API, which both images turn on by default.
 		Console: &ConsolePreset{Adapter: SourceRCON, Name: "Palworld RCON", DefaultPort: 25575,
+			BroadcastTemplate: "Broadcast {message}",
+			Announce: &Announce{Prefix: "Broadcast ", Transport: TransportPalworldREST, Port: 8212,
+				OnEnv: []string{"REST_API_ENABLED", "RESTAPI_ENABLED"}, OnValues: []string{"true", "1"},
+				PortEnv: []string{"REST_API_PORT", "RESTAPI_PORT"}},
 			Placeholder: "Info, ShowPlayers, Broadcast Hello",
 			Commands:    []QuickCommand{{"List players", "ShowPlayers"}, {"Save world", "Save"}, {"Server info", "Info"}},
 			Players:     &PlayerQuery{Command: "ShowPlayers", Parse: ParsePalworldPlayers}, Moderation: palworldModeration}},
@@ -133,21 +146,24 @@ var Integrations = []Integration{
 		Repositories: []string{"community-valheim-tools/valheim-server", "lloesche/valheim-server"}, UpdatesOnStart: true,
 		ServerFiles: []string{"/opt/valheim"},
 		// Valheim answers on its game port plus one, and only when public.
-		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 2457}},
+		Query: &StatusQuery{Protocol: gamequery.ValveA2S, Port: 2457, OffEnv: "SERVER_PUBLIC", OffValues: []string{"false", "0"},
+			OffReason: "Valheim answers the status check only while it’s listed publicly, and SERVER_PUBLIC is off."}},
 	{GameType: "terraria", Name: "Terraria", GamePort: &Port{7777, "tcp"},
 		Repositories: []string{"hexlo/terraria-server-docker", "beardedio/terraria", "ryshe/terraria"},
 		// Every listed image runs the server where SIGTERM never reaches it:
 		// under a shell that doesn't forward it, or as PID 1 without a handler.
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Terraria console", BroadcastTemplate: "say {message}",
 			StopCommand: "exit", Placeholder: "playing, save, say Hello",
-			Commands: []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}}}},
+			Commands: []QuickCommand{{"List players", "playing"}, {"Save world", "save"}, {"Message players", "say "}},
+			Players:  &PlayerQuery{Command: "playing", Parse: ParseTerrariaPlaying}, Moderation: terrariaModeration}},
 	// From Bedrock 1.26.50 the default NetherNet transport connects over TCP
 	// first, then plays on UDP ports the image leaves unset.
 	{GameType: "minecraft-bedrock", Name: "Minecraft: Bedrock Edition", GamePort: &Port{19132, "tcp"},
 		Repositories: []string{"itzg/minecraft-bedrock-server"}, UpdatesOnStart: true, SavesOnStop: true, Aliases: []string{"bedrock"},
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Bedrock console", BroadcastTemplate: "say {message}",
 			Placeholder: "list, gamerule dofiretick false, say Hello",
-			Commands:    []QuickCommand{{"List players", "list"}, {"Message players", "say "}}}},
+			Commands:    []QuickCommand{{"List players", "list"}, {"Message players", "say "}},
+			Players:     &PlayerQuery{Command: "list", Parse: ParseBedrockList}, Moderation: bedrockModeration}},
 	{GameType: "satisfactory", Name: "Satisfactory", GamePort: &Port{7777, "udp"},
 		Repositories: []string{"robtme/satisfactory-server", "wolveix/satisfactory-server"}, UpdatesOnStart: true},
 	{GameType: "enshrouded", Name: "Enshrouded", GamePort: &Port{15637, "udp"},
@@ -165,7 +181,8 @@ var Integrations = []Integration{
 		Console: &ConsolePreset{Adapter: StdinConsole, Name: "Vintage Story console", BroadcastTemplate: "/announce {message}",
 			Placeholder: "/list clients, /autosavenow, /announce Hello",
 			Commands: []QuickCommand{{"List players", "/list clients"}, {"Save world", "/autosavenow"},
-				{"Message players", "/announce "}}}},
+				{"Message players", "/announce "}},
+			Players: &PlayerQuery{Command: "/list clients", Parse: ParseVintageStoryClients}, Moderation: vintageStoryModeration}},
 }
 
 func arkConsole() *ConsolePreset {
