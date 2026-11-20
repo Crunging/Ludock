@@ -784,16 +784,16 @@ func (o *Observer) stop(ctx context.Context, id string, info *docker.ContainerIn
 	case <-time.After(stopCommandDelay):
 	}
 	// Best effort: without it, Docker still kills the game when the grace
-	// period ends. Only the run being stopped gets the command.
+	// period ends. Docker binds the stream to the current run, so only the
+	// run being stopped, checked once attached, gets the command.
 	attach, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if current, err := o.Docker.Inspect(attach, id); err != nil || !current.State.Running ||
-		current.State.StartedAt != info.State.StartedAt {
-		return <-done
-	}
 	if conn, err := o.Docker.Attach(attach, id, docker.AttachOptions{Stream: true, Stdin: true}); err == nil {
 		stop := context.AfterFunc(attach, func() { conn.Close() })
-		conn.Write([]byte(command + "\n"))
+		if current, err := o.Docker.Inspect(attach, id); err == nil && current.State.Running &&
+			current.State.StartedAt == info.State.StartedAt {
+			conn.Write([]byte(command + "\n"))
+		}
 		stop()
 		conn.Close()
 	}

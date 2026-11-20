@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,6 +105,9 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 		}
 	}
 	engine.AddGame = func(game, name string) bool {
+		if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`).MatchString(name) {
+			return false
+		}
 		switch game {
 		case "terraria":
 			id, command := terrariaGame(engine, dir, name)
@@ -291,7 +295,7 @@ func palworldRCON(password string) string {
 
 // gameData makes a fake game's data folder under dir.
 func gameData(dir, name string, files map[string]string) string {
-	path := filepath.Join(dir, "data", filepath.Base(name))
+	path := filepath.Join(dir, "data", name)
 	for file, content := range files {
 		os.MkdirAll(filepath.Dir(filepath.Join(path, file)), 0o755)
 		os.WriteFile(filepath.Join(path, file), []byte(content), 0o644)
