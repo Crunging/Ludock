@@ -52,7 +52,7 @@ var unavailableMessages = map[string]string{
 	ActionAccessRemoved: "Suspended: the schedule owner can no longer do this action",
 	SharingPaused:       "Paused: the server's game or data folders changed, and an administrator needs to confirm it",
 	BindingUnavailable:  "Suspended: Ludock can’t find this server in Docker",
-	Unavailable:         "Suspended: this schedule cannot currently run; review the server and schedule",
+	Unavailable:         "Suspended: this schedule can’t run right now; check the server and the schedule",
 }
 
 type UnavailableError struct {

@@ -1,6 +1,7 @@
 package views
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/Crunging/Ludock/internal/authz"
@@ -175,14 +176,17 @@ templ userRow(u UsersView, user db.User) {
 				</ul>
 			}
 		</div>
-		<button class="secondary-btn" type="button" hx-post={ "/users/" + user.ID + "/access" } hx-vals={ accessValues(user) } hx-target="#users" hx-swap="outerHTML" data-busy-label="Working…">
-			if user.Disabled {
-				Enable
-			} else {
-				Disable
-			}
-		</button>
-		if !user.Disabled {
+		{{ last := u.lastAdmin(user) }}
+		if !last {
+			<button class="secondary-btn" type="button" hx-post={ "/users/" + user.ID + "/access" } hx-vals={ accessValues(user) } hx-target="#users" hx-swap="outerHTML" data-busy-label="Working…">
+				if user.Disabled {
+					Enable
+				} else {
+					Disable
+				}
+			</button>
+		}
+		if !user.Disabled && !last {
 			if user.Role == db.RoleAdmin {
 				<button
 					class="secondary-btn"
@@ -239,19 +243,19 @@ templ userRow(u UsersView, user db.User) {
 				data-confirm-action="Turn off two-factor"
 			>Turn off two-factor</button>
 		}
-		<button
-			class="secondary-btn secondary-btn--danger"
-			type="button"
-			disabled?={ user.ID == u.CurrentID }
-			title={ map[bool]string{true: "You cannot delete your own account", false: "Delete " + user.Username}[user.ID == u.CurrentID] }
-			hx-post={ "/users/" + user.ID + "/delete" }
-			hx-target="#users"
-			hx-swap="outerHTML"
-			hx-confirm={ "Delete " + user.Username + "?" }
-			data-confirm-detail="This signs them out everywhere and can’t be undone."
-			data-confirm-action="Delete user"
-			data-confirm-danger
-		>Delete</button>
+		if user.ID != u.CurrentID && !last {
+			<button
+				class="secondary-btn secondary-btn--danger"
+				type="button"
+				hx-post={ "/users/" + user.ID + "/delete" }
+				hx-target="#users"
+				hx-swap="outerHTML"
+				hx-confirm={ "Delete " + user.Username + "?" }
+				data-confirm-detail="This signs them out everywhere and can’t be undone."
+				data-confirm-action="Delete user"
+				data-confirm-danger
+			>Delete</button>
+		}
 		if user.Link != nil {
 			<div class="user-row__link">
 				<p>
@@ -287,6 +291,17 @@ templ linkResult(link LinkResult) {
 			<button class="primary-btn" type="button" data-copy={ link.URL } data-copied-label="Copied">Copy link</button>
 		</div>
 	</section>
+}
+
+// lastAdmin reports whether user is the only enabled administrator who can
+// sign in, whom Ludock refuses to disable, demote, or delete.
+func (u UsersView) lastAdmin(user db.User) bool {
+	if user.Role != db.RoleAdmin || user.Disabled || !user.PasswordSet {
+		return false
+	}
+	return !slices.ContainsFunc(u.Users, func(other db.User) bool {
+		return other.ID != user.ID && other.Role == db.RoleAdmin && !other.Disabled && other.PasswordSet
+	})
 }
 
 func accessValues(user db.User) string {

@@ -126,12 +126,12 @@ func ActionLabel(action string) string {
 
 var unavailableGuidance = map[string]string{
 	"owner_missing":         "Its owner’s account was deleted. Make the schedule again from an account that can use this server.",
-	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
-	"owner_access_removed":  "Schedule owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
-	"action_access_removed": "Schedule owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
+	"owner_disabled":        "Its owner’s account is disabled. Ask an administrator to enable it.",
+	"owner_access_removed":  "Its owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
+	"action_access_removed": "Its owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
 	"binding_unavailable":   "Ludock can’t find this server in Docker. The schedule runs again once the server is back.",
-	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
+	"unavailable":           "Ludock can’t work out the next run. Refresh this page, then check the schedule’s settings.",
 }
 
 func sameDays(a, b []int) bool {
@@ -181,7 +181,7 @@ func scheduleState(item schedules.Schedule) string {
 	case !item.Enabled:
 		return "Paused"
 	case item.CompletedAt != 0:
-		return "Completed"
+		return "Done"
 	}
 	return "Enabled"
 }
@@ -192,7 +192,7 @@ func WaitText(wait *schedules.WaitForEmpty) string {
 	if wait.Then == schedules.WaitRun {
 		then = "goes ahead"
 	}
-	return "Waits up to " + strconv.Itoa(wait.Minutes) + " min for an empty server, then " + then
+	return "Waits up to " + minutesText([]int{wait.Minutes}) + " for everyone to leave, then " + then
 }
 
 func waitMinutes(input schedules.Input) string {
@@ -303,7 +303,7 @@ templ ScheduleList(v SchedulesView) {
 								<small class="table-detail">{ WaitText(item.WaitForEmpty) }</small>
 							}
 							if item.Announcements != nil {
-								<small class="table-detail">Warnings: { LeadText(item.Announcements.LeadMinutes) } min before</small>
+								<small class="table-detail">Warns players { minutesText(item.Announcements.LeadMinutes) } before</small>
 							}
 						</td>
 						<td>{ scheduleState(item) }</td>

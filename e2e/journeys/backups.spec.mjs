@@ -49,7 +49,9 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await expect(page.locator("#selected-operation")).toContainText("Save command sent before stopping.");
   const rows = page.locator("#backup-list tbody tr");
   await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText("complete");
+  // A complete backup needs no state of its own; the stored value never shows.
+  await expect(rows.first().locator("td").nth(2)).not.toContainText("complete");
+  await expect(rows.first().getByRole("link", { name: "Restore…" })).toBeVisible();
   await expect(page.locator("#create-backup")).toBeEnabled();
   await expect(page.locator("#backup-readiness")).toBeEmpty();
 
@@ -94,7 +96,7 @@ test("backing up, downloading, restoring, and deleting a backup", async ({ page,
   await row.getByRole("button", { name: "Restart…" }).click();
   const restart = page.getByRole("dialog", { name: `Restart ${ownServer.name}?` });
   await expect(row.locator(".action-menu__content")).toBeHidden();
-  await restart.getByLabel("Take a backup first").check();
+  await restart.getByLabel("Back up first").check();
   // Leaving the page before the restart is accepted would cancel it.
   const queued = page.waitForResponse((response) => response.request().method() === "POST" && /\/restart$/.test(response.url()));
   await restart.getByRole("button", { name: "Restart server" }).click();
@@ -236,7 +238,7 @@ test("keeping a backup with a note, seeing it outlast retention, and releasing i
   await keep.getByRole("button", { name: "Keep backup" }).click();
   await expect(keep).toHaveCount(0);
   const kept = rows.filter({ hasText: "before 1.21 update" });
-  await expect(kept).toContainText("kept");
+  await expect(kept.locator("td").nth(2)).toContainText("Kept");
   await expect(kept.getByRole("button", { name: "Delete", includeHidden: true })).toBeDisabled();
   await expect(page.locator("#backup-usage")).toContainText("of it in kept backups");
   const browse = await kept.getByRole("link", { name: "Browse files", includeHidden: true }).getAttribute("href");

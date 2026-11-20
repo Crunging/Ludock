@@ -345,7 +345,7 @@ func PlayersFact(p PlayersView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<span class=\"muted\">Ludock counts them with the game’s status query, which hasn’t said how many are online. Checked ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<span class=\"muted\">Ludock counts them with the game’s status check, which hasn’t said how many are online. Checked ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -548,7 +548,7 @@ func PlayersFact(p PlayersView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if p.Reading.Via == players.ViaQuery {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<span class=\"overview-players__checked muted\">Counted by the game’s status query ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "<span class=\"overview-players__checked muted\">Counted by the game’s status check ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -670,7 +670,7 @@ func GameFact(g GameView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "<span>Answering</span> <span class=\"muted\">Over its status query, ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "<span>Answering</span> <span class=\"muted\">Over its status check, ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -687,7 +687,7 @@ func GameFact(g GameView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "<span>Not answering</span> <span class=\"muted\">The container is running, but its image’s health check keeps failing. It last passed ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "<span>Not answering</span> <span class=\"muted\">The server is running, but its image’s health check keeps failing. It last passed ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -704,7 +704,7 @@ func GameFact(g GameView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, "<span>Not answering</span> <span class=\"muted\">The container is running, but the game stopped answering its status query. It last answered ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, "<span>Not answering</span> <span class=\"muted\">The server is running, but the game stopped answering its status check. It last answered ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -717,7 +717,7 @@ func GameFact(g GameView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case g.State == players.Unknown:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "<span>Not checked recently</span> <span class=\"muted\">It last answered its status query ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "<span>Not checked recently</span> <span class=\"muted\">It last answered its status check ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -735,7 +735,7 @@ func GameFact(g GameView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		default:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "<span>Not answered yet</span> <span class=\"muted\">Ludock asks over its status query. A game that’s still starting, or whose query port is wrong or off, doesn’t answer.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "<span>Not answered yet</span> <span class=\"muted\">Ludock asks over its status check. A game that’s still starting, or whose status check port is wrong or off, doesn’t answer.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

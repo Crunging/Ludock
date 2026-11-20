@@ -11,7 +11,7 @@ test("counting players with the game's status query when it has no console", asy
     await openServer(page, "valheim");
     const players = page.locator(".overview-players");
     await expect(players).toContainText(/2\s*of 10 online/, { timeout: 45_000 });
-    await expect(players).toContainText("Counted by the game’s status query");
+    await expect(players).toContainText("Counted by the game’s status check");
     await expect(players.locator(".player-slot--taken")).toHaveCount(2);
     await expect(page.locator(".overview-game")).toContainText("Answering");
 

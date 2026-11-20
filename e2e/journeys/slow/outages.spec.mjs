@@ -42,14 +42,14 @@ test("a game that stops answering while its container runs is an outage, until i
     const game = page.locator(".overview-game");
     // Readings run every 30 seconds, and the overview shows them within 10.
     await expect(game).toContainText("Answering", { timeout: 45_000 });
-    await expect(game).toContainText("Over its status query");
+    await expect(game).toContainText("Over its status check");
 
     // Monitoring may still be in the start's quiet time; the outage begins
     // once it ends.
     await writeFile(silence, "");
     // The container still runs; only the game went quiet.
     await expect(game).toContainText("Not answering", { timeout: 45_000 });
-    await expect(game).toContainText("the game stopped answering its status query");
+    await expect(game).toContainText("the game stopped answering its status check");
     await expect(page.locator(".overview-facts")).toContainText("Running");
 
     await page.goto("/");
@@ -100,7 +100,7 @@ test("Ludock restarts a game that stopped answering, and says when it answers ag
     await page.getByRole("tab", { name: "Activity" }).click();
     await expect(page.getByText("By Ludock, because the game stopped answering").first()).toBeVisible();
     await page.getByRole("link", { name: "Restart" }).first().click();
-    await expect(page.locator(".metadata-list")).toContainText("Ludock (automatic restart)");
+    await expect(page.locator(".metadata-list")).toContainText("Ludock, because the game stopped answering");
   } finally {
     await rm(hang, { force: true });
     await openServer(page, "valheim");

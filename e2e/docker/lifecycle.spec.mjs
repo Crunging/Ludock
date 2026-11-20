@@ -34,7 +34,7 @@ test("an update recreates the server with its settings and unnamed volume", asyn
     await expect(form).toContainText(gameImage, { timeout: 2_000 });
   }).toPass();
   await form.locator("summary", { hasText: "Advanced" }).click();
-  await form.getByLabel("Update even if the image is already current").check();
+  await form.getByLabel("Update even if the image is already up to date").check();
   await form.getByLabel("Back up first").uncheck();
   await form.getByLabel(/Type Test Game to skip the backup/).fill("Test Game");
   await form.getByRole("button").last().click();

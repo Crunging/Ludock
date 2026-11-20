@@ -135,12 +135,12 @@ func ActionLabel(action string) string {
 
 var unavailableGuidance = map[string]string{
 	"owner_missing":         "Its owner’s account was deleted. Make the schedule again from an account that can use this server.",
-	"owner_disabled":        "Schedule owner is disabled. Ask an administrator to enable the owner’s account.",
-	"owner_access_removed":  "Schedule owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
-	"action_access_removed": "Schedule owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
+	"owner_disabled":        "Its owner’s account is disabled. Ask an administrator to enable it.",
+	"owner_access_removed":  "Its owner can no longer set up schedules for this server. Ask an administrator to give them Full access again in the server’s Sharing tab.",
+	"action_access_removed": "Its owner can no longer do this action. Ask an administrator to give it back in the server’s Sharing tab, or edit the schedule to use an action they can do.",
 	"sharing_paused":        "The server’s game or data folders changed. This schedule runs again once an administrator confirms the change on the server’s page.",
 	"binding_unavailable":   "Ludock can’t find this server in Docker. The schedule runs again once the server is back.",
-	"unavailable":           "The next run cannot be determined. Try refreshing this page, then review the schedule settings.",
+	"unavailable":           "Ludock can’t work out the next run. Refresh this page, then check the schedule’s settings.",
 }
 
 func sameDays(a, b []int) bool {
@@ -190,7 +190,7 @@ func scheduleState(item schedules.Schedule) string {
 	case !item.Enabled:
 		return "Paused"
 	case item.CompletedAt != 0:
-		return "Completed"
+		return "Done"
 	}
 	return "Enabled"
 }
@@ -201,7 +201,7 @@ func WaitText(wait *schedules.WaitForEmpty) string {
 	if wait.Then == schedules.WaitRun {
 		then = "goes ahead"
 	}
-	return "Waits up to " + strconv.Itoa(wait.Minutes) + " min for an empty server, then " + then
+	return "Waits up to " + minutesText([]int{wait.Minutes}) + " for everyone to leave, then " + then
 }
 
 func waitMinutes(input schedules.Input) string {
@@ -488,20 +488,20 @@ func ScheduleList(v SchedulesView) templ.Component {
 				}
 			}
 			if item.Announcements != nil {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<small class=\"table-detail\">Warnings: ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<small class=\"table-detail\">Warns players ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var11 string
-				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(LeadText(item.Announcements.LeadMinutes))
+				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(minutesText(item.Announcements.LeadMinutes))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `schedules.templ`, Line: 306, Col: 88}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `schedules.templ`, Line: 306, Col: 95}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, " min before</small>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, " before</small>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

@@ -18,7 +18,7 @@ test("restarting with players online warns them first", async ({ page, ownServer
     await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
     const dialog = page.getByRole("dialog", { name: `Restart ${ownServer.name}?` });
     await expect(dialog.getByLabel("Warn players and wait 1 minute")).toBeChecked();
-    await expect(dialog.getByLabel("Take a backup first")).not.toBeChecked();
+    await expect(dialog.getByLabel("Back up first")).not.toBeChecked();
     await dialog.getByRole("button", { name: "Restart server" }).click();
     await expect(page.locator("#selected-operation")).toContainText("Giving players 1 minute");
     await gameCommand(console, "fake-said", ownServer.name);

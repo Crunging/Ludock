@@ -15,6 +15,7 @@ import (
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
+	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/textutil"
 )
@@ -45,6 +46,8 @@ type Item struct {
 	Status        string
 	UpdatedAt     int64
 	ForceStopped  bool
+	// Recovery: an automatic restart did the work.
+	Recovery bool
 	// notifications, with Since and Reason
 	Destination notify.Destination
 }
@@ -160,22 +163,22 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		// later, unless it may have left something only a person can sort
 		// out: an interrupted restore, a force-stop, or an error asking for
 		// an administrator.
-		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,
+		rows, err := s.DB.QueryContext(ctx, `SELECT id,kind,status,updated_at,actor_id=?,
       CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END
-      FROM (SELECT id,kind,status,updated_at,result_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
+      FROM (SELECT id,kind,status,updated_at,actor_id,result_json,created_at,error FROM operations WHERE server_id=? ORDER BY created_at DESC,id DESC LIMIT 100) o
       WHERE (status IN ('failed','interrupted') AND ((kind='restore' AND status='interrupted') OR instr(COALESCE(error,''),'administrator') > 0 OR
         (json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1) OR
         NOT EXISTS (SELECT 1 FROM operations later WHERE later.server_id=? AND later.kind=o.kind AND later.status='succeeded' AND
           (later.created_at > o.created_at OR (later.created_at = o.created_at AND later.id > o.id)))))
         OR (status='succeeded' AND kind IN ('stop','restart') AND
-        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, server.ID, server.ID)
+        CASE WHEN json_valid(result_json) AND json_extract(result_json,'$.forceStopped') = 1 THEN 1 ELSE 0 END)`, ops.RecoveryActor, server.ID, server.ID)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			item := base
 			var forced int
-			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &forced); err != nil {
+			if err := rows.Scan(&item.OperationID, &item.OperationKind, &item.Status, &item.UpdatedAt, &item.Recovery, &forced); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -195,7 +198,7 @@ func (s *Service) List(ctx context.Context, actor *db.SessionUser, now int64) (*
 		}
 		for _, problem := range problems {
 			result.Items = append(result.Items, Item{ID: "notifications:" + string(problem.Destination), Kind: "notifications",
-				Destination: problem.Destination, Since: problem.Since, Reason: problem.Reason})
+				Destination: problem.Destination, Since: problem.LastTried, Reason: problem.Reason})
 		}
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool {

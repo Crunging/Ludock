@@ -70,7 +70,7 @@ async function addWaitingRestart(page, server, minutes, then) {
   if (then === "Skip this run") await form.getByLabel("Warn players in the game").uncheck();
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
-  const summary = `Waits up to ${minutes} min for an empty server, then ${then === "Skip this run" ? "skips" : "goes ahead"}`;
+  const summary = `Waits up to ${minutes} ${minutes === 1 ? "minute" : "minutes"} for everyone to leave, then ${then === "Skip this run" ? "skips" : "goes ahead"}`;
   return page.locator("#schedule-list tbody tr", { hasText: summary }).last();
 }
 
@@ -102,7 +102,7 @@ test("a scheduled restart waits for players to leave", async ({ page, ownServer 
   await expect(page).toHaveURL(/tab=schedules/);
   const row = page.locator("#schedule-list tbody tr", { hasText: "Waits up to 30 min" }).last();
   await expectResult(page, row, "Succeeded", 75_000);
-  await expect(row.locator("td").nth(2)).toHaveText("Completed");
+  await expect(row.locator("td").nth(2)).toHaveText("Done");
 });
 
 // Cancelling a waiting run ends it in place, without acting: its row says
@@ -148,7 +148,7 @@ test("pausing a schedule after its warning tells the players", async ({ page, ow
   await form.getByLabel("Warning lead times (minutes)").fill("1");
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
-  const row = page.locator("#schedule-list tbody tr", { hasText: time }).filter({ hasText: "Warnings: 1 min before" }).last();
+  const row = page.locator("#schedule-list tbody tr", { hasText: time }).filter({ hasText: "Warns players 1 minute before" }).last();
   const console = await page.context().newPage();
   try {
     await expect(async () => {
@@ -203,7 +203,7 @@ test("a scheduled command reaches the game console", async ({ page, ownServer })
   const row = await addCommand(page, ownServer.name, "say Saving soon");
   await expectResult(page, row, "Succeeded");
   await expect(row.locator(".schedule-reply")).toHaveText("Reply: [Server] Saving soon");
-  await expect(row.locator("td").nth(2)).toHaveText("Completed");
+  await expect(row.locator("td").nth(2)).toHaveText("Done");
   await row.getByRole("link", { name: "View activity" }).click();
   await expect(page.locator("#selected-operation")).toContainText("Command");
   await expect(page.locator("#selected-operation")).toContainText("Succeeded");

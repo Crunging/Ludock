@@ -627,7 +627,7 @@ func (s *Service) RevokeSession(ctx context.Context, principal *Principal, sessi
 var (
 	errInsufficient = apperr.New("FORBIDDEN", 403, "You can’t do that")
 	errUserNotFound = apperr.New("USER_NOT_FOUND", 404, "User not found")
-	errLastAdmin    = apperr.New("LAST_ADMIN", 409, "At least one active admin is required")
+	errLastAdmin    = apperr.New("LAST_ADMIN", 409, "Ludock needs at least one administrator who can sign in")
 )
 
 // RequireAdmin rejects a principal whose session role is not admin.
@@ -821,7 +821,7 @@ func (s *Service) DeleteUser(ctx context.Context, principal *Principal, id strin
 		return errUserNotFound
 	}
 	if target.ID == principal.User.ID {
-		return apperr.New("SELF_DELETE", 409, "You cannot delete your own account")
+		return apperr.New("SELF_DELETE", 409, "You can’t delete your own account")
 	}
 	err = s.DB.AdminMutation(ctx, principal.User.ID, principal.TokenHash, s.Now(), func(tx *sql.Tx) error {
 		last, err := db.RemovesLastAdmin(ctx, tx, id, db.RoleMember, true)
