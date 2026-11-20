@@ -114,6 +114,10 @@ func seed(engine *fakedocker.Engine, dir, self, backups string, demo bool) {
 			stdinGames.Store(id, command)
 		case "factorio":
 			factorioGame(engine, dir, name)
+		case "minecraft":
+			// Like Survival, its name in Ludock isn't its container's. A tag
+			// of its own keeps its image updates apart from Survival's.
+			minecraftServer(engine, dir, name, "itzg/minecraft-server:"+name, map[string]string{"ludock.name": "Realm " + name}, nil, nil)
 		default:
 			return false
 		}
@@ -481,22 +485,29 @@ func (g *fakeGame) rcon(password, list string, format func(online []string) stri
 	return fmt.Sprint(port)
 }
 
-// seedDev adds the servers the journeys and local development use.
-func seedDev(engine *fakedocker.Engine, dir string) {
-	data := func(name string) string {
-		path := filepath.Join(dir, "data", name)
-		os.MkdirAll(filepath.Join(path, "world"), 0o755)
-		os.WriteFile(filepath.Join(path, "server.properties"), []byte("motd=Hello from "+name+"\nmax-players=10\n"), 0o644)
-		os.WriteFile(filepath.Join(path, "world", "level.dat"), []byte{0x1f, 0x8b, 0, 1, 2, 3}, 0o644)
-		return path
-	}
-	mc := data("minecraft")
+// devData makes a dev server's data folder under dir, with a world and
+// server.properties.
+func devData(dir, name string) string {
+	path := filepath.Join(dir, "data", name)
+	os.MkdirAll(filepath.Join(path, "world"), 0o755)
+	os.WriteFile(filepath.Join(path, "server.properties"), []byte("motd=Hello from "+name+"\nmax-players=10\n"), 0o644)
+	os.WriteFile(filepath.Join(path, "world", "level.dat"), []byte{0x1f, 0x8b, 0, 1, 2, 3}, 0o644)
+	return path
+}
+
+// minecraftServer adds a running Minecraft server like the dev Survival,
+// with its own console, status query, and data folder, and returns its ID.
+// env and logs add to its own.
+func minecraftServer(engine *fakedocker.Engine, dir, name, image string, labels map[string]string, env, logs []string) string {
+	mc := devData(dir, name)
 	game, rcon, query := minecraftGame("dev-rcon-secret")
-	id := engine.AddContainer(fakedocker.GameOptions{Name: "minecraft", Image: "itzg/minecraft-server:java21", Running: true,
-		Labels: map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games", "com.docker.compose.service": "minecraft",
-			"com.docker.compose.container-number": "1", "ludock.query.port": query},
-		Env: []string{"RCON_PORT=" + rcon, "EULA=TRUE", "DB_PASS=dev-db-secret",
-			"STATS_URL=postgres://stats:dev-url-secret@db/stats"},
+	labels = maps.Clone(labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels["ludock.query.port"] = query
+	id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: image, Running: true,
+		Labels: labels, Env: append([]string{"RCON_PORT=" + rcon, "EULA=TRUE"}, env...),
 		Mounts: []docker.MountPoint{{Type: "bind", Source: mc, Destination: mc, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "25565"}}}})
 	// Like the real image, every version of the fake one has a healthcheck,
@@ -519,11 +530,19 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 		game.publish = func(files map[string]string) {
 			engine.Update(id, func(c *fakedocker.Container) { maps.Copy(c.Files, files) })
 		}
-		c.Logs = []string{"[Server thread/INFO]: Starting minecraft server version 1.21",
-			"[Server thread/INFO]: Stats plugin using dev-db-secret for postgres://stats:dev-url-secret@db/stats",
-			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
+		c.Logs = append(append([]string{"[Server thread/INFO]: Starting minecraft server version 1.21"}, logs...),
+			"[Server thread/INFO]: Done (3.2s)! For help, type \"help\"")
 	})
-	valheim := data("valheim")
+	return id
+}
+
+// seedDev adds the servers the journeys and local development use.
+func seedDev(engine *fakedocker.Engine, dir string) {
+	minecraftServer(engine, dir, "minecraft", "itzg/minecraft-server:java21", map[string]string{"ludock.name": "Survival", "com.docker.compose.project": "games",
+		"com.docker.compose.service": "minecraft", "com.docker.compose.container-number": "1"},
+		[]string{"DB_PASS=dev-db-secret", "STATS_URL=postgres://stats:dev-url-secret@db/stats"},
+		[]string{"[Server thread/INFO]: Stats plugin using dev-db-secret for postgres://stats:dev-url-secret@db/stats"})
+	valheim := devData(dir, "valheim")
 	// Valheim has no console; its status query says two of ten are online,
 	// and goes silent while a file named fake-silent is in its data folder.
 	// A file named fake-hang silences it only until the container starts

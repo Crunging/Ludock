@@ -2,8 +2,8 @@
 // data for every worker, completes first-administrator setup, and saves the
 // administrator's signed-in state.
 import { spawn, execFileSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, statfsSync, writeFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { port } from "./playwright.config.mjs";
 
@@ -11,17 +11,43 @@ const root = resolve(import.meta.dirname, "..");
 export const admin = { username: "admin", password: "correct horse battery staple" };
 const setupCode = "e2e-setup-code-0123456789abcdef-0123";
 
-async function waitFor(check, what, timeout = 30_000) {
+const exited = (child) => child.exitCode !== null || child.signalCode !== null || child.failed;
+
+// waitFor waits for check to pass, failing at once with child's output if
+// child exits first.
+async function waitFor(check, what, child, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   for (;;) {
+    if (exited(child)) {
+      throw new Error(`${child.log} exited while waiting for ${what}:\n${child.lines.join("")}`);
+    }
     try {
       if (await check()) return;
     } catch {
       // Not ready yet.
     }
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}:\n${child.lines.join("")}`);
     await new Promise((done) => setTimeout(done, 100));
   }
+}
+
+// Backups keep 5 GiB free in their folder and refuse to run below it, so
+// stacks live in the temporary folder only when it has room to spare, as a
+// small memory-backed /tmp often doesn't.
+const room = 8 * 1024 ** 3;
+function free(path) {
+  try {
+    const stat = statfsSync(path);
+    return stat.bavail * stat.bsize;
+  } catch {
+    return 0;
+  }
+}
+function scratch() {
+  if (free(tmpdir()) >= room) return tmpdir();
+  const cache = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ludock-e2e");
+  mkdirSync(cache, { recursive: true });
+  return free(cache) > free(tmpdir()) ? cache : tmpdir();
 }
 
 // start runs a child process; file, if given, keeps its output for journeys
@@ -29,6 +55,12 @@ async function waitFor(check, what, timeout = 30_000) {
 function start(command, args, env, log, file) {
   const child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   const lines = [];
+  Object.assign(child, { lines, log });
+  // A command that can't start never exits; its error is its output.
+  child.on("error", (error) => {
+    lines.push(String(error));
+    child.failed = true;
+  });
   const saved = file && createWriteStream(file);
   for (const stream of [child.stdout, child.stderr]) {
     stream.on("data", (chunk) => {
@@ -46,8 +78,9 @@ function start(command, args, env, log, file) {
 // startStack starts one Ludock and fake daemon on fresh data under dir and
 // signs in the setup administrator, adding each process to children as it
 // starts. Each worker gets its own stack; a journey that needs a fresh
-// install starts another with freshStack. With found, the folder dir/found
-// stands in for one mounted at /backups-copy.
+// install starts another with freshStack. port 0 has the system choose one.
+// With found, the folder dir/found stands in for one mounted at
+// /backups-copy.
 async function startStack(bin, dir, port, { found = false, children = [] } = {}) {
   const dockerDir = join(dir, "docker");
   // Backups go to the first root; the backups journey chooses the second
@@ -57,9 +90,8 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
   const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted], {}, "fakedocker");
   children.push(fake);
   const socket = join(dockerDir, "docker.sock");
-  await waitFor(() => existsSync(socket), "the fake Docker socket");
+  await waitFor(() => existsSync(socket), "the fake Docker socket", fake);
 
-  const baseURL = `http://127.0.0.1:${port}`;
   const ludock = start(join(bin, "ludock"), ["serve"], {
     LUDOCK_LISTEN: `127.0.0.1:${port}`,
     LUDOCK_DATA_DIR: join(dir, "data"),
@@ -68,10 +100,17 @@ async function startStack(bin, dir, port, { found = false, children = [] } = {})
     LUDOCK_SELF_CONTAINER: "ludock-dev",
     LUDOCK_BACKUP_ROOTS: backups,
     LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
+    // Its default level logs the address it listens on, which this reads.
+    LUDOCK_LOG_LEVEL: "",
     ...(found ? { LUDOCK_DEV_COPY_ROOT: join(dir, "found") } : {}),
   }, "ludock", join(dir, "ludock.log"));
   children.push(ludock);
-  await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check");
+  // The port this Ludock bound, from its own log, so nothing else that
+  // answers on a port can stand in for it.
+  let listening;
+  await waitFor(() => (listening = ludock.lines.join("").match(/Ludock listening.*?localhost:(\d+)"/)), "Ludock to listen", ludock);
+  const baseURL = `http://127.0.0.1:${listening[1]}`;
+  await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check", ludock);
 
   const form = (values) => ({ method: "POST", redirect: "manual", body: new URLSearchParams(values),
     headers: { "Content-Type": "application/x-www-form-urlencoded" } });
@@ -93,7 +132,7 @@ async function stopStack(stack) {
   for (const child of stack.children.toReversed()) {
     child.stopping = true;
     child.kill("SIGTERM");
-    await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
+    await new Promise((done) => (exited(child) ? done() : child.once("exit", done)));
   }
 }
 
@@ -102,7 +141,7 @@ async function stopStack(stack) {
  * returns its env and a function that stops it and removes its data.
  */
 export async function freshStack(index, options) {
-  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-fresh-"));
+  const dir = mkdtempSync(join(scratch(), "ludock-e2e-fresh-"));
   const children = [];
   const stop = async () => {
     await stopStack({ children });
@@ -112,7 +151,7 @@ export async function freshStack(index, options) {
   // whatever it started.
   process.once("exit", () => children.forEach((child) => child.kill("SIGTERM")));
   try {
-    return { env: (await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index, { ...options, children })).env, stop };
+    return { env: (await startStack(process.env.LUDOCK_E2E_BIN, dir, port && port + 50 + index, { ...options, children })).env, stop };
   } catch (error) {
     await stop();
     throw error;
@@ -120,7 +159,7 @@ export async function freshStack(index, options) {
 }
 
 export default async function setup(config) {
-  const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-"));
+  const dir = mkdtempSync(join(scratch(), "ludock-e2e-"));
   const bin = join(dir, "bin");
   const env = { ...process.env, CGO_ENABLED: "0" };
   execFileSync("go", ["build", "-o", bin + "/", "./cmd/ludock", "./cmd/fakedocker"], { cwd: root, env, stdio: "inherit" });
@@ -133,7 +172,7 @@ export default async function setup(config) {
   const results = await Promise.allSettled(started.map((stack, index) => {
     const stackDir = join(dir, String(index));
     mkdirSync(stackDir);
-    return startStack(bin, stackDir, port + index, { children: stack.children });
+    return startStack(bin, stackDir, port && port + index, { children: stack.children });
   }));
   // A stack that couldn't start would leave the others running.
   const failed = results.find((result) => result.status === "rejected");

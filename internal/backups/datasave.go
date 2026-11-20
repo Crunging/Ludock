@@ -45,6 +45,10 @@ var (
 
 const dataStamp = "20060102-150405"
 
+// dataNow is the clock a save is named and timed by; tests move it past the
+// name's one-second resolution instead of sleeping.
+var dataNow = time.Now
+
 func dataFileName(at time.Time) string { return "ludock-data-" + at.UTC().Format(dataStamp) + ".tar" }
 
 // dataTrack is the state of saving into one folder: the last save that
@@ -143,7 +147,7 @@ func (s *Service) SaveData(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
+	now := dataNow()
 	if due, err := s.dataDue(ctx, track, settings.Destination, now); err != nil || !due {
 		return err
 	}
@@ -206,7 +210,7 @@ func (s *Service) CopyData(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
+	now := dataNow()
 	if track.Folder == settings.CopyTo && track.Name == saved.Name || now.UnixMilli() < track.NextAt {
 		return nil
 	}

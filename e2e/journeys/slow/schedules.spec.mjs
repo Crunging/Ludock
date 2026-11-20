@@ -1,7 +1,8 @@
 import { test, expect, asAdmin, dockerAction, gameCommand, openServer } from "../fixtures.mjs";
 
 asAdmin();
-// Each journey waits for the scheduler, so they run beside each other.
+// Each journey waits for the scheduler, so they run beside each other, each
+// on a server of its own.
 test.describe.configure({ mode: "parallel" });
 
 /** Opens the schedule form's More options once the page has filled in the
@@ -37,8 +38,8 @@ async function expectResult(page, row, text, timeout = 45_000) {
   }).toPass({ timeout, intervals: [2000] });
 }
 
-async function addCommand(page, command) {
-  await openServer(page, "Survival");
+async function addCommand(page, server, command) {
+  await openServer(page, server);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Action").selectOption("command");
@@ -56,8 +57,8 @@ async function addCommand(page, command) {
 
 // Adds a restart due now that waits for an empty server. A one-minute wait
 // ends at the end of the scheduled minute, so it lasts at most a minute.
-async function addWaitingRestart(page, minutes, then) {
-  await openServer(page, "Survival");
+async function addWaitingRestart(page, server, minutes, then) {
+  await openServer(page, server);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Back up first").uncheck();
@@ -80,12 +81,12 @@ async function expectWaiting(page, row) {
   }).toPass({ timeout: 45_000, intervals: [2000] });
 }
 
-test("a scheduled restart waits for players to leave", async ({ page }) => {
+test("a scheduled restart waits for players to leave", async ({ page, ownServer }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();
-  await gameCommand(console, "fake-join Mara");
+  await gameCommand(console, "fake-join Mara", ownServer.name);
   try {
-    const row = await addWaitingRestart(page, 30, "Skip this run");
+    const row = await addWaitingRestart(page, ownServer.name, 30, "Skip this run");
     await expectWaiting(page, row);
     await expect(row.locator(".schedule-next-run")).toContainText("then skipping");
     await expect(row.locator(".schedule-result")).toContainText("Waiting for players to leave");
@@ -94,7 +95,7 @@ test("a scheduled restart waits for players to leave", async ({ page }) => {
     await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.locator(".overview-facts")).toContainText("Restart waiting for players to leave, until");
   } finally {
-    await gameCommand(console, "fake-leave Mara");
+    await gameCommand(console, "fake-leave Mara", ownServer.name);
   }
   // The restart goes ahead once the server is empty.
   await page.getByRole("tab", { name: "Schedules" }).click();
@@ -106,12 +107,12 @@ test("a scheduled restart waits for players to leave", async ({ page }) => {
 
 // Cancelling a waiting run ends it in place, without acting: its row says
 // who cancelled it, and the server isn't waiting anymore.
-test("a waiting restart can be cancelled", async ({ page }) => {
+test("a waiting restart can be cancelled", async ({ page, ownServer }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();
-  await gameCommand(console, "fake-join Iris");
+  await gameCommand(console, "fake-join Iris", ownServer.name);
   try {
-    const row = await addWaitingRestart(page, 30, "Skip this run");
+    const row = await addWaitingRestart(page, ownServer.name, 30, "Skip this run");
     await expectWaiting(page, row);
     await row.getByRole("button", { name: "Cancel this run" }).click();
     await expect(page.locator("#detail-status")).toHaveText("Cancelled. The schedule’s next run is unchanged.");
@@ -122,15 +123,15 @@ test("a waiting restart can be cancelled", async ({ page }) => {
     await expect(page.locator("#activity-list")).toBeVisible();
     await expect(page.locator(".activity-waiting")).toHaveCount(0);
   } finally {
-    await gameCommand(console, "fake-leave Iris");
+    await gameCommand(console, "fake-leave Iris", ownServer.name);
   }
 });
 
 // An owner who hears a scheduled shutdown's warning in the game and pauses
 // the schedule calls it off: the players hear it's off.
-test("pausing a schedule after its warning tells the players", async ({ page }) => {
+test("pausing a schedule after its warning tells the players", async ({ page, ownServer }) => {
   test.setTimeout(300_000);
-  await openServer(page, "Survival");
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Action").selectOption("stop");
@@ -151,13 +152,13 @@ test("pausing a schedule after its warning tells the players", async ({ page }) 
   const console = await page.context().newPage();
   try {
     await expect(async () => {
-      await gameCommand(console, "fake-said");
+      await gameCommand(console, "fake-said", ownServer.name);
       await expect(console.locator(".xterm-rows")).toContainText("Server shutting down in 1 minute.", { timeout: 2000 });
     }).toPass({ timeout: 200_000, intervals: [5000] });
     await row.getByRole("button", { name: "Pause" }).click();
     await expect(page.locator("#detail-status")).toHaveText("Schedule paused.");
     await expect(async () => {
-      await gameCommand(console, "fake-said");
+      await gameCommand(console, "fake-said", ownServer.name);
       await expect(console.locator(".xterm-rows")).toContainText("Server shutting down in 1 minute. | Server shutdown cancelled.",
         { timeout: 2000 });
     }).toPass({ timeout: 30_000, intervals: [2000] });
@@ -168,38 +169,38 @@ test("pausing a schedule after its warning tells the players", async ({ page }) 
   }
 });
 
-test("a waiting restart goes ahead anyway at the end of its wait", async ({ page }) => {
+test("a waiting restart goes ahead anyway at the end of its wait", async ({ page, ownServer }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();
-  await gameCommand(console, "fake-join Ada");
+  await gameCommand(console, "fake-join Ada", ownServer.name);
   try {
-    const row = await addWaitingRestart(page, 1, "Go ahead anyway");
+    const row = await addWaitingRestart(page, ownServer.name, 1, "Go ahead anyway");
     await expectWaiting(page, row);
     await expect(row.locator(".schedule-next-run")).toContainText("then going ahead anyway");
     await expectResult(page, row, "Succeeded", 100_000);
   } finally {
-    await gameCommand(console, "fake-leave Ada");
+    await gameCommand(console, "fake-leave Ada", ownServer.name);
   }
 });
 
-test("a waiting restart is skipped when players stay online", async ({ page }) => {
+test("a waiting restart is skipped when players stay online", async ({ page, ownServer }) => {
   test.setTimeout(150_000);
   const console = await page.context().newPage();
-  await gameCommand(console, "fake-join Theo");
+  await gameCommand(console, "fake-join Theo", ownServer.name);
   try {
-    const row = await addWaitingRestart(page, 1, "Skip this run");
+    const row = await addWaitingRestart(page, ownServer.name, 1, "Skip this run");
     await expectWaiting(page, row);
     await expectResult(page, row, "Skipped: players were still online when the wait ended", 100_000);
     await expect(row.getByRole("link", { name: "View activity" })).toHaveCount(0);
   } finally {
-    await gameCommand(console, "fake-leave Theo");
+    await gameCommand(console, "fake-leave Theo", ownServer.name);
   }
 });
 
-test("a scheduled command reaches the game console", async ({ page }) => {
+test("a scheduled command reaches the game console", async ({ page, ownServer }) => {
   test.setTimeout(120_000);
   // The fake game answers "say" with what players see.
-  const row = await addCommand(page, "say Saving soon");
+  const row = await addCommand(page, ownServer.name, "say Saving soon");
   await expectResult(page, row, "Succeeded");
   await expect(row.locator(".schedule-reply")).toHaveText("Reply: [Server] Saving soon");
   await expect(row.locator("td").nth(2)).toHaveText("Completed");
@@ -208,15 +209,15 @@ test("a scheduled command reaches the game console", async ({ page }) => {
   await expect(page.locator("#selected-operation")).toContainText("Succeeded");
 });
 
-test("a scheduled command skips a stopped server", async ({ page }) => {
+test("a scheduled command skips a stopped server", async ({ page, ownServer }) => {
   test.setTimeout(120_000);
   // Stopped first, so no scheduler check can send the command before.
-  await dockerAction("minecraft", "stop");
+  await dockerAction(ownServer.container, "stop");
   try {
-    const row = await addCommand(page, "save-all");
+    const row = await addCommand(page, ownServer.name, "save-all");
     await expectResult(page, row, "Skipped: the server wasn't running");
     await expect(row.getByRole("link", { name: "View activity" })).toHaveCount(0);
   } finally {
-    await dockerAction("minecraft", "start");
+    await dockerAction(ownServer.container, "start");
   }
 });

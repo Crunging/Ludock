@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { test, expect, signIn, createUser, serverRow, openServer, shareServer, chooseAccess } from "./fixtures.mjs";
 
 async function openSharing(page, server) {
@@ -126,41 +127,45 @@ test("changing someone's access and stopping sharing from the server's page", as
 });
 
 test("a custom share gives exactly the actions chosen", async ({ session }) => {
+  // A retry runs on the same install, so the account is new each time.
+  const name = "picky-" + randomBytes(3).toString("hex");
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(admin, "picky", "picky password one");
-  await shareServer(admin, "Survival", "picky", ["Read logs"]);
-  const row = shareRow(admin.locator("#sharing"), "picky");
-  await expect(row.getByLabel("Access for picky")).toHaveValue("custom");
+  await createUser(admin, name, "picky password one");
+  await shareServer(admin, "Survival", name, ["Read logs"]);
+  const row = shareRow(admin.locator("#sharing"), name);
+  await expect(row.getByLabel(`Access for ${name}`)).toHaveValue("custom");
   await expect(row.getByLabel("See the server")).toBeChecked();
   await expect(row.getByLabel("Read logs")).toBeChecked();
   await expect(row.getByLabel("Start", { exact: true })).not.toBeChecked();
 
   const picky = await session();
-  await signIn(picky, "picky", "picky password one");
+  await signIn(picky, name, "picky password one");
   await picky.getByRole("link", { name: "Survival", exact: true }).click();
   await expect(picky.locator(".detail-actions").getByRole("link", { name: "Logs" })).toBeVisible();
   await expect(picky.locator(".detail-actions").getByRole("button")).toHaveCount(0);
   await admin.goto("/users");
-  await expect(admin.getByRole("list", { name: "Servers shared with picky" })).toHaveText("Survival Custom");
+  await expect(admin.getByRole("list", { name: `Servers shared with ${name}` })).toHaveText("Survival Custom");
 });
 
 test("making someone an administrator and back starts them with nothing shared", async ({ session }) => {
+  // A retry runs on the same install, so the account is new each time.
+  const name = "deputy-" + randomBytes(3).toString("hex");
   const admin = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await createUser(admin, "deputy", "deputy password one");
-  await shareServer(admin, "valheim", "deputy", "Full access");
+  await createUser(admin, name, "deputy password one");
+  await shareServer(admin, "valheim", name, "Full access");
   await admin.goto("/users");
-  const user = admin.locator(".user-row", { has: admin.getByText("deputy", { exact: true }) });
+  const user = admin.locator(".user-row", { has: admin.getByText(name, { exact: true }) });
   await user.getByRole("button", { name: "Make administrator" }).click();
-  await admin.getByRole("dialog", { name: "Make deputy an administrator?" }).getByRole("button", { name: "Make administrator" }).click();
+  await admin.getByRole("dialog", { name: `Make ${name} an administrator?` }).getByRole("button", { name: "Make administrator" }).click();
   await expect(user).toContainText("Administrator · every server and setting");
 
   const deputy = await session();
-  await signIn(deputy, "deputy", "deputy password one");
+  await signIn(deputy, name, "deputy password one");
   await expect(deputy.getByRole("link", { name: "Users" })).toBeVisible();
   await expect(serverRow(deputy, "Survival")).toBeVisible();
 
   await user.getByRole("button", { name: "Make member" }).click();
-  await admin.getByRole("dialog", { name: "Make deputy a member?" }).getByRole("button", { name: "Make member" }).click();
+  await admin.getByRole("dialog", { name: `Make ${name} a member?` }).getByRole("button", { name: "Make member" }).click();
   await expect(user).toContainText("Nothing shared yet");
   await deputy.goto("/");
   await expect(deputy.getByText("No servers shared with you yet")).toBeVisible();

@@ -5,10 +5,12 @@ import { test, expect, asAdmin, openServer, serverRow, expectOperationSucceeded,
 
 asAdmin();
 
-const image = "itzg/minecraft-server:java21";
-
-/** Points a tag in the fake daemon's registry at a new image ID, or makes its lookups fail with status. */
-function registry(query) {
+/**
+ * Points image's tag in the fake daemon's registry at a new image ID, or
+ * makes its lookups fail with status. Each journey updates a server of its
+ * own, whose tag no other server uses.
+ */
+function registry(image, query) {
   return new Promise((resolve, reject) => {
     const call = request({ socketPath: join(process.env.LUDOCK_E2E_DIR, "docker", "docker.sock"), method: "POST",
       path: "/fake/registry?" + new URLSearchParams({ image, ...query }) }, (response) => {
@@ -31,42 +33,42 @@ async function checkNow(page, text) {
 }
 
 /** Starts an update without a backup, confirming in the dialog. */
-async function startUpdate(page) {
+async function startUpdate(page, server) {
   const form = page.locator("#update-panel form");
   await form.getByLabel("Back up first").uncheck();
-  await form.getByLabel(/Type Survival to skip the backup/).fill("Survival");
+  await form.getByLabel(`Type ${server} to skip the backup`).fill(server);
   await form.getByRole("button", { name: "Update server" }).click();
-  await page.getByRole("dialog", { name: "Update Survival?" }).getByRole("button", { name: "Update server" }).click();
+  await page.getByRole("dialog", { name: `Update ${server}?` }).getByRole("button", { name: "Update server" }).click();
 }
 
-async function updateSurvival(page) {
-  await startUpdate(page);
+async function update(page, server) {
+  await startUpdate(page, server);
   await expectOperationSucceeded(page);
 }
 
 // The fake daemon offers a newer image on the first pull. Updating needs no
 // setup: Ludock recreates the container through Docker alone.
-test("updating a server's image, then finding it current", async ({ page }) => {
-  await openServer(page, "Survival");
+test("updating a server's image, then finding it current", async ({ page, ownServer }) => {
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Update" }).click();
   const form = page.locator("#update-panel form");
-  await expect(form.locator(".metadata-list")).toContainText("itzg/minecraft-server:java21");
+  await expect(form.locator(".metadata-list")).toContainText(ownServer.image);
   await form.getByText("What gets replaced").click();
   await expect(form.locator(".disclosure").first()).toContainText("including unnamed ones");
   await expect(form.getByLabel("Back up first")).toBeChecked();
   await expect(form.getByLabel("Update even if the image is already current")).toBeHidden();
   // Cancelling the confirmation starts nothing.
   await form.getByRole("button", { name: "Update server" }).click();
-  const confirm = page.getByRole("dialog", { name: "Update Survival?" });
+  const confirm = page.getByRole("dialog", { name: `Update ${ownServer.name}?` });
   await expect(confirm).toContainText("Connected players are disconnected");
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(page).not.toHaveURL(/[?&]operation=/);
-  await updateSurvival(page);
+  await update(page, ownServer.name);
   await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
 
   // The replacement is the same server, now running the pulled image.
   await page.getByRole("tab", { name: "Update" }).click();
-  await startUpdate(page);
+  await startUpdate(page, ownServer.name);
   await expect(page.locator("#selected-operation")).toContainText("Already current", { timeout: 45_000 });
   await page.getByRole("link", { name: "Update anyway" }).click();
   await expect(form.getByLabel("Update even if the image is already current")).toBeChecked();
@@ -115,13 +117,13 @@ async function webhook(page) {
 // the list and the Update tab, a destination that chose newer images is told
 // once, and updating
 // clears it.
-test("finding a newer image, being told once, and updating to it", async ({ page }) => {
+test("finding a newer image, being told once, and updating to it", async ({ page, ownServer }) => {
   // Manual checks are 10 seconds apart, and this one waits that out twice.
   test.slow();
   const hook = await webhook(page);
   try {
-    await registry({ id: "sha256:" + "3".repeat(64) });
-    await openServer(page, "Survival");
+    await registry(ownServer.image, { id: "sha256:" + "3".repeat(64) });
+    await openServer(page, ownServer.name);
     await checkNow(page, "A newer image is available.");
     const check = page.locator("#image-check");
     // Minecraft's image downloads the game on start, so the notice says which
@@ -130,24 +132,24 @@ test("finding a newer image, being told once, and updating to it", async ({ page
     await expect(check).toContainText("Last checked");
 
     await page.goto("/");
-    await expect(serverRow(page, "Survival").getByRole("link", { name: "Update available" })).toBeVisible();
+    await expect(serverRow(page, ownServer.name).getByRole("link", { name: "Update available" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(1);
 
     await expect.poll(() => hook.alerts().length, { timeout: 30_000 }).toBe(1);
-    expect(hook.alerts()[0].message).toMatch(/^Survival: a newer image is available\./);
+    expect(hook.alerts()[0].message).toMatch(new RegExp(`^${ownServer.name}: a newer image is available\\.`));
     expect(JSON.stringify(hook.alerts()[0])).not.toContain("itzg");
     // Checking again finds the same version, which was already announced.
-    await openServer(page, "Survival");
+    await openServer(page, ownServer.name);
     await page.waitForTimeout(10_000);
     await checkNow(page, "A newer image is available.");
     await page.waitForTimeout(3_000);
     expect(hook.alerts()).toHaveLength(1);
 
-    await updateSurvival(page);
+    await update(page, ownServer.name);
     await page.goto("/");
-    await expect(serverRow(page, "Survival")).toBeVisible();
+    await expect(serverRow(page, ownServer.name)).toBeVisible();
     await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
-    await openServer(page, "Survival");
+    await openServer(page, ownServer.name);
     await checkNow(page, "This server runs the newest image its tag points to.");
     await expect(page.locator("#image-check .alert")).toHaveCount(0);
     // An update started in the panel shows its result there; only a failure
@@ -161,33 +163,33 @@ test("finding a newer image, being told once, and updating to it", async ({ page
 // An owner who pulls a newer image with their own tool, such as
 // `docker compose pull`, without recreating the server keeps it in Ludock,
 // though Docker then lists the container by its image's ID.
-test("pulling a newer image outside Ludock keeps the server", async ({ page }) => {
-  await registry({ id: "sha256:" + "5".repeat(64) });
-  await fake("/images/create", { fromImage: image });
+test("pulling a newer image outside Ludock keeps the server", async ({ page, ownServer }) => {
+  await registry(ownServer.image, { id: "sha256:" + "5".repeat(64) });
+  await fake("/images/create", { fromImage: ownServer.image });
   await page.goto("/");
-  await expect(serverRow(page, "Survival")).toContainText("Running");
+  await expect(serverRow(page, ownServer.name)).toContainText("Running");
   await expect(page.getByText("Server missing in Docker")).toHaveCount(0);
-  await openServer(page, "Survival");
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Update" }).click();
-  await updateSurvival(page);
+  await update(page, ownServer.name);
 });
 
 // A registry that refuses is not an alert: the Update tab says so quietly.
-test("a registry that refuses the check", async ({ page }) => {
-  await registry({ status: "401" });
+test("a registry that refuses the check", async ({ page, ownServer }) => {
+  await registry(ownServer.image, { status: "401" });
   try {
-    await openServer(page, "Survival");
+    await openServer(page, ownServer.name);
     await checkNow(page, "The last check couldn’t reach the registry, or the registry refused it.");
     await expect(page.locator("#image-check .alert")).toHaveCount(0);
   } finally {
-    await registry({ status: "0" });
+    await registry(ownServer.image, { status: "0" });
   }
 });
 
 // Turning the checks off hides what they found until they are on again.
-test("turning image update checks off", async ({ page }) => {
-  await registry({ id: "sha256:" + "4".repeat(64) });
-  await openServer(page, "Survival");
+test("turning image update checks off", async ({ page, ownServer }) => {
+  await registry(ownServer.image, { id: "sha256:" + "4".repeat(64) });
+  await openServer(page, ownServer.name);
   await checkNow(page, "A newer image is available.");
 
   const save = async (on) => {
@@ -198,18 +200,21 @@ test("turning image update checks off", async ({ page }) => {
     await form.getByRole("button", { name: "Save image update settings" }).click();
     await expect(form.locator(".alert--success")).toHaveText(`Image update checks turned ${on ? "on" : "off"}.`);
   };
-  await save(false);
+  try {
+    await save(false);
+    await page.goto("/");
+    await expect(serverRow(page, ownServer.name)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
+    await openServer(page, ownServer.name);
+    await page.getByRole("tab", { name: "Update" }).click();
+    await expect(page.locator("#image-check")).toContainText("Checks for newer images are off.");
+    await expect(page.locator("#image-check").getByRole("button", { name: "Check now" })).toHaveCount(0);
+  } finally {
+    // The setting is the whole install's.
+    await save(true);
+  }
   await page.goto("/");
-  await expect(serverRow(page, "Survival")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Update available" })).toHaveCount(0);
-  await openServer(page, "Survival");
-  await page.getByRole("tab", { name: "Update" }).click();
-  await expect(page.locator("#image-check")).toContainText("Checks for newer images are off.");
-  await expect(page.locator("#image-check").getByRole("button", { name: "Check now" })).toHaveCount(0);
-
-  await save(true);
-  await page.goto("/");
-  await expect(serverRow(page, "Survival").getByRole("link", { name: "Update available" })).toBeVisible();
+  await expect(serverRow(page, ownServer.name).getByRole("link", { name: "Update available" })).toBeVisible();
 });
 
 // Ludock checks its own image as it checks a server's. Pinned by digest, as

@@ -164,13 +164,22 @@ func (f *fixture) run(t *testing.T, kind string, input map[string]any) *ops.Job 
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		current, _ := f.runner.Get(ctx, job.ID)
-		if current.Status != ops.Queued && current.Status != ops.Running {
+	return finished(t, f.runner, job.ID)
+}
+
+// finished waits for a job to end, until shortly before go test's own
+// deadline: a loaded machine slows a job down many times over, and one that
+// hangs still fails.
+func finished(t *testing.T, runner *ops.Runner, id string) *ops.Job {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Minute)
+	if end, ok := t.Deadline(); ok {
+		deadline = end.Add(-min(10*time.Second, time.Until(end)/10))
+	}
+	for ; time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if current, _ := runner.Get(ctx, id); current.Status != ops.Queued && current.Status != ops.Running {
 			return current
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("job did not finish")
 	return nil
@@ -572,7 +581,7 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 	f := setup(t)
 	logical, _ := f.jobs.Identity.Get(ctx, f.serverID)
 	// Recovery keeps the deadline in milliseconds, so the test does too.
-	deadline := time.UnixMilli(time.Now().Add(400 * time.Millisecond).UnixMilli())
+	deadline := time.UnixMilli(time.Now().Add(time.Second).UnixMilli())
 	job := &ops.Context{Job: &ops.Job{ID: "stop", ServerID: f.serverID, ActorID: "admin", Kind: "stop",
 		BindingRevision: logical.BindingRevision, Recovery: ops.Recovery{ContainerID: logical.ContainerID,
 			StopStarted: true, StopRecoveryDeadlineAt: deadline.UnixMilli(), LockKeys: []string{locks.ServerKey(f.serverID)}}}}
@@ -584,7 +593,16 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 		_, err := f.jobs.recoverLifecycle(ctx, job)
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	for waited := time.Now(); !f.jobs.Locks.ServerBusy(f.serverID); time.Sleep(time.Millisecond) {
+		select {
+		case err := <-done:
+			t.Fatal("recovery ended without holding the server:", err)
+		default:
+		}
+		if time.Since(waited) > 10*time.Second {
+			t.Fatal("recovery never held the server")
+		}
+	}
 	if release, err := f.jobs.Locks.Acquire([]string{locks.ServerKey(f.serverID)}, nil); err == nil {
 		release()
 		t.Fatal("new work could take the server while its stop may still be running")

@@ -45,10 +45,16 @@ The Playwright journeys in `e2e/journeys` are the main suite. They build the
 real binary and `cmd/fakedocker`, start one of each on fresh temporary data for
 every worker, and use the product as people do. Add or extend a journey for
 anything a user can reach in the browser; Go unit tests are for what a journey
-can't reach. Workers run whole files, so a file must pass on a fresh server
-without the files before it and leave each server as the next file expects it
+can't reach. A journey that changes a server's state, files, schedules,
+backups, or sharing takes the `ownServer` fixture: a running Minecraft server
+like Survival that only it sees, added for it and removed after
+(`addServer()`). Journeys that only look stay on the shared servers. Workers
+run whole files, so a file must pass on a fresh install without the files
+before it and leave each shared server as the next file expects it
 (`restoreServer()`). A file whose journeys each pass on their own can set
 `test.describe.configure({ mode: "parallel" })` to spread them over workers.
+Accounts a journey creates need names of their own too, such as one built
+from `ownServer.container`, since a retry runs on the same install.
 `--workers=1` runs every file on one server. CI retries a failed journey once
 to show whether it's flaky, but a flaky journey still fails the run.
 
@@ -60,7 +66,10 @@ warned restart waits one. Shorten what Ludock lets you, such as the shortest
 "Wait before alerting", and start a server through Ludock after changing it,
 which replaces an earlier stop's quiet time with the new wait. The `slow`
 project runs beside `quick`, everything else, so the whole suite takes about
-three minutes locally with 6 and 3 workers; each worker needs about 400 MB. CI
+three minutes locally with 6 and 3 workers. Each worker needs about 600 MB,
+and a machine that runs short of memory stalls every journey at once, so a
+local run takes workers for at most half the memory free when it starts,
+from two to nine. CI
 runs each project in two jobs, with a worker for each slow journey, so a slow
 job takes about as long as its longest journey. Ordering a slow file's longest
 journeys first keeps one from starting last.
@@ -74,12 +83,14 @@ daemon's controls, such as `/fake/disk`. Every page fails its journey on a scrip
 dialog. A journey that needs a fresh install, such as the first-run checklist,
 starts its own stack with `freshStack()` from `setup.mjs`.
 
-Locally, point the journeys at an installed Chromium with
-`LUDOCK_E2E_CHROMIUM=/path/to/chrome`, or run `npx playwright install chromium`
-once. `LUDOCK_E2E_LOGS=1` prints the servers' output and `LUDOCK_E2E_KEEP=1`
-keeps their temporary data. That data goes in the system temporary folder,
-which needs more than 5 GiB free: backups keep that much in reserve and
-refuse to run otherwise. Point `TMPDIR` at a roomier disk if it is smaller.
+Locally, run `npx playwright install chromium` once, or point the journeys at
+an installed Chromium with `LUDOCK_E2E_CHROMIUM=/path/to/chrome`. Playwright's
+own headless shell needs much less memory than a full Chrome. Each stack
+listens on a port the system hands out; `LUDOCK_E2E_PORT` picks consecutive
+ports from that one instead. `LUDOCK_E2E_LOGS=1` prints the servers' output and
+`LUDOCK_E2E_KEEP=1` keeps their temporary data. Backups keep 5 GiB free in
+their folder, so that data goes in the system temporary folder only when it
+has 8 GiB free, and in `~/.cache/ludock-e2e` otherwise.
 
 ### Measuring
 

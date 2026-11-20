@@ -1,6 +1,8 @@
 import { test, expect, asAdmin, createUser, openServer, signIn, shareServer } from "./fixtures.mjs";
 
 asAdmin();
+// Each journey schedules on a server of its own.
+test.describe.configure({ mode: "parallel" });
 
 /** Opens the schedule form's More options once the page has filled in the
  * browser's time zone; typing earlier would add to it. */
@@ -10,8 +12,8 @@ async function moreOptions(form) {
   if (!(await more.evaluate((details) => details.open))) await more.locator("summary").click();
 }
 
-test("scheduling, editing, pausing, and deleting a restart", async ({ page, session }) => {
-  await openServer(page, "Survival");
+test("scheduling, editing, pausing, and deleting a restart", async ({ page, session, ownServer }) => {
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await moreOptions(form);
@@ -61,7 +63,7 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
   await page.getByRole("tab", { name: "Schedules" }).click();
   await row.getByRole("link", { name: "Edit" }).click();
   const other = await session({ storageState: process.env.LUDOCK_E2E_ADMIN_STATE });
-  await openServer(other, "Survival");
+  await openServer(other, ownServer.name);
   await other.getByRole("tab", { name: "Schedules" }).click();
   await other.locator("#schedule-list tbody tr", { hasText: "weekdays" }).getByRole("button", { name: "Pause" }).click();
   await expect(other.locator("#detail-status")).toHaveText("Schedule paused.");
@@ -93,8 +95,8 @@ test("scheduling, editing, pausing, and deleting a restart", async ({ page, sess
 // The common case needs no choices: a daily restart at 08:00 in the
 // browser's time zone that backs up first, waits for players to leave, and
 // warns anyone still on. The rest waits under More options.
-test("a new schedule opens on a daily restart that backs up first", async ({ page }) => {
-  await openServer(page, "Survival");
+test("a new schedule opens on a daily restart that backs up first", async ({ page, ownServer }) => {
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await expect(form.getByLabel("Action")).toHaveValue("restart");
@@ -131,13 +133,14 @@ test("a new schedule opens on a daily restart that backs up first", async ({ pag
   await expect(row).toHaveCount(0);
 });
 
-test("a new schedule starts on an action its owner can use", async ({ page, session }) => {
-  await createUser(page, "scheduler", "scheduler password one");
-  await shareServer(page, "Survival", "scheduler", ["Restart", "Set up their own schedules"]);
+test("a new schedule starts on an action its owner can use", async ({ page, session, ownServer }) => {
+  const scheduler = "scheduler-" + ownServer.container;
+  await createUser(page, scheduler, "scheduler password one");
+  await shareServer(page, ownServer.name, scheduler, ["Restart", "Set up their own schedules"]);
 
   const operator = await session({ storageState: { cookies: [], origins: [] } });
-  await signIn(operator, "scheduler", "scheduler password one");
-  await operator.getByRole("link", { name: "Survival", exact: true }).click();
+  await signIn(operator, scheduler, "scheduler password one");
+  await operator.getByRole("link", { name: ownServer.name, exact: true }).click();
   await operator.getByRole("tab", { name: "Schedules" }).click();
   const form = operator.locator("#schedule-form");
   await expect(form.getByLabel("Action")).toHaveValue("restart");
@@ -149,7 +152,7 @@ test("a new schedule starts on an action its owner can use", async ({ page, sess
   // Sending commands needs console access too.
   await expect(form.getByLabel("Action").locator("option", { hasText: "Send command" })).toHaveCount(0);
 
-  await shareServer(page, "Survival", "scheduler", ["Restart", "Set up their own schedules", "Send console commands"]);
+  await shareServer(page, ownServer.name, scheduler, ["Restart", "Set up their own schedules", "Send console commands"]);
   await operator.reload();
   await operator.locator("#schedule-form").getByLabel("Action").selectOption("command");
   await expect(operator.locator("#schedule-form").getByLabel("Console command")).toBeVisible();
@@ -157,19 +160,20 @@ test("a new schedule starts on an action its owner can use", async ({ page, sess
 
 // A member who manages schedules sees the administrator's schedule, and who
 // set it up, but can only read it.
-test("a member sees the owner's schedules read-only", async ({ page, session }) => {
-  await openServer(page, "Survival");
+test("a member sees the owner's schedules read-only", async ({ page, session, ownServer }) => {
+  const planner = "planner-" + ownServer.container;
+  await openServer(page, ownServer.name);
   await page.getByRole("tab", { name: "Schedules" }).click();
   const form = page.locator("#schedule-form");
   await form.getByLabel("Time", { exact: true }).fill("03:10");
   await form.getByRole("button", { name: "Add schedule" }).click();
   await expect(page).toHaveURL(/saved=created/);
   try {
-    await createUser(page, "planner", "planner password one");
-    await shareServer(page, "Survival", "planner", ["Restart", "Set up their own schedules"]);
+    await createUser(page, planner, "planner password one");
+    await shareServer(page, ownServer.name, planner, ["Restart", "Set up their own schedules"]);
     const member = await session({ storageState: { cookies: [], origins: [] } });
-    await signIn(member, "planner", "planner password one");
-    await member.getByRole("link", { name: "Survival", exact: true }).click();
+    await signIn(member, planner, "planner password one");
+    await member.getByRole("link", { name: ownServer.name, exact: true }).click();
     await expect(member.locator(".overview-facts")).not.toContainText("Nothing scheduled");
     await member.getByRole("tab", { name: "Schedules" }).click();
     const row = member.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
@@ -179,7 +183,7 @@ test("a member sees the owner's schedules read-only", async ({ page, session }) 
     await expect(row.getByRole("button", { name: "Delete" })).toBeDisabled();
   } finally {
     await page.goto("/servers");
-    await openServer(page, "Survival");
+    await openServer(page, ownServer.name);
     await page.getByRole("tab", { name: "Schedules" }).click();
     const row = page.locator("#schedule-list tbody tr", { hasText: "03:10, every day" });
     await row.getByRole("button", { name: "Delete" }).click();

@@ -217,13 +217,14 @@ func TestMountProof(t *testing.T) {
 // Periodic checks at most once a second and keeps a refusal.
 func TestPeriodicCheckLimit(t *testing.T) {
 	calls, refuse := 0, false
-	check := Periodic(func() error {
+	clock := time.Now()
+	check := periodic(func() error {
 		calls++
 		if refuse {
 			return errors.New("revoked")
 		}
 		return nil
-	})
+	}, func() time.Time { return clock })
 	for range 1000 {
 		if err := check(); err != nil {
 			t.Fatal(err)
@@ -232,7 +233,11 @@ func TestPeriodicCheckLimit(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("checked", calls, "times within a second")
 	}
-	time.Sleep(1100 * time.Millisecond)
+	clock = clock.Add(999 * time.Millisecond)
+	if check(); calls != 1 {
+		t.Fatal("checked again within a second")
+	}
+	clock = clock.Add(time.Millisecond)
 	refuse = true
 	if check() == nil || calls != 2 {
 		t.Fatal("did not check again after a second", calls)

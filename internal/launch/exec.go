@@ -105,15 +105,19 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // database reads. The first call always checks, and once check refuses, every
 // later call refuses.
 func Periodic(check func() error) func() error {
+	return periodic(check, time.Now)
+}
+
+func periodic(check func() error, now func() time.Time) func() error {
 	if check == nil {
 		return nil
 	}
 	var last time.Time
 	var refused error
 	return func() error {
-		if refused == nil && (last.IsZero() || time.Since(last) >= time.Second) {
+		if refused == nil && (last.IsZero() || now().Sub(last) >= time.Second) {
 			if refused = check(); refused == nil {
-				last = time.Now()
+				last = now()
 			}
 		}
 		return refused

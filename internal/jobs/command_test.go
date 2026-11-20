@@ -68,13 +68,7 @@ func (f *fixture) scheduleCommand(t *testing.T, serverID, owner, command string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if current, _ := f.runner.Get(ctx, job.ID); current.Status != ops.Queued && current.Status != ops.Running {
-			return current
-		}
-	}
-	t.Fatal("command did not finish")
-	return nil
+	return finished(t, f.runner, job.ID)
 }
 
 // A scheduled command reaches the game once, and only a redacted, bounded,
@@ -140,7 +134,7 @@ func TestScheduledCommandSkipsBusyServer(t *testing.T) {
 	started := time.Now()
 	job := f.scheduleCommand(t, serverID, "admin", "save-all")
 	if job.Status != ops.Skipped || job.Result["guidance"] != "Skipped: the server was busy with other work" ||
-		time.Since(started) > 2*time.Second || len(received()) != 0 {
+		time.Since(started) > commandTimeout/2 || len(received()) != 0 {
 		t.Fatalf("%+v", job)
 	}
 }

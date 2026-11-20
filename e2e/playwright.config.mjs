@@ -1,19 +1,25 @@
 // Journeys run the real Ludock binary against cmd/fakedocker. Each worker has
 // its own server and fake daemon, and runs whole files in order, so a file's
 // journeys share state but never see another worker's.
+import { freemem } from "node:os";
 import { defineConfig } from "@playwright/test";
 
-export const port = Number(process.env.LUDOCK_E2E_PORT || 39871);
+// Stacks listen on ports the system hands out, or from LUDOCK_E2E_PORT up.
+export const port = Number(process.env.LUDOCK_E2E_PORT || 0);
 
-// Locally both projects share one run, each held to its share of workers;
-// a worker takes about 400 MB with its browser and server. CI runs each
-// project in jobs of its own and sets --workers there.
-const share = (workers) => (process.env.CI ? {} : { workers });
+// Locally both projects share one run, each held to its share of workers.
+// A worker takes about 600 MB with its browser and servers, and a machine
+// that runs out of memory stalls every journey at once, so a run takes
+// workers for at most half the memory free when it starts, from two to nine,
+// leaving the rest to whatever else runs. CI runs each project in jobs of
+// its own and sets --workers there.
+const workers = Math.max(2, Math.min(9, Math.floor(freemem() / 2 / (600 * 1024 ** 2))));
+const share = (count) => (process.env.CI ? {} : { workers: count });
 
 export default defineConfig({
   testDir: "journeys",
   fullyParallel: false,
-  workers: 9,
+  workers,
   projects: [
     // Journeys that wait on Ludock's own clocks: readings, monitoring, the
     // scheduler, a warning's minute. They mostly wait, so more run at once,
