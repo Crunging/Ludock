@@ -122,7 +122,7 @@ func TestRestoreItemRefusesUnsafePaths(t *testing.T) {
 
 // A selective restore interrupted after its swap, with the replaced copy
 // still staged, is rolled back on startup: the current copy returns, the
-// stage is removed, and the server starts again.
+// stage is removed, the server starts again, and Activity says it was undone.
 func TestRestoreItemInterrupted(t *testing.T) {
 	f := setup(t)
 	backupID, rootID := f.itemBackup(t)
@@ -160,7 +160,8 @@ func TestRestoreItemInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered, _ := f.runner.Get(ctx, job.ID)
-	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") {
+	if recovered.Status != ops.Interrupted || !strings.Contains(recovered.Error, "restarted") ||
+		recovered.Result["guidance"] != "The restore was undone: the server’s files are as they were." {
 		t.Fatalf("%+v", recovered)
 	}
 	if read(t, filepath.Join(f.data, "world", "level.dat")) != "newer" || read(t, filepath.Join(f.data, "world", "today.dat")) != "today" ||

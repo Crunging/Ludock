@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -544,8 +545,10 @@ func publicFirst(err error) error {
 	return err
 }
 
-func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
-	return j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
+func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	// What recovery did with the data, for Activity.
+	outcome := "Nothing was restored: the server’s files are as they were."
+	err := j.withRecoveryLocks(ctx, job, func(server *servers.Context) error {
 		entries, err := journals(job)
 		if err != nil {
 			return err
@@ -579,8 +582,10 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
 			state, _ := restoreState(job)
 			if state != nil && state.Status == "committed" {
 				err = j.cleanupRestore(ctx, server, job, data)
+				outcome = "The restore had finished: the server’s files are the backup’s."
 			} else {
 				err = j.rollbackRestore(ctx, server, job, data)
+				outcome = "The restore was undone: the server’s files are as they were."
 			}
 			data.Cleanup()
 			if err != nil {
@@ -589,4 +594,13 @@ func (j *Jobs) recoverRestore(ctx context.Context, job *ops.Context) error {
 		}
 		return j.restoreInitialState(ctx, server, job)
 	})
+	if err != nil {
+		return nil, err
+	}
+	result := maps.Clone(job.Job.Result)
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["guidance"] = outcome
+	return result, nil
 }

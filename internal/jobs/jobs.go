@@ -122,7 +122,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		return map[string]any{"action": "command"}, nil
 	}})
 	runner.Register("restore", ops.Handler{Run: j.runRestore, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-		return nil, j.recoverRestore(ctx, job)
+		return j.recoverRestore(ctx, job)
 	}})
 	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)
