@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
@@ -252,18 +251,7 @@ func publicMessage(err error) string {
 	return "Internal server error"
 }
 
-// causeFields describe an unexpected error by its types and any Docker
-// status. Their messages can name host paths, so they are never logged.
-func causeFields(err error) []logging.Field {
-	var kinds []string
-	for current := err; current != nil && len(kinds) < 8; current = errors.Unwrap(current) {
-		kinds = append(kinds, fmt.Sprintf("%T", current))
-	}
-	fields := []logging.Field{logging.F("errorTypes", strings.Join(kinds, " > "))}
-	if status := docker.StatusCode(err); status != 0 {
-		fields = append(fields, logging.F("dockerStatus", status))
-	}
-	return fields
-}
+// causeFields describe an unexpected error without its message.
+func causeFields(err error) []logging.Field { return logging.Cause(err, docker.StatusCode(err)) }
 
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }

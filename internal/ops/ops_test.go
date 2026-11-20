@@ -1,8 +1,12 @@
 package ops
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,8 +14,10 @@ import (
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
+	"github.com/Crunging/Ludock/internal/logging"
 )
 
 var ctx = context.Background()
@@ -473,5 +479,31 @@ func TestCancelRefusesWorkThatActed(t *testing.T) {
 		if _, err := r.Cancel(ctx, job.ID, "admin", nil); !apperr.Is(err, state.code) {
 			t.Fatal(state, err)
 		}
+	}
+}
+
+// An operation that fails with an unexpected error tells people the log has
+// the details, so the log names the error's types and Docker status, though
+// never its message, which can hold a host path.
+func TestUnexpectedFailureIsLogged(t *testing.T) {
+	r, servers := setup(t, 1)
+	r.Register("backup", Handler{Run: func(context.Context, *Context) (map[string]any, error) {
+		return nil, fmt.Errorf("open /srv/secret/world: %w", &docker.APIError{Status: 500})
+	}})
+	var stdout, stderr bytes.Buffer
+	logging.SetOutput(&stdout, &stderr)
+	defer logging.SetOutput(os.Stdout, os.Stderr)
+	job, err := r.Enqueue(ctx, nil, EnqueueOptions{ServerID: servers[0], ActorID: "admin", Kind: "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitStatus(t, r, job.ID, Failed)
+	logged := stdout.String() + stderr.String()
+	if !strings.Contains(failed.Error, "log has the details") || !strings.Contains(logged, "*docker.APIError") ||
+		!strings.Contains(logged, `"dockerStatus":500`) || !strings.Contains(logged, job.ID) || strings.Contains(logged, "/srv/secret") {
+		t.Fatal(failed.Error, logged)
 	}
 }

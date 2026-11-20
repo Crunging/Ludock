@@ -30,18 +30,26 @@ func main() {
 	self := flag.String("self", "ludock-dev", "name of the fake Ludock container (LUDOCK_SELF_CONTAINER)")
 	backups := flag.String("backups", "", "backup roots mounted into the fake Ludock container, ':'-separated")
 	demo := flag.Bool("demo", false, "seed the servers shown in the README screenshots")
+	extra := flag.Int("extra", 0, "add this many more Minecraft servers, each with its own console and data folder")
+	socket := flag.String("socket", "", "socket path, if not DIR/docker.sock (unix socket paths are limited to about 100 bytes)")
 	flag.Parse()
 	if *directory == "" {
 		fmt.Fprintln(os.Stderr, "Usage: fakedocker -dir DIR [-backups DIR] [-demo]")
 		os.Exit(2)
 	}
 	os.MkdirAll(*directory, 0o755)
-	engine, err := fakedocker.Start(*directory)
+	if *socket == "" {
+		*socket = filepath.Join(*directory, "docker.sock")
+	}
+	engine, err := fakedocker.StartSocket(*socket)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	seed(engine, *directory, *self, *backups, *demo)
+	for index := 1; index <= *extra; index++ {
+		seedExtra(engine, *directory, index)
+	}
 	fmt.Println(engine.Socket)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -425,6 +433,28 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	engine.AddContainer(fakedocker.GameOptions{Name: "factorio", Image: "factoriotools/factorio:stable",
 		Mounts: []docker.MountPoint{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock", RW: true}},
 		Ports:  map[string][]docker.PortBinding{"34197/udp": {{HostIP: "0.0.0.0", HostPort: "34197"}}}})
+}
+
+// seedExtra adds a running Minecraft server with its own console, status
+// query, and data folder, for runs that need many servers.
+func seedExtra(engine *fakedocker.Engine, dir string, index int) {
+	name := fmt.Sprintf("minecraft-%d", index)
+	path := filepath.Join(dir, "data", name)
+	os.MkdirAll(filepath.Join(path, "world"), 0o755)
+	os.WriteFile(filepath.Join(path, "server.properties"), []byte("motd=Hello from "+name+"\n"), 0o644)
+	os.WriteFile(filepath.Join(path, "world", "level.dat"), []byte{0x1f, 0x8b, 0, 1, 2, 3}, 0o644)
+	game, rcon, query := minecraftGame("extra-rcon-secret")
+	id := engine.AddContainer(fakedocker.GameOptions{Name: name, Image: "itzg/minecraft-server:java21", Running: true,
+		Labels: map[string]string{"ludock.name": fmt.Sprintf("World %d", index), "ludock.query.port": query},
+		Env:    []string{"RCON_PORT=" + rcon, "RCON_PASSWORD=extra-rcon-secret", "EULA=TRUE"},
+		Mounts: []docker.MountPoint{{Type: "bind", Source: path, Destination: path, RW: true}}})
+	engine.Update(id, func(c *fakedocker.Container) {
+		c.Files = map[string]string{}
+		game.publish = func(files map[string]string) {
+			engine.Update(id, func(c *fakedocker.Container) { maps.Copy(c.Files, files) })
+		}
+		c.Logs = []string{"[Server thread/INFO]: Done (3.2s)! For help, type \"help\""}
+	})
 }
 
 // seedDemo adds the servers shown in the README screenshots, with files and

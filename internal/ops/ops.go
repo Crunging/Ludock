@@ -16,6 +16,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/db"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/logging"
@@ -678,6 +679,10 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 	}()
 	fail := func(err error) {
 		message, _ := apperr.Public(err)
+		if _, public := apperr.As(err); !public {
+			log.Error("Operation failed unexpectedly", append([]logging.Field{logging.F("operation", rw.id), logging.F("kind", rw.kind)},
+				logging.Cause(err, docker.StatusCode(err))...)...)
+		}
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
 		finished := false
 		if r.persist(ctx, "finish", func() (err error) {

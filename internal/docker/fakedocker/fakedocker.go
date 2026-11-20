@@ -96,10 +96,87 @@ type Engine struct {
 	Creates []docker.ContainerCreate
 	// RegistryAuth records the X-Registry-Auth header of each registry lookup.
 	RegistryAuth []string
+	// Delay holds every Engine API request this long before it is handled,
+	// as a slow daemon would; faults fail or stall chosen requests.
+	Delay  time.Duration
+	faults []*fault
 
 	listener net.Listener
 	server   *http.Server
 	Socket   string
+}
+
+// fault fails (status) or stalls the next count requests whose
+// "METHOD path" matches.
+type fault struct {
+	match  *regexp.Regexp
+	status int
+	stall  bool
+	count  int
+}
+
+// AddFault fails the next count Engine API requests whose "METHOD path"
+// matches pattern with status, or with stall leaves them unanswered until the
+// client hangs up. A count below one means every match.
+func (e *Engine) AddFault(pattern string, status int, stall bool, count int) error {
+	match, err := regexp.Compile(pattern)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.faults = append(e.faults, &fault{match: match, status: status, stall: stall, count: count})
+	return nil
+}
+
+// ClearFaults removes the delay and every fault.
+func (e *Engine) ClearFaults() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.Delay, e.faults = 0, nil
+}
+
+// faultLocked uses up and returns the first fault matching request, if any.
+func (e *Engine) faultLocked(request string) *fault {
+	for index, f := range e.faults {
+		if !f.match.MatchString(request) {
+			continue
+		}
+		if f.count > 0 {
+			if f.count--; f.count == 0 {
+				e.faults = slices.Delete(e.faults, index, index+1)
+			}
+		}
+		return f
+	}
+	return nil
+}
+
+// Outage stops answering on the socket for duration, as a daemon that
+// exits and is started again would: connections close, event streams end,
+// and new connections are refused until it is back. Containers are kept.
+func (e *Engine) Outage(duration time.Duration) error {
+	e.mu.Lock()
+	for _, events := range e.events {
+		close(events)
+	}
+	e.events = nil
+	server := e.server
+	e.mu.Unlock()
+	server.Close()
+	os.Remove(e.Socket)
+	time.Sleep(duration)
+	listener, err := net.Listen("unix", e.Socket)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.listener = listener
+	e.server = &http.Server{Handler: http.HandlerFunc(e.serve)}
+	server = e.server
+	e.mu.Unlock()
+	go server.Serve(listener)
+	return nil
 }
 
 type exec struct {
@@ -112,7 +189,11 @@ type exec struct {
 }
 
 func Start(dir string) (*Engine, error) {
-	socket := filepath.Join(dir, "docker.sock")
+	return StartSocket(filepath.Join(dir, "docker.sock"))
+}
+
+// StartSocket serves on the unix socket at path.
+func StartSocket(socket string) (*Engine, error) {
 	os.Remove(socket)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -132,8 +213,9 @@ func (e *Engine) Close() error {
 		close(events)
 	}
 	e.events = nil
+	server := e.server
 	e.mu.Unlock()
-	return e.server.Close()
+	return server.Close()
 }
 
 var idCounter atomic.Int64
@@ -248,32 +330,51 @@ var (
 	distribution = regexp.MustCompile(`^/distribution/(.+)/json$`)
 )
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(value)
-}
-
-func fail(w http.ResponseWriter, status int) {
-	writeJSON(w, status, map[string]string{"message": "fake docker error"})
-}
-
-func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
-	e.mu.Lock()
-	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
-	failure := e.Fail
-	e.mu.Unlock()
-	if failure != 0 {
-		fail(w, failure)
+// control serves the /fake/ endpoints that journeys and tests use to change
+// the daemon; faults and delays never apply to them.
+func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/fake/fault":
+		// Injects faults: POST /fake/fault?delay=MS holds every request;
+		// &match=REGEXP with &status=CODE fails, or &stall=1 stalls, the next
+		// &count=N requests whose "METHOD path" matches (every one without a
+		// count); &clear=1 removes all of them first.
+		query := r.URL.Query()
+		if query.Get("clear") != "" {
+			e.ClearFaults()
+		}
+		if delay := query.Get("delay"); delay != "" {
+			ms, _ := strconv.Atoi(delay)
+			e.mu.Lock()
+			e.Delay = time.Duration(ms) * time.Millisecond
+			e.mu.Unlock()
+		}
+		if pattern := query.Get("match"); pattern != "" {
+			status, _ := strconv.Atoi(query.Get("status"))
+			count, _ := strconv.Atoi(query.Get("count"))
+			if err := e.AddFault(pattern, status, query.Get("stall") != "", count); err != nil {
+				fail(w, 400)
+				return
+			}
+		}
+		w.WriteHeader(204)
 		return
-	}
-	path := r.URL.Path
-	switch path {
-	case "/_ping":
-		w.Write([]byte("OK"))
+	case "/fake/outage":
+		// Goes away for a while, as a restarted daemon does:
+		// POST /fake/outage?seconds=N answers, then the socket closes.
+		seconds, _ := strconv.ParseFloat(r.URL.Query().Get("seconds"), 64)
+		w.WriteHeader(204)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			e.Outage(time.Duration(seconds * float64(time.Second)))
+		}()
 		return
-	case "/version":
-		writeJSON(w, 200, map[string]string{"ApiVersion": e.APIVersion, "MinAPIVersion": "1.24"})
+	case "/fake/requests":
+		// Lists every Engine API request so far, one "METHOD path" a line.
+		e.mu.Lock()
+		requests := strings.Join(e.Requests, "\n")
+		e.mu.Unlock()
+		w.Write([]byte(requests))
 		return
 	case "/fake/registry":
 		// Lets journeys publish a new version of a tag or break its registry:
@@ -336,6 +437,55 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		e.mu.Unlock()
 		w.WriteHeader(204)
+		return
+	}
+	fail(w, 404)
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(value)
+}
+
+func fail(w http.ResponseWriter, status int) {
+	writeJSON(w, status, map[string]string{"message": "fake docker error"})
+}
+
+func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/fake/") {
+		e.control(w, r)
+		return
+	}
+	e.mu.Lock()
+	e.Requests = append(e.Requests, r.Method+" "+r.URL.Path)
+	failure, delay, injected := e.Fail, e.Delay, e.faultLocked(r.Method+" "+r.URL.Path)
+	e.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	if injected != nil && injected.stall {
+		<-r.Context().Done()
+		return
+	}
+	if injected != nil {
+		failure = injected.status
+	}
+	if failure != 0 {
+		fail(w, failure)
+		return
+	}
+	switch path {
+	case "/_ping":
+		w.Write([]byte("OK"))
+		return
+	case "/version":
+		writeJSON(w, 200, map[string]string{"ApiVersion": e.APIVersion, "MinAPIVersion": "1.24"})
 		return
 	}
 	match := versioned.FindStringSubmatch(path)
@@ -884,6 +1034,10 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		}
 		e.emitLocked("stop", id)
 		e.emitLocked("die", id)
+		// Docker removes an AutoRemove container once it stops.
+		if autoRemove, _ := c.HostConfig["AutoRemove"].(bool); autoRemove {
+			e.removeLocked(id)
+		}
 		e.mu.Unlock()
 		w.WriteHeader(204)
 	case action == "/restart" && r.Method == "POST":
