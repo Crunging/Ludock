@@ -72,16 +72,6 @@ type DiskState struct {
 	Revision int64 `json:"revision,omitempty"`
 }
 
-// measuredSince reports whether every folder was measured at or after since.
-func (d DiskState) measuredSince(since int64) bool {
-	for _, folder := range d.Folders {
-		if folder.Unknown || folder.MeasuredAt < since {
-			return false
-		}
-	}
-	return len(d.Folders) > 0 && since != 0
-}
-
 func (d DiskState) alerting() bool {
 	for _, folder := range d.Folders {
 		if folder.AlertSince != 0 {
@@ -298,8 +288,7 @@ func bound(server identity.Server, current map[string]servers.Container) bool {
 }
 
 // CheckDisk measures the data folders of monitored servers that are due,
-// more often while someone is watching, and a stopped one unwatched only
-// once after it stops. current is the
+// running or not, more often while someone is watching. current is the
 // tick's discovery result, or nil when Docker is unreachable; then nothing
 // is measured.
 func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Container, now int64, watched bool) error {
@@ -339,14 +328,6 @@ func (s *Service) CheckDisk(ctx context.Context, current map[string]servers.Cont
 			interval = DiskInterval
 		}
 		if previous.CheckedAt != 0 && now-previous.CheckedAt < interval {
-			continue
-		}
-		// A stopped game writes nothing to its disk, so while nobody watches,
-		// one measurement of every folder since it stopped stands until it
-		// starts again. An alerting disk is still measured, so its recovery
-		// is heard.
-		if container := current[server.ContainerID]; !watched && !previous.alerting() && container.State != "running" &&
-			previous.CheckedAt != 0 && previous.measuredSince(container.StateSince) {
 			continue
 		}
 		spaces, err := s.MeasureDisk(ctx, server)

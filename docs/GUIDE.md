@@ -438,8 +438,7 @@ Each alert is sent once, with another when it recovers. Stops and work started
 through Ludock don't alert, and a server that was already stopped when Ludock
 found it stays quiet until it runs. A game still starting, or whose status
 check is off or wrong, never counts as not answering. Disks are measured about
-every 10 minutes while someone has Ludock open and every 30 otherwise; while
-nobody has it open, a stopped server's disk is measured once after it stops.
+every 10 minutes while someone has Ludock open and every 30 otherwise.
 
 ### Notifications
 
