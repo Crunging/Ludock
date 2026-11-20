@@ -234,10 +234,10 @@ func TestRestoreJournalLeadsEachStep(t *testing.T) {
 			left: true, trace: checked},
 		{name: "started after unpacking", after: startedAfter("extract", "config"), status: ops.Failed, journal: "rolling_back staging,staging unsafe",
 			left: true, trace: extracted},
-		// The stopped server is checked before each root's swap, not between
-		// moving its data out and in.
-		{name: "started after a move out", after: startedAfter("moveOld", "world"), status: ops.Failed, journal: "rolling_back replaced,staging unsafe",
-			left: true, restored: true, trace: worldSwapped},
+		// The stopped server is checked again between moving a root's data
+		// out and the backup's in.
+		{name: "started after a move out", after: startedAfter("moveOld", "world"), status: ops.Failed, journal: "rolling_back old_moved,staging unsafe",
+			left: true, trace: slices.Concat(extracted, []string{"moveOld world: replacing moving_old,staging unsafe"})},
 		{name: "started before commit", after: startedAfter("moveNew", "config"), status: ops.Failed, journal: "rolling_back replaced,replaced unsafe",
 			left: true, restored: true, trace: swapped},
 		{name: "revoked after staging", after: revokedAfter("stage", "config"), status: ops.Failed, journal: "rolled_back", trace: slices.Concat(checked, unstaged)},
@@ -484,11 +484,10 @@ func lastRestore(f *fixture) string {
 	return id
 }
 
-// A server started elsewhere between a root's move out and move in should
-// stop the restore before the backup's data goes into the running server's
-// folder. Today the move in runs, and only the next root's check stops it.
+// A server started elsewhere between a root's move out and move in stops
+// the restore before the backup's data goes into the running server's
+// folder.
 func TestRestoreStoppedBeforeMoveIn(t *testing.T) {
-	t.Skip("known: no stopped check between moveOld and moveNew; left as is in the phases refactor")
 	f := setup(t)
 	input := map[string]any{"backupId": twoRootBackup(t, f), "confirmation": "mc"}
 	trace := f.traceRestore(startedAfter("moveOld", "world")(t, f))
