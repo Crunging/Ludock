@@ -68,10 +68,18 @@ type Container struct {
 	ConnectPort int
 	Console     *Console
 	// Query asks the game itself whether it answers, or is nil.
-	Query     *games.StatusQuery
-	FileRoots []files.Root
-	Ports     []Port
-	Created   int64
+	Query *games.StatusQuery
+	// QueryOff says in plain words why the game's status query is off in
+	// this setup, or is "".
+	QueryOff string
+	// HealthAnswers: a supported game without a status query whose image has
+	// a health check, which then says whether the game answers. HealthyAt is
+	// when the check last passed in Docker's recent results, or 0.
+	HealthAnswers bool
+	HealthyAt     int64
+	FileRoots     []files.Root
+	Ports         []Port
+	Created       int64
 	// Labels holds approved configuration labels only.
 	Labels map[string]string
 	// Source is why Ludock manages it: SourceImage, SourceLabel, or
@@ -486,12 +494,34 @@ func toContainer(info *docker.ContainerInspect) (*Container, error) {
 		gamePort = integration.GamePort
 	}
 	container.ConnectPort = connectPort(bindings, gamePort)
+	env := map[string]string{}
+	for _, entry := range info.Config.Env {
+		key, value, _ := strings.Cut(entry, "=")
+		env[key] = value
+	}
 	if adapter := games.ResolveAdapter(gameType, container.Labels); adapter != nil {
+		// A game that announces another way can warn players only while that
+		// way is on.
 		container.Console = &Console{ID: adapter.ID, Name: adapter.Name, CommandPlaceholder: adapter.CommandPlaceholder,
-			Commands: adapter.Commands, SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != "",
-			ListsPlayers: adapter.Players != nil}
+			Commands: adapter.Commands, ListsPlayers: adapter.Players != nil,
+			SupportsBroadcast: games.BroadcastTemplate(gameType, container.Labels) != "" && (adapter.Announce == nil || adapter.Announce.On(env))}
 	}
 	container.Query = games.ResolveQuery(gameType, container.Labels)
+	if container.Query != nil && container.Labels[games.LabelQuery] == "" {
+		if container.QueryOff = container.Query.Off(env); container.QueryOff != "" {
+			container.Query = nil
+		}
+	}
+	if container.Query == nil && games.Lookup(gameType) != nil && !games.QueryDisabled(container.Labels) && info.State.Health != nil {
+		container.HealthAnswers = true
+		if container.Health != "" {
+			for _, result := range info.State.Health.Log {
+				if result.ExitCode == 0 {
+					container.HealthyAt = max(container.HealthyAt, dockerTime(result.End))
+				}
+			}
+		}
+	}
 	container.FileRoots = files.Roots(gameType, container.Labels, identity.DockerMounts(info.Mounts))
 	return container, nil
 }

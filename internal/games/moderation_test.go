@@ -27,6 +27,9 @@ func TestModerationCommands(t *testing.T) {
 		"ark-survival-evolved":  {Kick: {"76561198000000000", "KickPlayer 76561198000000000"}, Ban: {"76561198000000000", "BanPlayer 76561198000000000"}},
 		"ark-survival-ascended": {Kick: {"0002a1b2c3d4e5f60718293a4b5c6d7e", "KickPlayer 0002a1b2c3d4e5f60718293a4b5c6d7e"}},
 		"7-days-to-die":         {Kick: {"171", "kick 171"}},
+		"terraria":              {Kick: {"Zed_2", "kick Zed_2"}, Ban: {"Zed_2", "ban Zed_2"}},
+		"minecraft-bedrock":     {Kick: {"Steve42", "kick Steve42"}},
+		"vintage-story":         {Kick: {"Ada_2", "/kick Ada_2"}},
 	} {
 		moderation := moderationOf(t, gameType)
 		for _, action := range []PlayerAction{Kick, Ban, Unban, Allow, Disallow} {
@@ -40,7 +43,7 @@ func TestModerationCommands(t *testing.T) {
 			}
 		}
 	}
-	for _, gameType := range []string{"project-zomboid", "conan-exiles", "cs2", "rust", "terraria", "minecraft-bedrock", "valheim"} {
+	for _, gameType := range []string{"project-zomboid", "conan-exiles", "cs2", "rust", "valheim"} {
 		if adapter := ResolveAdapter(gameType, nil); adapter != nil && adapter.Moderation != nil {
 			t.Errorf("%s has moderation", gameType)
 		}

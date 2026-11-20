@@ -33,7 +33,7 @@ func queryName(integration games.Integration) string {
 	if query := integration.Query; query != nil {
 		return query.Name() + ", port " + strconv.Itoa(query.Port)
 	}
-	return "—"
+	return "The image’s health check, if it has one"
 }
 
 // settingsTabs moves between Settings and System, which share the menu entry.

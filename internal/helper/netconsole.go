@@ -78,7 +78,7 @@ func RunNetworkConsole(stdin io.Reader, stdout io.Writer) int {
 	}
 	console := request.Transport != ""
 	validPort := func(port int) bool { return port >= 1 && port <= 65535 }
-	if (console && (!slices.Contains([]string{"source-rcon", "rust-webrcon", "telnet"}, request.Transport) || !validPort(request.Port))) ||
+	if (console && (!slices.Contains([]string{"source-rcon", "rust-webrcon", "telnet", "palworld-rest"}, request.Transport) || !validPort(request.Port))) ||
 		(request.Query != nil && (!slices.Contains([]string{string(gamequery.MinecraftPing), string(gamequery.ValveA2S)}, request.Query.Protocol) ||
 			!validPort(request.Query.Port))) || (!console && request.Query == nil) {
 		send(map[string]string{"type": "error"})

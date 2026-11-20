@@ -32,6 +32,10 @@ func (c *GameSource) Lists(container servers.Container) bool {
 
 var errSkipped = errors.New("player reading skipped")
 
+// settle is how long a reading after a command waits for a game on standard
+// input to carry the command out.
+var settle = 2 * time.Second
+
 // Read takes one reading under the server lock, as background work that
 // anything needing the server cancels, unless the caller holds it.
 func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) (*Reading, error) {
@@ -71,6 +75,15 @@ func (c *GameSource) Read(ctx context.Context, server identity.Server, ask Ask) 
 	// whole timeout.
 	if !ask.Fresh && previous != nil && previous.listed != nil && (probe.Adapter == nil || previous.Answer == Answered) {
 		probe.Known = previous.listed
+	}
+	// A game on standard input acts on a command after printing it: Terraria
+	// still lists a player it just kicked until they have left.
+	if ask.Fresh && probe.Adapter != nil && probe.Adapter.Transport == games.TransportContainerStdin {
+		select {
+		case <-time.After(settle):
+		case <-ctx.Done():
+			return nil, errSkipped
+		}
 	}
 	reading := &Reading{ContainerID: container.ID, StartedAt: container.StateSince, Failed: true,
 		partial: lists && probe.Adapter == nil}

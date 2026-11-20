@@ -336,3 +336,165 @@ func Parse7DaysPlayers(response string) (Players, bool) {
 	}
 	return players, total >= 0 && players.Online == total
 }
+
+// logLines splits a game's log output into its complete lines, without their
+// line ends, or reports false when it holds a NUL byte.
+func logLines(output string) ([]string, bool) {
+	if strings.Contains(output, "\x00") {
+		return nil, false
+	}
+	lines := strings.Split(output, "\n")
+	// The last line is still being written.
+	lines = lines[:len(lines)-1]
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(terminalCodes.ReplaceAllString(line, ""), "\r ")
+	}
+	return lines, true
+}
+
+// terminalCodes are escape sequences a game under a TTY prints, such as
+// Terraria's window title and the cursor query before its ": " prompt.
+var terminalCodes = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[=>]`)
+
+var (
+	terrariaSummary = regexp.MustCompile(`^(?:: )?(?:(No) players connected\.|(1) player connected\.|(\d+) players connected\.)$`)
+	terrariaPlayer  = regexp.MustCompile(`^(?:: )?(.+) \([0-9A-Fa-f.:\[\]]+\)$`)
+)
+
+// ParseTerrariaPlaying reads Terraria's reply to playing from the log that
+// follows the command: a row per player with their address, then a count.
+//
+//	Ada (172.18.0.1:51234)
+//	1 player connected.
+//
+// Lines before the reply are skipped; the rows must be right above the
+// count, and only names are kept.
+func ParseTerrariaPlaying(output string) (Players, bool) {
+	lines, ok := logLines(output)
+	if !ok {
+		return Players{}, false
+	}
+	for index, line := range lines {
+		match := terrariaSummary.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		count := 0
+		switch {
+		case match[2] != "":
+			count = 1
+		case match[3] != "":
+			count, _ = strconv.Atoi(match[3])
+		}
+		if count > index || count > 255 {
+			return Players{}, false
+		}
+		var players Players
+		for _, row := range lines[index-count : index] {
+			player := terrariaPlayer.FindStringSubmatch(row)
+			if player == nil {
+				return Players{}, false
+			}
+			players.Online++
+			// Terraria's commands take the whole name, as it shows.
+			players.addWithID(player[1], player[1])
+		}
+		return players, true
+	}
+	return Players{}, false
+}
+
+var (
+	// Bedrock's own log lines start with a time and level; a command's
+	// reply may too.
+	bedrockPrefix  = regexp.MustCompile(`^(?:: )?(?:\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?::\d{3})? [A-Z]+\] )?`)
+	bedrockHeader  = regexp.MustCompile(`^There are (\d+)/(\d+) players online:$`)
+	bedrockLogLine = regexp.MustCompile(`^(?:: )?\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?::\d{3})? [A-Z]+\] `)
+)
+
+// ParseBedrockList reads Minecraft Bedrock's reply to list from the log that
+// follows the command: a count, then the names on the next line.
+//
+//	There are 2/10 players online:
+//	Ada, Zed
+func ParseBedrockList(output string) (Players, bool) {
+	lines, ok := logLines(output)
+	if !ok {
+		return Players{}, false
+	}
+	for index, line := range lines {
+		match := bedrockHeader.FindStringSubmatch(bedrockPrefix.ReplaceAllString(line, ""))
+		if match == nil {
+			continue
+		}
+		online, _ := strconv.Atoi(match[1])
+		capacity, _ := strconv.Atoi(match[2])
+		players := Players{Online: online, Max: capacity}
+		if online == 0 {
+			return players, true
+		}
+		// The names line has no time and level, unlike log lines the server
+		// writes meanwhile.
+		next := index + 1
+		for next < len(lines) && bedrockLogLine.MatchString(lines[next]) {
+			next++
+		}
+		if next >= len(lines) {
+			return Players{}, false
+		}
+		names := strings.Split(lines[next], ", ")
+		if len(names) != online {
+			return Players{}, false
+		}
+		for _, name := range names {
+			if strings.TrimSpace(name) == "" {
+				return Players{}, false
+			}
+			// Bedrock's commands take the gamertag, as it shows.
+			players.addWithID(name, name)
+		}
+		return players, true
+	}
+	return Players{}, false
+}
+
+var (
+	// Vintage Story's log lines start with a date, a time, and a level.
+	vintageStoryPrefix = regexp.MustCompile(`^\d\d\.\d\d\.\d{4} \d\d:\d\d:\d\d \[Server [A-Za-z]+\] `)
+	// A connected client is "{4} [{0}] {1} {2} ({3}ms) ({5}s inactive)": its
+	// client ID, account name, address, and ping, by the server's own format.
+	vintageStoryClient = regexp.MustCompile(`^(?:.* )?\[\d+\] ([A-Za-z0-9_-]{1,32}) \S+ \(-?\d+ms\)(?: \(\d+s inactive\))?$`)
+)
+
+// ParseVintageStoryClients reads Vintage Story's reply to /list clients from
+// the log that follows the command: a header, a row per player, and a blank
+// line that ends the reply.
+//
+//	20.11.2026 19:04:32 [Server Notification] List of online Players
+//	 [3] Ada 172.18.0.1:51234 (12ms) (0s inactive)
+func ParseVintageStoryClients(output string) (Players, bool) {
+	lines, ok := logLines(output)
+	if !ok {
+		return Players{}, false
+	}
+	for index, line := range lines {
+		if vintageStoryPrefix.ReplaceAllString(line, "") != "List of online Players" || !vintageStoryPrefix.MatchString(line) {
+			continue
+		}
+		var players Players
+		for _, row := range lines[index+1:] {
+			if row == "" {
+				return players, true
+			}
+			client := vintageStoryClient.FindStringSubmatch(row)
+			if client == nil {
+				return Players{}, false
+			}
+			players.Online++
+			// Its commands take the account name.
+			players.addWithID(client[1], client[1])
+		}
+		return Players{}, false
+	}
+	return Players{}, false
+}

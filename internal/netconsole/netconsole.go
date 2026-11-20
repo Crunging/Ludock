@@ -72,6 +72,8 @@ func Execute(ctx context.Context, transport, host string, port int, password, co
 		return RustWebRCON(ctx, host, port, password, command, control)
 	case "telnet":
 		return Telnet(ctx, host, port, password, command, control)
+	case "palworld-rest":
+		return PalworldAnnounce(ctx, host, port, password, command, control)
 	}
 	return "", errors.New("unsupported console transport")
 }
@@ -390,6 +392,40 @@ func RustWebRCON(ctx context.Context, host string, port int, password, command s
 		}
 		return string(reply.Message), nil
 	}
+}
+
+// PalworldAnnounce sends a message to every player through Palworld's REST
+// API, which keeps its spaces; RCON's Broadcast sends only the first word.
+// The API takes the admin password as the password of the user "admin".
+func PalworldAnnounce(ctx context.Context, host string, port int, password, message string, control Control) (string, error) {
+	if err := control.check(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, CommandTimeout)
+	defer cancel()
+	body, _ := json.Marshal(map[string]string{"message": message})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+formatHost(host)+":"+strconv.Itoa(port)+"/v1/api/announce",
+		bytes.NewReader(body))
+	if err != nil {
+		return "", errors.New("could not reach Palworld's REST API")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("admin", password)
+	response, err := directClient.Do(request)
+	if err != nil {
+		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
+			return "", errCancelled
+		}
+		return "", errors.New("could not reach Palworld's REST API")
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusOK:
+		return "Announced to every player", nil
+	case http.StatusUnauthorized:
+		return "", errors.New("the Palworld REST API refused the admin password")
+	}
+	return "", errors.New("the Palworld REST API refused the message")
 }
 
 var (

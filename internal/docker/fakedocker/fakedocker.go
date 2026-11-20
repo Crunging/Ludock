@@ -541,6 +541,25 @@ func (e *Engine) control(w http.ResponseWriter, r *http.Request) {
 		e.mu.Unlock()
 		w.WriteHeader(204)
 		return
+	case "/fake/health":
+		// Sets what a container's health check reports, as Docker does once
+		// its retries agree: POST /fake/health?container=NAME&status=unhealthy
+		// or healthy.
+		query := r.URL.Query()
+		e.mu.Lock()
+		if c := e.find(query.Get("container")); c != nil && c.State.Health != nil {
+			result := docker.HealthResult{End: time.Now().UTC().Format(time.RFC3339Nano)}
+			if query.Get("status") != "healthy" {
+				result.ExitCode = 1
+			}
+			// Docker keeps the latest five results.
+			c.State.Health.Status, c.State.Health.Log = query.Get("status"), append(c.State.Health.Log, result)
+			c.State.Health.Log = c.State.Health.Log[max(0, len(c.State.Health.Log)-5):]
+			e.emitLocked("health_status: "+c.State.Health.Status, c.ID)
+		}
+		e.mu.Unlock()
+		w.WriteHeader(204)
+		return
 	case "/fake/stats":
 		// Sets a container's memory in use: POST /fake/stats?container=NAME&memory=BYTES.
 		query := r.URL.Query()
@@ -1129,7 +1148,7 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 		// Healthchecks pass at once.
 		if check, _ := c.ExtraConfig["Healthcheck"].(map[string]any); check != nil {
 			if test, _ := check["Test"].([]any); len(test) > 0 && test[0] != "NONE" {
-				c.State.Health = &docker.HealthState{Status: "healthy"}
+				c.State.Health = &docker.HealthState{Status: "healthy", Log: []docker.HealthResult{{End: now}}}
 			}
 		}
 		e.emitLocked("start", id)
@@ -1210,19 +1229,39 @@ func (e *Engine) containerRequest(w http.ResponseWriter, r *http.Request, refere
 	case action == "/logs":
 		lines := append([]string(nil), c.Logs...)
 		e.mu.Unlock()
+		sent := len(lines)
+		if tail, err := strconv.Atoi(r.URL.Query().Get("tail")); err == nil && tail >= 0 && tail < len(lines) {
+			lines = lines[len(lines)-tail:]
+		}
 		w.Header().Set("Content-Type", "application/vnd.docker.multiplexed-stream")
 		w.WriteHeader(200)
-		for _, line := range lines {
-			if r.URL.Query().Get("timestamps") == "true" {
-				line = now + " " + line
+		write := func(lines []string) {
+			for _, line := range lines {
+				if r.URL.Query().Get("timestamps") == "true" {
+					line = now + " " + line
+				}
+				w.Write(Frame(1, []byte(line+"\n")))
 			}
-			w.Write(Frame(1, []byte(line+"\n")))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
 		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		if r.URL.Query().Get("follow") == "true" {
-			<-r.Context().Done()
+		write(lines)
+		// Like Docker, a followed log streams the lines written after it opened.
+		for r.URL.Query().Get("follow") == "true" {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			e.mu.Lock()
+			var added []string
+			if current := e.containers[id]; current != nil && len(current.Logs) > sent {
+				added = append(added, current.Logs[sent:]...)
+				sent = len(current.Logs)
+			}
+			e.mu.Unlock()
+			write(added)
 		}
 	case action == "/exec" && r.Method == "POST":
 		var options docker.ExecCreate

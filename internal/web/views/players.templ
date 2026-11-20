@@ -156,10 +156,15 @@ templ PlayersFact(p PlayersView) {
 	</div>
 }
 
-// GameView is whether the game answers its status query.
+// GameView is whether the game answers its status query, or the image's
+// health check in its place.
 type GameView struct {
-	// Query is the status query's name, or "" when the game isn't checked.
-	Query      string
+	// Query is the check's name, or "" when the game isn't checked.
+	Query string
+	// Health: the check is the image's own health check.
+	Health bool
+	// Off is why the game's status query is off in this setup, or "".
+	Off        string
 	Running    bool
 	State      players.Game
 	AnsweredAt int64
@@ -171,15 +176,26 @@ templ GameFact(g GameView) {
 		<dt>Game</dt>
 		<dd>
 			switch {
+				case g.Query == "" && g.Off != "":
+					<span>Not checked</span>
+					<span class="muted">{ g.Off }</span>
 				case g.Query == "":
 					<span>Not checked</span>
-					<span class="muted">Ludock checks supported games that can answer.</span>
+					<span class="muted">Ludock checks supported games that can answer, and ones whose image has a health check.</span>
 				case !g.Running:
 					<span class="muted">Checked while the server is running</span>
+				case g.State == players.Answering && g.Health:
+					@Pip("ok")
+					<span>Answering</span>
+					<span class="muted">Its image’s health check passed @Time(g.AnsweredAt, "plain", "")</span>
 				case g.State == players.Answering:
 					@Pip("ok")
 					<span>Answering</span>
 					<span class="muted">Over its status query, @Time(g.AnsweredAt, "plain", "")</span>
+				case g.State == players.NotAnswering && g.Health:
+					@Pip("failed")
+					<span>Not answering</span>
+					<span class="muted">The container is running, but its image’s health check keeps failing. It last passed @Time(g.AnsweredAt, "plain", "")</span>
 				case g.State == players.NotAnswering:
 					@Pip("failed")
 					<span>Not answering</span>
@@ -187,6 +203,9 @@ templ GameFact(g GameView) {
 				case g.State == players.Unknown:
 					<span>Not checked recently</span>
 					<span class="muted">It last answered its status query @Time(g.AnsweredAt, "plain", "")</span>
+				case g.Health:
+					<span>Not answered yet</span>
+					<span class="muted">Its image’s health check hasn’t passed since it started. A game that’s still starting doesn’t pass it.</span>
 				default:
 					<span>Not answered yet</span>
 					<span class="muted">Ludock asks over its status query. A game that’s still starting, or whose query port is wrong or off, doesn’t answer.</span>

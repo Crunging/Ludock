@@ -1,6 +1,6 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, openServer, restoreServer, serverRow } from "../fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, fake, openServer, restoreServer, serverRow, withGame } from "../fixtures.mjs";
 
 asAdmin();
 // Each journey waits for monitoring to notice, so they run beside each other.
@@ -107,6 +107,36 @@ test("Ludock restarts a game that stopped answering, and says when it answers ag
     await page.getByLabel("Restart it if the game stops answering").uncheck();
     await restoreServer(page, "valheim");
   }
+});
+
+test("a game without a status query answers through its image's health check, which can restart it", async ({ page }) => {
+  // Factorio has no status query, but factoriotools/factorio's health check
+  // asks the game, so a hung game was only Unhealthy and never restarted.
+  test.setTimeout(240_000);
+  await withGame(page, "factorio", async (factorio) => {
+    await openServer(page, factorio);
+    const game = page.locator(".overview-game");
+    await expect(game).toContainText("Answering");
+    await expect(game).toContainText("Its image’s health check passed");
+    await page.getByText("Alert levels").click();
+    const wait = page.getByLabel("Wait before alerting (seconds)");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/availability"));
+    await wait.fill("10");
+    await wait.press("Tab");
+    expect((await saved).ok()).toBe(true);
+    const recovery = page.waitForResponse((response) => response.url().endsWith("/availability"));
+    await page.getByLabel("Restart it if the game stops answering").check();
+    expect((await recovery).ok()).toBe(true);
+    const status = page.locator(".recovery-status");
+    await expect(status).toHaveText("On. Not needed so far.");
+
+    await fake("/fake/health", { container: factorio, status: "unhealthy" });
+    await expect(game).toContainText("its image’s health check keeps failing", { timeout: 45_000 });
+    // The restart starts the game again, and its health check passes.
+    await expect(status).toContainText("because the game stopped answering", { timeout: 120_000 });
+    await expect(status).toContainText("It answered again.", { timeout: 60_000 });
+    await expect(game).toContainText("Its image’s health check passed");
+  });
 });
 
 test("an outage reaches an open server list when its grace period ends, and clears", async ({ page }) => {

@@ -266,6 +266,26 @@ var sevenDaysModeration = &Moderation{
 	commands: map[PlayerAction][2]string{Kick: {"kick ", ""}},
 }
 
+// Terraria's kick and ban take the rest of the line as a name, which may
+// hold spaces; only names without them are offered.
+var terrariaModeration = &Moderation{
+	target:   regexp.MustCompile(`^[A-Za-z0-9_.-]{1,20}$`),
+	commands: map[PlayerAction][2]string{Kick: {"kick ", ""}, Ban: {"ban ", ""}},
+}
+
+// Bedrock kicks by gamertag; it has no ban command.
+var bedrockModeration = &Moderation{
+	target:   regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,15}$`),
+	commands: map[PlayerAction][2]string{Kick: {"kick ", ""}},
+}
+
+// Vintage Story kicks by account name; its bans need a length and a reason,
+// so they stay in the console.
+var vintageStoryModeration = &Moderation{
+	target:   regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`),
+	commands: map[PlayerAction][2]string{Kick: {"/kick ", ""}},
+}
+
 // Pattern is the name form for a browser's pattern attribute.
 func (m *Moderation) Pattern() string {
 	return strings.TrimSuffix(strings.TrimPrefix(m.target.String(), "^"), "$")

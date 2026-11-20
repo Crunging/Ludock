@@ -138,7 +138,7 @@ docker build -t ludock:test .
 cd e2e
 export LUDOCK_DOCKER_E2E=disposable-daemon
 MINECRAFT_EULA=TRUE node real/rig.mjs up   # Minecraft Java, the default
-node real/rig.mjs bot Steve                # a headless player; Ctrl-C leaves
+node real/rig.mjs bot Steve                # a headless player; Ctrl-C leaves (Minecraft or Terraria)
 node real/rig.mjs remove minecraft
 node real/rig.mjs up terraria              # another game beside the same Ludock
 node real/rig.mjs down
@@ -153,7 +153,10 @@ finishes setup with the journeys' administrator and prints how to sign in.
 [Minecraft EULA](https://aka.ms/MinecraftEULA) for the test servers; Valheim
 downloads its server from Steam anonymously.
 
-The bot (mineflayer, installed into the rig folder on first use) joins
+For Terraria, `bot` runs `real/terraria-bot.mjs`, which speaks just enough of
+the game's protocol (release 326, Terraria 1.4.5.8) to join and hold a slot;
+Terraria bans by address too, and every bot connects from the same one. The
+Minecraft bot (mineflayer, installed into the rig folder on first use) joins
 Minecraft in offline mode, chats once a minute, and prints every message,
 kick, and silence it sees, such as a warning before a restart. Game data lives
 in the rig folder (`LUDOCK_RIG_DIR`, a temporary folder by default) so you can

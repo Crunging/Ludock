@@ -188,7 +188,8 @@ limits are in [Updates](REFERENCE.md#updates).
 ### Restart a game that hangs
 
 A game can freeze while its container keeps running. For servers with a
-[status check](REFERENCE.md#supported-games), Ludock can restart it:
+[status check](REFERENCE.md#supported-games), or an image health check that
+stands in for one, Ludock can restart it:
 
 - Use **Restart automatically** in [Finish setting up](#finish-setting-up), or
 - tick **Restart it if the game stops answering** on the server's **Overview**.
@@ -331,7 +332,8 @@ Factorio also the one the image generates. If yours uses another name, set
 [`ludock.console.password-env`](REFERENCE.md#labels). Terraria, Bedrock, and Vintage Story read commands
 from the server's input, which needs `stdin_open: true` on the container (and
 `StdinOnce` off, outside Compose) and an image that passes input to the game;
-their replies appear only in **Logs**. Ludock reaches consoles from inside the
+their replies appear only in **Logs**, which is also where Ludock reads who's
+online. Ludock reaches consoles from inside the
 container's network, so the console port needn't be published.
 
 ### Files
@@ -429,7 +431,9 @@ players, a status check that names the same players, or says nobody is
 online, stands in for it. While nobody has Ludock open, only monitored games
 with a status check are asked, about every 2 minutes, and only through the
 status check. Games with a working status check but no player list, or no
-console password, still show how many are online. A count Ludock can't read
+console password, still show how many are online. Terraria, Bedrock, and
+Vintage Story have no status check, so their list command and its reply show
+in their **Logs** each time Ludock reads them. A count Ludock can't read
 shows as unavailable, never as empty. Readings stay in memory.
 
 A kick or ban targets the player by the name or ID the game's latest list
@@ -447,7 +451,7 @@ for maintenance** on the server's **Overview**.
 | Alert | When |
 | --- | --- |
 | Server unavailable | The container stops, or fails its health check, without Ludock stopping it, for longer than **Wait before alerting** (120 seconds by default) |
-| Game not answering | A game with a status check answered since its container started, then stops answering for that long |
+| Game not answering | A game with a status check answered since its container started, then stops answering for that long; for a game whose image's health check stands in, the check passed, then Docker calls it unhealthy for that long |
 | Disk nearly full | A data folder's disk reaches 90% full |
 | Memory near its limit | A container with a memory limit stays at 90% of it for 5 minutes |
 

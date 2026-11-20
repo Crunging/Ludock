@@ -13,8 +13,8 @@ image doesn't verify where it came from.
 | Game | Images | Console (port) | Status check (port) |
 | --- | --- | --- | --- |
 | Minecraft | `itzg/minecraft-server` | Minecraft RCON (25575) | Server List Ping (25565, `SERVER_PORT`) |
-| Factorio | `factoriotools/factorio` | Factorio RCON (27015) | — |
-| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Palworld RCON (25575) | — |
+| Factorio | `factoriotools/factorio` | Factorio RCON (27015) | Health check |
+| Palworld | `thijsvanloef/palworld-server-docker`, `jammsen/palworld-dedicated-server` | Palworld RCON (25575), REST API (8212) for warnings | Health check |
 | ARK: Survival Evolved | `hermsi/ark-server`, `hermsi1337/ark-server`, `indifferentbroccoli/ark-server-docker` | ARK RCON (27020) | Steam (27015, `SERVER_LIST_PORT`, `QUERY_PORT`) |
 | ARK: Survival Ascended | `sknnr/ark-ascended-server`, `mschnitzer/asa-linux-server` | ARK RCON (27020) | — |
 | Counter-Strike 2 | `joedwards32/cs2` | Source RCON (27015) | Steam (27015, `CS2_PORT`) |
@@ -25,19 +25,38 @@ image doesn't verify where it came from.
 | 7 Days to Die | `vinanrra/7dtd-server` | Telnet (8081) | — |
 | Valheim | `community-valheim-tools/valheim-server`, `lloesche/valheim-server` | — | Steam (2457) |
 | Terraria | `hexlo/terraria-server-docker`, `beardedio/terraria`, `ryshe/terraria` | Server input | — |
-| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Server input | — |
+| Minecraft: Bedrock Edition | `itzg/minecraft-bedrock-server` | Server input | Health check |
 | Satisfactory | `robtme/satisfactory-server`, `wolveix/satisfactory-server` | — | — |
 | Enshrouded | `sknnr/enshrouded-dedicated-server`, `mornedhels/enshrouded-server` | — | Steam (15637, `SERVER_QUERYPORT`, `PORT`) |
 | Don't Starve Together | `jamesits/dst-server` | — | — |
 | Core Keeper | `escaping/core-keeper-dedicated` | — | — |
-| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Server input | — |
+| Vintage Story | `zsuatem/vintagestory`, `devidian/vintagestory` | Server input | Health check |
 
 The console port is where Ludock sends commands, inside the container. The
 status check asks the game whether it answers; when the image documents a
 variable for its port, listed after the port, that variable's value wins.
 Steam is Valve's A2S server query, which Valheim answers only when the server
-is public (`SERVER_PUBLIC`). If your server answers one that isn't listed, set
-`ludock.query: a2s` and `ludock.query.port`.
+is public: with `SERVER_PUBLIC` off, the server's page says the check is off.
+If your server answers one that isn't listed, set `ludock.query: a2s` and
+`ludock.query.port`.
+
+A supported game without a status check of its own uses its image's Docker
+health check, when the image has one: healthy is answering, and unhealthy
+after it was healthy since the container started is not answering, which
+alerts and can restart the server like a status check. Docker calls a
+container unhealthy only after its check fails several times in a row (about
+90 seconds by default). A health check sees only what it tests: Factorio's
+and Bedrock's ask the game, but Palworld's and Vintage Story's only check
+that the process exists, so a hung server still passes them. Health check is
+listed for the images known to have one; no health check means no claim.
+`ludock.query: none` turns this off too.
+
+Games on server input (Terraria, Bedrock, Vintage Story) print their replies
+in their own output rather than answering a command. Ludock types the list
+command and reads the reply from the log lines that follow it; other lines
+in between are skipped, a reply that never comes counts as unknown, and only
+the names are kept. While a page shows the server, the command and its reply
+appear in its log about every 30 seconds.
 
 What each game gets beyond start, stop, files, and backups:
 
@@ -45,7 +64,7 @@ What each game gets beyond start, stop, files, and backups:
 | --- | --- | --- | --- | --- |
 | Minecraft | Names | Kick, ban, allowlist | ✓ | ✓ |
 | Factorio | Names | Kick, ban | ✓ | |
-| Palworld | Names | Kick, ban | | ✓ |
+| Palworld | Names | Kick, ban | ✓ | ✓ |
 | ARK: Survival Evolved | Names | Kick, ban | ✓ | |
 | ARK: Survival Ascended | Names | Kick, ban | ✓ | |
 | Counter-Strike 2 | Count | | ✓ | ✓ |
@@ -54,8 +73,9 @@ What each game gets beyond start, stop, files, and backups:
 | Rust | | | ✓ | ✓ |
 | 7 Days to Die | Names | Kick | ✓ | |
 | Valheim, Enshrouded | Count | | | ✓ |
-| Terraria, Vintage Story | | | ✓ | |
-| Minecraft: Bedrock Edition | | | ✓ | ✓ |
+| Terraria | Names | Kick, ban | ✓ | |
+| Vintage Story | Names | Kick | ✓ | |
+| Minecraft: Bedrock Edition | Names | Kick | ✓ | ✓ |
 | Satisfactory, Don't Starve Together, Core Keeper | | | | ✓ |
 
 V Rising gets its console only. Names need the console's password; a count
@@ -64,57 +84,71 @@ image's own settings pin a version or skip updates.
 
 Project Zomboid and Conan Exiles get no kick or ban buttons: Zomboid's names
 can hold spaces its commands need quoted, and Conan's kick takes a row number
-that can change. 7 Days to Die bans need a length, so they stay in the console.
+that can change. Terraria and Bedrock offer them only for names without
+spaces. 7 Days to Die and Vintage Story bans need a length, and Bedrock has no
+ban command, so those stay in the console. Palworld's warnings go over its
+REST API, which keeps the spaces RCON's `Broadcast` drops; they're offered
+while `REST_API_ENABLED` (`RESTAPI_ENABLED` on jammsen's image) is on, both
+images' default.
 
 ### Checked on real servers
 
 These games were run on their real images, under Compose, with Ludock beside
-them. No player joined, since that needs an account or the game; who's online
-was read on an empty server, and kick and ban were sent for players who
-weren't there. The others follow their images' documentation and haven't been
-run yet.
+them. Players joined Minecraft Java and Terraria, with scripted clients that
+need no account; on the others, who's online was read on an empty server, and
+the replies with players come from the game's own text. The others follow
+their images' documentation and haven't been run yet.
 
-- **Terraria** (`hexlo/terraria-server-docker`): its console needs
-  `stdin_open: true`, with or without `tty`; replies show in the console's
-  output. Ludock saves with `save` before a stop and then types `exit`, since
-  the images never pass Docker's stop signal on to the game. `say` warns
-  players. Files and backups take the worlds folder Ludock finds mounted.
-  Terraria can't tell Ludock who's online or whether it answers, so it gets no
-  player list, kick or ban buttons, or automatic restart; the console has
-  `kick` and `ban`. `ryshe/terraria` and `beardedio/terraria` were only
+- **Minecraft** (`itzg/minecraft-server`, vanilla 1.21.11): with zero, one,
+  and two players online, Ludock opened RCON, which the game logs, only when
+  a page opened or someone joined; the status query's player sample vouched
+  for the list the rest of the time.
+- **Terraria** (`hexlo/terraria-server-docker`, 1.4.5.8): its console needs
+  `stdin_open: true`, with or without `tty`. Ludock saves with `save` before a
+  stop and then types `exit`, since the images never pass Docker's stop
+  signal on to the game. `say` warns players. Files and backups take the
+  worlds folder Ludock finds mounted. With two players online, Ludock listed
+  both from `playing`, and kicked and banned them; the list follows within a
+  few seconds. A ban also bans the player's address, and the ban list lives
+  in `/root/.local/share/Terraria/banlist.txt`, outside the worlds folder, so
+  backups don't include it. The image has no health check, so Terraria gets
+  no automatic restart. `ryshe/terraria` and `beardedio/terraria` were only
   inspected: both also keep the game from Docker's stop signal.
 - **Factorio** (`factoriotools/factorio`): the console works by itself with the
   password the image generates. Who's online, kick, and ban answer as
-  expected; warnings appear in chat from `<server>`; `/server-save` saves, and the game saves
-  again when it stops. Factorio has no status check: a hung server shows
-  **Unhealthy** from the image's own health check, and automatic restart isn't
-  offered.
+  expected; warnings appear in chat from `<server>`; `/server-save` saves, and
+  the game saves again when it stops. The image's health check asks the game
+  over RCON, so a hung game is not answering and can be restarted; that was
+  checked on Bedrock, not again on Factorio.
 - **Valheim** (`lloesche/valheim-server`): no console. The game saves its world
   when it stops. Files and backups take `/config`, not the server the image
   downloads into `/opt/valheim`. The count and the status check need
   `SERVER_PUBLIC` on, its default, which lists the server publicly; with it
-  off, the page says the game hasn't answered and automatic restart can't
-  act. With it on, Ludock restarted a hung server by itself once automatic
-  restart was turned on.
+  off, the page says the status check is off for that setup, and automatic
+  restart isn't offered. With it on, Ludock restarted a hung server by itself
+  once automatic restart was turned on.
 - **Vintage Story** (`zsuatem/vintagestory`): its console needs
   `stdin_open: true`. `/autosavenow` saves before a stop, `/announce` warns
-  players, and the game saves again when it stops. It gets no player list or
-  status check. `devidian/vintagestory` wasn't run.
+  players, and the game saves again when it stops. Ludock reads who's online
+  from `/list clients`, and kicks with `/kick`. Its health check only checks
+  that the server process exists. `devidian/vintagestory` wasn't run.
 - **Minecraft: Bedrock Edition** (`itzg/minecraft-bedrock-server`): its console
   needs `stdin_open: true`. The image saves the world when Docker stops it.
   From 1.26.50 the server takes players on TCP 19132 only, so publish
-  `19132:19132/tcp` for its address to show. The server takes the `say`
-  warnings, but joining to see them needs a Microsoft account, so that wasn't
-  checked. `list` and `kick` work in the console only.
-- **Palworld** (`thijsvanloef/palworld-server-docker`): its console needs
+  `19132:19132/tcp` for its address to show. Ludock reads who's online from
+  `list` and kicks with `kick`; Bedrock has no `ban`. Its health check asks
+  the game: with the game process frozen, Docker called it unhealthy within
+  two minutes, and Ludock restarted it and said it answered again. Joining to
+  see warnings needs a Microsoft account, so that wasn't checked.
+- **Palworld** (`thijsvanloef/palworld-server-docker`, 1.0.5): its console needs
   `RCON_ENABLED=true` and `ADMIN_PASSWORD`. Who's online, kick, and ban answer
   as expected; kick and ban send `steam_<ID>`, the only form Palworld 1.0
-  takes. `Save` saves before a
-  stop. Palworld's own `Broadcast` sends only a message's first word, so
-  Ludock doesn't warn its players. It didn't answer a status check. Its saves
-  live inside the server the image downloads to `/palworld`, so each backup
-  copies about 3.5 GB; `ludock.files: "/palworld/Pal/Saved"` backs up only
-  the saves.
+  takes. `Save` saves before a stop. Warnings go to the REST API's announce,
+  which the server logged as accepted; seeing them in game needs the game.
+  Files and backups take the saves in `/palworld/Pal/Saved`, about 0.3 MB on
+  a new world, not the 3.5 GB server download around them; a backup and its
+  restore each took about 15 s. `ludock.files: "/palworld"` takes the whole
+  folder again.
 - **Project Zomboid** (`renegademaster/zomboid-dedicated-server`) couldn't be
   checked: the image doesn't start the current game, Build 42, which refuses
   the empty arguments it passes.

@@ -103,13 +103,23 @@ func Roots(gameType string, labels map[string]string, mounts []identity.Mount) [
 			candidates = append(candidates, strings.TrimSpace(value))
 		}
 	} else {
-		var serverFiles []string
+		var serverFiles, saves []string
 		if integration := games.Lookup(gameType); integration != nil {
-			serverFiles = integration.ServerFiles
+			serverFiles, saves = integration.ServerFiles, integration.Saves
 		}
 		for _, mount := range mounts {
-			if SafeWritableDataMount(mount) && !slices.Contains(serverFiles, normalizedMountPath(mount.Destination)) {
+			destination := normalizedMountPath(mount.Destination)
+			if !SafeWritableDataMount(mount) {
+				continue
+			}
+			if !slices.Contains(serverFiles, destination) {
 				candidates = append(candidates, mount.Destination)
+				continue
+			}
+			for _, save := range saves {
+				if Within(save, destination) {
+					candidates = append(candidates, save)
+				}
 			}
 		}
 	}
@@ -175,6 +185,8 @@ func rootName(gameType, rootPath string) string {
 		return "Valheim config"
 	case strings.EqualFold(gameType, "terraria") && rootPath == "/root/.local/share/Terraria/Worlds":
 		return "Terraria worlds"
+	case strings.EqualFold(gameType, "palworld") && rootPath == "/palworld/Pal/Saved":
+		return "Palworld saves"
 	}
 	if base := path.Base(rootPath); base != "/" && base != "." {
 		return base

@@ -104,8 +104,12 @@ const (
 )
 
 // Game reports whether a server's current container run answers its status
-// query, and since when it last did.
+// query, or the image's health check in its place, and since when it last
+// did.
 func (s *Service) Game(serverID string, container servers.Container) (Game, int64) {
+	if container.Query == nil && container.HealthAnswers && container.State == "running" {
+		return s.health(serverID, container)
+	}
 	if container.Query == nil || container.State != "running" {
 		return NotChecked, 0
 	}
@@ -120,6 +124,44 @@ func (s *Service) Game(serverID string, container servers.Container) (Game, int6
 		return NotAnswering, reading.AnsweredAt
 	}
 	return Answering, reading.AnsweredAt
+}
+
+// healthRun is when a container run's health check last passed.
+type healthRun struct {
+	containerID string
+	startedAt   int64
+	healthyAt   int64
+}
+
+// health reads the game's answer from Docker's health check, which retries
+// before it says unhealthy. Docker keeps only its latest results, so the last
+// pass in this run is remembered past them.
+func (s *Service) health(serverID string, container servers.Container) (Game, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.healthy == nil {
+		s.healthy = map[string]healthRun{}
+	}
+	run := s.healthy[serverID]
+	if run.containerID != container.ID || run.startedAt != container.StateSince {
+		run = healthRun{containerID: container.ID, startedAt: container.StateSince}
+	}
+	if container.HealthyAt >= container.StateSince {
+		run.healthyAt = max(run.healthyAt, container.HealthyAt)
+	}
+	s.healthy[serverID] = run
+	switch {
+	case container.Health == "healthy":
+		// Docker's results may no longer hold the pass that made it healthy.
+		if run.healthyAt == 0 {
+			run.healthyAt = time.Now().UnixMilli()
+			s.healthy[serverID] = run
+		}
+		return Answering, run.healthyAt
+	case container.Health == "unhealthy" && run.healthyAt > 0:
+		return NotAnswering, run.healthyAt
+	}
+	return Waiting, run.healthyAt
 }
 
 // A Source reads who is online on one server.
@@ -167,6 +209,7 @@ type Service struct {
 	// starts after it was made, ends; every caller waiting meanwhile shares
 	// it.
 	waiters map[string]chan struct{}
+	healthy map[string]healthRun
 	slots   chan struct{}
 	work    sync.WaitGroup
 	stopped bool

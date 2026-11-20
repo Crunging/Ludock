@@ -1,6 +1,9 @@
 package games
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const (
 	LabelConsole            = "ludock.console"
@@ -30,7 +33,58 @@ const (
 	TransportRustWebRCON    Transport = "rust-webrcon"
 	TransportTelnet         Transport = "telnet"
 	TransportContainerStdin Transport = "container-stdin"
+	TransportPalworldREST   Transport = "palworld-rest"
 )
+
+// Announce sends the message of a command that starts with Prefix over
+// another transport of the game, beside the console, with the console's
+// password.
+type Announce struct {
+	Prefix    string
+	Transport Transport
+	Port      int
+	// OnEnv and PortEnv are the variables images use to turn the transport
+	// on, with one of OnValues in any case, and to move its port; the first
+	// one set wins. Images set their defaults in their own environment,
+	// which containers inherit.
+	OnEnv    []string
+	OnValues []string
+	PortEnv  []string
+}
+
+func firstSet(env map[string]string, names []string) (string, string) {
+	for _, name := range names {
+		if value := strings.TrimSpace(env[name]); value != "" {
+			return name, value
+		}
+	}
+	return "", ""
+}
+
+// On reports whether the container's environment turns the transport on.
+func (a *Announce) On(env map[string]string) bool {
+	_, value := firstSet(env, a.OnEnv)
+	for _, on := range a.OnValues {
+		if strings.EqualFold(value, on) {
+			return true
+		}
+	}
+	return false
+}
+
+// PortFor is the transport's port in the container, or 0 and the variable
+// when that variable isn't a port.
+func (a *Announce) PortFor(env map[string]string) (int, string) {
+	name, raw := firstSet(env, a.PortEnv)
+	if raw == "" {
+		return a.Port, ""
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, name
+	}
+	return port, name
+}
 
 type Adapter struct {
 	ID                    AdapterID
@@ -51,6 +105,8 @@ type Adapter struct {
 	Players *PlayerQuery
 	// Moderation acts on players in that list, or is nil.
 	Moderation *Moderation
+	// Announce, when set, sends announcements another way.
+	Announce *Announce
 }
 
 var adapters = map[AdapterID]Adapter{
@@ -99,7 +155,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 		}
 		// Moderation belongs to the game, never to an adapter a label names.
 		if integration != nil && integration.Console != nil && integration.Console.Adapter == adapter.ID {
-			adapter.Moderation = integration.Console.Moderation
+			adapter.Moderation, adapter.Announce = integration.Console.Moderation, integration.Console.Announce
 		}
 		return &adapter
 	}
@@ -111,7 +167,7 @@ func ResolveAdapter(gameType string, labels map[string]string) *Adapter {
 	if preset.Players != nil {
 		adapter.Players = preset.Players
 	}
-	adapter.Moderation = preset.Moderation
+	adapter.Moderation, adapter.Announce = preset.Moderation, preset.Announce
 	if preset.Name != "" {
 		adapter.Name = preset.Name
 	}

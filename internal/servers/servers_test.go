@@ -157,6 +157,47 @@ func TestHealthUptimeAndExit(t *testing.T) {
 	}
 }
 
+// A supported game without a status query answers through its image's
+// health check, from the last check that passed in this run. Valheim answers
+// its query only while it's public, so with SERVER_PUBLIC off the query is
+// off and the page says why; a label naming the query keeps it.
+func TestHealthCheckStandsInForQuery(t *testing.T) {
+	engine, s := setup(t)
+	factorio := engine.AddContainer(fakedocker.GameOptions{Name: "factorio", Image: "factoriotools/factorio", Running: true})
+	engine.Update(factorio, func(c *fakedocker.Container) {
+		c.State.StartedAt = "2026-09-15T10:00:00.000Z"
+		c.State.Health = &docker.HealthState{Status: "unhealthy", Log: []docker.HealthResult{
+			{End: "2026-09-15T10:01:00.000Z"}, {End: "2026-09-15T10:01:30.000Z"}, {End: "2026-09-15T10:02:00.000Z", ExitCode: 1}}}
+	})
+	passed, _ := time.Parse(time.RFC3339, "2026-09-15T10:01:30Z")
+	if got := inspectTest(t, s, factorio).Container; !got.HealthAnswers || got.HealthyAt != passed.UnixMilli() || got.Query != nil {
+		t.Fatalf("%+v", got)
+	}
+	none := engine.AddContainer(fakedocker.GameOptions{Name: "factorio-plain", Image: "factoriotools/factorio", Running: true})
+	off := engine.AddContainer(fakedocker.GameOptions{Name: "factorio-off", Image: "factoriotools/factorio", Running: true,
+		Labels: map[string]string{"ludock.query": "none"}})
+	engine.Update(off, func(c *fakedocker.Container) { c.State.Health = &docker.HealthState{Status: "healthy"} })
+	for _, id := range []string{none, off} {
+		if got := inspectTest(t, s, id).Container; got.HealthAnswers {
+			t.Fatalf("%+v", got)
+		}
+	}
+	private := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: true,
+		Env: []string{"SERVER_PUBLIC=false"}})
+	if got := inspectTest(t, s, private).Container; got.Query != nil || !strings.Contains(got.QueryOff, "SERVER_PUBLIC") {
+		t.Fatalf("%+v", got)
+	}
+	labeled := engine.AddContainer(fakedocker.GameOptions{Name: "valheim-labeled", Image: "lloesche/valheim-server", Running: true,
+		Env: []string{"SERVER_PUBLIC=0"}, Labels: map[string]string{"ludock.query": "a2s"}})
+	public := engine.AddContainer(fakedocker.GameOptions{Name: "valheim-public", Image: "lloesche/valheim-server", Running: true,
+		Env: []string{"SERVER_PUBLIC=true"}})
+	for _, id := range []string{labeled, public} {
+		if got := inspectTest(t, s, id).Container; got.Query == nil || got.QueryOff != "" {
+			t.Fatalf("%+v", got)
+		}
+	}
+}
+
 func TestInspectionCacheAndEligibilityRecheck(t *testing.T) {
 	engine, s := setup(t)
 	now := time.Unix(1000, 0)

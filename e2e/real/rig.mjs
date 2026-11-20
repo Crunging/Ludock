@@ -4,7 +4,7 @@
 //
 //   node real/rig.mjs up [GAME]    start Ludock and a game from real/games.mjs (minecraft)
 //   node real/rig.mjs remove GAME  remove that game's containers, volumes, network, and data
-//   node real/rig.mjs bot NAME     join the Minecraft server as NAME and log what the player sees
+//   node real/rig.mjs bot NAME     join the Minecraft or Terraria server as NAME and log what the player sees
 //   node real/rig.mjs down         remove every container, volume, and network the rig made
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
@@ -135,6 +135,12 @@ function clear(names) {
 
 async function bot() {
   const name = process.argv[3] || "RigBot";
+  // Terraria's player needs no packages.
+  if (started().includes("terraria")) {
+    const child = spawn(process.execPath, [join(import.meta.dirname, "terraria-bot.mjs"), name], { stdio: "inherit" });
+    child.on("exit", (code) => process.exit(code ?? 1));
+    return;
+  }
   const modules = join(dir, "bot");
   if (!existsSync(join(modules, "node_modules", "mineflayer"))) {
     mkdirSync(modules, { recursive: true });

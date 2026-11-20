@@ -248,6 +248,38 @@ func TestGameAnswers(t *testing.T) {
 	}
 }
 
+// A game without a status query answers through its image's health check.
+// Docker keeps only its latest five results, so a check failing for longer
+// than that still counts as not answering after it once passed in this run;
+// one that never passed is still waiting, and a new run starts over.
+func TestGameAnswersHealthCheck(t *testing.T) {
+	service := &Service{}
+	run := servers.Container{ID: "c1", StateSince: 100, State: "running", HealthAnswers: true, Health: "starting"}
+	check := func(step string, want Game, wantAt int64) {
+		t.Helper()
+		if got, at := service.Game("s1", run); got != want || (wantAt != 0 && at != wantAt) {
+			t.Errorf("%s: got %d at %d, want %d at %d", step, got, at, want, wantAt)
+		}
+	}
+	check("starting", Waiting, 0)
+	run.Health = "unhealthy"
+	check("unhealthy before passing", Waiting, 0)
+	run.Health, run.HealthyAt = "healthy", 500
+	check("healthy", Answering, 500)
+	run.Health, run.HealthyAt = "unhealthy", 0
+	check("past Docker's results", NotAnswering, 500)
+	// The last pass of an earlier run doesn't count in this one.
+	run.StateSince, run.Health, run.HealthyAt = 1000, "unhealthy", 500
+	check("restarted", Waiting, 0)
+	// Healthy with no pass left in Docker's results still counts as one.
+	run.StateSince, run.Health, run.HealthyAt = 2000, "healthy", 0
+	check("healthy without a pass", Answering, 0)
+	run.Health = "unhealthy"
+	check("unhealthy after that", NotAnswering, 0)
+	run.HealthAnswers = false
+	check("no health check", NotChecked, 0)
+}
+
 type countingSource struct {
 	Source
 	reads, lists int
