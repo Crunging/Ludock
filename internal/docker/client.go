@@ -96,8 +96,8 @@ func New(socket string) *Client {
 	transport := &http.Transport{
 		// Daemon requests keep their own pool. Ambient proxy settings must
 		// never redirect them.
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx, socket) },
+		Proxy:           nil,
+		DialContext:     func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx, socket) },
 		MaxIdleConns:    8,
 		IdleConnTimeout: 30 * time.Second,
 	}

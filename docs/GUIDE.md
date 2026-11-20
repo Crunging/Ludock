@@ -295,7 +295,10 @@ which won.
 
 **Take a backup first** in the Restart dialog checks the backup folder, stops
 the server, backs it up, and starts it once. If the backup fails, the server
-stays stopped and Ludock sends an alert, since starting may update the game.
+stays stopped and Ludock sends an alert, since starting may update the game
+with no backup to go back to. If Ludock itself restarts during the backup, the
+server is started again when Ludock is back, without the backup, and
+**Activity** says so.
 
 Every stop, restart, backup, restore, and update is listed in **Activity**,
 with who started it.
@@ -391,7 +394,8 @@ again, and its entry in **Activity** says which.
   as missed. A daylight-saving hour that doesn't exist is skipped, and a
   repeated one runs once.
 - **Back up first** needs the server running when the schedule runs. If the
-  backup fails, the server stays stopped.
+  backup fails, the server stays stopped; if Ludock restarts during it, the
+  server is started again.
 - **Wait until no one is online** works on restarts, stops, and backups on
   servers whose players Ludock can read, and waits 1 to 360 minutes. A player
   count Ludock can't read counts as players online. Warnings need **Go ahead
