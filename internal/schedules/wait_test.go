@@ -2,6 +2,7 @@ package schedules
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -223,8 +224,9 @@ func TestWaitEndsOnRevocationOrChange(t *testing.T) {
 	}
 }
 
-// Waiting is offered only for restarts and stops on servers whose players
-// Ludock can read, and countdown warnings need a restart that goes ahead.
+// Waiting is offered only for actions that take the server down, on servers
+// whose players Ludock can read, and countdown warnings need a run that goes
+// ahead.
 func TestWaitForEmptyValidation(t *testing.T) {
 	f := setup(t)
 	players := f.withPlayers(0, true)
@@ -436,5 +438,85 @@ func TestWaitNeedsReadingSinceLatestCheck(t *testing.T) {
 	f.s.Run(ctx, due+45_000)
 	if f.operations(t) != 1 {
 		t.Fatal("did not act on the reading the latest check produced")
+	}
+}
+
+// A backup schedule waits for players like a restart: with players online it
+// waits, warns before the end of its wait, and backs up once the server
+// empties. Like a restart, warnings need a run that goes ahead.
+func TestBackupScheduleWaitsAndWarns(t *testing.T) {
+	f := setup(t)
+	players := f.withPlayers(2, true)
+	input := base
+	input.Action = "backup"
+	input.Considerate(true, true)
+	skipping := input
+	skipping.WaitForEmpty = &WaitForEmpty{Minutes: 30, Then: WaitSkip}
+	if _, err := f.s.Create(ctx, admin, f.serverID, skipping); !apperr.Is(err, "INVALID_REQUEST") {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Create(ctx, admin, f.serverID, input); err != nil {
+		t.Fatal(err)
+	}
+	claims := func() int {
+		var count int
+		f.s.DB.QueryRow("SELECT COUNT(*) FROM schedule_announcements").Scan(&count)
+		return count
+	}
+	f.s.Run(ctx, due)
+	if first := f.first(t, admin); first.LastResult != WaitingResult || f.operations(t) != 0 {
+		t.Fatal(first)
+	}
+	f.s.Announce(ctx, due+25*minute)
+	f.s.Announce(ctx, due+29*minute)
+	f.s.Wait()
+	if claims() != 2 {
+		t.Fatal("warnings were not counted down to the end of the wait", claims())
+	}
+	players.now.Online = 0
+	f.s.Run(ctx, due+29*minute+30_000)
+	var kind string
+	f.s.DB.QueryRow("SELECT kind FROM operations").Scan(&kind)
+	if kind != "backup" || f.first(t, admin).LastOperation == nil {
+		t.Fatal("the backup didn't run once the server emptied", kind)
+	}
+}
+
+// New schedules start as considerate as the game allows, only for actions
+// that take the server down, and the defaults always save.
+func TestConsiderateDefaults(t *testing.T) {
+	for _, action := range Actions {
+		for _, warn := range []bool{false, true} {
+			for _, wait := range []bool{false, true} {
+				input := base
+				input.Action = action
+				if action == "command" {
+					input.Command = "save-all"
+				}
+				input.Considerate(warn, wait)
+				disconnects := action == "restart" || action == "stop" || action == "backup"
+				if (input.Announcements != nil) != (warn && disconnects) || (input.WaitForEmpty != nil) != (wait && disconnects) {
+					t.Fatal(action, warn, wait, input.Announcements, input.WaitForEmpty)
+				}
+				if wait && disconnects && (input.WaitForEmpty.Minutes != 30 || input.WaitForEmpty.Then != WaitRun) {
+					t.Fatal(input.WaitForEmpty)
+				}
+				if warn && disconnects && !slices.Equal(input.Announcements.LeadMinutes, []int{5, 1}) {
+					t.Fatal(input.Announcements)
+				}
+				if err := input.Validate(); err != nil {
+					t.Fatal(action, warn, wait, err)
+				}
+			}
+		}
+	}
+	for action, message := range map[string]string{"restart": "Server restart in 5 minutes.", "stop": "Server shutting down in 5 minutes.",
+		"backup": "Server restart for a backup in 5 minutes.", "update": "Server restart for an update in 5 minutes."} {
+		if got := WarningMessage(action, 5); got != message {
+			t.Fatal(got)
+		}
+	}
+	if got := WarningMessage("stop", 1); got != "Server shutting down in 1 minute." {
+		t.Fatal(got)
 	}
 }

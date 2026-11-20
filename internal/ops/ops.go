@@ -92,6 +92,11 @@ type Recovery struct {
 
 	// DataUnsafe is set while a restore is replacing or rolling back data.
 	DataUnsafe bool `json:"dataUnsafe,omitempty"`
+
+	// WarnUntil (Unix ms) is when players were told the action happens,
+	// saved before the warning is sent; WarnSent once it was.
+	WarnUntil int64 `json:"warnUntil,omitempty"`
+	WarnSent  bool  `json:"warnSent,omitempty"`
 	// Restore and Swap are the restore journal and update swap, which their
 	// handlers decode and validate.
 	Restore json.RawMessage `json:"restore,omitempty"`
@@ -134,6 +139,10 @@ func (c *Context) Progress(phase string, change func(*Recovery), result map[stri
 	c.Job.Recovery, c.Job.Result, c.Job.Phase = merged, result, phase
 	return nil
 }
+
+// ErrResume, returned by Recover, queues an interrupted job again: it had not
+// acted on anything yet, so running it once more is not a replay.
+var ErrResume = errors.New("operation resumes")
 
 // Handler runs and reconciles one operation kind.
 type Handler struct {
@@ -779,6 +788,13 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 		// recovered again on the next startup.
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, ErrResume) {
+			if _, err := r.DB.ExecContext(ctx, "UPDATE operations SET status='queued', phase='queued', updated_at=? WHERE id=? AND status='running'",
+				db.Now(), rw.id); err != nil {
+				return err
+			}
+			continue
 		}
 		if err != nil {
 			if err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,

@@ -2322,6 +2322,8 @@ type UpdateView struct {
 	// means an administrator turned the checks off.
 	Check     *update.CheckStatus
 	ChecksOff bool
+	// Warn offers to warn players first (WarnOn, WarnOff, or "").
+	Warn string
 }
 
 func UpdateTab(serverID string, recreate bool) templ.Component {
@@ -2348,7 +2350,7 @@ func UpdateTab(serverID string, recreate bool) templ.Component {
 		var templ_7745c5c3_Var82 string
 		templ_7745c5c3_Var82, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/servers/" + serverID + "/update" + map[bool]string{true: "?recreate=1"}[recreate]).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 637, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 639, Col: 126}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var82)
 		if templ_7745c5c3_Err != nil {
@@ -2405,7 +2407,7 @@ func UpdatePanel(u UpdateView) templ.Component {
 			var templ_7745c5c3_Var84 string
 			templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.JoinStringErrs(capability.ActionLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 651, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 653, Col: 31}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var84))
 			if templ_7745c5c3_Err != nil {
@@ -2443,7 +2445,7 @@ func UpdatePanel(u UpdateView) templ.Component {
 				var templ_7745c5c3_Var85 string
 				templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.JoinStringErrs(capability.UnavailableReason)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 666, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 668, Col: 58}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var85))
 				if templ_7745c5c3_Err != nil {
@@ -2614,7 +2616,7 @@ func ImageCheck(u UpdateView) templ.Component {
 			var templ_7745c5c3_Var87 string
 			templ_7745c5c3_Var87, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/servers/" + u.ServerID + "/update-check").Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 723, Col: 100}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 725, Col: 100}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var87)
 			if templ_7745c5c3_Err != nil {
@@ -2657,7 +2659,7 @@ func reloadUpdate(serverID, label string) templ.Component {
 		var templ_7745c5c3_Var89 string
 		templ_7745c5c3_Var89, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/fragments/servers/" + serverID + "/update").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 730, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 732, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var89)
 		if templ_7745c5c3_Err != nil {
@@ -2670,7 +2672,7 @@ func reloadUpdate(serverID, label string) templ.Component {
 		var templ_7745c5c3_Var90 string
 		templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 730, Col: 184}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 732, Col: 184}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var90))
 		if templ_7745c5c3_Err != nil {
@@ -2709,7 +2711,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var92 string
 		templ_7745c5c3_Var92, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/servers/" + u.ServerID + "/updates").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 737, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 739, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var92)
 		if templ_7745c5c3_Err != nil {
@@ -2722,7 +2724,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var93 string
 		templ_7745c5c3_Var93, templ_7745c5c3_Err = templruntime.NewAttributeExpression("Update " + u.ServerName + "?").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 739, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 741, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var93)
 		if templ_7745c5c3_Err != nil {
@@ -2735,7 +2737,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var94 string
 		templ_7745c5c3_Var94, templ_7745c5c3_Err = templruntime.NewAttributeExpression(capability.ActionLabel).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 741, Col: 46}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 743, Col: 46}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var94)
 		if templ_7745c5c3_Err != nil {
@@ -2748,7 +2750,7 @@ func UpdateForm(u UpdateView) templ.Component {
 		var templ_7745c5c3_Var95 string
 		templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.JoinStringErrs(capability.Image)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 749, Col: 25}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 751, Col: 25}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var95))
 		if templ_7745c5c3_Err != nil {
@@ -2770,73 +2772,120 @@ func UpdateForm(u UpdateView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "> Back up first</label><p class=\"muted check-help\">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p><label data-hidden-by=\"update-backup\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "> Back up first</label><p class=\"muted check-help\">The server stays stopped during the backup. If it was stopped before, it stays stopped after.</p>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if u.Warn != "" {
+			option := WarnOption("update", u.Warn)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "<label class=\"check-label\"><input type=\"checkbox\" name=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var96 string
+			templ_7745c5c3_Var96, templ_7745c5c3_Err = templruntime.NewAttributeExpression(option.Name).Resolve(ctx)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 766, Col: 45}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var96)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "\" value=\"true\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			if option.Checked {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, " checked")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "> ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var97 string
+			templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.JoinStringErrs(option.Label)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 767, Col: 18}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var97))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "</label><p class=\"muted check-help\">Once the new image is downloaded, tells players in the game that the server restarts for an update in 1 minute, then goes ahead.</p>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, "<label data-hidden-by=\"update-backup\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if u.CanBackup {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, " hidden")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, " hidden")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "><span>Type <strong>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, "><span>Type <strong>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var96 string
-		templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.JoinStringErrs(u.ServerName)
+		var templ_7745c5c3_Var98 string
+		templ_7745c5c3_Var98, templ_7745c5c3_Err = templ.JoinStringErrs(u.ServerName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 762, Col: 36}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 772, Col: 36}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var96))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var98))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, "</strong> to skip the backup</span> <input name=\"skipBackupConfirmation\" autocomplete=\"off\"></label> <details class=\"disclosure\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, "</strong> to skip the backup</span> <input name=\"skipBackupConfirmation\" autocomplete=\"off\"></label> <details class=\"disclosure\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if u.Recreate {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, " open")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, " open")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "><summary>Advanced</summary><div class=\"stack-form\"><label class=\"check-label\"><input type=\"checkbox\" name=\"forceRecreate\" value=\"true\" id=\"update-recreate\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 258, "><summary>Advanced</summary><div class=\"stack-form\"><label class=\"check-label\"><input type=\"checkbox\" name=\"forceRecreate\" value=\"true\" id=\"update-recreate\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if u.Recreate {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, " checked")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, " checked")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, "> Update even if the image is already current</label><p class=\"muted check-help\">Picks up a game update that installs on startup.</p></div></details><div id=\"update-status\" aria-live=\"polite\"></div><button class=\"primary-btn\" type=\"submit\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 260, "> Update even if the image is already current</label><p class=\"muted check-help\">Picks up a game update that installs on startup.</p></div></details><div id=\"update-status\" aria-live=\"polite\"></div><button class=\"primary-btn\" type=\"submit\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if u.Blocked || u.Active {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, " disabled")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, " disabled")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, " data-busy-label=\"Working…\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, " data-busy-label=\"Working…\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var97 string
-		templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.JoinStringErrs(capability.ActionLabel)
+		var templ_7745c5c3_Var99 string
+		templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.JoinStringErrs(capability.ActionLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 776, Col: 133}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `server_backups.templ`, Line: 786, Col: 133}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var97))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var99))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, "</button></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 263, "</button></form>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

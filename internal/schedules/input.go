@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ type Announcements struct {
 	LeadMinutes []int `json:"leadMinutes"`
 }
 
-// WaitForEmpty holds a restart or stop until no one is online, for up to
+// WaitForEmpty holds a restart, stop, or backup until no one is online, for up to
 // Minutes after its scheduled time. Then is "skip" or "run": what happens
 // when players are still online, or their count is unknown, at the end.
 type WaitForEmpty struct {
@@ -71,7 +72,44 @@ var Actions = []string{"start", "stop", "restart", "backup", "command"}
 const MaxCommandLength = 500
 
 // DefaultLeadMinutes are the countdown warnings offered by default.
-var DefaultLeadMinutes = []int{10, 5, 1}
+var DefaultLeadMinutes = []int{5, 1}
+
+// Disconnects reports whether an action stops a running server, which is
+// what warnings and waiting for an empty server are for.
+func Disconnects(action string) bool {
+	return action == "restart" || action == "stop" || action == "backup"
+}
+
+// Considerate gives a new schedule the polite choices its game allows:
+// waiting up to DefaultWaitMinutes for the server to empty, then going
+// ahead, and warning anyone still online before it does.
+func (i *Input) Considerate(canWarn, canWait bool) {
+	i.WaitForEmpty, i.Announcements = nil, nil
+	if !Disconnects(i.Action) {
+		return
+	}
+	if canWait {
+		i.WaitForEmpty = &WaitForEmpty{Minutes: DefaultWaitMinutes, Then: WaitRun}
+	}
+	if canWarn {
+		i.Announcements = &Announcements{LeadMinutes: slices.Clone(DefaultLeadMinutes)}
+	}
+}
+
+// WarningMessage is what players see minutes before an action, in the
+// words of the restart warning.
+func WarningMessage(action string, minutes int) string {
+	what := map[string]string{"stop": "Server shutting down", "backup": "Server restart for a backup",
+		"update": "Server restart for an update"}[action]
+	if what == "" {
+		what = "Server restart"
+	}
+	unit := "minutes"
+	if minutes == 1 {
+		unit = "minute"
+	}
+	return fmt.Sprintf("%s in %d %s.", what, minutes, unit)
+}
 
 func invalid(message string) error { return apperr.New("INVALID_REQUEST", 400, message) }
 
@@ -116,8 +154,8 @@ func (i *Input) Validate() error {
 		return invalid("Backup before restart is only available for restart schedules")
 	}
 	if wait := i.WaitForEmpty; wait != nil {
-		if i.Action != "restart" && i.Action != "stop" {
-			return invalid("Waiting for an empty server is only available for restarts and stops")
+		if !Disconnects(i.Action) {
+			return invalid("Waiting for an empty server is only available for restarts, stops, and backups")
 		}
 		if wait.Minutes < 1 || wait.Minutes > MaxWaitMinutes {
 			return apperr.Newf("INVALID_REQUEST", 400, "Wait between 1 and %d minutes for players to leave", MaxWaitMinutes)
@@ -127,12 +165,12 @@ func (i *Input) Validate() error {
 		}
 		// A warning announces a restart, so it needs one that happens.
 		if i.Announcements != nil && wait.Then != WaitRun {
-			return invalid("Countdown warnings need the restart to go ahead when the wait ends")
+			return invalid("Warnings need the run to go ahead when the wait ends, so they don’t announce something that doesn’t happen")
 		}
 	}
 	if i.Announcements != nil {
-		if i.Action != "restart" {
-			return invalid("Announcements are only available for restarts")
+		if !Disconnects(i.Action) {
+			return invalid("Warnings are only available for restarts, stops, and backups")
 		}
 		if i.Announcements.LeadMinutes == nil {
 			i.Announcements.LeadMinutes = slices.Clone(DefaultLeadMinutes)

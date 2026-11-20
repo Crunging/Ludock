@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,9 @@ type ServerRow struct {
 	// Down: the server stopped without anyone stopping it, and its outage
 	// alert is due.
 	Down bool
+	// Warn is whether stopping offers to warn players first: WarnOn,
+	// WarnOff, or "" when it isn't offered.
+	Warn string
 }
 
 // Status is the row's state, naming a server its alert calls down the same way.
@@ -41,6 +45,34 @@ func (r ServerRow) Status() Status {
 		return Status{"Down", "failed"}
 	}
 	return status
+}
+
+const (
+	WarnOn  = "on"
+	WarnOff = "off"
+)
+
+// ConfirmOption is a checkbox in the confirmation dialog.
+type ConfirmOption struct {
+	Name    string `json:"name"`
+	Label   string `json:"label"`
+	Help    string `json:"help"`
+	Checked bool   `json:"checked"`
+}
+
+func confirmOptions(options []ConfirmOption) string {
+	encoded, _ := json.Marshal(options)
+	return string(encoded)
+}
+
+// WarnOption offers to warn players before an action takes the server down.
+func WarnOption(action, warn string) ConfirmOption {
+	what := map[string]string{"stop": "shuts down", "update": "restarts for an update"}[action]
+	if what == "" {
+		what = "restarts"
+	}
+	return ConfirmOption{Name: "warnPlayers", Label: "Warn players and wait 1 minute", Checked: warn == WarnOn,
+		Help: "Tells players in the game that the server " + what + " in 1 minute, then goes ahead."}
 }
 
 // FleetBlock is one server in the strip of state blocks under the title.
@@ -437,7 +469,7 @@ templ ServerCard(row ServerRow) {
 				<button class="secondary-btn" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/start" } hx-target="#action-error" data-busy-label="Working…">Start</button>
 			}
 			if row.CanStop {
-				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false)... }>Stop</button>
+				<button class="secondary-btn secondary-btn--danger" type="button" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/stop" } hx-target="#action-error" data-busy-label="Working…" { LifecycleConfirm("stop", server.DisplayName, false, row.Warn)... }>Stop</button>
 			}
 			if row.CanFiles || row.CanRestart {
 				<div class="action-menu" data-action-menu>
@@ -450,7 +482,7 @@ templ ServerCard(row ServerRow) {
 							<a class="action-menu__action" href={ templ.SafeURL("/files/" + server.ID) }>Files</a>
 						}
 						if row.CanRestart {
-							<button type="button" class="action-menu__action" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#action-error" { LifecycleConfirm("restart", server.DisplayName, row.CanBackup)... }>Restart…</button>
+							<button type="button" class="action-menu__action" disabled?={ row.Disabled } hx-post={ "/servers/" + server.ID + "/restart" } hx-target="#action-error" { LifecycleConfirm("restart", server.DisplayName, row.CanBackup, row.Warn)... }>Restart…</button>
 						}
 					</div>
 				</div>
@@ -460,8 +492,9 @@ templ ServerCard(row ServerRow) {
 }
 
 // LifecycleConfirm asks in the page's confirmation dialog before a stop or
-// restart. A restart can offer to take a backup first.
-func LifecycleConfirm(action, serverName string, backupOption bool) templ.Attributes {
+// restart. It can offer to warn players first, and a restart to take a
+// backup first.
+func LifecycleConfirm(action, serverName string, backupOption bool, warn string) templ.Attributes {
 	label := map[string]string{"stop": "Stop", "restart": "Restart"}[action]
 	detail := "Connected players will be disconnected."
 	if action == "stop" {
@@ -469,10 +502,16 @@ func LifecycleConfirm(action, serverName string, backupOption bool) templ.Attrib
 	}
 	attributes := templ.Attributes{"hx-confirm": label + " " + serverName + "?", "data-confirm-detail": detail,
 		"data-confirm-action": label + " server", "data-confirm-danger": true}
+	var options []ConfirmOption
+	if warn != "" {
+		options = append(options, WarnOption(action, warn))
+	}
 	if backupOption {
-		attributes["data-confirm-option"] = "createBackup"
-		attributes["data-confirm-option-label"] = "Take a backup first"
-		attributes["data-confirm-option-help"] = "The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."
+		options = append(options, ConfirmOption{Name: "createBackup", Label: "Take a backup first",
+			Help: "The server stays stopped while the backup runs, then starts again. If the backup fails, it stays stopped."})
+	}
+	if len(options) > 0 {
+		attributes["data-confirm-options"] = confirmOptions(options)
 	}
 	return attributes
 }

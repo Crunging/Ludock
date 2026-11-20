@@ -26,6 +26,58 @@ type SchedulesView struct {
 	Message     string
 	Now         int64
 	Form        ScheduleForm
+	// Viewer is the viewer's account ID; Admin views can edit every schedule.
+	Viewer string
+	Admin  bool
+}
+
+// Editable: only a schedule's owner or an administrator changes it.
+func (v SchedulesView) Editable(item schedules.Schedule) bool {
+	return v.Admin || item.OwnerID == v.Viewer
+}
+
+func ownerText(item schedules.Schedule) string {
+	if item.OwnerName == "" {
+		return "Set up by a deleted account"
+	}
+	return "Set up by " + item.OwnerName
+}
+
+// minutesText lists minutes as "5 and 1 minutes" or "10, 5 and 1 minutes".
+func minutesText(minutes []int) string {
+	parts := strings.Split(LeadText(minutes), ", ")
+	text := parts[len(parts)-1]
+	if len(parts) > 1 {
+		text = strings.Join(parts[:len(parts)-1], ", ") + " and " + text
+	}
+	if len(minutes) == 1 && minutes[0] == 1 {
+		return text + " minute"
+	}
+	return text + " minutes"
+}
+
+// PlayersPlan says in one line what players experience when an action that
+// disconnects them runs, or "" for one that doesn't.
+func PlayersPlan(input schedules.Input) string {
+	if !schedules.Disconnects(input.Action) {
+		return ""
+	}
+	wait := input.WaitForEmpty
+	warned := ""
+	if input.Announcements != nil && len(input.Announcements.LeadMinutes) > 0 {
+		warned = minutesText(input.Announcements.LeadMinutes)
+	}
+	switch {
+	case wait != nil && wait.Then != schedules.WaitRun:
+		return "Waits up to " + minutesText([]int{wait.Minutes}) + " for everyone to leave, and skips this run if anyone is still on."
+	case wait != nil && warned != "":
+		return "Waits up to " + minutesText([]int{wait.Minutes}) + " for everyone to leave. Anyone still on is warned in the game " + warned + " before it goes ahead."
+	case wait != nil:
+		return "Waits up to " + minutesText([]int{wait.Minutes}) + " for everyone to leave, then goes ahead without warning anyone still on."
+	case warned != "":
+		return "Players are warned in the game " + warned + " before."
+	}
+	return "Anyone playing is disconnected without warning."
 }
 
 // ScheduleForm is the add or edit form, with the viewer's draft.
@@ -174,7 +226,7 @@ func toggleDisabled(v SchedulesView, item schedules.Schedule) bool {
 	if item.CompletedAt != 0 && !(item.Enabled && item.LastOperation != nil && item.LastOperation.Status == "queued") {
 		return true
 	}
-	return !item.Enabled && (v.Blocked || !v.CanResume[item.ID])
+	return !v.Editable(item) || (!item.Enabled && (v.Blocked || !v.CanResume[item.ID]))
 }
 
 templ SchedulesTab(v SchedulesView) {
@@ -232,9 +284,14 @@ templ ScheduleList(v SchedulesView) {
 							{ ActionLabel(item.Action) }
 							if item.Command != "" {
 								<small class="table-detail schedule-command"><code>{ item.Command }</code></small>
+							} else if item.CommandHidden {
+								<small class="table-detail">Its command shows only to people who can send console commands.</small>
 							}
 							if item.CreateBackup {
 								<small class="table-detail">Backup before restart</small>
+							}
+							if item.OwnerID != v.Viewer {
+								<small class="table-detail schedule-owner">{ ownerText(item) }</small>
 							}
 						</td>
 						<td>
@@ -301,7 +358,7 @@ templ ScheduleList(v SchedulesView) {
 						</td>
 						<td>
 							<div class="schedule-row-actions">
-								if v.Editing == "" && !v.Blocked && len(v.Form.Actions) > 0 {
+								if v.Editing == "" && !v.Blocked && len(v.Form.Actions) > 0 && v.Editable(item) {
 									<a class="secondary-btn" id={ "schedule-edit-" + item.ID } href={ detailURL(v.ServerID, "tab=schedules&edit="+item.ID) }>Edit</a>
 								} else {
 									<button type="button" class="secondary-btn" disabled>Edit</button>
@@ -324,7 +381,7 @@ templ ScheduleList(v SchedulesView) {
 								<button
 									type="button"
 									class="secondary-btn secondary-btn--danger"
-									disabled?={ v.Editing != "" }
+									disabled?={ v.Editing != "" || !v.Editable(item) }
 									hx-post={ "/servers/" + v.ServerID + "/schedules/" + item.ID + "/delete" }
 									hx-target="#detail-status"
 									hx-confirm="Delete this schedule?"
@@ -478,7 +535,7 @@ templ ScheduleEditor(f ScheduleForm) {
 				Back up first
 			</label>
 		}
-		<details class="disclosure" id="schedule-more" open?={ input.WaitForEmpty != nil || input.Announcements != nil }>
+		<details class="disclosure" id="schedule-more" open?={ f.Error != "" && (input.WaitForEmpty != nil || input.Announcements != nil) }>
 			<summary>More options</summary>
 			<div class="stack-form">
 				<label>
@@ -487,7 +544,7 @@ templ ScheduleEditor(f ScheduleForm) {
 					<datalist id="schedule-timezones" data-timezones></datalist>
 					<small id="schedule-timezone-help">Times follow this zone, including daylight saving.</small>
 				</label>
-				<div data-shown-when="action=restart|stop" hidden?={ input.Action != "restart" && input.Action != "stop" }>
+				<div data-shown-when="action=restart|stop|backup" hidden?={ !schedules.Disconnects(input.Action) }>
 					if f.CanWait || input.WaitForEmpty != nil {
 						<fieldset>
 							<legend>Players online</legend>
@@ -517,20 +574,20 @@ templ ScheduleEditor(f ScheduleForm) {
 						</fieldset>
 					}
 				</div>
-				<div data-shown-when="action=restart" hidden?={ input.Action != "restart" }>
+				<div data-shown-when="action=restart|stop|backup" hidden?={ !schedules.Disconnects(input.Action) }>
 					if f.CanAnnounce {
 						<fieldset>
 							<legend>Player warnings</legend>
 							<label class="check-label">
 								<input type="checkbox" name="announce" value="true" id="schedule-announce" checked?={ input.Announcements != nil }/>
-								Announce countdown to players
+								Warn players in the game
 							</label>
 							<label data-shown-by="schedule-announce" hidden?={ input.Announcements == nil }>
 								Warning lead times (minutes)
 								<input name="leadMinutes" value={ f.LeadText }/>
-								<small>Comma-separated whole minutes, 1–60; up to 10 unique times. Default: 10, 5, 1.</small>
+								<small>Comma-separated whole minutes, 1–60; up to 10 unique times. Default: { LeadText(schedules.DefaultLeadMinutes) }.</small>
 							</label>
-							<p class="section-note">Sent through the game console. A missed warning doesn’t stop the restart.</p>
+							<p class="section-note">Sent through the game console, counting down to when the run goes ahead. A missed warning doesn’t stop it.</p>
 						</fieldset>
 					} else if input.Announcements != nil {
 						<p class="section-note">You can no longer send player warnings on this server, so saving turns them off.</p>
@@ -564,7 +621,7 @@ templ ScheduleEditor(f ScheduleForm) {
 	</form>
 }
 
-templ SchedulePreview(enabled bool, text string) {
+templ SchedulePreview(enabled bool, text, players string) {
 	<strong>
 		if enabled {
 			Next run:
@@ -574,4 +631,7 @@ templ SchedulePreview(enabled bool, text string) {
 	</strong>
 	{ text }
 	<small class="table-detail">If the server is still there and its owner can still use it.</small>
+	if players != "" {
+		<span class="schedule-players"><strong>Players:</strong> { players }</span>
+	}
 }

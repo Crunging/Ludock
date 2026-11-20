@@ -14,6 +14,7 @@ import (
 	"github.com/Crunging/Ludock/internal/backups"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/games"
+	"github.com/Crunging/Ludock/internal/jobs"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -308,7 +309,7 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request, request *Re
 	view := &d.Row.Server
 	u := views.UpdateView{ServerID: id, ServerName: view.DisplayName, CanBackup: can(view, authz.BackupsCreate),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		Recreate: r.URL.Query().Get("recreate") == "1"}
+		Recreate: r.URL.Query().Get("recreate") == "1", Warn: s.warnOffer(view)}
 	resolved, _, err := s.resolveFresh(r, request, id, capability)
 	if err == nil {
 		result := s.App.Updates.Capability(r.Context(), resolved, func() bool {
@@ -417,5 +418,9 @@ func (s *Server) queueUpdate(w http.ResponseWriter, r *http.Request, request *Re
 	if !createBackup {
 		updateRequest["skipBackupConfirmation"] = skip
 	}
-	s.enqueue(w, r, request, resolved, &current.User, "update", map[string]any{"request": updateRequest})
+	input := map[string]any{"request": updateRequest}
+	if r.PostFormValue(jobs.WarnInput) == "true" && s.warnPlayers(resolved) {
+		input[jobs.WarnInput] = true
+	}
+	s.enqueue(w, r, request, resolved, &current.User, "update", input)
 }

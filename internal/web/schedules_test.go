@@ -10,6 +10,7 @@ import (
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 func scheduleForm(values map[string][]string) url.Values {
@@ -112,5 +113,41 @@ func TestScheduleWarningDraftStaysOpen(t *testing.T) {
 	body := readBody(t, response)
 	if response.StatusCode != http.StatusBadRequest || !strings.Contains(body, `id="schedule-more" open`) {
 		t.Fatal(response.StatusCode, body)
+	}
+}
+
+// A member who manages schedules sees the administrator's schedule with its
+// owner but can't change it: the page offers no edit, pause, or delete, and
+// forged requests for them change nothing.
+func TestOthersSchedulesAreReadOnly(t *testing.T) {
+	t.Parallel()
+	p := newPages(t)
+	member := p.user("u-member", "member", db.RoleMember)
+	p.grant(member, authz.ServerView, authz.SchedulesManage, authz.ServerStart)
+	owned, err := p.app.Schedules.Create(context.Background(), &p.admin.User, p.server, schedules.Input{Kind: "recurring", Action: "start",
+		Enabled: true, Time: "08:00", Timezone: "Europe/Berlin", Days: []int{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := p.do("GET", "/servers/"+p.server+"?tab=schedules", member, nil, nil).Body.String()
+	if !strings.Contains(page, "Set up by "+p.admin.User.Username) || strings.Contains(page, `id="schedule-edit-`+owned.ID+`"`) {
+		t.Fatal(page)
+	}
+	if page := p.do("GET", "/servers/"+p.server+"?tab=schedules&edit="+owned.ID, member, nil, nil).Body.String(); !strings.Contains(page, "no longer available") {
+		t.Fatal("opened another owner's schedule for editing")
+	}
+	base := "/servers/" + p.server + "/schedules/" + owned.ID
+	for path, form := range map[string]url.Values{
+		base:             scheduleForm(map[string][]string{"revision": {"1"}, "time": {"09:00"}}),
+		base + "/toggle": {"revision": {"1"}, "enabled": {"false"}},
+		base + "/delete": {},
+	} {
+		if response := p.action(path, member, form); response.StatusCode < 400 {
+			t.Fatal(path, response.StatusCode)
+		}
+	}
+	list, _ := p.app.Schedules.List(context.Background(), &p.admin.User, p.server)
+	if len(list) != 1 || list[0].Revision != 1 || list[0].Time != "08:00" || !list[0].Enabled {
+		t.Fatal(list)
 	}
 }

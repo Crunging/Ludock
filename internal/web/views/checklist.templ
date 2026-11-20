@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 const (
@@ -26,6 +27,9 @@ type ChecklistItem struct {
 	// computer can use it.
 	Host     string
 	Loopback bool
+	// Warn and Wait count the servers whose backups can warn players and
+	// wait for them to leave.
+	Warn, Wait int
 }
 
 type ChecklistView struct {
@@ -62,15 +66,26 @@ func checklistTitle(key string) string {
 	}[key]
 }
 
-func backupConfirm(count int) templ.Attributes {
+// backupConfirm says what players experience; servers that differ in what
+// their games allow are described together.
+func backupConfirm(item ChecklistItem) templ.Attributes {
+	count := len(item.Names)
 	question, when := "Back up "+strconv.Itoa(count)+" servers every night?", "between 04:00 and 06:00 your time, a few minutes apart so they don’t stop together"
+	offline := "Each server goes offline for a few minutes during its backup, then starts again."
 	if count == 1 {
 		question, when = "Back up this server every night?", "between 04:00 and 06:00 your time"
+		offline = "The server goes offline for a few minutes during the backup, then starts again."
+	}
+	players := "Each backup waits up to " + strconv.Itoa(schedules.DefaultWaitMinutes) + " minutes for everyone to leave where Ludock can see who is online, " +
+		"and warns anyone still playing where the game allows."
+	if (item.Warn == 0 || item.Warn == count) && (item.Wait == 0 || item.Wait == count) {
+		input := schedules.Input{Action: "backup"}
+		input.Considerate(item.Warn > 0, item.Wait > 0)
+		players = PlayersPlan(input)
 	}
 	return templ.Attributes{
-		"hx-confirm": question,
-		"data-confirm-detail": "Each backup stops its server for a few minutes, disconnecting anyone playing, then starts it again. " +
-			"Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
+		"hx-confirm":          question,
+		"data-confirm-detail": players + " " + offline + " Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
 		"data-confirm-action": "Back up every night",
 	}
 }
@@ -171,7 +186,7 @@ templ checklistAction(item ChecklistItem) {
 					<input type="hidden" name="server" value={ id }/>
 				}
 			</form>
-			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-backups" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(len(item.Names))... }>Back up every night</button>
+			<button class="secondary-btn" type="button" hx-post="/checklist/backups" hx-include="#checklist-backups" hx-target="#checklist" data-busy-label="Scheduling…" { backupConfirm(item)... }>Back up every night</button>
 		case ChecklistRecovery:
 			<form id="checklist-recovery" hidden>
 				for _, id := range item.IDs {

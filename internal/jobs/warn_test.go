@@ -1,0 +1,95 @@
+package jobs
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/Crunging/Ludock/internal/ops"
+)
+
+// interruptedWarning saves a restart that warned players and was waiting
+// when Ludock stopped, with recovery as it was saved then, and starts a new
+// runner as Ludock's next start would.
+func (f *fixture) interruptedWarning(t *testing.T, recovery ops.Recovery) (*ops.Runner, string) {
+	t.Helper()
+	f.runner.Stop()
+	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
+		BindingRevision: server.BindingRevision, Input: map[string]any{WarnInput: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(recovery)
+	if _, err := f.jobs.DB.Exec("UPDATE operations SET status='running', phase='warning', recovery_json=? WHERE id=?", string(encoded), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	next := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+	f.jobs.Register(next)
+	if err := next.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(next.Stop)
+	return next, job.ID
+}
+
+func finished(t *testing.T, runner *ops.Runner, id string) *ops.Job {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if current, _ := runner.Get(ctx, id); current.Status != ops.Queued && current.Status != ops.Running {
+			return current
+		}
+	}
+	t.Fatal("job did not finish")
+	return nil
+}
+
+// A restart that warned players and was waiting when Ludock stopped resumes
+// its wait at the next start and restarts once at the time players were
+// given, without warning them again.
+func TestWarnedRestartResumesAfterLudockRestarts(t *testing.T) {
+	f := setup(t)
+	before := f.startedAt()
+	until := time.Now().Add(300 * time.Millisecond).UnixMilli()
+	runner, id := f.interruptedWarning(t, ops.Recovery{WarnUntil: until, WarnSent: true})
+	job := finished(t, runner, id)
+	if job.Status != ops.Succeeded || f.startedAt() == before || !f.running() {
+		t.Fatalf("%+v", job)
+	}
+	if job.Recovery.WarnUntil != until || job.UpdatedAt < until {
+		t.Fatal("warned again, or restarted before the time players were given", job.Recovery.WarnUntil, job.UpdatedAt-until)
+	}
+}
+
+// A warned restart found long after its time, as after Ludock was down for
+// a while, doesn't restart late and says players were told it would; one
+// that already began stopping is reconciled, never resumed.
+func TestWarnedRestartTooLateOrStartedIsNotResumed(t *testing.T) {
+	f := setup(t)
+	before := f.startedAt()
+	runner, id := f.interruptedWarning(t, ops.Recovery{WarnUntil: time.Now().Add(-10 * time.Minute).UnixMilli(), WarnSent: true})
+	job := finished(t, runner, id)
+	if job.Status != ops.Failed || job.Error != "Ludock wasn’t running when the server was due to restart, so it didn’t. Players had been told it would." ||
+		f.startedAt() != before {
+		t.Fatalf("%+v", job)
+	}
+
+	f = setup(t)
+	before = f.startedAt()
+	runner, id = f.interruptedWarning(t, ops.Recovery{WarnUntil: time.Now().UnixMilli(), WarnSent: true, StopStarted: true, StopSettled: true})
+	if job := finished(t, runner, id); job.Status != ops.Interrupted || f.startedAt() != before {
+		t.Fatalf("%+v", job)
+	}
+}
+
+// A fresh warned restart saves when players were told before it waits, and
+// restarts once that time has come.
+func TestWarnedRestartWaitsForTheTimeGiven(t *testing.T) {
+	f := setup(t)
+	f.jobs.WarningLead = 200 * time.Millisecond
+	started := time.Now()
+	job := f.run(t, "restart", map[string]any{WarnInput: true})
+	if job.Status != ops.Succeeded || job.Recovery.WarnUntil == 0 || time.Since(started) < 200*time.Millisecond {
+		t.Fatalf("%+v", job)
+	}
+}

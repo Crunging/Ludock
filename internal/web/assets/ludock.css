@@ -848,6 +848,7 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .schedule-day-presets .secondary-btn { min-height: 32px; padding: 4px 12px; font-size: 14px; }
 .schedule-day-presets .secondary-btn[aria-pressed=true] { background: var(--ink); color: var(--block); }
 .schedule-preview { padding: 12px 14px; border-radius: var(--radius); background: var(--block-2); font-size: 15px; }
+.schedule-players { display: block; margin-top: 8px; }
 .schedule-form-note { color: var(--ink-2); font-size: 14px; }
 .schedule-conflict { padding: 14px; border-radius: var(--radius); background: color-mix(in srgb, var(--caution) 20%, var(--block)); display: grid; gap: 8px; font-size: 15px; }
 .schedule-form fieldset > fieldset, .schedule-form [data-shown-when] > fieldset { display: grid; gap: 10px; }

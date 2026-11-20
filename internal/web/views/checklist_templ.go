@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Crunging/Ludock/internal/monitor"
+	"github.com/Crunging/Ludock/internal/schedules"
 )
 
 const (
@@ -35,6 +36,9 @@ type ChecklistItem struct {
 	// computer can use it.
 	Host     string
 	Loopback bool
+	// Warn and Wait count the servers whose backups can warn players and
+	// wait for them to leave.
+	Warn, Wait int
 }
 
 type ChecklistView struct {
@@ -71,15 +75,26 @@ func checklistTitle(key string) string {
 	}[key]
 }
 
-func backupConfirm(count int) templ.Attributes {
+// backupConfirm says what players experience; servers that differ in what
+// their games allow are described together.
+func backupConfirm(item ChecklistItem) templ.Attributes {
+	count := len(item.Names)
 	question, when := "Back up "+strconv.Itoa(count)+" servers every night?", "between 04:00 and 06:00 your time, a few minutes apart so they don’t stop together"
+	offline := "Each server goes offline for a few minutes during its backup, then starts again."
 	if count == 1 {
 		question, when = "Back up this server every night?", "between 04:00 and 06:00 your time"
+		offline = "The server goes offline for a few minutes during the backup, then starts again."
+	}
+	players := "Each backup waits up to " + strconv.Itoa(schedules.DefaultWaitMinutes) + " minutes for everyone to leave where Ludock can see who is online, " +
+		"and warns anyone still playing where the game allows."
+	if (item.Warn == 0 || item.Warn == count) && (item.Wait == 0 || item.Wait == count) {
+		input := schedules.Input{Action: "backup"}
+		input.Considerate(item.Warn > 0, item.Wait > 0)
+		players = PlayersPlan(input)
 	}
 	return templ.Attributes{
-		"hx-confirm": question,
-		"data-confirm-detail": "Each backup stops its server for a few minutes, disconnecting anyone playing, then starts it again. " +
-			"Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
+		"hx-confirm":          question,
+		"data-confirm-detail": players + " " + offline + " Backups run " + when + ". Change or remove them on each server’s Schedules tab.",
 		"data-confirm-action": "Back up every night",
 	}
 }
@@ -182,7 +197,7 @@ func Checklist(v ChecklistView) templ.Component {
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(checklistTitle(item.Key))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 108, Col: 42}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 123, Col: 42}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -211,7 +226,7 @@ func Checklist(v ChecklistView) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templruntime.NewAttributeExpression("/checklist/" + item.Key + "/dismiss").Resolve(ctx)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 115, Col: 114}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 130, Col: 114}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 					if templ_7745c5c3_Err != nil {
@@ -224,7 +239,7 @@ func Checklist(v ChecklistView) templ.Component {
 					var templ_7745c5c3_Var6 string
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templruntime.NewAttributeExpression("Dismiss: " + checklistTitle(item.Key)).Resolve(ctx)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 115, Col: 191}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 130, Col: 191}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
 					if templ_7745c5c3_Err != nil {
@@ -276,7 +291,7 @@ func checklistDetail(item ChecklistItem) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(NameList(item.Names))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 130, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 145, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
@@ -305,7 +320,7 @@ func checklistDetail(item ChecklistItem) templ.Component {
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(item.Host)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 137, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 152, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -334,7 +349,7 @@ func checklistDetail(item ChecklistItem) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(NameList(item.Names))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 145, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 160, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
@@ -359,7 +374,7 @@ func checklistDetail(item ChecklistItem) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(NameList(item.Names))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 152, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 167, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -426,7 +441,7 @@ func checklistAction(item ChecklistItem) templ.Component {
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templruntime.NewAttributeExpression(id).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 171, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 186, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 				if templ_7745c5c3_Err != nil {
@@ -449,7 +464,7 @@ func checklistAction(item ChecklistItem) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", backupConfirm(len(item.Names)))
+				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", backupConfirm(item))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -480,7 +495,7 @@ func checklistAction(item ChecklistItem) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templruntime.NewAttributeExpression(id).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 178, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `checklist.templ`, Line: 193, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 				if templ_7745c5c3_Err != nil {

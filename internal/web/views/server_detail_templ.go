@@ -663,7 +663,7 @@ func DetailLive(d ServerDetail) templ.Component {
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", LifecycleConfirm("stop", server.DisplayName, false))
+						templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", LifecycleConfirm("stop", server.DisplayName, false, d.Row.Warn))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -714,7 +714,7 @@ func DetailLive(d ServerDetail) templ.Component {
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup))
+						templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "button", LifecycleConfirm("restart", server.DisplayName, d.Row.CanBackup, d.Row.Warn))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}

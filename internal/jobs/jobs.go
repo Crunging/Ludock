@@ -59,6 +59,9 @@ type Jobs struct {
 	ReplacementSettle time.Duration
 	// Poll is the reconciliation poll interval; tests shorten it.
 	Poll time.Duration
+	// WarningLead is how long an operation waits after warning players;
+	// tests shorten it.
+	WarningLead time.Duration
 	// Hung reports whether a running server's game still doesn't answer,
 	// which a recovery restart requires, and when it last answered. It may
 	// be nil.
@@ -69,19 +72,36 @@ func (j *Jobs) Register(runner *ops.Runner) {
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
 			Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-				return j.runLifecycle(ctx, job, action)
+				if err := j.warnFirst(ctx, job, capabilityFor(action), false); err != nil {
+					return nil, calledOff(job, err)
+				}
+				result, err := j.runLifecycle(ctx, job, action)
+				return result, calledOff(job, err)
 			},
-			Recover: j.recoverLifecycle,
+			Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+				if resumable(job) {
+					return nil, ops.ErrResume
+				}
+				return j.recoverLifecycle(ctx, job)
+			},
 		})
 	}
 	runner.Register("restart", ops.Handler{
 		Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-			if job.Job.Input["createBackup"] == true {
-				return j.runBackupRestart(ctx, job)
+			if err := j.warnFirst(ctx, job, authz.ServerRestart, false); err != nil {
+				return nil, calledOff(job, err)
 			}
-			return j.runLifecycle(ctx, job, servers.Restart)
+			if job.Job.Input["createBackup"] == true {
+				result, err := j.runBackupRestart(ctx, job)
+				return result, calledOff(job, err)
+			}
+			result, err := j.runLifecycle(ctx, job, servers.Restart)
+			return result, calledOff(job, err)
 		},
 		Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+			if resumable(job) {
+				return nil, ops.ErrResume
+			}
 			if job.Job.Input["createBackup"] == true {
 				return nil, j.recoverBackupRestart(ctx, job)
 			}
@@ -98,7 +118,13 @@ func (j *Jobs) Register(runner *ops.Runner) {
 	runner.Register("restore", ops.Handler{Run: j.runRestore, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		return nil, j.recoverRestore(ctx, job)
 	}})
-	runner.Register("update", ops.Handler{Run: j.runUpdate, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		result, err := j.runUpdate(ctx, job)
+		return result, calledOff(job, err)
+	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		if resumable(job) {
+			return nil, ops.ErrResume
+		}
 		return nil, j.recoverUpdate(ctx, job)
 	}})
 }

@@ -372,6 +372,10 @@ func (j *Jobs) update(ctx context.Context, job *ops.Context, server *servers.Con
 	if !request.CreateBackup && request.SkipBackupConfirmation != server.Container.DisplayName {
 		return nil, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm skipping the backup")
 	}
+	// Warned only now, once the update is sure to replace the server.
+	if err := j.warnFirst(ctx, job, capability, true); err != nil {
+		return nil, err
+	}
 	if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
 		return nil, err
 	}
