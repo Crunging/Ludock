@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -364,19 +365,32 @@ func seedDev(engine *fakedocker.Engine, dir string) {
 	valheim := data("valheim")
 	// Valheim has no console; its status query says two of ten are online,
 	// and goes silent while a file named fake-silent is in its data folder.
+	// A file named fake-hang silences it only until the container starts
+	// again, as a hang that a restart cures.
+	var valheimID atomic.Value
 	valheimQuery, err := fakedocker.ServeA2S("Valheim", func() (int, int, bool) {
-		_, silent := os.Stat(filepath.Join(valheim, "fake-silent"))
-		return 2, 10, silent != nil
+		if _, err := os.Stat(filepath.Join(valheim, "fake-silent")); err == nil {
+			return 2, 10, false
+		}
+		if hang, err := os.Stat(filepath.Join(valheim, "fake-hang")); err == nil {
+			id, _ := valheimID.Load().(string)
+			if c := engine.Container(id); c != nil {
+				started, _ := time.Parse(time.RFC3339Nano, c.State.StartedAt)
+				return 2, 10, hang.ModTime().Before(started)
+			}
+		}
+		return 2, 10, true
 	})
 	if err != nil {
 		panic(err)
 	}
-	valheimID := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
+	valheimContainer := engine.AddContainer(fakedocker.GameOptions{Name: "valheim", Image: "lloesche/valheim-server", Running: false,
 		Labels: map[string]string{"ludock.query.port": fmt.Sprint(valheimQuery)},
 		Mounts: []docker.MountPoint{{Type: "bind", Source: valheim, Destination: valheim, RW: true}},
 		Ports:  map[string][]docker.PortBinding{"2456/udp": {{HostIP: "0.0.0.0", HostPort: "2456"}}}})
+	valheimID.Store(valheimContainer)
 	// 1 GiB of a 2 GiB limit; journeys change the use with POST /fake/stats.
-	engine.Update(valheimID, func(c *fakedocker.Container) {
+	engine.Update(valheimContainer, func(c *fakedocker.Container) {
 		c.Stats.MemoryStats.Usage, c.Stats.MemoryStats.Limit, c.Host.Memory = 1<<30, 2*(1<<30), 2*(1<<30)
 	})
 	engine.AddContainer(fakedocker.GameOptions{Name: "palworld", Image: "thijsvanloef/palworld-server-docker", Running: false,

@@ -98,7 +98,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	backupService := &backups.Service{DB: database, Storage: storage, Docker: client, Observer: observer, Locks: table,
 		Helpers: &backups.Helpers{Docker: client, Images: images, Storage: storage}}
 	runner := &ops.Runner{DB: database, Locks: table, Notify: notifications.Notify}
-	monitoring := &monitor.Service{DB: database, Locks: table, Notify: notifications.Notify, Store: store}
+	monitoring := &monitor.Service{DB: database, Locks: table, Runner: runner, Notify: notifications.Notify, Store: store}
 	runtime := &console.Runtime{Docker: client, Images: images}
 	files.SetSensitivePaths(cfg.SensitivePaths)
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
@@ -145,6 +145,10 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		switch game, _ := a.Players.Game(serverID, container); game {
 		case players.NotChecked:
 			return monitor.GameNotChecked
+		case players.Waiting:
+			if a.Players.Get(serverID, container) != nil {
+				return monitor.GameWaiting
+			}
 		case players.Answering:
 			return monitor.GameAnswering
 		case players.NotAnswering:
@@ -152,7 +156,14 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 		}
 		return monitor.GameUnknown
 	}
+	monitoring.LastAnswer = func(serverID string, container servers.Container) int64 {
+		_, answered := a.Players.Game(serverID, container)
+		return answered
+	}
 	monitoring.MeasureDisk = a.measureDisk
+	jobService.Hung = func(serverID string, container servers.Container) (bool, int64) {
+		return monitoring.Game(serverID, container) == monitor.GameNotAnswering, monitoring.LastAnswer(serverID, container)
+	}
 	a.Resources.Recorded = monitoring.CheckMemory
 	a.Sessions.Commanded = func(serverID string) { a.Players.Check(context.Background(), serverID) }
 	scheduleService.Players = schedules.ServerPlayers{Servers: serverService, Players: a.Players}

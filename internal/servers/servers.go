@@ -474,7 +474,23 @@ func (s *Service) ResolveAuthorized(ctx context.Context, actor *db.SessionUser, 
 // without discovering the fleet. Docker events and the background tick still
 // reconcile replacements and ambiguity. expectedRevision < 0 skips the pin.
 func (s *Service) VerifyAuthorized(ctx context.Context, actor *db.SessionUser, id string, capability authz.Capability, expectedRevision int64) (*Context, error) {
-	if _, err := s.Authz.Assert(ctx, actor, id, capability); err != nil {
+	return s.verify(ctx, id, expectedRevision, func(ctx context.Context) error {
+		_, err := s.Authz.Assert(ctx, actor, id, capability)
+		return err
+	})
+}
+
+// ResolveChecked is ResolveAuthorized for work that runs on Ludock's own
+// authority, with allowed in place of an account's capability.
+func (s *Service) ResolveChecked(ctx context.Context, id string, expectedRevision int64, allowed func(context.Context) error) (*Context, error) {
+	if _, err := s.RefreshNow(ctx); err != nil {
+		return nil, err
+	}
+	return s.verify(ctx, id, expectedRevision, allowed)
+}
+
+func (s *Service) verify(ctx context.Context, id string, expectedRevision int64, allowed func(context.Context) error) (*Context, error) {
+	if err := allowed(ctx); err != nil {
 		return nil, err
 	}
 	logical, err := s.Identity.ResolveBinding(ctx, id, expectedRevision)
@@ -485,7 +501,7 @@ func (s *Service) VerifyAuthorized(ctx context.Context, actor *db.SessionUser, i
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.Authz.Assert(ctx, actor, id, capability); err != nil {
+	if err := allowed(ctx); err != nil {
 		return nil, err
 	}
 	if _, err := s.Identity.AssertObservedBinding(ctx, id, observed.Observation, logical.BindingRevision); err != nil {
