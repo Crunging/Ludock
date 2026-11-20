@@ -105,35 +105,43 @@ docker build --pull --no-cache-filter runtime -t ludock:test .
 cd e2e && LUDOCK_DOCKER_E2E=disposable-daemon npx playwright test -c docker.config.mjs
 ```
 
-### A real Minecraft server
+### Real game servers
 
-[`e2e/real/rig.mjs`](../e2e/real/rig.mjs) brings up the local image beside a
-real Minecraft Java server, as an owner would, for trying changes by hand. It
-never runs in CI. Use a disposable daemon: it publishes Ludock on
-`127.0.0.1:3000` and Minecraft on `127.0.0.1:25565`, and `down` removes the
-containers, volumes, and networks of its Compose projects, named
-`ludocktest-…`, and the files it made.
+[`e2e/real/rig.mjs`](../e2e/real/rig.mjs) brings up the local image beside
+one real game server, as an owner would, for trying changes by hand. It never
+runs in CI. Use a disposable daemon: it publishes Ludock on `127.0.0.1:3000`
+and the game on loopback only, and `remove` and `down` take apart only the
+containers, volumes, networks, and files of its Compose projects, named
+`ludocktest-…`.
 
 ```sh
 docker build -t ludock:test .
 cd e2e
 export LUDOCK_DOCKER_E2E=disposable-daemon
-MINECRAFT_EULA=TRUE node real/rig.mjs up
+MINECRAFT_EULA=TRUE node real/rig.mjs up   # Minecraft Java, the default
 node real/rig.mjs bot Steve                # a headless player; Ctrl-C leaves
+node real/rig.mjs remove minecraft
+node real/rig.mjs up terraria              # another game beside the same Ludock
 node real/rig.mjs down
 ```
 
-`up` finishes setup with the journeys' administrator and prints how to sign
-in. `MINECRAFT_EULA=TRUE` accepts the
-[Minecraft EULA](https://aka.ms/MinecraftEULA) for the test servers. The
-bot (mineflayer, installed into the rig folder on first use) joins in offline
-mode, chats once a minute, and prints every message, kick, and silence it
-sees, such as a warning before a restart. Game data lives in the rig folder
-(`LUDOCK_RIG_DIR`, a temporary folder by default) so you can read it from the
-host; its `backups-copy` folder is mounted as the second backup copy, so
-point it at a disk where the temporary folder is kept in memory. Images
-stay after `down`; `LUDOCK_RIG_JAVA_IMAGE` picks another Minecraft image,
-such as an older tag to try an update.
+[`e2e/real/games.mjs`](../e2e/real/games.mjs) defines each game: its image,
+environment, ports, data folder, memory limit, and the log line or health check
+that says it's ready. It has Minecraft Java and Bedrock, Terraria, Factorio,
+Valheim, and Vintage Story; add one there. One game runs at a time. `up`
+finishes setup with the journeys' administrator and prints how to sign in.
+`MINECRAFT_EULA=TRUE` accepts the
+[Minecraft EULA](https://aka.ms/MinecraftEULA) for the test servers; Valheim
+downloads its server from Steam anonymously.
+
+The bot (mineflayer, installed into the rig folder on first use) joins
+Minecraft in offline mode, chats once a minute, and prints every message,
+kick, and silence it sees, such as a warning before a restart. Game data lives
+in the rig folder (`LUDOCK_RIG_DIR`, a temporary folder by default) so you can
+read it from the host. Servers the images download and the second backup copy
+live in named volumes, since the temporary folder may be kept in memory.
+Images stay after `down`; `LUDOCK_RIG_JAVA_IMAGE` picks another Minecraft
+image, such as an older tag to try an update.
 
 ## CI and releases
 

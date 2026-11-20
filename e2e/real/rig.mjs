@@ -24,7 +24,9 @@ const project = (game) => ["compose", "--project-name", `ludocktest-${game}`, "-
 // The games up started, which down and remove take apart.
 const started = () => Object.keys(games).filter((game) => existsSync(join(dir, game, "compose.yaml")));
 
-const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+// Games print a lot while they start, such as world generation progress.
+const docker = (...args) => execFileSync("docker", args,
+  { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 1 << 28 }).trim();
 
 async function waitFor(check, what, timeout) {
   const deadline = Date.now() + timeout;
@@ -78,7 +80,7 @@ volumes:
 `);
   const service = { restart: "unless-stopped", ...game.service,
     ports: game.service.ports.map((port) => `127.0.0.1:${port}`),
-    volumes: [`./data:${game.data}`, ...(game.service.volumes || [])] };
+    volumes: [...(game.data ? [`./data:${game.data}`] : []), ...(game.service.volumes || [])] };
   // Named volumes, such as a game's own install, live on Docker's disk; the
   // scratch folder may be kept in memory.
   const named = service.volumes.map((volume) => volume.split(":")[0]).filter((source) => !/^[./]/.test(source));
@@ -98,10 +100,17 @@ volumes:
   const container = docker(...project(name), "ps", "--quiet", name);
   const ready = game.ready === "healthy"
     ? async () => docker("inspect", "--format", "{{.State.Health.Status}}", container) === "healthy"
-    : async () => game.ready.test(docker("logs", "--tail", "20", container));
+    : async () => game.ready.test(docker("logs", container));
   await waitFor(ready, `${name} to start`, game.timeout || 900_000);
   console.log(`Ludock: http://127.0.0.1:3000 (${admin.username} / ${admin.password})
 ${name}: ${service.ports.join(", ")}, container ${container.slice(0, 12)}, data in ${join(dir, name, "data")}`);
+}
+
+// removeHelpers removes the file, backup, and console helpers the rig's
+// Ludock started from its image, which may still hold a game's volumes.
+function removeHelpers() {
+  const helpers = docker("ps", "--all", "--quiet", "--filter", "label=ludock.internal", "--filter", `ancestor=${image}`);
+  if (helpers) docker("rm", "--force", "--volumes", ...helpers.split("\n"));
 }
 
 // remove takes one game apart, so another can start beside the same Ludock.
@@ -110,6 +119,7 @@ function remove() {
   const name = process.argv[3];
   gameNamed(name);
   if (!existsSync(join(dir, marker)) || !started().includes(name)) throw new Error(`${name} isn't up in ${dir}.`);
+  removeHelpers();
   // A failed teardown stops here, before any game data is removed.
   docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
   clear([name]);
@@ -139,8 +149,9 @@ function down() {
   confirmDaemon();
   if (!existsSync(join(dir, marker))) throw new Error(`${dir} wasn't made by real/rig.mjs up; leaving it alone.`);
   // A failed teardown stops here, before any game data is removed.
-  for (const name of started()) docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
   docker(...ludock, "down", "--volumes", "--remove-orphans", "--timeout", "30");
+  removeHelpers();
+  for (const name of started()) docker(...project(name), "down", "--volumes", "--remove-orphans", "--timeout", "60");
   clear([...Object.keys(games), "bot", "ludock.override.yaml"]);
   rmSync(join(dir, marker));
   try {

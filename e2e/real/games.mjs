@@ -1,6 +1,6 @@
 // The games real/rig.mjs can run, each as an owner would define it under
 // Compose. service is the Compose service; the rig publishes its ports on
-// 127.0.0.1 only and mounts the rig's <game>/data folder at data. ready is a
+// 127.0.0.1 only and mounts the rig's <game>/data folder at data, if set. ready is a
 // log line that says the game takes players, or "healthy" for an image with a
 // health check. licence names an environment variable the owner sets to TRUE
 // to accept the game's terms for the test servers.
@@ -64,6 +64,32 @@ export const games = {
       tty: true,
       mem_limit: "2g",
       ports: ["42420:42420/tcp"],
+    },
+  },
+  "minecraft-bedrock": {
+    licence: { env: "MINECRAFT_EULA", terms: "https://aka.ms/MinecraftEULA" },
+    data: "/data",
+    ready: "healthy",
+    service: {
+      image: "itzg/minecraft-bedrock-server:latest",
+      environment: { EULA: "TRUE", SERVER_NAME: "Ludock real rig" },
+      stdin_open: true,
+      tty: true,
+      mem_limit: "1g",
+      ports: ["19132:19132/udp"],
+    },
+  },
+  palworld: {
+    ready: /Running Palworld dedicated server/,
+    timeout: 1_800_000,
+    service: {
+      image: "thijsvanloef/palworld-server-docker:latest",
+      environment: { RCON_ENABLED: "true", ADMIN_PASSWORD: "rig-admin-password", PLAYERS: "4", COMMUNITY: "false",
+        SERVER_NAME: "Ludock real rig", BACKUP_ENABLED: "false" },
+      mem_limit: "4g",
+      ports: ["8211:8211/udp", "27015:27015/udp"],
+      // The saves live inside the server the image downloads.
+      volumes: ["palworld:/palworld"],
     },
   },
 };
