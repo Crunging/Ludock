@@ -9,7 +9,7 @@ asAdmin();
 async function setUploadLimit(page, limit, notice) {
   await page.goto("/settings");
   if ((await page.locator("#advanced-settings").getAttribute("open")) === null) {
-    await page.getByText("Upload size limit, verbose logging, and reverse proxy").click();
+    await page.locator("#advanced-settings > summary").click();
   }
   const form = page.locator("#upload-limit-form");
   await form.getByLabel("Largest file").fill(limit);

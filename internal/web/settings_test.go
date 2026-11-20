@@ -151,3 +151,20 @@ func TestAdvancedSettingsEnvironmentWins(t *testing.T) {
 		t.Fatal(code)
 	}
 }
+
+// The backup folder is lost and an administrator makes the second folder
+// the backup folder: the second copy turns off instead of the save being
+// refused for using one folder twice, and that choice sticks.
+func TestBackupFolderTakesOverTheCopyFolder(t *testing.T) {
+	for _, c := range []struct {
+		destination, copyTo string
+		chosen              bool
+		wantCopy            string
+		wantChosen          bool
+	}{{"/backups-copy", "/backups-copy", false, "", true}, {"/backups", "/backups-copy", false, "/backups-copy", false},
+		{"/backups", "", true, "", true}} {
+		if copyTo, chosen := copyBeside(c.destination, c.copyTo, c.chosen); copyTo != c.wantCopy || chosen != c.wantChosen {
+			t.Errorf("%+v: %q %v", c, copyTo, chosen)
+		}
+	}
+}

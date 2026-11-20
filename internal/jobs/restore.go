@@ -263,7 +263,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	if confirmation, _ := text(job.Job.Input["confirmation"]); confirmation != server.Container.DisplayName {
+	item, _ := text(job.Job.Input["item"])
+	rootID, _ := text(job.Job.Input["root"])
+	whole := rootID == "" && item == ""
+	if confirmation, _ := text(job.Job.Input["confirmation"]); whole && confirmation != server.Container.DisplayName {
 		return nil, fail("RESTORE_CONFIRMATION", "Type the server's display name to confirm this restore.")
 	}
 	backupID, _ := text(job.Job.Input["backupId"])
@@ -283,8 +286,7 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 	}
 	// A selective restore replaces one item of one root; a full one, every root.
 	roots := row.Roots
-	item, _ := text(job.Job.Input["item"])
-	if rootID, _ := text(job.Job.Input["root"]); rootID != "" || item != "" {
+	if !whole {
 		index := slices.IndexFunc(row.Roots, func(root backups.Root) bool { return root.ID == rootID })
 		if clean, err := backups.CleanPath(item); err != nil || clean == "" || index < 0 {
 			return nil, fail("UNSAFE_PATH", "That path isn’t allowed.")
@@ -337,9 +339,10 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 				return nil, err
 			}
 			// One item's replaced copy is kept in the stage until the swap
-			// commits; a whole restore also keeps a safety backup.
+			// commits; a whole restore, or one asked to, also keeps a safety
+			// backup.
 			var safety *backups.Backup
-			if item == "" {
+			if whole || job.Job.Input["createBackup"] == true {
 				if safety, err = j.createStoppedBackup(ctx, server, job); err != nil {
 					return nil, err
 				}
@@ -446,7 +449,8 @@ func (j *Jobs) runRestore(ctx context.Context, job *ops.Context) (map[string]any
 			restored = map[string]any{"restoredBackupId": row.ID}
 			if safety != nil {
 				restored["safetyBackupId"] = safety.ID
-			} else {
+			}
+			if !whole {
 				restored["restoredRoot"], restored["restoredItem"] = roots[0].ID, item
 			}
 			if err := j.cleanupRestore(ctx, server, job, data); err != nil {

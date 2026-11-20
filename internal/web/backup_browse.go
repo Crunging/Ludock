@@ -54,11 +54,6 @@ func (s *Server) backupBrowser(r *http.Request, serverID, backupID string, check
 	}
 	browser.Total = len(entries)
 	browser.Entries = entries[:min(len(entries), browser.Limit)]
-	if pick := query.Get("pick"); pick != "" {
-		if index := slices.IndexFunc(entries, func(entry backups.ArchiveEntry) bool { return entry.Name == pick }); index >= 0 {
-			browser.Pick = &entries[index]
-		}
-	}
 	return browser
 }
 

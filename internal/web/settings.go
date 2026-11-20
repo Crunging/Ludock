@@ -117,7 +117,7 @@ func (s *Server) checkLudock(w http.ResponseWriter, r *http.Request, request *Re
 	if !s.App.Checks.Enabled(r.Context()) {
 		check = nil
 	}
-	render(w, r, http.StatusOK, views.LudockCheck(check))
+	render(w, r, http.StatusOK, views.LudockCheckSaved(check))
 }
 
 func (s *Server) saveImageUpdateSettings(w http.ResponseWriter, r *http.Request, request *Request) {
@@ -274,11 +274,29 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request, request *Re
 	render(w, r, status, views.ProxyForm(p))
 }
 
+// copyBeside turns the second copy off when its folder becomes the backup
+// folder, which is how backups are reached after the first folder is lost;
+// the choice sticks, so the folder isn't picked up again as a found one.
+func copyBeside(destination, copyTo string, chosen bool) (string, bool) {
+	if copyTo != "" && copyTo == destination {
+		return "", true
+	}
+	return copyTo, chosen
+}
+
 func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, request *Request) {
 	b := s.backupSettingsView(r)
 	b.Destination = strings.TrimSpace(r.PostFormValue("destination"))
 	b.MaxGiB, b.ReserveGiB = strings.TrimSpace(r.PostFormValue("maxGiB")), strings.TrimSpace(r.PostFormValue("reserveGiB"))
+	// The form sends copyTo only when it offers a choice; otherwise the
+	// saved one, or a found folder, stays.
+	_, chosen := r.PostForm["copyTo"]
 	b.CopyTo = strings.TrimSpace(r.PostFormValue("copyTo"))
+	copyChosen := chosen
+	if saved, _, err := s.App.Backups.SavedSettings(r.Context()); !chosen && err == nil && saved != nil {
+		b.CopyTo, copyChosen = saved.CopyTo, saved.CopyChosen
+	}
+	b.CopyTo, copyChosen = copyBeside(b.Destination, b.CopyTo, copyChosen)
 	invalid := apperr.New("INVALID_REQUEST", 400,
 		"Check the backup settings: choose a folder, a free-space reserve of zero or more, and a total limit above zero or none.")
 	maxGiB, maxErr := 0.0, error(nil)
@@ -288,7 +306,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 	reserveGiB, reserveErr := strconv.ParseFloat(b.ReserveGiB, 64)
 	var err error
 	settings := backups.Settings{Destination: b.Destination, MaxBytes: int64(math.Round(maxGiB * gib)), ReserveBytes: int64(math.Round(reserveGiB * gib)),
-		CopyTo: b.CopyTo}
+		CopyTo: b.CopyTo, CopyChosen: copyChosen}
 	if b.Destination == "" || maxErr != nil || reserveErr != nil || (b.MaxGiB != "" && settings.MaxBytes <= 0) ||
 		settings.MaxBytes < 0 || settings.ReserveBytes < 0 || math.IsInf(maxGiB, 0) || math.IsInf(reserveGiB, 0) {
 		err = invalid
@@ -305,7 +323,7 @@ func (s *Server) saveBackupSettings(w http.ResponseWriter, r *http.Request, requ
 		s.audit(r, request, "settings.backups.updated", "", nil)
 		b.Configured, b.Saved, b.Destination = true, true, settings.Destination
 	}
-	render(w, r, status, views.BackupSettingsForm(b))
+	render(w, r, status, views.BackupSettingsSaved(b))
 }
 
 func (s *Server) backupStorage(w http.ResponseWriter, r *http.Request, request *Request) {

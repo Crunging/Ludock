@@ -36,8 +36,9 @@ type checklistState struct {
 	AlertsOn bool
 	// Unbacked names the servers a nightly backup would cover; of those,
 	// UnbackedWarn can warn players and UnbackedWait can wait for them.
-	Unbacked, UnbackedIDs      []string
-	UnbackedWarn, UnbackedWait int
+	// NoData are the IDs of servers it leaves out for having no data folders.
+	Unbacked, UnbackedIDs, NoData []string
+	UnbackedWarn, UnbackedWait    int
 	// Unrecovered names the servers automatic restart could be turned on for.
 	Unrecovered, UnrecoveredIDs []string
 	// LocalHost is the loopback or private host players are shown, or "".
@@ -60,7 +61,7 @@ func checklistItems(state checklistState) []views.ChecklistItem {
 	}
 	if len(state.Unbacked) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistBackups, Names: state.Unbacked, IDs: state.UnbackedIDs,
-			Warn: state.UnbackedWarn, Wait: state.UnbackedWait})
+			Warn: state.UnbackedWarn, Wait: state.UnbackedWait, NoData: state.NoData})
 	}
 	if len(state.Unrecovered) > 0 {
 		add(views.ChecklistItem{Key: views.ChecklistRecovery, Names: state.Unrecovered, IDs: state.UnrecoveredIDs})
@@ -227,6 +228,11 @@ func (s *Server) checklistView(r *http.Request, request *Request) views.Checklis
 				}
 				if target.Wait {
 					state.UnbackedWait++
+				}
+			}
+			for _, view := range all {
+				if view.BindingStatus == "active" && view.NoDataFolders && view.Can(authz.BackupsCreate) {
+					state.NoData = append(state.NoData, view.ID)
 				}
 			}
 		}

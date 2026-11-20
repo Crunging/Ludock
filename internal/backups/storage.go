@@ -30,6 +30,9 @@ type Settings struct {
 	// CopyTo is another approved folder that gets a second copy of every
 	// backup; empty means none.
 	CopyTo string `json:"copyTo,omitempty"`
+	// CopyChosen records an administrator's choice of CopyTo, even none,
+	// which a found copy folder never overrides.
+	CopyChosen bool `json:"copyChosen,omitempty"`
 }
 
 const (
@@ -94,12 +97,27 @@ func mountedAt(path string) bool {
 	return false
 }
 
-// ApprovedRoots are the configured roots, then CopyRoot when it is mounted.
-// With no configured roots backups are off, so CopyRoot isn't offered.
+// FoundCopy is the copy folder Ludock found: CopyRoot when something is
+// mounted there, or DevCopyRoot. With no configured roots backups are off,
+// so there is none.
+func (s *Storage) FoundCopy() string {
+	if len(RootList(s.Roots)) == 0 {
+		return ""
+	}
+	if s.DevCopyRoot != "" {
+		return s.DevCopyRoot
+	}
+	if mountedAt(CopyRoot) {
+		return CopyRoot
+	}
+	return ""
+}
+
+// ApprovedRoots are the configured roots, then the found copy folder.
 func (s *Storage) ApprovedRoots() []string {
 	roots := RootList(s.Roots)
-	if len(roots) > 0 && !slices.Contains(roots, CopyRoot) && mountedAt(CopyRoot) {
-		roots = append(roots, CopyRoot)
+	if found := s.FoundCopy(); found != "" && !slices.Contains(roots, found) {
+		roots = append(roots, found)
 	}
 	return roots
 }
@@ -110,6 +128,9 @@ type Storage struct {
 	// Roots are approved destinations, ':'-separated; Self names Ludock's
 	// own container.
 	Roots, Self string
+	// DevCopyRoot stands in for a folder mounted at CopyRoot when developing
+	// against cmd/fakedocker, which can't mount one.
+	DevCopyRoot string
 
 	// readers counts open archives by backup ID, and claimed holds archives
 	// retention is removing, so it never removes one being read.

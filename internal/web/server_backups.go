@@ -29,7 +29,7 @@ func (s *Server) backupsView(r *http.Request, request *Request, d *views.ServerD
 		CanRead: can(view, authz.BackupsRead), CanCreate: can(view, authz.BackupsCreate),
 		CanRestore: can(view, authz.BackupsRestore), CanDelete: can(view, authz.BackupsDelete),
 		Blocked: view.BindingStatus != "active" || d.DiscoveryUnavailable, Active: view.ActiveOperation != nil,
-		LatestBackup: view.LatestBackup}
+		LatestBackup: view.LatestBackup, NoData: view.NoDataFolders}
 	// The tab follows any running work, so readiness and paused controls come
 	// back when it ends.
 	b.Operation = views.ActivityView{ServerID: view.ID, Admin: d.Admin, Tab: "backups", SelectedID: r.URL.Query().Get("operation"),
@@ -191,11 +191,7 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, err)
 		return
 	}
-	confirmation, backupID := r.PostFormValue("confirmation"), r.PostFormValue("backupId")
-	if confirmation != resolved.Container.DisplayName {
-		s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm the restore"))
-		return
-	}
+	backupID := r.PostFormValue("backupId")
 	backup, err := s.App.Backups.Get(r.Context(), id, backupID)
 	if err != nil {
 		s.fail(w, r, request, err)
@@ -206,10 +202,19 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request, request *
 		s.fail(w, r, request, err)
 		return
 	}
+	// A whole restore is confirmed by typing the server's name; one item, in
+	// the confirmation dialog, which can ask for a backup first.
 	if input == nil {
-		input = map[string]any{}
+		confirmation := r.PostFormValue("confirmation")
+		if confirmation != resolved.Container.DisplayName {
+			s.fail(w, r, request, apperr.New("CONFIRMATION_REQUIRED", 400, "Type the server name to confirm the restore"))
+			return
+		}
+		input = map[string]any{"confirmation": confirmation}
+	} else if r.PostFormValue("createBackup") == "true" {
+		input["createBackup"] = true
 	}
-	input["backupId"], input["confirmation"] = backupID, confirmation
+	input["backupId"] = backupID
 	s.enqueue(w, r, request, resolved, user, "restore", input)
 }
 

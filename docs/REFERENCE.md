@@ -194,12 +194,12 @@ image. Administrators then see **Update available** on the server list and
 **A newer image is available.** on the **Update** tab. A registry that can't be reached isn't an alert; the
 tab says the last check failed. Images built or loaded locally can't be
 compared. Docker Hub counts each check against its pull rate limit. Turn the
-checks off in **Settings → Image updates**.
+checks off in **Settings → Advanced → Image updates**.
 
 ## Backup storage
 
-**Settings → Backup storage** shows where backups go, the space they use, and
-the free space left. Under its **Advanced**:
+**Settings → Backups** shows where backups go, the space they use, and the
+free space left. Under **Settings → Advanced → Backup folder and limits**:
 
 - **Backup folder:** one of the folders mounted for backups.
 - **Minimum free space (GiB):** kept free on the backup disk, and on game-data
@@ -244,8 +244,12 @@ cloud:
    ```
 
 2. Run `docker compose up -d --force-recreate ludock`.
-3. In **Settings → Backup storage → Advanced**, choose `/backups-copy` under
-   **Also copy backups to** and save.
+
+Ludock finds the folder and starts copying to it by itself; **Settings →
+Backups** says so. To stop, or to use another approved folder, choose under
+**Also copy backups to** in **Settings → Advanced**; that choice sticks, even
+while `/backups-copy` stays mounted. A second folder listed only in
+`LUDOCK_BACKUP_ROOTS` is used only once chosen there.
 
 Ludock copies the backups you already have, then each new one after its server
 is back as it was, so the copy adds no downtime. Each copy is checked against
@@ -269,8 +273,8 @@ the original before it's named `<id>.tar`.
 
 ### Update Ludock
 
-Ludock doesn't update itself. **Settings → Image updates** says when a newer
-image is published. In the folder with its `compose.yaml`:
+Ludock doesn't update itself. **Settings** says at the top when a newer image
+is published. In the folder with its `compose.yaml`:
 
 ```bash
 docker compose pull ludock

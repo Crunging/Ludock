@@ -78,23 +78,29 @@ test("changing the public address and backup limits", async ({ page }) => {
   await page.goto("/");
   await expect(serverRow(page, "Survival")).toContainText("play.example.com:25565");
 
-  // Backup storage set itself up: the page says where backups go and what
-  // they use, and keeps the folder and limits under Advanced.
+  // Backup storage set itself up: the everyday tab says where backups go
+  // and what they use, with the address and alerts; everything else waits
+  // under one Advanced area.
   await page.goto("/settings");
+  await expect(page.locator(".settings-page h2")).toHaveText(["Server address", "Notifications", "Backups", "Advanced"]);
+  await expect(page.locator("details.disclosure:not(.notification-alerts)")).toHaveCount(1);
   const backups = page.locator("#backup-settings-form");
-  const storage = backups.locator("#backup-storage");
+  const storage = page.locator("#backup-storage");
   await expect(storage).toContainText("Saved in");
   await expect(storage).toContainText("Backups use");
   await expect(storage).toContainText("Free on disk");
   await expect(storage).not.toContainText("Total limit");
-  await expect(backups.getByLabel("Backup folder")).toBeHidden();
-  await backups.getByText("Advanced").click();
+  await expect(storage.getByRole("button")).toHaveCount(0);
+  for (const hidden of [backups.getByLabel("Backup folder"), page.getByLabel("Check for newer server images"),
+    page.locator("#upload-limit-form"), page.locator("#notification-deliveries")]) await expect(hidden).toBeHidden();
+  await page.locator("#advanced-settings > summary").click();
   await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("");
   await backups.getByLabel("Total limit for all backups (GiB)").fill("2.5");
   await backups.getByRole("button", { name: "Save backup settings" }).click();
   await expect(backups.locator(".alert--success")).toContainText("Backup settings saved.");
   await expect(storage).toContainText("Total limit2.5 GiB");
-  await backups.getByText("Advanced").click();
+  await page.reload();
+  await page.locator("#advanced-settings > summary").click();
   await expect(backups.getByLabel("Total limit for all backups (GiB)")).toHaveValue("2.5");
   await backups.getByLabel("Total limit for all backups (GiB)").fill("");
   await backups.getByRole("button", { name: "Save backup settings" }).click();

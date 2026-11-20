@@ -52,6 +52,9 @@ type Config struct {
 	HelperImage string
 	// MaxUploadBytes limits each uploaded file (LUDOCK_MAX_UPLOAD_SIZE).
 	MaxUploadBytes int64
+	// DevCopyRoot is a folder treated as mounted at /backups-copy, for
+	// development against cmd/fakedocker (LUDOCK_DEV_COPY_ROOT).
+	DevCopyRoot string
 }
 
 const (
@@ -172,6 +175,11 @@ func Load() (Config, error) {
 	}
 	if c.SensitivePaths, err = pathList("LUDOCK_SENSITIVE_PATHS", os.Getenv("LUDOCK_SENSITIVE_PATHS")); err != nil {
 		problems = append(problems, err)
+	}
+	if dev, err := pathList("LUDOCK_DEV_COPY_ROOT", os.Getenv("LUDOCK_DEV_COPY_ROOT")); err != nil || len(dev) > 1 {
+		problems = append(problems, errors.New("LUDOCK_DEV_COPY_ROOT must be one absolute path"))
+	} else if len(dev) == 1 {
+		c.DevCopyRoot = dev[0]
 	}
 	if c.DockerConfig != "" && !strings.HasPrefix(c.DockerConfig, "/") {
 		problems = append(problems, errors.New("LUDOCK_DOCKER_CONFIG must be an absolute path"))

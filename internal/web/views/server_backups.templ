@@ -19,8 +19,10 @@ type BackupsView struct {
 	CanRestore           bool
 	CanDelete            bool
 	// Blocked: the binding needs review or Docker state is unavailable.
-	Blocked      bool
-	Active       bool
+	Blocked bool
+	Active  bool
+	// NoData: the server has no data folder Ludock can back up.
+	NoData       bool
 	LatestBackup *servers.BackupSummary
 	Backups      []backups.Backup
 	HistoryError string
@@ -78,27 +80,17 @@ templ BackupsTab(b BackupsView) {
 templ backupsTabBody(b BackupsView) {
 	<div class="section-heading">
 		<h2>Backups</h2>
-		if b.CanCreate {
+		if b.CanCreate && !b.NoData {
 			@CreateBackupButton(b.ServerID, b.ServerName, false)
 		}
 	</div>
-	<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
-	<p class="section-note" id="backup-retention">
-		Ludock keeps the 3 newest backups, plus the last one of each of the 7 most recent days, 4 weeks, and 6 months with backups, and removes the rest after each new backup.
-		if b.Admin {
-			Backups you keep are never removed.
-		}
-	</p>
-	if b.CanCreate && !b.Blocked && !b.Active {
-		<section class="backup-readiness" id="backup-readiness" aria-labelledby="backup-readiness-title" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML">
-			<div class="backup-readiness__status">
-				<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
-				<p role="status">
-					@Pip("active")
-					Checking the backup folder and the server’s data…
-				</p>
-			</div>
-		</section>
+	if b.NoData {
+		@noDataFolders(b.Admin)
+	} else {
+		<p class="section-lede">The server stops while a backup copies, then goes back to how it was.</p>
+	}
+	if b.CanCreate && !b.NoData && !b.Blocked && !b.Active {
+		<div id="backup-readiness" hx-get={ "/fragments/servers/" + b.ServerID + "/backups/preflight" } hx-trigger="load" hx-swap="outerHTML"></div>
 	}
 	if !b.archives() {
 		<p class="section-note">
@@ -111,27 +103,41 @@ templ backupsTabBody(b BackupsView) {
 			}
 		</p>
 	}
-	<details class="disclosure">
-		<summary>How backups work</summary>
-		<p>A backup stops the server for the whole copy, then restores its previous running state. A server that was already stopped stays stopped.</p>
-		<p>The readiness check doesn’t copy anything or stop the server. Space and data can change before the backup runs, so Ludock checks them again then.</p>
-		<p>Only days, weeks, and months with backups count, so if you back up rarely, nothing is removed for being old. Safety backups taken before a restore or an update follow the same rule.</p>
-		<p>A new backup needs room before older ones are removed. If the backup disk is getting full, Ludock removes this server’s oldest backups first so the next one fits, but never the 3 newest or kept ones; if there still isn’t room, the backup fails and says why.</p>
-		if b.Admin {
-			<p>Choose where backups go in <a class="text-link" href="/settings">backup settings</a>.</p>
-		}
-	</details>
 	if b.archives() && b.Keep != nil {
 		@KeepForm(b)
-	}
-	if b.archives() {
-		@BackupList(b)
-	} else if b.Admin {
-		<p class="section-note">The list of backups can’t be shown right now.</p>
 	}
 	if b.archives() && b.CanRestore && b.Restore != nil {
 		@RestoreForm(b)
 	}
+	if b.archives() && (!b.NoData || len(b.Backups) > 0) {
+		@BackupList(b)
+	} else if b.Admin && !b.archives() {
+		<p class="section-note">The list of backups can’t be shown right now.</p>
+	}
+	if !b.NoData {
+		<details class="disclosure" id="backup-retention">
+			<summary>Which backups Ludock keeps</summary>
+			<p>The 3 newest, plus the last one of each of the 7 most recent days, 4 weeks, and 6 months with backups. The rest are removed after each new backup, so backing up rarely never loses old ones.</p>
+			if b.Admin {
+				<p>Backups you keep are never removed.</p>
+			}
+			<p>When the backup disk runs short, this server’s oldest backups go first so the next one fits, but never the 3 newest or kept ones.</p>
+		</details>
+	}
+}
+
+// noDataFolders explains a server whose data no backup can reach.
+templ noDataFolders(admin bool) {
+	<div class="alert alert--info" id="backup-no-data" role="status">
+		<div>
+			<p><strong>Ludock can’t back up this server.</strong> None of its data is in a folder Ludock can reach.</p>
+			if admin {
+				<p>Where you define the server, such as its Compose file or Portainer stack, give its game data a writable volume or bind mount and recreate it. Ludock finds the folder by itself.</p>
+			} else {
+				<p>Its owner can change that where the server is defined.</p>
+			}
+		</div>
+	</div>
 }
 
 // CreateBackupButton is replaced once readiness is known.
@@ -157,48 +163,36 @@ type ReadinessView struct {
 	Error                string
 }
 
+// BackupReadiness shows only what stops a backup; a ready server shows
+// nothing but an enabled button.
 templ BackupReadiness(r ReadinessView) {
 	{{ ready := r.Preflight != nil && r.Preflight.Ready }}
-	<section
-		class={ "backup-readiness", templ.KV("backup-readiness--ready", r.Preflight != nil && ready), templ.KV("backup-readiness--blocked", r.Preflight != nil && !ready) }
-		id="backup-readiness"
-		aria-labelledby="backup-readiness-title"
-	>
-		<div class="backup-readiness__status">
-			<h3 id="backup-readiness-title" class="sr-only">Backup readiness</h3>
-			if r.Preflight != nil {
-				<p>
-					if ready {
-						@Pip("ok")
-						<strong>Ready to back up.</strong>
-					} else {
-						@Pip("attention")
-						<strong>Not ready to back up.</strong>
-					}
-				</p>
+	if ready {
+		<div id="backup-readiness"></div>
+	} else {
+		<section class="backup-readiness backup-readiness--blocked" id="backup-readiness" aria-labelledby="backup-readiness-title">
+			<div class="backup-readiness__status">
+				<h3 id="backup-readiness-title">
+					@Pip("attention")
+					This server can’t be backed up right now
+				</h3>
+				<button class="text-link" type="button" hx-get={ "/fragments/servers/" + r.ServerID + "/backups/preflight" } hx-target="#backup-readiness" hx-swap="outerHTML" data-busy-label="Checking…">Check again</button>
+			</div>
+			if r.Error != "" {
+				<p role="alert">{ r.Error }</p>
 			}
-			<button class="text-link" type="button" hx-get={ "/fragments/servers/" + r.ServerID + "/backups/preflight" } hx-target="#backup-readiness" hx-swap="outerHTML" data-busy-label="Checking…">Check again</button>
-		</div>
-		if r.Error != "" {
-			<p class="alert alert--error" role="alert">{ r.Error }</p>
-		}
-		if r.Preflight != nil && len(r.Preflight.Issues) > 0 {
-			<ul>
-				for _, issue := range r.Preflight.Issues {
-					<li>{ issue.Message }</li>
-				}
-			</ul>
-		}
-		if r.Preflight != nil && !ready {
-			<p class="muted">
-				if r.Admin {
-					Fix these in <a class="text-link" href="/settings">backup settings</a> or the server’s mounts, then check again.
-				} else {
-					Ask an administrator to fix these, then check again.
-				}
-			</p>
-		}
-	</section>
+			if r.Preflight != nil && len(r.Preflight.Issues) > 0 {
+				<ul>
+					for _, issue := range r.Preflight.Issues {
+						<li>{ issue.Message }</li>
+					}
+				</ul>
+			}
+			if !r.Admin {
+				<p class="muted">Ask an administrator to fix this.</p>
+			}
+		</section>
+	}
 	@Partial("#create-backup", "outerHTML") {
 		@CreateBackupButton(r.ServerID, r.ServerName, ready)
 	}
@@ -210,14 +204,15 @@ templ BackupList(b BackupsView) {
 		if usage := b.usage(); usage != "" {
 			<p class="backup-usage" id="backup-usage">{ usage }</p>
 		}
-		<div class="table-scroll">
+		// Not in a scrolling wrapper, which would clip each row's menu.
+		<div>
 			<table class="data-table">
 				<thead>
 					<tr>
 						<th>Created</th>
 						<th>Size</th>
 						<th>State</th>
-						<th>Actions</th>
+						<th><span class="sr-only">Actions</span></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -243,6 +238,7 @@ templ BackupList(b BackupsView) {
 
 templ backupRow(b BackupsView, backup backups.Backup) {
 	{{ kept := backup.KeptAt != 0 }}
+	{{ complete := backup.State == "complete" }}
 	<tr class={ templ.KV("backup-row--kept", kept) }>
 		<td>
 			@Time(backup.CreatedAt, "", "")
@@ -260,7 +256,7 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 		<td>{ FormatBytes(backup.Size) }</td>
 		<td>
 			switch {
-				case backup.State != "complete":
+				case !complete:
 					@Pip("failed")
 					{ backup.State }
 				case kept:
@@ -270,47 +266,56 @@ templ backupRow(b BackupsView, backup backups.Backup) {
 					@Pip("ok")
 					complete
 			}
-			if backup.State == "complete" {
+			if complete {
 				@copyState(backup)
 			}
 		</td>
 		<td>
-			<div class="inline-actions">
-				if backup.State == "complete" {
-					<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&browse="+backup.ID) } { inPage()... }>Browse</a>
-					<a class="secondary-btn" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
-					if kept {
-						<button
-							class="secondary-btn"
-							type="button"
-							hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/release" }
-							hx-target="#detail-status"
-							data-busy-label="Releasing…"
-						>Release</button>
+			<div class="inline-actions backup-row__actions">
+				if complete && b.CanRestore {
+					if !b.Blocked && !b.Active {
+						<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
 					} else {
-						<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups&keep="+backup.ID) } { inPage()... }>Keep…</a>
+						<button class="secondary-btn" type="button" disabled>Restore…</button>
 					}
 				}
-				if b.CanRestore && !b.Blocked && !b.Active && backup.State == "complete" {
-					<a class="secondary-btn secondary-btn--danger" href={ detailURL(b.ServerID, "tab=backups&restore="+backup.ID) } { inPage()... }>Restore…</a>
-				} else {
-					<button class="secondary-btn secondary-btn--danger" type="button" disabled>Restore…</button>
-				}
-				<button
-					class="secondary-btn secondary-btn--danger"
-					type="button"
-					disabled?={ !b.CanDelete || b.Active || kept }
-					if kept {
-						title="Release this backup before deleting it"
-					}
-					hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
-					hx-target="#detail-status"
-					hx-confirm="Delete this backup?"
-					data-confirm-detail="The archive is deleted permanently."
-					data-confirm-action="Delete backup"
-					data-confirm-danger
-					data-busy-label="Deleting…"
-				>Delete</button>
+				<div class="action-menu" data-action-menu>
+					<button type="button" class="secondary-btn action-menu__trigger action-menu__trigger--compact" aria-label={ "More actions for the backup from " + UTCText(backup.CreatedAt) } aria-expanded="false" aria-controls={ "backup-actions-" + backup.ID }>
+						<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="3" cy="8" r="1.5"></circle><circle cx="8" cy="8" r="1.5"></circle><circle cx="13" cy="8" r="1.5"></circle></svg>
+					</button>
+					<div class="action-menu__content" id={ "backup-actions-" + backup.ID } hidden>
+						if complete {
+							<a class="action-menu__action" href={ detailURL(b.ServerID, "tab=backups&browse="+backup.ID) } { inPage()... }>Browse files</a>
+							<a class="action-menu__action" href={ templ.SafeURL("/servers/" + b.ServerID + "/backups/" + backup.ID + "/download") } download>Download</a>
+							if kept {
+								<button
+									class="action-menu__action"
+									type="button"
+									hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/release" }
+									hx-target="#detail-status"
+									data-busy-label="Releasing…"
+								>Release</button>
+							} else {
+								<a class="action-menu__action" href={ detailURL(b.ServerID, "tab=backups&keep="+backup.ID) } { inPage()... }>Keep…</a>
+							}
+						}
+						<button
+							class="action-menu__action action-menu__action--danger"
+							type="button"
+							disabled?={ !b.CanDelete || b.Active || kept }
+							if kept {
+								title="Release this backup before deleting it"
+							}
+							hx-post={ "/servers/" + b.ServerID + "/backups/" + backup.ID + "/delete" }
+							hx-target="#detail-status"
+							hx-confirm="Delete this backup?"
+							data-confirm-detail="The archive is deleted permanently."
+							data-confirm-action="Delete backup"
+							data-confirm-danger
+							data-busy-label="Deleting…"
+						>Delete</button>
+					</div>
+				</div>
 			</div>
 		</td>
 	</tr>
@@ -385,8 +390,6 @@ type BackupBrowser struct {
 	Total, Limit int
 	Error        string
 	CanRestore   bool
-	// Pick is the item of this folder chosen for restoring.
-	Pick *backups.ArchiveEntry
 }
 
 func (b BackupBrowser) values(path string) url.Values {
@@ -404,12 +407,6 @@ func (b BackupBrowser) folderURL(path string) templ.SafeURL {
 func (b BackupBrowser) rootURL(root backups.Root) templ.SafeURL {
 	b.Root = root
 	return b.folderURL("")
-}
-
-func (b BackupBrowser) pickURL(name string) templ.SafeURL {
-	values := b.values(b.Path)
-	values.Set("pick", name)
-	return detailURL(b.ServerID, "tab=backups&"+values.Encode())
 }
 
 func (b BackupBrowser) moreURL() string {
@@ -458,7 +455,7 @@ templ BackupBrowserView(b BackupBrowser) {
 			</h2>
 			<a class="secondary-btn" href={ detailURL(b.ServerID, "tab=backups") } { inPage()... }>All backups</a>
 		</div>
-		<p class="section-lede">Look through what this backup holds without changing anything. Download a file, or restore one file or folder in place of the server’s current copy.</p>
+		<p class="section-lede">Download a file, or put one file or folder back the way it was in this backup.</p>
 		if b.Backup.FromCopy {
 			@Alert("warning", "This backup is missing from the backup folder, so Ludock is reading the second copy.")
 		}
@@ -502,9 +499,6 @@ templ BackupBrowserView(b BackupBrowser) {
 					}
 				</nav>
 			</div>
-			if b.Pick != nil && b.CanRestore {
-				@RestoreItemForm(b, *b.Pick)
-			}
 			@BackupFolder(b)
 		}
 	</section>
@@ -560,7 +554,7 @@ templ BackupFolder(b BackupBrowser) {
 											<a class="action-menu__action" href={ b.fileURL(entry.Name) } download>Download</a>
 										}
 										if b.CanRestore {
-											<a class="action-menu__action action-menu__action--danger" href={ b.pickURL(entry.Name) } { inPage()... }>Restore…</a>
+											@restoreItem(b, entry)
 										}
 									</div>
 								</div>
@@ -578,45 +572,37 @@ templ BackupFolder(b BackupBrowser) {
 	</div>
 }
 
-// RestoreItemForm confirms replacing one file or folder with its copy in
-// the backup.
-templ RestoreItemForm(b BackupBrowser, item backups.ArchiveEntry) {
+// restoreItemDetail says what restoring one item replaces.
+func (b BackupBrowser) restoreItemDetail(item backups.ArchiveEntry) string {
+	detail := "The backup’s copy (" + FormatBytes(item.Size)
+	if item.Type == "directory" {
+		detail += " in " + ItemCount(item.Items)
+	}
+	detail += ") replaces " + b.livePath(item.Name) + ", or brings it back if it was deleted."
+	if item.Type == "directory" {
+		detail += " Everything now inside that folder is replaced."
+	}
+	return detail + " The server stops while the copies swap, then goes back to how it was. If anything fails, the current copy is put back."
+}
+
+// restoreItem restores one file or folder after the confirmation dialog,
+// which offers a backup of the current data first.
+templ restoreItem(b BackupBrowser, item backups.ArchiveEntry) {
 	{{ kind := map[bool]string{true: "folder", false: "file"}[item.Type == "directory"] }}
-	<form class="danger-panel stack-form" id="restore-item" hx-post={ "/servers/" + b.ServerID + "/restores" } hx-target="#restore-status">
-		<h3>Restore the { kind } “{ item.Name }”?</h3>
-		<p>
-			The backup’s copy replaces <code>{ b.livePath(item.Name) }</code> in the server’s data, or brings it back if it was deleted.
-			if item.Type == "directory" {
-				Everything now inside that folder is replaced.
-			}
-			The rest of the server’s data stays as it is.
-		</p>
-		<dl class="metadata-list">
-			<dt>Backup’s copy</dt>
-			<dd>
-				{ FormatBytes(item.Size) }
-				if item.Type == "directory" {
-					in { ItemCount(item.Items) }
-				}
-			</dd>
-			if item.ModifiedAt > 0 {
-				<dt>Modified</dt>
-				<dd>@Time(int64(item.ModifiedAt*1000), "", "")</dd>
-			}
-		</dl>
-		<p>Ludock stops the server while it swaps the copies, then returns it to how it was. If the swap fails, the current copy is put back. Once the restore succeeds the current copy isn’t kept, so back up the server first if you might want it again.</p>
+	<form
+		hx-post={ "/servers/" + b.ServerID + "/restores" }
+		hx-target="#detail-status"
+		hx-confirm={ "Restore the " + kind + " “" + item.Name + "”?" }
+		data-confirm-detail={ b.restoreItemDetail(item) }
+		data-confirm-action={ "Restore " + kind }
+		data-confirm-danger
+		data-confirm-options={ confirmOptions([]ConfirmOption{{Name: "createBackup", Label: "Back up first", Checked: true,
+			Help: "Saves the server’s data as it is now, so this restore can be undone."}}) }
+	>
 		<input type="hidden" name="backupId" value={ b.Backup.ID }/>
 		<input type="hidden" name="root" value={ b.Root.ID }/>
 		<input type="hidden" name="item" value={ b.child(item.Name) }/>
-		<label>
-			<span>Type <strong>{ b.ServerName }</strong> to confirm</span>
-			<input name="confirmation" autocomplete="off" required data-confirm-value={ b.ServerName }/>
-		</label>
-		<div id="restore-status" aria-live="polite"></div>
-		<div class="inline-actions">
-			<button class="secondary-btn secondary-btn--danger" type="submit" data-busy-label="Working…">Restore { kind }</button>
-			<a class="secondary-btn" href={ b.folderURL(b.Path) } { inPage()... }>Cancel</a>
-		</div>
+		<button class="action-menu__action action-menu__action--danger" type="submit">Restore…</button>
 	</form>
 }
 

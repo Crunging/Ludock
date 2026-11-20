@@ -1,12 +1,15 @@
 import { createServer } from "node:http";
-import { test, expect, createUser, signIn } from "./fixtures.mjs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { test, expect, createUser, signIn, shareServer } from "./fixtures.mjs";
 import { freshStack } from "../setup.mjs";
 
 // Other files leave their worker's install set up, so these journeys start
-// an install of their own, just past creating the first administrator.
+// an install of their own, just past creating the first administrator, with
+// a folder mounted for second copies of backups.
 let stack;
 test.beforeAll(async ({}, info) => {
-  stack = await freshStack(info.parallelIndex);
+  stack = await freshStack(info.parallelIndex, { found: true });
 });
 test.afterAll(async () => {
   await stack?.stop();
@@ -20,7 +23,7 @@ function item(page, title) {
   return page.locator("#checklist li", { has: page.getByText(title, { exact: true }) });
 }
 
-test("members never see the setup list", async ({ session }) => {
+test("members never see the setup list, and a member with one server sees no filters", async ({ session }) => {
   const admin = await adminPage(session);
   await createUser(admin, "friend", "friend password one");
   await admin.goto("/");
@@ -28,9 +31,21 @@ test("members never see the setup list", async ({ session }) => {
   const member = await session({ baseURL: stack.env.LUDOCK_E2E_URL });
   await signIn(member, "friend", "friend password one");
   await expect(member.getByRole("heading", { level: 1, name: "Servers" })).toBeVisible();
-  await expect(member.getByRole("region", { name: "Needs attention" })).toBeVisible();
   await expect(member.locator("#checklist")).toHaveCount(0);
   await expect(member.getByText("Finish setting up")).toHaveCount(0);
+
+  // One shared server is the whole list: nothing to search or filter, and
+  // nothing needs attention, so neither shows.
+  await shareServer(admin, "Survival", "friend", "Can run it");
+  await member.reload();
+  await expect(member.getByRole("link", { name: "Survival", exact: true })).toBeVisible();
+  await expect(member.getByPlaceholder("Find a server…")).toBeHidden();
+  await expect(member.getByLabel("State")).toBeHidden();
+  await expect(member.getByRole("region", { name: "Needs attention" })).toHaveCount(0);
+  await expect(member.getByRole("button", { name: "Refresh" })).toHaveCount(0);
+  // An administrator with more servers can filter them.
+  await admin.goto("/");
+  await expect(admin.getByPlaceholder("Find a server…")).toBeVisible();
 });
 
 test("a new install lists what's left to set up, and does it in a click", async ({ session }) => {
@@ -42,11 +57,12 @@ test("a new install lists what's left to set up, and does it in a click", async 
     const checklist = page.getByRole("region", { name: "Finish setting up" });
     await expect(checklist.locator("li strong")).toHaveText(["Get alerts", "Back up your servers", "Restart servers that stop answering",
       "Check the address players use", "Add the servers Ludock didn’t find", "Protect your sign-in"]);
-    await expect(item(page, "Back up your servers")).toContainText("Survival and valheim have no scheduled backups.");
+    const backups = item(page, "Back up your servers");
+    await expect(backups).toContainText("Survival and valheim have no scheduled backups. Ludock can’t back up 2 other servers (why).");
     await expect(item(page, "Check the address players use")).toContainText("Players are shown 127.0.0.1, which only works on this computer.");
     await expect(item(page, "Add the servers Ludock didn’t find")).toContainText("satisfactory looks like a game server");
-    // Needs attention keeps meaning what is wrong now.
-    await expect(page.getByRole("region", { name: "Needs attention" })).toContainText("Nothing right now.");
+    // Needs attention shows only when something is wrong.
+    await expect(page.getByRole("region", { name: "Needs attention" })).toHaveCount(0);
 
     // Alerts: the link goes to the notification settings; a destination
     // that is on clears the item.
@@ -126,9 +142,57 @@ test("a new install lists what's left to set up, and does it in a click", async 
     await item(page, "Protect your sign-in").getByRole("button", { name: "Dismiss" }).click();
     await expect(page.locator("#checklist")).toBeEmpty();
     await page.reload();
-    await expect(page.getByRole("region", { name: "Needs attention" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Servers" })).toBeVisible();
     await expect(page.locator("#checklist")).toBeEmpty();
   } finally {
     hooks.close();
   }
+});
+
+// savesIn lists the saved copies of Ludock's own data in folder.
+const savesIn = (folder) => existsSync(folder) ? readdirSync(folder).filter((name) => name.startsWith("ludock-data-")) : [];
+
+test("a folder mounted for second copies is used without asking, until an administrator turns it off", async ({ session }) => {
+  const page = await adminPage(session);
+  const found = join(stack.env.LUDOCK_E2E_DIR, "found");
+  await page.goto("/settings");
+  const storage = page.locator("#backup-storage");
+  await expect(async () => {
+    await page.reload();
+    await expect(storage).toContainText(`Second copy in${found}`, { timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(storage).toContainText("Ludock found this folder mounted, so it copies every backup there.");
+  // Ludock's own data is copied there too.
+  await expect.poll(() => savesIn(found).length, { timeout: 45_000 }).toBeGreaterThan(0);
+
+  // Turned off under Advanced, it stays off.
+  await page.getByRole("link", { name: "Advanced" }).first().click();
+  const form = page.locator("#backup-settings-form");
+  await expect(form.getByLabel("Also copy backups to")).toHaveValue(found);
+  await form.getByLabel("Also copy backups to").selectOption({ label: "No second copy" });
+  await form.getByRole("button", { name: "Save backup settings" }).click();
+  await expect(form.locator(".alert--success")).toHaveText("Backup settings saved.");
+  await expect(storage).not.toContainText("Second copy in");
+  // The choice is saved; the Go tests cover it holding as Ludock looks again.
+  await page.reload();
+  await expect(storage.locator("#ludock-data-save")).toBeVisible();
+  await expect(storage).not.toContainText("Second copy in");
+  await expect(page.locator("#backup-settings-form").getByLabel("Also copy backups to")).toHaveValue("");
+});
+
+// A server whose data no backup can reach says so in plain words and
+// offers no backup, and the server list doesn't warn about it.
+test("a server with no data folders says why it can't be backed up", async ({ session }) => {
+  const page = await adminPage(session);
+  await page.goto("/");
+  const row = page.locator(".server-row", { has: page.getByRole("link", { name: "enshrouded", exact: true }) });
+  await expect(row.locator(".server-row__backup")).not.toContainText("Never");
+  await expect(row.locator(".server-row__never")).toHaveCount(0);
+  await row.getByRole("link", { name: "enshrouded", exact: true }).click();
+  await page.getByRole("tab", { name: "Backups" }).click();
+  const why = page.locator("#backup-no-data");
+  await expect(why).toContainText("Ludock can’t back up this server. None of its data is in a folder Ludock can reach.");
+  await expect(why).toContainText("give its game data a writable volume or bind mount");
+  await expect(page.getByRole("button", { name: "Create backup" })).toHaveCount(0);
+  await expect(page.locator("main")).not.toContainText("approved writable data roots");
 });

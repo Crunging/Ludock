@@ -96,7 +96,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(activity).toBeFocused();
 
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  await expect(page.locator("#create-backup")).toBeEnabled();
   expect(await page.evaluate(() => window.stayedOnPage)).toBe(true);
 
   // A modified click opens the tab in a new browser tab and leaves this one.
@@ -111,7 +111,7 @@ test("switching a server's tabs keeps the page loaded", async ({ page }) => {
   await expect(page).toHaveURL(/\?tab=activity$/);
   await expect(page.getByRole("heading", { name: "Recent activity" })).toBeVisible();
   await page.goForward();
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  await expect(page.locator("#create-backup")).toBeEnabled();
 
   // Quick clicks: the last tab wins even when the one before it answers
   // first. Both requests are held until both are sent.
@@ -171,7 +171,7 @@ test("a later tab wins over following earlier work", async ({ page }) => {
 test("a tab opened while an action is sending stays open", async ({ page }) => {
   await openServer(page, "Survival");
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(page.locator("#backup-readiness")).toContainText("Ready to back up.");
+  await expect(page.locator("#create-backup")).toBeEnabled();
   // Hold the backup request until the user has moved to Activity.
   let release;
   const held = new Promise((resolve) => { release = resolve; });
@@ -213,7 +213,7 @@ test("a filter answering after another tab opened leaves that tab alone", async 
   await page.getByLabel("Result").selectOption("failed");
   await filtered;
   await page.getByRole("tab", { name: "Backups" }).click();
-  await expect(page.locator("#backup-readiness")).toBeVisible();
+  await expect(page.locator("#backups-tab")).toBeVisible();
   const answered = page.waitForResponse(/\/activity\?.*status=failed/);
   release();
   await answered;
@@ -273,7 +273,7 @@ test("quick repeated clicks end on the last tab clicked", async ({ page }) => {
   await fourth;
   gates[0]();
   gates[1]();
-  await expect(page.locator("#backup-readiness")).toBeVisible();
+  await expect(page.locator("#backups-tab")).toBeVisible();
   await expect(backups).toHaveAttribute("aria-selected", "true");
   await expect(page).toHaveURL(/\?tab=backups$/);
   await page.unroute(/\?tab=(activity|backups)$/);
@@ -290,7 +290,7 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
       }
     }, gap);
     await expect(page.getByRole("tab", { name: "Backups" })).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator("#backup-readiness")).toBeVisible();
+    await expect(page.locator("#backups-tab")).toBeVisible();
     await expect(page).toHaveURL(/\?tab=backups$/);
     await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.locator("#overview-live")).toBeVisible();
