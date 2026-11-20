@@ -3,12 +3,10 @@ package schedules
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/db"
-	"github.com/Crunging/Ludock/internal/logging"
 	"github.com/Crunging/Ludock/internal/schedtime"
 )
 
@@ -196,7 +194,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	if actor.Role == db.RoleAdmin {
 		within = func(fn func(*sql.Tx) error) error { return s.DB.AdminMutation(ctx, actor.ID, tokenHash, db.Now(), fn) }
 	}
-	var warned bool
+	var heard int64
 	err = within(func(tx *sql.Tx) error {
 		now := db.Now()
 		result, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=? AND revision=? AND last_slot=?"+stillWaitingSQL,
@@ -209,8 +207,7 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 		} else if changed == 0 {
 			return errWaitOver
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schedule_announcements WHERE schedule_id=? AND slot=?)",
-			r.id, slot).Scan(&warned); err != nil {
+		if heard, err = callOff(ctx, tx, r.id, slot); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.wait.cancelled", TargetType: "server",
@@ -222,11 +219,8 @@ func (s *Service) CancelWait(ctx context.Context, actor *db.SessionUser, tokenHa
 	if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
 		log.Warn("Audit retention cleanup failed after cancelling a schedule run; it will be retried")
 	}
-	// Players counted down to the end of the wait hear that it's off.
-	if warned {
-		if err := s.say(context.WithoutCancel(ctx), r, data, false, time.Now().Add(15*time.Second), CalledOffMessage(data.Action)); err != nil {
-			log.Debug("Could not tell players a scheduled run was cancelled", logging.F("scheduleId", id))
-		}
+	if heard != 0 {
+		s.sayCalledOff(serverID, data.Action, heard)
 	}
 	return nil
 }

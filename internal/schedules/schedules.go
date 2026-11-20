@@ -104,6 +104,8 @@ type Service struct {
 	// latest first.
 	checked  map[string][2]int64
 	warnings sync.WaitGroup
+	// calledOff, set by tests, observes call-offs instead of sending them.
+	calledOff func(serverID, action string, binding int64)
 }
 
 type row struct {
@@ -553,7 +555,8 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 	if err != nil {
 		return err
 	}
-	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+	action, heard := "", int64(0)
+	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// A grant or role revoked after the check above stops the deletion.
 		if err := assertUnchanged(ctx, tx, state, serverID, actor.ID); err != nil {
 			return err
@@ -565,12 +568,27 @@ func (s *Service) Delete(ctx context.Context, actor *db.SessionUser, serverID, i
 		if r == nil || (current.Role != db.RoleAdmin && r.ownerID != current.ID) {
 			return errNotFound
 		}
+		// The claims go with the schedule, so they are spent first.
+		if data, err := ParseSaved(r.input); err == nil {
+			slot, _, _, err := countdown(ctx, tx, r, data, db.Now())
+			if err != nil {
+				return err
+			}
+			if heard, err = callOff(ctx, tx, id, slot); err != nil {
+				return err
+			}
+			action = data.Action
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM schedules WHERE id=?", id); err != nil {
 			return err
 		}
 		return s.DB.WriteAudit(ctx, tx, db.AuditEntry{UserID: actor.ID, Action: "schedule.deleted", TargetType: "server",
 			TargetID: serverID, Details: map[string]string{"scheduleId": id}})
 	})
+	if err == nil && heard != 0 {
+		s.sayCalledOff(serverID, action, heard)
+	}
+	return err
 }
 
 func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, id string, expected int64, update *Input, enabled *bool) (*Schedule, error) {
@@ -642,7 +660,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		}
 	}
 	var result *row
-	changed := false
+	changed, heard, action := false, int64(0), ""
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		r, err := s.get(ctx, tx, id, serverID)
 		if err != nil {
@@ -671,10 +689,33 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			return nil
 		}
 		changed = true
+		// Every change ends a wait and refuses a queued operation. Otherwise
+		// a countdown stands only if its run still happens as announced.
+		now := db.Now()
+		slot, runAt, queued, err := countdown(ctx, tx, r, previous, now)
+		if err != nil {
+			return err
+		}
+		if slot != "" {
+			// The edit saves changed_at, which can end a due run's retries.
+			edited := *r
+			edited.changedAt = sql.NullInt64{Int64: now, Valid: true}
+			nextSlot, nextRunAt, _, err := countdown(ctx, tx, &edited, data, now)
+			if err != nil {
+				return err
+			}
+			if queued || waiting(r) || !data.Enabled || data.Announcements == nil || data.Action != previous.Action ||
+				nextSlot != slot || nextRunAt != runAt {
+				if heard, err = callOff(ctx, tx, id, slot); err != nil {
+					return err
+				}
+				action = previous.Action
+			}
+		}
 		encoded, _ := json.Marshal(data)
 		// Keep the binding baseline, consumed slot, and history. Every change
 		// invalidates work queued from an earlier configuration.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), db.Now(), id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), now, id); err != nil {
 			return err
 		}
 		r.input, r.revision = string(encoded), r.revision+1
@@ -683,7 +724,6 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			if pausing {
 				ended = "Ended: the schedule was paused while it waited for players to leave"
 			}
-			now := db.Now()
 			if _, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=?", ended, now, id); err != nil {
 				return err
 			}
@@ -701,6 +741,9 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 	})
 	if err != nil {
 		return nil, err
+	}
+	if heard != 0 {
+		s.sayCalledOff(serverID, action, heard)
 	}
 	if changed {
 		if err := s.DB.PruneAuditIfNeeded(ctx); err != nil {
@@ -771,13 +814,14 @@ func (s *Service) Run(ctx context.Context, now int64) {
 }
 
 func (s *Service) runOne(ctx context.Context, r *row, now int64) {
-	slot := ""
+	slot, action := "", ""
 	configurationValid := false
 	err := func() error {
 		data, err := ParseSaved(r.input)
 		if err != nil {
 			return err
 		}
+		action = data.Action
 		if waiting(r) {
 			slot, configurationValid = r.lastSlot.String, true
 			return s.wait(ctx, r, data, now)
@@ -888,6 +932,13 @@ func (s *Service) runOne(ctx context.Context, r *row, now int64) {
 	}
 	if changed, err := result.RowsAffected(); err != nil || changed == 0 {
 		return
+	}
+	// A run that won't happen calls off its countdown, unless its time
+	// passed long ago while Ludock was down.
+	if configurationValid && !apperr.Is(err, "SCHEDULE_MISSED") {
+		if heard, err := callOff(ctx, s.DB, r.id, slot); err == nil && heard != 0 {
+			s.sayCalledOff(r.serverID, action, heard)
+		}
 	}
 	// A command is expected to skip while its server is stopped or busy.
 	if skip != "" {
@@ -1043,23 +1094,7 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 		}
 		// A schedule that waits for an empty server warns only when it goes
 		// ahead anyway, so its warnings count down to the end of the wait.
-		var runAt int64
-		var slot string
-		if waiting(r) {
-			if data.WaitForEmpty == nil {
-				continue
-			}
-			runAt, slot = waitEnds(r, data), r.lastSlot.String
-		} else {
-			next, ok := schedtime.NextRun(data.Clock(), now, r.lastSlot.String)
-			if !ok {
-				continue
-			}
-			runAt, slot = next, schedtime.Slot(data.Clock(), next)
-			if data.WaitForEmpty != nil {
-				runAt += int64(data.WaitForEmpty.Minutes) * 60_000
-			}
-		}
+		slot, runAt := announcedRun(r, data, now)
 		lead := 0
 		for _, minutes := range data.Announcements.LeadMinutes {
 			if now >= runAt-int64(minutes)*60_000 && now < runAt-int64(minutes-1)*60_000 {
@@ -1089,23 +1124,41 @@ func (s *Service) Announce(ctx context.Context, now int64) {
 			}()
 			// Console output and errors may contain secrets; a skipped warning
 			// never affects the scheduled action.
-			if err := s.announce(context.WithoutCancel(ctx), r, data, runAt, lead); err != nil {
+			if err := s.announce(context.WithoutCancel(ctx), r, data, slot, runAt, lead); err != nil {
 				log.Debug("Skipped a schedule countdown warning", logging.F("scheduleId", r.id))
 			}
 		}()
 	}
 }
 
-func (s *Service) announce(ctx context.Context, r *row, data Input, runAt int64, lead int) error {
-	return s.say(ctx, r, data, waiting(r), time.UnixMilli(runAt).Add(-announceCutoff), WarningMessage(data.Action, lead))
+// announce sends one warning and records the binding it reached players
+// on; only a recorded warning is called off later.
+func (s *Service) announce(ctx context.Context, r *row, data Input, slot string, runAt int64, lead int) error {
+	binding, err := s.say(ctx, r, data, waiting(r), time.UnixMilli(runAt).Add(-announceCutoff), WarningMessage(data.Action, lead))
+	if err != nil || binding == 0 {
+		return err
+	}
+	recorded, err := s.DB.ExecContext(ctx, "UPDATE schedule_announcements SET heard_binding=? WHERE schedule_id=? AND slot=? AND lead_minutes=?",
+		binding, r.id, slot, lead)
+	if err != nil {
+		return err
+	}
+	// The run was called off while the warning went out: its claim was
+	// spent unheard, so nobody told the players. This is the only side that
+	// knows they heard it.
+	if rows, err := recorded.RowsAffected(); err == nil && rows == 0 {
+		s.sayCalledOff(r.serverID, data.Action, binding)
+	}
+	return nil
 }
 
 // say sends players message on the owner's authority, before deadline and
 // while the schedule is unchanged; stillWaiting also requires r's waiting
-// run to be waiting still, not cancelled or ended.
-func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool, deadline time.Time, message string) error {
+// run to be waiting still, not cancelled or ended. It reports the binding
+// revision it broadcast on, or 0 when the game can't message players.
+func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool, deadline time.Time, message string) (int64, error) {
 	if s.Console == nil {
-		return errors.New("no console")
+		return 0, errors.New("no console")
 	}
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
@@ -1126,11 +1179,11 @@ func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool
 	}
 	user, binding, err := assertCurrent()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	initial, err := s.Servers.ResolveAuthorized(ctx, user, r.serverID, authz.ConsoleExecute, binding.BindingRevision)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	// A warning has one chance to go out, so it cancels a player reading and
 	// is not cancelled by requests or jobs, which wait for it. The locks are
@@ -1138,27 +1191,31 @@ func (s *Service) say(ctx context.Context, r *row, data Input, stillWaiting bool
 	// announcement cutoff.
 	release, err := s.Locks.AcquirePreempting(ctx, initial.LockKeys, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer release()
 	current, err := s.Servers.ResolveAuthorized(ctx, user, r.serverID, authz.ConsoleExecute, binding.BindingRevision)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	template := ""
 	if current.Container.Console != nil && current.Container.Console.SupportsBroadcast {
 		template = broadcastTemplate(current)
 	}
 	if template == "" {
-		return nil
+		return 0, nil
 	}
-	return s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", message), func() error {
+	err = s.Console.Broadcast(ctx, current, strings.ReplaceAll(template, "{message}", message), func() error {
 		if _, _, err := assertCurrent(); err != nil {
 			return err
 		}
 		_, err := s.Identity.AssertObservedBinding(ctx, r.serverID, current.Observation, binding.BindingRevision)
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return binding.BindingRevision, nil
 }
 
 // Wait lets warnings settle before the database closes.

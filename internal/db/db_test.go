@@ -446,6 +446,38 @@ func TestScheduleSaveTimeMigration(t *testing.T) {
 	}
 }
 
+// Countdown warnings claimed before deliveries were recorded upgrade as not
+// heard, so no call-off follows one nobody may have heard; a delivery can
+// then be recorded on them.
+func TestHeardBindingMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "announcements.db")
+	before, err := open(path, Migrations[:11])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO users(id,username,password_hash,role,created_at,updated_at) VALUES('u','u','x','admin',1,1)`,
+		`INSERT INTO docker_hosts(id,name,created_at) VALUES('h','local',1)`,
+		`INSERT INTO logical_servers(id,host_id,external_identity,display_name,game_type,status,binding_revision,binding_fingerprint,first_seen_at,last_seen_at)
+      VALUES('s','h','standalone:mc','mc','minecraft','active',1,'',1,1)`,
+		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,created_at) VALUES('a','s','u','{}',1,1)`,
+		`INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES('a','2026-01-01T05:00:UTC',5)`,
+	} {
+		if _, err := before.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before.Close()
+	after := mustOpen(t, path)
+	var heard sql.NullInt64
+	if err := after.QueryRow("SELECT heard_binding FROM schedule_announcements WHERE schedule_id='a'").Scan(&heard); err != nil || heard.Valid {
+		t.Fatal(heard, err)
+	}
+	if _, err := after.Exec("UPDATE schedule_announcements SET heard_binding=1 WHERE schedule_id='a'"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Operators and viewers become members without losing their sessions or
 // schedules; a viewer gains nothing their role withheld, even from a malformed
 // grant, and an administrator's leftover grant is gone.

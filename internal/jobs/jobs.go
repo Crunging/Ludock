@@ -70,8 +70,9 @@ type Jobs struct {
 	runner *ops.Runner
 }
 
-func (j *Jobs) Register(runner *ops.Runner) {
-	j.runner = runner
+func (j *Jobs) Register(queue *ops.Runner) {
+	j.runner = queue
+	runner := registrar{queue, j}
 	for _, action := range []servers.Action{servers.Start, servers.Stop} {
 		runner.Register(string(action), ops.Handler{
 			Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
