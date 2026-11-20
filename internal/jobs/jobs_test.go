@@ -593,3 +593,21 @@ func TestRecoveryHoldsADispatchedStop(t *testing.T) {
 		t.Fatal("reported", err, "before the stop's deadline")
 	}
 }
+
+// Compose replaces a container to change it. A backup whose stopped server
+// is replaced meanwhile says something outside Ludock changed it, rather
+// than that something went wrong.
+func TestBackupOfReplacedServer(t *testing.T) {
+	f := setup(t)
+	validate := f.engine.OnStart
+	f.engine.OnStart = func(c *fakedocker.Container) {
+		validate(c)
+		if c.CreateRequest.Labels["ludock.internal"] == "backup-helper" {
+			f.engine.RemoveContainer(f.game)
+		}
+	}
+	job := f.run(t, "backup", nil)
+	if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Something outside Ludock started or changed the server") {
+		t.Fatalf("%+v", job)
+	}
+}

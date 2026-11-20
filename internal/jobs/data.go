@@ -117,7 +117,12 @@ func (j *Jobs) assertStopped(ctx context.Context, server *servers.Context, job *
 // assertStillStopped confirms the server is still the instance this
 // operation stopped, under the same binding.
 func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, job *ops.Context) error {
+	changed := fail("EXTERNAL_SERVER_CHANGE", "Something outside Ludock started or changed the server meanwhile. Check it before trying again.")
 	observed, info, err := j.Servers.Observer.Inspect(ctx, server.Container.ID)
+	if docker.IsNotFound(err) {
+		// Compose and the like replace a container to change it.
+		return changed
+	}
 	if err != nil {
 		return err
 	}
@@ -126,7 +131,7 @@ func (j *Jobs) assertStillStopped(ctx context.Context, server *servers.Context, 
 	}
 	if info.State.Running || info.State.Status == "running" || info.State.Paused || info.State.Restarting ||
 		info.State.StartedAt != job.Job.Recovery.StoppedStartedAt {
-		return fail("EXTERNAL_SERVER_CHANGE", "Something outside Ludock started or changed the server meanwhile. Check it before trying again.")
+		return changed
 	}
 	return nil
 }
