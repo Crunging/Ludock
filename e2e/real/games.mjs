@@ -76,7 +76,7 @@ export const games = {
       stdin_open: true,
       tty: true,
       mem_limit: "1g",
-      ports: ["19132:19132/udp"],
+      ports: ["19132:19132/tcp", "19132:19132/udp"],
     },
   },
   palworld: {
