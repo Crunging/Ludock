@@ -114,12 +114,6 @@ func SharingTab(v SharingView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if v.ControlsHost {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<div class=\"alert alert--warning\" role=\"note\" id=\"sharing-host-warning\">This container can control the host: it is privileged or can reach Docker or the host’s system folders. Anyone who can use its console or change its files could take over this whole machine. Share it only as <strong>Can see it</strong>, or with people you would trust with the host.</div>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
 		templ_7745c5c3_Err = SharingContent(v).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -146,9 +140,15 @@ func SharingContent(v SharingView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div id=\"sharing\" class=\"sharing\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<div id=\"sharing\" class=\"sharing\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
+		}
+		if v.ControlsHost {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<div class=\"alert alert--warning\" role=\"note\" id=\"sharing-host-warning\">This container can control the host: it is privileged or can reach Docker or the host’s system folders. Anyone who can use its console or change its files could take over this whole machine. Share it only as <strong>Can see it</strong>, or with people you would trust with the host.</div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 		}
 		if v.Error != "" {
 			templ_7745c5c3_Err = Alert("error", v.Error).Render(ctx, templ_7745c5c3_Buffer)

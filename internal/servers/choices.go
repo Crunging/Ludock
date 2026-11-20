@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"net/http"
 	"path"
@@ -165,6 +166,30 @@ func (c candidate) excluded() map[string]string {
 	return labels
 }
 
+// ownLabels is info, with a host-controlling container's ludock.enable left
+// out when its image sets that label. Docker merges an image's labels into
+// its containers', and only the owner's own label can add such a container.
+// It fails closed when the image can't be read.
+func (o *Observer) ownLabels(ctx context.Context, info *docker.ContainerInspect) *docker.ContainerInspect {
+	if enable, ok := games.ParseBool(info.Config.Labels[games.LabelEnable], true); !ok || !enable ||
+		!inspectCandidate(info).controlsHost() {
+		return info
+	}
+	image, err := o.Docker.InspectImageConfig(ctx, info.Image)
+	if err == nil {
+		var labels map[string]string
+		if raw := image.Config["Labels"]; len(raw) == 0 || json.Unmarshal(raw, &labels) == nil {
+			if _, set := labels[games.LabelEnable]; !set {
+				return info
+			}
+		}
+	}
+	excluded := *info
+	excluded.Config.Labels = maps.Clone(info.Config.Labels)
+	excluded.Config.Labels[games.LabelEnable] = "false"
+	return &excluded
+}
+
 // applyChoice returns a copy of info whose labels include the choice, which
 // is what every eligibility and integration decision reads. The copy is
 // never sent to Docker.
@@ -192,7 +217,7 @@ func (o *Observer) Managed(ctx context.Context, info *docker.ContainerInspect) b
 	if err != nil {
 		return false
 	}
-	applied, _ := applyChoice(info, choices)
+	applied, _ := applyChoice(o.ownLabels(ctx, info), choices)
 	return games.Evaluate(applied.Config.Image, applied.Config.Labels).Eligible
 }
 
@@ -260,7 +285,8 @@ func (o *Observer) Unmanaged(ctx context.Context) ([]Unmanaged, error) {
 			for index := range work {
 				entry, err := o.addable(ctx, ids[index], choices)
 				mu.Lock()
-				if err != nil && !apperr.Is(err, "NOT_ADDABLE") && docker.StatusCode(err) != http.StatusNotFound && failure == nil {
+				if err != nil && !apperr.Is(err, "NOT_ADDABLE") && docker.StatusCode(err) != http.StatusNotFound &&
+					docker.StatusCode(err) != http.StatusForbidden && failure == nil {
 					failure = err
 				}
 				results[index] = entry

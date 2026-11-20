@@ -175,6 +175,15 @@ func TestHostControlNeedsOwnerLabel(t *testing.T) {
 	if list, err := s.Observer.Unmanaged(ctx); err != nil || len(list) != 0 {
 		t.Fatal(list, err)
 	}
+	// Docker merges an image's labels into its containers'; an image that
+	// labels itself in isn't its owner saying so.
+	info, _ := s.Observer.Docker.Inspect(ctx, id)
+	engine.SetImageConfig(info.Image, map[string]any{"Labels": map[string]string{"ludock.enable": "true"}})
+	engine.RemoveContainer(id)
+	engine.AddContainer(options)
+	if current, err := s.RefreshNow(ctx); err != nil || len(current) != 0 {
+		t.Fatal(current, err)
+	}
 }
 
 // A managed server recreated as privileged leaves discovery as a relabeled

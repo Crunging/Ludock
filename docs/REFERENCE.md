@@ -111,7 +111,8 @@ Variables whose names look like credentials, such as `RCON_PASSWORD`,
 2. Containers that can control the host are left out: privileged ones, and ones
    that mount a Docker, Podman, containerd, or CRI-O socket, or bind `/`,
    `/run`, `/var/run`, the container runtime's storage, or a folder holding
-   them. The panel can't add them.
+   them. The panel can't add them, and a `ludock.enable` label their image
+   sets doesn't count: it must be set where the container is defined.
 3. Compose one-off containers (`docker compose run`) are left out.
 4. A container added in the panel is managed; one removed there is left out.
 5. Containers on supported images are managed; others are left out.

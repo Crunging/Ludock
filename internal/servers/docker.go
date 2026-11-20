@@ -288,7 +288,7 @@ func (o *Observer) observeSummary(ctx context.Context, container docker.Containe
 		if err != nil {
 			return nil, nil, err
 		}
-		cached = inspection{summary: summary, inspectedAt: now, info: info}
+		cached = inspection{summary: summary, inspectedAt: now, info: o.ownLabels(ctx, info)}
 	}
 	observed, _, err := observe(cached.info, choices)
 	if err != nil {
@@ -315,7 +315,7 @@ func (o *Observer) Inspect(ctx context.Context, id string) (*Observed, *docker.C
 	if err != nil {
 		return nil, nil, err
 	}
-	return observe(info, choices)
+	return observe(o.ownLabels(ctx, info), choices)
 }
 
 func observe(info *docker.ContainerInspect, choices map[string]identity.Choice) (*Observed, *docker.ContainerInspect, error) {
