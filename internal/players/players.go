@@ -178,10 +178,8 @@ func (s *Service) Get(serverID string, container servers.Container) *Reading {
 }
 
 // Online is how many players a server's current container run has, and
-// whether that is known: false until a reading succeeds, after one fails,
-// once the latest is older than Fresh, or while it is a query-only count the
-// console could have listed, which a schedule waiting for an empty server
-// mustn't take over its own console checks.
+// whether that is known: false until a reading succeeds, after one fails, or
+// once the latest is older than Fresh.
 func (s *Service) Online(serverID string, container servers.Container) (int, bool) {
 	online, _, known := s.OnlineAt(serverID, container)
 	return online, known
@@ -190,10 +188,20 @@ func (s *Service) Online(serverID string, container servers.Container) (int, boo
 // OnlineAt is Online with when that reading was taken, in Unix milliseconds.
 func (s *Service) OnlineAt(serverID string, container servers.Container) (int, int64, bool) {
 	reading := s.Get(serverID, container)
-	if reading == nil || reading.Failed || reading.partial || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
+	if reading == nil || reading.Failed || time.Since(time.UnixMilli(reading.CheckedAt)) > Fresh {
 		return 0, 0, false
 	}
 	return reading.Online, reading.CheckedAt, true
+}
+
+// ListedAt is OnlineAt without a query-only count the console could have
+// listed, for a schedule waiting for an empty server, which goes by its own
+// console checks.
+func (s *Service) ListedAt(serverID string, container servers.Container) (int, int64, bool) {
+	if reading := s.Get(serverID, container); reading != nil && reading.partial {
+		return 0, 0, false
+	}
+	return s.OnlineAt(serverID, container)
 }
 
 // Poll starts a reading for every running server that is due: those that
@@ -259,6 +267,17 @@ func (s *Service) Check(ctx context.Context, serverID string) {
 		return
 	}
 	s.start(ctx, *server, true, true, nil)
+}
+
+// CheckAndWait is Check, returning once the reading ends.
+func (s *Service) CheckAndWait(ctx context.Context, serverID string) {
+	server, err := s.Identity.ResolveBinding(ctx, serverID, -1)
+	if err != nil {
+		return
+	}
+	var wait sync.WaitGroup
+	s.start(ctx, *server, true, true, &wait)
+	wait.Wait()
 }
 
 // Stop waits for readings to finish; none start after it.

@@ -49,9 +49,10 @@ func (s *Server) playerAction(w http.ResponseWriter, r *http.Request, request *R
 	}
 	act.Done()
 	// The list the account check compared may be one the status query
-	// vouched for in an older order, so the next attempt gets a new one.
+	// vouched for in an older order, so the refusal waits for a new one for
+	// the next attempt.
 	if errors.Is(err, errUnconfirmed) {
-		s.App.Players.Check(context.WithoutCancel(r.Context()), id)
+		s.App.Players.CheckAndWait(r.Context(), id)
 	}
 	if err != nil {
 		if public, ok := apperr.As(err); ok && panel != nil && public.Status != http.StatusUnauthorized {
