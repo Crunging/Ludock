@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -403,14 +402,7 @@ func errDisabled(d Destination) error {
 
 func savedIn(ctx context.Context, tx *sql.Tx) (settings, error) {
 	saved := settings{}
-	var raw string
-	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingKey).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return saved, nil
-	}
-	if err == nil {
-		err = json.Unmarshal([]byte(raw), &saved)
-	}
+	_, err := db.ReadSetting(ctx, tx, settingKey, &saved)
 	return saved, err
 }
 

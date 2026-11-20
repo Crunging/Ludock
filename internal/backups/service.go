@@ -332,9 +332,8 @@ func (s *Service) SaveSettings(ctx context.Context, settings Settings, admin *db
 		// Skipped validation holds only if the folders weren't changed since.
 		if unchanged {
 			var current Settings
-			var raw string
-			if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingsKey).Scan(&raw); err != nil ||
-				json.Unmarshal([]byte(raw), &current) != nil || current.CopyTo != settings.CopyTo || current.Destination != settings.Destination {
+			if found, err := db.ReadSetting(ctx, tx, settingsKey, &current); err != nil || !found ||
+				current.CopyTo != settings.CopyTo || current.Destination != settings.Destination {
 				return errSettingsChanged
 			}
 		}
@@ -449,11 +448,14 @@ func (s *Service) startCopies(ctx context.Context, saved Settings) error {
 	started := false
 	err = s.DB.Tx(ctx, func(tx *sql.Tx) error {
 		// A choice saved while the folder was checked wins.
-		var raw string
-		var current Settings
-		if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", settingsKey).Scan(&raw); err != nil {
+		raw, found, err := db.RawSetting(ctx, tx, settingsKey)
+		if err == nil && !found {
+			err = sql.ErrNoRows
+		}
+		if err != nil {
 			return err
 		}
+		var current Settings
 		if json.Unmarshal([]byte(raw), &current) != nil || current != saved {
 			return nil
 		}

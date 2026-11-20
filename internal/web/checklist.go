@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -395,13 +394,13 @@ func (s *Server) dismissChecklistItem(w http.ResponseWriter, r *http.Request, re
 	}
 	err := s.App.DB.AdminMutation(ctx, request.User().ID, request.Principal.TokenHash, db.Now(), func(tx *sql.Tx) error {
 		var dismissed []string
-		var value string
-		err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", checklistDismissedSetting).Scan(&value)
-		if err == nil {
+		value, found, err := db.RawSetting(ctx, tx, checklistDismissedSetting)
+		if err != nil {
+			return err
+		}
+		if found {
 			// A damaged value is replaced.
 			_ = json.Unmarshal([]byte(value), &dismissed)
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
 		}
 		if slices.Contains(dismissed, key) {
 			return nil

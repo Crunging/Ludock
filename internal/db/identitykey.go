@@ -293,9 +293,8 @@ func initializeKeyCheck(tx *sql.Tx, key []byte) error {
 }
 
 func assertKey(q queryer, key []byte) error {
-	var actual string
-	err := q.QueryRowContext(bg, "SELECT value_json FROM settings WHERE key=?", keyCheckSetting).Scan(&actual)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	actual, _, err := RawSetting(bg, q, keyCheckSetting)
+	if err != nil {
 		return err
 	}
 	expected, _ := json.Marshal(keyCheck(key))

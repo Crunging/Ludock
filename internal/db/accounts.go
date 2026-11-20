@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 )
 
@@ -612,17 +613,62 @@ func (d *DB) PruneAudit(ctx context.Context) error {
 	return err
 }
 
+// RowQueryer is a transaction or the pool.
+type RowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // Setting reads a JSON setting into target. It reports false when unset.
 func (d *DB) Setting(ctx context.Context, key string, target any) (bool, error) {
-	var value string
-	err := d.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", key).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
+	return ReadSetting(ctx, d, key, target)
+}
+
+// ReadSetting reads a JSON setting through q into target. It reports false
+// when unset.
+func ReadSetting(ctx context.Context, q RowQueryer, key string, target any) (bool, error) {
+	value, found, err := RawSetting(ctx, q, key)
+	if err != nil || !found {
 		return false, err
 	}
 	return true, json.Unmarshal([]byte(value), target)
+}
+
+// RawSetting reads a setting's JSON through q. It reports false when unset.
+func RawSetting(ctx context.Context, q RowQueryer, key string) (string, bool, error) {
+	var value string
+	err := q.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return value, err == nil, err
+}
+
+// PrefixedSetting is a setting's key without the prefix it was listed by, and
+// its JSON.
+type PrefixedSetting struct{ Key, Value string }
+
+// SettingsWithPrefix lists the settings whose keys start with prefix, a
+// nonempty ASCII string, in key order.
+func (d *DB) SettingsWithPrefix(ctx context.Context, prefix string) ([]PrefixedSetting, error) {
+	// Every key with the prefix sorts below the prefix with its last byte
+	// incremented, so the range uses the key index.
+	last := len(prefix) - 1
+	end := prefix[:last] + string([]byte{prefix[last] + 1})
+	rows, err := d.QueryContext(ctx, "SELECT key, value_json FROM settings WHERE key >= ? AND key < ? ORDER BY key", prefix, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var settings []PrefixedSetting
+	for rows.Next() {
+		var setting PrefixedSetting
+		if err := rows.Scan(&setting.Key, &setting.Value); err != nil {
+			return nil, err
+		}
+		setting.Key = strings.TrimPrefix(setting.Key, prefix)
+		settings = append(settings, setting)
+	}
+	return settings, rows.Err()
 }
 
 func (d *DB) SetSetting(ctx context.Context, q execer, key string, value any) error {
