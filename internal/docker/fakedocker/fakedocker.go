@@ -320,11 +320,12 @@ func (e *Engine) serve(w http.ResponseWriter, r *http.Request) {
 		// Recreates a container with changed settings under a new ID, as
 		// Compose or Portainer would: POST /fake/recreate?container=NAME
 		// with any number of env=KEY=VALUE and label=KEY=VALUE; a KEY alone
-		// removes it.
+		// removes it. image=REF changes the image reference it was created
+		// from, keeping the image it runs.
 		query := r.URL.Query()
 		e.mu.Lock()
 		if c := e.find(query.Get("container")); c != nil {
-			e.recreateLocked(c, query["env"], query["label"])
+			e.recreateLocked(c, query.Get("image"), query["env"], query["label"])
 		}
 		e.mu.Unlock()
 		w.WriteHeader(204)
@@ -748,9 +749,12 @@ func (c *Container) inspection() map[string]any {
 	return result
 }
 
-func (e *Engine) recreateLocked(c *Container, env, labels []string) {
+func (e *Engine) recreateLocked(c *Container, image string, env, labels []string) {
 	replacement := *c
 	replacement.ID = newID()
+	if image != "" {
+		replacement.Config.Image = image
+	}
 	replacement.Config.Env = slices.Clone(c.Config.Env)
 	for _, entry := range env {
 		key, _, set := strings.Cut(entry, "=")

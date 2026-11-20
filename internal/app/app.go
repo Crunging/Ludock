@@ -104,7 +104,7 @@ func New(cfg config.Config, database *db.DB, setup *auth.Setup) (*App, error) {
 	updates := &update.Service{Docker: client, DockerConfig: cfg.DockerConfig}
 	jobService := &jobs.Jobs{DB: database, Authz: authorization, Identity: store, Servers: serverService, Docker: client, Locks: table,
 		Monitor: monitoring, Notify: notifications.Notify, Console: runtime, Backups: backupService, Updates: updates}
-	checks := &update.Checks{Updates: updates, DB: database, Identity: store, Notify: notifications.Notify}
+	checks := &update.Checks{Updates: updates, DB: database, Identity: store, Notify: notifications.Notify, Self: cfg.SelfContainer}
 	backupService.CopyFailed = func(ctx context.Context, tx *sql.Tx, backupID, serverID, problem string) error {
 		name := "a server"
 		var display string

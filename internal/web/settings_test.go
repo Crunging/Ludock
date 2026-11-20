@@ -21,8 +21,10 @@ func TestSettingsNeedAnAdministrator(t *testing.T) {
 		}
 	}
 	form := url.Values{"_csrf": {CSRFToken(operator.Token)}, "host": {"evil.example"}}
-	if response := p.do("POST", "/settings/connection", operator, strings.NewReader(form.Encode()), map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
-		t.Fatal(response.Code)
+	for _, target := range []string{"/settings/connection", "/settings/ludock-check"} {
+		if response := p.do("POST", target, operator, strings.NewReader(form.Encode()), map[string]string{"HX-Request": "true"}); response.Code != http.StatusForbidden {
+			t.Fatal(target, response.Code)
+		}
 	}
 }
 

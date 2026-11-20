@@ -368,7 +368,7 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; margin: 0; 
 .help-panel h2, .help-panel h3, .admin-setup-help h3 { color: var(--ink); margin-bottom: 8px; font-family: var(--font); font-size: 16px; font-weight: 700; }
 .help-panel p + p, .help-panel pre, .admin-setup-help ol, .admin-setup-help p + p, .alert p + p, .section-note + p,
 .empty-state p + p, .danger-panel p + p, .startup-update-note p + p, .login-card p + p { margin-top: 8px; }
-.help-panel pre, .admin-setup-help pre { padding: 10px 12px; border-radius: var(--radius); background: var(--block); color: var(--ink); }
+.help-panel pre, .admin-setup-help pre, .ludock-check pre { padding: 10px 12px; border-radius: var(--radius); background: var(--block); color: var(--ink); }
 .admin-setup-help ol { display: grid; gap: 6px; }
 .disclosure { margin: 6px 0 16px; font-size: 15px; color: var(--ink-2); max-width: var(--measure); }
 .disclosure > summary { cursor: pointer; width: fit-content; font-weight: 700; color: var(--ink); }
@@ -843,6 +843,9 @@ dialog[open] { animation: rise 0.16s ease-out; }
 .startup-update-note .section-lede { margin-bottom: 0; }
 .image-check { max-width: 760px; margin: 0 0 18px; }
 .image-check .muted { margin: 6px 0; }
+.ludock-check { margin-top: 28px; }
+.ludock-check:empty { display: none; }
+.ludock-check h3 { margin: 0 0 8px; }
 #update-panel > h2 { margin-bottom: 8px; }
 #update-panel > h3 { margin: 22px 0 8px; }
 #update-panel form { max-width: 720px; }

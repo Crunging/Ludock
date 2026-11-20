@@ -591,6 +591,11 @@ tab asks right away, at most once every 10 seconds.
 - For images that download the game when they start, the notice is about the
   container image, such as its startup scripts and system packages; **Restart**
   still updates the game.
+- Ludock checks its own image the same way. When its tag points to a newer
+  image, **Settings → Image updates** says so with the commands that
+  [update it](#update-ludock), and destinations that chose **Newer images
+  available** are told once per version. An image pinned by digest, or a
+  Ludock not running in a container it can identify, isn't checked.
 - **Settings → Image updates** turns the checks off; they are on by default.
 
 ## Schedules
@@ -858,6 +863,17 @@ game worlds.
 docker compose stop ludock
 docker cp "$(docker compose ps --all --quiet ludock):/data/." ./ludock-data.backup
 docker compose start ludock
+```
+
+### Update Ludock
+
+Ludock doesn't update itself. In the folder with its `compose.yaml`, pull the
+newer image and recreate the container; its data and your servers stay as they
+are.
+
+```bash
+docker compose pull ludock
+docker compose up -d ludock
 ```
 
 ### Logs

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { request } from "node:http";
 import { join } from "node:path";
-import { test, expect, asAdmin, openServer, serverRow, expectOperationSucceeded } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, serverRow, expectOperationSucceeded, fake } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -96,6 +96,7 @@ async function webhook(page) {
   await expect(card.locator("form .alert--success")).toHaveText("Webhook settings saved.");
   return {
     alerts: () => bodies.filter((body) => body.message.includes("newer version of its container image")),
+    ludockAlerts: () => bodies.filter((body) => body.message.startsWith("A newer version of Ludock is available.")),
     close: async () => {
       await page.goto("/settings");
       if (!(await card.evaluate((details) => details.open))) await card.locator(":scope > summary").click();
@@ -188,4 +189,56 @@ test("turning image update checks off", async ({ page }) => {
   await save(true);
   await page.goto("/");
   await expect(serverRow(page, "Survival").getByRole("link", { name: "Image update available" })).toBeVisible();
+});
+
+// Ludock checks its own image as it checks a server's. Pinned by digest, as
+// the fake daemon starts it, there is nothing to say. Once it runs from a tag
+// that moves, Settings gives the commands that update it, a destination that
+// chose newer images is told once, and nothing offers to update it.
+test("finding a newer Ludock", async ({ page }) => {
+  test.setTimeout(120_000);
+  const pinned = "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32);
+  const tagged = "ghcr.io/crunging/ludock:latest";
+  const check = page.locator("#ludock-check");
+  /** Reloads Settings until the Ludock check shows text, pressing Check now when it can. */
+  const checkLudock = async (text) => {
+    await expect(async () => {
+      await page.goto("/settings");
+      await check.getByRole("button", { name: "Check now" }).click({ timeout: 2_000 });
+      await expect(check).toContainText(text, { timeout: 2_000 });
+    }).toPass({ timeout: 45_000, intervals: [1_000, 3_000] });
+  };
+  await page.goto("/settings");
+  await expect(page.locator("#image-update-settings-form")).toBeVisible();
+  await expect(check).toBeEmpty();
+
+  const hook = await webhook(page);
+  await fake("/fake/recreate", { container: "ludock-dev", image: tagged });
+  try {
+    await checkLudock("Ludock runs the newest image its tag points to.");
+    await expect(check.locator(".alert")).toHaveCount(0);
+    await fake("/fake/registry", { image: tagged, id: "sha256:" + "5".repeat(64) });
+    await checkLudock("A newer Ludock is available.");
+    await expect(check.locator("pre")).toHaveText("docker compose pull ludock\ndocker compose up -d ludock");
+    await expect(check).toContainText("Last checked");
+    await expect(check.getByRole("button")).toHaveText(["Check now"]);
+    await expect.poll(() => hook.ludockAlerts().length, { timeout: 30_000 }).toBe(1);
+    expect(JSON.stringify(hook.ludockAlerts()[0])).not.toContain("ghcr.io");
+
+    // The server checks' setting turns this one off and on too.
+    const form = page.locator("#image-update-settings-form");
+    await form.getByLabel("Check for newer server images").uncheck();
+    await form.getByRole("button", { name: "Save image update settings" }).click();
+    await expect(form.locator(".alert--success")).toHaveText("Image update checks turned off.");
+    await expect(check).toBeEmpty();
+    await form.getByLabel("Check for newer server images").check();
+    await form.getByRole("button", { name: "Save image update settings" }).click();
+    await expect(form.locator(".alert--success")).toHaveText("Image update checks turned on.");
+    await expect(check).toContainText("A newer Ludock is available.");
+  } finally {
+    await fake("/fake/recreate", { container: "ludock-dev", image: pinned });
+    await hook.close();
+  }
+  await page.goto("/settings");
+  await expect(check).toBeEmpty();
 });

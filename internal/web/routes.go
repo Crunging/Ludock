@@ -84,6 +84,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /settings/upload-limit", s.admin(s.saveUploadLimit))
 	m.HandleFunc("POST /settings/logging", s.admin(s.saveLogging))
 	m.HandleFunc("POST /settings/proxies", s.admin(s.saveProxies))
+	m.HandleFunc("POST /settings/ludock-check", s.admin(s.checkLudock))
 	m.HandleFunc("GET /fragments/settings/backup-storage", s.admin(s.backupStorage))
 	m.HandleFunc("POST /settings/notifications/{destination}", s.admin(s.saveNotifications))
 	m.HandleFunc("GET /fragments/settings/deliveries", s.admin(s.deliveries))
