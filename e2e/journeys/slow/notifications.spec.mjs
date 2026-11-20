@@ -1,7 +1,7 @@
 import { createServer, request } from "node:http";
 import { createServer as createTCPServer } from "node:net";
 import { join } from "node:path";
-import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, openServer } from "./fixtures.mjs";
+import { test, expect, asAdmin, dockerAction, expectOperationSucceeded, openServer } from "../fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.

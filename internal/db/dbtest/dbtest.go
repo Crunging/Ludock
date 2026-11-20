@@ -3,16 +3,83 @@ package dbtest
 
 import (
 	"context"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/Crunging/Ludock/internal/db"
 )
 
+// Migrating a new database takes about 150ms under the race detector, so
+// each test writes out a copy of one migrated once per test binary.
+var template = sync.OnceValues(func() ([]file, error) {
+	dir, err := os.MkdirTemp("", "ludock-dbtest-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	d, err := db.Open(filepath.Join(dir, "ludock.db"))
+	if err != nil {
+		return nil, err
+	}
+	// Closing the last connection checkpoints the WAL into the file.
+	if err := d.Close(); err != nil {
+		return nil, err
+	}
+	var files []file
+	err = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || path == dir {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		f := file{mode: info.Mode()}
+		f.path, _ = filepath.Rel(dir, path)
+		if !entry.IsDir() {
+			if f.data, err = os.ReadFile(path); err != nil {
+				return err
+			}
+		}
+		files = append(files, f)
+		return nil
+	})
+	return files, err
+})
+
+type file struct {
+	path string
+	mode fs.FileMode
+	data []byte
+}
+
 // Open opens a fresh database in a temporary directory.
 func Open(t testing.TB) *db.DB {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "ludock.db"))
+	files, err := template()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	// Parents come before their files, and the identity key needs its modes.
+	for _, f := range files {
+		path := filepath.Join(dir, f.path)
+		if f.mode.IsDir() {
+			err = os.Mkdir(path, f.mode.Perm())
+		} else {
+			err = os.WriteFile(path, f.data, f.mode.Perm())
+		}
+		if err == nil {
+			err = os.Chmod(path, f.mode.Perm())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := db.Open(filepath.Join(dir, "ludock.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

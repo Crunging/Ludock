@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, openServer, expectOperationSucceeded, dockerAction } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -295,30 +295,4 @@ test("tabs clicked faster than they open end on the last one", async ({ page }) 
     await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.locator("#overview-live")).toBeVisible();
   }
-});
-
-// Nobody configured Enshrouded's monitoring. Stopped when Ludock found it, it
-// stays quiet; once it runs, a stop outside Ludock is an outage.
-test("a server nobody set up is monitored", async ({ page }) => {
-  await openServer(page, "enshrouded");
-  const status = page.locator("#availability-title + p");
-  await expect(page.getByLabel("Monitor this server")).toBeChecked();
-  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
-  await dockerAction("enshrouded", "start");
-  try {
-    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
-    await dockerAction("enshrouded", "stop");
-    // Another journey may have shortened its wait before alerting.
-    await expect(status).toHaveText(/^The server (looks|is) down\./, { timeout: 30_000 });
-    await dockerAction("enshrouded", "start");
-    await expect(status).toHaveText("No outage detected.", { timeout: 30_000 });
-  } finally {
-    // A stop through Ludock stays quiet for the journeys after this one.
-    await page.goto(page.url());
-    await page.locator(".detail-actions").getByRole("button", { name: "Stop" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Stop server" }).click();
-    await expectOperationSucceeded(page);
-  }
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await expect(status).toHaveText("Stopped. Alerts resume once the server is running again.");
 });

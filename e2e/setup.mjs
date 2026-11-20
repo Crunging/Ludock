@@ -44,16 +44,18 @@ function start(command, args, env, log, file) {
 }
 
 // startStack starts one Ludock and fake daemon on fresh data under dir and
-// signs in the setup administrator. Each worker gets its own stack; a
-// journey that needs a fresh install starts another with freshStack. With
-// found, the folder dir/found stands in for one mounted at /backups-copy.
-async function startStack(bin, dir, port, { found = false } = {}) {
+// signs in the setup administrator, adding each process to children as it
+// starts. Each worker gets its own stack; a journey that needs a fresh
+// install starts another with freshStack. With found, the folder dir/found
+// stands in for one mounted at /backups-copy.
+async function startStack(bin, dir, port, { found = false, children = [] } = {}) {
   const dockerDir = join(dir, "docker");
   // Backups go to the first root; the backups journey chooses the second
   // for second copies.
   const backups = join(dir, "backups") + ":" + join(dir, "copies");
   const mounted = found ? backups + ":" + join(dir, "found") : backups;
   const fake = start(join(bin, "fakedocker"), ["-dir", dockerDir, "-backups", mounted], {}, "fakedocker");
+  children.push(fake);
   const socket = join(dockerDir, "docker.sock");
   await waitFor(() => existsSync(socket), "the fake Docker socket");
 
@@ -68,6 +70,7 @@ async function startStack(bin, dir, port, { found = false } = {}) {
     LUDOCK_HELPER_IMAGE: "ghcr.io/crunging/ludock@sha256:" + "ab".repeat(32),
     ...(found ? { LUDOCK_DEV_COPY_ROOT: join(dir, "found") } : {}),
   }, "ludock", join(dir, "ludock.log"));
+  children.push(ludock);
   await waitFor(async () => (await fetch(`${baseURL}/api/v1/health`)).ok, "Ludock's health check");
 
   const form = (values) => ({ method: "POST", redirect: "manual", body: new URLSearchParams(values),
@@ -81,11 +84,13 @@ async function startStack(bin, dir, port, { found = false } = {}) {
   const state = join(dir, "admin.json");
   writeFileSync(state, JSON.stringify({ cookies: [{ name: "ludock_session", value: token, domain: "127.0.0.1", path: "/",
     expires: -1, httpOnly: true, secure: false, sameSite: "Strict" }], origins: [] }));
-  return { children: [ludock, fake], env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
+  return { children, env: { LUDOCK_E2E_URL: baseURL, LUDOCK_E2E_ADMIN_STATE: state, LUDOCK_E2E_DIR: dir } };
 }
 
+// stopStack stops Ludock before the fake daemon, which it may still need
+// to finish its work.
 async function stopStack(stack) {
-  for (const child of stack.children) {
+  for (const child of stack.children.toReversed()) {
     child.stopping = true;
     child.kill("SIGTERM");
     await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
@@ -98,11 +103,20 @@ async function stopStack(stack) {
  */
 export async function freshStack(index, options) {
   const dir = mkdtempSync(join(tmpdir(), "ludock-e2e-fresh-"));
-  const stack = await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index, options);
-  return { env: stack.env, stop: async () => {
-    await stopStack(stack);
+  const children = [];
+  const stop = async () => {
+    await stopStack({ children });
     if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });
-  } };
+  };
+  // A hook that times out abandons this call, so the worker's exit stops
+  // whatever it started.
+  process.once("exit", () => children.forEach((child) => child.kill("SIGTERM")));
+  try {
+    return { env: (await startStack(process.env.LUDOCK_E2E_BIN, dir, port + 50 + index, { ...options, children })).env, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
 }
 
 export default async function setup(config) {
@@ -111,17 +125,24 @@ export default async function setup(config) {
   const env = { ...process.env, CGO_ENABLED: "0" };
   execFileSync("go", ["build", "-o", bin + "/", "./cmd/ludock", "./cmd/fakedocker"], { cwd: root, env, stdio: "inherit" });
 
-  const stacks = await Promise.all(Array.from({ length: config.workers }, (_, index) => {
-    const stackDir = join(dir, String(index));
-    mkdirSync(stackDir);
-    return startStack(bin, stackDir, port + index);
-  }));
-  // fixtures.mjs picks the stack for its worker's parallel index.
-  process.env.LUDOCK_E2E_STACKS = JSON.stringify(stacks.map((stack) => stack.env));
-  process.env.LUDOCK_E2E_BIN = bin;
-
-  return async () => {
-    await Promise.all(stacks.map(stopStack));
+  const started = Array.from({ length: config.workers }, () => ({ children: [] }));
+  const teardown = async () => {
+    await Promise.all(started.map(stopStack));
     if (!process.env.LUDOCK_E2E_KEEP) rmSync(dir, { recursive: true, force: true });
   };
+  const results = await Promise.allSettled(started.map((stack, index) => {
+    const stackDir = join(dir, String(index));
+    mkdirSync(stackDir);
+    return startStack(bin, stackDir, port + index, { children: stack.children });
+  }));
+  // A stack that couldn't start would leave the others running.
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    await teardown();
+    throw failed.reason;
+  }
+  // fixtures.mjs picks the stack for its worker's parallel index.
+  process.env.LUDOCK_E2E_STACKS = JSON.stringify(results.map((result) => result.value.env));
+  process.env.LUDOCK_E2E_BIN = bin;
+  return teardown;
 }

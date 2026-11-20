@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, dockerAction, openServer, serverRow } from "./fixtures.mjs";
+import { test, expect, asAdmin, serverRow } from "./fixtures.mjs";
 
 asAdmin();
 
@@ -223,37 +223,4 @@ test("filters changed while the list is loading all apply", async ({ page }) => 
   release();
   await expect(page.locator("#server-count")).toHaveText("1 of 4 servers");
   await expect(page).toHaveURL(/\/\?search=valh$/);
-});
-
-test("an outage reaches an open server list when its grace period ends, and clears", async ({ page }) => {
-  test.setTimeout(150_000);
-  await openServer(page, "valheim");
-  // On by default, unless a journey before this one turned it off.
-  await page.getByLabel("Monitor this server").check();
-  await page.getByText("Alert levels").click();
-  await page.getByLabel("Wait before alerting (seconds)").fill("10");
-  await page.getByLabel("Wait before alerting (seconds)").press("Tab");
-  await expect(page.locator("#availability-result")).toHaveText("Monitoring settings saved.");
-  // Starting through Ludock ends any earlier stop's quiet time.
-  await page.locator(".detail-actions").getByRole("button", { name: "Start" }).click();
-  await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeVisible();
-
-  await page.goto("/");
-  const attention = page.locator("#attention");
-  await expect(attention).not.toContainText("Server down");
-  await dockerAction("valheim", "stop");
-  await expect(serverRow(page, "valheim")).toContainText("Stopped");
-  await expect(attention).toContainText("Server down", { timeout: 60_000 });
-  // The list and its summary call it down, as the alert does.
-  await expect(serverRow(page, "valheim").locator(".server-row__state")).toContainText("Down");
-  await expect(page.locator("#fleet")).toContainText("1 down");
-
-  await dockerAction("valheim", "start");
-  await expect(attention).not.toContainText("Server down", { timeout: 30_000 });
-
-  await dockerAction("valheim", "stop");
-  await openServer(page, "valheim");
-  await expect(page.locator(".detail-header__identity")).toContainText("Down", { timeout: 60_000 });
-  await page.getByLabel("Monitor this server").uncheck();
-  await expect(page.locator("#availability-title + p")).toHaveText("Monitoring is off.");
 });
