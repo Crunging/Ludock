@@ -228,7 +228,7 @@ func MovedDetail(result map[string]any) string {
 // DockerWaitDetail notes work that waited for Docker to come back.
 func DockerWaitDetail(result map[string]any) string {
 	if result["waitedForDocker"] == true {
-		return "Waited for Docker, which was briefly unreachable."
+		return "Waited for Docker to answer again."
 	}
 	return ""
 }

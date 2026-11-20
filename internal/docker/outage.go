@@ -89,14 +89,14 @@ func (c *Client) WaitForDocker(ctx context.Context, err error) bool {
 		if !wait.retry(ctx, err) {
 			return false
 		}
-		if err = c.Ping(withoutRideOut(ctx)); err == nil {
+		if err = c.Ping(Promptly(ctx)); err == nil {
 			return true
 		}
 	}
 }
 
-// withoutRideOut keeps a ping inside WaitForDocker to one attempt.
-func withoutRideOut(ctx context.Context) context.Context {
+// Promptly undoes RideOut, for work that is done on time or not at all.
+func Promptly(ctx context.Context) context.Context {
 	return context.WithValue(ctx, rideOutKey{}, nil)
 }
 
