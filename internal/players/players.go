@@ -143,6 +143,8 @@ type Ask struct {
 	// as after a command that may have changed them, whose effect the
 	// game's status can show a few seconds late.
 	Fresh bool
+	// Held: the caller holds the server's lock.
+	Held bool
 }
 
 type Service struct {
@@ -303,6 +305,21 @@ func (s *Service) CheckAndWait(ctx context.Context, serverID string, limit time.
 	}
 }
 
+// ReadHeld takes and keeps a reading of a server whose lock the caller
+// holds, returning nil when none was taken.
+func (s *Service) ReadHeld(ctx context.Context, server identity.Server) *Reading {
+	s.mu.Lock()
+	s.ready()
+	ask := Ask{Players: true, Previous: s.readings[server.ID], Fresh: true, Held: true}
+	s.mu.Unlock()
+	reading, err := s.Source.Read(ctx, server, ask)
+	if err != nil || reading == nil {
+		return nil
+	}
+	s.store(server.ID, reading)
+	return reading
+}
+
 // Stop waits for readings to finish; none start after it.
 func (s *Service) Stop() {
 	s.mu.Lock()
@@ -315,12 +332,16 @@ func (s *Service) Stop() {
 	s.work.Wait()
 }
 
-func (s *Service) start(ctx context.Context, server identity.Server, players, fresh bool, wait *sync.WaitGroup) {
-	s.mu.Lock()
+func (s *Service) ready() {
 	if s.reading == nil {
 		s.reading, s.readings, s.again, s.slots = map[string]bool{}, map[string]*Reading{}, map[string]identity.Server{},
 			make(chan struct{}, parallel)
 	}
+}
+
+func (s *Service) start(ctx context.Context, server identity.Server, players, fresh bool, wait *sync.WaitGroup) {
+	s.mu.Lock()
+	s.ready()
 	if s.stopped || s.reading[server.ID] {
 		if !s.stopped && wait == nil {
 			s.again[server.ID] = server

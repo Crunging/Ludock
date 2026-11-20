@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/db/dbtest"
 	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/docker/fakedocker"
@@ -414,6 +416,14 @@ func TestFoundCopyFolderStartsCopies(t *testing.T) {
 	}
 	if status := f.s.Status(ctx); !status.CopyFound || status.CopyTo != f.other {
 		t.Fatalf("%+v", status)
+	}
+	// Settings removed while the folder was checked are a changed choice too.
+	f.s.DB.Exec(`DELETE FROM settings WHERE key='backups'`)
+	if err := f.s.startCopies(ctx, *stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := f.s.SavedSettings(ctx); found {
+		t.Fatal("brought back removed settings")
 	}
 }
 
@@ -938,4 +948,104 @@ func (g *folderGuard) busyIn(folder string, l lane) int {
 		return counts[l]
 	}
 	return 0
+}
+
+// The backup folder, the second folder, or Docker stops answering while an
+// administrator opens Settings or saves it: the storage summary says which
+// within a few seconds, and the save fails with that reason, changing
+// nothing.
+func TestSettingsGiveUpOnStuckFoldersAndDocker(t *testing.T) {
+	defer func(measure, save time.Duration) { measureWait, saveWait = measure, save }(measureWait, saveWait)
+	measureWait, saveWait = 200*time.Millisecond, 200*time.Millisecond
+	for _, c := range []struct {
+		name string
+		// stuck is which look into a folder never returns, 0 for none.
+		stuck  int32
+		docker bool
+		status string
+		save   error
+	}{
+		{"backup folder", 1, false, errFolderStalled.Message, errFolderStalled},
+		{"second folder", 2, false, "", errCopyStalled},
+		{"Docker", 0, true, errDockerStalled.Message, errDockerStalled},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCopyFixture(t)
+			settings := Settings{Destination: f.main, CopyTo: f.other}
+			release := make(chan struct{})
+			var looks atomic.Int32
+			testHook = func(point string) {
+				if point == "reaching" && looks.Add(1) == c.stuck {
+					<-release
+				}
+			}
+			t.Cleanup(func() {
+				close(release)
+				// Calls given up on read the hook until they return.
+				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+					f.s.Storage.folders.mu.Lock()
+					idle := len(f.s.Storage.folders.busy) == 0
+					f.s.Storage.folders.mu.Unlock()
+					if idle {
+						break
+					}
+				}
+				testHook = nil
+			})
+			if c.docker {
+				client := docker.New(silentSocket(t))
+				f.s.Docker, f.s.Storage.Docker = client, client
+			}
+			started := time.Now()
+			if c.status != "" {
+				status := f.s.Status(ctx)
+				if len(status.Issues) != 1 || status.Issues[0].Message != c.status {
+					t.Fatalf("%+v", status.Issues)
+				}
+				looks.Store(0)
+			}
+			before, _, _ := f.s.SavedSettings(ctx)
+			if _, err := f.s.SaveSettings(ctx, settings, &db.SessionUser{ID: "admin", Role: db.RoleAdmin}, "token"); !errors.Is(err, c.save) {
+				t.Fatal(err)
+			}
+			if after, _, _ := f.s.SavedSettings(ctx); *after != *before {
+				t.Fatal("changed settings:", after)
+			}
+			if waited := time.Since(started); waited > 2*time.Second {
+				t.Fatal("waited", waited)
+			}
+		})
+	}
+}
+
+// silentSocket is a Docker socket that accepts connections and never answers.
+func silentSocket(t *testing.T) string {
+	t.Helper()
+	socket := filepath.Join(t.TempDir(), "silent.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		listener.Close()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		var held []net.Conn
+		defer func() {
+			for _, conn := range held {
+				conn.Close()
+			}
+		}()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, conn)
+		}
+	}()
+	return socket
 }

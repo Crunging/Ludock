@@ -33,9 +33,8 @@ type ServerRow struct {
 	// Down: the server stopped without anyone stopping it, and its outage
 	// alert is due.
 	Down bool
-	// Warn is whether stopping offers to warn players first: WarnOn,
-	// WarnOff, or "" when it isn't offered.
-	Warn string
+	// Warn: stopping offers to warn players first.
+	Warn bool
 }
 
 // Status is the row's state, naming a server its alert calls down the same way.
@@ -46,11 +45,6 @@ func (r ServerRow) Status() Status {
 	}
 	return status
 }
-
-const (
-	WarnOn  = "on"
-	WarnOff = "off"
-)
 
 // ConfirmOption is a checkbox in the confirmation dialog.
 type ConfirmOption struct {
@@ -66,15 +60,9 @@ func confirmOptions(options []ConfirmOption) string {
 }
 
 // WarnOption offers to warn players before an action takes the server down.
-func WarnOption(action, warn string) ConfirmOption {
-	what := map[string]string{"stop": "shuts down", "update": "restarts for an update", "backup": "restarts for a backup",
-		"restore": "restarts to restore a backup"}[action]
-	if what == "" {
-		what = "restarts"
-	}
-	return ConfirmOption{Name: "warnPlayers", Label: "Warn players and wait 1 minute", Checked: warn == WarnOn,
-		Help: "Tells players in the game that the server " + what + " in 1 minute, then goes ahead."}
-}
+// Whether anyone is online is decided when the action runs.
+var WarnOption = ConfirmOption{Name: "warnPlayers", Label: "Warn players and wait 1 minute", Checked: true,
+	Help: "If nobody is online when it’s time to warn, it goes ahead at once."}
 
 // FleetBlock is one server in the strip of state blocks under the title.
 type FleetBlock struct{ Name, Label, Tone string }
@@ -539,7 +527,7 @@ templ ServerCard(row ServerRow) {
 // LifecycleConfirm asks in the page's confirmation dialog before a stop or
 // restart. It can offer to warn players first, and a restart to take a
 // backup first.
-func LifecycleConfirm(action, serverName string, backupOption bool, warn string) templ.Attributes {
+func LifecycleConfirm(action, serverName string, backupOption, warn bool) templ.Attributes {
 	label := map[string]string{"stop": "Stop", "restart": "Restart"}[action]
 	detail := "Connected players will be disconnected."
 	if action == "stop" {
@@ -548,8 +536,8 @@ func LifecycleConfirm(action, serverName string, backupOption bool, warn string)
 	attributes := templ.Attributes{"hx-confirm": label + " " + serverName + "?", "data-confirm-detail": detail,
 		"data-confirm-action": label + " server", "data-confirm-danger": true}
 	var options []ConfirmOption
-	if warn != "" {
-		options = append(options, WarnOption(action, warn))
+	if warn {
+		options = append(options, WarnOption)
 	}
 	if backupOption {
 		options = append(options, ConfirmOption{Name: "createBackup", Label: "Take a backup first",

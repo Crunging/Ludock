@@ -309,6 +309,9 @@ func (s *Storage) validateFolder(ctx context.Context, folder string) (string, er
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Identify Ludock's container with LUDOCK_SELF_CONTAINER before configuring backups.")
 	}
 	self, err := s.Docker.Inspect(ctx, s.Self)
+	if errors.Is(err, docker.ErrReadTimeout) {
+		return "", errDockerStalled
+	}
 	if err != nil {
 		return "", fail("BACKUP_MOUNT_UNVERIFIED", "Ludock could not verify its backup mount. Set LUDOCK_SELF_CONTAINER to its Docker container name or ID.")
 	}

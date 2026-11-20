@@ -57,7 +57,7 @@ func (j *Jobs) warnedFirst(capability authz.Capability, run runFunc) runFunc {
 			}
 		}
 		result, err := run(ctx, job)
-		return result, calledOff(job, err)
+		return warnedResult(job, result, err)
 	}
 }
 
@@ -85,8 +85,18 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 	}
 	until := job.Job.Recovery.WarnUntil
 	if until == 0 {
+		if err := job.Progress(phaseCounting, nil, nil); err != nil {
+			return err
+		}
+		if j.nobodyOnline(ctx, server, locked) {
+			if err := assertAccess(); err != nil {
+				return err
+			}
+			return job.Progress(phaseCounting, func(r *ops.Recovery) { r.WarnSkipped = true }, nil)
+		}
 		until = time.Now().Add(j.warningLead()).UnixMilli()
-		if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnUntil = until }, nil); err != nil {
+		// An earlier attempt, requeued behind other work, may have found nobody.
+		if err := job.Progress("warning", func(r *ops.Recovery) { r.WarnUntil, r.WarnSkipped = until, false }, nil); err != nil {
 			return err
 		}
 		// Best effort: a warning that can't be sent doesn't stop the action.
@@ -141,6 +151,55 @@ func (j *Jobs) warnFirst(ctx context.Context, job *ops.Context, capability authz
 
 // phaseWarned is a warned operation past its wait that hasn't acted yet.
 const phaseWarned = "warned"
+
+// phaseCounting is an operation reading who is online before it warns.
+const phaseCounting = "checking_players"
+
+// recentReading is how old the panel's own reading of players online may be
+// to warn them without reading again.
+const recentReading = 15 * time.Second
+
+// nobodyOnline reports whether a reading taken now finds nobody on server,
+// since someone may have joined since the panel's last. A count that can't
+// be read isn't nobody: the warning goes out.
+func (j *Jobs) nobodyOnline(ctx context.Context, server *servers.Context, locked bool) bool {
+	switch server.Container.State {
+	case "running", "paused", "restarting":
+	default:
+		return true
+	}
+	if j.Players == nil || !j.Players.Source.Lists(server.Container) {
+		return false
+	}
+	if online, at, known := j.Players.OnlineAt(server.Logical.ID, server.Container); known && online > 0 && time.Since(time.UnixMilli(at)) < recentReading {
+		return false
+	}
+	if !locked {
+		// Preempts a background reading, which this one replaces.
+		release, err := j.Locks.AcquirePreempting(ctx, server.LockKeys, nil)
+		if err != nil {
+			return false
+		}
+		defer release()
+	}
+	reading := j.Players.ReadHeld(ctx, *server.Logical)
+	return reading != nil && !reading.Failed && reading.Online == 0
+}
+
+// warnedResult ends an operation that may have warned first: a success notes
+// that nobody was online to warn, and a failure is calledOff.
+func warnedResult(job *ops.Context, result map[string]any, err error) (map[string]any, error) {
+	if err != nil {
+		return result, calledOff(job, err)
+	}
+	if job.Job.Recovery.WarnSkipped {
+		if result == nil {
+			result = map[string]any{}
+		}
+		result["warnSkipped"] = true
+	}
+	return result, nil
+}
 
 // broadcast sends message to players; ready, when set, runs once the
 // server's locks are held, right before sending.

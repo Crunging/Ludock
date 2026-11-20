@@ -28,6 +28,7 @@ import (
 	"github.com/Crunging/Ludock/internal/monitor"
 	"github.com/Crunging/Ludock/internal/notify"
 	"github.com/Crunging/Ludock/internal/ops"
+	"github.com/Crunging/Ludock/internal/players"
 	"github.com/Crunging/Ludock/internal/schedules"
 	"github.com/Crunging/Ludock/internal/servers"
 	"github.com/Crunging/Ludock/internal/update"
@@ -47,6 +48,8 @@ type Jobs struct {
 	Console  *console.Runtime
 	Backups  *backups.Service
 	Updates  *update.Service
+	// Players reads who is online before a warning; it may be nil.
+	Players *players.Service
 	// Pulled runs after an update pulls a server's image, whether or not
 	// it recreated the container, since the pull changes what the image
 	// records about its registry version.
@@ -82,7 +85,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 					}
 				}
 				result, err := j.runLifecycle(ctx, job, action)
-				return result, calledOff(job, err)
+				return warnedResult(job, result, err)
 			},
 			Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 				if resumable(job) {
@@ -99,10 +102,10 @@ func (j *Jobs) Register(queue *ops.Runner) {
 			}
 			if job.Job.Input["createBackup"] == true {
 				result, err := j.runBackupRestart(ctx, job)
-				return result, calledOff(job, err)
+				return warnedResult(job, result, err)
 			}
 			result, err := j.runLifecycle(ctx, job, servers.Restart)
-			return result, calledOff(job, err)
+			return warnedResult(job, result, err)
 		},
 		Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 			if resumable(job) {
@@ -132,7 +135,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 	}})
 	runner.Register("update", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		result, err := j.runUpdate(ctx, job)
-		return result, calledOff(job, err)
+		return warnedResult(job, result, err)
 	}, Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
 		if resumable(job) {
 			return nil, ops.ErrResume

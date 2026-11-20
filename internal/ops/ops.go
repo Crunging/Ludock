@@ -108,6 +108,8 @@ type Recovery struct {
 	// saved before the warning is sent; WarnSent once it was.
 	WarnUntil int64 `json:"warnUntil,omitempty"`
 	WarnSent  bool  `json:"warnSent,omitempty"`
+	// WarnSkipped: nobody was online to warn, so the operation didn't wait.
+	WarnSkipped bool `json:"warnSkipped,omitempty"`
 	// Restore and Swap are the restore journal and update swap, which their
 	// handlers decode and validate.
 	Restore json.RawMessage `json:"restore,omitempty"`

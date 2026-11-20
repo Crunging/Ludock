@@ -107,7 +107,7 @@ func Capitalize(value string) string {
 }
 
 var phaseLabels = map[string]string{"saving_world": "Saving world", "waiting_for_save": "Waiting for save", "save_skipped": "Save skipped",
-	"warning": "Giving players 1 minute", "warned": "Going ahead", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
+	"checking_players": "Checking who is online", "warning": "Giving players 1 minute", "warned": "Going ahead", "stopping": "Waiting for server to stop", "verifying_stop": "Checking shutdown", "starting": "Starting server",
 	"sending_command": "Sending command", "pulling": "Downloading the new image", "creating": "Preparing the updated server", "replacing": "Swapping in the updated server"}
 
 // OperationLabel describes an operation's progress.
@@ -204,6 +204,14 @@ func SaveDetail(result map[string]any) string {
 			return "No save command is configured for this game."
 		}
 		return "Save skipped; shutdown continued."
+	}
+	return ""
+}
+
+// WarnDetail notes work asked to warn players that found nobody online.
+func WarnDetail(result map[string]any) string {
+	if result["warnSkipped"] == true {
+		return "Nobody was online, so players weren’t warned."
 	}
 	return ""
 }

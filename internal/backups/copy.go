@@ -45,12 +45,17 @@ var copyRetry = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute, 
 // copyStall ends a copy that makes no progress for this long.
 var copyStall = 2 * time.Minute
 
-// measureWait is how long the storage summary waits for the second folder.
-var measureWait = 5 * time.Second
+// measureWait is how long the storage summary waits for a backup folder,
+// and saveWait how long saving settings waits to check them.
+var (
+	measureWait = 5 * time.Second
+	saveWait    = 30 * time.Second
+)
 
 var (
 	errFolderAway    = fail("BACKUP_FOLDER_AWAY", "The folder this backup was saved in can’t be reached.")
 	errFolderStalled = fail("BACKUP_FOLDER_STALLED", "The backup folder isn’t responding. Check its disk or network share, then try again.")
+	errDockerStalled = fail("BACKUP_DOCKER_STALLED", "Docker isn’t answering, so Ludock can’t check the backup folders. Try again once it does.")
 )
 
 var (
@@ -702,6 +707,22 @@ func (s *Service) finishCopyRemovals(ctx context.Context) error {
 func (s *Service) reach(folder string, stalled error, limit time.Duration, fn func(progress func()) error) error {
 	return s.Storage.folders.run(context.Background(), folder, lookOptions(stalled, limit), func(c *folderCall) error {
 		return fn(c.progress)
+	})
+}
+
+// checkFolder runs check, which looks into folder and asks Docker, through
+// the folder guard, giving up after limit. Docker calls end a little sooner,
+// with errDockerStalled, so a folder that stops answering is what reaches
+// the limit.
+func (s *Service) checkFolder(ctx context.Context, folder string, limit time.Duration, check func(ctx context.Context) error) error {
+	return s.Storage.folders.run(ctx, folder, lookOptions(errFolderStalled, limit), func(c *folderCall) error {
+		asking, cancel := context.WithTimeout(c.ctx, limit*3/4)
+		defer cancel()
+		err := check(asking)
+		if err != nil && c.ctx.Err() == nil && errors.Is(asking.Err(), context.DeadlineExceeded) {
+			return errDockerStalled
+		}
+		return err
 	})
 }
 
