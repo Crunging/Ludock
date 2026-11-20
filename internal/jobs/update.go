@@ -131,12 +131,25 @@ func (j *Jobs) runBackupRestart(ctx context.Context, job *ops.Context) (map[stri
 	})
 }
 
-func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) error {
-	// Starting is safe to reconcile, but only once the backup completed.
-	if job.Job.Recovery.InitialRunning != nil {
-		return j.recoverBackup(ctx, job, j.backupCompleted(ctx, job))
+// recoverBackupRestart returns the server to running, as the restart was
+// asked to. Ludock restarting is not a failed backup, so a server stopped
+// for one is started again even if the backup didn't complete, and the
+// backup is not taken again.
+func (j *Jobs) recoverBackupRestart(ctx context.Context, job *ops.Context) (map[string]any, error) {
+	if job.Job.Recovery.InitialRunning == nil {
+		return nil, nil
 	}
-	return nil
+	completed := j.backupCompleted(ctx, job)
+	if err := j.recoverBackup(ctx, job, true); err != nil {
+		return nil, err
+	}
+	result := map[string]any{"action": "restart"}
+	if completed {
+		result["backupId"] = job.Job.Recovery.BackupID
+	} else {
+		result["guidance"] = "Ludock restarted before the backup finished, so there’s no new backup. The server was started again."
+	}
+	return withSave(job, result), nil
 }
 
 // recoverUpdate reconciles an interrupted update. Once it began swapping
@@ -496,20 +509,33 @@ func (j *Jobs) swap(ctx context.Context, job *ops.Context, server *servers.Conte
 	}
 	verification := "created"
 	if initiallyRunning {
-		// The owner may have lost authority while Docker created the
-		// container, and another manager may have started the original.
-		if err := j.assertCapability(ctx, job, capability); err != nil {
-			return "", err
-		}
-		if err := j.assertStopped(ctx, server, job); err != nil {
-			return "", err
-		}
-		state.Stage = swapStarting
-		if err := saveSwap(job, state); err != nil {
-			return "", err
-		}
-		if err := j.Docker.Start(ctx, replacement); err != nil {
-			return "", errStart
+		var since time.Time
+		for {
+			// The owner may have lost authority while Docker created the
+			// container, and another manager may have started the original.
+			if err := j.assertCapability(ctx, job, capability); err != nil {
+				return "", err
+			}
+			// The checks hold only together: after waiting for Docker, another
+			// manager may have started the original, so all are made again.
+			if err := j.assertStopped(docker.Promptly(ctx), server, job); err != nil {
+				if docker.Unavailable(err) && j.Docker.WaitForDocker(ctx, err, &since) {
+					continue
+				}
+				return "", err
+			}
+			state.Stage = swapStarting
+			if err := saveSwap(job, state); err != nil {
+				return "", err
+			}
+			err := j.Docker.Start(ctx, replacement)
+			if err == nil {
+				break
+			}
+			// A start that never reached Docker is checked and sent again.
+			if !docker.NotSent(err) || !j.Docker.WaitForDocker(ctx, err, &since) {
+				return "", errStart
+			}
 		}
 		if verification, err = j.awaitReplacement(ctx, job, capability, replacement); err != nil {
 			return "", err

@@ -1,6 +1,6 @@
 // Package docker is a minimal Docker Engine API client over the local unix
 // socket. Requests never go through HTTP proxies, mutations are never
-// retried, and daemon error bodies (which can contain credentials, commands,
+// resent unless they provably never reached Docker, and daemon error bodies (which can contain credentials, commands,
 // and host paths) are discarded.
 package docker
 
@@ -83,6 +83,9 @@ type Client struct {
 	socket      string
 	http        *http.Client
 	readTimeout time.Duration
+	// OutageLimit bounds each wait for Docker under RideOut; zero means 90
+	// seconds.
+	OutageLimit time.Duration
 
 	mu      sync.Mutex
 	version string
@@ -93,11 +96,8 @@ func New(socket string) *Client {
 	transport := &http.Transport{
 		// Daemon requests keep their own pool. Ambient proxy settings must
 		// never redirect them.
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", socket)
-		},
+		Proxy:           nil,
+		DialContext:     func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx, socket) },
 		MaxIdleConns:    8,
 		IdleConnTimeout: 30 * time.Second,
 	}
@@ -193,6 +193,9 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 		c.writes.Add(1)
 	}
 	if err != nil {
+		if NotSent(err) {
+			return nil, ErrNotSent
+		}
 		return nil, ErrRequestFailed
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
@@ -204,8 +207,20 @@ func (c *Client) request(ctx context.Context, method, path string, body any, hea
 }
 
 // read bounds a complete GET including its body so stalled discovery can be
-// retried.
+// retried, and retries it under RideOut.
 func (c *Client) read(ctx context.Context, path string, decode func(io.Reader) error) error {
+	wait := c.newOutage()
+	for {
+		attempt, cancel := wait.attempt(ctx)
+		err := c.readOnce(attempt, path, decode)
+		cancel()
+		if err == nil || !wait.retry(ctx, err) {
+			return err
+		}
+	}
+}
+
+func (c *Client) readOnce(ctx context.Context, path string, decode func(io.Reader) error) error {
 	ctx, cancel := context.WithTimeout(ctx, c.readTimeout)
 	defer cancel()
 	response, err := c.Request(ctx, http.MethodGet, path, nil)
@@ -214,7 +229,11 @@ func (c *Client) read(ctx context.Context, path string, decode func(io.Reader) e
 		err = decode(response.Body)
 		if err != nil && ctx.Err() == nil {
 			var api *APIError
-			if !errors.As(err, &api) {
+			var network *net.OpError
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &network) {
+				// The connection ended before the body did.
+				err = ErrIncompleteStream
+			} else if !errors.As(err, &api) {
 				err = errors.New("docker returned invalid JSON")
 			}
 		}
@@ -682,6 +701,19 @@ func (c *Client) Events(ctx context.Context, filters Filters) (io.ReadCloser, er
 // registryAuth is an X-Registry-Auth value, or "" for anonymous access;
 // platform selects an image variant, or "" for the daemon's own.
 func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string) error {
+	// Pulling again only fetches what is still missing. Registry errors,
+	// which Docker reports as 5xx or in the body, are not retried.
+	wait := c.newOutage()
+	for {
+		err := c.pull(ctx, image, registryAuth, platform)
+		cut := errors.Is(err, ErrRequestFailed) || errors.Is(err, ErrIncompleteStream)
+		if err == nil || !cut || !wait.retry(ctx, err) {
+			return err
+		}
+	}
+}
+
+func (c *Client) pull(ctx context.Context, image, registryAuth, platform string) error {
 	query := url.Values{"fromImage": {image}}
 	if platform != "" {
 		query.Set("platform", platform)
@@ -704,7 +736,7 @@ func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string)
 	decodeErr := DecodeJSONLines(response.Body, 1<<20, false, func(raw json.RawMessage) error {
 		var record map[string]json.RawMessage
 		if json.Unmarshal(raw, &record) != nil || record == nil {
-			return errors.New("docker returned invalid pull progress")
+			return errPullProgress
 		}
 		_, hasError := record["error"]
 		_, hasDetail := record["errorDetail"]
@@ -718,11 +750,17 @@ func (c *Client) Pull(ctx context.Context, image, registryAuth, platform string)
 	if failure != nil {
 		return failure
 	}
+	if decodeErr != nil && !errors.Is(decodeErr, ErrJSONLineTooLong) && !errors.Is(decodeErr, ErrInvalidJSONLine) && !errors.Is(decodeErr, errPullProgress) {
+		// The stream was cut before Docker finished.
+		return ErrIncompleteStream
+	}
 	if decodeErr != nil || records == 0 {
 		return errors.New("docker returned invalid or oversized pull progress")
 	}
 	return nil
 }
+
+var errPullProgress = errors.New("docker returned invalid pull progress")
 
 // Conn is a hijacked Docker stream. Closing the write side sends stdin EOF
 // while output keeps flowing.

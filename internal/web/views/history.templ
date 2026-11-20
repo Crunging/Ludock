@@ -529,6 +529,9 @@ templ OperationSummary(o OperationDetailView) {
 		if detail := MovedDetail(operation.Result); detail != "" {
 			<p class="section-note">{ detail }</p>
 		}
+		if detail := DockerWaitDetail(operation.Result); detail != "" {
+			<p class="section-note">{ detail }</p>
+		}
 		if text := guidance(operation.Result); text != "" {
 			<p class="section-note">{ text }</p>
 		}

@@ -604,7 +604,10 @@ func (d *DB) PruneAuditIfNeeded(ctx context.Context) error {
 	if !due {
 		return nil
 	}
-	return d.PruneAudit(ctx)
+	if err := d.PruneAudit(ctx); err != nil {
+		return err
+	}
+	return d.PruneOperations(ctx)
 }
 
 // PruneAudit keeps the newest auditMaxRows entries.

@@ -61,7 +61,18 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 			return err
 		}
 	}
-	err := j.Servers.Observer.ChangeState(ctx, server.Container.ID, servers.Stop, func(observation identity.Observation, info *docker.ContainerInspect) error {
+	// dispatching is set once the checks before a stop request pass, and
+	// cleared once it is known never to have reached Docker.
+	dispatching := false
+	// No stop reached Docker, so there is no shutdown to wait out.
+	unsent := func() error {
+		dispatching = false
+		if !stopPending(job) {
+			return nil
+		}
+		return job.Progress(job.Job.Phase, func(r *ops.Recovery) { r.StopStarted = false }, nil)
+	}
+	err := j.Servers.Observer.ChangeStateUnsent(ctx, server.Container.ID, servers.Stop, func(observation identity.Observation, info *docker.ContainerInspect) error {
 		if err := backups.AssertDataOperationState(info.State.Status); err != nil {
 			return err
 		}
@@ -71,19 +82,30 @@ func (j *Jobs) stopForData(ctx context.Context, server *servers.Context, job *op
 		if _, err := j.Identity.AssertObservedBinding(ctx, server.Logical.ID, observation, server.Logical.BindingRevision); err != nil {
 			return err
 		}
-		if job.Job.Recovery.InitialRunning == nil {
-			if err := job.Progress("stopping", func(r *ops.Recovery) {
-				recordStop(r, info)
+		// Called again after a stop that never reached Docker: the new
+		// inspection replaces the stop state, but not the initial state.
+		if err := job.Progress("stopping", func(r *ops.Recovery) {
+			recordStop(r, info)
+			if r.InitialRunning == nil {
 				running := r.StopStarted
 				r.InitialRunning = &running
-				r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
-				r.DataUnsafe = false
-			}, nil); err != nil {
-				return err
 			}
+			r.ContainerID, r.Fingerprint, r.LockKeys = server.Container.ID, server.Logical.BindingFingerprint, server.LockKeys
+			r.DataUnsafe = false
+		}, nil); err != nil {
+			return err
 		}
-		return j.Monitor.Suppress(ctx, server.Logical.ID)
-	})
+		if err := j.Monitor.Suppress(ctx, server.Logical.ID); err != nil {
+			return err
+		}
+		dispatching = true
+		return nil
+	}, unsent)
+	if err != nil && !dispatching {
+		if err := unsent(); err != nil {
+			return err
+		}
+	}
 	if err != nil {
 		return err
 	}

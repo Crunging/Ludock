@@ -59,7 +59,10 @@ func Stdout(source io.Reader) io.ReadCloser {
 	return reader
 }
 
-var ErrJSONLineTooLong = errors.New("JSON line exceeded its limit")
+var (
+	ErrJSONLineTooLong = errors.New("JSON line exceeded its limit")
+	ErrInvalidJSONLine = errors.New("invalid JSON line")
+)
 
 // DecodeJSONLines calls receive for each newline-delimited JSON value, with
 // a per-record byte limit. Incomplete final records and malformed input fail
@@ -86,7 +89,7 @@ func DecodeJSONLines(source io.Reader, maxBytes int, skipInvalid bool, receive f
 		if len(bytes.TrimSpace(line)) > 0 {
 			if !json.Valid(line) {
 				if !skipInvalid {
-					return errors.New("invalid JSON line")
+					return ErrInvalidJSONLine
 				}
 			} else if receiveErr := receive(append(json.RawMessage(nil), line...)); receiveErr != nil {
 				return receiveErr

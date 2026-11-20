@@ -725,7 +725,14 @@ const (
 // which is not a failure.
 func (o *Observer) ChangeState(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
-	if err := o.ChangeStateExact(ctx, id, action, assertAccess); !errors.Is(err, ErrUnchanged) {
+	return o.ChangeStateUnsent(ctx, id, action, assertAccess, nil)
+}
+
+// ChangeStateUnsent is ChangeState that calls unsent, when not nil, as soon
+// as a request is known never to have reached Docker, before any retry.
+func (o *Observer) ChangeStateUnsent(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
+	if err := o.changeStateExact(ctx, id, action, assertAccess, unsent); !errors.Is(err, ErrUnchanged) {
 		return err
 	}
 	return nil
@@ -735,16 +742,56 @@ func (o *Observer) ChangeState(ctx context.Context, id string, action Action,
 // such as one stopped by another tool after the final inspection.
 var ErrUnchanged = errors.New("container already in the requested state")
 
-// ChangeStateExact is ChangeState, reporting ErrUnchanged.
+// ChangeStateExact is ChangeState, reporting ErrUnchanged. Under
+// docker.RideOut, a request that never reached Docker is made again from a
+// fresh inspection and check once Docker answers, and one whose answer was
+// lost counts as done if Docker then shows the state it asked for.
 func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Action,
 	assertAccess func(identity.Observation, *docker.ContainerInspect) error) error {
+	return o.changeStateExact(ctx, id, action, assertAccess, nil)
+}
+
+func (o *Observer) changeStateExact(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error, unsent func() error) error {
+	var since time.Time
+	for {
+		before, err := o.changeState(ctx, id, action, assertAccess)
+		if before != nil && docker.NotSent(err) && unsent != nil {
+			if unsentErr := unsent(); unsentErr != nil {
+				return unsentErr
+			}
+		}
+		if before == nil || !docker.Unavailable(err) || !o.Docker.WaitForDocker(ctx, err, &since) {
+			return err
+		}
+		if docker.NotSent(err) {
+			continue
+		}
+		after, inspectErr := o.Docker.Inspect(ctx, id)
+		if inspectErr != nil {
+			return err
+		}
+		// A stopped run that started after the check is another manager's.
+		running := after.State.Running || after.State.Restarting
+		sameRun := after.State.StartedAt == before.State.StartedAt
+		if (action == Stop && !running && sameRun) || (action == Start && running && !sameRun) {
+			return nil
+		}
+		return err
+	}
+}
+
+// changeState returns the inspection the change was dispatched after, or nil
+// if it wasn't.
+func (o *Observer) changeState(ctx context.Context, id string, action Action,
+	assertAccess func(identity.Observation, *docker.ContainerInspect) error) (*docker.ContainerInspect, error) {
 	observed, info, err := o.Inspect(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if assertAccess != nil {
 		if err := assertAccess(observed.Observation, info); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	timeout := StopTimeoutSeconds(info)
@@ -754,14 +801,14 @@ func (o *Observer) ChangeStateExact(ctx context.Context, id string, action Actio
 	case Stop:
 		err = o.stop(ctx, id, info, games.StopCommand(observed.Container.GameType, observed.Container.Labels), timeout)
 	case Restart:
-		return o.Docker.Restart(ctx, id, &timeout)
+		err = o.Docker.Restart(ctx, id, &timeout)
 	default:
-		return errors.New("unknown container action")
+		return nil, errors.New("unknown container action")
 	}
-	if docker.StatusCode(err) == http.StatusNotModified {
-		return ErrUnchanged
+	if action != Restart && docker.StatusCode(err) == http.StatusNotModified {
+		return info, ErrUnchanged
 	}
-	return err
+	return info, err
 }
 
 // stopCommandDelay lets Docker take the stop first: once it has sent the

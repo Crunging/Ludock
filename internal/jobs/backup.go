@@ -8,6 +8,7 @@ import (
 
 	"github.com/Crunging/Ludock/internal/authz"
 	"github.com/Crunging/Ludock/internal/backups"
+	"github.com/Crunging/Ludock/internal/docker"
 	"github.com/Crunging/Ludock/internal/identity"
 	"github.com/Crunging/Ludock/internal/locks"
 	"github.com/Crunging/Ludock/internal/notify"
@@ -55,7 +56,7 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 			log.Warn("Could not save a backup helper's removal; recovery will look for it again")
 		}
 	}()
-	backup, err := func() (*backups.Backup, error) {
+	copyOnce := func() (*backups.Backup, error) {
 		if err := j.dataAuthority(ctx, server, job); err != nil {
 			return nil, err
 		}
@@ -142,7 +143,33 @@ func (j *Jobs) createStoppedBackup(ctx context.Context, server *servers.Context,
 			return nil, err
 		}
 		return backup, nil
-	}()
+	}
+	var backup *backups.Backup
+	var since time.Time
+	for attempt := 1; ; attempt++ {
+		backup, err = copyOnce()
+		// A 5xx answer means Docker is there but failing, which copying again
+		// won't fix.
+		if err == nil || recorded || attempt == 3 || !docker.Unavailable(err) || docker.StatusCode(err) >= 500 || !j.Docker.WaitForDocker(ctx, err, &since) {
+			break
+		}
+		// Docker went away mid-copy. Copy again only once every helper that
+		// may still write is gone and the partial archive is removed.
+		if data != nil {
+			data.Cleanup()
+			data = nil
+		}
+		if cleanupErr := j.removeOperationHelpers(ctx, job); cleanupErr != nil {
+			break
+		}
+		if j.Backups.Storage.Remove(settings.Destination, id, nil) != nil || j.Backups.Storage.RemovePartial(settings.Destination, id) != nil {
+			break
+		}
+		if stoppedErr := j.assertStopped(ctx, server, job); stoppedErr != nil {
+			err = stoppedErr
+			break
+		}
+	}
 	if err != nil && !recorded {
 		removeErr := j.Backups.Storage.Remove(settings.Destination, id, nil)
 		if removeErr == nil {

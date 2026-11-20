@@ -199,6 +199,7 @@ needs `ludock.address`.
 | Backup archive | 100,000 entries and 64 folder levels; use `ludock.files` for smaller folders |
 | Shell command | 60 seconds |
 | Schedules | 100 per server and 1,000 in total, including paused ones |
+| Activity | The newest 100,000 entries; finished work older than 90 days leaves once its entries do, keeping each server's newest 100 |
 | Scheduled command | One line, 500 characters |
 | Schedule warnings | Up to 10, each 1 to 60 minutes before |
 | Waiting for an empty server | 1 to 360 minutes |
@@ -599,10 +600,21 @@ a scheduled run that waited for players to leave.
 Work is recorded before it runs. When Ludock starts after a crash or restart,
 it removes helpers left behind before anything else runs, waits for a stop that
 was in progress instead of sending it again, finishes or rolls back an
-interrupted restore from its journal, and removes unpacking leftovers. Work it
-can't safely finish is marked interrupted, never repeated, and scheduled runs
-missed by more than five minutes are recorded as missed. Cancelled work stays
+interrupted restore from its journal, removes unpacking leftovers, and starts
+a server that a backup or a restart with a backup first had stopped, without
+taking the backup again. Work it can't safely finish is marked interrupted,
+never repeated, and scheduled runs missed by more than five minutes are
+recorded as missed. Cancelled work stays
 cancelled, and a warning Ludock resumes can still be cancelled.
+
+If Docker itself restarts while work runs, such as for an upgrade, the work
+waits up to 90 seconds for Docker to answer again, then carries on and its
+entry in **Activity** says it waited. A stop or start whose answer was lost
+counts as done if Docker then shows the server stopped or started, and a
+backup copy Docker cut short is removed and copied again. Docker coming back
+with the server started on its own still counts as a change outside Ludock.
+After 90 seconds, or when Ludock can't tell what Docker did, the work stops
+and says Ludock couldn't reach Docker.
 
 Asked to stop, Ludock gives running work about six seconds to finish, inside
 the ten Docker waits before killing it. Work still running then, such as a

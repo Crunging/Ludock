@@ -1,4 +1,4 @@
-import { test, expect, asAdmin, openServer, expectOperationSucceeded } from "./fixtures.mjs";
+import { test, expect, asAdmin, openServer, expectOperationSucceeded, fake } from "./fixtures.mjs";
 
 asAdmin();
 // Each journey here passes on its own, so they spread across workers.
@@ -42,6 +42,18 @@ test("reviewing a server, tuning its monitoring, and following a restart", async
   await page.getByLabel("Result").selectOption("failed");
   await expect(page.locator(".activity-filter-count")).toHaveText(/^Showing 0 of \d+\.$/);
   await expect(page).toHaveURL(/status=failed/);
+});
+
+test("a restart rides out Docker restarting under it and says it waited", async ({ page }) => {
+  await openServer(page, "Survival");
+  await page.locator(".detail-actions").getByRole("button", { name: "Restart" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Restart server" }).click();
+  const operation = page.locator("#selected-operation");
+  await expect(operation).toContainText("Waiting for save");
+  await fake("/fake/outage", { seconds: "3" });
+  await expectOperationSucceeded(page);
+  await expect(operation).toContainText("Waited for Docker to answer again.");
+  await expect(page.locator(".detail-actions").getByRole("button", { name: "Stop" })).toBeEnabled();
 });
 
 test("reading a server's resource history over an hour and a day", async ({ page }) => {

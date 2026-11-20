@@ -12,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
@@ -387,8 +388,8 @@ func (r *Runner) Enqueue(ctx context.Context, tx *sql.Tx, options EnqueueOptions
 }
 
 // finish records a running job's outcome, reporting false when it was
-// cancelled instead.
-func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string) (bool, error) {
+// cancelled instead. waited notes in its result that it waited for Docker.
+func (r *Runner) finish(ctx context.Context, job *Job, status string, result map[string]any, errorText string, waited bool) (bool, error) {
 	var resultJSON, errorValue any
 	if result != nil {
 		encoded, _ := json.Marshal(result)
@@ -410,8 +411,10 @@ func (r *Runner) finish(ctx context.Context, job *Job, status string, result map
 	// meanwhile keeps the outcome its cancellation recorded.
 	finished := false
 	if err := r.DB.Tx(ctx, func(tx *sql.Tx) error {
-		updated, err := tx.ExecContext(ctx, "UPDATE operations SET status=?,phase=?,result_json=COALESCE(?,result_json),error=?,updated_at=? WHERE id=? AND status='running'",
-			status, status, resultJSON, errorValue, db.Now(), job.ID)
+		updated, err := tx.ExecContext(ctx, `UPDATE operations SET status=?1,phase=?1,result_json=CASE
+			WHEN ?2 AND json_valid(COALESCE(?3,result_json,'{}')) THEN json_set(COALESCE(?3,result_json,'{}'),'$.waitedForDocker',json('true'))
+			ELSE COALESCE(?3,result_json) END,error=?4,updated_at=?5 WHERE id=?6 AND status='running'`,
+			status, waited, resultJSON, errorValue, db.Now(), job.ID)
 		if err != nil {
 			return err
 		}
@@ -683,6 +686,8 @@ func (r *Runner) handler(kind string) (Handler, bool) {
 }
 
 func (r *Runner) run(ctx context.Context, rw *row) {
+	var waited atomic.Bool
+	work := docker.RideOut(ctx, func() { waited.Store(true) })
 	defer func() {
 		r.mu.Lock()
 		delete(r.signals, rw.id)
@@ -701,7 +706,7 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		job := &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}
 		finished := false
 		if r.persist(ctx, "finish", func() (err error) {
-			finished, err = r.finish(ctx, job, Failed, nil, message)
+			finished, err = r.finish(ctx, job, Failed, nil, message, waited.Load())
 			return err
 		}) && finished {
 			r.notifyScheduledFailure(rw)
@@ -741,7 +746,7 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 		r.mu.Lock()
 		r.signals[job.ID] = signal
 		r.mu.Unlock()
-		result, err := handler.Run(ctx, &Context{Job: job, runner: r, cancelled: signal})
+		result, err := handler.Run(work, &Context{Job: job, runner: r, cancelled: signal})
 		var busy *resourcesBusy
 		if !errors.As(err, &busy) {
 			if err != nil {
@@ -758,7 +763,7 @@ func (r *Runner) run(ctx context.Context, rw *row) {
 				status = Skipped
 			}
 			r.persist(ctx, "finish", func() error {
-				_, err := r.finish(ctx, job, status, result, "")
+				_, err := r.finish(ctx, job, status, result, "", waited.Load())
 				return err
 			})
 			return
@@ -891,12 +896,12 @@ func (r *Runner) recoverInterrupted(ctx context.Context) error {
 		}
 		if err != nil {
 			if _, err := r.finish(ctx, &Job{ID: rw.id, ServerID: rw.serverID, Kind: rw.kind, ActorID: rw.actorID}, Interrupted, nil,
-				"Recovery requires administrator attention. The server has been left stopped where possible."); err != nil {
+				"Recovery requires administrator attention. The server has been left stopped where possible.", false); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again."); err != nil {
+		if _, err := r.finish(ctx, job, Interrupted, result, "Ludock restarted while this ran. Check the server before trying again.", false); err != nil {
 			return err
 		}
 	}

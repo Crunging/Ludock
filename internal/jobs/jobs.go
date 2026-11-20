@@ -112,7 +112,7 @@ func (j *Jobs) Register(queue *ops.Runner) {
 				return nil, ops.ErrResume
 			}
 			if job.Job.Input["createBackup"] == true {
-				return nil, j.recoverBackupRestart(ctx, job)
+				return j.recoverBackupRestart(ctx, job)
 			}
 			return j.recoverLifecycle(ctx, job)
 		},
@@ -124,7 +124,10 @@ func (j *Jobs) Register(queue *ops.Runner) {
 		return nil, j.recoverBackup(ctx, job, true)
 	}})
 	// An interrupted command is reported as interrupted and never sent again.
-	runner.Register("command", ops.Handler{Run: j.runCommand, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
+	// It is sent on time or not at all, so it doesn't wait for Docker.
+	runner.Register("command", ops.Handler{Run: func(ctx context.Context, job *ops.Context) (map[string]any, error) {
+		return j.runCommand(docker.Promptly(ctx), job)
+	}, Recover: func(context.Context, *ops.Context) (map[string]any, error) {
 		return map[string]any{"action": "command"}, nil
 	}})
 	runner.Register("restore", ops.Handler{Run: j.warnedFirst(authz.BackupsRestore, j.runRestore), Recover: func(ctx context.Context, job *ops.Context) (map[string]any, error) {

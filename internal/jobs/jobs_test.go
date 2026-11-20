@@ -119,6 +119,7 @@ func setup(t *testing.T) *fixture {
 	d := dbtest.Open(t)
 	d.CreateUser(ctx, db.UserRecord{User: db.User{ID: "admin", Username: "admin", Role: db.RoleAdmin, CreatedAt: 1}, PasswordHash: "x"})
 	client := docker.New(engine.Socket)
+	client.OutageLimit = 6 * time.Second
 	table := locks.New()
 	store := &identity.Store{DB: d}
 	authorization := &authz.Service{DB: d, Servers: store}
@@ -616,6 +617,7 @@ func TestBackupOfReplacedServer(t *testing.T) {
 // restart fails and the server stays stopped; Ludock keeps running.
 func TestRestartWhenDockerGoesAway(t *testing.T) {
 	f := setup(t)
+	f.jobs.Docker.OutageLimit = 300 * time.Millisecond
 	f.engine.OnStop = func(c *fakedocker.Container) {
 		if c.ID == f.game {
 			f.engine.AddFault(`^GET .*/containers/`, 500, false, 0)
@@ -629,21 +631,36 @@ func TestRestartWhenDockerGoesAway(t *testing.T) {
 }
 
 // Docker fails just as a backup's archive is read, or comes back from a
-// restart without the archive's exec. The backup blames Docker, not the
-// server's files.
+// restart without the archive's exec. A failing Docker fails the backup,
+// which blames Docker, not the server's files; a lost exec is copied again.
 func TestBackupWhenDockerGoesAway(t *testing.T) {
 	for _, status := range []int{500, 404} {
 		f := setup(t)
+		f.jobs.Docker.OutageLimit = 300 * time.Millisecond
 		exec := f.engine.Exec
+		var once sync.Once
 		f.engine.Exec = func(c *fakedocker.Container, cmd []string, stdin *bufio.Reader, stdout, stderr func([]byte)) int {
 			if strings.Contains(strings.Join(cmd, " "), `"operation":"backup"`) {
-				f.engine.AddFault(`/exec/`, status, false, 0)
+				once.Do(func() { f.engine.AddFault(`/exec/`, status, false, 0) })
 			}
 			return exec(c, cmd, stdin, stdout, stderr)
 		}
+		if status == 404 {
+			// The restarted Docker knows the execs made after it.
+			validate := f.engine.OnStart
+			f.engine.OnStart = func(c *fakedocker.Container) {
+				validate(c)
+				if c.CreateRequest.Labels["ludock.internal"] == "mount-validator" {
+					f.engine.ClearFaults()
+				}
+			}
+		}
 		job := f.run(t, "backup", nil)
 		f.engine.ClearFaults()
-		if job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker") {
+		if status == 500 && (job.Status != ops.Failed || !strings.HasPrefix(job.Error, "Ludock couldn’t reach Docker")) {
+			t.Fatalf("%d: %+v", status, job)
+		}
+		if status == 404 && job.Status != ops.Succeeded {
 			t.Fatalf("%d: %+v", status, job)
 		}
 	}
