@@ -113,9 +113,9 @@ func (j *Jobs) countedDown(ctx context.Context, job *ops.Job) bool {
 	return err == nil && counted
 }
 
-// registrar registers handlers whose scheduled operations are refused, when
-// their turn comes, if their schedule changed or its owner lost access,
-// before they act; players counted down to the run hear it's off.
+// registrar registers handlers so that players counted down to a scheduled
+// operation hear it's off when its turn comes and it is refused, because
+// its schedule changed or its owner lost access, before it acts.
 type registrar struct {
 	runner *ops.Runner
 	jobs   *Jobs
@@ -124,17 +124,28 @@ type registrar struct {
 func (r registrar) Register(kind string, handler ops.Handler) {
 	run := handler.Run
 	handler.Run = func(ctx context.Context, job *ops.Context) (map[string]any, error) {
-		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled {
-			if _, err := r.jobs.Actor(ctx, job); err != nil {
-				if _, public := apperr.As(err); public && r.jobs.countedDown(ctx, job.Job) {
-					r.jobs.sayCalledOff(ctx, job.Job)
-				}
-				return nil, err
-			}
+		if _, scheduled := job.Job.Input["scheduleId"].(string); scheduled && r.refused(ctx, job) && r.jobs.countedDown(ctx, job.Job) {
+			r.jobs.sayCalledOff(ctx, job.Job)
 		}
 		return run(ctx, job)
 	}
 	r.runner.Register(kind, handler)
+}
+
+// refused reports whether the handler will refuse job before acting; it
+// then records the refusal itself.
+func (r registrar) refused(ctx context.Context, job *ops.Context) bool {
+	actor, err := r.jobs.Actor(ctx, job)
+	if err != nil {
+		_, public := apperr.As(err)
+		return public
+	}
+	for _, capability := range StartCapabilities(job.Job) {
+		if ok, err := r.jobs.Authz.Has(ctx, actor, job.Job.ServerID, capability); err == nil && !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // sayCalledOff tells players a warned operation is off, best effort, on the

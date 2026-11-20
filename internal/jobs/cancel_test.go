@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/Crunging/Ludock/internal/apperr"
+	"github.com/Crunging/Ludock/internal/authz"
+	"github.com/Crunging/Ludock/internal/db"
 	"github.com/Crunging/Ludock/internal/ops"
 	"github.com/Crunging/Ludock/internal/schedules"
 )
@@ -133,39 +135,54 @@ func TestCancelFindsAScheduledRunsCountdown(t *testing.T) {
 	}
 }
 
-// A scheduled restart whose owner lost access while it waited in the queue
-// is refused when its turn comes, before it acts, and spends its run's
-// countdown, which is what tells players it's off.
+// A scheduled restart whose owner lost access while it waited in the queue,
+// to the schedule or only to restarting, is refused when its turn comes,
+// before it acts, and spends its run's countdown, which is what tells
+// players it's off.
 func TestRefusedScheduledRunCallsOffCountdown(t *testing.T) {
-	f := setup(t)
-	f.runner.Stop()
-	server, _ := f.jobs.Identity.Get(ctx, f.serverID)
-	job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: "admin", Kind: "restart",
-		BindingRevision: server.BindingRevision, Input: map[string]any{"scheduleId": "schedule", "scheduleRevision": 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := f.startedAt()
-	for _, statement := range []string{
-		`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
-      VALUES('schedule','` + f.serverID + `','admin','{}',1,'2026-01-01T05:00',1,'` + job.ID + `')`,
-		"INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES('schedule','2026-01-01T05:00',1)",
-		"UPDATE users SET disabled=1 WHERE id='admin'",
-	} {
-		if _, err := f.jobs.DB.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	next := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
-	f.jobs.Register(next)
-	if err := next.Start(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(next.Stop)
-	if done := finished(t, next, job.ID); done.Status != ops.Failed || f.startedAt() != before {
-		t.Fatalf("%+v", done)
-	}
-	if again, _ := schedules.CallOffQueued(ctx, f.jobs.DB, "schedule", job.ID); again {
-		t.Fatal("the refusal left the countdown for another call-off")
+	for _, owner := range []string{"admin", "member"} {
+		t.Run(owner, func(t *testing.T) {
+			f := setup(t)
+			f.runner.Stop()
+			if owner == "member" {
+				f.jobs.DB.CreateUser(ctx, db.UserRecord{User: db.User{ID: "member", Username: "member", Role: db.RoleMember, CreatedAt: 1}, PasswordHash: "x"})
+				if err := f.jobs.Authz.Share(ctx, f.admin, f.adminSession, "member", f.serverID,
+					[]authz.Capability{authz.ServerView, authz.SchedulesManage}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server, _ := f.jobs.Identity.Get(ctx, f.serverID)
+			job, err := f.runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: owner, Kind: "restart",
+				BindingRevision: server.BindingRevision, Input: map[string]any{"scheduleId": "schedule", "scheduleRevision": 1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := f.startedAt()
+			statements := []string{
+				`INSERT INTO schedules(id,server_id,owner_id,input_json,binding_revision,last_slot,created_at,last_operation_id)
+          VALUES('schedule','` + f.serverID + `','` + owner + `','{"kind":"recurring","action":"restart","enabled":true,"time":"05:00","days":[4],"timezone":"UTC"}',1,'2026-01-01T05:00',1,'` + job.ID + `')`,
+				"INSERT INTO schedule_announcements(schedule_id,slot,lead_minutes) VALUES('schedule','2026-01-01T05:00',1)",
+			}
+			if owner == "admin" {
+				statements = append(statements, "UPDATE users SET disabled=1 WHERE id='admin'")
+			}
+			for _, statement := range statements {
+				if _, err := f.jobs.DB.ExecContext(ctx, statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			next := &ops.Runner{DB: f.jobs.DB, Locks: f.jobs.Locks}
+			f.jobs.Register(next)
+			if err := next.Start(ctx, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(next.Stop)
+			if done := finished(t, next, job.ID); done.Status != ops.Failed || f.startedAt() != before {
+				t.Fatalf("%+v", done)
+			}
+			if again, _ := schedules.CallOffQueued(ctx, f.jobs.DB, "schedule", job.ID); again {
+				t.Fatal("the refusal left the countdown for another call-off")
+			}
+		})
 	}
 }

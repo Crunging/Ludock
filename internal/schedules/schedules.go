@@ -697,7 +697,10 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			return err
 		}
 		if slot != "" {
-			nextSlot, nextRunAt, _, err := countdown(ctx, tx, r, data, now)
+			// The edit saves changed_at, which can end a due run's retries.
+			edited := *r
+			edited.changedAt = sql.NullInt64{Int64: now, Valid: true}
+			nextSlot, nextRunAt, _, err := countdown(ctx, tx, &edited, data, now)
 			if err != nil {
 				return err
 			}
@@ -712,7 +715,7 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 		encoded, _ := json.Marshal(data)
 		// Keep the binding baseline, consumed slot, and history. Every change
 		// invalidates work queued from an earlier configuration.
-		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), db.Now(), id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE schedules SET input_json=?,revision=revision+1,changed_at=? WHERE id=?", string(encoded), now, id); err != nil {
 			return err
 		}
 		r.input, r.revision = string(encoded), r.revision+1
@@ -721,7 +724,6 @@ func (s *Service) mutate(ctx context.Context, actor *db.SessionUser, serverID, i
 			if pausing {
 				ended = "Ended: the schedule was paused while it waited for players to leave"
 			}
-			now := db.Now()
 			if _, err := tx.ExecContext(ctx, "UPDATE schedules SET last_result=?,last_run_at=? WHERE id=?", ended, now, id); err != nil {
 				return err
 			}

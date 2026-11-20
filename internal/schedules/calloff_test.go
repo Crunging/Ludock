@@ -214,3 +214,25 @@ func TestSkippedWaitCallsOffCountdown(t *testing.T) {
 		})
 	}
 }
+
+// An edit while a due run waits for other work to finish ends that run, even
+// one that keeps its settings, so the countdown to it is called off.
+func TestEditEndsADueRunsCountdown(t *testing.T) {
+	f := setup(t)
+	schedule, calls := f.warnedRestart(t, admin)
+	server, _ := f.s.Identity.Get(ctx, f.serverID)
+	if _, err := f.s.Runner.Enqueue(ctx, nil, ops.EnqueueOptions{ServerID: f.serverID, ActorID: admin.ID, Kind: "start",
+		BindingRevision: server.BindingRevision}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Run(ctx, due)
+	if f.operations(t) != 1 || *calls != 0 {
+		t.Fatal("the run didn't wait for the other work")
+	}
+	db.Now = func() int64 { return due + 2*minute }
+	input := schedule.Input
+	input.Announcements = &Announcements{LeadMinutes: []int{10, 1}}
+	if _, err := f.s.Update(ctx, admin, f.serverID, schedule.ID, schedule.Revision, input); err != nil || *calls != 1 {
+		t.Fatal(err, *calls)
+	}
+}
